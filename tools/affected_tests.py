@@ -114,11 +114,14 @@ def select_tests(root, changed, within=None):
                         or path.startswith(".github/workflows/"))
         if suite_config:
             return fallback("suite configuration")
-        if not p.parts or p.parts[0] not in {"src", "tests", "tools"}:
-            # Docs, status cards and root files outside the source roots
-            # cannot affect Python tests.
+        if not p.parts or (len(p.parts) == 1 and p.name != "conftest.py"):
+            continue
+        if p.parts[0] not in {"src", "tests", "tools"}:
             if p.name != "conftest.py":
-                continue
+                if p.parts[0] in {"docs", "status"} or p.suffix in {".md", ".rst"}:
+                    continue
+                if not revision_asset(root, path, asset_cache):
+                    continue
         elif p.name != "conftest.py" and p.suffix != ".py":
             # A tracked non-Python asset under the source roots is read by
             # production code at runtime, so it must reach the tests naming
@@ -128,7 +131,7 @@ def select_tests(root, changed, within=None):
                 continue
         if p.name == "conftest.py" or (path.startswith("tests/") and not p.name.startswith("test_")):
             return fallback("shared fixture")
-        if path not in texts and p.suffix == ".py":
+        if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
             return fallback("unmapped file")
         seen, todo = set(), [path]
         while todo:

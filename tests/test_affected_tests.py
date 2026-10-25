@@ -130,6 +130,57 @@ def test_ignored_non_python_src_asset_is_skipped(tmp_path):
     assert selector().select_tests(tmp_path, ["src/pkg/generated/gen.sql"])["tests"] == []
 
 
+def test_tracked_deploy_watchdog_maps_to_tests_naming_it(tmp_path):
+    _asset_repo(tmp_path, {
+        "deploy/watchdog/watchdog.xml": "<watchdog/>",
+        "tests/test_watchdog.py": "WATCHDOG = 'deploy/watchdog/watchdog.xml'",
+    })
+    plan = selector().select_tests(tmp_path, ["deploy/watchdog/watchdog.xml"])
+    assert plan["tests"] == ["tests/test_watchdog.py"]
+
+
+def test_tracked_deploy_unnamed_falls_back_to_full_suite(tmp_path):
+    _asset_repo(tmp_path, {
+        "deploy/x.service": "[Service]\nExecStart=/bin/true",
+    })
+    plan = selector().select_tests(tmp_path, ["deploy/x.service"])
+    assert plan["tests"] == ["tests"]
+    assert plan["reason"].startswith("no mapped tests")
+
+
+def test_docs_and_status_markdown_skipped_when_changed(tmp_path):
+    _asset_repo(tmp_path, {
+        "docs/readme.md": "# Docs",
+        "status/card.md": "# Status",
+    })
+    plan = selector().select_tests(tmp_path, ["docs/readme.md", "status/card.md"])
+    assert plan["tests"] == []
+
+
+def test_tracked_deploy_allowlist_maps_to_tests_naming_it(tmp_path):
+    _asset_repo(tmp_path, {
+        "deploy/allowlist.txt": "service-a\nservice-b\n",
+        "tests/test_deploy.py": "ALLOWLIST = 'deploy/allowlist.txt'",
+    })
+    plan = selector().select_tests(tmp_path, ["deploy/allowlist.txt"])
+    assert plan["tests"] == ["tests/test_deploy.py"]
+
+
+def test_tracked_deploy_markdown_skipped(tmp_path):
+    _asset_repo(tmp_path, {
+        "deploy/notes.md": "# Deploy notes",
+        "tests/test_deploy.py": "NOTES = 'deploy/notes.md'",
+    })
+    plan = selector().select_tests(tmp_path, ["deploy/notes.md"])
+    assert plan["tests"] == []
+
+
+def test_real_repo_deploy_watchdog_selects_w36_regressions():
+    root = Path(__file__).resolve().parents[1]
+    plan = selector().select_tests(root, ["deploy/watchdog/watchdog.xml"])
+    assert "tests/test_w36_regressions.py" in plan["tests"]
+
+
 def test_select_tests_within_filters_matching_tests(tmp_path):
     files = {
         "src/pkg/__init__.py": "",
