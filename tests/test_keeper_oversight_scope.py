@@ -1828,10 +1828,17 @@ def test_oversight_triggers_persist_across_reopens_and_concurrent_open(tmp_path)
     Test that a concurrent open and a re-open keep the guards in place.
     """
     path = tmp_path / "triggers-persist.db"
+    def _triggers(conn):
+        if getattr(conn, "backend", None) == "postgres" or os.environ.get("PG_KEEPER_BACKEND") == "postgres":
+            return {row[0] for row in conn.execute(
+                "SELECT trigger_name FROM information_schema.triggers"
+                " WHERE trigger_schema=current_schema() AND trigger_name LIKE 'trg_oversight%'")}
+        return {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+
     # First open: creates the schema with oversight tables and triggers
     conn1 = kdb.open_db(path, create=True)
-    triggers1 = {row[0] for row in conn1.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    triggers1 = _triggers(conn1)
     assert "trg_oversight_tokens_revoke_only_update" in triggers1
     assert "trg_oversight_tokens_append_only_delete" in triggers1
     assert "trg_oversight_ops_append_only_update" in triggers1
@@ -1840,18 +1847,15 @@ def test_oversight_triggers_persist_across_reopens_and_concurrent_open(tmp_path)
 
     # Second open: triggers must still be there (no DROP on open)
     conn2 = kdb.open_db(path)
-    triggers2 = {row[0] for row in conn2.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    triggers2 = _triggers(conn2)
     assert triggers2 == triggers1
     conn2.close()
 
     # Concurrent opens: both should see the same triggers
     conn3 = kdb.open_db(path)
     conn4 = kdb.open_db(path)
-    triggers3 = {row[0] for row in conn3.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
-    triggers4 = {row[0] for row in conn4.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    triggers3 = _triggers(conn3)
+    triggers4 = _triggers(conn4)
     assert triggers3 == triggers4 == triggers1
     conn3.close()
     conn4.close()
@@ -2026,9 +2030,14 @@ def test_commit_phase_revalidates_and_rejects_a_forged_prepared(w, monkeypatch):
                                                        go_decision="D-FAKE"))
     assert has("go_required", err.msg)
     # (d) the GO row deleted between prepare and commit stops the commit
-    w.conn.set_authorizer(None)                 # test surgery: DDL for one DELETE
-    w.conn.execute("DROP TRIGGER trg_decisions_append_only_delete")
-    w.conn.execute("DELETE FROM decisions WHERE id=?", (GO,))
+    if hasattr(w.conn, "set_authorizer"):
+        w.conn.set_authorizer(None)                 # test surgery: DDL for one DELETE
+        w.conn.execute("DROP TRIGGER trg_decisions_append_only_delete")
+        w.conn.execute("DELETE FROM decisions WHERE id=?", (GO,))
+    else:
+        w.conn._raw.execute("DROP TRIGGER trg_decisions_append_only_delete ON decisions")
+        w.conn._raw.execute("DELETE FROM decisions WHERE id=%s", (GO,))
+        w.conn._raw.commit()
     err = refusal(w.store.commit_oversight_token, prepared)
     assert has("go_required", err.msg)
     assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
@@ -2343,7 +2352,12 @@ def test_open_alarm_unique_index_exists_on_both_schemas(tmp_path):
                 "SELECT indexdef FROM pg_indexes"
                 " WHERE indexname='idx_projector_alarms_open'"
                 " AND schemaname=current_schema()").fetchone()
-            assert row is not None and clause in row["indexdef"]
+            assert row is not None
+            idef = row["indexdef"]
+            assert "UNIQUE INDEX" in idef
+            assert "projector_alarms" in idef
+            assert "(kind, workflow_id, key)" in idef
+            assert "cleared_at IS NULL" in idef
         else:
             row = world.conn.execute(
                 "SELECT sql FROM sqlite_master WHERE type='index'"

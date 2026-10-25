@@ -495,7 +495,7 @@ class OversightMixin:
                 " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_ops),"
                 "?,?,?,?,?,?,?,?,?,?,'denied',?,NULL)",
                 (self._iso(now), principal.token_id, principal.name,
-                 principal.generation, batch_ref or "", index + 1,
+                 principal.generation, _audit_text(batch_ref), index + 1,
                  _op_name(op), key, finding, stored_reason, code))
             self._oversight_guard_alarm(principal, finding,
                                         policy_reason or code, _op_name(op), now)
