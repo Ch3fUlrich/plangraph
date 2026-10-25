@@ -83,6 +83,13 @@ E1 tests:
 | seat (`review`) | no new stdout/stderr bytes AND CPU < 2% | a seat writes no files. Whether qodercli `-p`, `opencode run` and agy `-p` stream output before they end is not verified (F1). The seat rule ships only for harnesses in `spawn_limits.streams` (default empty); every other seat is bounded by its 45 min wall cap. Per D-2839, F1 is checked on the first E2 test run, not a separate one |
 | default | as writer | |
 
+- Per-leg window (routing D-2843; build-L1-bus saw mimo-pro work in single turns of 4-20 min, and run-c3b5a522 and run-8cba759a were cancelled under a flat 15 min rule, at least one mid-turn). `spawn_limits.stall_min_by_leg` (map leg id -> minutes) overrides `stall_min` per leg. The default is set from F5: `mimo-v2.6-pro` 45, `mimo-v2.6-flash` 20, `opencode` free legs 20, and every leg without measurements 45. A leg's window is never below its measured max turn gap, rounded up to 5 min.
+- Harness stream bytes (D-2843 ask) were checked on coding.vm, 2026-10-25 19:07-19:16Z, with live mimo-pro runs (wt4a, wtfix, seatenf2/3):
+  - opencode 2.1.0 persists a session's messages (`opencode.db` `session_v2.time_updated`, `session_message`) only when a message ends: wt4a showed no change for 490 s mid-turn.
+  - The shared `log/opencode.log` has no per-token or per-chunk lines.
+  - The process tree's `/proc/<pid>/io` rchar grows about 180 B/s from MCP and watcher polling in every state, so it cannot separate a live stream from a dead one.
+
+  No local per-run stream signal exists for opencode today, so the per-leg window is the mitigation. If a later opencode version persists partial parts, a probe on `session_v2.time_updated` for the run's `directory` can be added as a work signal for that harness.
 - A wait inside the harness (its own 429 backoff) is invisible to the spawner. After 15 min with no work, CPU or child, such a run is stalled and, once 4a2 lands, falls through to the next leg. That cost is accepted; a harness that prints its waits can be added to the waiting exemption later.
 - `spawn_limits` gains `streams` (a list of harness names; validation refuses any other shape).
 - The 4b budget becomes 400 here and in PG-EFFICIENCY-GATES `#5`, because the role split, the child signal and the hash change add about 80 lines (seat r1 E14).
@@ -293,3 +300,14 @@ E10 tests:
 - F2 (E4): the projected-RSS defaults from 4c are carried over; MemoryPeak data comes once 4c's scopes run.
 - F3 (E7): whether ending a session stops the process group or the cgroup; one manual outlive check before E7 merges.
 - F4 (E10): which harnesses report token usage, and in which line format; one real run per harness before its parser is enabled, otherwise `estimate`.
+- F5 (E2, D-2843): the max turn latency per leg. Measured for opencode legs from `opencode.db` (gaps between consecutive `session_message.time_created` in sessions of the last 3 days, coding.vm, 2026-10-25; a gap covers model turn + tool time):
+
+  | model | gaps | p50 | p90 | p99 | max | > 15 min |
+  |---|---|---|---|---|---|---|
+  | mimo-v2.6-pro | 1966 | 10 s | 120 s | 546 s | 2622 s | 4 |
+  | mimo-v2.6-flash | 146 | 19 s | 151 s | 454 s | 618 s | 0 |
+  | deepseek-v4.1-flash-free | 260 | 5 s | 42 s | 222 s | 419 s | 0 |
+
+  glm-5.3-flash-free's max (172671 s) is a resumed session, not a turn. Its p99 is 448 s.
+
+  Still open: qodercli (qwen) and agy (gemini), which keep no opencode.db. Measure them from their own session stores, or from the 4a `stdout.log` timestamps once E2's first runs exist. Until then they use the 45 min default.
