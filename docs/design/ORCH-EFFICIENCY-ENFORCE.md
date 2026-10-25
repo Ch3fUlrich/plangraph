@@ -126,13 +126,13 @@ E4 tests (fake probe, temp host dir, fake clock and sleep):
 | piece | where | behaviour |
 |---|---|---|
 | LOW-only variants | one rule in `gates/findings.py` `low_only(verdict_line, body) -> bool`, used by both `parse_seat_verdict` and `tools/seat_verdict.parse_verdict` (seat_verdict already imports `src` for `body_blocking`) | a VERDICT line whose first word is a fix word (`fix`, `changes`, `fail`, ...) followed, within the same line, by `LOW only` / `LOWs only` / `only LOW(s)` (case-insensitive, any punctuation between, e.g. "fix - LOW only:") counts as pass-with-lows when the body has no HIGH/MED finding (`blocking(parse_findings)` empty); with a HIGH/MED in the body it stays changes (0.2c); `seat_verdict` posts `ok=true`, reason prefix `pass-with-lows` and the LOW lines; this builds on lane/review-verdict-parse (6ef7b09d spec) and must match its variants |
-| refutation file | `tools/seat_verdict.py --refutation <file> --decisions-log <path>` | file format: line 1 `Refutation: D-<digits>`, then one line per blocking finding `<id> <path>:<line> <reason>`. Accepted only when ALL hold: the D-id appears as a row id in `--decisions-log` (the routing `docs/decisions-log.md`; a missing or unreadable log refuses, so an L1 cannot invent a D-id); every blocking id of the seat body has a line; each `path` exists at `--head` (`git cat-file -e <head>:<path>`) and `line` is within its length. Then `ok=true`, reason `pass-with-lows: refuted per D-<n>: <ids>` + the refutation lines. Any failed check -> exit 2 (refused), nothing posted |
+| refutation file | `tools/seat_verdict.py --refutation <file> --decisions-log <path>` | file format: line 1 `Refutation: D-<digits>`, then one line per blocking finding `<id> <path>:<line> <reason>`. Accepted only when ALL hold: the D-id appears as a row id in `--decisions-log` (the routing `docs/decisions-log.md`; a missing or unreadable log refuses, so an L1 cannot invent a D-id); that D-row's DECISION cell carries the whole token `Refutes: <project:ID>` for this item and, when the seat has a run id (`evidence.json` `run_id`) or a seat dir name, that run id / seat dir name as a whole token in the same `Refutes:` capture (routing D-2839; checked exactly like `Waives:` by a new `DecisionsAdapter.refutes(decision_id, key, ref=None)` in `keeper/evidence_decisions.py`: same cell scope (D-276), same keyword boundary and whole-token rule, so an old D-id or one written for another item never passes; routing rows carry the token from D-2840 on); every blocking id of the seat body has a line; each `path` exists at `--head` (`git cat-file -e <head>:<path>`) and `line` is within its length. Then `ok=true`, reason `pass-with-lows: refuted per D-<n>: <ids>` + the refutation lines. Any failed check -> exit 2 (refused), nothing posted |
 | no re-run | unchanged | the seat's own text is never edited, and the refutation is a separate file named in the reason; 3.4's "never re-run a seat with rulings in its prompt" is untouched |
 
 E5 tests:
 - "VERDICT: fix - LOW only:" with LOW lines -> pass-with-lows; the same with a MED line -> changes; "VERDICT: FIX" with LOWs and no "only" -> changes (unchanged);
 - refutation accepted (D-id in the log, every id covered, path:line valid);
-- refutation refused for each of: an unknown D-id, a missing log, an uncovered id, a missing path, a line past the end of the file;
+- refutation refused for each of: an unknown D-id, a missing log, an uncovered id, a missing path, a line past the end of the file, a real D-row without `Refutes: <this item>` (or with it only outside the DECISION cell, or naming another run id);
 - both parsers agree on a shared fixture table.
 
 ## Invariants
@@ -143,7 +143,7 @@ E5 tests:
 | IE2 | Route mode is a pure function of (card, role, limits); a missing or malformed input yields `writer`, never `direct_edit`. |
 | IE3 | A stall kill always leaves `exit_class=stall`, `liveness=stalled` in the record and `result.json`, and no runner job in `running`. |
 | IE4 | Host admission is atomic under one host-wide lock, and stale registry and queue entries never count (I-E4a..d). |
-| IE5 | A pass-with-lows post needs either a VERDICT line that says LOW only with no HIGH/MED in the body, or a refutation file whose D-id exists in the routing log and which covers every blocking id with a valid path:line. |
+| IE5 | A pass-with-lows post needs either a VERDICT line that says LOW only with no HIGH/MED in the body, or a refutation file whose D-row carries `Refutes: <this item>` (and the seat's run id when it has one) and which covers every blocking id with a valid path:line. |
 | IE6 | All decisions are pure functions of injected inputs (clock, sleep, probe, git reader, host dir) and are tested hermetically: no real models, systemd, network or memory pressure. |
 
 ## Input classes (E3, E5)
@@ -157,6 +157,7 @@ E5 tests:
 | `VERDICT: fix - LOW only:` + LOW lines | LOW only | pass-with-lows |
 | `VERDICT: fix - LOW only` + a MED line | contradiction | changes |
 | refutation with a D-id that is not in the log | invented ruling | refused |
+| refutation with a real D-id whose row has no `Refutes: <this item>` | reused ruling | refused |
 
 ## Open facts
 
