@@ -51,7 +51,7 @@ def make_phase(w):
 def code_of(exc):
     return getattr(exc, "code", None) or exc.args[0]
 
-PLAN_KEYS = {"phase", "ready", "blocked", "cards",
+PLAN_KEYS = {"review_method", "review_scope", "phase", "ready", "blocked", "cards",
              "overlaps", "skipped", "busy"}
 CARD_KEYS = {"key", "state", "write_set", "ready", "findings",
              "start_allowed", "start_reason", "route",
@@ -71,6 +71,7 @@ def test_two_ready_cards_disjoint(w, repo):
 
     assert set(plan) == PLAN_KEYS
     assert plan["phase"] == "demo:PH-X"
+    assert plan["review_method"]["mode"] == "batch"
     assert plan["ready"] is True
     assert plan["blocked"] == []
     assert plan["skipped"] == [] and plan["busy"] == [] and plan["overlaps"] == []
@@ -202,6 +203,7 @@ def test_guards(w, repo):
 
     plan = phase.plan_phase(w.store, w.p("system"), "demo:PH-X", repo_root=repo)
     assert plan["phase"] == "demo:PH-X"
+    assert plan["review_method"]["mode"] == "batch"
 
 def test_reader_and_l1_forbidden(w, repo):
     make_phase(w)
