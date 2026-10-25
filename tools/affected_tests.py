@@ -118,7 +118,7 @@ def select_tests(root, changed, within=None):
             continue
         if p.parts[0] not in {"src", "tests", "tools"}:
             if p.name != "conftest.py":
-                if p.parts[0] in {"docs", "status"} or p.suffix in {".md", ".txt", ".rst"}:
+                if p.parts[0] in {"docs", "status"} or p.suffix in {".md", ".rst"}:
                     continue
                 if not revision_asset(root, path, asset_cache):
                     continue
