@@ -104,9 +104,10 @@ def seats(paths):
             raw = file_path.read_text("utf-8", "replace")
             if res_file.is_file():
                 try:
-                    outputs[stem] = (raw, json.loads(res_file.read_text("utf-8")))
+                    meta = json.loads(res_file.read_text("utf-8"))
                 except Exception:
-                    outputs[stem] = raw
+                    meta = None
+                outputs[stem] = (raw, meta if isinstance(meta, dict) else None)
             else:
                 outputs[stem] = raw
         except OSError as exc:

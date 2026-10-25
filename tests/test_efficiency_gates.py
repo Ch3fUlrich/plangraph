@@ -705,6 +705,17 @@ def test_run_result_refusals_and_findings(tmp_path):
         assert F.findings_from_files([seat_file]) == []
     (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
     assert len(F.findings_from_files([seat_file])) == 1
+    for junk in ("{not json", "null", "[]", '"junk"'):
+        (run_dir / "result.json").write_text(junk)
+        assert F.findings_from_files([seat_file]) == [], junk  # haiku-C2, qwen-C2: unreadable/non-dict result.json refuses the seat
+    for meta in (None, [], "junk", 3):
+        assert F.first_review({"a": (PASS_SEAT, meta), "b": PASS_SEAT})[0] is None  # haiku-C2, qwen-C1: no verdict from such a seat
+    assert F.first_review({"a": (PASS_SEAT, {"status": "completed"}), "b": PASS_SEAT})[0] == "pass"
+    (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
+    with pytest.raises(OSError):
+        F.findings_from_files([run_dir])  # qwen-C2: missing stdout.log refuses loudly, never skips
+    (run_dir / "stdout.log").write_text(pass_text)
+    assert len(F.findings_from_files([run_dir])) == 1
 
     standalone = tmp_path / "other.out"
     standalone.write_text(pass_text)
@@ -729,6 +740,11 @@ def test_run_result_refusals_and_findings(tmp_path):
     assert seats([str(s1), str(s2)]) == 0
     (s1 / "result.json").write_text(json.dumps({"status": "completed", "output_cut": True}))
     assert seats([str(s1), str(s2)]) == 3
+    for junk in ("{not json", "null", "[]", '"junk"'):
+        (s1 / "result.json").write_text(junk)
+        assert seats([str(s1), str(s2)]) == 3, junk  # haiku-C1, qwen-C1: corrupt result.json never falls back to the raw reply
+    (s1 / "result.json").write_text(json.dumps({"status": "completed"}))
+    assert seats([str(s1), str(s2)]) == 0
 
 
 def test_output_on_disk_under_and_over_2mb(tmp_path):

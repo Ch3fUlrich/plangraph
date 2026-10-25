@@ -201,8 +201,10 @@ def first_review(outputs, need=FIRST_REVIEW_SEATS):
             outcome, reason, _ = seat_outcome(item[0], status=r.get("status"), seat=seat,
                                               exit_class=r.get("exit_class"), liveness=r.get("liveness"),
                                               output_cut=bool(r.get("output_cut", False)))
+        elif isinstance(item, tuple):
+            outcome, reason = None, "unreadable result.json"
         else:
-            outcome, reason, _ = seat_outcome(item[0] if isinstance(item, tuple) else item, seat=seat)
+            outcome, reason, _ = seat_outcome(item, seat=seat)
         outcomes.append(outcome)
         reasons.append(f"{seat}: {outcome or 'no verdict'} ({reason})")
     if len(outputs) < need:
@@ -216,12 +218,16 @@ def findings_from_files(paths, card=None, seat_classes=None):
     for path in paths:
         p = Path(path)
         fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
-        meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
+        try:
+            meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
+        except (OSError, ValueError):
+            meta = None
+        if not isinstance(meta, dict) and (meta is not None or res.is_file()):
+            continue  # I16: unreadable or non-dict result.json refuses the seat
         if meta and (meta.get("liveness") or meta.get("exit_class") == "cancelled" or meta.get("output_cut") or meta.get("status") not in (None, "completed")):
             continue
-        if fp.is_file():
-            text, _ = seat_text(fp.read_text("utf-8", "replace"))
-            out.extend(parse_findings(text, stem))
+        text, _ = seat_text(fp.read_text("utf-8", "replace"))
+        out.extend(parse_findings(text, stem))
     return out
 
 
