@@ -23,6 +23,11 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 | (3) | the spawner kills a run with no worktree write and < 2% CPU for 15 min (exit class `stall`, liveness `stalled`, slot freed, recorded) | E2 = PG-EFFICIENCY-GATES 4b, amended below |
 | (4) | the host gate keeps at least 1 slot for every project with queued work; seats are counted apart from writers | E4 |
 | (5) | the seat parsers accept the "LOW only" variants and post a seat that has a D-id refutation file as pass-with-lows (3.4) | E5 |
+| (6) | one compiled boot file per level, superseded rules dropped, size cap in CI; a relaunched session reads only it + its card (D-2840) | E6 |
+| (7) | runs outlive sessions: the spawner owns live runs and completion events per owner/claim; `spawner watch --owner X` re-attaches and replays pending completions | E7 |
+| (8) | one live-state command (runs, PRs, CI, claims), so handoffs hold only decisions + next steps | E8 |
+| (9) | claim heartbeats from the spawner while a run lives, no per-session shell loops | E9 |
+| (10) | tokens per merged change + claim-to-merge time per item, in the router digest | E10 |
 
 ## Slices
 
@@ -33,10 +38,17 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 | 3 | E3 route `direct_edit` + spawn refusal (crit 1) | 300 |
 | 4 | E4 host admission (row moved from PG-EFFICIENCY-GATES 4c) + per-project slot reservation + seat slots (crit 4) | 400 |
 | 5 | E5 seat parsers: LOW-only variants + D-id refutation file (crit 5) | 300 |
+| 6 | E6 compiled boot file per level + CI size cap + relaunch prompt (crit 6) | 350 |
+| 7 | E7 detached run supervisor + per-owner completion inbox + `watch --owner` (crit 7) | 400 |
+| 8 | E8 live-state command (crit 8) | 300 |
+| 9 | E9 claim heartbeat from the run supervisor (crit 9) | 250 |
+| 10 | E10 tokens per merged change + claim-to-merge metrics (crit 10) | 300 |
 
-Build order with slice 4 (one task loop, routing D-2837):
+Build order with slice 4 (one task loop, routing D-2837, D-2840):
 
-4a (written, `a43a7ff8`) -> E1 -> E2 (4b) -> E3 -> 4a2 -> 4a3 -> E4 -> 4c (scope and OOM) -> E5 -> phase review.
+4a (written, `a43a7ff8`) -> E1 -> E2 (4b) -> E7 -> E9 -> E3 -> 4a2 -> 4a3 -> E4 -> 4c (scope and OOM) -> E5 -> E6 -> E8 -> E10 -> phase review.
+
+- E7 and E9 follow E2 because they share the run-liveness code (the supervisor that polls the run also heartbeats the claim and writes the completion), D-2840.
 
 - E1 and E2 land first, as the item asks.
 - E2 and E4 are the same rows as PG-EFFICIENCY-GATES 4b and 4c's host admission (D-2837): their commits carry two Plan-Slice trailers, `docs/design/PG-EFFICIENCY-GATES.md#5` (resp. `#6`) and `docs/design/ORCH-EFFICIENCY-ENFORCE.md#2` (resp. `#4`), so both items close on the same evidence.
@@ -135,6 +147,85 @@ E5 tests:
 - refutation refused for each of: an unknown D-id, a missing log, an uncovered id, a missing path, a line past the end of the file, a real D-row without `Refutes: <this item>` (or with it only outside the DECISION cell, or naming another run id);
 - both parsers agree on a shared fixture table.
 
+### E7 runs outlive sessions (crit 7)
+
+Today a run's supervisor is the `spawn --wait` CLI process (or the MCP server), a child of the orchestrator session: when the session ends, the supervisor dies with it, the run's result is never written, and nobody learns the outcome (seen 2026-10-25: background seat runs lost with their session).
+
+| piece | where | behaviour |
+|---|---|---|
+| detached supervisor | `cli.py spawn --detach` (default for `implement` and `review` from E7 on; `--attach` keeps today's behaviour) -> new verb `supervise <run_id>` | `spawn` admits, writes the record `status=queued` with `owner`, then launches `python3 -m plangraph.spawner.cli --state <state> supervise <run_id>` outside the session. With a reachable user manager (4c's check) the launch is `systemd-run --user --unit=pg-sup-<12 hex> --collect --quiet -- ...`, so the session's scope stop cannot reach it. Otherwise it uses `subprocess.Popen(start_new_session=True)` with stdio redirected to the run dir (a process-group kill misses it, a cgroup stop does not; recorded as `supervisor: setsid`). `spawn --detach` returns at once with `{run_id, owner, watch_cmd}` |
+| supervisor | `supervise` | runs `SpawnService.execute` for the record (monitor, E2 stall kill, 4a result files), then delivers the completion; an exception still writes `status=failed`, `liveness=None`, `error` before exit. A second `supervise` for the same run exits at once (lock file `runs/<run>/supervisor.lock`, flock / msvcrt as E4) |
+| owner | record field `owner` = `--owner`, else `PLANGRAPH_OWNER`, else the 4a3 principal name; `claim = {key, epoch}` from the card (`claim_epoch`) when given | completion events go to recipient `owner` through the existing `FileInbox` (`state/inbox/<owner>.jsonl`, deduped on `idempotency_key`) and, as today, to the keeper outbox |
+| watch | `cli.py watch --owner X [--follow] [--ack <event_id>...]` | prints the owner's pending events (inbox lines not in `inbox/<owner>.acked`) and its live runs (records with `status in (queued, running)` whose supervisor pid + start time match). `--follow` polls every `tick` (injected sleep) and prints each new event once. `--ack` appends ids under the inbox lock. A relaunched session runs `watch --owner <me>` once and sees every completion it missed |
+
+E7 tests:
+- the `supervise` argv for both launch modes (captured, no real systemd);
+- a supervisor exception writes `failed`;
+- a second supervisor exits;
+- events reach `inbox/<owner>.jsonl` once (replayed delivery deduped);
+- `watch` lists pending events and hides acked ones;
+- live runs are filtered by pid + start time (pid reuse);
+- `--follow` with fake sleep prints each new event once.
+
+Open fact F3: whether ending a Claude Code session stops its process group or its whole cgroup. The design covers both (systemd-run when available). Before E7 merges, one detached run must outlive a killed session, as a manual check recorded in the PR.
+
+### E9 claim heartbeat (crit 9)
+
+| piece | where | behaviour |
+|---|---|---|
+| heartbeat | the E7 supervisor loop (same tick as E2's monitor) -> keeper verb `heartbeat(key, epoch)` (`keeper/store_verbs.py`, exists: extends `lease_until`, never shortens, refuses when not `claimed` or the epoch is wrong) | when the record has `claim`, the supervisor heartbeats every `heartbeat_s` (`spawn_limits`, default 300; must be < the keeper's default lease / 3, checked at admission against `whoami`'s lease when the keeper reports it) while the run lives, using the owner's keeper token (the same token file `keeper_item_reader` uses; no new credential). On `bad_state`/`conflict` it records `claim_lost` once, sends an owner event `CLAIM_LOST`, stops heartbeating and keeps the run (the result may still be useful; the L1 decides). On a network error it retries next tick and records `heartbeat_errors` |
+| no shell loops | docs only | the per-session shell heartbeat loops are retired once E9 merges; the router announces it |
+
+E9 tests:
+- a fake keeper client sees heartbeats at the fake-clock interval only while the run lives;
+- `conflict` -> `claim_lost` + one `CLAIM_LOST` event, the run continues;
+- a network error -> a retry, counted;
+- no `claim` -> no heartbeat;
+- a `heartbeat_s` too long for the lease is refused at admission.
+
+### E6 compiled boot file per level (crit 6)
+
+| piece | where | behaviour |
+|---|---|---|
+| levels on rules | keeper rule items (slice 2, `rule_set`) gain an optional `levels` list from `{L0, L1, L2, writer, seat}`; missing = every level | set by the router through `rule_set` like any rule field; retired rules (`cancelled`, slice 2) are never rendered, which is the "superseded rules dropped" part |
+| compiler | `src/plangraph/boot_file.py` `compile(items, level) -> str` (pure), `tools/boot_file.py build --level L1 [--from-export <json>] --out <file>` | renders the live rules for that level, in rule-number order, each as `<number> <title>: <text>` with its `[gate: ...]` tag kept and its D-id list cut to the newest 3 (the full list stays in DECISIONS.md); a header names the export sha/time; deterministic (same export -> same bytes) |
+| size cap | `tools/boot_file.py check <file> --level L1` | fails above `BOOT_CAP_BYTES = {L0: 24000, L1: 16000, L2: 12000, writer: 6000, seat: 4000}`; plangraph CI runs `check` on the fixtures, and the routing repo's CI runs it on its generated `boot/*.md` (a routing-side step, named in the PR as a router follow-up, not done by this lane) |
+| relaunch | `tools/boot_file.py relaunch --level L1 --card <card.md>` | prints the relaunch prompt = boot file + card, and nothing else; the router's relaunch path uses it, so a relaunched session reads only these two |
+
+E6 tests:
+- compile drops cancelled rules and keeps level-matching ones;
+- a rule without `levels` appears in every level;
+- the output is byte-stable;
+- `check` fails at cap + 1 and passes at cap;
+- `relaunch` output = boot + card exactly.
+
+### E8 live-state command (crit 8)
+
+| piece | where | behaviour |
+|---|---|---|
+| command | `tools/live_state.py --owner X [--repo owner/name ...] [--json]` over pure `src/plangraph/live_state.py` `collect(readers) -> dict` | sections: `runs` (the owner's spawner records via `watch`'s live filter plus E4's host registry), `prs` (`gh pr list --author @me --json number,headRefName,isDraft,mergeable,state`), `ci` (`gh pr checks <n> --json name,bucket` per open PR), `claims` (keeper `list` of items claimed by the owner, with lease and epoch). Each reader is injected; a reader that fails gives `{"unavailable": "<reason>"}` for its section, never an empty list, so a handoff never mistakes "no data" for "nothing open" |
+| handoff | the markdown output is at most 60 lines | a handoff card holds decisions + next steps and the line `state: tools/live_state.py --owner X` instead of copied run/PR lists |
+
+E8 tests:
+- fake readers for all four sources -> stable markdown and JSON;
+- one reader raising -> that section `unavailable`, the others intact;
+- the 60-line cap truncates with a count.
+
+### E10 efficiency metrics (crit 10)
+
+| piece | where | behaviour |
+|---|---|---|
+| tokens per run | 4a's `result.json` gains `tokens: {input, output, source}` | `source=harness` when the client reports usage (opencode `--format json` step events, qodercli/agy usage lines: open fact F4, verified per harness against one real run each before its parser is enabled), else `{estimate: estimate_tokens, source: "estimate"}` |
+| tokens per merged change | `tools/metrics.py tokens --since <iso> --repo <path>` | for each merged commit on main since `--since`, take every `Writer:` trailer run id (`run-<32hex>`, ci_commit_gate format), sum the tokens of those runs and of the seat runs whose card key is the same item (the run records give the key); merged change = merge commit; reports per item and the total, with the share of `estimate` sources shown |
+| claim-to-merge | `tools/metrics.py cycle --since <iso>` | per item: first `claimed` event -> the merge of its last PR (keeper event log + `Plan-Item:` trailers), median and p90 |
+| digest | `tools/metrics.py digest` prints both tables in the router digest format (markdown, at most 30 lines) | the router pastes or pipes it into its digest; wiring it into the routing digest job is a router follow-up |
+
+E10 tests:
+- fake run records + a fake git log -> tokens per item, with estimate shares;
+- a Writer trailer without a run record is counted as `missing`;
+- cycle time from a fake event log;
+- the digest stays within 30 lines.
+
 ## Invariants
 
 | id | invariant |
@@ -144,6 +235,10 @@ E5 tests:
 | IE3 | A stall kill always leaves `exit_class=stall`, `liveness=stalled` in the record and `result.json`, and no runner job in `running`. |
 | IE4 | Host admission is atomic under one host-wide lock, and stale registry and queue entries never count (I-E4a..d). |
 | IE5 | A pass-with-lows post needs either a VERDICT line that says LOW only with no HIGH/MED in the body, or a refutation file whose D-row carries `Refutes: <this item>` (and the seat's run id when it has one) and which covers every blocking id with a valid path:line. |
+| IE7 | A run's result and completion event never depend on the spawning session staying alive; every completion reaches its owner's inbox exactly once (deduped), and `watch` shows it until acked. |
+| IE8 | Only the supervisor of a live run heartbeats its claim; a lost claim stops the heartbeat and is reported, never silently retried into a new epoch. |
+| IE9 | Boot files contain only live rules for their level, are byte-stable for one export, and stay under their CI cap. |
+| IE10 | A live-state or metrics source that cannot be read is reported as unavailable or missing, never as empty or zero. |
 | IE6 | All decisions are pure functions of injected inputs (clock, sleep, probe, git reader, host dir) and are tested hermetically: no real models, systemd, network or memory pressure. |
 
 ## Input classes (E3, E5)
@@ -163,3 +258,5 @@ E5 tests:
 
 - F1 (E2): whether the seat harnesses stream stdout before they exit. Until verified, no seat is stall-killed (wall cap only).
 - F2 (E4): the projected-RSS defaults from 4c are carried over; MemoryPeak data comes once 4c's scopes run.
+- F3 (E7): whether ending a session stops the process group or the cgroup; one manual outlive check before E7 merges.
+- F4 (E10): which harnesses report token usage, and in which line format; one real run per harness before its parser is enabled, otherwise `estimate`.
