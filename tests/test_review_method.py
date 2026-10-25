@@ -862,13 +862,200 @@ def test_plan_phase_empty_settings_error_keeps_colon_prefix(tmp_path, monkeypatc
         world.close()
 
 
-def test_r5_doc_states_r1_r2_and_finding_3_by_design():
-    text = (Path(__file__).parent.parent / 'docs' / 'REVIEW-METHOD.md').read_text(encoding='utf-8')
+def test_r5_behaviour_r1_r2_and_no_scope_admitted(tmp_path, monkeypatch):
+    """R1 root, R2 trusted item layers, and the by-design no-scope admission,
+    as behaviour (replaces the R5 doc substring test, D-2784)."""
+    from plangraph.settings import enforce_review_scope, fixer_threshold
+    hostile = tmp_path / 'hostile'
+    hostile.mkdir()
+    (hostile / 'policy.json').write_text(
+        '{"review_method": {"mode": "per-item", "fixer_split_threshold": 2}}')
+    trusted = tmp_path / 'trusted'
+    trusted.mkdir()
+    (trusted / 'policy.json').write_text(json.dumps({
+        'review_method': {'mode': 'batch', 'fixer_split_threshold': 12},
+        'phases': {'demo:P': {'review_method': {'mode': 'per-item'}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+    monkeypatch.setenv('PLANGRAPH_REPO_ROOT', str(trusted))
+    card = {'key': 'demo:C', 'phase': 'demo:P', 'repo_root': str(hostile)}
     # R1: the settings root is never taken from the card.
-    assert 'never taken from the card' in text
-    # R2: per-item layers come only from a trusted keeper item; card fields never.
-    assert 'trusted keeper' in text
-    assert 'card is trusted caller input' not in text
-    # Finding 3 named: a no-scope review spawn in batch is admitted by design.
-    assert 'no explicit scope is admitted' in text
-    assert 'by design' in text
+    assert fixer_threshold() == 12
+    assert fixer_threshold(card=card) == 12
+    # R3: the card-selected per-item layer may not loosen the batch global.
+    with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+        enforce_review_scope(card, 'review', 'per-fixer')
+    # R2: the trusted keeper item may loosen; its phase layer is per-item.
+    enforce_review_scope(card, 'review', 'per-fixer',
+                         item={'key': 'demo:C', 'phase': 'demo:P'})
+    # Finding 3 by design: a review spawn with no explicit scope is admitted
+    # in batch -- only an explicit per-fixer scope is refused.
+    enforce_review_scope(card, 'review', None,
+                         item={'key': 'demo:C', 'phase': 'demo:P'})
+    enforce_review_scope({'key': 'demo:C'}, 'review', None)
+
+
+# D-2784 (R3): the layers a card's project/phase select are evaluated with the
+# same root but may only tighten. These pin the round-6 findings: spawner and
+# planner paths hold no keeper item, so tightening overrides were dropped and
+# a per-fixer seat was admitted where policy said batch.
+
+
+def test_card_layers_cannot_loosen_spoof(tmp_path, monkeypatch):
+    """Spoof-loosen (D-2784): per-item/20 card layers never loosen batch/10."""
+    from plangraph.settings import enforce_review_scope, fixer_threshold
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'mode': 'batch', 'fixer_split_threshold': 10},
+        'projects': {'demo': {'review_method': {'mode': 'per-item',
+                                                'fixer_split_threshold': 20}}},
+        'phases': {'demo:P': {'review_method': {'mode': 'per-item',
+                                                'fixer_split_threshold': 20}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    for card in ({'key': 'demo:C', 'phase': 'demo:P'},
+                 {'key': 'demo:C', 'project': 'demo'},
+                 {'key': 'demo:P'}):
+        with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+            enforce_review_scope(card, 'review', 'per-fixer')
+        assert fixer_threshold(card=card) == 10
+
+
+def test_card_phase_layer_batch_tightens_scope(tmp_path, monkeypatch):
+    """Phase-tighten (D-2784): a card-selected batch phase layer refuses
+    per-fixer under a per-item global; without the card layer it is admitted."""
+    from plangraph.settings import enforce_review_scope
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'mode': 'per-item'},
+        'phases': {'demo:P': {'review_method': {'mode': 'batch'}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+        enforce_review_scope({'key': 'demo:C', 'phase': 'demo:P'}, 'review', 'per-fixer')
+    # The same spawn without the card layer (no phase on the card) is admitted.
+    enforce_review_scope({'key': 'demo:C'}, 'review', 'per-fixer')
+    # An explicit batch scope is the safe direction and stays admitted.
+    enforce_review_scope({'key': 'demo:C', 'phase': 'demo:P'}, 'review', 'batch')
+
+
+def test_card_threshold_min_only_tightens(tmp_path, monkeypatch):
+    """Threshold (D-2784): fixer_threshold is min(trusted, card-selected)."""
+    from plangraph.settings import fixer_threshold
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'fixer_split_threshold': 10},
+        'phases': {'demo:low': {'review_method': {'fixer_split_threshold': 4}},
+                   'demo:high': {'review_method': {'fixer_split_threshold': 20}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    assert fixer_threshold() == 10
+    assert fixer_threshold(card={'phase': 'demo:low'}) == 4
+    # A card layer can never raise the threshold.
+    assert fixer_threshold(card={'phase': 'demo:high'}) == 10
+    # The min applies to both sides: trusted 4 beats card 20.
+    assert fixer_threshold(item={'key': 'demo:x', 'phase': 'demo:low'},
+                           card={'phase': 'demo:high'}) == 4
+
+
+def test_production_path_card_phase_batch_refuses_per_fixer(tmp_path, monkeypatch):
+    """The SpawnService admission path honours card tightening (D-2784):
+    a card-selected batch phase layer refuses the per-fixer seat."""
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'mode': 'per-item'},
+        'phases': {'demo:P': {'review_method': {'mode': 'batch'}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    service = SpawnService(runner=object(), state=tmp_path / 'state')
+    with pytest.raises(SpawnRefused) as caught:
+        asyncio.run(service.spawn(card={'key': 'demo:C', 'phase': 'demo:P',
+                                        'estimate_tokens': 1000},
+                                  prompt='review task', role='review',
+                                  review_scope='per-fixer'))
+    assert caught.value.reason == 'review_method_batch_per_fixer'
+
+
+def test_production_threshold_paths_pass_card(tmp_path, monkeypatch):
+    """The threshold callers pass the card (D-2784): planner/routing.py
+    plan_spawn and the SpawnService fixer dispatch honour the card-tightened
+    threshold (12 findings split 3x4, not 2x6)."""
+    from plangraph.planner.routing import plan_spawn
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'fixer_split_threshold': 6},
+        'phases': {'demo:P': {'review_method': {'fixer_split_threshold': 4}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    findings = [{'text': f'gap{i}', 'files': [f'src/f{i}.py']} for i in range(12)]
+    card = {'key': 'demo:C', 'phase': 'demo:P', 'estimate_tokens': 1000,
+            'findings': findings}
+    plan = plan_spawn(card, role='implement')
+    assert len(plan.writer_groups) == 3
+
+    service = SpawnService(runner=object(), state=tmp_path / 'state')
+    calls = []
+    async def fake_spawn(self, **kwargs):
+        calls.append(kwargs)
+        return {'status': 'stub'}
+    monkeypatch.setattr(SpawnService, '_spawn', fake_spawn)
+    asyncio.run(service.spawn(card=card, prompt='fix', role='implement'))
+    assert len(calls) == 3
+
+
+def test_card_layer_resolution_error_fails_closed(tmp_path, monkeypatch):
+    """Fail rule (D-2784): an error resolving card layers refuses per-fixer
+    (fail closed) and leaves the threshold at the trusted value."""
+    from plangraph.settings import enforce_review_scope, fixer_threshold
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'mode': 'per-item', 'fixer_split_threshold': 10},
+        'projects': {'demo': 'not-a-dict'},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+        enforce_review_scope({'key': 'demo:C'}, 'review', 'per-fixer')
+    assert fixer_threshold(card={'key': 'demo:C'}) == 10
+    # Cards that do not select the broken layer are unaffected.
+    enforce_review_scope({'key': 'other:C'}, 'review', 'per-fixer')
+    assert fixer_threshold(card={'key': 'other:C'}) == 10
+
+
+def test_non_dict_item_uses_global_layers(tmp_path, monkeypatch):
+    """A non-dict item yields no item layers and never crashes (D-2784)."""
+    from plangraph.settings import _item_layers, enforce_review_scope, fixer_threshold
+    assert _item_layers(None) == (None, None)
+    assert _item_layers('demo:1') == (None, None)
+    assert _item_layers(7) == (None, None)
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'mode': 'per-item', 'fixer_split_threshold': 10},
+        'projects': {'demo': {'review_method': {'fixer_split_threshold': 5}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    # A dict item selects the project layer; a non-dict one stays global.
+    assert fixer_threshold(item={'key': 'demo:1'}) == 5
+    assert fixer_threshold(item='demo:1') == 10
+    enforce_review_scope({}, 'review', 'per-fixer', item='demo:1')
+
+
+def test_root_kwarg_beats_repo_root_env(tmp_path, monkeypatch):
+    """root= wins over PLANGRAPH_REPO_ROOT for trusted and card layers."""
+    from plangraph.settings import fixer_threshold
+    env_root = tmp_path / 'envroot'
+    env_root.mkdir()
+    (env_root / 'policy.json').write_text(
+        '{"review_method": {"fixer_split_threshold": 5}}')
+    arg_root = tmp_path / 'argroot'
+    arg_root.mkdir()
+    (arg_root / 'policy.json').write_text(json.dumps({
+        'review_method': {'fixer_split_threshold': 7},
+        'phases': {'demo:P': {'review_method': {'fixer_split_threshold': 3}}},
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+    monkeypatch.setenv('PLANGRAPH_REPO_ROOT', str(env_root))
+    assert fixer_threshold() == 5
+    assert fixer_threshold(root=arg_root) == 7
+    # Card layers are evaluated with the same root.
+    assert fixer_threshold(root=arg_root, card={'phase': 'demo:P'}) == 3
+    assert fixer_threshold(card={'phase': 'demo:P'}) == 5
