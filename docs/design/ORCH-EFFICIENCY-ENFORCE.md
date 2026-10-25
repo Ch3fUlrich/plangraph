@@ -33,7 +33,7 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 
 | slice | scope | max_lines |
 |---|---|---|
-| 1 | E1a gate: hand-edit ceiling 400, `Route-Decision:` format above 50 lines per item, secret/malformed paths, `doors.py` + drift test (crit 2) | 400 |
+| 1 | E1a gate: hand-edit ceiling 400, `Route-Decision:` format above 50 lines per item, secret/malformed paths, `doors.py` + drift test (crit 2) | 400(fix rounds exempt per D-2865) |
 | 2 | E2 = PG-EFFICIENCY-GATES slice 4b with the writer/seat stall split below (crit 3); Plan-Slice stays `PG-EFFICIENCY-GATES.md#5`, this row only books the order | 400 |
 | 3 | E3a pure route core: guards, `route_stats`, prices, cost model, `RouteDecision` (crit 1, part 1) | 400 |
 | 4 | E4a host admission (row moved from PG-EFFICIENCY-GATES 4c) + host registry + lock (crit 4, part 1) | 400 |
