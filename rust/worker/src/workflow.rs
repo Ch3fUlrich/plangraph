@@ -26,7 +26,7 @@ use pg_worker_core::worktree::AttemptId;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use temporalio_common::RetryPolicy;
-use temporalio_common::protos::temporal::api::failure::v1::{Failure, FailureInfo};
+use temporalio_common::protos::temporal::api::failure::v1::{Failure, failure::FailureInfo};
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{
     ActivityOptions, ApplicationFailure, SyncWorkflowContext, TimeoutType,

@@ -2729,8 +2729,7 @@ async fn stale_state_refusal_reobserves_at_most_twice() {
             .keeper
             .execs()
             .into_iter()
-            .filter(|e| e.expected_state.is_some())
-            .last()
+            .rfind(|e| e.expected_state.is_some())
             .expect("park exec");
         assert_eq!(park.expected_state, Some(vec!["waiting".to_string()]));
 
@@ -2758,7 +2757,8 @@ async fn stale_state_refusal_reobserves_at_most_twice() {
             scheduled_activities(&handle, "CardActivities::park").await,
             3
         );
-        assert!(env.keeper.parked().is_empty());
+        // The stub still holds the first scenario's one landed park: none added.
+        assert_eq!(env.keeper.parked().len(), 1, "no refused park may land");
 
         env.stop();
     })
