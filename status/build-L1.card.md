@@ -11,7 +11,7 @@ Spawn (D-2749/D-2795): jobs/0bbdff0b/tmp/gspawn2.sh <wt> <brief> <tag> <reason> 
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | item | state / next |
 |---|---|
-| SPAWN-WIN-PARITY (HIGH, claimed) | S1: #210 CLOSED -> #216 lane/spawn-win-parity-b head f17b1568 (no Claude lines, r1d run-bde3f466, 325 passed, gate rc0); seats Haiku+qwen running ($J/seats1b.sh, log seats1b.log) -> GO-REQ per sha. S3 #213 fix r1 requeued (swps3f1). S2 after S1 merges |
+| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216 MERGED 7a101ae2 (GO D-2863; Haiku MED refuted $J/seat-s1b-haiku/refutation-L1.txt) -> finish216 CI+evidence; workst+server told. S2 agy writer queued (swps2, wt spawn-win-parity-s2, brief $J/brief-swp-s2.md). S3 #213 fix r1 running (run-f2cc0438, stallwatch). LOWs from #216 (fixture vs 2 refusal tests, substring pins) noted, not in S2 files |
 | KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); queue when budget frees; 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78 (D-2824). in_review until #211 merges -> post seat-rms-f2b-haiku unchanged |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
@@ -25,4 +25,4 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 Seats: seatpost.py/qwenprompt.py/haikuseat.sh interim OK (D-2789): count toward cap, never edit review.txt/prompt.txt, keep seat dirs; post via post.sh (verdict.judge -> tools/seat_verdict.py reviewer-<family> token).
 Traps: zsh -> bash -c; mergepath needs claim; never dump environ; Hand-Edit <=10 lines (gate); define new lane = JSON to router (D-2230).
 | REVIEW-VERDICT-PARSE (std, claimed) | PR #212 head 0777d452, qwen delta pass; finish212.sh: CI -> merge -> evidence -> submit -> post |
-| ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 hecap50 30679bb7: CI 40229693906 green, qwen pass, Haiku pass/LOW-only (parser gap: no-tools Haiku standing answer); GO-REQ sent 21:3xZ -> on GO merge + full-sha evidence. Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm). #214 MERGED 7bbd11a6 |
+| ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 MERGED 43aebc1d (GO D-2861), evidence ok (main CI 40235422603); efficiency told, E1a rebased 94e5f316. Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm after reset). #214 MERGED 7bbd11a6 |
