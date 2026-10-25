@@ -219,14 +219,3 @@ def test_stall_watchdog_read_runs_retries_winerror_5(tmp_path, monkeypatch):
     assert runs[0]["run_id"] == "run-w1"
     assert len(calls) == 3
     assert not (tmp_path / "watchdog" / "bad-records.json").exists()
-
-
-def test_platform_hook_is_nt():
-    """Module-level _is_nt() hook exists in touched modules."""
-    from plangraph.spawner import service as sp_service
-    assert hasattr(private_io, "_is_nt")
-    assert hasattr(sp_service, "_is_nt")
-    assert hasattr(stall_watchdog, "_is_nt")
-    assert isinstance(private_io._is_nt(), bool)
-    assert isinstance(sp_service._is_nt(), bool)
-    assert isinstance(stall_watchdog._is_nt(), bool)

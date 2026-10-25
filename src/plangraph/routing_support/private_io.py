@@ -11,10 +11,6 @@ import time
 ATOMIC_WRITE_ATTEMPTS = 25
 
 
-def _is_nt():
-    return os.name == 'nt'
-
-
 def atomic_write_private(path, text):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

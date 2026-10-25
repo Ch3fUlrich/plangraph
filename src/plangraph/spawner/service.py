@@ -15,10 +15,6 @@ from .runner import SpawnerRunner
 from .private_io import read_text_retry
 
 
-def _is_nt():
-    return os.name == 'nt'
-
-
 class SpawnService:
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()

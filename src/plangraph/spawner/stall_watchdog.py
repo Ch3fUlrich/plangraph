@@ -17,10 +17,6 @@ import time
 from xml.sax.saxutils import escape
 
 
-def _is_nt():
-    return os.name == 'nt'
-
-
 def tick(runs, claims, activity, *, now=None, deliver=None):
     now = time.time() if now is None else now
     findings = []
