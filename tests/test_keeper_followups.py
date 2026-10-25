@@ -299,6 +299,74 @@ def test_role_checked_verbs_refuse_a_reader_before_the_body(world, srv, verb, bo
     assert exc.value.code == 403   # routed to the verb, which refuses the role
 
 
+# ------------------------------ role refusals are audited (fix round 2, R1/R2)
+import ast  # noqa: E402
+
+#: Every role the store admits anywhere; a routed handler must name none of
+#: them (R2: the store is the single role authority, the route table must not
+#: hard-duplicate its lists).
+ROLE_NAMES = {"router", "l1", "worker", "reviewer", "reader", "system",
+              "spawner", "oversight"}
+
+#: The routed write verbs the wrong-role probe below covers (R1): every router
+#: verb plus the two PG-EFFICIENCY-GATES verbs whose handlers were hoisted too.
+R1_VERBS = sorted(set(ROUTER_VERBS) | {"log_item", "rule_set"})
+
+
+@pytest.mark.parametrize("verb", R1_VERBS)
+def test_wrong_role_refusal_is_audited(world, srv, verb):
+    # "every refusal is audited" (docs/contract/keeper-contract-v1.md): the
+    # role refusal must come from inside Store._run, so it writes its
+    # audit_log row, re-checks the principal and (for oversight) records the
+    # denial -- a hoisted handler check answers 403 before _run ever runs and
+    # audits nothing.
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/{verb}", data=json.dumps({}).encode(),
+        method="POST", headers={"Authorization": f"Bearer {world.tokens['reader']}",
+                                "Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(request, timeout=10)
+    assert exc.value.code == 403
+    rows = world.conn.execute(
+        "SELECT ok, code FROM audit_log WHERE actor=? AND action=?",
+        ("reader", verb)).fetchall()
+    assert [(r[0], r[1]) for r in rows] == [(0, "forbidden")], (
+        f"{verb}: the wrong-role 403 must leave exactly one audited refusal")
+
+
+def _routed_handlers():
+    import plangraph.keeper.api_routes as routes
+    names = {fn.__name__ for fn in list(routes.ROUTER_VERBS.values())
+             + list(routes.ROLE_CHECKED_VERBS.values())}
+    return routes.__file__, [
+        node for node in ast.walk(
+            ast.parse(open(routes.__file__, encoding="utf-8").read()))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in names]
+
+
+def test_routed_handlers_hold_no_role_check():
+    # R1/R2: the role refusal lives inside Store._run, never in a route
+    # handler -- a handler check is raised before the seam, so it writes no
+    # audit row and skips the principal re-read.  R2: the handlers must not
+    # carry the store's role lists either, or a widened store silently 403s
+    # the newly admitted role.
+    path, handlers = _routed_handlers()
+    assert len(handlers) >= 15, path
+    for fn in handlers:
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr == "_require_role":
+                raise AssertionError(f"{fn.name}: role check hoisted into the handler")
+            if isinstance(node, ast.Constant) and node.value in ROLE_NAMES:
+                raise AssertionError(
+                    f"{fn.name}: handler names the role {node.value!r};"
+                    " the store is the single role authority")
+
+
 def test_known_item_fields_cover_every_items_column(w):
     lifecycle = {"epoch", "round", "claimed_by", "delegate", "lease_until",
                  "reviewer", "model", "review_waiver", "created_at",
