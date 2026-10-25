@@ -62,3 +62,14 @@ def test_all_six_rpc_tools(tmp_path, monkeypatch):
         assert (await call('status', run_id=record['run_id']))['status'] == 'dry_run'
         assert (await call('cancel', run_id=record['run_id']))['status'] == 'cancelled'
     asyncio.run(run())
+
+
+def test_refute_finding_6_mcp_review_scope_only_in_spawn():
+    tools = {t['name']: t for t in TOOLS_METADATA}
+    assert 'review_scope' in tools['plangraph_agent_spawn']['inputSchema']['properties']
+    for name, tool in tools.items():
+        if name != 'plangraph_agent_spawn':
+            assert 'review_scope' not in tool['inputSchema'].get('properties', {}), (
+                f"{name} should not have review_scope in its inputSchema"
+            )
+
