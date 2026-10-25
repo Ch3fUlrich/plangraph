@@ -17,8 +17,8 @@ def fake_host_binaries(tmp_path, monkeypatch):
     from plangraph.planner.legs import DEFAULT_LEGS
     directory = tmp_path / 'bin'
     directory.mkdir()
-    models = '\n'.join(leg.model for leg in DEFAULT_LEGS if leg.harness == 'opencode')
     for name in ('opencode', 'agy'):
+        models = '\n'.join(leg.model for leg in DEFAULT_LEGS if leg.harness == name)
         binary = directory / name
         binary.write_text('#!' + sys.executable + '\nimport sys\n'
                           'if sys.argv[1:] == ["models"]:\n'
@@ -105,8 +105,10 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 3, record
-        assert 'cx-' in models[0] and 'gemini' in models[1] and 'mimo' in models[2]
+        assert len(models) == 8, record
+        assert len(runner.jobs) == 3
+        assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
+        assert 'gemini' in models[0] and 'mimo' in models[1] and 'openrouter' in models[2]
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
@@ -114,7 +116,9 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert record['attempts'] == []
+        assert len(record['attempts']) == 8
+        assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
+                   for a in record['attempts'])
         assert len(runner.jobs) == count
     asyncio.run(run())
 
@@ -193,7 +197,7 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
 def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'
+    assert plan['first_leg']['model'] == 'gemini-3.8-flash'
     assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
@@ -218,17 +222,25 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         async def factory(*args, **kwargs):
             if provider_stop and len(runner.jobs) == 1:
                 job_id = next(iter(runner.jobs))
-                runner.provider_response(job_id, 'omniroute/cx-gpt-6.1-sol', 429,
+                first_model = runner.jobs[job_id].model_or_combo
+                runner.provider_response(job_id, first_model, 429,
                     'provider quota exhausted', {}, store=store, source='gateway_adapter',
                     adapter_token=runner._adapter_tokens[job_id])
             return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("429")', **kwargs)
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record['attempts']) == (2 if provider_stop else 1)
-        assert store.leg_status('omniroute/cx-gpt-6.1-sol')['state'] == ('limited' if provider_stop else 'ok')
+        assert len(record['attempts']) == 8
+        launched = [a for a in record['attempts'] if a['status'] != 'skipped']
+        assert len(launched) == (2 if provider_stop else 1)
+        assert len(runner.jobs) == len(launched)
+        assert all(a['skip_reason'] == 'earlier_leg_succeeded'
+                   for a in record['attempts'][len(launched):])
+        first_model = list(runner.jobs.values())[0].model_or_combo
+        first_key = first_model if '/' in first_model else 'agy/' + first_model
+        assert store.leg_status(first_key)['state'] == ('limited' if provider_stop else 'ok')
         if provider_stop:
-            assert service.route({'estimate_tokens': 1000}).first_leg.id != 'cx-gpt-6.1-sol'
+            assert service.route({'estimate_tokens': 1000}).first_leg.model != first_model
     asyncio.run(run())
 
 

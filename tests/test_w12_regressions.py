@@ -94,7 +94,8 @@ def test_missing_card_parity(tmp_path, capsys):
     response = asyncio.run(MCPSpawnerServer(state=tmp_path).handle_rpc_request({
         'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
             'name': 'plangraph_agent_spawn', 'arguments': {'prompt': 'task', 'model_or_combo': 'Qwen3.8-Flash'}}}))
-    assert response['error']['data']['type'] == 'SpawnRefused'
+    assert response['error']['data']['type'] == 'ParameterRefused'
+    assert response['error']['code'] == -32602
     assert response['error']['message'] == capsys.readouterr().err.strip()
 
 

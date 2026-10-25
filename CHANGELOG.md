@@ -5,6 +5,11 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## Unreleased
 
 - **RT-OVERSIGHT-KEEPER-SCOPE:** add scoped, expiring oversight tokens, local GO-gated minting, fail-closed plan-refinement policy, append-only applied/denied audit and hourly budgets. SQLite v14 and PostgreSQL Migration 8 add oversight tables only; preserve main's JEV schema, all five exec ownership columns, shipped migrations and batch precondition/dry-run/dependency forms.
+- Exclude proven CHANGELOG.md-only Hand-Edit commits from keeper writer families; path inspection failures refuse writer resolution.
+
+- **KEEPER-SEAT-FAMILY-WRITER:** isolate reviewer families from verified current-epoch commit writers, then writer_model, retaining fail-closed legacy claimant/delegate fallback.
+- **KG export health:** report every export failure and missing-token misconfiguration without leaking credentials; add freshness and failure checks with optional alert inbox and systemd examples targeting the live Omnigraph URL.
+
 - Install gitleaks 8.30.1 in the CI pytest job from the pinned GitHub release (tarball plus checksums file fetched with `curl -fsSL`, the asset's own line grepped out of the downloaded checksums file and checked with `sha256sum -c`, fail-closed on mismatch or missing line), extract the single binary to `~/.local/bin`, and require `gitleaks version` to print `8.30.1` before pytest runs.
 - Allowlist the 12 historical synthetic Temporal replay ids by exact `^...$` value in both gitleaks configs (root and public build), beside the 6 the current fixtures hold, so the git-history scan stops reporting the older RT-P1-PHASE-RUNNER S2 fixture generations while a new id or any other credential-shaped value stays reported; pin all 18 ids in both configs, value by value with no pattern regex, and extend the public-build pins to match.
 
@@ -184,3 +189,15 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - Preserve owners on projector resumes, audit owner changes in the event chain,
   bound retired runs to 16, and explicitly reject removed `new_run` takeover.
 - Repair Postgres fence setup and Rust worker formatting.
+# D-2458 keeper writer-family review corrections
+
+- Fail closed with `writer_unknown` when verified commit evidence resolves to no
+  writers, including an entirely exempt CHANGELOG Hand-Edit chain.
+- Restore closing-seat coverage refusals and allow writer-family change requests;
+  direct family-gate callers remain strict and accept an optional context.
+- CHANGELOG Hand-Edit exemption requires a proven non-merge addition/modification
+  of root `CHANGELOG.md`. Missing adapter capability counts the hand; deletions
+  and merges are never exempt. Leaf commit identity is used for path/status checks.
+- Known gap: merge-conflict-only authorship detection is not implemented by the
+  merge writer traversal (which enumerates branch leaves). A Hand-Edit merge that
+  reaches the resolver is counted as anthropic, never CHANGELOG-exempt.

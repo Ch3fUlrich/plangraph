@@ -440,6 +440,40 @@ class GitAdapter:
             return {}
         return parse_trailers(proc.stdout)
 
+    def changed_paths(self, repo: str, sha: str) -> list[str]:
+        """Exact changed paths (including both sides of renames); raise on error."""
+        if not valid_commit_ref(sha):
+            raise ValueError("invalid commit")
+        proc = self._run(repo, ["diff-tree", "--root", "-m", "--no-commit-id",
+                                "--name-only", "--no-renames", "-r", "-z",
+                                "--end-of-options", sha])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read commit paths")
+        return [path for path in proc.stdout.split("\0") if path]
+
+    def changelog_only_edit(self, repo: str, sha: str) -> bool:
+        """Prove a non-merge addition/modification of the root changelog."""
+        if not valid_commit_ref(sha):
+            raise ValueError("invalid commit")
+        parents = self._run(repo, ["rev-list", "--parents", "-n", "1",
+                                   "--end-of-options", sha])
+        if parents.returncode != 0:
+            raise RuntimeError("cannot read commit parents")
+        if len(parents.stdout.split()) > 2:
+            return False
+        proc = self._run(repo, ["diff-tree", "--root", "--no-commit-id",
+                                "--name-status", "--no-renames", "-r", "-z",
+                                "--end-of-options", sha])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read commit status")
+        return proc.stdout.split("\0") == ["M", "CHANGELOG.md", ""] or proc.stdout.split("\0") == ["A", "CHANGELOG.md", ""]
+
+    def _writer_trailer(self, repo, sha):
+        trailers = self.trailers(repo, sha)
+        if trailers.get("Hand-Edit") and not trailers.get("Writer"):
+            trailers = dict(trailers, _writer_commit=sha)
+        return trailers
+
     def writer_trailers(self, repo: str, sha: str) -> list[dict[str, str]]:
         """Trailer dicts of the commits that authored the change behind *sha*.
 
@@ -473,7 +507,7 @@ class GitAdapter:
             # ignoring the commits they carry.
             return []
         if len(parents) < 2:
-            return [self.trailers(repo, sha)]
+            return [self._writer_trailer(repo, sha)]
         base = self._run(
             repo, ["merge-base", "--end-of-options", parents[0], parents[1]]
         )
@@ -492,7 +526,7 @@ class GitAdapter:
             commit = line.strip().lower()
             if not valid_commit_ref(commit):
                 continue
-            out.append(self.trailers(repo, commit))
+            out.append(self._writer_trailer(repo, commit))
         return out
 
     def commit_times(self, repo: str, sha: str) -> tuple[float | None, float | None]:

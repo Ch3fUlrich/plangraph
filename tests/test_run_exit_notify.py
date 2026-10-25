@@ -5,11 +5,12 @@ import sys
 import pytest
 
 from plangraph.spawner.runner import spawn_service
+from plangraph.spawner.notify import FileInbox
 
 
 @pytest.mark.parametrize('rc,status', [(0, 'completed'), (7, 'failed'), (-9, 'failed'), (124, 'timeout')])
 def test_terminal_delivery_once(tmp_path, rc, status):
-    service = spawn_service(state=tmp_path)
+    service = spawn_service(state=tmp_path, keeper_sink=FileInbox(tmp_path))
     record = dict(run_id='run-test', status=status, exit_code=rc, started=1, ended=2)
     service._save(record)
     service._save(record)
@@ -59,7 +60,7 @@ def test_command_hook_and_injected_sink(tmp_path, monkeypatch):
         def deliver(self, recipient, event):
             self.events.append((recipient, event))
     sink = Sink()
-    service = spawn_service(state=tmp_path, completion_sink=sink)
+    service = spawn_service(state=tmp_path, completion_sink=sink, keeper_sink=sink)
     record = dict(run_id='run-hook', status='failed', exit_code=9, started=1, ended=2)
     service._save(record)
     service._save(record)
@@ -89,7 +90,7 @@ def test_real_child_exit(tmp_path, monkeypatch, script, rc):
         monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '.03')
     monkeypatch.setattr('plangraph.spawner.runner.build_command', lambda **kw: [sys.executable, '-c', script])
     runner = SpawnerRunner()
-    service = spawn_service(runner=runner, state=tmp_path)
+    service = spawn_service(runner=runner, state=tmp_path, keeper_sink=FileInbox(tmp_path))
     async def run():
         job = await runner.spawn('test', model_or_combo='omniroute/cx-gpt-6.1-sol')
         await runner._tasks[job.job_id]
