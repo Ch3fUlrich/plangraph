@@ -8,7 +8,7 @@ export, so the chain is checked from outside with what it does expose:
   new head must equal ``sha256(previous head + canonical event)`` for the event we expect
   (type, actor, role, key, payload), which also proves attribution and canonical JSON;
 * reads, refusals and heartbeats must not move the head;
-* ``python -m plangraph.keeper.cli admin verify`` (the adapter, so it works on either
+* ``python3 -m plangraph.keeper.cli admin verify`` (the adapter, so it works on either
   backend) recomputes the whole chain and compares the cached rows with the events.
 
 Starts its own keeper through the contract harness (a subprocess on a free localhost port;

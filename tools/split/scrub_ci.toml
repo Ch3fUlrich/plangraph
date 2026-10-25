@@ -2,7 +2,7 @@
 # (.github/workflows/tests.yml "scrub" job).  The whole tree is PUBLIC (D-1751), so there are
 # no path-wide rule allowances: each entry names one file, one rule and the sha256 of one
 # matched value, plus why it is synthetic (D-1883).  Get hashes with
-#   python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml --hash-hits
+#   python3 tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml --hash-hits
 # (prints hashes only, never values).  Symlink and private-word hits are never allowable.
 
 [scrub]

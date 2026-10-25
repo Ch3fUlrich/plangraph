@@ -131,17 +131,26 @@ class SpawnService:
         return reader(key)
 
     def _gate_plan(self, plan, card, role):
-        """D-2739 §0.2a/d: drop flash / weaker-than-writer legs from a fix run."""
+        """D-2744: drop retired-family legs (any role); D-2739 §0.2a/d: drop flash /
+        weaker-than-writer legs from a fix run."""
         from dataclasses import replace as _replace
         from plangraph.gates.admission import filter_fixer_legs
-        kept, dropped = filter_fixer_legs(plan.legs, card or {}, role)
-        if not dropped:
+        from plangraph.gates.models import retired
+        gone = [leg for leg in plan.legs if retired(leg.model, getattr(leg, 'family', None))]
+        live = [leg for leg in plan.legs if leg not in gone]
+        kept, dropped = filter_fixer_legs(live, card or {}, role)
+        if not dropped and not gone:
             return plan
         skipped = tuple(plan.skipped) + tuple(
+            {'leg': leg.id, 'reason': 'retired_family',
+             'skip_reason': f'retired family (D-2744): {leg.model} has no working account'}
+            for leg in gone) + tuple(
             {'leg': leg.id, 'reason': 'fixer_floor',
              'skip_reason': f'fixer floor (D-2739 §0.2d): {leg.model} is flash or weaker than the writer'}
             for leg in dropped)
-        error = plan.error or (None if kept else 'fixer floor (D-2739 §0.2d): no leg at or above the writer tier')
+        error = plan.error or (None if kept else
+                               'retired family (D-2744): no usable leg' if gone and not dropped else
+                               'fixer floor (D-2739 §0.2d): no leg at or above the writer tier')
         return _replace(plan, legs=tuple(kept), skipped=skipped, error=error)
 
     async def spawn(self, *args, **kwargs):

@@ -310,7 +310,7 @@ def test_numstat_counting_and_slices():
     assert lane.size_verdict(900, 30, slice_budget=1000)[0] == "ok"
     assert lane.size_verdict(1100, 30, slice_budget=1000)[0] == "fail"
     design = (ROOT / "docs/design/PG-EFFICIENCY-GATES.md").read_text()
-    assert lane.design_slices(design) == {1: 3000}
+    assert lane.design_slices(design) == {1: 3000, 2: 600}
     assert lane.parse_slice_trailer("docs/design/PG-EFFICIENCY-GATES.md#1") == (
         "docs/design/PG-EFFICIENCY-GATES.md", 1)
 
@@ -356,3 +356,69 @@ def test_lane_gates_cli(tmp_path):
     _git(repo, "commit", "-qm", "design\n\nPlan-Slice: docs/D.md#1")
     out = subprocess.run(big, capture_output=True, text=True)
     assert out.returncode == 0, out.stdout
+
+
+# ------------------------------------------------------------ D-2744 retired family, first-review seats
+def test_retired_family_dropped_from_every_role(tmp_path):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.service import SpawnService
+    assert models.retired("omniroute/deepseek-direct-flash") == "deepseek"
+    assert models.retired("x/y", family="DeepSeek") == "deepseek"
+    assert models.retired("mimo/mimo-v2.6-pro", family="mimo") is None
+    service = SpawnService(runner=object(), state=tmp_path)
+    legs = tuple(leg for leg in DEFAULT_LEGS if leg.family in ("deepseek", "mimo"))
+    for role in ("review", "implement"):
+        plan = service._gate_plan(SpawnPlan(legs, (), "t", (), ()), {}, role)
+        assert plan.legs and all(leg.family != "deepseek" for leg in plan.legs)
+        assert {s["reason"] for s in plan.skipped} == {"retired_family"}
+    only = service._gate_plan(SpawnPlan(tuple(l for l in legs if l.family == "deepseek"), (), "t", (), ()),
+                              {}, "review")
+    assert not only.legs and "D-2744" in only.error
+
+
+PASS_SEAT = "looks fine\nVERDICT: PASS\n"
+FIX_SEAT = "- HIGH src/a.py:3 wrong sign\nVERDICT: PASS\n"
+
+
+@pytest.mark.parametrize("outputs,expect", [
+    ({"mimo": PASS_SEAT, "qwen": PASS_SEAT}, "pass"),
+    ({"mimo": PASS_SEAT, "qwen": FIX_SEAT}, "changes"),
+    ({"mimo": PASS_SEAT, "qwen": ""}, None),
+    ({"mimo": FIX_SEAT, "qwen": "Error: 402 insufficient balance"}, None),
+    ({"mimo": PASS_SEAT}, None),
+])
+def test_first_review_needs_two_seats_with_text(outputs, expect):
+    outcome, reasons = F.first_review(outputs)
+    assert outcome == expect, reasons
+
+
+def test_lane_gates_seats_cli(tmp_path):
+    (tmp_path / "mimo.out").write_text(PASS_SEAT)
+    (tmp_path / "qwen.out").write_text("")
+    tool = [sys.executable, str(ROOT / "tools/lane_gates.py"), "seats",
+            str(tmp_path / "mimo.out"), str(tmp_path / "qwen.out")]
+    out = subprocess.run(tool, capture_output=True, text=True)
+    assert out.returncode == 3 and "no verdict" in out.stdout
+    (tmp_path / "qwen.out").write_text(PASS_SEAT)
+    assert subprocess.run(tool, capture_output=True).returncode == 0
+
+
+def test_no_bare_python_invocation():
+    """D-2746 (11): hosts ship ``python3`` only; code, tests, scripts and docs never call ``python``."""
+    import re
+    bare = re.compile(r"(^|[^\w/.-])python( -m | tools/| tests/)|^#!/usr/bin/env python$", re.M)
+    files = subprocess.run(["git", "-C", str(ROOT), "ls-files", "src", "tests", "tools", "skills", "docs",
+                            ".github", "deploy", "README.md", "CONTRIBUTING.md"],
+                           capture_output=True, text=True, check=True).stdout.split()
+    skip = ("deploy/bootstrap.ps1", "docs/plan/")  # Windows ships ``python``; plan docs are history
+    hits = []
+    for name in files:
+        if name.startswith(skip) or name == "tests/test_efficiency_gates.py":
+            continue
+        try:
+            text = (ROOT / name).read_text("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        hits += [f"{name}: {m.group(0).strip()}" for m in bare.finditer(text)]
+    assert hits == []

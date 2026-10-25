@@ -1,6 +1,6 @@
 """``pg`` — the keeper command line client.
 
-``python -m plangraph.keeper.cli <verb> [args]`` talks to the API named by
+``python3 -m plangraph.keeper.cli <verb> [args]`` talks to the API named by
 ``PG_URL`` with the token from ``PG_TOKEN_FILE``.  ``pg admin …`` runs locally
 on the keeper host.  Exit codes: 0 ok, 2 refused, 3 unreachable.
 """

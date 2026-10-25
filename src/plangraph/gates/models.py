@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["FLASH", "STANDARD", "STRONG", "model_tier", "fixer_floor", "fixer_ok"]
+__all__ = ["FLASH", "STANDARD", "STRONG", "RETIRED_FAMILIES", "model_tier", "fixer_floor", "fixer_ok", "retired"]
 
 FLASH, STANDARD, STRONG = 0, 1, 2
 
@@ -32,3 +32,15 @@ def fixer_floor(writer_model=None):
 
 def fixer_ok(model, writer_model=None):
     return model_tier(model) >= fixer_floor(writer_model)
+
+
+#: D-2744: model families with no working account; any leg of them is refused.
+RETIRED_FAMILIES = ("deepseek",)
+
+
+def retired(model, family=None):
+    """Retired family name for a leg (``family`` or a substring of the id), or None."""
+    for name in RETIRED_FAMILIES:
+        if str(family or "").lower() == name or name in str(model or "").lower():
+            return name
+    return None

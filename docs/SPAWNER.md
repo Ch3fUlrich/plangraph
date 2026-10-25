@@ -2,16 +2,16 @@
 
 ## Spawn by card
 
-Install the package on each host, then use `python -m plangraph.spawner.cli`
-(or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
+Install the package on each host, then use `python3 -m plangraph.spawner.cli`
+(or `python3 tools/plangraph-spawn.py` from a source checkout). No central keeper
 or Temporal service is required for this slice.
 
 ```bash
-python -m plangraph.spawner.cli route --card @card.json --role implement --json
-python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
-python -m plangraph.spawner.cli spawn --card @card.json --role review --review-of run-ID "Review"
-python -m plangraph.spawner.cli ps
-python -m plangraph.spawner.cli result run-ID
+python3 -m plangraph.spawner.cli route --card @card.json --role implement --json
+python3 -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
+python3 -m plangraph.spawner.cli spawn --card @card.json --role review --review-of run-ID "Review"
+python3 -m plangraph.spawner.cli ps
+python3 -m plangraph.spawner.cli result run-ID
 ```
 
 Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise
@@ -100,7 +100,7 @@ Duplicate model rows expose `benchmark_row_count`; the first row supplies metric
 Before an OmniRoute image release or swap, check both host database snapshots:
 
 ```bash
-python tools/bench_gate.py --db workstation.sqlite --db server.sqlite --json
+python3 tools/bench_gate.py --db workstation.sqlite --db server.sqlite --json
 ```
 
 Every distinct model in `DEFAULT_LEGS` with an `implement` or `review` role must
@@ -457,7 +457,7 @@ All 3 participants run over the **exact same** `l2-worker` combo definition with
 
 Run stdio MCP server:
 ```bash
-python -m plangraph.spawner.mcp
+python3 -m plangraph.spawner.mcp
 ```
 
 #### Available MCP Tools
@@ -514,15 +514,15 @@ matches the effective one.
 
 - **Initialize & Seed Database**:
   ```bash
-  python -m plangraph.spawner.catalog_db init-and-seed [--db-path PATH]
+  python3 -m plangraph.spawner.catalog_db init-and-seed [--db-path PATH]
   ```
 - **Export Deterministic JSON**:
   ```bash
-  python -m plangraph.spawner.catalog_db export-json [--output PATH]
+  python3 -m plangraph.spawner.catalog_db export-json [--output PATH]
   ```
 - **Export OmniRoute Combos**:
   ```bash
-  python -m plangraph.spawner.catalog_db export-combos [--output PATH]
+  python3 -m plangraph.spawner.catalog_db export-combos [--output PATH]
   ```
 
 ---
@@ -628,7 +628,7 @@ are typed `SpawnRefused` failures.
 
 For source checkouts, add the repository's `tools` directory to PATH to expose
 the executable `plangraph-spawn` entry point (or use
-`python -m plangraph.spawner.cli`).
+`python3 -m plangraph.spawner.cli`).
 # Completion delivery contract
 
 Completion events carry `idempotency_key = run_id + ':' + status`. Delivery is

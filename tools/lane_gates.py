@@ -9,7 +9,11 @@
 * base pin: at most one merge from main inside the lane (the L1 merges main
   once, right before the final review).
 
-Exit 0 pass (warnings printed), 1 a gate failed, 2 git or usage error.
+``seats <file> <file> [...]``: first-review round over seat output files
+(§0.2c): every seat must return text and at least two seats must run.
+
+Exit 0 pass (warnings printed), 1 a gate failed (seats: changes requested),
+2 git or usage error, 3 seats gave no round verdict (re-run the empty seats).
 """
 from __future__ import annotations
 
@@ -87,6 +91,22 @@ def check(repo, base, head):
     return 1 if failed else 0
 
 
+def seats(paths):
+    from plangraph.gates.findings import first_review
+    outputs = {}
+    for path in paths:
+        try:
+            outputs[Path(path).stem] = Path(path).read_text("utf-8", "replace")
+        except OSError as exc:
+            print(f"lane-gates: seats: cannot read {path}: {type(exc).__name__}", file=sys.stderr)
+            return 2
+    outcome, reasons = first_review(outputs)
+    for reason in reasons:
+        print(f"lane-gates: seat {reason}")
+    print(f"lane-gates: first review {(outcome or 'no verdict, re-run').upper()}")
+    return {"pass": 0, "changes": 1}.get(outcome, 3)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -94,7 +114,11 @@ def main(argv=None):
     c.add_argument("--base", required=True)
     c.add_argument("--head", required=True)
     c.add_argument("--repo", default=".")
+    s = sub.add_parser("seats")
+    s.add_argument("files", nargs="+")
     args = ap.parse_args(argv)
+    if args.cmd == "seats":
+        return seats(args.files)
     try:
         return check(args.repo, args.base, args.head)
     except subprocess.CalledProcessError as exc:

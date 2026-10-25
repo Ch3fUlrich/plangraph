@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 
 __all__ = ["BLOCKING", "seat_text", "parse_seat_verdict", "parse_findings", "blocking", "failure_reason", "seat_outcome",
-           "findings_from_files", "build_fix_brief", "missing_ids"]
+           "FIRST_REVIEW_SEATS", "first_review", "findings_from_files", "build_fix_brief", "missing_ids"]
 
 BLOCKING = frozenset({"HIGH", "MED", "CRITICAL", "BLOCKER", "MAJOR"})
 _SEV = r"(?P<sev>CRITICAL|BLOCKER|HIGH|MAJOR|MEDIUM|MED|MINOR|LOW|NIT)"
@@ -172,6 +172,29 @@ def seat_outcome(raw, verdict=None, status=None, seat="seat"):
     m = _FAILED.search(text)
     why = f"failed seat output ({m.group(0)!r})" if m else "no VERDICT line"
     return None, f"{why} and no HIGH/MED finding", findings
+
+
+#: §0.2c: a first review needs this many seats, each returning text.
+FIRST_REVIEW_SEATS = 2
+
+
+def first_review(outputs, need=FIRST_REVIEW_SEATS):
+    """Round outcome over ``{seat: raw output}``: ``(outcome, reasons)``.
+
+    ``None`` (re-run) when fewer than *need* seats ran or any seat gave no
+    verdict (empty, failed, billing or fence output); else ``changes`` when any
+    seat asks for changes, else ``pass``.
+    """
+    reasons, outcomes = [], []
+    for seat, raw in outputs.items():
+        outcome, reason, _ = seat_outcome(raw, seat=seat)
+        outcomes.append(outcome)
+        reasons.append(f"{seat}: {outcome or 'no verdict'} ({reason})")
+    if len(outputs) < need:
+        return None, reasons + [f"{len(outputs)} seat(s), first review needs {need} with text"]
+    if None in outcomes:
+        return None, reasons
+    return ("changes" if "changes" in outcomes else "pass"), reasons
 
 
 def findings_from_files(paths):

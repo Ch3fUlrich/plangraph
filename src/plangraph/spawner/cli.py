@@ -1,4 +1,4 @@
-"""Card-only per-host agent CLI: python -m plangraph.spawner.cli."""
+"""Card-only per-host agent CLI: python3 -m plangraph.spawner.cli."""
 from __future__ import annotations
 
 import argparse

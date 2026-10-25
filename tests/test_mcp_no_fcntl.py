@@ -45,7 +45,7 @@ def test_mcp_imports_without_fcntl():
 
 
 def test_mcp_module_entry_starts_without_fcntl():
-    # ``python -m plangraph.keeper.mcp`` with an empty stdin exits cleanly.
+    # ``python3 -m plangraph.keeper.mcp`` with an empty stdin exits cleanly.
     proc = _run_path(
         "import runpy\n"
         "sys.argv = ['plangraph.keeper.mcp']\n"

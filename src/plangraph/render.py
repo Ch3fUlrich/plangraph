@@ -21,7 +21,7 @@ Public API
 ``cdn_script_tags() -> list[str]``
     The exact ``<script defer src=…>`` tags used when ``cdn=True``.
 ``main(argv=None) -> int``
-    CLI: ``python -m plangraph.render --snapshot S.json --out plan.html [--cdn]``.
+    CLI: ``python3 -m plangraph.render --snapshot S.json --out plan.html [--cdn]``.
 """
 
 from __future__ import annotations

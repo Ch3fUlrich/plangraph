@@ -16,6 +16,8 @@ Goal: the §0 rules that broke in practice become code, so no L1 has to remember
 | 0.2b | size gate | `tools/lane_gates.py size` (CI) | > 400 changed lines or > 15 files vs merge-base (lockfiles/generated/vendor excluded) fails, warns at 200/8, unless a `Plan-Slice:` trailer names a design slice whose budget covers it |
 | 0.2f | base pin | `tools/lane_gates.py base` (CI) + spawner | > 1 merge-from-main in the lane fails; writer/fixer briefs that ask to merge main are refused (the one merge is the L1's final step) |
 | 0.2a | plan gate + fixer strength | spawner `gates.admission.admit` | HIGH (or `est_lines > 400`) implement run without a reviewed `design` log entry is refused; fixer legs weaker than the writer or flash-class are dropped |
+| 0.2c | first review = two seats with text | `gates.findings.first_review`, `tools/lane_gates.py seats <files>` | fewer than 2 seats, or any seat without a verdict -> no round verdict (exit 3, re-run that seat); any seat changes -> changes |
+| D-2744 | retired family | `gates.models.retired` in `SpawnService._gate_plan` (every role, overrides too) | deepseek legs (family or model id) dropped with skip reason `retired_family`; no leg left -> refused; an all-limited plan stays exit 4 |
 
 ## Invariants
 
@@ -51,3 +53,23 @@ Goal: the §0 rules that broke in practice become code, so no L1 has to remember
 | slice | scope | max_lines |
 |---|---|---|
 | 1 | all gates above, one lane (D-2739: single task, single go) | 3000 |
+| 2 | decisions in the keeper (D-2746 (10)): rule items, rule tree, generated DECISIONS.md | 600 |
+
+## Slice 2: decisions in the keeper (operator D-2746 (10))
+
+Goal: the plan graph is the single source of truth for rules; `routing/DECISIONS.md` is a generated view.
+
+| part | where | behaviour |
+|---|---|---|
+| rule item | project `decisions`, key `decisions:RULE-<n>` (e.g. `RULE-0-2A`), kind `decision`, `operator=0`, `wait=NULL` | description = the rule line verbatim; title = number + bold title; `source` = section; `note` = `tag=<keep|gate:..|gate-todo ..>; d=<D-ids>; order=<n>` |
+| in force / retired | state `done` = in force, `cancelled` = retired | done/cancelled rows never show in ready, blocked, critical path, stall or operator-wait views; no lifecycle (claim/review) applies |
+| write path | new router-only verb `rule_set` (event `rule_set`, folded by `events.fold`) | creates or replaces one rule item and its depends_on edges in one event; a replace keeps history in the event chain; refuses keys outside project `decisions`, text with credentials, edges to unknown rule keys, cycles |
+| rule tree | `edges` depends_on rule -> rule | from rule-number references in the rule text (`per 3.2`, `(7.1)`, `0.2b`) plus the §0.2 pipeline 0.2a -> 0.2b -> 0.2c -> 0.2d -> 0.2e; `tools/decisions_view.py tree` walks it |
+| section text | items `decisions:PREAMBLE`, `decisions:SECTION-<n>` (kind `decision`, done) | description = the block's text with one `{{<rule number>}}` placeholder per rule line |
+| import | `tools/decisions_view.py import DECISIONS.md` -> `rule_set` ops (dry-run default) | round-trip check before writing: render(parse(file)) == file byte for byte |
+| view | `tools/decisions_view.py render` (keeper `snapshot`) -> DECISIONS.md | deterministic: sections by number, rules by `order` |
+| CI check | routing repo: `decisions.json` (keeper export, committed with the view) and `DECISIONS.md == render(decisions.json)`; host check `export == keeper` | a hand edit of DECISIONS.md fails CI; CI never needs keeper access |
+
+Invariants: I7 render(import(file)) == file; I8 a rule key exists once, its latest `rule_set` wins on replay; I9 rule edges form a DAG.
+
+Switch-over for routing: (1) slice 2 merged + keeper deployed; (2) `decisions_view.py import routing/DECISIONS.md --apply` (router token); (3) `render` == file, commit `decisions.json` + CI check in routing; (4) from then a new D-row = `rule_set` first (CLI `plangraph-keeper rule set`), then `render`, commit view + log row together; hand edits of DECISIONS.md are refused by CI.

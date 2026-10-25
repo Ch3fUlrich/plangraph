@@ -5,7 +5,7 @@ and no keeper import beyond this module's own HTTP client: every tool call is on
 request to the keeper API (base URL ``PG_URL``) carrying the bearer token read
 from the file named by ``PG_TOKEN_FILE``.  Token values are never logged or
 returned.  Protocol version is ``2025-06-18`` and is echoed back when the client
-asks for a different one.  Entry point: ``python -m plangraph.keeper.mcp``:
+asks for a different one.  Entry point: ``python3 -m plangraph.keeper.mcp``:
 ``main()`` switches stdin/stdout to UTF-8 first, since Windows stdio defaults
 to cp1252 and a non-ASCII item title would otherwise kill the server.
 

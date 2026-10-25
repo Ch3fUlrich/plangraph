@@ -139,7 +139,7 @@ def run_cli(argv):
 
 
 def mcp_lines(e2e, requests):
-    """Drive ``python -m plangraph.keeper.mcp`` over pipes; return stdout."""
+    """Drive ``python3 -m plangraph.keeper.mcp`` over pipes; return stdout."""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(SRC)
     env["PG_URL"] = e2e.base

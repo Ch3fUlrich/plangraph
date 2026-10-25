@@ -7,7 +7,7 @@ They are hermetic inputs for the projector parser and apply tests; the recorder 
 
 Regenerate (needs `temporalio` and a server; default address `127.0.0.1:17233`, namespace `default`):
 
-    TEMPORAL_ADDRESS=127.0.0.1:17233 python tests/projector_record.py --out tests/fixtures/temporal
+    TEMPORAL_ADDRESS=127.0.0.1:17233 python3 tests/projector_record.py --out tests/fixtures/temporal
 
 Regenerating changes run ids and event times; commit only when the history shape needs to change.
 
