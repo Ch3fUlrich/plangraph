@@ -1,4 +1,4 @@
-# build-L1 card · gen-30 · 2026-10-25 08:3xZ (D-2717) · NO cron · hb loop = jobs/2f3882a9/tmp/hb.sh (3x8min, restart on exit) over ops/hb-keys.txt
+# build-L1 card · gen-30 · 2026-10-25 08:2xZ (D-2717) · NO cron · hb loop = jobs/2f3882a9/tmp/hb.sh (3x8min, restart on exit) over ops/hb-keys.txt
 Rules: D-2643/2644 batch review at end; D-2534 phase-batch; D-2539 Haiku first w/o Claude writer; D-2540 first review 2 families, re-review 1; D-2511 seats != any writer family.
 Writers D-2683/2684: agy gemini > mimo-pro > OR free/opencode free (~01Z) > mimo-flash; never Claude; cx out ~10-30. agy -p never a seat (L24). D-2706: floor MemAvailable 2000 MB (incl. projected RSS), max 4 writers here, rest -> workst-L1-autoos. One compaction = recycle (new session from handoff).
 D-2716: no new writers on coding.vm until <=4 agent-run procs; route to workst.
@@ -8,7 +8,8 @@ D-2719 done: AutoOS ff d386df2e->282abaab.
 | Item | State / next |
 |---|---|
 | DONE gen-30 | #188 0c4e8913, #187 532c95e3, #184 0de64eb5 (3 keys), #190 318f95ce; D-2721 closed 5; #183 DONE |
-| STALL-WATCHDOG / MODEL-ROUTE-SPAWN | code merged; live install + prod run: GO-REQ sent to routing (D-id needed) |
+| STALL-WATCHDOG (claimed e2) | D-2722: timer ENABLED code, pinned live-stall f0e8a4a2 (#191 keeper-skip merged); env ~/.config/plangraph/watchdog.env; bridge ~/.local/share/plangraph/stall-bridge.sh -> routing L0 inbox; W12 replay pass. Open: routing decisions re-alert + parent_session gap; workst task (brief sent); token Q-STALL-WD-TOKEN operator. Rollback: systemctl --user disable --now plangraph-stall-watchdog.timer |
+| MODEL-ROUTE-SPAWN (claimed e1) | prod run: code host 3 real spawns (run-667e9a9e, run-b8917744, run-80542f93, qwen leg); workst spawns asked; then 2 non-Claude seats != writer family |
 | #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | r9 88bc89d4: Haiku+dsfree delta FAIL. r10 = ROUND 3/3 brief scope-r10.md (group A store_oversight/auth/store, group B db.py) queued on workst (order sq12, r10a, r10b; cap full 08:3xZ). Next: merge both into r6, keeper tests, delta seat (Haiku + non-Claude), pass -> GO-REQ round 3; fail -> replan |
 | RT-P1-EXEC-OWNERSHIP-SQ12 (HIGH, D-2703) | writer workst lane/exec-own-sq12; then 2 seats, GO-REQ; parent stays in_review |
 | #166 KEEPER-PG-RECONNECT | after #164 |
