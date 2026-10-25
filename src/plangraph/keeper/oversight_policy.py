@@ -341,7 +341,7 @@ def _check_add_dep(index, op, items, projects):
     return []
 
 
-def check_batch(items_by_key, ops, projects=()):
+def check_batch(items_by_key, ops, projects=(), *, normalize_create=None):
     """Return the deny verdicts for *ops*; empty means the batch is granted.
 
     *items_by_key* is the graph as it is BEFORE the batch (the store passes
@@ -371,12 +371,12 @@ def check_batch(items_by_key, ops, projects=()):
             raw = op.get("item")
             if not found and isinstance(raw, dict):
                 key = _key_of(op)
-                items[key] = {
-                    "key": key, "project": raw.get("project"),
-                    "id": raw.get("id"), "kind": raw.get("kind", "lane"),
-                    "review_tier": raw.get("review_tier"), "state": "open",
-                    "depends_on": list(raw.get("depends_on") or []),
-                }
+                if normalize_create is None:
+                    from .store_create import oversight_definition
+                    definition = oversight_definition(raw)
+                else:
+                    definition = normalize_create(raw)
+                items[key] = dict(definition, state="open")
             continue
         if name == "edit":
             found = _check_edit(index, op, items, projects)

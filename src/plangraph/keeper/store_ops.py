@@ -464,7 +464,8 @@ class OpsMixin:
         graph = self._all_items() if items is None else items
         items_by_key = {item["key"]: item for item in graph}
         for verdict in oversight_policy.check_batch(
-                items_by_key, ops, principal.projects):
+                items_by_key, ops, principal.projects,
+                normalize_create=lambda raw: self._normalise_create(raw, principal)):
             self._oversight_fail = {
                 "index": verdict.index, "op": ops[verdict.index],
                 "key": None if verdict.key == "-" else verdict.key,
@@ -507,7 +508,10 @@ class OpsMixin:
                                   allow_new=batch.allow_new)
             self._refuse_strict_allow_new(before, batch)
         except Refused as exc:
-            owner = next((i for i, keys in sorted(batch.touched.items())
+            # For cycles, attribute the final contributing op, not the first
+            # item mentioned by the whole-graph diagnostic.
+            owner = next((i for i, keys in sorted(batch.touched.items(),
+                                                  reverse=exc.code == "cycle")
                           if any(k in exc.msg for k in keys)), None)
             if owner is None:
                 raise Refused(exc.code, f"op - validate: {exc.code} "

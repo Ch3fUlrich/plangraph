@@ -85,6 +85,37 @@ def _active_edit_only(fields):
             and not set(fields) - _ACTIVE_EDITABLE)
 
 
+def creation_tier(raw, definition, principal):
+    explicit = raw.get("review_tier") if isinstance(raw, dict) else None
+    default = default_review_tier(definition["project"], definition["id"],
+                                  definition.get("title"), definition.get("track"))
+    if explicit is not None:
+        tier = validated_review_tier(explicit)
+        # Oversight may only RAISE tiers, never lower below default
+        # But oversight can set tier='none' for questions (per policy)
+        allowed_lowering = principal.role == "router"
+        oversight_can_set_none = (principal.role == "oversight"
+                                 and tier == "none"
+                                 and definition.get("kind") == "question")
+        if tier_needs_router(tier) and not (allowed_lowering or oversight_can_set_none):
+            raise Refused("forbidden",
+                          "only the router may set review_tier='none'")
+        # Check if explicit tier is lower than default
+        # Order: none < standard < high (none already handled above)
+        tier_order = {"standard": 1, "high": 2}
+        if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
+            if not (allowed_lowering or oversight_can_set_none):
+                if principal.role == "oversight":
+                    # Oversight's raise-only grant clamps to the default.
+                    tier = default
+                else:
+                    raise Refused(
+                        "forbidden",
+                        "only the router may lower review_tier below its default")
+        return validated_decision_tier(tier, definition["evidence_kinds"])
+    return default
+
+
 class CreateMixin:
     """Create, import and edit item definitions."""
 
@@ -122,12 +153,10 @@ class CreateMixin:
             # ``under`` is a create-only attachment; a legacy import may not
             # smuggle one in (checked before _normalise resolves it).
             raise Refused("validation", "import_items does not accept 'under'")
-        defs = [self._normalise(raw) for raw in items]
+        defs = [self._normalise_create(raw, principal) for raw in items]
         for raw in items:
             if isinstance(raw, dict):
                 validate_family(raw.get("owner_family"))
-        for raw, definition in zip(items, defs):
-            definition["review_tier"] = self._tier_for(raw, definition, principal)
         for definition in defs:
             self._may_manage(principal, definition["project"])
         if principal.role != "router":
@@ -231,40 +260,18 @@ class CreateMixin:
         self._assert_unlocked(gate)
         return gate
 
+    def _normalise_create(self, raw, principal):
+        definition = self._normalise(raw)
+        definition["review_tier"] = self._tier_for(raw, definition, principal)
+        return definition
+
     def _tier_for(self, raw, definition, principal):
         """The tier to store: an explicit (validated) value, else the default.
 
         An explicit tier LOWER than the computed default requires the router role.
         Raising or keeping the same tier is allowed for router and L1.
         """
-        explicit = raw.get("review_tier") if isinstance(raw, dict) else None
-        default = default_review_tier(definition["project"], definition["id"],
-                                      definition.get("title"), definition.get("track"))
-        if explicit is not None:
-            tier = validated_review_tier(explicit)
-            # Oversight may only RAISE tiers, never lower below default
-            # But oversight can set tier='none' for questions (per policy)
-            allowed_lowering = principal.role == "router"
-            oversight_can_set_none = (principal.role == "oversight" 
-                                     and tier == "none" 
-                                     and definition.get("kind") == "question")
-            if tier_needs_router(tier) and not (allowed_lowering or oversight_can_set_none):
-                raise Refused("forbidden",
-                              "only the router may set review_tier='none'")
-            # Check if explicit tier is lower than default
-            # Order: none < standard < high (none already handled above)
-            tier_order = {"standard": 1, "high": 2}
-            if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
-                if not (allowed_lowering or oversight_can_set_none):
-                    if principal.role == "oversight":
-                        # Oversight's raise-only grant clamps to the default.
-                        tier = default
-                    else:
-                        raise Refused(
-                            "forbidden",
-                            "only the router may lower review_tier below its default")
-            return validated_decision_tier(tier, definition["evidence_kinds"])
-        return default
+        return creation_tier(raw, definition, principal)
 
     def _insert_item(self, principal, definition, now):
         state = definition["state"]
@@ -670,3 +677,15 @@ class CreateMixin:
             (int(n), self._iso(now), key, item["state"], item["epoch"]))
         self._row_guard(cursor, key, item["state"], item["epoch"])
         self._append(principal, key, "priority_set", {"priority": int(n)}, now)
+
+
+def oversight_definition(raw):
+    """Pure default for policy callers; store supplies its alias-aware normalizer."""
+    from types import SimpleNamespace
+    from .store_input import InputMixin
+
+    class Normalizer(InputMixin, CreateMixin):
+        def resolve_key(self, key):
+            return key
+
+    return Normalizer()._normalise_create(raw, SimpleNamespace(role="oversight"))

@@ -82,7 +82,7 @@ class ReadMixin:
 
     def progress(self, principal, project=None):
         """PROGRESS-PANEL: per-project / per-phase progress of the snapshot rows."""
-        # build-L1 MED: oversight tokens are project-scoped on reads too
+        # Explicit project guard only; unfiltered reads retain the normal read contract.
         if isinstance(principal, auth.OversightPrincipal) and project is not None:
             self._require_project(principal, project)
         return self._run(principal, "progress", None,

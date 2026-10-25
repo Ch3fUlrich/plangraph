@@ -471,6 +471,12 @@ def test_create_allowed_kinds_and_tiers(w, monkeypatch, kind, tier, evidence):
     """
     _, principal = live(w, monkeypatch)
     item = fresh("NEW", kind=kind, tier=tier, evidence=evidence)
+    if tier == "standard":
+        err = refusal(create_linked, w, principal, item)
+        assert "target_high" in err.msg
+        assert w.store._normalise_create(item, principal)["review_tier"] == "high"
+        assert w.store._item("plangraph:NEW") is None
+        return
     out = create_linked(w, principal, item)
     assert out["applied"] == 2
     stored = w.store._item("plangraph:NEW")
@@ -813,11 +819,10 @@ def test_oversight_cannot_lower_tier_below_default(w, monkeypatch):
     """
     _, principal = live(w, monkeypatch)
     item = fresh("LOW_TIER", kind="lane", tier="standard")
-    out = create_linked(w, principal, item)
-    assert out["applied"] == 2
-    stored = w.store._item("plangraph:LOW_TIER")
-    # Tier is raised to 'high' (the default for plangraph)
-    assert stored["review_tier"] == "high"
+    assert w.store._normalise_create(item, principal)["review_tier"] == "high"
+    err = refusal(create_linked, w, principal, item)
+    assert "target_high" in err.msg
+    assert w.store._item("plangraph:LOW_TIER") is None
 
 
 def test_create_unknown_field_denied(w, monkeypatch):
@@ -1217,7 +1222,8 @@ def test_cycle_refusal_writes_a_denied_row_and_alarm(w, monkeypatch):
     ])
     assert err.code == "cycle"
     assert_audited_refusal(w, err, op_name="add_dep",
-                           key="plangraph:HOST")
+                           key="plangraph:OTHER")
+    assert _denied_rows(w)[-1]["op_index"] == 2
     dump = (str([dict(r) for r in _denied_rows(w)])
             + str([dict(a) for a in _open_guard_alarms(w)]))
     assert token not in dump                       # never the plaintext token
@@ -1856,7 +1862,7 @@ def test_cli_mint_failed_write_keeps_old_token_valid(w, monkeypatch, tmp_path):
 
 
 # =========================================================================
-# build-L1 MED: READ_VERBS are project-scoped for oversight tokens.
+# Explicit project guards for four reads; not a general read-isolation grant.
 # =========================================================================
 @pytest.mark.parametrize("verb,call", [
     ("needs_you", lambda s, p: s.needs_you(p, project="demo")),
@@ -1865,10 +1871,10 @@ def test_cli_mint_failed_write_keeps_old_token_valid(w, monkeypatch, tmp_path):
     ("jev_report", lambda s, p: s.jev_report(p, project="demo")),
 ])
 def test_oversight_read_verbs_are_project_scoped(w, monkeypatch, verb, call):
-    """An oversight token's reads are project-scoped (only its project).
+    """These four explicit project filters reject an out-of-scope project.
 
-    build-L1 MED: test a cross-project read is refused for every read verb
-    an oversight token may call.
+    Unfiltered and other reads retain the ordinary authenticated read contract;
+    the oversight item grants project-scoped writes, not read isolation.
     """
     _seed_demo(w)
     _, principal = live(w, monkeypatch)
@@ -1876,3 +1882,54 @@ def test_oversight_read_verbs_are_project_scoped(w, monkeypatch, verb, call):
     err = refusal(call, w.store, principal)
     assert err.code == "forbidden"
     assert "demo" in err.msg
+
+
+@pytest.mark.parametrize("verb", ["edit", "add_dep", "priority"])
+def test_same_batch_clamped_high_is_never_an_oversight_target(w, monkeypatch, verb):
+    _, principal = live(w, monkeypatch)
+    item = fresh("CLAMPED")
+    follow = (op("edit", key="plangraph:HOST", fields={"depends_on":
+              ["plangraph:OTHER", "plangraph:CLAMPED"]}) if verb == "edit"
+              else op("add_dep", key="plangraph:HOST", dep="plangraph:CLAMPED")
+              if verb == "add_dep" else op("priority", key="plangraph:CLAMPED", priority=2))
+    err = refusal(apply, w, principal, [op("create", item=item), follow])
+    assert "target_high" in err.msg
+    assert w.store._item("plangraph:CLAMPED") is None
+
+
+def test_prepared_mints_allocate_generation_only_at_commit(w, monkeypatch):
+    live(w, monkeypatch)
+    a = w.store.prepare_oversight_token(OPP, go_decision=GO)
+    b = w.store.prepare_oversight_token(OPP, go_decision=GO)
+    first = w.store.commit_oversight_token(a)
+    second = w.store.commit_oversight_token(b)
+    assert second["generation"] == first["generation"] + 1
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens WHERE revoked_at IS NULL").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("raw", [
+    fresh("DEFAULTS"),
+    {k: v for k, v in fresh("DEFAULTS").items() if k != "kind"},
+    fresh("DEFAULTS", kind="question", tier="none", evidence=["decision"]),
+    dict(fresh("DEFAULTS"), project="demo"),
+    dict(fresh("DEFAULTS"), title="security auth"),
+])
+def test_policy_simulation_uses_all_store_create_defaults(w, monkeypatch, raw):
+    from plangraph.keeper import oversight_policy
+    _, principal = live(w, monkeypatch, projects=(P, "demo"))
+    expected = w.store._normalise_create(raw, principal)
+    seen = []
+    original = oversight_policy._check_priority
+    def capture(index, operation, items, projects):
+        seen.append(items[expected["key"]])
+        return original(index, operation, items, projects)
+    monkeypatch.setattr(oversight_policy, "_check_priority", capture)
+    oversight_policy.check_batch({}, [op("create", item=raw),
+        op("priority", key=expected["key"], priority=1)], principal.projects)
+    assert seen == [dict(expected, state="open")]
+
+
+def test_oversight_read_scope_is_not_a_general_isolation_contract(w, monkeypatch):
+    _seed_demo(w)
+    _, principal = live(w, monkeypatch)
+    assert w.store.snapshot(principal) == w.store.snapshot(w.p("router"))

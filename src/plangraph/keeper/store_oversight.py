@@ -97,7 +97,8 @@ class OversightMixin:
 
     # ------------------------------------------------------------- minting
     def mint_oversight_token(self, name, *, go_decision=None, reason=""):
-        return self._mint_oversight(name, go_decision, reason, self.now())
+        return self.commit_oversight_token(self.prepare_oversight_token(
+            name, go_decision=go_decision, reason=reason))
 
     def prepare_oversight_token(self, name, *, go_decision=None, reason=""):
         """Phase 1: validate and generate token WITHOUT DB changes.
@@ -130,11 +131,8 @@ class OversightMixin:
                           " oversight principal")
         token = OVERSIGHT_PREFIX + secrets.token_urlsafe(32)
         digest = auth.hash_token(token)
-        generation = self.conn.execute(
-            "SELECT COALESCE(MAX(generation), 0) + 1 FROM oversight_tokens"
-            " WHERE principal=?", (name,)).fetchone()[0]
         expires = now + float(self.oversight_token_ttl)
-        return {"token": token, "digest": digest, "generation": generation,
+        return {"token": token, "digest": digest,
                 "expires": expires, "now": now, "go_decision": go_decision,
                 "reason": reason, "name": name}
 
@@ -147,7 +145,6 @@ class OversightMixin:
         """
         name = prepared["name"]
         digest = prepared["digest"]
-        generation = prepared["generation"]
         expires = prepared["expires"]
         now = prepared["now"]
         go_decision = prepared["go_decision"]
@@ -160,6 +157,9 @@ class OversightMixin:
                 raise Refused("forbidden",
                               f"oversight:principal_denied {name!r} is not an active"
                               " oversight principal")
+            generation = self.conn.execute(
+                "SELECT COALESCE(MAX(generation), 0) + 1 FROM oversight_tokens"
+                " WHERE principal=?", (name,)).fetchone()[0]
             self.conn.execute(
                 "UPDATE oversight_tokens SET revoked_at=?"
                 " WHERE principal=? AND revoked_at IS NULL",
@@ -178,63 +178,6 @@ class OversightMixin:
                  "generation": generation, "expires_at": self._iso(expires),
                  "go_decision": go_decision})
         return {"token": prepared["token"], "generation": generation,
-                "expires_at": self._iso(expires), "scope": "plan-write"}
-
-    def _mint_oversight(self, name, go_decision, reason, now):
-        if os.environ.get("PG_OVERSIGHT_LIVE") != "1":
-            raise Refused("forbidden",
-                          "oversight:not_live PG_OVERSIGHT_LIVE is not set on this host")
-        if not isinstance(go_decision, str) or not go_decision.strip():
-            raise Refused("forbidden",
-                          "oversight:go_required --go D-NNN is required")
-        decisions = getattr(self.ctx, "decisions", None)
-        if not grants(self.conn, go_decision, GRANT_SCOPE, decisions):
-            raise Refused(
-                "forbidden",
-                f"oversight:go_required {go_decision!r} is not an operator"
-                f" decision granting {GRANT_SCOPE}")
-        reason = self._oversight_text("reason", reason, _REASON_CAP)
-        row = self.conn.execute(
-            "SELECT role,active,projects FROM principals WHERE name=?",
-            (name,)).fetchone()
-        if row is None or row["role"] != "oversight" or not row["active"]:
-            raise Refused("forbidden",
-                          f"oversight:principal_denied {name!r} is not an active"
-                          " oversight principal")
-        token = OVERSIGHT_PREFIX + secrets.token_urlsafe(32)
-        digest = auth.hash_token(token)
-        with self._write():
-            fresh = self.conn.execute(
-                "SELECT role,projects,active FROM principals WHERE name=?",
-                (name,)).fetchone()
-            if fresh is None or fresh["role"] != "oversight" or not fresh["active"]:
-                raise Refused("forbidden",
-                              f"oversight:principal_denied {name!r} is not an active"
-                              " oversight principal")
-            generation = self.conn.execute(
-                "SELECT COALESCE(MAX(generation), 0) + 1 FROM oversight_tokens"
-                " WHERE principal=?", (name,)).fetchone()[0]
-            self.conn.execute(
-                "UPDATE oversight_tokens SET revoked_at=?"
-                " WHERE principal=? AND revoked_at IS NULL",
-                (self._iso(now), name))
-            expires = now + float(self.oversight_token_ttl)
-            token_id = self.conn.execute(
-                "INSERT INTO oversight_tokens(id,token_sha256,principal,generation,"
-                "scope,minted_by,go_decision,mint_reason,created_at,expires_at)"
-                " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_tokens),"
-                "?,?,?,?,?,?,?,?,?) RETURNING id",
-                (digest, name, generation, "plan-write", "router", go_decision,
-                 reason, self._iso(now), self._iso(expires))).fetchone()[0]
-            # The plaintext never leaves this return; the chain carries only the
-            # sha256/gen/expiry (precedent: token_minted).
-            events.append_event(
-                self.conn, self._iso(now), name, "oversight", None, None,
-                "oversight_token_minted",
-                {"token_id": token_id, "token_sha256": digest,
-                 "generation": generation, "expires_at": self._iso(expires),
-                 "go_decision": go_decision})
-        return {"token": token, "generation": generation,
                 "expires_at": self._iso(expires), "scope": "plan-write"}
 
     # ------------------------------------------------------------- per use
