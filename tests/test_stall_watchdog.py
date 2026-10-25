@@ -116,3 +116,12 @@ def test_tick_keeper_unconfigured_skips_with_one_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(w, "read_claims", lambda: (_ for _ in ()).throw(MissingKeeperURL()))
     assert w.main(["tick"]) == 0
     assert (tmp_path / "watchdog/status.txt").read_text().count("keeper skipped MissingKeeperURL") == 1
+
+
+def test_real_spawn_record_parent_and_item_come_from_completion(tmp_path):
+    record = Path(__file__).parent / "fixtures/stall_real_spawn_record.json"
+    (tmp_path / "runs/run-real").mkdir(parents=True)
+    (tmp_path / "runs/run-real/record.json").write_text(record.read_text())
+    [run] = w.read_runs(tmp_path)
+    assert (run["parent_session"], run["item_key"]) == ("build-L1", "plangraph:STALL-WATCHDOG")
+    assert w.tick([run], [], lambda s: 1, now=run["ended"] + 400)[0]["rule"] == "finished-child"
