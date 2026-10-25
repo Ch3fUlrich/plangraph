@@ -660,3 +660,6 @@ has `continuation_run_id`. A continuation cannot continue again. Clean reports,
 nonzero exit codes, review runs, and continuation-limit refusals record their
 reason in `continuation_reason`. Dry runs never continue. Live execution proof
 belongs to L2/L1; unit tests use synthetic processes.
+# Review policy
+
+See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.

@@ -3,8 +3,11 @@ import math
 import re
 
 
-def split_findings(findings, limit=10):
+def split_findings(findings, limit=None):
     """Balance connected file components; indivisible components may exceed limit."""
+    if limit is None:
+        from plangraph.settings import review_method
+        limit = review_method().fixer_split_threshold
     if limit < 1:
         raise ValueError('limit must be positive')
     components = []

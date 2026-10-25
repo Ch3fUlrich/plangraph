@@ -91,6 +91,9 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
     if state in _TERMINAL_STATES:
         raise Refused("bad_state", f"{key} is {state}")
 
+    from dataclasses import asdict
+    from plangraph.settings import review_method
+    method = review_method(key.split(":", 1)[0], key)
     project = key.split(":", 1)[0]
     if now is None:
         now = datetime.now(timezone.utc)
@@ -163,7 +166,11 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
             card, key=dst, repo_root=Path(repo_root),
             running_write_sets=running, leg_max_request=leg_max)
 
+        review_fields = ({"role": "review", "review_scope":
+                          "batch" if method.mode == "batch" else "per-fixer"}
+                         if card.get("role") == "review" else {})
         cards.append({
+            **review_fields,
             "key": dst,
             "state": card_state,
             "write_set": _write_set(card),
@@ -207,6 +214,7 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
 
     return {
         "phase": key,
+        "review_method": asdict(method),
         "ready": ready,
         "blocked": blocked,
         "cards": cards,

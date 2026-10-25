@@ -102,6 +102,7 @@ def main(argv=None):
         p.add_argument('--role', choices=('implement', 'review'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
+        p.add_argument('--review-scope', choices=['per-fixer', 'batch'])
         p.add_argument('--json', action='store_true')
         if verb == 'spawn':
             p.add_argument('prompt')
@@ -143,9 +144,16 @@ def main(argv=None):
                 raise exc
             payload = dict(card=args.card, prompt=args.prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
+                review_scope=args.review_scope,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, **options)
             # Validate before detaching so refusals are reported synchronously.
+            from plangraph.settings import enforce_review_scope
+            try:
+                enforce_review_scope(args.card, args.role, args.review_scope)
+            except Exception as exc:
+                service.save_refusal(exc, args.role)
+                raise
             if not args.model and not args.leg:
                 if not args.card:
                     raise ValueError('spawn by card; card required')
