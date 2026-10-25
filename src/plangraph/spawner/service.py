@@ -88,8 +88,19 @@ class SpawnService:
             record['error'] = '; '.join(p[:300] for p in clean(record['error']).split('; '))[:2000]
         run_dir = self.state / 'runs' / record['run_id']
         job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
+        # The logs hold the full output of every attempt and output_cut measures it all
+        # (I17); a later _save must never shrink them back to the 4 KB tail (haiku-C3,
+        # qwen-C5). The live job's text replaces only its own earlier snapshot as it grows.
+        accs = self.__dict__.setdefault('_accs', {})
+        same_job = accs.get((record['run_id'], 'job')) == record.get('job_id')
         for s in ('stdout', 'stderr'):
-            t = clean(record.get(s) if record.get(s) is not None else (getattr(job, s, '') if job else record.get(f'{s}_tail', '')))
+            acc, snap = accs.get((record['run_id'], s), (None, 0))
+            if acc is None:
+                acc = record.get(s) if record.get(s) is not None else record.get(f'{s}_tail', '')
+            live = getattr(job, s, '') if job is not None else None
+            full = acc if live is None else (acc[: len(acc) - snap] if same_job else acc) + live
+            accs[(record['run_id'], s)] = (full, len(live or ''))
+            t = clean(full)
             raw = t.encode('utf-8', errors='replace')
             if len(raw) > 2097152:
                 record['output_cut'] = True
@@ -99,6 +110,7 @@ class SpawnService:
             atomic_write_private(run_dir / f"{s}.log", content.decode('utf-8', errors='replace'))
             record[f'{s}_tail'] = t.encode()[-4096:].decode('utf-8', errors='ignore')
             record.pop(s, None)
+        accs[(record['run_id'], 'job')] = record.get('job_id')
         record.setdefault('output_cut', False)
         record['stdout_path'] = record['stdout_log'] = str(run_dir / 'stdout.log')
         record['stderr_path'] = record['stderr_log'] = str(run_dir / 'stderr.log')
@@ -363,8 +375,7 @@ class SpawnService:
                     record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                         served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                         writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
-                        stdout_tail=record.get('stdout_tail', '') + job.stdout,
-                        stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
+                        events=record.get('events', []) + getattr(job, 'events', []))
                     if job.liveness:
                         record['liveness'] = job.liveness
                         record['exit_class'] = job.exit_class
