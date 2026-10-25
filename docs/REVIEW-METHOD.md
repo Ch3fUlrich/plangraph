@@ -37,9 +37,10 @@ The output is JSON. Phase plans publish top-level `review_method` and `review_sc
 Spawn CLI `--review-scope` (on `spawn` only) and MCP `review_scope` accept these same scope values.
 A review spawn requesting `per-fixer` under batch policy raises `SpawnRefused`
 with reason/code `review_method_batch_per_fixer`, including audited overrides.
-Per-item policy allows that scope. Include the card's `key` (project prefix) and
-`phase` to resolve overrides at admission. A "per-fixer seat" is a review spawn with
-`review_scope=per-fixer`.
+Per-item policy allows that scope. A "per-fixer seat" is a review spawn with
+`review_scope=per-fixer`. Finding 3 (by design): a review spawn with
+no explicit scope is admitted in batch mode -- only an explicit per-fixer
+scope (argument or stamped `card["review_scope"]`) is refused.
 
 ## Enforcement boundaries
 
@@ -48,15 +49,18 @@ per-field provenance. It never exposes an absolute settings path.
 Policies are deliberately read per call: edits take effect without restart.
 The guard reading the policy file twice (potential TOCTOU) and per-call re-read are intended:
 policy changes take effect dynamically without daemon restarts.
-Cross-project card key spoofing is not guarded at admission: card is trusted caller input,
-with the same trust boundary as role.
+Policy layers are never selected by the card (R2): the card's `project`/`phase`/
+`key` are caller-chosen, and spoofing them cannot reach a per-item override.
+Per-item layers come only from a trusted keeper `item` (the keeper item's `key`
+plus optional `phase`/`track`, supplied by keeper/planner code that read it from
+the store) passed as `item=` to `enforce_review_scope`, `admit_review_scope`,
+`fixer_threshold` and `admit_fixer_threshold`; with no `item`, only the global
+layer applies.
 
-Admission callers must set `PLANGRAPH_REPO_ROOT` or pass `root` (or include
-`card["repo_root"]` when present); phase plans do not publish `repo_root`.
-`enforce_review_scope` accepts `card["repo_root"]` when present.
-Explicit roots (phase planner `repo_root`, admission card `repo_root`) take
-precedence over `PLANGRAPH_REPO_ROOT`. Otherwise the nearest `.git` ancestor of
-cwd is used; without `.git`, cwd itself is the documented fallback.
+The settings root is never taken from the card (R1): `card["repo_root"]` is
+ignored everywhere. Root resolution is an explicit `root=` argument passed by
+server-side code (phase plans take it from `PG_PHASE_REPO_ROOT`), else
+`PLANGRAPH_REPO_ROOT`, else the nearest `.git` ancestor of cwd, else cwd.
 
 Only per-fixer refusal and fixer threshold are enforced.
 `seats`, `max_rounds`, `distinct_families`, `family_source`, and ONE-review count are ADVISORY

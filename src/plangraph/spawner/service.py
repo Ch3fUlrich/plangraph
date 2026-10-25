@@ -127,7 +127,8 @@ class SpawnService:
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold
-                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card))
+                # No keeper item is held here: the global layer applies (R2).
+                groups = split_findings(card['findings'], limit=admit_fixer_threshold())
                 if len(groups) > 1:
                     async def dispatch(group):
                         child = dict(card, findings=list(group))

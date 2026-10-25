@@ -78,6 +78,23 @@ def project_of(card_or_key) -> str | None:
     return None
 
 
+def _item_layers(item):
+    """Return (project, phase) from a trusted keeper item; never from a card.
+
+    ``item`` is a keeper item dict ('key' plus optional 'phase'/'track') read
+    from the store by keeper or planner code. The card's 'project'/'phase'/'key'
+    are caller-chosen and must not select a policy layer (review-method R2, fix
+    D-2773); with no item only the global layer applies. The item key falls
+    back as the phase, as cards did before.
+    """
+    if item is None:
+        return None, None
+    if not isinstance(item, dict):
+        raise SettingsError('item: expected keeper item dict')
+    phase = item.get('phase') or item.get('track') or item.get('key')
+    return project_of(item.get('key') or phase), phase
+
+
 def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
     """Resolve global, project and phase tables from PLANGRAPH_SETTINGS.
 
@@ -131,27 +148,30 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
     return ReviewMethod(**values, source=source)
 
 
-def fixer_threshold(card=None) -> int:
-    """Resolve fixer split threshold for card context."""
-    card = card or {}
-    project = project_of(card)
-    phase = card.get('phase') or card.get('key')
-    method = review_method(project, phase, root=card.get('repo_root'))
-    return method.fixer_split_threshold
+def fixer_threshold(*, item=None, root=None) -> int:
+    """Resolve fixer split threshold for a trusted keeper item context.
+
+    Card fields never select layers or the settings root (review-method R1/R2).
+    """
+    project, phase = _item_layers(item)
+    return review_method(project, phase, root=root).fixer_split_threshold
 
 
-def enforce_review_scope(card, role, review_scope, *, root=None):
-    """Admission guard shared by both spawner implementations."""
+def enforce_review_scope(card, role, review_scope, *, root=None, item=None):
+    """Admission guard shared by both spawner implementations.
+
+    The settings root is never taken from the card (R1): ``root`` is passed by
+    server-side code only, else PLANGRAPH_REPO_ROOT / cwd resolution applies.
+    Per-item layers come only from a trusted keeper ``item`` (R2).
+    """
     card = card or {}
     if any(value not in (None, 'batch', 'per-fixer')
            for value in (review_scope, card.get('review_scope'))):
         raise SettingsError('review_scope: expected batch or per-fixer')
     if role != 'review' and (review_scope is not None or card.get('review_scope') is not None):
         raise SettingsError('review_scope only valid for role=review')
-    project = project_of(card)
-    phase = card.get('phase') or card.get('key')
-    method = review_method(project,
-                           phase, root=root or card.get('repo_root'))
+    project, phase = _item_layers(item)
+    method = review_method(project, phase, root=root)
     if method.mode == 'batch' and (review_scope == 'per-fixer' or
             (review_scope is None and card.get('review_scope') == 'per-fixer')):
         from plangraph.routing_errors import SpawnRefused
@@ -170,18 +190,18 @@ def as_spawn_refused(exc: SettingsError):
     return err
 
 
-def admit_review_scope(card, role, review_scope, *, root=None):
+def admit_review_scope(card, role, review_scope, *, root=None, item=None):
     """Validate review scope for admission, converting SettingsError to SpawnRefused."""
     try:
-        return enforce_review_scope(card, role, review_scope, root=root)
+        return enforce_review_scope(card, role, review_scope, root=root, item=item)
     except SettingsError as exc:
         raise as_spawn_refused(exc) from None
 
 
-def admit_fixer_threshold(card=None) -> int:
+def admit_fixer_threshold(*, item=None, root=None) -> int:
     """Resolve fixer split threshold for admission, converting SettingsError to SpawnRefused."""
     try:
-        return fixer_threshold(card)
+        return fixer_threshold(item=item, root=root)
     except SettingsError as exc:
         raise as_spawn_refused(exc) from None
 
