@@ -125,7 +125,7 @@ def test_upsert_never_stores_key_material(tmp_path):
         rows = w.store.list_bus_hosts()
         assert list(rows[0]) == list(HOST_FIELDS)
         assert "key_file" not in rows[0]
-        columns = [r[1] for r in w.conn.execute("PRAGMA table_info(bus_hosts)")]
+        columns = w.conn.execute("SELECT * FROM bus_hosts").fetchone().keys()  # portable: no PRAGMA on PG
         assert "key_file" not in columns
     finally:
         w.close()
