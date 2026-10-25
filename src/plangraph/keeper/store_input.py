@@ -75,6 +75,8 @@ class InputMixin:
         check_model_fields(raw, kind, key)
         corrects = raw.get("corrects")
         if corrects:
+            if not isinstance(corrects, str):
+                raise Refused("validation", f"{key}: corrects must be a key string or null")
             corrects = self._qualify(project, corrects)
         fixes = raw.get("fixes")
         if fixes is not None:

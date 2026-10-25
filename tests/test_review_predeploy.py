@@ -338,7 +338,7 @@ def fake_bin(tmp_path, body):
 
 def test_opencode_argv_attach_only_with_url():
     base = opencode.argv("P", "prov/model")
-    assert base == ["opencode", "run", "-m", "prov/model", "--", "P"]
+    assert base == ["opencode", "run", "--standalone", "-m", "prov/model", "--", "P"]
     url = "http://127.0.0.1:4096"
     assert opencode.argv("P", "prov/model", url) == [
         "opencode", "run", "-m", "prov/model", "--attach", url, "--", "P"]

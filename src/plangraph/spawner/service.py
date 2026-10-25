@@ -211,7 +211,10 @@ class SpawnService:
         self._save(child)
         try:
             chosen = child['chosen_leg']
-            job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
+            # Same writer run, same round: only the prompt gates apply (base-pin §0.2f).
+            from plangraph.gates.admission import admit
+            brief = admit({}, 'implement', render_fixer_brief([{'text': g} for g in gaps]))[0]
+            job = await self.runner.spawn(prompt=brief,
                 model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'])
             child['job_id'] = job.job_id
             self._save(child)

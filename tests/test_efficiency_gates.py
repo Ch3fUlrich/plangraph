@@ -152,6 +152,8 @@ VERDICT: PASS
     ("VERDICT fail", "changes"),
     ("", None),
     ("Error: 402 Payment Required", None),
+    ("insufficient balance, add credits\nVERDICT: PASS", None),
+    ("rate limit hit, partial review\n**VERDICT**: PASS", None),
     ("I reviewed it, looks fine.", None),
     ('{"type":"result","is_error":true,"result":"VERDICT: PASS"}', None),
     ('{"type":"result","is_error":false,"result":"1. (MED) x\\nVERDICT: pass"}', "changes"),
@@ -407,7 +409,7 @@ def test_lane_gates_seats_cli(tmp_path):
 def test_no_bare_python_invocation():
     """D-2746 (11): hosts ship ``python3`` only; code, tests, scripts and docs never call ``python``."""
     import re
-    bare = re.compile(r"(^|[^\w/.-])python( -m | tools/| tests/)|^#!/usr/bin/env python$", re.M)
+    bare = re.compile(r"(^|[^\w/.-])python(\s+-m\s|\s+tools/|\s+tests/)|^#!/usr/bin/env python$", re.M)
     files = subprocess.run(["git", "-C", str(ROOT), "ls-files", "src", "tests", "tools", "skills", "docs",
                             ".github", "deploy", "README.md", "CONTRIBUTING.md"],
                            capture_output=True, text=True, check=True).stdout.split()

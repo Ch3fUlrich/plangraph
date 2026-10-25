@@ -39,6 +39,9 @@ _CHANGE_WORDS = frozenset({"fix", "fail", "failed", "changes", "change", "reject
 # A row/line reporting an earlier finding as closed is not a new finding.
 _CLOSED = re.compile(r"(?<!NOT )(?<!PARTIALLY )(?<!NOT YET )\b(?:FIXED|RESOLVED|WITHDRAWN|REFUTED)\b")
 _HEADING = re.compile(r"^\s*#{1,6}\s")
+#: A PASS reply shorter than this (VERDICT line removed) that carries a
+#: failure signature is a provider error, not a review.
+FAILED_TEXT_MAX = 400
 _FAILED = re.compile(
     r"insufficient (?:balance|credits?|quota)|billing|payment required|\b402\b|quota exceeded"
     r"|rate.?limit(?:ed)?\b|\b429\b|too many requests|sandbox fence|outside (?:the )?(?:allowed|sandbox)"
@@ -146,6 +149,10 @@ def failure_reason(text, status=None, is_error=False):
     return None
 
 
+def _body_len(text):
+    return len("".join(l for l in text.splitlines() if not _VERDICT_LINE.match(l)).strip())
+
+
 def seat_outcome(raw, verdict=None, status=None, seat="seat"):
     """``(outcome, reason, findings)``; outcome is ``changes``, ``pass`` or ``None``.
 
@@ -165,11 +172,13 @@ def seat_outcome(raw, verdict=None, status=None, seat="seat"):
         return "changes", f"{len(hard)} HIGH/MED finding(s) in body: {ids}", findings
     if verdict is None:
         verdict = parse_seat_verdict(text)
+    m = _FAILED.search(text)
+    if verdict == "pass" and m and _body_len(text) < FAILED_TEXT_MAX:
+        return None, f"failed seat output ({m.group(0)!r}) beside VERDICT: PASS", findings
     if verdict in ("fix", "halt", "changes"):
         return "changes", f"verdict {verdict}", findings
     if verdict == "pass":
         return "pass", "verdict pass, no HIGH/MED in body", findings
-    m = _FAILED.search(text)
     why = f"failed seat output ({m.group(0)!r})" if m else "no VERDICT line"
     return None, f"{why} and no HIGH/MED finding", findings
 
