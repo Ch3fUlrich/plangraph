@@ -18,8 +18,8 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 
 | crit | rule | slice |
 |---|---|---|
-| (1) | `route` returns `direct_edit` when `est_lines <= 30` and no path is a door or secret; otherwise a writer leg | E3 |
-| (2) | `ci_commit_gate` allows a `Hand-Edit` of up to 30 lines outside `AUTH_DOOR_PATHS` | E1 |
+| (1) | `route` picks `direct_edit` or a writer leg by the cost + L*time model (D-2853, spec `status/direct-edit-cost-model.md` @ d97b5fb3); hard guards only: door/secret paths, context fill <= 70%, Claude quota floor, slice ceiling 400 | E3 (after E10a) |
+| (2) | `ci_commit_gate` allows a `Hand-Edit` up to the slice ceiling (400 lines per commit and per Plan-Item in the range) outside `AUTH_DOOR_PATHS` and secret paths; above 50 lines it needs a `Route-Decision:` trailer | E1 |
 | (3) | the spawner kills a writer run with no worktree write and < 2% CPU for 15 min (exit class `stall`, liveness `stalled`, slot freed, recorded) | E2 = PG-EFFICIENCY-GATES 4b, amended below |
 | (4) | the host gate keeps at least 1 slot for every project with queued work; seats are counted apart from writers | E4a + E4b |
 | (5) | the seat parsers accept the "LOW only" variants and post a seat that has a D-id refutation file as pass-with-lows (3.4) | E5 |
@@ -27,15 +27,15 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 | (7) | runs outlive sessions: the spawner owns live runs and completion events per owner/claim; `spawner watch --owner X` re-attaches and replays pending completions | E7a + E7b |
 | (8) | one live-state command (runs, PRs, CI, claims), so handoffs hold only decisions + next steps | E8 |
 | (9) | claim heartbeats from the spawner while a run lives, no per-session shell loops | E9 |
-| (10) | tokens per merged change + claim-to-merge time per item, in the router digest | E10 |
+| (10) | tokens per merged change + claim-to-merge time per item, in the router digest; token counts per run first, because the route model needs them (D-2853) | E10a + E10 |
 
 ## Slices
 
 | slice | scope | max_lines |
 |---|---|---|
-| 1 | E1 hand-edit cap 30 + secret paths in the gate + shared lists with drift test (crit 2) | 200 |
+| 1 | E1 hand-edit ceiling 400 + `Route-Decision:` above 50 lines + secret/malformed paths in the gate + shared lists with drift test (crit 2) | 250 |
 | 2 | E2 = PG-EFFICIENCY-GATES slice 4b with the writer/seat stall split below (crit 3); Plan-Slice stays `PG-EFFICIENCY-GATES.md#5`, this row only books the order | 400 |
-| 3 | E3 route `direct_edit` + spawn refusal (crit 1) | 300 |
+| 3 | E3 route by cost + L*time model, hard guards, route record, spawn refusal (crit 1) | 400 |
 | 4 | E4a host admission (row moved from PG-EFFICIENCY-GATES 4c) + host registry + lock (crit 4, part 1) | 400 |
 | 5 | E5 seat parsers: one extractor, LOW-only variants, router refutation held by the keeper (crit 5) | 400 |
 | 6 | E6 compiled boot file per level + CI size cap + relaunch prompt, incl. the `levels` rule field in `store_rules._rule` and `decisions_view` (crit 6) | 400 |
@@ -45,18 +45,20 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 | 10 | E10 tokens per merged change + claim-to-merge metrics (crit 10) | 300 |
 | 11 | E4b writer/seat slots, queue-first admission, cross-project order, queue sweeper (crit 4, part 2) | 400 |
 | 12 | E11 wake budget: `watch --block --batch` with decision-only wake classes and one digest | 250 |
+| 14 | E10a token counts per run in the record, `result.json` and the keeper run post (crit 10, part 1; input to E3) | 150 |
 | 13 | E7b per-owner completion inbox, one run identity key, claim epoch on events, `watch --owner` (crit 7, part 2) | 300 |
 
 Build order with slice 4 (one task loop, routing D-2837, D-2840):
 
-4a (written, `a43a7ff8`) -> E1 -> E2 (4b), with E5 in parallel (D-2844: no dependency, no cost) -> 4a3 -> E7a -> E7b -> E9 -> E11 -> E3 -> 4a2 -> E4a -> E4b -> 4c (scope and OOM) -> E6 -> E8 -> E10 -> phase review. The operator may reorder the rest (Q-INV-1, routing report 2026-10-25-throughput-cost-investigation §6); until then this order holds (D-2844).
+4a (written, `a43a7ff8`) -> E1 -> E2 (4b), with E5 in parallel (D-2844: no dependency, no cost) -> 4a3 -> E7a -> E7b -> E9 -> E11 -> E10a -> E3 -> 4a2 -> E4a -> E4b -> 4c (scope and OOM) -> E6 -> E8 -> E10 -> phase review. The operator may reorder the rest (Q-INV-1, routing report 2026-10-25-throughput-cost-investigation §6); until then this order holds (D-2844).
 
 - 4a3 moves ahead of E7a (seat r2 G5): E7's owner fallback is the 4a3 principal name. E7a carries its own user-manager probe (`systemctl --user is-system-running`, injected), so it does not wait for 4c; 4c later reuses that probe for the scope launch.
 - E7 and E9 follow E2 because they share the run-liveness code (the supervisor that polls the run also heartbeats the claim and writes the completion), D-2840.
 
 - E1 and E2 land first, as the item asks.
 - E2 and E4 are the same rows as PG-EFFICIENCY-GATES 4b and 4c's host admission (D-2837): their commits carry two Plan-Slice trailers, `docs/design/PG-EFFICIENCY-GATES.md#5` (resp. `#6`) and `docs/design/ORCH-EFFICIENCY-ENFORCE.md#2` (resp. `#4` for E4a), so both items close on the same evidence.
-- E1 touches the gate path `tools/ci_commit_gate.py`, so it is a spawned writer with `Gate-Edit: D-2835`, never a Hand-Edit.
+- E1 touches the gate path `tools/ci_commit_gate.py`, so it is a spawned writer with `Gate-Edit: D-2835`, never a Hand-Edit. It is cut after build-L1's interim Gate-Edit 10 -> 50 (D-2853) when that merges first, and rebased on it otherwise.
+- E10a comes before E3 (D-2853): the route model's writer cost uses measured tokens per run, not only catalog figures.
 - E2 needs only 4a: without 4a2, a stalled run ends `failed` with no fall-through, which still meets crit (3).
 - E5 has no dependency. It may run in parallel once lane/review-verdict-parse (the build-L1 mimo-pro writer for the 6ef7b09d spec) has merged, because E5 builds on its parser.
 
@@ -64,16 +66,19 @@ Build order with slice 4 (one task loop, routing D-2837, D-2840):
 
 | piece | where | behaviour |
 |---|---|---|
-| cap | `tools/ci_commit_gate.py` `HAND_EDIT_MAX_LINES = 30` | added + deleted lines per Hand-Edit commit, measured as today (`_changed_lines`, numstat); binary files are refused as today; the malformed-trailer check is unchanged. Range cap (delta2 seat H12): the gate also sums the lines of all Hand-Edit commits in the checked range (`BASE..HEAD`) per `Plan-Item:` value (no trailer = one bucket) and refuses when a bucket is over 30 (`hand-edit total over cap for <item>`), so an understated card cannot land as ten 30-line Hand-Edits |
+| ceiling | `tools/ci_commit_gate.py` `HAND_EDIT_MAX_LINES = 400` (the slice cap, D-2739; a safety ceiling, not an efficiency rule, D-2853) | added + deleted lines per Hand-Edit commit, measured as today (`_changed_lines`, numstat); binary files are refused as today; the malformed-trailer check is unchanged. Range ceiling (delta2 seat H12, D-2852 with ceiling 400 per D-2853): the gate also sums the lines of all Hand-Edit commits in the checked range (`BASE..HEAD`) per `Plan-Item:` value (no trailer = one bucket) and refuses a bucket over 400 (`hand-edit total over ceiling for <item>`) |
+| route decision | `ROUTE_DECISION_LINES = 50`, `ROUTE_DECISION_RE = ^Route-Decision: route-[0-9a-f]{32}$` | a Hand-Edit commit over 50 lines (or one that brings its Plan-Item bucket over 50) must carry exactly one well-formed `Route-Decision:` trailer, else `hand-edit over 50 lines without Route-Decision`. CI cannot read route records (they live in the L1's spawner state), so CI checks the format only; `tools/lane_gates.py hand-edits --state <dir> --range BASE..HEAD` checks each id against `routes/<id>.json`: the record exists, says `mode=direct_edit`, has the commit's `Plan-Item` as card key, and its `est_lines` is at least half the commit's changed lines (an understated card is flagged). The L1 runs it before every push, like the other lane gates |
 | secret paths in the gate (seat r1 E4) | `tools/ci_commit_gate.py` gains `SECRET_NAME_PATTERNS`, `SECRET_DIRS` (copied from `gates/privacy.py`) and `_secret_path(path)` with the same logic as `privacy.secret_path` | a Hand-Edit touching a secret-shaped path is refused (`hand-edit touches secret-shaped path`), next to the existing door refusal, so IE1 holds at the gate, not only in route |
-| shared lists | new `src/plangraph/gates/doors.py`: `AUTH_DOOR_PATHS` (same tuple), `HAND_EDIT_MAX_LINES = 30`, `canon_path(path)` (backslash -> `/`, leading `./` dropped, `posixpath.normpath`; absolute paths and any `..` segment -> `None`, which callers treat as blocked), `door_path(path)` (fnmatchcase over the tuple, on the canonical path), `blocked_path(path) -> "door" or "secret" or "malformed" or None` (delta2 seat H9: `./src/plangraph/keeper/x.py` and `src\plangraph\keeper\x.py` are doors). The gate copies `canon_path` too | `ci_commit_gate.py` stays self-contained, because CI runs the BASE copy from `$RUNNER_TEMP` (`.github/workflows/tests.yml`, `git show $BASE:tools/ci_commit_gate.py`) and cannot import `src`. Drift test (seat r1 E11): the tuples, caps and secret lists are equal, AND a shared fixture of about 40 rows `(path, gate_verdict, route_verdict)` pins the expected answer per path, not only agreement (delta2 seat H17): doors, secrets, `./` and backslash forms, gate-blocked paths such as `src/plangraph/authoring.md` (matches `src/plangraph/*auth*`, so `door`), gate-pass but route-writer paths such as `docs/tokens.md`, `docs/oauth.md`, `tools/token_count.py`, and true near misses such as `docs/keys.md`; the gate's own loop and `doors.blocked_path` must both give `gate_verdict`, and E3's `decide` must give `route_verdict` |
+| shared lists | new `src/plangraph/gates/doors.py`: `AUTH_DOOR_PATHS` (same tuple), `HAND_EDIT_MAX_LINES = 400`, `ROUTE_DECISION_LINES = 50`, `canon_path(path)` (backslash -> `/`, leading `./` dropped, `posixpath.normpath`; absolute paths and any `..` segment -> `None`, which callers treat as blocked), `door_path(path)` (fnmatchcase over the tuple, on the canonical path), `blocked_path(path) -> "door" or "secret" or "malformed" or None` (delta2 seat H9: `./src/plangraph/keeper/x.py` and `src\plangraph\keeper\x.py` are doors). The gate copies `canon_path` too | `ci_commit_gate.py` stays self-contained, because CI runs the BASE copy from `$RUNNER_TEMP` (`.github/workflows/tests.yml`, `git show $BASE:tools/ci_commit_gate.py`) and cannot import `src`. Drift test (seat r1 E11): the tuples, caps and secret lists are equal, AND a shared fixture of about 40 rows `(path, gate_verdict, route_verdict)` pins the expected answer per path, not only agreement (delta2 seat H17): doors, secrets, `./` and backslash forms, gate-blocked paths such as `src/plangraph/authoring.md` (matches `src/plangraph/*auth*`, so `door`), gate-pass but route-writer paths such as `docs/tokens.md`, `docs/oauth.md`, `tools/token_count.py`, and true near misses such as `docs/keys.md`; the gate's own loop and `doors.blocked_path` must both give `gate_verdict`, and E3's guard step must give `route_verdict` (`writer` exactly when `gate_verdict` is not None: D-2853 keeps door and secret paths as the only path guards, so the old route-only `*auth*`/`*token*` name patterns are dropped and `docs/tokens.md` is `direct_edit`-eligible) |
 | bootstrap | `Gate-Edit: D-2835` (`GATE_PATHS` includes `tools/ci_commit_gate.py`) | the BASE copy judges the commit that raises the cap, so that commit is a writer commit (Writer trailer), never a Hand-Edit; the new cap and secret check bind only the commits after the merge. A PR that adds a door to both copies is judged by the old BASE list for its own commits; that is the accepted bootstrap window, and the drift test catches a door added to only one copy |
 
 E1 tests:
-- Hand-Edits of 30 lines (pass), 31 lines (refused), and 30 lines touching `tools/seat_verdict.py` (door, refused);
+- Hand-Edits of 400 lines with a Route-Decision (pass), 401 (refused), 30 lines touching `tools/seat_verdict.py` (door, refused);
+- 50 lines without Route-Decision (pass), 51 without (refused), 51 with a malformed one (refused), 51 with a well-formed one (pass);
+- `lane_gates.py hand-edits`: a missing route record, `mode=writer`, another key, and `est_lines` under half the real lines each flagged;
 - Hand-Edits touching `vault/x.json` and `config/.env` (secret, refused);
 - `./src/plangraph/keeper/x.py`, a backslash door path and a `..` path (refused);
-- two 20-line Hand-Edits for one Plan-Item in one range (refused), and for two items (pass);
+- two 210-line Hand-Edits for one Plan-Item in one range (refused), and for two items (pass);
 - the drift test with the shared fixture;
 - the existing gate suite stays green.
 
@@ -112,27 +117,29 @@ E2 tests add to 4b's:
 - a seat on a harness in `streams`, silent with low CPU -> stalled;
 - after a kill, the runner holds no running job and `result.json` has `exit_class=stall`, `liveness=stalled`.
 
-### E3 route `direct_edit` (crit 1, R2)
+### E3 route `direct_edit` by cost model (crit 1, R2; D-2853)
+
+The operator replaced the line cap with a calculation (D-2853; spec `status/direct-edit-cost-model.md` at plangraph d97b5fb3, build-L1). `route` compares the orchestrator doing the change itself against delegating it, both in dollars plus latency.
 
 | piece | where | behaviour |
 |---|---|---|
-| decision | pure `gates.direct_edit.decide(card, role, limits) -> (mode, reason)`, called from `SpawnService._route` AND from the leg/model override branch of `_spawn` (seat r1 E13), so every plan carries a mode | `mode = "direct_edit"` only when ALL of these hold: `role == "implement"`; not a fix card (`admission.is_fix` false: fix rounds keep the 0.2d writer path); `card.est_lines` passes `routing._is_int` (bool excluded, seat r1 E7) and is 1..`direct_edit_max_lines` (30); the scope list (`card.paths` and `card.write_set` together, the same pair `plan_spawn` and `privacy.admit_card` read, seat r1 E7) is non-empty, every entry is a string whose `doors.canon_path` is not `None` (delta2 seat H9), and no canonical entry is `doors.blocked_path` or matches the route-only patterns `*auth*`, `*secret*`, `*credential*`, `*token*` anywhere in the path (route is stricter than the gate, seat r1 E6); no tag in `card.risk_tags` is in `spawn_limits.direct_edit_block_tags` (one config point, D-2852; default = every keeper `RISK_TAGS` value, so any tag sends the card to a writer; Q-INV-6 may later narrow it; `doors` stays refused regardless) (delta2 seat H10: `access`/`privacy` are not in the keeper `RISK_TAGS` = auth, secrets, money, migration, public-contract, live-step, and every one of those six marks a lane that 3.13 sends to a spawned writer; replaces the undefined `lane_class`, seat r1 E6); the card is not `privacy=sensitive`. Anything else, a missing or malformed field included -> `"writer"`, with a reason naming the failed condition |
-| plan field | `SpawnPlan.mode` (`"writer"` default) + `mode_reason`; `to_dict` includes both | `route --json` shows them; legs are still listed (they are the fallback when the orchestrator overrides) |
-| spawn refusal | `SpawnService.spawn`, after the plan, before launch | `mode == "direct_edit"` -> `SpawnRefused("direct_edit: ...; make it a Hand-Edit commit (DECISIONS 3.13)")`; `save_refusal` gains a `refusal_code` field (`direct_edit`) and the card's `key` (seat r1 E13); `--override-reason` lets the run proceed and the record keeps `mode`, `mode_reason` and the override text. The leg/model override branch already requires `--override-reason` (`routing.hand_picked`), so there the refusal never fires (delta2 seat H11): `decide` still runs and the record carries `mode=direct_edit`, `mode_reason` and the override text, so the bypass is visible in metrics |
-| limits | `spawn_limits.direct_edit_max_lines` (default 30, int 0..30; 0 turns direct edit off) | never above `doors.HAND_EDIT_MAX_LINES`; validation refuses higher values |
+| guards | pure `gates.direct_edit.guard(card, role, limits) -> reason or None`, first step of `decide` | `writer` with the failed guard as reason when any holds: `role != "implement"`; a fix card (`admission.is_fix`: 0.2d fix rounds keep the code-built brief and a writer); `card.est_lines` missing, not `routing._is_int` (bool excluded) or outside 1..`doors.HAND_EDIT_MAX_LINES` (400); the scope list (`card.paths` + `card.write_set`) empty, or any entry whose `doors.canon_path` is `None` or whose `doors.blocked_path` is set (door, secret, malformed); a tag in `spawn_limits.direct_edit_block_tags` (D-2852, one config point, default every keeper `RISK_TAGS` value); `privacy=sensitive`; context fill: `ctx_fill` missing or > `route_model.max_ctx_fill` (0.70); Claude quota: `quota_headroom` missing or < `route_model.quota_floor`. `ctx_tokens`, `ctx_fill`, `quota_headroom` come from the orchestrator: `route`/`spawn` flags `--ctx-tokens N --ctx-fill F --quota-headroom F`, copied onto the card; a missing one fails the guard toward a writer |
+| leg stats | pure `route_stats(records, leg, now)` over the spawner run records | `p_fail(leg)` = failed / all, and `dur(leg)` = median wall time, over the leg's real writer runs (role implement, >= 60 s, not `dry_run`, not a mock/fake leg, E10's test-record filter) in the last 14 days; fewer than `route_model.min_runs` (10) -> `route_model.defaults` (p_fail 0.48, dur 19 min, the D-2853 measurement over 29 runs) with `source: default`. `queue(host, leg)`: from E4's host registry once E4a lands; before that 0 with `queue: unknown` in the record (this biases toward delegation, which is the cautious side) |
+| cost model | pure `decide(card, role, limits, stats, prices) -> RouteDecision` | after the guards, exactly the spec's formulas: `cost_del = P_out*T_brief + N_del*P_cache*ctx + (W_run + P_out*T_check)/(1-p_fail)`, `time_del = queue + dur/(1-p_fail) + t_fill_push`; `cost_dir = P_out*T_edit + N_dir*P_cache*ctx + carry`, `time_dir = est_lines*s_line + t_tests`, with `T_edit = 12*1.5*est_lines`, `T_check = 12*est_lines + T_report`, `carry = T_edit + T_test_out` times `P_cache` times `turns_left`. `direct_edit` iff `cost_dir + L*time_dir <= cost_del + L*time_del`. `P_out`, `P_cache` = the orchestrator model's catalog prices; `W_run` = E10a's median measured run cost of the leg (tokens * catalog price), else the catalog `cost_per_task_usd`, with `w_run_source`; `L` = `route_model.latency_usd_per_h`, a router policy value (no default: unset -> guard reason `route_model.L unset`, writer). Every other constant (`T_brief` 3500, `N_del` 8, `N_dir` 3, `s_line`, `t_tests`, `t_fill_push`, `T_report`, `T_test_out`, `turns_left`) lives in `spawn_limits.route_model` with the spec's values as defaults; validation refuses negatives, `p_fail >= 1` is clamped to 0.95 |
+| route record | `routes/<route_id>.json` in the spawner state, `route_id = route-<32hex>` | written for every `decide` call that reaches the cost model: card key, `est_lines`, both sides with each term, `L`, the stats and their sources, `mode`, `reason`. `route` prints both sides with numbers and the id; the orchestrator's Hand-Edit commit carries `Route-Decision: <route_id>` (E1 checks it above 50 lines) |
+| plan field | `SpawnPlan.mode` (`"writer"` default), `mode_reason`, `route_id`; `to_dict` includes them | `route --json` shows them; legs are still listed |
+| spawn refusal | `SpawnService.spawn`, after the plan, before launch | `mode == "direct_edit"` -> `SpawnRefused("direct_edit: <both sides>; make it a Hand-Edit commit with Route-Decision: <id>")`; `save_refusal` gains `refusal_code` (`direct_edit`) and the card's `key`. `--override-reason` lets the run proceed and the record keeps `mode`, `mode_reason`, `route_id` and the override text. The leg/model override branch already requires `--override-reason` (`routing.hand_picked`), so there the refusal never fires (delta2 seat H11): `decide` still runs and the record carries the decision, so the bypass is visible in metrics |
 
-- The orchestrator writes `est_lines` and the scope list on the card. A card that understates them gets a direct edit that the E1 gate still refuses above 30 lines per commit and per item in the range, or on door and secret paths.
-- A missing `est_lines` routes to a writer and does not refuse, so older cards keep working.
+- A card that understates `est_lines` gets a direct edit whose real size the gate still bounds at 400 per commit and per item, and `lane_gates.py hand-edits` flags an `est_lines` under half the real lines.
+- With today's numbers the spec expects direct to win for any fully specified change up to a few hundred lines; delegation wins when the orchestrator lacks the context, the change needs exploration, the context is near its cap, or Claude quota is short. The decision is only as good as `L` and the stats, so both are in every route record and E10's digest.
 
 E3 tests:
-- the decision table: each condition failing alone -> writer with its reason; all holding -> direct_edit;
-- scope entries `src/plangraph/keeper/x.py`, `.github/workflows/a.yml`, `vault/k.json`, `rust/src/auth.rs`, and a door hidden only in `write_set` -> writer;
-- `est_lines: true` -> writer;
-- `risk_tags: ["auth"]` and `["money"]` -> writer;
-- `./`-prefixed, backslash and `..` scope entries -> writer;
-- a cap above 30 refused;
-- the refusal on the routed path, proceeding with `--override-reason` there, and the leg override branch recording `mode=direct_edit` without a refusal (record fields checked);
-- `route --json` carries `mode`.
+- each guard failing alone -> writer with its reason (missing `ctx_fill`, `ctx_fill` 0.71, quota under floor, `L` unset, `est_lines` 401 / `true` / missing, door / secret / `./` / backslash / `..` scope entry, a door only in `write_set`, `risk_tags: ["money"]`, fix card, sensitive);
+- the cost model against a hand-computed table: a 50-line change with ctx 150k and default stats -> direct; the same with `p_fail` 0.05, `dur` 5 min and `L` 0 -> writer where the formula says so; the boundary case `cost_dir + L*time_dir == cost_del + L*time_del` -> direct;
+- `route_stats`: fewer than 10 runs -> defaults with `source: default`; test records excluded;
+- the route record holds every term and is referenced by the plan's `route_id`;
+- the refusal on the routed path, proceeding with `--override-reason`, and the leg override branch recording the decision without a refusal;
+- `route --json` carries `mode`, `mode_reason`, `route_id` and both sides.
 
 ### E4 host admission + per-project slots (crit 4)
 
@@ -285,7 +292,7 @@ E8 tests:
 
 | piece | where | behaviour |
 |---|---|---|
-| tokens per run | 4a's `result.json` gains `tokens: {input, output, source}` | `source=harness` when the client reports usage (opencode `--format json` step events, qodercli/agy usage lines: open fact F4, verified per harness against one real run each before its parser is enabled), else `{estimate: estimate_tokens, source: "estimate"}` |
+| tokens per run (E10a, before E3) | 4a's `result.json`, the run record and the completion sink's keeper run post gain `tokens: {input, output, usd, source}` (`usd` from catalog prices) | `source=harness` when the client reports usage (opencode `--format json` step events, qodercli/agy usage lines: open fact F4, verified per harness against one real run each before its parser is enabled), else `{estimate: estimate_tokens, source: "estimate"}` |
 | test records excluded | `tools/metrics.py` | records with `status=dry_run`, a mock/fake gateway leg, or no `exit_code` never count (D-2844: 149 of 233 records in the production state dir are test records); the routing side runs its own metric from 2026-10-25 and E10 replaces it later |
 | tokens per merged change | `tools/metrics.py tokens --since <iso> --repo <path>` | merged change = a PR merged into main since `--since` (`gh pr list --state merged --json number,mergeCommit,commits`, so merge, squash and rebase merges all count, seat r2 G15); its commits are the PR's commits. For each, take every `Writer:` trailer: a `run-<32hex>` id is summed from the run's tokens; a trailer without that id counts as `unattributed`, a commit with `Hand-Edit:` as `hand_edit`, a commit with neither as `no_trailer`, each shown as a count, never as 0 tokens (G14). Run tokens come from the keeper's run events (`record_run` / `items.run_ids`, which the completion sink already posts from every host; E10 adds `tokens` to that post), not from local state dirs (G16); seat runs count by item key the same way. Reports per item and the total, with the share of `estimate` sources and the unattributed counts shown |
 | claim-to-merge | `tools/metrics.py cycle --since <iso>` | per item: first `claimed` event -> `mergedAt` of the last merged PR whose commits carry its `Plan-Item:` trailer (same PR list as above); an item with a claim and no mapped PR is listed as `unmapped`, not dropped; median and p90 |
@@ -302,8 +309,8 @@ E10 tests:
 
 | id | invariant |
 |---|---|
-| IE1 | No Hand-Edit (gate) and no `direct_edit` route ever touches `AUTH_DOOR_PATHS` or a secret-shaped path; route also refuses auth/secret/credential/token names anywhere, any risk tag, and any path that does not canonicalise; route's line cap is never above the gate's. |
-| IE2 | Route mode is a pure function of (card, role, limits); a missing or malformed input yields `writer`, never `direct_edit`. |
+| IE1 | No Hand-Edit (gate) and no `direct_edit` route ever touches `AUTH_DOOR_PATHS`, a secret-shaped path or a path that does not canonicalise; route also sends any tag in `direct_edit_block_tags` to a writer; route's ceiling is never above the gate's (both `doors.HAND_EDIT_MAX_LINES`). |
+| IE2 | Route mode is a pure function of (card, role, limits, stats, prices); a missing or malformed guard input (`est_lines`, scope, `ctx_fill`, `quota_headroom`, `L`) yields `writer`, never `direct_edit`; every cost-model decision has a route record. |
 | IE3 | A stall kill always leaves `exit_class=stall`, `liveness=stalled` in the record and `result.json`, and no runner job in `running`. |
 | IE4 | Host admission is atomic under one host-wide lock, and stale registry and queue entries never count (I-E4a..d). |
 | IE5 | A pass-with-lows needs either a VERDICT line that says LOW only with no HIGH/MED line in the body (strict scan), or a router-principal keeper `refute` entry bound to this seat's recorded review run that covers every strict-scan `BLOCKING` id with a valid path:line; `seat_verdict` and `first_review` call the same `seat_decision`. |
@@ -318,9 +325,11 @@ E10 tests:
 | input | class | result |
 |---|---|---|
 | card without `est_lines` or `paths` | legacy card | writer, reason `missing est_lines/paths` |
-| `est_lines` 31, or a non-int | over cap / malformed | writer |
+| `est_lines` 401, or a non-int | over ceiling / malformed | writer |
+| no `--ctx-fill` / `--quota-headroom`, or fill 0.71 | guard input missing / over | writer |
+| 51-line Hand-Edit without `Route-Decision:` | unaudited direct edit | gate refuses |
 | `paths` with `keeper/`, `.github/`, `seat_verdict.py`, `vault/` | door / secret | writer |
-| fix card <= 30 lines | fix round | writer (0.2d) |
+| fix card of any size | fix round | writer (0.2d) |
 | `VERDICT: fix - LOW only:` + LOW lines | LOW only | pass-with-lows |
 | `VERDICT: fix - LOW only` + a MED line | contradiction | changes |
 | refutation written by an L1 (not the router principal) | invented ruling | refused (keeper 403) |
