@@ -23,7 +23,14 @@ Rules new this gen:
    - Fix r1b is done (run-eb06bed7, 8 commits F2-F6 + LOWs + sweep, RUNID filled). Merged main once; head 7b8b3e33 pushed; 411 tests passed; gate rc 0; I6 is still in src (opencode_render.py:16).
    - PR CI: check `gh pr checks 210`.
    - qwen delta seat: running `$J/seatswps1d.sh` (log $J/seatswps1d.log, dir $J/seat-swps1d-qwen; delta 0d3a7d99..0518aaf3, vectors $J/swp-s1d.vec).
-   - The second seat is BLOCKED. Writer families are google + xiaomi + anthropic (F1 Hand-Edit f5f2f027), so Haiku is refused (D-2855) and glm is at its free limit. Sent to routing.
+   - **D-2857: drop f5f2f027; the next mimo-pro round writes those 3 hermetic-fixture lines, so Haiku is eligible as the second seat.**
+     - f5f2f027 is already pushed, and force-push is forbidden, so build a NEW branch, the same way #211 became #212:
+       `git -C ~/code/plangraph-worktrees/spawn-win-parity checkout -b lane/spawn-win-parity-b 0d3a7d99 && git cherry-pick <the 8 writer commits after f5f2f027, oldest first>`.
+       The cherry-pick of 19d00082 (the I16 conftest scrub) may need f5f2f027's context: resolve by keeping the writer's lines only.
+     - Then spawn mimo-pro with a 1-finding brief that says verbatim: "Add an autouse fixture in tests/test_spawn_cli.py and tests/test_w9_regressions.py that sets PLANGRAPH_GATEWAY_URL to http://127.0.0.1:9/v1 via monkeypatch (hermetic: I6 refuses a gateway leg with no base URL); D-2857: this replaces L1's dropped Hand-Edit f5f2f027". Leg mimo-v2.6-pro.
+     - Then RUNID fill, merge main once, push, open a new PR, and close #210 with a pointer.
+     - Seats: the qwen delta seat on 7b8b3e33 still counts for the parts that do not change. Haiku is the second seat on the new head. Then GO-REQ per sha.
+     - NO Claude commits on this branch.
    - Then GO-REQ per sha and spawn S2 (design §4 "### S2 brief"; prompt via stdin/file).
 2. **#215 hecap50 (OEE interim, D-2853/D-2856).** Head 30679bb7 (writer run-a57cee93; trailers Gate-Edit + Test-Removal D-2853), gate rc 0, 107 passed.
    - Seats: Haiku + qwen running `$J/seathecap.sh` (log $J/seathecap.log).
