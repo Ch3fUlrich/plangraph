@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import pytest
 
+from plangraph.fleet_bus.discovery import Host, Registry
 from plangraph.keeper import schema
 from plangraph.keeper.api_routes import READ_VERBS, WRITE_VERBS
 from tests.keeper_util import World
@@ -19,12 +20,22 @@ from contextlib import contextmanager
 
 
 @pytest.fixture
-def world(w):
+def world(w, tmp_path):
+    key_file = tmp_path / "dummy.key"
+    key_file.write_bytes(b"x" * 32)
+    hosts = [
+        Host(host="relay", node_id="n-relay", key_id="k-relay", key_file=key_file),
+        Host(host="a", node_id="n-a", key_id="k-a", key_file=key_file),
+        Host(host="worker", node_id="n-worker", key_id="k-worker", key_file=key_file),
+    ]
+    w.store.bus_registry = Registry(hosts)
+    w.store.outbox_dir = w.path.parent
     return w
 
 
 @contextmanager
 def message_store(world):
+    world.store.outbox_dir = world.path.parent
     class Adapter:
         def write(self, verb, **fields):
             try:
@@ -38,7 +49,17 @@ def message_store(world):
 
 
 @pytest.fixture
-def srv(http_srv, w):
+def srv(http_srv, w, tmp_path):
+    key_file = tmp_path / "dummy_srv.key"
+    key_file.write_bytes(b"x" * 32)
+    hosts = [
+        Host(host="relay", node_id="n-relay", key_id="k-relay", key_file=key_file),
+        Host(host="a", node_id="n-a", key_id="k-a", key_file=key_file),
+        Host(host="worker", node_id="n-worker", key_id="k-worker", key_file=key_file),
+    ]
+    http_srv.bus_registry = Registry(hosts)
+    http_srv.store.bus_registry = Registry(hosts)
+    http_srv.store.outbox_dir = w.path.parent
     class Response:
         def __init__(self, status, raw):
             self.status_code = status
@@ -79,7 +100,7 @@ def test_messages_table_declared_in_both_ddls():
     cols = re.findall(r'^    "?(\w+)"? \w+', m_body.group(1), re.M)
     assert list(cols) == [
         "seq", "from", "to", "body", "trace_id", "key", "run_id",
-        "attempt_n", "ack_state", "ts", "prev_hash", "hash",
+        "attempt_n", "ack_state", "ts", "prev_hash", "hash", "posted_by",
     ]
     assert "message_nonces" in schema.SCHEMA
     assert "message_envelopes" in schema.SCHEMA
@@ -142,6 +163,7 @@ def test_post_message_hash_chain_links_rows(world: World):
         "seq": 2, "from": "a", "to": "b", "body": {"n": 2},
         "trace_id": "t-1", "key": "", "run_id": "", "attempt_n": 0,
         "ack_state": "pending", "ts": NOW + 1, "prev_hash": r1["hash"],
+        "posted_by": "router",
     }
     want = hashlib.sha256(
         (r1["hash"] + json.dumps(payload, sort_keys=True,
@@ -155,7 +177,7 @@ def test_post_message_rejects_bad_enum_and_types(world: World):
     with message_store(world) as st:
         with pytest.raises(ValueError):
             st.write("post_message", **{
-                "from": "relay", "to": "nope", "body": {}, "ts": NOW,
+                "from": "relay", "to": "bad recipient!", "body": {}, "ts": NOW,
             })
         with pytest.raises(ValueError):
             st.write("post_message", **{
@@ -216,12 +238,13 @@ def test_jsonl_outbox_stays_metadata_only(world: World):
             "body": {"secret": "do-not-log"},
             "trace_id": "t-5", "key": "K-5", "ts": NOW,
         })
-    text = (world.path.parent / "outbox.jsonl").read_text(encoding="utf-8") \
-        if (world.path.parent / "outbox.jsonl").exists() else ""
+    outbox_file = world.path.parent / "outbox.jsonl"
+    assert outbox_file.exists(), "outbox.jsonl must exist"
+    text = outbox_file.read_text(encoding="utf-8")
+    assert text.strip(), "outbox.jsonl must contain metadata line"
     assert "do-not-log" not in text
-    if text.strip():
-        for line in text.strip().splitlines():
-            assert "body" not in line or '"body"' not in line
+    for line in text.strip().splitlines():
+        assert '"body"' not in line
 
 
 # ------------------------------------------------------- ack only after commit
@@ -260,10 +283,30 @@ def test_api_post_message_then_read(srv):
 
 def test_api_post_message_rejects_unknown_to(srv):
     out = srv.call("post_message", {
-        "from": "relay", "to": "ghost", "body": {}, "ts": NOW,
+        "from": "relay", "to": "bad recipient!", "body": {}, "ts": NOW,
     })
     assert out["status"] == "error"
     assert out["code"] == 400
+
+
+def test_post_message_accepts_valid_agent_name(world: World):
+    """G1-3: post_message accepts any 'to' that matches agent-name rule."""
+    with message_store(world) as st:
+        row = st.write("post_message", **{
+            "from": "router", "to": "agent-worker-01", "body": {"status": "ok"}, "ts": NOW,
+        })
+        assert row["to"] == "agent-worker-01"
+
+
+def test_api_messages_with_fmt_json_succeeds(srv):
+    """G1-2: GET messages with fmt=json is accepted and fmt is dropped."""
+    srv.call("post_message", {
+        "from": "router", "to": "keeper", "body": {"op": "test-fmt"},
+        "trace_id": "t-fmt", "ts": NOW,
+    })
+    out = srv.call("messages", {"trace_id": "t-fmt", "fmt": "json"})
+    assert out["status"] == "ok"
+    assert len(out["rows"]) == 1
 
 
 def test_api_messages_requires_filter(srv):

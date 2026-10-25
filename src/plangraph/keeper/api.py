@@ -50,6 +50,17 @@ from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
 from .api_routes import (READ_CALLS, ROLE_CHECKED_VERBS, ROUTER_VERBS,
                          TEXT_DEFAULT as _TEXT_DEFAULT)
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
+_READ_VERBS.add("hosts")
+
+
+def _probe_endpoint(endpoint):
+    try:
+        import urllib.request
+        req = urllib.request.Request(endpoint.rstrip("/") + "/v1/health")
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -222,6 +233,19 @@ class KeeperHandler(BaseHTTPRequestHandler):
         return values[0] if values else default
 
     def _read(self, name, extra, query, principal):
+        if name == "hosts":
+            registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
+            hosts_data = []
+            if registry is not None:
+                for h in registry.hosts.values():
+                    hosts_data.append({
+                        "host": h.host,
+                        "endpoint": h.endpoint,
+                        "key_id": h.key_id,
+                        "health": h.health,
+                        "last_seen": h.last_seen,
+                    })
+            return {"hosts": hosts_data}, False
         if name == "messages":
             from .messages_poll import read_messages
             return read_messages(self.server, principal, query), False
@@ -297,8 +321,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
             _STATUS.setdefault("replayed_nonce", 401)
             _STATUS.setdefault("replay_window_full", 503)
             _STATUS.setdefault("rate_limited", 429)
+            _STATUS.setdefault("too_large", 413)
+            if not isinstance(body, dict):
+                raise Refused("validation", "body must be a JSON object")
+            if "principal" in body or "registry" in body:
+                raise Refused("validation", "body contains reserved keys")
             registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
-            return {"row": self.server.store.post_message(principal, registry=registry, **body)}
+            return {"row": self.server.store.post_message(principal, registry=registry, fields=body)}
         store = self.server.store
         if not isinstance(body, dict):
             if name in ("create_items", "import_items") and isinstance(body, list):
@@ -429,6 +458,38 @@ class KeeperHTTPServer(ThreadingHTTPServer):
             self.snapshot_writer = SnapshotWriter(
                 self, debounce, getattr(config, "snapshot_max_delay_s", 2.0))
             self.snapshot_writer.start()
+        self.bus_registry = None
+        self.bus_stop = None
+        self.bus_thread = None
+        inv_file = os.environ.get("PLANGRAPH_BUS_INVENTORY")
+        if inv_file and os.path.isfile(inv_file):
+            from ..fleet_bus import discovery
+            try:
+                import json
+                inv_data = json.loads(Path(inv_file).read_text("utf-8"))
+                hosts = inv_data.get("hosts") or []
+                records = [
+                    discovery.Host(
+                        host=entry["host"],
+                        node_id=entry["node_id"],
+                        key_id=entry["key_id"],
+                        key_file=Path(entry["key_file"])
+                    )
+                    for entry in hosts
+                ]
+                agents = inv_data.get("agents") or {}
+                port = inv_data.get("port", 8765)
+                self.bus_registry = discovery.Registry(records, agents=agents, port=port)
+                self.bus_stop = threading.Event()
+                self.bus_thread = threading.Thread(
+                    target=self.bus_registry.run,
+                    args=(self.bus_stop, _probe_endpoint),
+                    daemon=True,
+                    name="bus-registry",
+                )
+                self.bus_thread.start()
+            except Exception:
+                self.bus_registry = None
         super().__init__(address, KeeperHandler)
 
     def start_reaper(self):
@@ -448,6 +509,8 @@ class KeeperHTTPServer(ThreadingHTTPServer):
             self.snapshot_writer.flush()
 
     def server_close(self):
+        if getattr(self, "bus_stop", None) is not None:
+            self.bus_stop.set()
         self.stop_reaper()
         writer, self.snapshot_writer = self.snapshot_writer, None
         if writer is not None:
