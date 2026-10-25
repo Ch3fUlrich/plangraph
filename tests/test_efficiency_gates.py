@@ -766,6 +766,25 @@ def test_output_on_disk_under_and_over_2mb(tmp_path):
     assert saved.startswith("H" * 1048576) and saved.endswith("T" * 1048576) and "[... output cut ...]" in saved
     assert len(rec2["stdout_tail"].encode()) <= 4096
 
+    from types import SimpleNamespace
+    serv.runner.jobs["j9"] = SimpleNamespace(stdout="ATTEMPT-TWO", stderr="e2")
+    rec3 = dict(run_id="run-t", status="completed", exit_code=0, job_id="j9",
+                stdout_tail="ATTEMPT-ONE", stderr_tail="e1")
+    serv._save(rec3)
+    log = tmp_path / "runs" / "run-t" / "stdout.log"
+    assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWO"  # haiku-C3, qwen-C5: not just the last attempt
+    rec3["stdout"], rec3["stderr"] = rec3["stdout_tail"] + "ATTEMPT-TWO", "e1e2"
+    serv._save(rec3)
+    serv.runner.jobs.clear()
+    serv._save(serv.result("run-t"))  # job gone: never rewritten from the 4 KB tail
+    assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWO"
+    rec4 = dict(run_id="run-c", status="completed", exit_code=0, stdout="A" * 1100000, stderr="")
+    serv._save(rec4)
+    assert rec4["output_cut"] is False
+    rec4["stdout"] += "B" * 1100000
+    serv._save(rec4)
+    assert rec4["output_cut"] is True  # I17: the cut measures the accumulated attempts
+
 
 def test_cancel_with_class_racing_minus_9():
     from plangraph.spawner.runner import SpawnerRunner
