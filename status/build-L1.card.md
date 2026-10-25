@@ -1,40 +1,19 @@
-# build-L1 card · gen-28 · 2026-10-24 10:5xZ · NO cron · hb loop = jobs/6931599d/tmp/hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
-D-2534 PHASE-BATCH: new phase work = all tasks merged onto phase/<key> (green CI, no per-task seats), ONE review round over phase diff (HIGH=2 families), one fixer brief, <=3 rounds, one phase PR + GO-REQ; in-flight seated items keep seats. Cheapest capable models.
-D-2643 BATCH REVIEW (supersedes per-W seats): writers in parallel by file group, gate = affected tests + CI only; ONE review over the whole collected delta at the end. D-2626 affected tests only, full suite at main merge; >10 findings split by file. D-2539/2540 seat families still apply to the final review.
-INCIDENT 03:52Z cx quota ~134h. Writers D-2684: gemini > mimo-pro > OR free/opencode free > mimo-flash. #177 PG-PUBLIC MERGED ec69660a in_review (cut = OS-PG-PUBLIC-CUT). AutoOS ff d386df2e (D-2673). ROUTER-LIVENESS generic in plangraph lane/liveness-watchdog (D-2682); watchdog principal prepared briefs/lanes-d2657/watchdog-principal.md, role leaf asked. Hardening 7f1acb54 pushed, 7001 pass, seats running.
-Handoff = status/build-L1.handoff.md (gen-27 -> gen-28). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
-Writers (D-2569): cx/gpt-6.1-sol on workst (inline briefs); cx 429/cooldown -> agy/gemini-3.8-flash > mimo/mimo-v2.6-flash; probe first, record skips; gemini writer = no google seat (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
-Seats ONLY via spawner AutoOS main>=5ce05dd9 (workst C:\fleet\wt\ao-lessons-b1\tools\autoos-agent.py), never C:\fleet\clones\AutoOS or bare opencode run (D-2552). qodercli Efficient = qwen (D-1714). deepseek-direct 402 on workst.
-Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
-## PH-MODEL-ROUTE: #170 4d8f41e7, #172 W27 2b163d6e, #173 W28-W34 ce92c5fe, #174 W35b/c+W36 748fe7f3 MERGED (qwen seat pass), main green. Prod code host 2/2 OK (A1 card, A2 EMPTY catalog; gemini via agy; prod-run-findings.md). D-2655 FREEZE END MET: workst run-7401b982 rc0 (cx skip->agy) + #174; Windows watchdog task Disabled; gaps G6/G7 -> HARDENING. Watchdog timers installed DISABLED (OS-WATCHDOG-IDENTITY operator). Then FREEZE-END + D-2638 lane list to routing.
-| Item | Owner | State / next |
-|---|---|---|
-| KG-LINK-REPAIR | L1 | #178 MERGED 4608fd3f, in_review |
-| KEEPER-SEAT-FAMILY-WRITER | L1 | #182 MERGED 3857ed0b (D-2672), in_review |
-| BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
-| RT-P1-PHASE-RUNNER (HIGH) | DONE | #163 a6587b14 + #167 S4 09f67846 (GO D-2571), keeper done 2/2 (alibaba+google seats/phase-runner-s4). L2 stopped. Follow-up PHASE-HOLDER-EXEC-GATE-ONCE p3 (gates HARDEN) |
-| PG-PUBLIC-READY #162 (HIGH) | L1 | MERGED 5bb75e5f (D-2577), main CI green, commit+ci attached; NOT submitted: D-2579 rewrite AFTER PH-MODEL-ROUTE, one announced window + private bundle of old history, then submit + qwen(r8)/gemini(r9,r10) verdicts |
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
-| UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
-| D-2657 FREEZE ENDED; D-2638 lanes | L1 | L2s build-L2-review-method d3c8d22a, -hardening cb077891 (+TEST-SPEED-AFFECTED), -pg-public ce88608e (D-2659). #171 -> #175 r2 5b02ffbc GO asked (migration note briefs/lanes-d2657). Keeper lanes serial: #164 > #166 > SEAT-FAMILY-WRITER > #139. D-2660 closed 5 PH-MODEL-ROUTE items; #175 MERGED 0a65abac. LIVE-SYNC-9 (D-2664): live stays 2d61e281; a) autoos:SPAWNER-ITEM-KEY (workst) + smoke briefs/lanes-d2657/ls9-mint-smoke.sh, b) OS-KEEPER-LS9-MIGRATE operator, c) z8 recreate; worktree .claude/worktrees/live-0a65abac. Keeper lanes: asked workst to push #164 r5/SEAT-FAMILY/KG-LINK |
-| KEEPER-TRAILER-MULTI (HIGH) | L1 via workst | D-2570: #139 CLOSED (fix13 HIGH L1-repro: token-order fail-open). Re-cut lane/keeper-trailer-strict from a6587b14, brief seats/trailer-multi/recut sent 11:4xZ (cx else agy, no mimo). First review 2 non-Claude families != writer, <=3 rounds then stop+report |
-| JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
-| WAIT-GUARD #158 | L1 | MERGED 27082207, evidence, in_review; LOWs leaf KEEPER-WAIT-GUARD-PRECISION asked. B1-KEEPER lane/lessons-b1-keeper (HIGH) in flight |
-| SEAT-VERDICT-QODER-ALIAS p9 | L1 | #161 MERGED f8e5f051, main CI green, evidence, in_review; agy APPROVE .out 3b8217c6 (prompt afd766bb); verdict = agy re-run via GW-QODER-401 adapter. D-2515 re-seats after GW-QODER-401 adapter: RT-P1-WORKER-CODE (1 fix part) + RT-P1-KEEPER-PG-CODE (HIGH, 2 fix parts), fresh qoder on original findings at main; qseat.py --adjudication retired. OLD: D-2495 claimed; writer queued workst after sq10 -> 1 dsfree seat |
-| CARD-CHECKS #157 / WF-VERSIONING | build-L2-rt-cards | WFV lane 3 r3 off 7e53f0d1: legs A-F go, Gate-Edit D-n asked router (H1-H4 tests.yml + ci_select); HIGH -> 2 seats + GO. D-2506: standard closes on 1 verdict; tier-check fwd to B1. CARD-CHECKS DONE: merged 7e53f0d1, main CI green, keeper done 2/2 (alibaba). Next lane 3 WF-VERSIONING GO-REQ (Gate-Edit). OLD: 2b b9fc8a7f CI green, qwen delta FIX -> (a) writer F2+F3+sweep -> re-seat -> MERGE-READY |
-| RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | L1 mimo | r7 pushed; ds+glm seats fail (3 HIGH) -> r8 brief briefs/lanes-d2657/scope-r8.md on mimo (cx quota); bus fence: #164 keeps schema v14, bus renumbers | OS-OVERSIGHT-TIMER D-2562: units DISABLED until LIVE-SYNC-9.
-| RT-P1-BUS-CONTRACT | DONE | #153 merged 432c5377, keeper done (mimo + deepseek r2) |
-| KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
-| KEEPER-LEGACY-HUMAN-FAMILY | L1 queue | D-2348, bundle w/ LIVE-SYNC-9 |
-| PG-BOOTSTRAP-FLEET-ENV (HIGH) | L1 queue | blocked autoos:AO-OCL1-PW-FILE |
-| PG-OMNIROUTE-CONFIG-HOME (p6) | L1 queue | D-2359, L2 after PH-RT-RUNTIME |
-| #100 SANDBOX | sweep-runtime | Gate-Edit squash pending |
-| OCGO-PROBE / OCGO-L1-FALLBACK | released D-2409 | trigger OS-OCL1-ENV |
-- D-2418 CI GitHub-hosted (D-1718). D-2315 no age-only deletes; D-2378 kill recorded PIDs only.
-## Traps
-- D-2555 workst L2 launch/recycle: cwd = C:\fleet\AutoOS (main 5ce05dd9) or --mcp-config C:\fleet\AutoOS\tools\autoos_agent_mcp.py; else MCP tools are stale. phase-runner: CLI spawner only till recycle.
-- D-2466 DONE: SEAT-FREE-OPENCODE on AutoOS main 5ce05dd9; coding.vm CLAUDE.md mimo block removed (backup job tmp). B1 build-L2-lessons-b1 STARTED 03:0xZ workst as Sonnet L2 (D-2476 A override; OpenCode l2_start blocked: AUTOOS_OCL1_PW unset, AO-OCL1-PW-FILE unmerged).
-- Keeper refuses reviewer-anthropic verdicts on build-L1 claims (same_family): Haiku seats cannot be recorded; ruling asked 12:4xZ.
-- Never eval a range of mergepath.sh. Verdict needs in_review; mergepath does not submit.
-- ONE final trailer block per commit; Hand-Edit <=10 lines; workflow edit needs Gate-Edit D-n.
-- zsh: use bash -c for chains; never dump environ; never push site strings/seat prompts to GitHub; never touch .claude/worktrees/proposal.
+# build-L1 card · gen-29 · 2026-10-25 05:3xZ · NO cron · hb loop = jobs/975daff2/tmp/hb.sh (3x8min, restart on exit) over ops/hb-keys.txt
+Rules: D-2643/2644 batch review at end; D-2534 phase-batch; D-2539 Haiku first w/o Claude writer; D-2540 first review 2 families, re-review 1; D-2511 seats != any writer family.
+Writers D-2683/2684: agy gemini > mimo-pro > OR free/opencode free (~01Z) > mimo-flash; never Claude; cx out ~10-30. agy -p never a seat (L24). D-2686: no spawn while MemAvailable < 4000 MB.
+Spawn: python3 ~/code/AutoOS/tools/autoos-agent.py run --isolate --client agy --model gemini-3.8-flash | --client opencode --model mimo/mimo-v2.6-pro --card '{"complexity":"standard","privacy":"public","role":"implement"}' --item-key K --title T "$(cat brief)" (cwd = lane worktree). Briefs/seats: ~/code/plangraph-worktrees/briefs/lanes-d2657{,/seats}.
+Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
+| Item | State / next |
+|---|---|
+| #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | r8 Haiku seat fail (5 new). r9 writer agy gemini RUNNING (bg bfunu1nj1, run.txt seats/scope-r9.run.txt, brief scope-r9.md, 3 files) = round 2 of 3 (D-2691). Next: delta re-seat Haiku + non-Claude (deepseek-direct if serves else opencode free glm/deepseek-free); pass -> GO-REQ naming round -> new PR from lane/keeper-scope-r6, close old #164 -> mergepath |
+| #183 ROUTER-LIVENESS-WATCHDOG | qwen seat fail; r2 writer mimo-pro RUNNING (bg bhnv9oyxz, seats/liveness-r2.run.txt, brief liveness-r2.md). Next: delta qwen seat -> MERGE-READY -> mergepath 183 |
+| #184 HARDENING (3 keys) | head 5a4e8a8b CI red pytest-postgres (pg job runs all affected -> gitleaks test). Gate-Edit D-2692 GO; brief hardening-ci-fix.md; writer agy gemini when mem >= 4000; then 1 seat (standard) -> mergepath -> evidence TEST-SPEED-AFFECTED + RUN-EXIT-NOTIFY, submit 3, prune hb-keys |
+| RT-P1-EXEC-OWNERSHIP (HIGH) | D-2691: Haiku tool-less seat as 2nd family; prompt seats/exec-own.haiku.prompt.txt (sha 8142cf0a…, diff #140+#160) ready; run when mem ok, then request close |
+| D-2691 closed 6 | KG-LINK, LESSONS-TO-ALGO, SEAT-VERDICT-QODER, WAIT-GUARD, SEAT-FAMILY-WRITER, PG-PUBLIC-READY |
+| #166 KEEPER-PG-RECONNECT | after #164 |
+| #139 KEEPER-TRAILER-MULTI | after #166 |
+| KEEPER-WATCHDOG-ROLE (HIGH) | after #164; spec watchdog-principal.md; schema vs build-L1-bus |
+| PG public cut | OS-PG-PUBLIC-PUSH operator; re-cut on "push window now" (pg-public-cut-plan.md) |
+| LIVE-SYNC-9 | live 2d61e281; OS-KEEPER-LS9-MIGRATE operator, then z8 drop-in |
+| L2s | build-L2-review-method d3c8d22a running (watch MERGE-READY); build-L1-bus peer |
+Traps: zsh -> bash -c; mergepath needs claim, no submit; no xdist, affected tests only; never dump environ; Haiku seat = claude -p --model haiku --tools "" --strict-mcp-config --mcp-config jobs/975daff2/tmp/nomcp.json from tmp/empty (stdin).
