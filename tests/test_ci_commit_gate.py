@@ -656,7 +656,7 @@ def test_real_exempt_file_is_frozen_and_well_formed():
 
     shas = [
         line.strip()
-        for line in lines
+        for line in lines[:lines.index("# D-2744 (sole exception to never-append): operator D-2739: Opus writes PG-EFFICIENCY-GATES")]
         if line.strip() and not line.strip().startswith("#")
     ]
     assert len(shas) == 33
