@@ -29,11 +29,13 @@ def world(w, tmp_path):
         Host(host="worker", node_id="n-worker", key_id="k-worker", key_file=key_file),
     ]
     w.store.bus_registry = Registry(hosts)
+    w.store.outbox_dir = w.path.parent
     return w
 
 
 @contextmanager
 def message_store(world):
+    world.store.outbox_dir = world.path.parent
     class Adapter:
         def write(self, verb, **fields):
             try:
@@ -57,6 +59,7 @@ def srv(http_srv, w, tmp_path):
     ]
     http_srv.bus_registry = Registry(hosts)
     http_srv.store.bus_registry = Registry(hosts)
+    http_srv.store.outbox_dir = w.path.parent
     class Response:
         def __init__(self, status, raw):
             self.status_code = status

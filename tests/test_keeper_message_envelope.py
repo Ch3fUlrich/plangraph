@@ -19,11 +19,15 @@ NOW = 1_700_000_000
 
 @pytest.fixture
 def world(w):
+    if hasattr(w, "path"):
+        w.store.outbox_dir = w.path.parent
     return w
 
 
 @pytest.fixture
 def srv(http_srv, w):
+    if hasattr(w, "path"):
+        http_srv.store.outbox_dir = w.path.parent
     class Response:
         def __init__(self, status, raw):
             self.status_code = status
@@ -142,10 +146,12 @@ def test_nonce_table_append_only_triggers(world: World, host_registry):
     env = make_signed_envelope("host-a", b"k" * 32, fields, nonce="trg-nonce")
     world.store.post_message(world.p("router"), registry=host_registry, envelope=env, **fields)
 
-    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+    from plangraph.keeper import db_errors
+    expected_errors = (sqlite3.DatabaseError, *db_errors.INTEGRITY)
+    with pytest.raises(expected_errors, match="append-only"):
         world.conn.execute("UPDATE message_nonces SET host='evil' WHERE nonce='trg-nonce'")
 
-    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+    with pytest.raises(expected_errors, match="append-only"):
         world.conn.execute("DELETE FROM message_nonces WHERE nonce='trg-nonce'")
 
 

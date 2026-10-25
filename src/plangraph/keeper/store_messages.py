@@ -121,6 +121,7 @@ class MessagesMixin:
             # Envelope cryptographic validation is deliberately performed before acquiring self._write()
             # so that CPU-bound HMAC verification does not hold the database write lock.
             # Nonce uniqueness, idempotency, and row insertion are then executed atomically inside the write lock.
+            is_conflict = False
             with self._write():
                 if envelope is not None:
                     seen = self.conn.execute("SELECT nonce FROM message_nonces WHERE nonce = ?", (envelope["nonce"],)).fetchone()
@@ -159,42 +160,45 @@ class MessagesMixin:
                                 'INSERT INTO message_nonces (nonce, host, ts) VALUES (?, ?, ?)',
                                 (envelope["nonce"], envelope["host"], int(now * 1000)),
                             )
-                            self.conn.execute("COMMIT")
-                            self.conn.execute("BEGIN IMMEDIATE")
-                        raise Refused("conflict", "msg_id reused with different content")
+                        is_conflict = True
 
-                msg_fields = {k: v for k, v in row.items() if k not in ("envelope", "msg_id")}
-                msg_fields["posted_by"] = principal.name
-                inserted = self._insert_message(**msg_fields)
+                if not is_conflict:
+                    msg_fields = {k: v for k, v in row.items() if k not in ("envelope", "msg_id")}
+                    msg_fields["posted_by"] = principal.name
+                    inserted = self._insert_message(**msg_fields)
 
-                if msg_id:
-                    host_name = envelope["host"] if envelope else row["from"]
-                    self.conn.execute(
-                        'INSERT INTO message_envelopes (msg_id, seq, body_hash, host, ts) VALUES (?, ?, ?, ?, ?)',
-                        (msg_id, inserted["seq"], body_hash, host_name, int(now * 1000)),
-                    )
-                    inserted["msg_id"] = msg_id
+                    if msg_id:
+                        host_name = envelope["host"] if envelope else row["from"]
+                        self.conn.execute(
+                            'INSERT INTO message_envelopes (msg_id, seq, body_hash, host, ts) VALUES (?, ?, ?, ?, ?)',
+                            (msg_id, inserted["seq"], body_hash, host_name, int(now * 1000)),
+                        )
+                        inserted["msg_id"] = msg_id
 
-                if envelope is not None:
-                    self.conn.execute(
-                        'INSERT INTO message_nonces (nonce, host, ts) VALUES (?, ?, ?)',
-                        (envelope["nonce"], envelope["host"], int(now * 1000)),
-                    )
+                    if envelope is not None:
+                        self.conn.execute(
+                            'INSERT INTO message_nonces (nonce, host, ts) VALUES (?, ?, ?)',
+                            (envelope["nonce"], envelope["host"], int(now * 1000)),
+                        )
 
-                self._write_outbox_metadata(inserted)
-                return inserted
+                    self._write_outbox_metadata(inserted)
+
+            if is_conflict:
+                raise Refused("conflict", "msg_id reused with different content")
+
+            return inserted
 
         return self._run(principal, "post_message", fields.get("key"), work)
 
     def _write_outbox_metadata(self, inserted):
         try:
-            db_file = None
-            for row in self.conn.execute("PRAGMA database_list").fetchall():
-                if row[1] == "main" and row[2]:
-                    db_file = Path(row[2])
-                    break
-            if db_file:
-                outbox_path = db_file.parent / "outbox.jsonl"
+            outbox_dir = getattr(self, "outbox_dir", None)
+            if not outbox_dir:
+                p = getattr(self, "path", None) or getattr(self.conn, "path", None)
+                if p:
+                    outbox_dir = Path(p).parent
+            if outbox_dir:
+                outbox_path = Path(outbox_dir) / "outbox.jsonl"
                 meta = {k: v for k, v in inserted.items() if k != "body"}
                 with open(outbox_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(meta, sort_keys=True) + "\n")
