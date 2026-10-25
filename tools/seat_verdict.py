@@ -46,8 +46,12 @@ KNOWN_FAMILIES = frozenset(family for _, family in FAMILIES)
 PASS_WORDS = frozenset({"pass", "approve"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
-_BLOCKING_LABEL = re.compile(r"\b(?:critical|high|med|medium|major|blocker)\b\s*[:(]", re.I)
-_LOW_LABEL = re.compile(r"\b(?:low|lows|nit|nits|minor)\b\s*[:(]", re.I)
+# [*_`]* before/after the word: markdown-bold labels like **MED**: or
+# _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
+_BLOCKING_LABEL = re.compile(
+    r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*[:(]", re.I)
+_LOW_LABEL = re.compile(
+    r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 # first word, ended by end/space/punctuation and NOT followed by "|" or "/"
 # (that would be an echoed "pass | fix | halt" template, not a decision)
@@ -80,6 +84,7 @@ def parse_verdict(text):
         word = word_m.group(1).lower() if word_m else ""
         if word in PASS_WORDS:
             return True, idx
+        # halt/reject are excluded from _LOW_ONLY_WORDS on purpose: they fall through to FIX_WORDS -> False, like verdict.py's halt check
         if word in _LOW_ONLY_WORDS:
             remainder = stripped[word_m.end():]
             if _LOW_LABEL.search(remainder) and not _BLOCKING_LABEL.search(remainder):

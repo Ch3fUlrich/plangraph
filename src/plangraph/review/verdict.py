@@ -27,8 +27,12 @@ VERDICTS = ("pass", "fix", "halt")
 PASS_WORDS = frozenset({"pass", "approve"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
-_BLOCKING_LABEL = re.compile(r"\b(?:critical|high|med|medium|major|blocker)\b\s*[:(]", re.I)
-_LOW_LABEL = re.compile(r"\b(?:low|lows|nit|nits|minor)\b\s*[:(]", re.I)
+# [*_`]* before/after the word: markdown-bold labels like **MED**: or
+# _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
+_BLOCKING_LABEL = re.compile(
+    r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*[:(]", re.I)
+_LOW_LABEL = re.compile(
+    r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 _FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I)
 
