@@ -202,6 +202,48 @@ def test_guard_fixture_value_is_waived_but_nothing_else(tmp_path, rel):
         f"only the planted value may be reported in {rel}: {secrets}"
 
 
+# --- PG-PUBLIC-READY: the regression fixture's synthetic gateway token is value-scoped -----
+
+#: The regression fixture whose synthetic gateway token IS a generic-api-key finding at HEAD
+#: (the value sits on one plain line next to the env-var name), and that exact value.  Both
+#: are assembled at runtime: this file sits in the same scanner gate, so neither fragment here
+#: may form a matchable credential-shaped line on its own.
+W30_REL = "tests/test_w30_regressions.py"
+W30_TOKEN = _join("opaque-test-", "SECRET123")
+
+
+def test_w30_regression_token_is_waived_but_nothing_else(tmp_path):
+    """The fixture's token is waived by value alone in ITS path; new values still fail.
+
+    The fixture is copied verbatim into a tree at the config-scoped relative path and given
+    one freshly planted key-shaped line:
+
+    * without the config BOTH the fixture token and the planted one are findings -- so the
+      waiver below is live, not a no-op over a literal that stopped matching;
+    * with the config ONLY the planted one survives -- so the entry is value-scoped and
+      another credential-shaped string in the same file (or a real token value) is never
+      exempt.  The mirrored public config carries the identical entry
+      (test_leaks_allowlist_only_names_test_paths pins both).
+    """
+    exe = _gitleaks()
+    tree = tmp_path / "tree"
+    target = tree / W30_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    planted = _fake_secret(("Vk7", "qP2", "mR9x", "Tl4b", "Zr")) + Path(W30_REL).name[:2]
+    target.write_text((ROOT / W30_REL).read_text(encoding="utf-8")
+                      + f"\napi key = {planted}\n", encoding="utf-8")
+
+    rc0, bare = _scan(exe, tree, None)
+    bare_secrets = {f["Secret"] for f in bare if f["RuleID"] == "generic-api-key"}
+    assert rc0 == 1 and {W30_TOKEN, planted} <= bare_secrets, \
+        f"both the fixture token and the planted value must be findings bare: {bare_secrets}"
+
+    rc, findings = _scan(exe, tree, CONFIG)
+    secrets = {f["Secret"] for f in findings if f["RuleID"] == "generic-api-key"}
+    assert rc == 1 and secrets == {planted}, \
+        f"only the planted value may be reported in {W30_REL}: {secrets}"
+
+
 # --- PG-PUBLIC-FIX: the private-key waiver pins the full fake PEM block, not a header ------
 
 #: Assembled at runtime: this file sits in the same scanner gate, so no fragment here may form
