@@ -280,6 +280,9 @@ def test_cli_existing_within_file_and_dir_accepted(tmp_path, capsys, monkeypatch
     assert rc == 0
     captured = capsys.readouterr()
     assert "unknown --within path" not in captured.err
+    import json
+    plan = json.loads(captured.out.splitlines()[0])
+    assert sorted(plan["tests"]) == ["tests/contract/test_inbox.py", "tests/test_api.py"]
 
 
 def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
