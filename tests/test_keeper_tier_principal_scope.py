@@ -24,8 +24,15 @@ def tier_for(store, role, tier, title):
 
 
 def test_oversight_lowering_prevented_and_raising_allowed(store):
-    assert tier_for(store, "oversight", "standard", "Handle the secret") == "high"
+    # Below the project default ("Handle the secret" makes demo default to
+    # high): REFUSED, never silently raised to the default (D-2458).
+    with pytest.raises(Refused) as exc:
+        tier_for(store, "oversight", "standard", "Handle the secret")
+    assert "oversight:tier_below_default" in exc.value.msg
+    assert exc.value.code == "forbidden"
+    # At/above the default: honoured, exactly what the grant names.
     assert tier_for(store, "oversight", "high", "Ordinary lane") == "high"
+    assert tier_for(store, "oversight", "standard", "Ordinary lane") == "standard"
 
 
 def test_router_may_lower_below_default(store):

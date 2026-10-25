@@ -50,11 +50,15 @@ class NeedsMixin:
     """
 
     def needs_you(self, principal, project=None):
-        # build-L1 MED: oversight tokens are project-scoped on reads too
+        # The guard lives INSIDE _run (D-2458): the token re-check and the
+        # denial audit run before an out-of-scope project can refuse.
+        return self._run(principal, "needs_you", None,
+                         lambda now: self._needs_you_in(principal, project))
+
+    def _needs_you_in(self, principal, project):
         if isinstance(principal, auth.OversightPrincipal) and project is not None:
             self._require_project(principal, project)
-        return self._run(principal, "needs_you", None,
-                         lambda now: self._needs_you(project, principal))
+        return self._needs_you(project, principal)
 
     def _needs_you(self, project, principal):
         items = self._all_items()
@@ -93,12 +97,14 @@ class NeedsMixin:
         return rows
 
     def answers(self, principal, project=None):
-        # build-L1 MED: oversight tokens are project-scoped on reads too
+        # The guard lives INSIDE _run (D-2458), like ``needs_you``.
+        return self._run(principal, "answers", None,
+                         lambda now: self._answers_in(principal, project))
+
+    def _answers_in(self, principal, project):
         if isinstance(principal, auth.OversightPrincipal) and project is not None:
             self._require_project(principal, project)
-        return self._run(principal, "answers", None,
-                         lambda now: views.answers(self._with_answers(),
-                                                   project=project))
+        return views.answers(self._with_answers(), project=project)
 
     def answer_map(self):
         """``key -> {"text", "decision_id", "ts"}`` for every answered item.

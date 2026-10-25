@@ -146,8 +146,11 @@ def fold(events, unknown=None):
     optional *unknown* list as ``{"seq", "type", "key"}``.  Types that are in
     ``EVENT_TYPES`` but have no branch here (``review_verdict``,
     ``token_minted``, ``outage_recorded``) are known no-ops: they are replayed
-    by ``token_fold``/the store and are never reported as unknown.  *events*
-    and the return value are unchanged from the single-argument signature.
+    by ``token_fold``/the store and are never reported as unknown.
+    ``oversight_token_minted`` is keyless, so it returns above its branch: the
+    ``oversight_tokens`` ledger is not event-sourced and replay never rebuilds
+    it (GAP, see docs/KEEPER.md).  *events* and the return value are unchanged
+    from the single-argument signature.
     """
     state = {}
     for event in events:
@@ -174,9 +177,12 @@ def fold(events, unknown=None):
             # Ownership has its own audit events; lifecycle replay is unchanged.
             pass
         elif kind == "oversight_token_minted":
-            # RT-OVERSIGHT: the mint audits a row in oversight_tokens (the event
-            # is keyless) -- no item state, so replay is a no-op; it is branched
-            # so a known type is never reported as unknown.
+            # RT-OVERSIGHT: the mint event is KEYLESS (``key is None`` returns
+            # above), and ``fold`` replays item caches only -- the
+            # ``oversight_tokens`` ledger is NOT event-sourced and is never
+            # reconstructed here (GAP: replaying events cannot rebuild it; the
+            # table itself is revoke-only).  Branched so a known type stays a
+            # known no-op; see docs/KEEPER.md.
             pass
         elif kind == "item_defined":
             if "priority" in payload:

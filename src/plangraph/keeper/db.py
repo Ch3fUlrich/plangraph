@@ -119,6 +119,15 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
 
+#: The oversight guard triggers (``OVERSIGHT_DDL``): a presence-based install
+#: never REPAIRS one, so ``_repair_oversight_triggers`` drops them on every open
+#: and the DDL below recreates the current body -- a weakened or older guard
+#: cannot survive a reopen (D-2458).
+_OVERSIGHT_TRIGGERS = ("trg_oversight_tokens_revoke_only_update",
+                       "trg_oversight_tokens_append_only_delete",
+                       "trg_oversight_ops_append_only_update",
+                       "trg_oversight_ops_append_only_delete")
+
 
 def _upgrade_lock_triggers(conn):
     """MK-ANSWER: re-create the key-lock triggers if they predate ``answered``.
@@ -153,7 +162,12 @@ def _upgrade(conn):
     conn.executescript(LOCKS_DDL)
     conn.executescript(JEV_DDL)
     # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)
-    # No DROP on open - triggers stay in place across reopens (build-L1 MED)
+    # for the TABLES, and a REPAIR for the guard triggers: ``CREATE TRIGGER IF
+    # NOT EXISTS`` would keep a weakened or outdated body, so every open drops
+    # them first and ``OVERSIGHT_DDL`` recreates the current one (idempotent:
+    # a correct guard is replaced by itself).
+    for trigger in _OVERSIGHT_TRIGGERS:
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     conn.executescript(OVERSIGHT_DDL)
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)

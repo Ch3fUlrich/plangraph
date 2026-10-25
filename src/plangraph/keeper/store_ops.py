@@ -21,6 +21,11 @@ Any refusal, validation problem or error rolls back the items, edges, events
 and evidence of the whole batch; the refusal names the op:
 ``op <n> <op> <key>: <code> <message>`` (``n`` is 1-based, like ``apply_batch.py``).
 
+An oversight refusal is recorded whether the batch was real or a ``dry_run``:
+the dry run changes no graph state and writes no *applied* row, but a denied
+attempt still leaves its denied ``oversight_ops`` row and its alarm (the done
+criterion "a denied attempt raises an alert row" holds for a probe too).
+
 Slow I/O runs before the lock: evidence for a ``claimed``/``in_review`` item
 that no earlier op of the batch moves is verified pre-lock, and the in-lock op
 re-checks that item's state and epoch (else ``conflict``).  Evidence for an
@@ -129,21 +134,21 @@ class OpsMixin:
         marks the denial it already wrote with ``_oversight_denied_written``:
         the batch row carries the op/finding context, the seam row would not.
 
-        build-L1 LOW: a refused dry run writes no oversight_ops / projector_alarms
-        / audit rows (dry run writes nothing, even on refusal).
+        A dry run writes no APPLIED row (its ops roll back with the batch), but
+        a refusal still records its denial exactly like a real call: the denied
+        ``oversight_ops`` row and the ``oversight-guard`` alarm are written
+        after the rollback, so a denied probe is never invisible.
         """
         oversight = principal.role == "oversight"
         self._oversight_fail = None
         self._oversight_ops = list(ops) if isinstance(ops, list) else []
-        # build-L1 LOW: mark dry run early so _run's deny() skips writing
-        if oversight and dry_run:
-            self._oversight_denied_written = True
         try:
             return self._apply_ops(principal, ops, batch_ref, now,
                                    base_seq=base_seq, dry_run=dry_run)
         except Refused as exc:
-            # A refused dry run writes nothing (build-L1 LOW)
-            if oversight and not dry_run:
+            if oversight:
+                # May raise ``oversight:rate_limited`` instead: once the denied
+                # cap is reached the refusal is reported, not recorded again.
                 self._record_oversight_denied(principal, batch_ref, exc, now)
                 self._oversight_denied_written = True
             raise
@@ -166,6 +171,10 @@ class OpsMixin:
         if not isinstance(op, dict):
             raise Refused("validation", "op must be a mapping")
         name = op.get("op")
+        if not isinstance(name, str):
+            # Malformed name (a list/dict/number): refuse as validation here so
+            # no membership test below raises TypeError at the caller.
+            raise Refused("validation", "op name must be text")
         if oversight and name == "remove_dep":
             # Shape-check it normally; the policy refuses it with dep_removal.
             pass

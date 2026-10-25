@@ -81,12 +81,20 @@ class ReadMixin:
                                                         project=project))
 
     def progress(self, principal, project=None):
-        """PROGRESS-PANEL: per-project / per-phase progress of the snapshot rows."""
-        # Explicit project guard only; unfiltered reads retain the normal read contract.
+        """PROGRESS-PANEL: per-project / per-phase progress of the snapshot rows.
+
+        The explicit project guard runs INSIDE ``_run`` (D-2458): an oversight
+        token is re-checked and any refusal audited before the filter can
+        answer, so an expired token reports ``oversight:token_expired`` with
+        its denial row instead of a bare "not scoped" message.
+        """
+        return self._run(principal, "progress", None,
+                         lambda now: self._progress_in(principal, project, now))
+
+    def _progress_in(self, principal, project, now):
         if isinstance(principal, auth.OversightPrincipal) and project is not None:
             self._require_project(principal, project)
-        return self._run(principal, "progress", None,
-                         lambda now: progress(self._snapshot(now)["items"], project=project))
+        return progress(self._snapshot(now)["items"], project=project)
 
     def whoami(self, principal):
         return self._run(principal, "whoami", None,

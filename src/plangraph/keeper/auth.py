@@ -11,7 +11,9 @@ import hashlib
 import json
 import re
 import secrets
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from .errors import Refused
 from .schema import ROLES
@@ -19,7 +21,7 @@ from .schema import ROLES
 __all__ = ["Principal", "RunPrincipal", "OversightPrincipal", "RUN_PREFIX",
            "OVERSIGHT_PREFIX", "add_principal", "add_oversight_principal",
            "authenticate", "revoke", "get_principal", "list_principals",
-           "hash_token", "norm_family", "validate_family"]
+           "hash_token", "norm_family", "validate_family", "set_clock"]
 
 
 @dataclass
@@ -73,6 +75,23 @@ class OversightPrincipal(Principal):
 def hash_token(token: str) -> str:
     """The only form of a token this system ever stores."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+#: The clock :func:`authenticate` judges token expiry against when the caller
+#: passes no ``now``.  Wall time by default; ``Store.__init__`` publishes the
+#: store's own clock here, so an ``expires_at`` the store stamped is read back
+#: by the very same clock (an injected test clock travels with it).
+_CLOCK = time.time
+
+
+def set_clock(clock) -> None:
+    """Publish the clock token expiry is judged against (the keeper store does)."""
+    global _CLOCK
+    _CLOCK = clock
+
+
+def _now(now):
+    return float(_CLOCK()) if now is None else float(now)
 
 
 def norm_family(value):
@@ -155,12 +174,26 @@ def add_principal(conn, name, role, projects, family=None) -> str:
         "SELECT 1 FROM principals WHERE name=?", (name,)).fetchone()
     if existing is not None:
         raise Refused("conflict", f"principal {name!r} already exists")
-    token = secrets.token_urlsafe(32)
+    token = _mint_token()
     conn.execute(
         "INSERT INTO principals(name,role,projects,family,token_sha256,active)"
         " VALUES(?,?,?,?,?,1)",
         (name, role, json.dumps(projects), family,
          hash_token(token)))
+    return token
+
+
+def _mint_token() -> str:
+    """A prefixless principal token that can never collide with a namespace.
+
+    ``secrets.token_urlsafe`` draws from an alphabet that includes ``_``, so
+    the text of a fresh token could start with ``pgo1_``; the dispatch would
+    then depend on luck.  Minting re-rolls until it cannot happen (the lookup
+    order in :func:`authenticate` is the second line of defence).
+    """
+    token = secrets.token_urlsafe(32)
+    while token.startswith(OVERSIGHT_PREFIX):
+        token = secrets.token_urlsafe(32)
     return token
 
 
@@ -186,24 +219,48 @@ def add_oversight_principal(conn, name, projects):
         (name, "oversight", json.dumps(projects), None))
 
 
-def authenticate(conn, token) -> Principal:
-    """Resolve a bearer token to an active principal, or refuse."""
+def authenticate(conn, token, *, now=None) -> Principal:
+    """Resolve a bearer token to an active principal, or refuse.
+
+    Dispatch is by STORED MARKER, not by the token's text: the principals table
+    is consulted first, so a prefixless principal token whose random bytes
+    happen to start with ``pgo1_`` still resolves to its own row instead of
+    being misrouted to (and refused by) the oversight lookup.  *now* is the
+    clock an expiry is judged against; the default is the clock the keeper
+    store published (:func:`set_clock`, wall time until one is built).
+    """
     if not token:
         raise Refused("forbidden", "missing token")
-    if isinstance(token, str) and token.startswith(OVERSIGHT_PREFIX):
-        return _authenticate_oversight(conn, token)
     row = conn.execute(
         "SELECT name,role,projects,family FROM principals"
         " WHERE token_sha256=? AND active=1", (hash_token(token),)).fetchone()
-    if row is None:
-        return _authenticate_run(conn, token)
-    return _as_principal(row)
+    if row is not None:
+        return _as_principal(row)
+    if isinstance(token, str) and token.startswith(OVERSIGHT_PREFIX):
+        return _authenticate_oversight(conn, token, now=now)
+    return _authenticate_run(conn, token)
 
 
-def _authenticate_oversight(conn, token) -> OversightPrincipal:
-    """Resolve a ``pgo1_`` token; an unknown/revoked row is refused here."""
+def _expired(value, now) -> bool:
+    """True when the ISO *expires_at* is missing, unreadable or in the past."""
+    if not isinstance(value, str):
+        return True
+    try:
+        expires = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return True
+    return expires <= _now(now)
+
+
+def _authenticate_oversight(conn, token, *, now=None) -> OversightPrincipal:
+    """Resolve a ``pgo1_`` token; an unknown/revoked/expired row is refused here.
+
+    The TTL is enforced at authentication as well as at every use: a caller
+    that trusts ``authenticate`` alone never sees an expired token as live (the
+    store's own per-use check re-reads the row and audits the refusal).
+    """
     row = conn.execute(
-        "SELECT o.id,o.principal,o.generation,o.scope,o.revoked_at,"
+        "SELECT o.id,o.principal,o.generation,o.scope,o.revoked_at,o.expires_at,"
         " p.role,p.projects,p.family,p.active"
         " FROM oversight_tokens o JOIN principals p ON p.name=o.principal"
         " WHERE o.token_sha256=?", (hash_token(token),)).fetchone()
@@ -213,6 +270,8 @@ def _authenticate_oversight(conn, token) -> OversightPrincipal:
         raise Refused("forbidden", "oversight principal is revoked")
     if row["role"] != "oversight":
         raise Refused("forbidden", "oversight principal role drifted")
+    if _expired(row["expires_at"], now):
+        raise Refused("forbidden", "oversight:token_expired token has expired")
     try:
         projects = json.loads(row["projects"] or "[]")
     except (ValueError, TypeError):

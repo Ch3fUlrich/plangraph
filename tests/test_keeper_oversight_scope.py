@@ -49,7 +49,7 @@ import os
 
 import pytest
 
-from keeper_util import World, defn
+from keeper_util import World, defn, to_done
 from plangraph.keeper import api_routes, auth, db as kdb, db_errors
 from plangraph.keeper import events as keeper_events
 from plangraph.keeper.errors import Refused
@@ -125,7 +125,10 @@ def live(w, monkeypatch, *, name=OPP, go=GO, projects=(P,)):
         grant_go(w, decision_id=go)
     add_oversight(w, name=name, projects=projects)
     out = mint(w, name=name, go=go)
-    return out["token"], auth.authenticate(w.conn, out["token"])
+    # The store clock is the TTL authority here: authenticate judges the
+    # expiry against the clock the mint stamped it with.
+    return out["token"], auth.authenticate(w.conn, out["token"],
+                                           now=w.clock())
 
 
 def apply(w, principal, ops, batch_ref=BATCH):
@@ -227,7 +230,7 @@ def test_empty_projects_fail_closed(w, monkeypatch):
         token = mint(w)
     except Refused:
         return                             # minting may fail closed too
-    principal = auth.authenticate(w.conn, token)
+    principal = auth.authenticate(w.conn, token, now=w.clock())
     assert principal.projects == []
     with pytest.raises(Refused) as exc:
         apply(w, principal, [op("edit", key="plangraph:OTHER",
@@ -305,7 +308,7 @@ def test_mint_only_through_the_local_admin_cli(w, monkeypatch, tmp_path,
     assert token not in captured.out and token not in captured.err
     assert str(token_out) in captured.out
     assert (token_out.stat().st_mode & 0o777) == 0o600
-    assert auth.authenticate(w.conn, token).role == "oversight"
+    assert auth.authenticate(w.conn, token, now=w.clock()).role == "oversight"
 
 
 def test_cli_mint_needs_the_live_env(w, monkeypatch, tmp_path, capsys):
@@ -376,8 +379,9 @@ def test_rotation_revokes_previous_generation(w, monkeypatch):
     assert token1 != token2
     assert out2["generation"] == 2
     # generation 1 is dead at authentication, generation 2 works
-    assert refusal(auth.authenticate, w.conn, token1).code == "forbidden"
-    p2 = auth.authenticate(w.conn, token2)
+    assert refusal(auth.authenticate, w.conn, token1,
+                   now=w.clock()).code == "forbidden"
+    p2 = auth.authenticate(w.conn, token2, now=w.clock())
     assert p2.generation == 2
     rows = list(w.conn.execute(
         "SELECT generation,revoked_at FROM oversight_tokens"
@@ -464,30 +468,34 @@ def test_every_write_verb_is_classified_for_oversight():
     ("question", "standard", ["any"]),
 ])
 def test_create_allowed_kinds_and_tiers(w, monkeypatch, kind, tier, evidence):
-    """Oversight can create items, but plangraph items default to 'high' tier.
+    """The grant's create tiers: honoured at/above the default, refused below.
 
-    build-L1 HIGH: oversight may only RAISE tiers, never lower below default.
-    So a plangraph item with tier='standard' is raised to 'high' (the default).
+    D-2458 contract correction: plangraph's project default is ``high`` and an
+    oversight create naming a TIER BELOW IT is REFUSED
+    ``oversight:tier_below_default`` (the raise-only grant refuses; it never
+    silently stores the default any more).  The R1 question/``none`` carve-out
+    is stored exactly as asked.  A ``standard`` create in a default-``standard``
+    project is honoured end to end in
+    ``test_create_at_or_above_default_is_honoured``.
     """
     _, principal = live(w, monkeypatch)
     item = fresh("NEW", kind=kind, tier=tier, evidence=evidence)
     if tier == "standard":
         err = refusal(create_linked, w, principal, item)
-        assert "target_high" in err.msg
-        assert w.store._normalise_create(item, principal)["review_tier"] == "high"
+        assert err.code == "forbidden" and has("tier_below_default", err.msg)
+        # both seams refuse it: the policy verdict and the store's own tier rule
+        with pytest.raises(Refused) as exc:
+            w.store._normalise_create(item, principal)
+        assert has("tier_below_default", exc.value.msg)
         assert w.store._item("plangraph:NEW") is None
         return
     out = create_linked(w, principal, item)
     assert out["applied"] == 2
     stored = w.store._item("plangraph:NEW")
     assert stored["kind"] == kind
-    # plangraph items default to 'high', so oversight can't lower to 'standard'
-    # The tier is either the requested tier (if >= default) or the default
-    # For questions with tier='none', it's allowed (per policy)
+    # The granted question/none carve-out keeps the tier it named.
     if tier == "none" and kind == "question":
         expected_tier = "none"
-    elif tier == "standard":
-        expected_tier = "high"  # raised to default
     else:
         expected_tier = tier
     assert stored["review_tier"] == expected_tier
@@ -812,17 +820,43 @@ def test_edit_tier_of_an_existing_item_denied(w, monkeypatch):
 
 
 def test_oversight_cannot_lower_tier_below_default(w, monkeypatch):
-    """Oversight may only RAISE tiers, never lower below default_review_tier.
+    """Raise-only tiers: a below-default create is REFUSED, never clamped.
 
-    plangraph items default to 'high', so oversight creating with tier='standard'
-    has the tier raised to 'high' (build-L1 HIGH: tier lowering is a grant escape).
+    D-2458 contract correction: the old build silently stored the project
+    default (``high``) for an oversight ``standard`` create, so the item the
+    grant described never existed and the refusal never fired.  Both seams now
+    refuse it with ``oversight:tier_below_default`` and store nothing.
     """
     _, principal = live(w, monkeypatch)
     item = fresh("LOW_TIER", kind="lane", tier="standard")
-    assert w.store._normalise_create(item, principal)["review_tier"] == "high"
+    with pytest.raises(Refused) as exc:
+        w.store._normalise_create(item, principal)
+    assert has("tier_below_default", exc.value.msg)
     err = refusal(create_linked, w, principal, item)
-    assert "target_high" in err.msg
+    assert err.code == "forbidden" and has("tier_below_default", err.msg)
     assert w.store._item("plangraph:LOW_TIER") is None
+
+
+def test_create_at_or_above_default_is_honoured(w, monkeypatch):
+    """The other half of the raise-only grant: at/above the default is stored.
+
+    ``demo`` defaults to ``standard``, so an oversight ``standard`` create
+    there is allowed end to end (batch applied, tier untouched) -- the grant
+    produces the very tier it names.
+    """
+    _seed_demo(w)
+    _, principal = live(w, monkeypatch, projects=(P, "demo"))
+    item = fresh("NEW", project="demo", tier="standard")
+    out = apply(w, principal, [
+        op("create", item=item),
+        op("edit", key="demo:DOUT", fields={"depends_on":
+                                            ["demo:DOTHER", "demo:NEW"]}),
+    ])
+    assert out["applied"] == 2, out
+    stored = w.store._item("demo:NEW")
+    assert stored["review_tier"] == "standard"
+    assert stored["kind"] == "lane"
+    assert [r for r in _denied_rows(w)] == []
 
 
 def test_create_unknown_field_denied(w, monkeypatch):
@@ -1049,7 +1083,7 @@ def test_denied_budget_is_alarm_only_not_auto_revoke(w, monkeypatch):
     row = w.conn.execute("SELECT revoked_at FROM oversight_tokens"
                          " WHERE principal=?", (OPP,)).fetchone()
     assert row["revoked_at"] is None
-    assert auth.authenticate(w.conn, token).role == "oversight"
+    assert auth.authenticate(w.conn, token, now=w.clock()).role == "oversight"
     alarms = list(w.conn.execute(
         "SELECT * FROM projector_alarms WHERE kind='oversight_denied'"
         " AND workflow_id='oversight-guard' AND cleared_at IS NULL"))
@@ -1450,7 +1484,7 @@ def test_verb_denials_count_toward_the_denied_budget(w, monkeypatch):
                   [op("priority", key="plangraph:OTHER", priority=2)])
     assert err.code == "forbidden" and has("rate_limited", err.msg)
     # R4: the breach is a single alarm, never an automatic revoke.
-    assert auth.authenticate(w.conn, token).role == "oversight"
+    assert auth.authenticate(w.conn, token, now=w.clock()).role == "oversight"
     assert len(_open_guard_alarms(w)) == 1
 
 
@@ -1579,18 +1613,25 @@ def test_oversight_dry_run_checks_the_gate_and_writes_nothing(w, monkeypatch):
     assert _denied_rows(w) == []                   # success is not a denial
     assert _open_guard_alarms(w) == []
 
-    # The gate still runs on a dry run: a refused op is refused, nothing moves,
-    # and the denial is recorded exactly as a real call would record it.
+    # The gate still runs on a dry run: a refused op is refused, nothing moves
+    # in the graph -- and the denial is recorded exactly as a real call would
+    # record it (D-2458: a denied dry run writes no APPLIED row, but its denied
+    # oversight_ops row and its alarm survive the rollback).
     err = refusal(w.store.apply_ops, principal,
                   [op("edit", key="plangraph:HIGH", fields={"note": "no"})],
                   batch_ref=BATCH, dry_run=True)
     assert err.code == "forbidden" and has("target_high", err.msg)
     assert snap(w) == before
-    # build-L1 LOW: a refused dry run writes no oversight_ops / projector_alarms
-    # / audit rows (dry run writes nothing, even on refusal)
     assert _applied_rows(w) == []
-    assert _denied_rows(w) == []
-    assert _open_guard_alarms(w) == []
+    rows = _denied_rows(w)
+    assert len(rows) == 1, [dict(r) for r in rows]
+    assert (rows[0]["op"], rows[0]["key"]) == ("edit", "plangraph:HIGH")
+    assert rows[0]["batch_ref"] == BATCH
+    assert "oversight:" in (rows[0]["code"] or "")
+    assert rows[0]["finding_id"] == FINDING
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1
+    assert "oversight:" in alarms[0]["detail"]
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
@@ -1598,8 +1639,8 @@ def test_oversight_stale_base_seq_is_conflict_and_a_denied_row(
         w, monkeypatch, dry_run):
     """The precondition behaves as on the router door, dry run or not.
 
-    build-L1 LOW: a refused dry run writes no oversight_ops / projector_alarms
-    / audit rows (dry run writes nothing, even on refusal).
+    D-2458: only APPLIED rows are dry-run-proof -- a refused dry run records
+    its denied oversight_ops row and its alarm exactly like a real refusal.
     """
     token, principal = live(w, monkeypatch)
     batch_ref = "batch-stale"
@@ -1621,20 +1662,15 @@ def test_oversight_stale_base_seq_is_conflict_and_a_denied_row(
     assert _applied_rows(w) == []
 
     rows = _denied_rows(w)
-    if dry_run:
-        # build-L1 LOW: a refused dry run writes nothing
-        assert len(rows) == 0
-        assert len(_open_guard_alarms(w)) == 0
-    else:
-        assert len(rows) == 1, [dict(r) for r in rows]
-        row = rows[0]
-        assert row["principal"] == OPP
-        assert row["batch_ref"] == batch_ref
-        assert row["code"] == "conflict"
-        assert "changed after base_seq" in row["reason"]
-        assert "plangraph:OTHER" in row["reason"]
-        assert token not in str(dict(row))
-        assert len(_open_guard_alarms(w)) == 1
+    assert len(rows) == 1, [dict(r) for r in rows]
+    row = rows[0]
+    assert row["principal"] == OPP
+    assert row["batch_ref"] == batch_ref
+    assert row["code"] == "conflict"
+    assert "changed after base_seq" in row["reason"]
+    assert "plangraph:OTHER" in row["reason"]
+    assert token not in str(dict(row))
+    assert len(_open_guard_alarms(w)) == 1
 
 
 @pytest.mark.parametrize("op_kind,op_builder", [
@@ -1836,7 +1872,7 @@ def test_cli_mint_failed_write_keeps_old_token_valid(w, monkeypatch, tmp_path):
     # Mint the first token
     out1 = mint(w)
     token1 = out1["token"]
-    assert auth.authenticate(w.conn, token1).role == "oversight"
+    assert auth.authenticate(w.conn, token1, now=w.clock()).role == "oversight"
     assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
                           ).fetchone()[0] == 1
     # Try to mint a second token with an unwritable output path
@@ -1851,7 +1887,7 @@ def test_cli_mint_failed_write_keeps_old_token_valid(w, monkeypatch, tmp_path):
                      OPP, "--go", GO, "--token-out", str(bad_path)])
     assert code != 0
     # The old token is still valid (commit never happened)
-    assert auth.authenticate(w.conn, token1).role == "oversight"
+    assert auth.authenticate(w.conn, token1, now=w.clock()).role == "oversight"
     # No new token was inserted
     assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
                           ).fetchone()[0] == 1
@@ -1886,6 +1922,12 @@ def test_oversight_read_verbs_are_project_scoped(w, monkeypatch, verb, call):
 
 @pytest.mark.parametrize("verb", ["edit", "add_dep", "priority"])
 def test_same_batch_clamped_high_is_never_an_oversight_target(w, monkeypatch, verb):
+    """D-2458: the clamp is gone, so a below-default create never exists at all.
+
+    The create itself is refused ``oversight:tier_below_default`` at the policy
+    gate -- no row, no ``high`` stand-in for the follow-up op to target (the
+    pre-fix build stored the clamped default and only then refused the link).
+    """
     _, principal = live(w, monkeypatch)
     item = fresh("CLAMPED")
     follow = (op("edit", key="plangraph:HOST", fields={"depends_on":
@@ -1893,8 +1935,9 @@ def test_same_batch_clamped_high_is_never_an_oversight_target(w, monkeypatch, ve
               else op("add_dep", key="plangraph:HOST", dep="plangraph:CLAMPED")
               if verb == "add_dep" else op("priority", key="plangraph:CLAMPED", priority=2))
     err = refusal(apply, w, principal, [op("create", item=item), follow])
-    assert "target_high" in err.msg
+    assert has("tier_below_default", err.msg)
     assert w.store._item("plangraph:CLAMPED") is None
+    assert _denied_rows(w)[-1]["key"] == "plangraph:CLAMPED"
 
 
 def test_prepared_mints_allocate_generation_only_at_commit(w, monkeypatch):
@@ -1917,7 +1960,17 @@ def test_prepared_mints_allocate_generation_only_at_commit(w, monkeypatch):
 def test_policy_simulation_uses_all_store_create_defaults(w, monkeypatch, raw):
     from plangraph.keeper import oversight_policy
     _, principal = live(w, monkeypatch, projects=(P, "demo"))
-    expected = w.store._normalise_create(raw, principal)
+    try:
+        expected = w.store._normalise_create(raw, principal)
+    except Refused as exc:
+        # D-2458: a below-default create is refused by BOTH seams with the same
+        # reason -- the store never clamps it and the policy never grants it.
+        assert has("tier_below_default", exc.msg)
+        verdicts = oversight_policy.check_batch(
+            {}, [op("create", item=raw)], principal.projects)
+        assert [(v.reason, v.code) for v in verdicts] == \
+            [("tier_below_default", "forbidden")], verdicts
+        return
     seen = []
     original = oversight_policy._check_priority
     def capture(index, operation, items, projects):
@@ -1933,3 +1986,425 @@ def test_oversight_read_scope_is_not_a_general_isolation_contract(w, monkeypatch
     _seed_demo(w)
     _, principal = live(w, monkeypatch)
     assert w.store.snapshot(principal) == w.store.snapshot(w.p("router"))
+
+
+# =========================================================================
+# D-2458: one named test per finding of this round (each red before the fix).
+# =========================================================================
+def test_commit_phase_revalidates_and_rejects_a_forged_prepared(w, monkeypatch):
+    """The commit phase never trusts ``prepared`` (HIGH: commit_oversight_token).
+
+    The reported input -- a forged dict carrying a ten-year expiry, an invented
+    ``D-FAKE`` GO and a digest nobody prepared -- must not mint, whichever half
+    of the router GO is missing; a digest a prepare DID make still cannot be
+    re-targeted at another GO, and a GO row that vanished between the two
+    phases stops the commit.
+    """
+    from plangraph.keeper import store_oversight
+
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    forged = {"name": OPP, "digest": auth.hash_token("pgo1_" + "x" * 43),
+              "token": "pgo1_" + "x" * 43,
+              "expires": w.clock() + 10 * 365 * 86400, "now": w.clock(),
+              "go_decision": "D-FAKE", "reason": ""}
+    # (a) either half of the router GO missing -> refused
+    monkeypatch.delenv("PG_OVERSIGHT_LIVE", raising=False)
+    assert has("not_live", refusal(w.store.commit_oversight_token, forged).msg)
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    assert has("go_required", refusal(w.store.commit_oversight_token, forged).msg)
+    # (b) a real GO but a digest this process never prepared -> refused
+    forged["go_decision"] = GO
+    err = refusal(w.store.commit_oversight_token, forged)
+    assert has("prepared_denied", err.msg)
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 0            # nothing minted
+    # (c) a real prepare cannot be re-targeted at another GO
+    prepared = w.store.prepare_oversight_token(OPP, go_decision=GO)
+    err = refusal(w.store.commit_oversight_token, dict(prepared,
+                                                       go_decision="D-FAKE"))
+    assert has("go_required", err.msg)
+    # (d) the GO row deleted between prepare and commit stops the commit
+    w.conn.set_authorizer(None)                 # test surgery: DDL for one DELETE
+    w.conn.execute("DROP TRIGGER trg_decisions_append_only_delete")
+    w.conn.execute("DELETE FROM decisions WHERE id=?", (GO,))
+    err = refusal(w.store.commit_oversight_token, prepared)
+    assert has("go_required", err.msg)
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 0
+    # a refused commit does not burn the prepare: it is still registered
+    assert store_oversight._peek_prepared(prepared["digest"]) is not None
+    # the untampered prepare still commits exactly once
+    grant_go(w)
+    out = w.store.commit_oversight_token(prepared)
+    assert out["generation"] == 1
+    assert store_oversight._peek_prepared(prepared["digest"]) is None  # consumed
+    assert has("prepared_denied",
+               refusal(w.store.commit_oversight_token, prepared).msg)
+
+
+def test_commit_ttl_bound_is_enforced_and_a_refused_commit_keeps_the_prepare(
+        w, monkeypatch):
+    """``expires <= now + OVERSIGHT_TOKEN_TTL_S`` is re-checked at commit (HIGH)."""
+    from plangraph.keeper import store_oversight
+
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    ttl = getattr(store_oversight, "OVERSIGHT_TOKEN_TTL_S", 3600)
+    prepared = w.store.prepare_oversight_token(OPP, go_decision=GO)
+    # the clock steps BACK out of the TTL window the prepare claimed
+    w.clock.advance(-(ttl + 60))
+    err = refusal(w.store.commit_oversight_token, prepared)
+    assert has("token_invalid", err.msg)
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 0
+    w.clock.advance(ttl + 60)                  # back to where it was prepared
+    out = w.store.commit_oversight_token(prepared)   # a refusal did not burn it
+    assert out["generation"] == 1
+    assert out["expires_at"] == w.store._iso(prepared["expires"])
+
+
+def test_verb_seam_denials_stop_at_the_denied_cap(w, monkeypatch):
+    """MEDIUM: the hourly denied cap is consulted at the VERB seam too.
+
+    Before this round a loop of denied ``cancel`` calls wrote one row each
+    forever (``oversight_ops`` is append-only and never reaped) and no call
+    ever answered ``oversight:rate_limited``; now the cap bounds the ledger
+    and the next denial is the rate-limited refusal.
+    """
+    from plangraph.keeper import oversight_policy
+
+    _, principal = live(w, monkeypatch)
+    cap = _denied_cap(oversight_policy)
+    assert cap > 0
+    for _ in range(cap):
+        err = refusal(w.store.cancel, principal, "plangraph:OTHER", "stop")
+        assert err.code == "forbidden" and has("verb_denied", err.msg)
+    assert len(_denied_rows(w)) == cap
+    for _ in range(5):                         # the reported 10,000-call probe
+        err = refusal(w.store.cancel, principal, "plangraph:OTHER", "stop")
+        assert err.code == "forbidden" and has("rate_limited", err.msg)
+        assert len(_denied_rows(w)) == cap     # the append-only ledger stops
+
+
+def test_add_dep_to_a_done_dependency_is_allowed(w, monkeypatch):
+    """MEDIUM: the dependency grant is "existing non-cancelled", not "open".
+
+    A dependency the store already marked ``done`` used to be refused
+    ``oversight:bad_state`` because the target ran through the item check;
+    the contract (and ``docs/KEEPER.md``) permit it, only a cancelled target
+    is refused.
+    """
+    _seed_demo(w)
+    _, principal = live(w, monkeypatch, projects=(P, "demo"))
+    to_done(w, "demo:DOUT")
+    assert w.store._item("demo:DOUT")["state"] == "done"
+    out = apply(w, principal, [
+        op("add_dep", key="demo:DOTHER", dep="demo:DOUT")])
+    assert out["applied"] == 1, out
+    assert "demo:DOUT" in w.store._item("demo:DOTHER")["depends_on"]
+    assert _denied_rows(w) == []
+    # a cancelled target is still refused
+    w.store.cancel(w.p("router"), "demo:DGOAL", "gone")
+    err = refusal(apply, w, principal,
+                  [op("add_dep", key="demo:DOTHER", dep="demo:DGOAL")])
+    assert has("dep_cancelled", err.msg)
+
+
+def test_authenticate_refuses_an_expired_oversight_token(w, monkeypatch):
+    """MEDIUM: the TTL is enforced at authentication, not only at use time.
+
+    A caller that trusts ``auth.authenticate`` alone used to get a live
+    ``OversightPrincipal`` back for a token whose ``expires_at`` had passed;
+    only ``Store._check_oversight_principal`` refused it later.
+    """
+    from plangraph.keeper import store_oversight
+
+    token, principal = live(w, monkeypatch)
+    ttl = getattr(store_oversight, "OVERSIGHT_TOKEN_TTL_S", 3600)
+    w.clock.advance(ttl - 1)                   # one second of life left
+    assert auth.authenticate(w.conn, token, now=w.clock()).name == OPP
+    w.clock.advance(1)
+    err = refusal(auth.authenticate, w.conn, token, now=w.clock())
+    assert err.code == "forbidden" and has("token_expired", err.msg)
+    # without a clock argument the store's published clock judges it (same verdict)
+    err = refusal(auth.authenticate, w.conn, token)
+    assert err.code == "forbidden" and has("token_expired", err.msg)
+    # the principal row itself is untouched: only the token is dead
+    assert auth.get_principal(w.conn, OPP).role == "oversight"
+
+
+_MALFORMED_SHAPES = {
+    "kind-list": op("create", item=fresh("NEW", kind=["lane"])),
+    "op-list": {"op": ["edit"], "reason": "scope", "finding": FINDING,
+                "key": "plangraph:OTHER", "fields": {"note": "x"}},
+    "evidence-map": op("create", item=fresh("NEW2", kind="question",
+                                            tier="none", evidence=[{}])),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_MALFORMED_SHAPES))
+def test_malformed_op_shapes_fail_closed_with_a_verdict(w, monkeypatch, name):
+    """MEDIUM: malformed values answer with a fail-closed Verdict/Refused.
+
+    ``kind=["lane"]``, ``{"op": ["edit"]}`` and ``evidence_kinds=[{}]`` used to
+    raise ``TypeError`` inside the pure policy (500-shaped input); both seams
+    now refuse, the graph is untouched and the denial is audited.
+    """
+    from plangraph.keeper import oversight_policy
+
+    _, principal = live(w, monkeypatch)
+    raw = _MALFORMED_SHAPES[name]
+    items = {item["key"]: item for item in w.store._all_items()}
+    verdicts = oversight_policy.check_batch(items, [raw], principal.projects)
+    assert verdicts, name                                   # never an exception
+    assert verdicts[0].code in ("forbidden", "validation"), (name, verdicts)
+    assert verdicts[0].message.startswith(f"oversight:{verdicts[0].reason}")
+    before = snap(w)
+    err = refusal(apply, w, principal, [raw])               # TypeError would escape
+    assert err.code in ("forbidden", "validation"), (name, err.code, err.msg)
+    assert snap(w) == before, name
+    assert len(_denied_rows(w)) == 1, name
+
+
+def test_fold_does_not_rebuild_the_oversight_token_ledger(w, monkeypatch):
+    """LOW: the doc claim was wrong, not the code -- pinned as corrected here.
+
+    ``docs/KEEPER.md`` said ``oversight_token_minted`` "has a fold branch that
+    updates the token ledger".  The event is KEYLESS, so ``fold`` returns
+    before its branch: replay never rebuilds ``oversight_tokens`` (that table is
+    revoke-only state, not an event-sourced cache) and reports no unknown type.
+    The doc now names the gap instead.
+    """
+    token, principal = live(w, monkeypatch)
+    events = keeper_events.read_events(w.conn)
+    minted = [e for e in events if e["type"] == "oversight_token_minted"]
+    assert minted and minted[0]["key"] is None
+    unknown = []
+    state = keeper_events.fold(events, unknown=unknown)
+    assert unknown == []                        # known type, never "unknown"
+    assert "oversight_tokens" not in state      # no ledger is reconstructed
+    # the ledger is read from its table, which still holds the live generation
+    row = w.conn.execute("SELECT generation FROM oversight_tokens"
+                         " WHERE revoked_at IS NULL").fetchone()
+    assert row["generation"] == 1
+    assert token.startswith("pgo1_")
+
+
+def test_read_project_guard_runs_after_the_token_recheck(w, monkeypatch):
+    """LOW: the read-side project filter must not hide a dead token.
+
+    ``progress(project=...)`` checked the project BEFORE ``_run``, so an
+    expired token got a bare "not scoped" message, no ``oversight:`` reason and
+    no ``oversight_ops`` denial row.  The guard now runs inside ``_run`` for
+    all four explicit project filters.
+    """
+    from plangraph.keeper import store_oversight
+
+    _, principal = live(w, monkeypatch)
+    ttl = getattr(store_oversight, "OVERSIGHT_TOKEN_TTL_S", 3600)
+    w.clock.advance(ttl + 1)
+    err = refusal(w.store.progress, principal, project="demo")
+    assert err.code == "forbidden" and has("token_expired", err.msg)
+    rows = _denied_rows(w)
+    assert len(rows) == 1
+    assert rows[0]["op"] == "progress"
+    assert "token_expired" in (rows[0]["code"] or "")
+    # a LIVE token out of scope is refused by the filter, and that refusal is
+    # audited too (it used to write no oversight_ops row at all)
+    w.clock.advance(-(ttl + 1))
+    err = refusal(w.store.progress, principal, project="demo")
+    assert err.code == "forbidden" and "demo" in err.msg
+    rows = _denied_rows(w)
+    assert len(rows) == 2
+    assert "not scoped" in rows[-1]["reason"]
+
+
+def test_weakened_oversight_guard_triggers_are_repaired_on_open(tmp_path):
+    """LOW: ``CREATE TRIGGER IF NOT EXISTS`` never repaired a weakened guard.
+
+    Every oversight guard trigger is dropped and re-created from
+    ``OVERSIGHT_DDL`` on each open (``db._upgrade``), so a permissive body --
+    the finding's replacement of ``trg_oversight_ops_append_only_update`` --
+    cannot survive a close/reopen, and the same holds for the token guards.
+    """
+    path = tmp_path / "keeper.db"
+    conn = kdb.open_db(path, create=True, backend="sqlite")
+    conn.set_authorizer(None)                  # test surgery: DDL for the probe
+    for name, table, when in (("trg_oversight_tokens_revoke_only_update",
+                               "oversight_tokens", "UPDATE"),
+                              ("trg_oversight_tokens_append_only_delete",
+                               "oversight_tokens", "DELETE"),
+                              ("trg_oversight_ops_append_only_update",
+                               "oversight_ops", "UPDATE"),
+                              ("trg_oversight_ops_append_only_delete",
+                               "oversight_ops", "DELETE")):
+        conn.execute(f"DROP TRIGGER {name}")
+        conn.execute(f"CREATE TRIGGER {name} BEFORE {when} ON {table}"
+                     " BEGIN SELECT 1; END;")
+    conn.execute(
+        "INSERT INTO oversight_ops(id,ts,token_id,principal,generation,"
+        "batch_ref,op_index,op,outcome) VALUES(1,?,?,1,1,?,?,?,'applied')",
+        ("2026-01-01T00:00:00+00:00", 1, "b", 0, "edit"))
+    conn.execute("UPDATE oversight_ops SET reason='tampered'")   # weak guard
+    assert conn.execute("SELECT reason FROM oversight_ops WHERE id=1"
+                        ).fetchone()[0] == "tampered"
+    conn.close()
+
+    conn = kdb.open_db(path, backend="sqlite")  # reopen -> db._upgrade repairs
+    conn.execute(
+        "INSERT INTO oversight_tokens(id,token_sha256,principal,generation,"
+        "created_at,expires_at) VALUES(?,?,?,?,?,?)",
+        (1, "f" * 64, "probe", 1, "2026-01-01T00:00:00+00:00",
+         "2027-01-01T00:00:00+00:00"))
+    for sql, why in (("UPDATE oversight_ops SET reason='x'", "append-only"),
+                     ("DELETE FROM oversight_ops", "append-only"),
+                     ("UPDATE oversight_tokens SET mint_reason='x'", "revoke-only"),
+                     ("DELETE FROM oversight_tokens", "revoke-only")):
+        with pytest.raises(db_errors.INTEGRITY, match=why):
+            conn.execute(sql)
+    body = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger'"
+        " AND name='trg_oversight_ops_append_only_update'").fetchone()[0]
+    assert "append-only" in body                # the CURRENT body, not mine
+    conn.close()
+
+
+def test_rate_limited_denial_row_carries_a_human_readable_reason(w, monkeypatch):
+    """LOW: the budget refusal used to store ``reason=''``.
+
+    Exhaust the applied cap, then apply one more op: the denied row keeps
+    ``code='oversight:rate_limited'`` AND carries the budget text (an op that
+    never ran contributes no input reason of its own).
+    """
+    from plangraph.keeper import oversight_policy
+
+    _, principal = live(w, monkeypatch)
+    cap = _applied_cap(oversight_policy)
+    for i in range(cap):
+        apply(w, principal, [op("priority", key="plangraph:OTHER",
+                                priority=i % 7)])
+    assert _denied_rows(w) == []
+    err = refusal(apply, w, principal,
+                  [op("priority", key="plangraph:OTHER", priority=3)])
+    assert err.code == "forbidden" and has("rate_limited", err.msg)
+    rows = _denied_rows(w)
+    assert len(rows) == 1, [dict(r) for r in rows]
+    assert rows[0]["code"] == "oversight:rate_limited"
+    assert rows[0]["reason"], dict(rows[0])     # never empty
+    assert "budget" in rows[0]["reason"]
+
+
+def test_applied_cap_stops_a_batch_mid_flight(w, monkeypatch):
+    """Pattern sweep: EVERY writer consults the cap, not only the batch entry.
+
+    One batch that would walk past the applied cap is refused ``rate_limited``
+    at the row that crosses it and rolls back whole (the entry check only sees
+    the count the batch started with).
+    """
+    from plangraph.keeper import oversight_policy
+
+    _, principal = live(w, monkeypatch)
+    cap = _applied_cap(oversight_policy)
+    ops = [op("priority", key="plangraph:OTHER", priority=i % 7)
+           for i in range(cap + 5)]
+    err = refusal(apply, w, principal, ops)
+    assert err.code == "forbidden" and has("rate_limited", err.msg)
+    assert _applied_rows(w) == []              # rolled back, all-or-nothing
+    rows = _denied_rows(w)
+    assert len(rows) == 1 and rows[0]["reason"]
+
+
+def test_open_alarm_unique_index_exists_on_both_schemas(tmp_path):
+    """glm MEDIUM: ``ON CONFLICT (...) WHERE cleared_at IS NULL`` needs its index.
+
+    Declared on BOTH schemas (the SQLite DDL the open path installs and PG
+    migration 3), present on the live backend this run uses, and it really is
+    the dedupe target: a second OPEN row on the same key is refused while a
+    cleared one re-opens.
+    """
+    from plangraph.keeper import schema_pg
+    from plangraph.projector import ddl as projector_ddl
+
+    clause = "ON projector_alarms(kind, workflow_id, key) WHERE cleared_at IS NULL"
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS idx_projector_alarms_open" in \
+        projector_ddl.SQLITE
+    assert "CREATE UNIQUE INDEX idx_projector_alarms_open" in projector_ddl.PG
+    assert clause in projector_ddl.SQLITE and clause in projector_ddl.PG
+    assert schema_pg.MIGRATIONS[2].sql == projector_ddl.PG   # PG migration 3
+
+    world = World(tmp_path)
+    try:
+        backend = os.environ.get("PG_KEEPER_BACKEND") or "sqlite"
+        if backend == "postgres":
+            row = world.conn.execute(
+                "SELECT indexdef FROM pg_indexes"
+                " WHERE indexname='idx_projector_alarms_open'"
+                " AND schemaname=current_schema()").fetchone()
+            assert row is not None and clause in row["indexdef"]
+        else:
+            row = world.conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index'"
+                " AND name='idx_projector_alarms_open'").fetchone()
+            assert row is not None and clause in row["sql"]
+        now = "2026-01-01T00:00:00+00:00"
+        world.conn.execute(
+            "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"
+            " VALUES(1,'oversight_denied','oversight-guard','probe','d',?)", (now,))
+        with pytest.raises(db_errors.INTEGRITY):
+            world.conn.execute(
+                "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"
+                " VALUES(2,'oversight_denied','oversight-guard','probe','d',?)", (now,))
+        world.conn.execute("UPDATE projector_alarms SET cleared_at=? WHERE id=1",
+                           (now,))
+        world.conn.execute(
+            "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"
+            " VALUES(3,'oversight_denied','oversight-guard','probe','d',?)", (now,))
+    finally:
+        world.close()
+
+
+def test_rotating_finding_ids_keep_one_open_alarm(w, monkeypatch):
+    """glm MEDIUM: one open ``oversight_denied`` alarm PER PRINCIPAL.
+
+    The key used to be the op-supplied finding, so rotating finding ids minted
+    one open row each (unbounded open alarms for routing-00) while the contract
+    promises one open row; the finding still rides in the detail.
+    """
+    _, principal = live(w, monkeypatch)
+    for i in range(10):
+        err = refusal(apply, w, principal, [op(
+            "edit", key="plangraph:OTHER", fields={"done_criteria": f"no {i}"},
+            finding=f"F-{i:04d}")])
+        assert has("field_denied", err.msg)
+    assert len(_denied_rows(w)) == 10          # the audit ledger keeps them all
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1, [dict(a) for a in alarms]
+    assert alarms[0]["key"] == OPP
+    assert "oversight:" in alarms[0]["detail"]
+    assert "F-0000" in alarms[0]["detail"]      # a real finding is still named
+
+
+def test_principal_token_never_dispatches_to_the_oversight_lookup(w, monkeypatch):
+    """glm LOW: the ``pgo1_`` dispatch keys on a stored marker, not on text.
+
+    ``secrets.token_urlsafe`` draws from an alphabet that contains ``_``, so a
+    prefixless principal token could START with ``pgo1_`` and be refused as an
+    unknown oversight token.  The principals table is consulted first, and the
+    mint re-rolls the prefix away so a fresh token cannot even look like one.
+    """
+    token = "pgo1_" + "Z" * 40
+    w.conn.execute(
+        "INSERT INTO principals(name,role,projects,family,token_sha256,active)"
+        " VALUES('misfire','l1',?,?,?,1)",
+        (json.dumps([P]), None, auth.hash_token(token)))
+    got = auth.authenticate(w.conn, token)
+    assert (got.name, got.role) == ("misfire", "l1")   # its own row, not a 403
+    # the mint never emits such a token: a pgo1_-shaped draw is re-rolled
+    draws = iter(["pgo1_" + "q" * 40, "zzzz" + "q" * 40])
+    monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda n: next(draws))
+    fresh_token = auth.add_principal(w.conn, "misfire2", "reader", [])
+    assert fresh_token == "zzzz" + "q" * 40
+    assert auth.authenticate(w.conn, fresh_token).name == "misfire2"

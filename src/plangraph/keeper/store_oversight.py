@@ -9,7 +9,9 @@ row with ``kind='operator'`` and the whole ``oversight-live`` scope in its
 Minting revokes every live token of the principal and inserts the next
 generation in one transaction; only the sha256 is stored and the plaintext is
 returned exactly once.  ``OVERSIGHT_TOKEN_TTL_S`` is absolute (no extension on
-use) and rotation is simply a new mint.
+use) and rotation is simply a new mint.  The mint's two phases do not trust
+each other: phase 2 re-checks the live env, the GO decision row and the TTL
+bound, and only commits a digest phase 1 registered in this process.
 
 Every use re-reads the token row (``_check_oversight_principal``): revoked,
 expired, a generation mismatch or a scope drift is a 403 before any write.
@@ -18,12 +20,16 @@ The principal's ``active=0`` revoke is already enforced by
 
 Audit rows are written by the store: applied rows inside the batch transaction
 (so an audit row exists iff the mutation exists) and denied rows after the
-rollback (so a denial survives the batch).  *Every* refusal an oversight
-principal earns is audited -- the policy's own ``oversight:<reason>`` verdict
-and any refusal the shared store machinery raises later (cycle, bad_state,
-validation, conflict, ...) -- so the denied budget counts them all.  Crossing
-the derived hourly caps is alarm-only; only an explicit ``pg admin revoke``
-kills the identity (R4).
+rollback (so a denial survives the batch) -- a denied ``dry_run`` batch audits
+its denial too (only *applied* rows are dry-run-proof).  *Every* refusal an
+oversight principal earns is audited -- the policy's own ``oversight:<reason>``
+verdict and any refusal the shared store machinery raises later (cycle,
+bad_state, validation, conflict, ...) -- so the denied budget counts them all.
+Every writer consults that budget before inserting, so past the cap the answer
+is ``oversight:rate_limited`` and the append-only table stops growing.
+Crossing the derived hourly caps is alarm-only; only an explicit ``pg admin
+revoke`` kills the identity (R4).  A denial opens ONE ``oversight_denied``
+alarm per principal (the key is the principal, not the op's finding id).
 """
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ import json
 import os
 import re
 import secrets
+from collections import OrderedDict
 
 from . import auth, events
 from .credential_guard import guard, mask as _mask_credentials
@@ -53,6 +60,15 @@ _OP_FAIL_RE = re.compile(r"^op (\d+) (\S+) (\S+): ")
 #: a plaintext oversight token must never reach the audit ledger.
 _TOKEN_RE = re.compile(re.escape(OVERSIGHT_PREFIX) + r"[A-Za-z0-9_-]{8,}")
 
+#: ``digest -> {name, digest, token_sha, expires, go_decision, reason}`` for the
+#: prepares THIS process validated and has not committed yet.  The two-phase
+#: mint (``prepare`` -> token file -> ``commit``) runs in one process -- the
+#: admin CLI keeps it -- so ``commit_oversight_token`` can prove the dict it was
+#: handed came from a prepare that passed every check, instead of trusting it.
+#: Bounded: a prepare whose commit never happens ages out.
+_PREPARED: "OrderedDict[str, dict]" = OrderedDict()
+_PREPARED_CAP = 64
+
 
 def _audit_text(value):
     """Bounded, control-free audit text with secrets and tokens masked."""
@@ -69,6 +85,22 @@ def _waives(row) -> list:
     except (ValueError, TypeError):
         return []
     return values if isinstance(values, list) else []
+
+
+def _remember_prepared(digest, record) -> None:
+    """Register one validated prepare for the commit phase (this process)."""
+    _PREPARED[digest] = record
+    _PREPARED.move_to_end(digest)
+    while len(_PREPARED) > _PREPARED_CAP:
+        _PREPARED.popitem(last=False)
+
+
+def _peek_prepared(digest):
+    return _PREPARED.get(digest)
+
+
+def _forget_prepared(digest) -> None:
+    _PREPARED.pop(digest, None)
 
 
 def grants(conn, decision_id, scope=GRANT_SCOPE, decisions=None) -> bool:
@@ -132,6 +164,12 @@ class OversightMixin:
         token = OVERSIGHT_PREFIX + secrets.token_urlsafe(32)
         digest = auth.hash_token(token)
         expires = now + float(self.oversight_token_ttl)
+        # The commit phase re-validates everything validated here, and it can
+        # only do that when it recognises this prepare's fingerprint.
+        _remember_prepared(digest, {"name": name, "digest": digest,
+                                    "token_sha": digest, "expires": expires,
+                                    "go_decision": go_decision,
+                                    "reason": reason})
         return {"token": token, "digest": digest,
                 "expires": expires, "now": now, "go_decision": go_decision,
                 "reason": reason, "name": name}
@@ -142,13 +180,55 @@ class OversightMixin:
         build-L1 LOW: called AFTER the token file has been written atomically.
         If this fails, the file exists but the DB has no new token (the old
         tokens are still valid).
+
+        D-2458: phase 2 never trusts ``prepared``.  It repeats every check
+        phase 1 made -- the live env half of the router GO, the ``decisions``
+        row behind ``--go``, an expiry that is neither dead nor longer than
+        ``OVERSIGHT_TOKEN_TTL_S`` -- and it only mints a digest this process
+        actually prepared, so a forged dict cannot mint a ten-year token under
+        an invented GO.
         """
-        name = prepared["name"]
-        digest = prepared["digest"]
-        expires = prepared["expires"]
-        now = prepared["now"]
-        go_decision = prepared["go_decision"]
-        reason = prepared["reason"]
+        if not isinstance(prepared, dict):
+            raise Refused("validation",
+                          "oversight:prepared_denied a prepared mint is required")
+        try:
+            name = prepared["name"]
+            digest = prepared["digest"]
+            expires = float(prepared["expires"])
+            go_decision = prepared["go_decision"]
+            reason = prepared["reason"]
+            token = prepared["token"]
+        except (KeyError, TypeError, ValueError):
+            raise Refused("validation",
+                          "oversight:prepared_denied a prepared mint is required") from None
+        if not isinstance(name, str) or not isinstance(token, str) \
+                or not isinstance(reason, str):
+            raise Refused("validation",
+                          "oversight:prepared_denied a prepared mint is required")
+        if os.environ.get("PG_OVERSIGHT_LIVE") != "1":
+            raise Refused("forbidden",
+                          "oversight:not_live PG_OVERSIGHT_LIVE is not set on this host")
+        decisions = getattr(self.ctx, "decisions", None)
+        if not isinstance(go_decision, str) or not grants(self.conn, go_decision,
+                                                          GRANT_SCOPE, decisions):
+            raise Refused(
+                "forbidden",
+                f"oversight:go_required {go_decision!r} is not an operator"
+                f" decision granting {GRANT_SCOPE}")
+        remembered = _peek_prepared(digest)
+        if remembered is None or any(
+                remembered.get(field) != value for field, value in (
+                    ("name", name), ("token_sha", auth.hash_token(token)),
+                    ("expires", expires), ("go_decision", go_decision),
+                    ("reason", reason))):
+            raise Refused("forbidden",
+                          "oversight:prepared_denied prepared mint does not match"
+                          " a prepare made by this process")
+        now = self.now()
+        if not now < expires <= now + float(self.oversight_token_ttl):
+            raise Refused("forbidden",
+                          "oversight:token_invalid prepared expiry is outside"
+                          " OVERSIGHT_TOKEN_TTL_S")
         with self._write():
             fresh = self.conn.execute(
                 "SELECT role,projects,active FROM principals WHERE name=?",
@@ -157,6 +237,8 @@ class OversightMixin:
                 raise Refused("forbidden",
                               f"oversight:principal_denied {name!r} is not an active"
                               " oversight principal")
+            # Consumed exactly once: a second commit of the same dict mints nothing.
+            _forget_prepared(digest)
             generation = self.conn.execute(
                 "SELECT COALESCE(MAX(generation), 0) + 1 FROM oversight_tokens"
                 " WHERE principal=?", (name,)).fetchone()[0]
@@ -199,35 +281,55 @@ class OversightMixin:
             raise Refused("forbidden", "oversight:token_expired token has expired")
 
     # ---------------------------------------------------------- rate limit
+    def _oversight_count(self, principal, outcome, now):
+        """*outcome* rows of this principal in the last hour: no counter table.
+
+        ``oversight_ops`` IS the ledger (R4), so every seam that writes a row
+        consults exactly this before writing.
+        """
+        since = self._iso(now - 3600)
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM oversight_ops WHERE principal=?"
+            " AND outcome=? AND ts>?", (principal.name, outcome, since)
+        ).fetchone()[0]
+
+    def _deny_within_budget(self, principal, now):
+        """Write gate for one DENIED row: the denied cap, nothing else.
+
+        An ``applied``-cap refusal is still a denial and must be recorded (with
+        its reason) like any other; only the denied cap bounds denial ROWS --
+        past it this raises ``oversight:rate_limited`` and nothing is written,
+        so denied-target probing stops growing the append-only table.
+        """
+        from . import oversight_policy as policy
+
+        if self._oversight_count(principal, "denied", now) >= \
+                policy.OVERSIGHT_DENIED_PER_HOUR:
+            raise Refused("forbidden",
+                          "oversight:rate_limited denied budget for this hour"
+                          " is exhausted")
+
     def _oversight_budget(self, principal, now):
         """Refuse when the derived hourly applied/denied caps are reached.
 
         No counter table: ``oversight_ops`` is the ledger.  A breach is
-        alarm-only (R4); this method never revokes anything.
+        alarm-only (R4); this method never revokes anything.  It is called at
+        every seam that would WRITE a row (the batch entry, each applied row,
+        and both denial writers), so the append-only table cannot be filled by
+        probing and the caller always sees ``oversight:rate_limited``.
         """
         from . import oversight_policy as policy
 
-        since = self._iso(now - 3600)
-        counts = {}
-        for outcome in ("applied", "denied"):
-            counts[outcome] = self.conn.execute(
-                "SELECT COUNT(*) FROM oversight_ops WHERE principal=?"
-                " AND outcome=? AND ts>?", (principal.name, outcome, since)
-            ).fetchone()[0]
-        if counts["applied"] >= policy.OVERSIGHT_APPLIED_PER_HOUR:
-            self._oversight_fail = {
-                "index": 0, "op": {"op": "apply_ops"}, "key": None,
-                "reason": "rate_limited", "finding": ""}
-            raise Refused("forbidden",
-                          "oversight:rate_limited applied budget for this hour"
-                          " is exhausted")
-        if counts["denied"] >= policy.OVERSIGHT_DENIED_PER_HOUR:
-            self._oversight_fail = {
-                "index": 0, "op": {"op": "apply_ops"}, "key": None,
-                "reason": "rate_limited", "finding": ""}
-            raise Refused("forbidden",
-                          "oversight:rate_limited denied budget for this hour"
-                          " is exhausted")
+        for outcome, cap in (("applied", policy.OVERSIGHT_APPLIED_PER_HOUR),
+                             ("denied", policy.OVERSIGHT_DENIED_PER_HOUR)):
+            if self._oversight_count(principal, outcome, now) >= cap:
+                self._oversight_fail = {
+                    "index": 0, "op": {"op": "apply_ops"}, "key": None,
+                    "reason": "rate_limited", "finding": "",
+                    "input_reason": f"{outcome} budget for this hour is exhausted"}
+                raise Refused("forbidden",
+                              f"oversight:rate_limited {outcome} budget for this"
+                              " hour is exhausted")
 
     # ---------------------------------------------------------- audit rows
     def _oversight_meta(self, op, index):
@@ -264,6 +366,10 @@ class OversightMixin:
 
     def _record_oversight_applied(self, principal, batch_ref, index, op, meta,
                                   before_seq, now):
+        # Re-read both caps before every row: the entry check only sees the
+        # count the batch STARTED at, so one large batch could otherwise walk
+        # past the applied cap.  Crossing it refuses with rate_limited (R3).
+        self._oversight_budget(principal, now)
         after_seq = self.conn.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
         event_seq = after_seq if after_seq > before_seq else None
@@ -273,7 +379,7 @@ class OversightMixin:
             " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_ops),"
             "?,?,?,?,?,?,?,?,?,?,'applied',NULL,?)",
             (self._iso(now), principal.token_id, principal.name,
-             principal.generation, batch_ref or "", index + 1, op.get("op"),
+             principal.generation, batch_ref or "", index + 1, _op_name(op),
              oversight_policy_key(op) if oversight_policy_key(op) != "-" else None,
              meta.get("finding", ""), meta.get("reason", ""), event_seq))
 
@@ -286,7 +392,12 @@ class OversightMixin:
         from a verb, a ``validation`` from the shape check, ...) has no policy
         verdict behind it, so the row names the failing op from the ``op <n>
         ...`` prefix and stores the exception's own code and message.
+
+        The denied cap is consulted FIRST: once it is reached no further row is
+        written (the append-only table stays bounded by the cap per window) and
+        the caller is refused ``oversight:rate_limited`` instead (R3/R4).
         """
+        self._deny_within_budget(principal, now)
         msg = str(getattr(exc, "msg", "") or "")
         fail = getattr(self, "_oversight_fail", None) or {}
         index, op, key, finding, input_reason = self._denial_context(exc, fail)
@@ -295,9 +406,11 @@ class OversightMixin:
         if policy_reason is not None and code == "forbidden":
             # A forbidden policy denial has no other specific code; the audit
             # keeps naming the granted-scope reason (the contract tests pin
-            # this shape) and the op's own reason as its human text.
+            # this shape) and the op's own reason as its human text.  A budget
+            # refusal carries no op reason, so it falls back to the refusal
+            # text -- an empty reason would log nothing human-readable.
             code = f"oversight:{policy_reason}"
-            stored_reason = input_reason
+            stored_reason = input_reason or _audit_text(msg)
         else:
             # Everything else stores the contract code and the actual message.
             stored_reason = _audit_text(msg)
@@ -308,9 +421,9 @@ class OversightMixin:
             "?,?,?,?,?,?,?,?,?,?,'denied',?,NULL)",
             (self._iso(now), principal.token_id, principal.name,
              principal.generation, batch_ref or "", index + 1,
-             op.get("op"), key, finding, stored_reason, code))
+             _op_name(op), key, finding, stored_reason, code))
         self._oversight_guard_alarm(principal, finding,
-                                    policy_reason or code, op.get("op"), now)
+                                    policy_reason or code, _op_name(op), now)
 
     def _record_oversight_refusal(self, principal, action, key, exc, now):
         """Audit a refusal raised at the VERB seam, after the refusal.
@@ -321,7 +434,12 @@ class OversightMixin:
         reason is the (bounded, masked) refusal text.  A refusal whose message
         carries ``oversight:<reason>`` stores that reason as its code, matching
         the policy rows; anything else stores the contract code.
+
+        Like the batch writer it consults the denied cap FIRST: a seam
+        refusal past the cap answers ``oversight:rate_limited`` and writes
+        nothing, so denied-target probing is bounded whichever door it uses.
         """
+        self._deny_within_budget(principal, now)
         msg = str(getattr(exc, "msg", "") or "")
         policy_reason = self._reason_from_msg(msg) if "oversight:" in msg else None
         code = f"oversight:{policy_reason}" if policy_reason else \
@@ -338,7 +456,13 @@ class OversightMixin:
                                     action, now)
 
     def _oversight_guard_alarm(self, principal, finding, reason, action, now):
-        """Open (or keep) the single ``oversight-guard`` alarm for a denial."""
+        """Open (or keep) ONE ``oversight-guard`` alarm for this principal.
+
+        The key is the principal, never the op-supplied ``finding``: the
+        contract promises ONE open ``projector_alarms`` row, and rotating
+        finding ids must not mint unbounded open alarms (routing-00 routes one
+        card).  The finding still rides in the detail of the open row.
+        """
         detail = (f"oversight:{reason} principal={principal.name}"
                   f" gen={principal.generation} op={action}"
                   f" finding={finding}")
@@ -348,7 +472,7 @@ class OversightMixin:
             "'oversight_denied','oversight-guard',?,?,?)"
             " ON CONFLICT (kind, workflow_id, key) WHERE cleared_at IS NULL"
             " DO NOTHING",
-            (finding, detail, self._iso(now)))
+            (principal.name, detail, self._iso(now)))
 
     def _denial_context(self, exc, fail):
         """``(index, op, key, finding, input_reason)`` for a denied batch.
@@ -387,6 +511,19 @@ def _policy_key(op):
     """The op's key when it names one, else ``None`` (never the ``-`` marker)."""
     key = oversight_policy_key(op)
     return None if key == "-" else key
+
+
+def _op_name(op):
+    """The op's name as text for the audit ledger.
+
+    A malformed name (a list/dict where a name belongs) must never reach a SQL
+    parameter: it is stringified instead of raising ``InterfaceError`` while
+    recording an already-denied batch.
+    """
+    name = op.get("op") if isinstance(op, dict) else None
+    if isinstance(name, str):
+        return name
+    return "-" if name is None else str(name)
 
 
 def oversight_policy_key(op):

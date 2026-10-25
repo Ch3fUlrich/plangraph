@@ -86,6 +86,15 @@ def _active_edit_only(fields):
 
 
 def creation_tier(raw, definition, principal):
+    """The tier a create stores for *principal* (D-2458: raise-only, never a clamp).
+
+    A tier below the project default needs the router role; an ``oversight``
+    create naming one is REFUSED ``oversight:tier_below_default`` -- the
+    raise-only grant is a refusal, never a silent raise to the default (that
+    clamp produced a high-tier item from an allowed ``standard`` create and hid
+    the refusal the item contract asks for).  The one oversight exception is the
+    R1 ``none`` choice for a ``question``, which the policy grants explicitly.
+    """
     explicit = raw.get("review_tier") if isinstance(raw, dict) else None
     default = default_review_tier(definition["project"], definition["id"],
                                   definition.get("title"), definition.get("track"))
@@ -106,12 +115,17 @@ def creation_tier(raw, definition, principal):
         if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
             if not (allowed_lowering or oversight_can_set_none):
                 if principal.role == "oversight":
-                    # Oversight's raise-only grant clamps to the default.
-                    tier = default
-                else:
+                    # Raise-only grant: a below-default tier is refused, never
+                    # silently stored as the default.
                     raise Refused(
                         "forbidden",
-                        "only the router may lower review_tier below its default")
+                        f"oversight:tier_below_default review_tier={tier!r} is"
+                        f" below the {default!r} default of"
+                        f" {definition['project']!r}; oversight may only create"
+                        " at or above the project default")
+                raise Refused(
+                    "forbidden",
+                    "only the router may lower review_tier below its default")
         return validated_decision_tier(tier, definition["evidence_kinds"])
     return default
 

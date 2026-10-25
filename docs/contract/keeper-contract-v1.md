@@ -136,22 +136,32 @@ generation and revokes every live token of the principal. `pg admin revoke NAME`
 kills the identity at once.
 
 The token authenticates as role `oversight` with the principal's `projects`
-copied verbatim (`[]` means nothing). It may call every read verb and exactly
+copied verbatim (`[]` means nothing); an **expired** token is refused at
+`authenticate` as well as at every use. It may call every read verb and exactly
 one write verb, `apply_ops`; every other write is
 `403 {"error":"forbidden","msg":"…oversight:verb_denied…"}`. Inside `apply_ops`
 (`batch_ref` is required) the grant is: create a `lane`/`question` with an
 explicit `review_tier` (`standard`, or `none` only for `question`), non-empty
-`done_criteria` and the closed field allowlist; edit `note`/`description` and
+`done_criteria` and the closed field allowlist — the tier is **raise-only**: a
+tier below the project's default is `403
+{"error":"forbidden","msg":"…oversight:tier_below_default…"}` and is never
+silently stored as the default, while a tier at or above the default is stored
+exactly as asked; edit `note`/`description` and
 add `depends_on` edges on an OPEN, non-high, non-gate/goal/decision/operator_task
 item; set `priority` on such an item; add an existing non-cancelled dependency
-to such an item. Dependency removal, tier changes, `done_criteria` edits,
-`under`, high/decision/operator_task targets, unknown ops/fields and cycles are
+(a DONE one is fine) to such an item. Dependency removal, tier changes,
+`done_criteria` edits,
+`under`, high/decision/operator_task targets, unknown or malformed ops/fields
+(malformed shapes are a refusal, never a server error) and cycles are
 refused. The public `error` stays a contract code; the specific refusal is the
 `oversight:<reason>` prefix in `msg`. Every op writes one append-only
 `oversight_ops` row (applied inside the batch transaction, denied after its
-rollback) and a denial raises one open `projector_alarms` row
-(`kind='oversight_denied'`, `workflow_id='oversight-guard'`). Derived hourly caps
-(120 applied, 10 denied) are alarm-only when crossed: the response is `403
+rollback — a denied `dry_run` records its denial too) and a denial raises one
+open `projector_alarms` row **per principal**
+(`kind='oversight_denied'`, `workflow_id='oversight-guard'`; the finding id
+rides in the detail, it is not the dedupe key). Derived hourly caps
+(120 applied, 10 denied) are consulted by every writer before it inserts and
+are alarm-only when crossed: the response is `403
 oversight:rate_limited` and no automatic revoke happens.
 
 ## 3. Item model

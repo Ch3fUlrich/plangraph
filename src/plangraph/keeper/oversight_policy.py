@@ -4,11 +4,15 @@ The narrow grant in one place: an ``oversight`` principal may use exactly one
 write verb (``apply_ops``) and, inside it, exactly four op kinds --
 
 * ``create`` a ``lane``/``question`` with an EXPLICIT tier (``standard``, or
-  ``none`` only for a question) and non-empty ``done_criteria``;
+  ``none`` only for a question) and non-empty ``done_criteria``.  The tier is
+  raise-only: a tier below the project default is refused
+  ``oversight:tier_below_default`` (never silently raised to the default); a
+  tier at or above the default is honoured;
 * ``edit`` only ``note``/``description``/``depends_on`` on an OPEN, non-high,
   non-gate/goal/decision/operator_task item, and only ADD dependencies;
 * ``priority`` on such an item;
-* ``add_dep`` on such an item, to a dependency that already exists and is open.
+* ``add_dep`` on such an item, to a dependency that already exists and is not
+  cancelled (a DONE target is legal; the kind/tier bars still apply).
 
 R5 bounds every one of those ops to the principal's ``projects``: the item a
 ``create``/``edit``/``priority``/``add_dep`` names, the dependency an
@@ -70,6 +74,10 @@ OVERSIGHT_DENIED_PER_HOUR = 10
 
 _DECISION_EVIDENCE = (frozenset({"decision"}), frozenset({"decision", "commit"}))
 
+#: The exception family malformed op data raises; ``check_batch`` turns each
+#: one into a fail-closed ``malformed`` verdict (same set as ``store_ops``).
+_MALFORMED = (TypeError, ValueError, AttributeError, KeyError)
+
 #: Refusal code per reason.  The public ``error`` stays a contract code; the
 #: reason rides in the message as ``oversight:<reason>``.
 _CODES = {
@@ -80,6 +88,8 @@ _CODES = {
     "kind_denied": "forbidden",
     "tier_denied": "validation",
     "criteria_missing": "validation",
+    "tier_below_default": "forbidden",
+    "malformed": "validation",
     "target_high": "forbidden",
     "target_kind": "forbidden",
     "target_unknown": "not_found",
@@ -111,9 +121,16 @@ class Verdict:
 
 
 def check_action(action) -> None:
-    """Allow the one write verb and every known read; deny everything else."""
+    """Allow the one write verb and every known read; deny everything else.
+
+    A non-text action (an unhashable ``list``/``dict`` name) fails closed as a
+    denial instead of raising ``TypeError``: malformed input never 500s.
+    """
     if action == ALLOWED_ACTION:
         return
+    if not isinstance(action, str):
+        raise Refused("forbidden",
+                      f"oversight:verb_denied {str(action)!r} is not granted")
     # WRITE_VERBS wins where a name is both (``alarms`` is an inbox read and a
     # worker write); a write the policy does not grant is always denied.
     if action in api_routes.WRITE_VERBS:
@@ -156,12 +173,26 @@ def _item_reason(item):
 
 
 def _dependency_reason(dep, items):
+    """Why *dep* may not be added (``None`` = ok).
+
+    The dependency grant is "an existing non-cancelled dependency" (contract,
+    ``docs/KEEPER.md``): only ``dep_unknown``/``dep_cancelled`` are state
+    denials here, so a DONE or claimed target is legal.  R1/R6 still bar a
+    ``high`` tier and a gate/goal/decision/operator_task target, while the
+    ITEM the edit/priority lands on keeps the OPEN check through
+    :func:`_item_reason`.
+    """
     target = items.get(dep)
     if target is None:
         return "dep_unknown"
     if target.get("state") == "cancelled":
         return "dep_cancelled"
-    return _item_reason(target)
+    kind = target.get("kind") or "lane"
+    if kind in FORBIDDEN_TARGET_KINDS:
+        return "target_kind"
+    if (target.get("review_tier") or "standard") == "high":
+        return "target_high"
+    return None
 
 
 def _project_of(items, key):
@@ -198,7 +229,8 @@ def _check_create(index, op, items, projects):
     if unknown:
         return [_verdict(index, "create", key, "field_unknown")]
     kind = raw.get("kind", "lane")
-    if kind not in OVERSIGHT_CREATE_KINDS:
+    if not isinstance(kind, str) or kind not in OVERSIGHT_CREATE_KINDS:
+        # A non-text kind (a list, a number) is denied as a kind, never raised.
         return [_verdict(index, "create", key, "kind_denied")]
     tier = raw.get("review_tier")
     if tier is None or tier not in ("standard", "none"):
@@ -208,7 +240,9 @@ def _check_create(index, op, items, projects):
             return [_verdict(index, "create", key, "tier_denied")]
         kinds = raw.get("evidence_kinds")
         kinds = list(kinds) if isinstance(kinds, (list, tuple)) else []
-        if frozenset(kinds) not in _DECISION_EVIDENCE or len(kinds) != len(set(kinds)):
+        if not all(isinstance(k, str) for k in kinds) \
+                or frozenset(kinds) not in _DECISION_EVIDENCE \
+                or len(kinds) != len(set(kinds)):
             return [_verdict(index, "create", key, "tier_denied")]
     criteria = raw.get("done_criteria")
     if not isinstance(criteria, str) or not criteria.strip():
@@ -223,7 +257,36 @@ def _check_create(index, op, items, projects):
         reason = _scope_reason(items, dep, projects)
         if reason:
             return [_verdict(index, "create", key, reason)]
+    # Raise-only tiers (R1): the last word on an otherwise legal create is the
+    # project default.  It runs LAST so every specific denial above keeps its
+    # own reason, and it mirrors the store's own ``creation_tier`` refusal --
+    # a below-default tier is refused here, never clamped to the default.
+    # ``none`` is the policy's own question carve-out, not a lowering.
+    if tier != "none" and _tier_order(tier) < _tier_order(_create_default(raw)):
+        return [_verdict(index, "create", key, "tier_below_default")]
     return []
+
+
+def _tier_order(tier) -> int:
+    """``none < standard < high``; an unknown tier orders below every tier."""
+    return {"none": 0, "standard": 1, "high": 2}.get(tier, -1)
+
+
+def _create_default(raw) -> str:
+    """The default ``store_create.creation_tier`` computes for this raw create.
+
+    The same three inputs the store reads (project, id, title/track when they
+    are text), so the policy verdict and the store refusal never disagree on a
+    create that both of them can see.
+    """
+    from .store_tiers import default_review_tier
+
+    identifier, title, track = raw.get("id"), raw.get("title"), raw.get("track")
+    return default_review_tier(
+        str(raw.get("project") or ""),
+        identifier if isinstance(identifier, str) else None,
+        title if isinstance(title, str) else None,
+        track if isinstance(track, str) else None)
 
 
 def _deps_delta(old, value):
@@ -355,45 +418,59 @@ def check_batch(items_by_key, ops, projects=(), *, normalize_create=None):
     projects = frozenset(p for p in (projects or ()) if isinstance(p, str))
     verdicts = []
     for index, op in enumerate(ops):
+        if not isinstance(op, dict):
+            # Malformed shape: a fail-closed verdict, never a TypeError.
+            verdicts.append(_verdict(index, "-", "", "malformed"))
+            continue
         name = op.get("op")
-        if name == "remove_dep":
-            # A removal is refused as a removal (never silently as "unknown op"):
-            # the grant is additions only.
-            verdicts.append(_verdict(index, "remove_dep", _key_of(op),
-                                     "dep_removal"))
+        if not isinstance(name, str):
+            verdicts.append(_verdict(index, str(name), _key_of(op), "malformed"))
             continue
-        if name not in OVERSIGHT_OPS:
-            verdicts.append(_verdict(index, str(name), _key_of(op), "op_denied"))
-            continue
-        if name == "create":
-            found = _check_create(index, op, items, projects)
+        try:
+            if name == "remove_dep":
+                # A removal is refused as a removal (never silently as "unknown op"):
+                # the grant is additions only.
+                verdicts.append(_verdict(index, "remove_dep", _key_of(op),
+                                         "dep_removal"))
+                continue
+            if name not in OVERSIGHT_OPS:
+                verdicts.append(_verdict(index, str(name), _key_of(op), "op_denied"))
+                continue
+            if name == "create":
+                found = _check_create(index, op, items, projects)
+                verdicts.extend(found)
+                raw = op.get("item")
+                if not found and isinstance(raw, dict):
+                    key = _key_of(op)
+                    if normalize_create is None:
+                        from .store_create import oversight_definition
+                        definition = oversight_definition(raw)
+                    else:
+                        definition = normalize_create(raw)
+                    items[key] = dict(definition, state="open")
+                continue
+            if name == "edit":
+                found = _check_edit(index, op, items, projects)
+                verdicts.extend(found)
+                if not found and isinstance(op.get("fields"), dict) \
+                        and "depends_on" in op["fields"]:
+                    items[key_of(op)]["depends_on"] = _deps_after(
+                        items[key_of(op)], op["fields"]["depends_on"])
+                continue
+            if name == "priority":
+                verdicts.extend(_check_priority(index, op, items, projects))
+                continue
+            found = _check_add_dep(index, op, items, projects)
             verdicts.extend(found)
-            raw = op.get("item")
-            if not found and isinstance(raw, dict):
-                key = _key_of(op)
-                if normalize_create is None:
-                    from .store_create import oversight_definition
-                    definition = oversight_definition(raw)
-                else:
-                    definition = normalize_create(raw)
-                items[key] = dict(definition, state="open")
-            continue
-        if name == "edit":
-            found = _check_edit(index, op, items, projects)
-            verdicts.extend(found)
-            if not found and isinstance(op.get("fields"), dict) \
-                    and "depends_on" in op["fields"]:
-                items[key_of(op)]["depends_on"] = _deps_after(
-                    items[key_of(op)], op["fields"]["depends_on"])
-            continue
-        if name == "priority":
-            verdicts.extend(_check_priority(index, op, items, projects))
-            continue
-        found = _check_add_dep(index, op, items, projects)
-        verdicts.extend(found)
-        if not found:
-            items[key_of(op)]["depends_on"] = list(
-                (items[key_of(op)].get("depends_on") or []) + [op.get("dep")])
+            if not found:
+                items[key_of(op)]["depends_on"] = list(
+                    (items[key_of(op)].get("depends_on") or []) + [op.get("dep")])
+        except _MALFORMED:
+            # An unhashable or oddly-typed value inside an op (a list ``kind``,
+            # ``evidence_kinds=[{}]``, a dict where a name belongs) is
+            # malformed input: one fail-closed verdict, never an exception a
+            # door would turn into a 500.
+            verdicts.append(_verdict(index, name, _key_of(op), "malformed"))
     return verdicts
 
 
