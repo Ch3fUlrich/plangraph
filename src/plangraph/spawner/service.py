@@ -99,9 +99,8 @@ class SpawnService:
             card = options.get('card')
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
-                from plangraph.settings import review_method
-                method = review_method(card.get('project') or card.get('key', '').split(':')[0], card.get('phase'), root=card.get('repo_root'))
-                groups = split_findings(card['findings'], limit=method.fixer_split_threshold)
+                from plangraph.settings import fixer_threshold
+                groups = split_findings(card['findings'], limit=fixer_threshold(card))
                 if len(groups) > 1:
                     async def dispatch(group):
                         child = dict(card, findings=list(group))

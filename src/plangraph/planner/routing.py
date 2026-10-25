@@ -411,10 +411,14 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     order = {leg.id: i for i, leg in enumerate(ordered)}
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
     from plangraph.spawner.fixer import split_findings
-    from plangraph.settings import review_method
-    method = review_method(card.get('project') or card.get('key', '').split(':')[0],
-                           card.get('phase'), root=card.get('repo_root'))
-    groups = split_findings(card.get('findings', ()), limit=method.fixer_split_threshold) if role == 'implement' else ()
+    from plangraph.settings import fixer_threshold, SettingsError
+    try:
+        threshold = fixer_threshold(card)
+    except SettingsError:
+        exc = SpawnRefused('review_method_invalid')
+        exc.reason = exc.code = 'review_method_invalid'
+        raise exc from None
+    groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
                      tuple(candidate_details), groups)
 

@@ -209,3 +209,69 @@ def test_plan_phase_carries_method(tmp_path, monkeypatch):
         assert plan['review_method']['max_rounds'] == 3
     finally:
         world.close()
+
+
+def test_finding_10_review_method_source_validation():
+    from plangraph.settings import SettingsError
+    # Valid sources
+    assert ReviewMethod(source='default').source == 'default'
+    assert ReviewMethod(source='global').source == 'global'
+    assert ReviewMethod(source='projects:demo').source == 'projects:demo'
+    assert ReviewMethod(source='phases:demo:P').source == 'phases:demo:P'
+
+    # Invalid sources with path separators or empty
+    with pytest.raises(SettingsError, match='path separators not allowed'):
+        ReviewMethod(source='/etc/settings.json')
+    with pytest.raises(SettingsError, match='path separators not allowed'):
+        ReviewMethod(source='relative/path')
+    with pytest.raises(SettingsError, match='path separators not allowed'):
+        ReviewMethod(source='win\\path')
+    with pytest.raises(SettingsError, match='nonempty string'):
+        ReviewMethod(source='')
+    with pytest.raises(SettingsError, match='nonempty string'):
+        ReviewMethod(source=123)
+
+
+def test_finding_11_settings_suffix_case_insensitive(tmp_path, monkeypatch):
+    path = tmp_path / 'POLICY.JSON'
+    path.write_text('{"review_method": {"max_rounds": 9}}')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    assert review_method().max_rounds == 9
+
+    path_toml = tmp_path / 'POLICY.TOML'
+    path_toml.write_text('[review_method]\nmax_rounds = 8\n')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path_toml))
+    assert review_method().max_rounds == 8
+
+
+def test_finding_2_derive_project_from_phase(tmp_path, monkeypatch):
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'projects': {'demo': {'review_method': {'mode': 'per-item'}}}
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    val = review_method(project=None, phase='demo:P')
+    assert val.mode == 'per-item'
+    assert val.source == 'projects:demo'
+
+
+def test_finding_5_fixer_threshold(tmp_path, monkeypatch):
+    from plangraph.settings import fixer_threshold
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    # Default without context
+    assert fixer_threshold() == 10
+    assert fixer_threshold({}) == 10
+
+    # With card project/phase override
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'fixer_split_threshold': 12},
+        'projects': {'demo': {'review_method': {'fixer_split_threshold': 5}}},
+        'phases': {'demo:special': {'review_method': {'fixer_split_threshold': 2}}}
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    assert fixer_threshold({'key': 'other:1'}) == 12
+    assert fixer_threshold({'key': 'demo:1'}) == 5
+    assert fixer_threshold({'project': 'demo', 'key': '1'}) == 5
+    assert fixer_threshold({'key': 'demo:1', 'phase': 'demo:special'}) == 2
+

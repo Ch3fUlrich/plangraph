@@ -43,6 +43,10 @@ class ReviewMethod:
             value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise SettingsError(f'{name}: expected positive integer')
+        if not isinstance(self.source, str) or not self.source.strip():
+            raise SettingsError('source: expected nonempty string')
+        if '/' in self.source or '\\' in self.source:
+            raise SettingsError('source: path separators not allowed')
 
 
 def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
@@ -58,16 +62,19 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
     root = next((p for p in (base, *base.parents)
                  if (p / '.git').exists()), base)
     path = root / filename
-    if path.suffix != '.json' and tomllib is None:
+    suffix = path.suffix.lower()
+    if suffix != '.json' and tomllib is None:
         raise SettingsError('file: tomllib unavailable; use JSON settings')
     try:
         text = path.read_text(encoding='utf-8')
-        data = json.loads(text) if path.suffix == '.json' else tomllib.loads(text)
+        data = json.loads(text) if suffix == '.json' else tomllib.loads(text)
     except (OSError, ValueError) as exc:
         location = f' line {exc.lineno} column {exc.colno}' if hasattr(exc, 'lineno') else ''
         raise SettingsError(f'file: {type(exc).__name__}{location}') from None
     if not isinstance(data, dict):
         raise SettingsError('file: expected settings table')
+    if project is None and phase and ':' in phase:
+        project = phase.split(':', 1)[0]
     values = {}
     source = 'default'
     layers = [('global', data)]
@@ -92,6 +99,15 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
             source = label
         ReviewMethod(**values)
     return ReviewMethod(**values, source=source)
+
+
+def fixer_threshold(card=None) -> int:
+    """Resolve fixer split threshold for card context."""
+    card = card or {}
+    key = card.get('key', '')
+    project = card.get('project') or (key.split(':', 1)[0] if ':' in key else None)
+    method = review_method(project, card.get('phase'), root=card.get('repo_root'))
+    return method.fixer_split_threshold
 
 
 def enforce_review_scope(card, role, review_scope, *, root=None):
