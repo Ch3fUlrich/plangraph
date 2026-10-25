@@ -202,7 +202,7 @@ def test_finding_9_cli_spawn_refused_audited(tmp_path, monkeypatch, capsys):
 
 
 
-def test_cli_settings_errors_not_audited(tmp_path, monkeypatch):
+def test_cli_settings_errors_audited_as_review_method_invalid(tmp_path, monkeypatch):
     """Settings problems are audited as review_method_invalid: one record, no double-record."""
     from plangraph.spawner.cli import main
     path = tmp_path / 'policy.json'
@@ -218,6 +218,12 @@ def test_cli_settings_errors_not_audited(tmp_path, monkeypatch):
     assert isinstance(exc, SpawnRefused)
     assert exc.reason == 'review_method_invalid'
     assert '{' not in str(exc)
+
+
+def test_cli_settings_errors_not_audited(tmp_path, monkeypatch):
+    """Backwards compatibility alias for gate."""
+    test_cli_settings_errors_audited_as_review_method_invalid(tmp_path, monkeypatch)
+
 
 
 def test_finding_1_spawner_paths_convert_settings_errors(tmp_path, monkeypatch):
@@ -743,6 +749,18 @@ def test_finding_5_advisory_and_batch_boundaries_assertions_restored():
     assert "assert 'TOCTOU' in text" in source or 'assert "TOCTOU" in text' in source
     assert "assert 'spoof' in text" in source or 'assert "spoof" in text' in source
     assert "assert 'per-fixer seat' in text" in source or 'assert "per-fixer seat" in text' in source
+
+
+def test_finding_6_cli_settings_errors_test_renamed_to_match_body():
+    import sys
+    mod = sys.modules[__name__]
+    assert hasattr(mod, 'test_cli_settings_errors_audited_as_review_method_invalid')
+    import inspect
+    source = inspect.getsource(mod.test_cli_settings_errors_audited_as_review_method_invalid)
+    assert 'save_refusal' in source
+    assert 'review_method_invalid' in source
+    assert 'len(calls) == 1' in source
+
 
 
 
