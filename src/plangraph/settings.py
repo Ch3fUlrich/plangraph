@@ -102,7 +102,8 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
         if not isinstance(table, dict):
             raise SettingsError(f'{section}: expected table')
         if key is not None:
-            layers.append((f'{section}:{key}', table.get(key, {})))
+            safe_key = key.replace('/', '_').replace('\\', '_')
+            layers.append((f'{section}:{safe_key}', table.get(key, {})))
     for label, table in layers:
         if not isinstance(table, dict):
             raise SettingsError(f'{label}: expected table')

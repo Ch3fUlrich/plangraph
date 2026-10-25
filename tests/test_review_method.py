@@ -532,5 +532,22 @@ def test_finding_2_project_of_helper_colon_free(tmp_path, monkeypatch):
     assert fixer_threshold({'key': 'myproject'}) == 4
 
 
+def test_finding_3_phase_key_with_slash(tmp_path, monkeypatch):
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'phases': {
+            'demo:PH/2': {
+                'review_method': {'max_rounds': 5}
+            }
+        }
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    method = review_method(phase='demo:PH/2')
+    assert method.max_rounds == 5
+    assert '/' not in method.source
+    assert '\\' not in method.source
+
+
+
 
 
