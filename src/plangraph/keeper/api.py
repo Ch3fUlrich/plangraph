@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import urllib.parse
@@ -40,7 +41,7 @@ from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing
 from .snapshot_writer import SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
 from .auth import Principal, RunPrincipal
-from .errors import Refused
+from .errors import ConnectionLost, Refused
 
 __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
            "make_server", "write_snapshot"]
@@ -64,10 +65,26 @@ class KeeperHandler(BaseHTTPRequestHandler):
         """Never log a request line: it can carry a query and must stay quiet."""
     # ---------------------------------------------------------------- verbs
     def do_GET(self):  # noqa: N802 - stdlib signature
-        self._handle("GET")
+        self._request("GET")
 
     def do_POST(self):  # noqa: N802 - stdlib signature
-        self._handle("POST")
+        self._request("POST")
+
+    def _request(self, method):
+        """Start of every request: at most one fail line and one status line (I1, V4)."""
+        self._logged = False                    # the one-line rule is per request
+        self._sent = False                      # and so is "answered" (keep-alive)
+        try:
+            self._handle(method)
+        except Exception as exc:  # noqa: BLE001 - I1: a request never dies silently
+            self._escape(exc)
+
+    def _escape(self, exc):
+        """Last resort when something escaped ``_handle``: one fail line; one 500 if nothing was sent."""
+        self._fail_line(exc)                    # V4: the failed request gets its line even after ``_sent``
+        if not getattr(self, "_sent", False):
+            with suppress(Exception):
+                self._json(500, {"error": "internal", "msg": "internal server error"})
 
     def _handle(self, method):
         parsed = urllib.parse.urlsplit(self.path)
@@ -84,7 +101,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed.query)
 
         if name == "health":
-            self._json(200, {"status": "ok"})
+            conn = getattr(self.server.store, "conn", None)
+            if getattr(conn, "lost", False) or getattr(self.server, "fatal_reason", None):
+                self._json(503, {"status": "unavailable"})   # I11: flag only, no IO, no lock
+            else:
+                self._json(200, {"status": "ok"})
             return
 
         allowed = _READ_VERBS if method == "GET" else _WRITE_VERBS
@@ -108,14 +129,14 @@ class KeeperHandler(BaseHTTPRequestHandler):
         server = self.server
         with server.lock:
             try:
-                principal = auth.authenticate(server.store.conn, self._token())
-            except Refused as exc:
-                audit = getattr(server.store, "audit_auth_failure", None)
-                with suppress(Exception):  # absent or broken: still a 401
-                    audit and audit(exc.msg or exc.code)
-                self._json(401, {"error": exc.code, "msg": exc.msg})
-                return
-            try:
+                try:
+                    principal = auth.authenticate(server.store.conn, self._token())
+                except Refused as exc:
+                    audit = getattr(server.store, "audit_auth_failure", None)
+                    with suppress(Exception):  # absent or broken: still a 401
+                        audit and audit(exc.msg or exc.code)
+                    self._json(401, {"error": exc.code, "msg": exc.msg})
+                    return
                 api_routes.run_gate(principal, name)
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
@@ -134,11 +155,25 @@ class KeeperHandler(BaseHTTPRequestHandler):
             except Refused as exc:
                 self._json(_STATUS.get(exc.code, 400),
                            {"error": exc.code, "msg": exc.msg})
-            except Exception:  # noqa: BLE001 - never leak internals
+            except ConnectionLost as exc:  # I1/I4: fail loud, never a silent close
+                self._fail_line(exc)
+                msg = ("keeper database lost at commit; outcome unknown"
+                       if exc.phase == "commit" else "keeper database unavailable")
+                self._json(503, {"error": "unavailable", "msg": msg})
+            except Exception as exc:  # noqa: BLE001 - never leak internals
+                self._fail_line(exc)
                 self._json(500, {"error": "internal",
                                  "msg": "internal server error"})
 
     # ------------------------------------------------------------- plumbing
+    def _fail_line(self, exc):
+        """One stderr line per failed request: the type only (I10), never ``str(exc)``."""
+        if getattr(self, "_logged", False):
+            return                          # the request path already logged this request (V4)
+        self._logged = True
+        with suppress(Exception):           # stderr trouble must not mask the response (V4)
+            print(f"keeper: request failed: {type(exc).__name__}", file=sys.stderr)
+
     def _token(self):
         header = self.headers.get("Authorization", "")
         if header.startswith("Bearer "):
@@ -195,6 +230,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def _empty(self, status):
         """No body, no Content-Length/Content-Type (HTTP 204 must not carry one)."""
         self.send_response(status)
+        self._sent = True                     # only a written status line counts (I1)
         self.end_headers()
 
     def _inbox(self):
@@ -206,6 +242,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if status == 413:
             self.close_connection = True
         self.send_response(status)
+        self._sent = True                     # only a written status line counts (I1)
         self.send_header("Content-Type", ctype)
         for name, value in headers:
             self.send_header(name, value)
