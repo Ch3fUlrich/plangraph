@@ -9,6 +9,7 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | #183 ROUTER-LIVENESS-WATCHDOG | qwen seat fail; r2 writer mimo-pro RUNNING (bg bhnv9oyxz, seats/liveness-r2.run.txt, brief liveness-r2.md). Next: delta qwen seat -> MERGE-READY -> mergepath 183 |
 | #184 HARDENING (3 keys) | head 5a4e8a8b CI red pytest-postgres (pg job runs all affected -> gitleaks test). Gate-Edit D-2692 GO; brief hardening-ci-fix.md; writer agy gemini when mem >= 4000; then 1 seat (standard) -> mergepath -> evidence TEST-SPEED-AFFECTED + RUN-EXIT-NOTIFY, submit 3, prune hb-keys |
 | RT-P1-EXEC-OWNERSHIP (HIGH) | D-2691: Haiku tool-less seat as 2nd family; prompt seats/exec-own.haiku.prompt.txt (sha 8142cf0a…, diff #140+#160) ready; run when mem ok, then request close |
+| PG-L3-MAX-TOKENS (D-2694/2695) | claimed e1; worktree ~/code/plangraph-worktrees/l3-max-tokens (lane/l3-max-tokens pushed); brief pg-l3-max-tokens.md; writer agy gemini when mem ok -> 1 seat -> mergepath |
 | D-2691 closed 6 | KG-LINK, LESSONS-TO-ALGO, SEAT-VERDICT-QODER, WAIT-GUARD, SEAT-FAMILY-WRITER, PG-PUBLIC-READY |
 | #166 KEEPER-PG-RECONNECT | after #164 |
 | #139 KEEPER-TRAILER-MULTI | after #166 |
