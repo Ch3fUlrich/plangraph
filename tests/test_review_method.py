@@ -23,12 +23,19 @@ def test_root_and_safe_source(tmp_path, monkeypatch):
     assert review_method(root=tmp_path).source == 'global'
 
 
-@pytest.mark.parametrize('role', ['implement', 'review'])
-def test_explicit_scope_all_roles(monkeypatch, role):
-    from plangraph.settings import enforce_review_scope
+def test_explicit_scope_all_roles(monkeypatch):
+    from plangraph.settings import enforce_review_scope, SettingsError
     monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    with pytest.raises(SettingsError, match='review_scope only valid for role=review'):
+        enforce_review_scope({}, 'implement', 'per-fixer')
+    with pytest.raises(SettingsError, match='review_scope only valid for role=review'):
+        enforce_review_scope({}, 'implement', 'batch')
+    with pytest.raises(SettingsError, match='review_scope only valid for role=review'):
+        enforce_review_scope({'review_scope': 'per-fixer'}, None, None)
+    with pytest.raises(SettingsError, match='review_scope only valid for role=review'):
+        enforce_review_scope({'review_scope': 'per-fixer'}, 'implement', None)
     with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
-        enforce_review_scope({}, role, 'per-fixer')
+        enforce_review_scope({}, 'review', 'per-fixer')
 
 
 def test_stamped_scope_validation(monkeypatch):
@@ -96,7 +103,7 @@ def test_cwd_non_git_fallback(tmp_path, monkeypatch):
 def test_non_review_batch_rejected(monkeypatch):
     from plangraph.settings import enforce_review_scope, SettingsError
     monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
-    with pytest.raises(SettingsError, match='only supported'):
+    with pytest.raises(SettingsError, match='review_scope only valid for role=review'):
         enforce_review_scope({}, 'implement', 'batch')
 
 
@@ -274,4 +281,62 @@ def test_finding_5_fixer_threshold(tmp_path, monkeypatch):
     assert fixer_threshold({'key': 'demo:1'}) == 5
     assert fixer_threshold({'project': 'demo', 'key': '1'}) == 5
     assert fixer_threshold({'key': 'demo:1', 'phase': 'demo:special'}) == 2
+
+
+def test_finding_7_runner_spawn_keyword_and_single_guard(tmp_path, monkeypatch):
+    import plangraph.spawner.runner as runner_mod
+    import plangraph.settings as settings_mod
+
+    guard_calls = []
+    orig_enforce = settings_mod.enforce_review_scope
+    monkeypatch.setattr(settings_mod, 'enforce_review_scope',
+                        lambda *a, **k: guard_calls.append((a, k)))
+
+    super_kwargs = []
+    orig_super_spawn = SpawnService._spawn
+    async def fake_super_spawn(self, *args, **kwargs):
+        super_kwargs.append((args, kwargs))
+        return {'status': 'super_spawn_ok'}
+    monkeypatch.setattr(SpawnService, '_spawn', fake_super_spawn)
+
+    service = runner_mod.spawn_service(runner=object(), state=tmp_path)
+
+    # Delegating path (with model override): must pass by keyword and run guard once
+    guard_calls.clear()
+    super_kwargs.clear()
+    res = asyncio.run(service._spawn(card={'key': 'demo:C', 'estimate_tokens': 100},
+                                     role='review', model='mimo/mimo-v2.6-flash',
+                                     review_scope='batch'))
+    assert res['status'] == 'super_spawn_ok'
+    assert len(super_kwargs) == 1
+    args, kwargs = super_kwargs[0]
+    # Verify review_scope was passed by keyword
+    assert kwargs.get('review_scope') == 'batch'
+    # And positional args must be empty (all passed by keyword to super()._spawn)
+    assert args == ()
+    # Guard runs only once (in super()._spawn, not runner before delegating)
+    # Since fake_super_spawn bypassed super, runner shouldn't have called it before delegating
+    assert len(guard_calls) == 0
+
+    # Non-delegating path: runner guards on its own
+    guard_calls.clear()
+    dummy_plan = type('Plan', (), {'legs': (), 'error': 'no leg', 'skipped': (), 'to_dict': lambda self: {'skipped': []}})()
+    service._route = lambda *a, **k: dummy_plan
+    service._save = lambda *a: None
+    service.result = lambda run_id: {'status': 'refused'}
+    asyncio.run(service._spawn(card={'key': 'demo:C', 'estimate_tokens': 100},
+                               role='review', review_scope='batch'))
+    assert len(guard_calls) == 1
+
+
+def test_finding_8_cli_review_scope_rejected_on_non_spawn(tmp_path, capsys):
+    from plangraph.spawner.cli import main
+    # --review-scope passed to route verb must be rejected by CLI argparser
+    with pytest.raises(SystemExit) as exc:
+        main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}',
+              '--review-scope', 'batch'])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert 'unrecognized arguments: --review-scope' in err
+
 

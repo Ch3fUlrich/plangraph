@@ -116,17 +116,17 @@ def enforce_review_scope(card, role, review_scope, *, root=None):
     if any(value not in (None, 'batch', 'per-fixer')
            for value in (review_scope, card.get('review_scope'))):
         raise SettingsError('review_scope: expected batch or per-fixer')
+    if role != 'review' and (review_scope is not None or card.get('review_scope') is not None):
+        raise SettingsError('review_scope only valid for role=review')
     key = card.get('key', '')
     method = review_method(card.get('project') or key.split(':', 1)[0] or None,
                            card.get('phase'), root=root or card.get('repo_root'))
     if method.mode == 'batch' and (review_scope == 'per-fixer' or
-            (role == 'review' and review_scope is None and card.get('review_scope') == 'per-fixer')):
+            (review_scope is None and card.get('review_scope') == 'per-fixer')):
         from plangraph.routing_errors import SpawnRefused
         exc = SpawnRefused('review_method_batch_per_fixer')
         exc.reason = exc.code = 'review_method_batch_per_fixer'
         raise exc
-    if role != 'review' and review_scope is not None:
-        raise SettingsError('review_scope: only supported for review spawns')
 
 
 def main():
