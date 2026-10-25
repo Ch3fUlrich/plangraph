@@ -57,6 +57,29 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
         w.close()
 
 
+def test_rule_set_frees_the_exec_owner_in_the_same_transaction(tmp_path):
+    """``rule_set`` hands the rule back to the rules channel: same transaction.
+
+    The ``store_rules`` module contract says the write "clears the review claim
+    ... and the run's exec owner at the same instant"; the state UPDATE must
+    therefore carry the clear with it (RT-P1-EXEC-OWNERSHIP).
+    """
+    w = World(tmp_path)
+    try:
+        key = "decisions:RULE-1-1"
+        w.store.rule_set(w.p("router"), [{"id": "RULE-1-1", "description": "r"}])
+        worker = w.p("workerA")
+        with w.store._write():
+            w.store._exec_record(w.conn, key, *RUN1, principal=worker)
+        assert owner(w, key) == RUN1
+        w.store.rule_set(w.p("router"), [{"id": "RULE-1-1", "description": "r2"}])
+        assert owner(w, key) == (None, None, None)
+        # every clear door keeps the retired-run fence
+        assert (RUN1[0], RUN1[1], RUN1[2]) in retired_runs(w, key)
+    finally:
+        w.close()
+
+
 # Explicit exceptions are function-scoped so moving line numbers is harmless.
 # ``set_state``/``_apply_state`` is NOT allow-listed: since RT-P1-EXEC-OWNERSHIP
 # every hand-back it writes (explicit ``hand_back=True``, open/ready, changing)

@@ -143,6 +143,15 @@ class RuleMixin:
                 self._append(principal, r["key"], "rule_set",
                              {"state": r["state"], "description": r["description"],
                               "depends_on": r["depends_on"]}, now)
+                # Same transaction as the state UPDATE (module contract above):
+                # the write hands the rule back to the rules channel -- the run
+                # claims no review of it -- so the exec owner is freed here and
+                # its run joins the retired-run fence (RT-P1-EXEC-OWNERSHIP).
+                # BEFORE the state write, unlike the other clear doors: a
+                # retire lands the row in ``cancelled``, which the lock
+                # triggers freeze against any later row write, so the clear
+                # must not be that write.
+                self._exec_clear(self.conn, r["key"], principal, now)
                 self.conn.execute(
                     "UPDATE items SET state=?, title=?, description=?, source=?, note=?,"
                     " lease_until=NULL, updated_at=? WHERE key=?",
