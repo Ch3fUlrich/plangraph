@@ -675,6 +675,8 @@ def test_liveness_exit_vocabulary():
     for liv, ec in LIVENESS_TO_EXIT_CLASS.items():
         assert ec in EXIT_CLASSES, f"{ec} not in EXIT_CLASSES"
         assert exit_class_for_liveness(liv) == ec
+    with pytest.raises(ValueError):
+        exit_class_for_liveness("bogus")  # class sweep: unknown liveness must refuse, never silent None (I13)
     assert LIVENESS_TO_EXIT_CLASS["stalled"] == "stall"
     assert LIVENESS_TO_EXIT_CLASS["capped"] == "timeout"
     assert LIVENESS_TO_EXIT_CLASS["attempt_timeout"] == "timeout"
