@@ -12,6 +12,7 @@ import time
 import uuid
 
 from .runner import SpawnerRunner
+from .liveness import classify_attempt
 
 
 class SpawnService:
@@ -376,15 +377,11 @@ class SpawnService:
                         served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                         writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                         events=record.get('events', []) + getattr(job, 'events', []))
-                    if job.liveness:
-                        record['liveness'] = job.liveness
-                        record['exit_class'] = job.exit_class
-                    elif job.status == 'cancelled':
-                        record['exit_class'] = 'cancelled'
-                        record['liveness'] = None
-                    elif job.status in ('completed', 'dry_run'):
-                        record.setdefault('exit_class', 'ok')
-                        record.setdefault('liveness', None)
+                    # Per-attempt, not setdefault: the record carries the LAST
+                    # attempt's (liveness, exit_class) — a stale value from
+                    # attempt N-1 must not stick to attempt N (haiku-C4), and
+                    # a plain failure needs a class (qwen-C3, I13).
+                    record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
                     self._save(record)
                     if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:
