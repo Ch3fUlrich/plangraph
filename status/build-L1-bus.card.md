@@ -13,7 +13,7 @@ D-2835: efficiency = all cost; Hand-Edit own commit <=10 lines (30 after ORCH-EF
 | Item | State / next |
 |---|---|
 | FIX r1 G1/G3/G2 | MERGED #186 c9d4bc38, #189 5feefbf5, #199 3ceaf974 (CI 40182839456; Hand-Edit scrub). Phase head ea21b539 (tree == CI head) |
-| DELTA r2 | R2a 59c1287e r3 NOT clean. R2a' mimo-pro run 1 + run 2 (run-8cba759a) both STALL-cancelled (D-2835). REPLAN v2 l2-cards/phase-fix-r2/replan-v2-slices.md: 6 slices <=150 lines, 1 red test each. BLOCKED: routing picks writer (mimo-pro per slice / cx ~10-30). Run-2 recorded fixture backup build-L1-bus-seats/r2a-prime-run2-partial |
+| DELTA r2 | R2a 59c1287e r3 NOT clean. R2a' = replan v2 64b5db48, D-2843: mimo-pro per slice S1..S6 serial (briefs l2-cards/phase-fix-r2/slice-S*.md, runner job tmp run-slice.sh: gate + stall = no write+no log+no stdout 15 min). Slice stalls twice -> stop, tell routing. Per slice: grep cited tests, push, CI. After S6: r4 qwen seat (review to file) -> R2b mimo-pro. NOW S1 |
 | BUS-REGISTRY-PERSIST (HIGH p8) | MERGED phase #193 (9b2eb4db; writer mimo-pro run ...062933-...a2456f; Hand-Edit PRAGMA test; CI 40174828383). Gap: docs/FLEET-BUS.md paragraph -> delta finding. Claim refused till DISCOVERY done |
 | BUS-PEER-DISCOVERY-ADOPT (HIGH p8) | AutoOS MERGED main 2629d740 (D-2730). routing 46b7d6a1 HELD till phase on main + keeper deploy (routing sets env + merges). NO ff live AutoOS checkouts till /v1/hosts deployed. Evidence: l2-cards/discovery-adopt/evidence.md (post after claim allowed) |
 | RT-P1-BUS-KEEPER / DISCOVERY / WAKE / EXEC-OBSERVED-STATE / ANY-AGENT-CLI W2a+W2b | IN PHASE, await delta review + phase PR |
