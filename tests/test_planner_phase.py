@@ -12,6 +12,7 @@ from plangraph.keeper.api import KeeperHandler
 from plangraph.keeper import api_routes
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase, shadow
+from plangraph.settings import enforce_review_scope
 from plangraph.planner.legs import DEFAULT_LEGS
 
 @pytest.fixture
@@ -89,6 +90,15 @@ def test_two_ready_cards_disjoint(w, repo):
         assert c["route"]["harness"] == "opencode"
         assert c["route"]["window_class"] == "128k"
         assert not (set(c["route"]["legs"]) & non_opencode)
+
+def test_loosened_phase_under_batch_global_stamps_batch_and_spawns(w, repo, monkeypatch):
+    (repo / "p.json").write_text('{"review_method": {"mode": "batch"}, "phases": {"demo:PH-X": {"review_method": {"mode": "per-item"}}}}')
+    monkeypatch.setenv("PLANGRAPH_SETTINGS", "p.json")
+    make_phase(w)
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["review_scope"] == "batch"  # D-2817: what spawn admits
+    enforce_review_scope({"phase": "demo:PH-X", "review_scope": plan["review_scope"]}, "review", None, root=repo)
+
 
 def test_needs_input_and_ready_cards_are_planned(w, repo):
     make_phase(w)
