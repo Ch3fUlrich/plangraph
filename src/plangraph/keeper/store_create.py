@@ -256,9 +256,13 @@ class CreateMixin:
             tier_order = {"standard": 1, "high": 2}
             if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
                 if not (allowed_lowering or oversight_can_set_none):
-                    # build-L1 HIGH: oversight may only RAISE, never lower
-                    # Instead of refusing, raise the tier to the default
-                    tier = default
+                    if principal.role == "oversight":
+                        # Oversight's raise-only grant clamps to the default.
+                        tier = default
+                    else:
+                        raise Refused(
+                            "forbidden",
+                            "only the router may lower review_tier below its default")
             return validated_decision_tier(tier, definition["evidence_kinds"])
         return default
 
