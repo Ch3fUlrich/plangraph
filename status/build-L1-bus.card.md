@@ -27,3 +27,4 @@ UNPARKED D-2657 ~23:2xZ. Phase @aded8d82 (main 4608fd3f + EOS + DISCOVERY + KEEP
 06:3xZ G1 MERGED phase #186 -> e30b2ae3 (head c9d4bc38, CI 40168236971 green incl PG). G3 next, then G2 (mimo-pro; agy 429 ~07:09Z).
 BUS-REGISTRY-PERSIST: writer mimo-v2.6-pro (agy 429 skip) run 20261025-062933-bus-registry-persist-wri-a2456f, worktree build-L1-bus-persist lane/bus-registry-persist, brief l2-cards/registry-persist/brief.md; bus_hosts in v15/PG8 in place; schema fence sent build-L1 [51fc4d].
 BUS-PEER-DISCOVERY-ADOPT: L2-LAUNCH bus-discovery-adopt sent routing 06:3xZ; brief l2-cards/discovery-adopt/brief.md; lanes routing-worktrees/ + AutoOS-worktrees/bus-discovery-adopt (lane/bus-discovery-adopt off main).
+Schema fence agreed w/ build-L1: #164 claims SQLite v14 + PG Migration(8) oversight (collides with bus PG 8). First to main keeps its numbers; second renumbers on its main merge (bus -> PG 9 / SQLite next). build-L1 pings on #164 GO.
