@@ -21,3 +21,4 @@ build-L1 file sets (18:5xZ): W27 spawner/{resolver,stall_watchdog}.py; #139 keep
 (OVERLAPS lane 2); #164 keeper/api_routes.py (OVERLAPS lane 2); #171 keeper define/edit validation. Rule: earlier merge first, later lane merges main;
 build-L1 tells me if #166/#164 land before BUS-KEEPER. Lanes 1, 3-6 file-disjoint. Freeze end only on build-L1's word.
 D-2643: fix rounds = parallel fix writers by file group (affected tests + CI gate), then ONE review over the collected delta; no seat per writer/fixer.
+Fence: #164 (build-L1) adds schema v14 oversight DDL to schema.py and schema_pg.py. Whoever lands first keeps its number; the phase renumbers its v14/v15 after #164 when it merges main.
