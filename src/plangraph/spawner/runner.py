@@ -570,8 +570,7 @@ def spawn_service(*args, **kwargs):
             from .notify import completion_event, CommandSink, KeeperNotConfigured
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
-                for stream in ('stdout', 'stderr'):
-                    record[stream + '_tail'] = getattr(job, stream, '')
+                # Tails belong to _save's accumulator; copying the live job's text here doubled it (qwen-C5).
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
                         attempt['skip_reason'] = (redact(job.stderr.strip().splitlines()[0])
