@@ -9,7 +9,7 @@
 
 use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
-use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper, expected_state_for};
+use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper};
 use crate::mergelock::{self, MergeOutcome};
 use crate::question::Question;
 use pg_worker_core::budget;
@@ -39,6 +39,10 @@ pub const TASK_QUEUE: &str = "pg-cards";
 
 /// How long a worker waits for a competing merge before giving up.
 const MERGE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound on one `observe` read (G3-4): the blocking keeper call runs in
+/// `spawn_blocking`, and the activity stops waiting for it after 5 s so a hung
+/// keeper cannot hold a park decision hostage.
+const OBSERVE_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The merge activity's own budget: the start-to-close window the workflow gives
 /// it (`workflow::once_options`), and the single value everything inside the
@@ -115,9 +119,10 @@ pub struct PhaseBranchResult {
 /// Ask the keeper to store an agent question for a card.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AskInput {
-    /// The live-set fallback the workflow hands over; under
-    /// EXEC-OBSERVED-STATE the activity replaces it with the state it just
-    /// observed whenever `Keeper::card_state` could tell it one.
+    /// The any-of `expected_state` the workflow hands over (the live set):
+    /// an ask keeps the any-of CAS the ADR documents and never narrows it
+    /// (G3-3), and the activity forwards it verbatim without re-reading
+    /// the keeper (G3-1).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -468,12 +473,77 @@ fn park_attempt_of(input: &str) -> Option<u32> {
         .ok()
 }
 
+/// The `expected_state` a `park` activity input carries: the observation the
+/// workflow captured when it decided to park, or its live-set fallback when it
+/// observed nothing. `None` when the key is absent or empty (the park then
+/// sends no state CAS, as it did before the key existed).
+///
+/// This is the whole of the park path's state handling (G3-1): the activity
+/// reads the key and forwards it, and never calls `Keeper::card_state`.
+pub(crate) fn expected_state_of(input: &str) -> Option<Vec<String>> {
+    let state = serde_json::from_str::<serde_json::Value>(input)
+        .ok()?
+        .get("expected_state")?
+        .clone();
+    if let Some(state) = state.as_str() {
+        return Some(vec![state.to_owned()]);
+    }
+    serde_json::from_value::<Vec<String>>(state)
+        .ok()
+        .filter(|states| !states.is_empty())
+}
+
+/// The `observe` read the park decision gets: `Keeper::card_state` (a blocking
+/// ureq call) off the tokio worker threads in `spawn_blocking`, waiting at most
+/// [`OBSERVE_READ_TIMEOUT`] for it (G3-4). `None` -- timeout, a panicking
+/// blocking task, a keeper that answered nothing -- means "observed nothing",
+/// so the workflow parks on its live-set fallback.
+pub(crate) async fn observe_read(keeper: Arc<dyn Keeper>, card: String) -> Option<String> {
+    observe_read_within(keeper, card, OBSERVE_READ_TIMEOUT).await
+}
+
+/// [`observe_read`] with an explicit bound, so the timeout is testable.
+async fn observe_read_within(
+    keeper: Arc<dyn Keeper>,
+    card: String,
+    limit: Duration,
+) -> Option<String> {
+    let read = tokio::task::spawn_blocking(move || keeper.card_state(&card));
+    match tokio::time::timeout(limit, read).await {
+        Ok(read) => read.ok().flatten(),
+        // Timed out: observed nothing. The blocking task is detached (it can
+        // only finish or sit on its own socket timeout); the activity returns.
+        Err(_) => None,
+    }
+}
+
+/// The whole of what the `park` activity runs below its context binding: parse
+/// the packet from the input and hand the keeper the exec identity the
+/// activity built -- workflow/run from the context, the card attempt and the
+/// recorded observation (`expected_state`) from the input, verbatim.
+///
+/// Extracted so a test can run exactly this path (V7-5): an `ActivityContext`
+/// cannot be built outside the SDK, but everything observation-shaped -- the
+/// parse, the forwarding, the keeper CAS -- lives here, and nothing in it ever
+/// calls `Keeper::card_state` (G3-1): a retried park presents the observation
+/// the workflow recorded when it decided, never a fresher read.
+pub(crate) async fn park_path(
+    keeper: Arc<dyn Keeper>,
+    input: String,
+    exec: ExecId,
+) -> Result<(), ActivityError> {
+    let packet = ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
+    tokio::task::spawn_blocking(move || keeper.park(&packet, &exec).map_err(activity_error))
+        .await
+        .map_err(activity_error)?
+}
+
 /// The park packet JSON the workflow hands to the `park` activity, with the
-/// card attempt and the live-set `expected_state` fallback added as extra
+/// card attempt and the `expected_state` the workflow recorded added as extra
 /// top-level keys when known. [`ParkPacket::from_json`] ignores the extra keys
-/// (the activity re-reads them there to build the [`ExecId`], and swaps the
-/// fallback for the state it observed when the keeper could tell it one), so
-/// the packet itself round-trips.
+/// (the activity reads them back there to build the [`ExecId`] and forwards the
+/// `expected_state` verbatim -- the observation the workflow captured when it
+/// decided to park, or its live-set fallback), so the packet itself round-trips.
 pub fn park_json_with_attempt(
     p: &ParkPacket,
     attempt: Option<u32>,
@@ -1280,39 +1350,47 @@ impl CardActivities {
             .map_err(activity_error)
     }
 
+    /// Capture the card state the park decision will present
+    /// (EXEC-OBSERVED-STATE, G3-1): the workflow runs this just before it
+    /// decides to park and carries the answer in the `park` activity input, so
+    /// a retry of a delayed park still shows the state the run observed at
+    /// decision time.
+    ///
+    /// The only keeper *read* left in the worker. It runs off the tokio worker
+    /// threads in `spawn_blocking` behind an explicit 5 s timeout (G3-4), and
+    /// `None` -- an unreachable keeper, a slow one, an unreadable or oversized
+    /// body (G3-5) -- means "observed nothing": the workflow parks on its
+    /// live-set fallback exactly as a run that could not read always did.
+    // A short wire name, pinned by `gate_activity_name_and_payload_shapes_are_stable`
+    // beside `attempt`; without the override the macro would emit
+    // "CardActivities::observe" like `gate`/`probe`/`merge`.
+    #[activity(name = "observe")]
+    pub async fn observe(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        card: String,
+    ) -> Result<Option<String>, ActivityError> {
+        Ok(observe_read(self.deps.keeper.clone(), card).await)
+    }
+
     /// Park a card: the keeper wants a human to look at the packet.
+    ///
+    /// EXEC-OBSERVED-STATE (G3-1): the observation was captured when the
+    /// workflow decided to park (its `observe` activity) and travels in the
+    /// input's `expected_state` key. This activity builds its exec identity
+    /// from its context plus that input and never re-reads the keeper, so a
+    /// Temporal retry of a delayed park presents the same observation the
+    /// keeper may now refuse instead of a fresh, tautological read of whatever
+    /// the projector wrote meanwhile. Everything below the context binding is
+    /// [`park_path`], which the tests run directly (V7-5).
     #[activity]
     pub async fn park(
         self: Arc<Self>,
         ctx: ActivityContext,
         input: String,
     ) -> Result<(), ActivityError> {
-        let keeper = self.deps.keeper.clone();
-        // The card attempt and the workflow's live-set fallback ride along as
-        // extra keys of the packet JSON (`ParkPacket::from_json` ignores them);
-        // read them before the blocking task so the exec identity is built
-        // from this activity's context.
-        let fallback = serde_json::from_str::<serde_json::Value>(&input)
-            .ok()
-            .and_then(|v| {
-                let state = v.get("expected_state")?;
-                if let Some(state) = state.as_str() {
-                    Some(vec![state.to_owned()])
-                } else {
-                    serde_json::from_value::<Vec<String>>(state.clone())
-                        .ok()
-                        .filter(|states| !states.is_empty())
-                }
-            });
-        let packet = ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
-        // EXEC-OBSERVED-STATE: park sends the state this run just read on the
-        // keeper; the workflow's live set is what it sends only when it
-        // observed nothing (`card_state` is `None` on any failed read).
-        let expected_state = expected_state_for(keeper.card_state(&packet.card), fallback);
-        let exec = exec_of(&ctx, park_attempt_of(&input), expected_state);
-        tokio::task::spawn_blocking(move || keeper.park(&packet, &exec).map_err(activity_error))
-            .await
-            .map_err(activity_error)?
+        let exec = exec_of(&ctx, park_attempt_of(&input), expected_state_of(&input));
+        park_path(self.deps.keeper.clone(), input, exec).await
     }
 
     /// Tell the keeper the card merged.
@@ -1357,11 +1435,10 @@ impl CardActivities {
         input: AskInput,
     ) -> Result<Option<i64>, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        // EXEC-OBSERVED-STATE: an ask presents the state this run just read;
-        // the workflow's live set is the fallback when it observed nothing.
-        let expected_state =
-            expected_state_for(keeper.card_state(&input.card), input.expected_state.clone());
-        let exec = exec_of(&ctx, input.attempt, expected_state);
+        // EXEC-OBSERVED-STATE / G3-3: an ask keeps the any-of live-set CAS the
+        // ADR documents (an ask never moves the card), so the workflow's
+        // recorded set is sent unchanged; nothing is re-read here (G3-1).
+        let exec = exec_of(&ctx, input.attempt, input.expected_state.clone());
         let res = tokio::task::spawn_blocking(move || {
             retry_transient(&TRANSIENT_BACKOFF, || {
                 keeper.ask_question(&input.card, &input.question, &exec)
@@ -1514,6 +1591,188 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::keeper::KeeperError;
+
+    /// The packet the park-path tests park.
+    fn g3_packet() -> ParkPacket {
+        ParkPacket {
+            card: "c-1".into(),
+            tier: Tier::Free,
+            exit_class: pg_worker_core::exit_class::ExitClass::UsageLimit,
+            check_tail: "tail".into(),
+        }
+    }
+
+    /// An execution identity built the way `park`/`ask_question` build one from
+    /// their input: attempt from the input, `expected_state` from the input.
+    fn g3_exec(expected_state: Option<Vec<String>>) -> ExecId {
+        ExecId {
+            workflow_id: Some("wf-1".into()),
+            run_id: Some("run-1".into()),
+            attempt: Some(4),
+            expected_state,
+        }
+    }
+
+    fn g3_live() -> Vec<String> {
+        crate::keeper::WORKER_LIVE_STATES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect()
+    }
+
+    /// G3-1 + V7-5: the park path presents exactly the observation the
+    /// workflow recorded in the input and never re-reads the keeper.
+    #[test]
+    fn park_forwards_the_recorded_observation_without_reading() {
+        let input = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["waiting".into()]));
+        // What the activity forwards (the whole of the park path's state use).
+        assert_eq!(expected_state_of(&input), Some(vec!["waiting".to_string()]));
+        let keeper = StubKeeper::default();
+        // What the projector holds is what the workflow observed at decision
+        // time; the park must present it without asking the keeper again.
+        keeper.set_card_state(Some("waiting"));
+        keeper
+            .park(&g3_packet(), &g3_exec(expected_state_of(&input)))
+            .expect("park with its recorded observation lands");
+        assert!(
+            keeper.card_state_calls().is_empty(),
+            "G3-1: the park path re-read the keeper"
+        );
+        assert_eq!(
+            keeper
+                .execs()
+                .last()
+                .expect("park was called")
+                .expected_state,
+            Some(vec!["waiting".to_string()])
+        );
+        // No observation recorded: the workflow's live-set fallback stands.
+        let plain = park_json_with_attempt(&g3_packet(), Some(4), Some(g3_live()));
+        assert_eq!(expected_state_of(&plain), Some(g3_live()));
+        assert_eq!(
+            expected_state_of(&park_json_with_attempt(&g3_packet(), Some(4), None)),
+            None
+        );
+    }
+
+    /// G3-1 (red): a retried park carries the observation from decision time,
+    /// so once the projector moved the card on, the keeper path refuses it
+    /// (stub equivalent of `exec_stale_state`) instead of re-reading a fresher
+    /// state that would make the CAS tautological.
+    #[test]
+    fn a_retried_park_with_a_stale_observation_is_refused() {
+        let keeper = StubKeeper::default();
+        // The card the run parked on was `running` when it decided; the
+        // projector wrote `waiting` while the activity was delayed.
+        keeper.set_card_state(Some("waiting"));
+        let input = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["running".into()]));
+        let err = keeper
+            .park(&g3_packet(), &g3_exec(expected_state_of(&input)))
+            .expect_err("stale observation must be refused");
+        assert_eq!(err, KeeperError::Status(409));
+        assert!(keeper.parked().is_empty());
+        assert!(
+            keeper.card_state_calls().is_empty(),
+            "G3-1: a retry must not re-read to repair its expectation"
+        );
+        // The same park with the observation that still holds lands.
+        keeper.set_card_state(Some("running"));
+        keeper
+            .park(&g3_packet(), &g3_exec(expected_state_of(&input)))
+            .expect("fresh observation lands");
+    }
+
+    /// V7-5: the `park` activity's own code path -- [`park_path`], everything
+    /// below the context binding the activity does -- forwards the observation
+    /// it passes and never reads the keeper's card state (G3-1), on the
+    /// landing case and on the refused one.
+    #[tokio::test]
+    async fn the_park_activity_path_presents_the_observation_it_passes() {
+        let stub = Arc::new(StubKeeper::default());
+        stub.set_card_state(Some("waiting"));
+        let keeper: Arc<dyn Keeper> = stub.clone();
+        // The identity the activity builds: observation verbatim from input.
+        let landed = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["waiting".into()]));
+        let exec = g3_exec(expected_state_of(&landed));
+        park_path(keeper.clone(), landed, exec)
+            .await
+            .expect("park with its recorded observation lands");
+        assert_eq!(stub.parked().len(), 1);
+        assert!(
+            stub.card_state_calls().is_empty(),
+            "V7-5/G3-1: the park path read the keeper"
+        );
+        // The refused case runs the same code: stale observation, no re-read.
+        let stale = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["running".into()]));
+        let exec = g3_exec(expected_state_of(&stale));
+        assert!(park_path(keeper.clone(), stale, exec).await.is_err());
+        assert_eq!(stub.parked().len(), 1, "the stale park did not land");
+        assert!(stub.card_state_calls().is_empty());
+    }
+
+    /// G3-3: an ask keeps the any-of live-set CAS the ADR documents -- it is
+    /// never narrowed to a single state -- and re-reads nothing (G3-1).
+    #[test]
+    fn ask_keeps_the_any_of_live_set_and_does_not_read() {
+        let keeper = StubKeeper::default();
+        keeper.set_card_state(Some("running"));
+        let input = AskInput {
+            expected_state: Some(g3_live()),
+            card: "c-1".into(),
+            question: Question {
+                text: "which db?".into(),
+                default: Some("sqlite".into()),
+                deadline_s: Some(60),
+                risk_tags: Vec::new(),
+            },
+            attempt: Some(4),
+        };
+        // Exactly what the activity sends: the input set, verbatim.
+        let exec = g3_exec(input.expected_state.clone());
+        keeper
+            .ask_question(&input.card, &input.question, &exec)
+            .expect("ask lands");
+        assert_eq!(
+            keeper
+                .execs()
+                .last()
+                .expect("ask was called")
+                .expected_state,
+            Some(g3_live())
+        );
+        assert!(keeper.card_state_calls().is_empty());
+    }
+
+    /// G3-4: the one keeper read left waits a bounded time off the runtime
+    /// threads, and a stalled keeper is "observed nothing".
+    #[tokio::test]
+    async fn observe_read_is_bounded_by_the_five_second_cap() {
+        assert!(
+            OBSERVE_READ_TIMEOUT <= Duration::from_secs(5),
+            "G3-4: the read timeout must stay <= 5 s"
+        );
+        let stub = Arc::new(StubKeeper::default());
+        stub.set_card_state(Some("waiting"));
+        stub.set_card_state_delay(Some(Duration::from_millis(500)));
+        let read: Arc<dyn Keeper> = stub.clone();
+        let started = Instant::now();
+        assert_eq!(
+            observe_read_within(read, "c-1".into(), Duration::from_millis(25)).await,
+            None,
+            "a stalled read answers nothing"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // An unstalled read hands the observation over.
+        stub.set_card_state_delay(None);
+        assert_eq!(
+            observe_read(stub.clone(), "c-1".into()).await,
+            Some("waiting".to_string())
+        );
+        assert_eq!(
+            stub.card_state_calls(),
+            vec!["c-1".to_string(), "c-1".to_string()]
+        );
+    }
 
     #[test]
     fn keeper_failures_are_classified() {
@@ -2992,6 +3251,7 @@ mod tests {
     #[test]
     fn gate_activity_name_and_payload_shapes_are_stable() {
         assert_eq!(CardActivities::gate.name(), "CardActivities::gate");
+        assert_eq!(CardActivities::observe.name(), "observe");
         assert_eq!(CardActivities::attempt.name(), "attempt");
         assert_eq!(CardActivities::probe.name(), "CardActivities::probe");
         assert_eq!(CardActivities::merge.name(), "CardActivities::merge");

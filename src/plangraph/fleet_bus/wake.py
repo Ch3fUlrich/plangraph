@@ -35,8 +35,17 @@ Behaviour and the vectors each guarantee covers:
 * **unknown session** -- a recipient with no configured session, an unusable row
   and a sink 404 are refused and logged (bounded list), the cursor still
   advances, and nothing retries forever or crashes.
-* **wake storm** -- only the first event inside ``debounce_s`` posts; the rest
-  coalesce into one follow-up wake that is still delivered.
+* **wake storm / one wake per burst** -- the 20 s debounce
+  (:data:`DEFAULT_DEBOUNCE_S`) is one wake per burst: only the first event
+  inside the window posts, so two events 5 s apart are one burst -> one wake
+  while that window is open; the rest coalesce into at most one follow-up
+  wake when the window closes, never one wake per event.
+* **crash between wake and save** -- the sink is called before
+  :meth:`WakeState.save` persists the cursor (save runs at the end of every
+  public call), so a crash inside that window replays the row on restart and
+  costs at most one duplicate wake per woken row: the replay wakes once more
+  and its own save closes the window, after which a redelivery is a duplicate
+  again.
 * **busy target** -- a ``WakeBusy`` (or any unexpected) delivery failure is
   retried after ``retry_s`` and never dropped: the obligation lives in the same
   file as the cursor, so even a restart keeps it.

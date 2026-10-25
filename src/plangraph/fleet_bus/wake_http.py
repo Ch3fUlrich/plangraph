@@ -14,7 +14,10 @@ default server endpoints (callers supply base URLs from their config):
   (``GET /v1/messages?since=<cursor>&wait_ms=...``) so a new ``messages``
   row wakes a session with no timer anywhere.
 
-Both are duck-typed so unit tests can inject fake transports.
+Both are duck-typed so unit tests can inject fake transports.  When a real
+socket opens (a redirected endpoint, the V7-4 keeper long-poll test), both go
+through :func:`_request`, which follows a redirect only on the same origin so
+the bearer token is never forwarded to another host (G3-7).
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import json
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 
 from .wake import PollFailed, SessionTarget, WakeBusy, WakeRefused
 
@@ -44,6 +47,33 @@ DEFAULT_PATHS: Dict[str, str] = {"opencode": OPENCODE_SYNTHETIC_PATH}
 READ_CAP = 65536
 
 
+def _origin(url: str) -> Tuple[str, str, Optional[int]]:
+    """``(scheme, host, effective port)`` of *url*, lower-cased."""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    port = parts.port or {"http": 80, "https": 443}.get(scheme)
+    return scheme, (parts.hostname or "").lower(), port
+
+
+class _SameOriginRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only while it stays on the request's own origin.
+
+    Both seams here send ``Authorization`` (G3-7): a hop to another
+    scheme/host/port would hand that bearer token to a host that never earned
+    it, so the 3xx is handed back to the caller as a status instead of being
+    followed -- ``SyntheticSink`` reports it as busy and ``KeeperMessagesPoll``
+    keeps its cursor, so a redirect can delay a wake but never leak the token
+    and never drop the row.  A same-origin redirect keeps its headers and is
+    followed exactly as ``urllib`` does.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(req.full_url):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, target)
+
+
 def _request(
     data: Optional[bytes],
     url: str,
@@ -52,10 +82,11 @@ def _request(
 ) -> Tuple[int, bytes]:
     """Open a URL and return ``(status, body)``; transport errors raise OSError."""
     req = urllib.request.Request(url, data=data, headers=dict(headers))
+    opener = urllib.request.build_opener(_SameOriginRedirects)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with opener.open(req, timeout=timeout) as resp:  # noqa: S310
             return int(resp.status), resp.read(READ_CAP)
-    except urllib.error.HTTPError as exc:  # non-2xx still carries a status
+    except urllib.error.HTTPError as exc:  # non-2xx (incl. a refused hop) carries a status
         return int(exc.code), exc.read(READ_CAP)
 
 
