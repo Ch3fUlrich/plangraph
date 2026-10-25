@@ -274,8 +274,15 @@ class JevMixin:
         return [dict(row) for row in rows]
 
     def jev_report(self, principal, project=None):
+        # The guard lives INSIDE _run (D-2458): the token re-check and the
+        # denial audit run before an out-of-scope project can refuse.
         return self._run(principal, "jev_report", None,
-                         lambda now: self._jev_report(project))
+                         lambda now: self._jev_report_in(principal, project))
+
+    def _jev_report_in(self, principal, project):
+        if isinstance(principal, auth.OversightPrincipal) and project is not None:
+            self._require_project(principal, project)
+        return self._jev_report(project)
 
     def _jev_report(self, project):
         rows = [dict(row) for row in self.conn.execute(
