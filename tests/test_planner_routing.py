@@ -6,16 +6,18 @@ import json
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, load_legs, with_measured
+from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, WRITER_ORDER, load_legs, with_measured
 from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
-                                       route_card)
+                                       plan_spawn, route_card)
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free", "opencode-zen-free", "or-north-mini-code-free",
     "or-laguna-s-2.1-free", "or-nemotron-3-super-free", "ovh-gpt-oss-120b",
-    "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "agy-sonnet-5.5", "deepseek",
+    "openrouter-free",
+    "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro",
+    "agy-sonnet-5.5", "deepseek",
 ]
 
 
@@ -140,7 +142,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "or-nemotron-3-super-free",
                       "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash",
-                      "agy-sonnet-5.5", "deepseek"]
+                      "mimo-v2.6-pro", "agy-sonnet-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
 
 
@@ -154,7 +156,7 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 6 legs: trains_on_data" in r.reasons
+        assert "excluded 7 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -305,3 +307,48 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
         next_after_failure(route, [], "ok", 1)
     with pytest.raises(ValueError):
         next_after_failure(route, [], "weird", 1)
+
+
+def test_writer_order_d2683_implement_first_seven():
+    # (a) implement plan for a public standard card (estimate_tokens 20000, no exclusions)
+    # lists exactly agy-gemini-3.8-flash, mimo-v2.6-pro, openrouter-free,
+    # opencode-deepseek-v4.1-flash-free, opencode-glm-5.3-flash-free, mimo-v2.6-flash,
+    # cx-gpt-6.1-sol as the first 7 leg ids in that order
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="implement")
+    expected = [
+        "agy-gemini-3.8-flash",
+        "mimo-v2.6-pro",
+        "openrouter-free",
+        "opencode-deepseek-v4.1-flash-free",
+        "opencode-glm-5.3-flash-free",
+        "mimo-v2.6-flash",
+        "cx-gpt-6.1-sol",
+    ]
+    assert [leg.id for leg in plan.legs[:7]] == expected
+
+
+def test_writer_order_d2683_unavailable_skipped():
+    # (b) a leg marked unavailable is skipped and the next in WRITER_ORDER leads
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    def mock_reader(model, **kwargs):
+        if model == "gemini-3.8-flash":
+            return {"state": "limited", "evidence": {"status": 429}}
+        return {"state": "available", "evidence": None}
+    plan = plan_spawn(c, role="implement", leg_reader=mock_reader)
+    assert plan.first_leg.id == "mimo-v2.6-pro"
+
+
+def test_writer_order_d2683_review_order_unchanged():
+    # (c) review plan order is unchanged (qodercli-qwen3.8-flash first)
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="review")
+    assert plan.first_leg.id == "qodercli-qwen3.8-flash"
+
+
+def test_writer_order_d2683_writer_family_exclusion():
+    # (d) writer-family exclusion still applies (exclude gemini -> mimo-v2.6-pro first)
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="implement", writer_families=("gemini",))
+    assert plan.first_leg.id == "mimo-v2.6-pro"
+
