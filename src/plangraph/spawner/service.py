@@ -126,7 +126,8 @@ class SpawnService:
             card = options.get('card')
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
-                groups = split_findings(card['findings'])
+                from plangraph.settings import admit_fixer_threshold
+                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card))
                 if len(groups) > 1:
                     async def dispatch(group):
                         child = dict(card, findings=list(group))
@@ -194,7 +195,9 @@ class SpawnService:
 
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
-                    dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
+                    dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
+        from plangraph.settings import admit_review_scope
+        admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import DEFAULT_LEGS
         if not card:

@@ -111,6 +111,7 @@ for _tool in TOOLS_METADATA:
         _tool['inputSchema']['properties'].update({
             'card': {'type': 'object'}, 'override_reason': {'type': 'string'},
             'writer_families': {'type': 'array', 'items': {'type': 'string'}},
+            'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'}})
         _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
@@ -169,6 +170,7 @@ class MCPSpawnerServer:
                 role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
                 writer_families=arguments.get('writer_families', ()),
+                review_scope=arguments.get('review_scope'),
                 dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
                 no_fallthrough=arguments.get('no_fallthrough', False), **options)
 

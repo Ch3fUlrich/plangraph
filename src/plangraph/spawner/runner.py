@@ -614,11 +614,17 @@ def spawn_service(*args, **kwargs):
 
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
-                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
+                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
             # Let the base service handle audited overrides, which never fall through.
             if model is not None or leg is not None or not card:
-                return await super()._spawn(card, prompt, role, writer_families, review_of,
-                    model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
+                return await super()._spawn(
+                    card=card, prompt=prompt, role=role, writer_families=writer_families,
+                    review_of=review_of, model=model, leg=leg, override_reason=override_reason,
+                    dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=True,
+                    benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
+                )
+            from plangraph.settings import admit_review_scope
+            admit_review_scope(card, role, review_scope)
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):

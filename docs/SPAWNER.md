@@ -699,3 +699,6 @@ The writer must not run this against the live keeper; build-L1 owns live proof.
 The local marker follows acknowledgement: writing it before sending would lose
 events on crash. Exactly-once visibility across marker failure instead relies
 on the keeper's atomic `(item, run_id, phase)` idempotency key.
+# Review policy
+
+See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.
