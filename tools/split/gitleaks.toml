@@ -121,6 +121,15 @@ paths = ['''^tests/test_w30_regressions\.py$''']
 regexes = ['''^opaque-test-SECRET123$''']
 
 [[allowlists]]
+# Earlier revisions of the same w30 test (history only) used this dummy env value instead.
+# Same scope rule: this file AND this exact synthetic value only (condition = AND).
+description = "earlier synthetic gateway token in the w30 regression (history)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_w30_regressions\.py$''']
+regexes = ['''^sk-test-SECRET123$''']
+
+[[allowlists]]
 # Reason: the w28 regression pins that the same synthetic gateway value never reaches error
 # text or the stored record, so the test names it as ONE plain literal the leak gate can read:
 # no split fragments to reassemble around the scanner.  Fake, no credential of any kind.  The
