@@ -166,13 +166,26 @@ def test_tracked_deploy_allowlist_maps_to_tests_naming_it(tmp_path):
     assert plan["tests"] == ["tests/test_deploy.py"]
 
 
-def test_tracked_deploy_markdown_skipped(tmp_path):
+def test_tracked_deploy_markdown_maps_to_tests_naming_it(tmp_path):
     _asset_repo(tmp_path, {
         "deploy/notes.md": "# Deploy notes",
         "tests/test_deploy.py": "NOTES = 'deploy/notes.md'",
     })
     plan = selector().select_tests(tmp_path, ["deploy/notes.md"])
-    assert plan["tests"] == []
+    assert plan["tests"] == ["tests/test_deploy.py"]
+
+
+def test_untracked_deploy_asset_is_skipped(tmp_path):
+    _asset_repo(tmp_path)
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "x.txt").write_text("local scratch\n")
+    assert selector().select_tests(tmp_path, ["deploy/x.txt"])["tests"] == []
+
+
+def test_root_level_file_is_skipped(tmp_path):
+    _asset_repo(tmp_path, {"README.txt": "hello\n"})
+    assert selector().select_tests(tmp_path, ["README.txt"])["tests"] == []
 
 
 def test_real_repo_deploy_watchdog_selects_w36_regressions():

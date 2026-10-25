@@ -114,11 +114,13 @@ def select_tests(root, changed, within=None):
                         or path.startswith(".github/workflows/"))
         if suite_config:
             return fallback("suite configuration")
+        # docs/status trees and root files cannot affect tests; untracked scratch outside the
+        # source roots is skipped; tracked files elsewhere map to tests naming them or full suite.
         if not p.parts or (len(p.parts) == 1 and p.name != "conftest.py"):
             continue
         if p.parts[0] not in {"src", "tests", "tools"}:
             if p.name != "conftest.py":
-                if p.parts[0] in {"docs", "status"} or p.suffix in {".md", ".rst"}:
+                if p.parts[0] in {"docs", "status"}:
                     continue
                 if not revision_asset(root, path, asset_cache):
                     continue
