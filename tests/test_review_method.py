@@ -113,6 +113,9 @@ def test_documented_advisory_and_batch_boundaries(tmp_path, monkeypatch):
     from plangraph.settings import enforce_review_scope
     text = (Path(__file__).parent.parent / 'docs' / 'REVIEW-METHOD.md').read_text(encoding='utf-8')
     assert 'ADVISORY' in text
+    assert 'TOCTOU' in text
+    assert 'spoof' in text
+    assert 'per-fixer seat' in text
 
     # Behavioral test 1: advisory fields (seats, max_rounds, distinct_families, family_source)
     # do not prevent admission or alter enforce_review_scope
@@ -406,12 +409,10 @@ def test_finding_7_runner_spawn_keyword_and_single_guard(tmp_path, monkeypatch):
     import plangraph.settings as settings_mod
 
     guard_calls = []
-    orig_enforce = settings_mod.enforce_review_scope
     monkeypatch.setattr(settings_mod, 'enforce_review_scope',
                         lambda *a, **k: guard_calls.append((a, k)))
 
     super_kwargs = []
-    orig_super_spawn = SpawnService._spawn
     async def fake_super_spawn(self, *args, **kwargs):
         super_kwargs.append((args, kwargs))
         return {'status': 'super_spawn_ok'}
@@ -734,6 +735,15 @@ def test_finding_4_no_path_or_layer_in_error_and_control_char_sanitization(tmp_p
     assert '\x00' not in method.source
     assert '/' not in method.source
     assert '\\' not in method.source
+
+
+def test_finding_5_advisory_and_batch_boundaries_assertions_restored():
+    import inspect
+    source = inspect.getsource(test_documented_advisory_and_batch_boundaries)
+    assert "assert 'TOCTOU' in text" in source or 'assert "TOCTOU" in text' in source
+    assert "assert 'spoof' in text" in source or 'assert "spoof" in text' in source
+    assert "assert 'per-fixer seat' in text" in source or 'assert "per-fixer seat" in text' in source
+
 
 
 
