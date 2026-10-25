@@ -135,6 +135,16 @@ async fn replays_check_fails() {
         .expect("check_fails history replays");
 }
 
+/// R2-1 / I2: a history that predates OBSERVE_PATCH replays unchanged with None
+/// (observe activity is not scheduled, no marker command is issued, no non-determinism).
+#[tokio::test]
+async fn old_history_predating_observe_marker_replays_with_none() {
+    replayer()
+        .replay_workflow(history("check_fails"))
+        .await
+        .expect("pre-marker history replays with None");
+}
+
 /// The gate-block run (a first attempt blocked on the card's check, main left
 /// untouched, then a retry that passes and merges) must replay
 /// deterministically like any other recorded run.

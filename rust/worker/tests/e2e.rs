@@ -2515,6 +2515,105 @@ async fn phase_rerun_reuses_a_closed_card_child_id() {
             completed.iter().any(|(card, _)| card == &c),
             "{completed:?}"
         );
+        env.stop();
+    })
+    .await;
+}
+
+/// R2-1 / R2-3 / I1: a fresh run that parks schedules `observe`, records the
+/// `park-observe-v1` marker in workflow history, and presents the observed
+/// state in `park`, never the live-set fallback.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_run_records_observe_patch_and_parks_with_observation() {
+    in_local(async {
+        let Some(env) = env_or_skip("observe-park", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-observe-park";
+        // The keeper holds state `waiting` (e.g. usage_limit/outage).
+        env.keeper.set_card_state(Some("waiting"));
+        let claim = env.claim(card, &["out.txt"], "true");
+        let id = format!("e2e-observe-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("observe_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+
+        // Invariant I1: observe was scheduled before park.
+        assert_eq!(
+            env.keeper.card_state_calls(),
+            vec![card.to_string()],
+            "observe activity must query card_state before park"
+        );
+
+        // Invariant I1: park carries the observed state ["waiting"], NOT the live-set fallback.
+        let execs = env.keeper.execs();
+        let park_exec = execs
+            .iter()
+            .find(|e| e.expected_state.is_some())
+            .expect("park must carry expected_state");
+        assert_eq!(
+            park_exec.expected_state,
+            Some(vec!["waiting".to_string()]),
+            "park must carry recorded observation, not live-set fallback"
+        );
+        assert_eq!(env.keeper.parked().len(), 1, "park must have landed");
+
+        // Invariant I1: OBSERVE_PATCH marker was recorded in workflow history.
+        let bytes = handle
+            .fetch_history(WorkflowFetchHistoryOptions::default())
+            .to_json()
+            .await
+            .expect("fetch history json");
+        let history_val: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("history is valid json");
+        let decoded = decoded_payloads(&history_val).join("\n");
+        assert!(
+            decoded.contains("park-observe-v1"),
+            "workflow history must record park-observe-v1 marker: {decoded}"
+        );
+
+        env.stop();
+    })
+    .await;
+}
+
+/// R2-2 / I3: a transient observe failure (500/timeout/None) makes the first park
+/// send the live-set fallback, which the keeper refuses with 409 exec_stale_state
+/// on a `waiting` card. The workflow must re-observe and land the cap-park.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cap_park_on_waiting_card_lands_after_one_failed_observe() {
+    in_local(async {
+        let Some(env) = env_or_skip("failed-observe-park", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-failed-observe-park";
+        // Card is waiting; simulate one transient read failure (returns None).
+        env.keeper.set_card_state(Some("waiting"));
+        env.keeper.set_card_state_fail_times(1);
+
+        let claim = env.claim(card, &["out.txt"], "true");
+        let id = format!("e2e-failed-observe-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("failed_observe_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+
+        // Invariant I3: the workflow re-observed after fallback refusal and landed the park.
+        assert_eq!(
+            env.keeper.card_state_calls().len(),
+            2,
+            "observe activity must have been re-run after fallback refusal"
+        );
+        assert_eq!(
+            env.keeper.parked().len(),
+            1,
+            "park must land within bounded retries"
+        );
+
+        env.stop();
     })
     .await;
 }

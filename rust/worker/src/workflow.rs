@@ -1465,17 +1465,38 @@ async fn park_and_alarm_in_state(
     // out of the park call, the park itself lands while `GET /v1/show` is down
     // (G3-2); when the observation could not be made, `expected_state_for`
     // keeps the live-set fallback the workflow hands over.
-    let observed = observe_card(ctx, cfg, &packet.card).await?;
-    let states = expected_state_for(
-        observed,
-        expected_state.map(|states| states.iter().map(|s| (*s).to_owned()).collect()),
-    );
-    ctx.execute_activity(
-        CardActivities::park,
-        park_json_with_attempt(packet, Some(attempt), states),
-        activity_options(cfg),
-    )
-    .await?;
+    //
+    // R2-2: an observe failure poisons the park if it falls back to the live set
+    // and the keeper refuses with exec_stale_state on an away state (waiting,
+    // needs_input). On refusal of a fallback-only park, re-run observe (bounded
+    // retries) so a transient read hiccup does not permanently block the park.
+    let mut retries = 0;
+    loop {
+        let observed = observe_card(ctx, cfg, &packet.card).await?;
+        let is_fallback = observed.is_none();
+        let states = expected_state_for(
+            observed,
+            expected_state.map(|states| states.iter().map(|s| (*s).to_owned()).collect()),
+        );
+        match ctx
+            .execute_activity(
+                CardActivities::park,
+                park_json_with_attempt(packet, Some(attempt), states),
+                activity_options(cfg),
+            )
+            .await
+        {
+            Ok(()) => break,
+            Err(e) if e.as_cancelled().is_some() => return Err(e.into()),
+            Err(e) => {
+                if is_fallback && retries < 2 {
+                    retries += 1;
+                    continue;
+                }
+                return Err(e.into());
+            }
+        }
+    }
     raise_alarm(
         ctx,
         cfg,

@@ -249,6 +249,8 @@ fn with_exec(mut body: serde_json::Value, exec: &ExecId) -> serde_json::Value {
 pub struct HttpKeeper {
     base: String,
     agent: ureq::Agent,
+    /// Dedicated agent for card_state with strict connect and read deadlines.
+    card_state_agent: ureq::Agent,
     /// Bearer token the keeper requires on every verb; `None` sends none.
     token: Option<String>,
 }
@@ -283,9 +285,14 @@ impl HttpKeeper {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(10))
             .build();
+        let card_state_agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(2))
+            .timeout_read(Duration::from_secs(5))
+            .build();
         HttpKeeper {
             base,
             agent,
+            card_state_agent,
             token: None,
         }
     }
@@ -307,8 +314,9 @@ impl HttpKeeper {
     }
 
     /// A GET request to `url`, carrying the bearer token when one is set.
+    /// Uses `card_state_agent` with connect and read deadlines.
     fn get(&self, url: &str) -> ureq::Request {
-        let req = self.agent.get(url);
+        let req = self.card_state_agent.get(url);
         match &self.token {
             Some(t) => req.set("Authorization", &format!("Bearer {t}")),
             None => req,
@@ -549,9 +557,23 @@ struct StubState {
     card_state_calls: Vec<String>,
     /// Make `card_state` hang that long first (G3-4: a stalled read).
     card_state_delay: Option<Duration>,
+    /// Number of card_state calls that should return None (simulating transient read failure).
+    card_state_fail_times: usize,
+    /// When set, `park` panics with this message.
+    park_panic: Option<String>,
 }
 
 impl StubKeeper {
+    /// When set, `park` panics with `msg`.
+    pub fn set_park_panic(&self, msg: Option<&str>) {
+        self.lock().park_panic = msg.map(str::to_owned);
+    }
+
+    /// Number of card_state calls that should return None.
+    pub fn set_card_state_fail_times(&self, times: usize) {
+        self.lock().card_state_fail_times = times;
+    }
+
     /// Make `card_state` answer `state` (`None` again to observe nothing).
     pub fn set_card_state(&self, state: Option<&str>) {
         self.lock().card_state = state.map(str::to_owned);
@@ -689,13 +711,22 @@ impl StubKeeper {
 
 impl Keeper for StubKeeper {
     fn card_state(&self, card: &str) -> Option<String> {
-        let delay = {
+        let (delay, fail) = {
             let mut state = self.lock();
             state.card_state_calls.push(card.to_string());
-            state.card_state_delay
+            let fail = if state.card_state_fail_times > 0 {
+                state.card_state_fail_times -= 1;
+                true
+            } else {
+                false
+            };
+            (state.card_state_delay, fail)
         };
         if let Some(delay) = delay {
             std::thread::sleep(delay);
+        }
+        if fail {
+            return None;
         }
         self.lock().card_state.clone()
     }
@@ -766,15 +797,26 @@ impl Keeper for StubKeeper {
 
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        if let Some(msg) = &s.park_panic {
+            panic!("{msg}");
+        }
         s.execs.push(exec.clone());
         // The keeper's state CAS, stub-equivalent (EXEC-OBSERVED-STATE): an
         // expectation that misses the state the stub holds is refused 409, so a
         // park that presents a stale observation can be tested without a server.
-        // No expectation (or no held state) keeps the unconditional stub park.
-        if let (Some(expected), Some(state)) = (&exec.expected_state, &s.card_state)
-            && !expected.iter().any(|e| e == state)
-        {
-            return Err(KeeperError::Status(409));
+        // A live-set fallback is never accepted when the held state is waiting
+        // or needs_input (matches store_worker._exec_expect_state, I4).
+        if let (Some(expected), Some(state)) = (&exec.expected_state, &s.card_state) {
+            let is_live_set = expected.len() == WORKER_LIVE_STATES.len()
+                && WORKER_LIVE_STATES
+                    .iter()
+                    .all(|s| expected.iter().any(|e| e == s));
+            if is_live_set && (state == "waiting" || state == "needs_input") {
+                return Err(KeeperError::Status(409));
+            }
+            if !expected.iter().any(|e| e == state) {
+                return Err(KeeperError::Status(409));
+            }
         }
         s.parked.push(p.clone());
         Ok(())
@@ -972,6 +1014,47 @@ mod tests {
         assert_eq!(seen[1].method, "POST");
         assert_eq!(seen[1].path, "/v1/park");
         assert_eq!(body_of(&seen[1])["expected_state"], "waiting");
+    }
+
+    #[test]
+    fn stub_park_refuses_bare_live_set_on_waiting_and_needs_input() {
+        let stub = StubKeeper::default();
+        let live_set: Vec<String> = super::WORKER_LIVE_STATES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let exec_live = ExecId {
+            expected_state: Some(live_set),
+            ..exec()
+        };
+        let exec_waiting = ExecId {
+            expected_state: Some(vec!["waiting".to_string()]),
+            ..exec()
+        };
+
+        // Invariant I4: live-set fallback is refused on waiting.
+        stub.set_card_state(Some("waiting"));
+        assert_eq!(
+            stub.park(&park(), &exec_live).unwrap_err(),
+            KeeperError::Status(409),
+            "bare live set must be refused on waiting card"
+        );
+        // Concrete observation on waiting lands.
+        stub.park(&park(), &exec_waiting)
+            .expect("observed waiting lands");
+
+        // Invariant I4: live-set fallback is refused on needs_input.
+        stub.set_card_state(Some("needs_input"));
+        assert_eq!(
+            stub.park(&park(), &exec_live).unwrap_err(),
+            KeeperError::Status(409),
+            "bare live set must be refused on needs_input card"
+        );
+
+        // Bare live set on running is accepted.
+        stub.set_card_state(Some("running"));
+        stub.park(&park(), &exec_live)
+            .expect("bare live set on running lands");
     }
 
     /// The stub observes nothing until a test says otherwise, so every stub
@@ -1244,6 +1327,19 @@ mod tests {
                     .expect("write response");
                 stream.flush().expect("flush response");
                 seen.push(captured);
+            }
+            listener.set_nonblocking(true).expect("set nonblocking");
+            std::thread::sleep(Duration::from_millis(50));
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let captured = read_request(&mut stream);
+                    panic!(
+                        "unexpected extra request beyond {n}: {} {}",
+                        captured.method, captured.path
+                    );
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => panic!("error checking for extra request: {e}"),
             }
             seen
         });

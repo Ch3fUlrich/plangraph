@@ -9,7 +9,7 @@
 
 use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
-use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper};
+use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper, KeeperError};
 use crate::mergelock::{self, MergeOutcome};
 use crate::question::Question;
 use pg_worker_core::budget;
@@ -517,6 +517,32 @@ async fn observe_read_within(
     }
 }
 
+fn join_error(e: tokio::task::JoinError) -> ActivityError {
+    if e.is_panic() {
+        let p = e.into_panic();
+        let msg = if let Some(s) = p.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = p.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic cause".to_string()
+        };
+        activity_error(format!("park blocking task panicked: {msg}"))
+    } else {
+        activity_error(e)
+    }
+}
+
+fn keeper_park_error(e: KeeperError) -> ActivityError {
+    if classify(&e) == Failure::Refused {
+        ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(
+            e.to_string(),
+        ))
+    } else {
+        activity_error(e)
+    }
+}
+
 /// The whole of what the `park` activity runs below its context binding: parse
 /// the packet from the input and hand the keeper the exec identity the
 /// activity built -- workflow/run from the context, the card attempt and the
@@ -533,9 +559,9 @@ pub(crate) async fn park_path(
     exec: ExecId,
 ) -> Result<(), ActivityError> {
     let packet = ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
-    tokio::task::spawn_blocking(move || keeper.park(&packet, &exec).map_err(activity_error))
+    tokio::task::spawn_blocking(move || keeper.park(&packet, &exec).map_err(keeper_park_error))
         .await
-        .map_err(activity_error)?
+        .map_err(join_error)?
 }
 
 /// The park packet JSON the workflow hands to the `park` activity, with the
@@ -1708,6 +1734,20 @@ mod tests {
         assert!(park_path(keeper.clone(), stale, exec).await.is_err());
         assert_eq!(stub.parked().len(), 1, "the stale park did not land");
         assert!(stub.card_state_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn park_path_join_error_preserves_panic_cause() {
+        let stub = Arc::new(StubKeeper::default());
+        stub.set_park_panic(Some("keeper exploded in park"));
+        let keeper: Arc<dyn Keeper> = stub;
+        let input = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["waiting".into()]));
+        let exec = g3_exec(expected_state_of(&input));
+        let err = park_path(keeper, input, exec).await.unwrap_err();
+        assert!(
+            format!("{err:?}").contains("keeper exploded in park"),
+            "JoinError must retain the panic cause, got: {err:?}"
+        );
     }
 
     /// G3-3: an ask keeps the any-of live-set CAS the ADR documents -- it is
