@@ -54,6 +54,7 @@ Goal: the §0 rules that broke in practice become code, so no L1 has to remember
 |---|---|---|
 | 1 | all gates above, one lane (D-2739: single task, single go) | 3000 |
 | 2 | decisions in the keeper (D-2746 (10)): rule items, rule tree, generated DECISIONS.md | 600 |
+| 3 | legs from properties x live OmniRoute availability (D-2758 (5)) | 450 |
 
 ## Slice 2: decisions in the keeper (operator D-2746 (10))
 
@@ -73,3 +74,20 @@ Goal: the plan graph is the single source of truth for rules; `routing/DECISIONS
 Invariants: I7 render(import(file)) == file; I8 a rule key exists once, its latest `rule_set` wins on replay; I9 rule edges form a DAG.
 
 Switch-over for routing: (1) slice 2 merged + keeper deployed; (2) `decisions_view.py import routing/DECISIONS.md --apply` (router token); (3) `render` == file, commit `decisions.json` + CI check in routing; (4) from then a new D-row = `rule_set` first (CLI `plangraph-keeper rule set`), then `render`, commit view + log row together; hand edits of DECISIONS.md are refused by CI.
+
+## Slice 3: legs from properties x live availability (operator D-2758 (5), routing OK)
+
+Goal: no hand-kept leg order. Any model may run (Claude included); the pick is computed from model properties and what OmniRoute serves right now. Bans stay.
+
+| part | where | behaviour |
+|---|---|---|
+| catalog | `routing_support/catalog.py` (new) | live list = OmniRoute `GET /v1/models` (host gateway, key per D-2758 (6)) + `agy`/`qodercli` probes (`resolver.host_skip_reason`); cached 5 min in the spawner state dir; fetch failure -> last cache, marked `stale`, never an empty list |
+| properties | `planner/legs.py` `MODEL_PROPS` (model -> family, tier, windows, trains_on_data, harness/path per D-1504) | only facts, no order; a served model without a props row is skipped with reason `no_props` (listed in the plan, so the gap is visible) |
+| roles | derived, not listed | a model takes a role when its benchmark row has that role's score (`score_model`); no row -> prior score from tier, `p_source=prior` |
+| rank | `plan_spawn` for every role (today: review only) | filters first: bans (`OPERATOR_REMOVED_MODELS`, retired deepseek D-2744), privacy (`gates.privacy.sensitive_leg_ok`), window fit, `limited` (provider stops, `unavailable_until`), excluded families; then `rank_candidates(role, risk, need_tokens)`; ties by tier (free < subscription < paid) |
+| removed | `WRITER_ORDER`, `DESIGN_ORDER`, "no Opus leg" | `plan.source` = `computed`; the D-2683 order survives only as a recorded tie-break until benchmark rows exist for all its legs |
+| attribution | unchanged | who may WRITE on open work stays the CI commit gate's job (D-2046); the router does not filter Claude |
+
+Invariants: I10 a banned or privacy-refused model is never in a plan, whatever its score; I11 the plan lists every served model with its reason (picked, skipped + why); I12 same catalog + benchmark + card -> same plan (deterministic).
+
+Size: ~450 lines incl. tests (hermetic: catalog from a fixture, never the live gateway in CI). Depends on the D-2758 (6) key path (6100115c, held for operator OK); without it the catalog falls back to the configured legs and records `catalog: offline`.
