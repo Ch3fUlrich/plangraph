@@ -157,7 +157,7 @@ pub struct Fence {
 /// both sides name it here.
 pub const STALE_STATE_FAILURE: &str = "exec_stale_state";
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum KeeperError {
     #[error("keeper request failed: {0}")]
     Http(String),
@@ -592,9 +592,13 @@ struct StubState {
     card_state_fail_times: usize,
     /// When set, `park` panics with this message.
     park_panic: Option<String>,
+    /// When set, `park` fails with this error every time, unrecorded (I3c).
+    park_error: Option<KeeperError>,
+    park_execs: Vec<ExecId>,
     /// Number of `park` calls refused 409 without recording the park (the
     /// state-CAS miss, `exec_stale_state`), so the re-observe loop is drivable.
     park_refuse_times: usize,
+    calls: Vec<&'static str>,
 }
 
 impl StubKeeper {
@@ -606,6 +610,21 @@ impl StubKeeper {
     /// Make the next `times` `park` calls refuse 409 (stale state), unrecorded.
     pub fn set_park_refuse_times(&self, times: usize) {
         self.lock().park_refuse_times = times;
+    }
+
+    /// Make every `park` call fail with `err`, unrecorded (`None` restores).
+    pub fn set_park_error(&self, err: Option<KeeperError>) {
+        self.lock().park_error = err;
+    }
+
+    /// Every keeper verb in call order (D6): the ordered call log.
+    pub fn calls(&self) -> Vec<&'static str> {
+        self.lock().calls.clone()
+    }
+
+    /// Exec identity of every `park` call, in call order.
+    pub fn park_execs(&self) -> Vec<ExecId> {
+        self.lock().park_execs.clone()
     }
 
     /// Number of card_state calls that should fail with `Status(500)`.
@@ -752,6 +771,7 @@ impl Keeper for StubKeeper {
     fn card_state(&self, card: &str) -> Result<Option<String>, KeeperError> {
         let (delay, fail) = {
             let mut state = self.lock();
+            state.calls.push("card_state");
             state.card_state_calls.push(card.to_string());
             let fail = if state.card_state_fail_times > 0 {
                 state.card_state_fail_times -= 1;
@@ -774,6 +794,7 @@ impl Keeper for StubKeeper {
 
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("claim_card");
         state
             .claim_card_calls
             .push((worker.to_string(), card.to_string()));
@@ -786,6 +807,7 @@ impl Keeper for StubKeeper {
 
     fn phase_plan(&self, key: &str) -> Result<crate::phase::PhasePlan, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("phase_plan");
         state.plan_calls.push(key.to_string());
         if state.plans.is_empty() {
             return Err(KeeperError::Status(404));
@@ -804,6 +826,7 @@ impl Keeper for StubKeeper {
         head: &str,
     ) -> Result<crate::phase::PhaseFinish, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("phase_finish");
         state
             .finish_calls
             .push((key.to_string(), branch.to_string(), head.to_string()));
@@ -819,6 +842,7 @@ impl Keeper for StubKeeper {
 
     fn claim_next(&self, _worker: &str) -> Result<Option<Claim>, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("claim_next");
         if state.queue.is_empty() {
             Ok(None)
         } else {
@@ -828,6 +852,7 @@ impl Keeper for StubKeeper {
 
     fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("report_attempt");
         s.attempt_execs.push(ExecId {
             expected_state: None,
             ..exec.clone()
@@ -838,10 +863,15 @@ impl Keeper for StubKeeper {
 
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("park");
         if let Some(msg) = &s.park_panic {
             panic!("{msg}");
         }
         s.execs.push(exec.clone());
+        s.park_execs.push(exec.clone());
+        if let Some(err) = &s.park_error {
+            return Err(err.clone());
+        }
         if s.park_refuse_times > 0 {
             s.park_refuse_times -= 1;
             return Err(KeeperError::Status(409));
@@ -869,6 +899,7 @@ impl Keeper for StubKeeper {
 
     fn complete(&self, card: &str, merged_sha: &str, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("complete");
         s.execs.push(exec.clone());
         s.completed.push((card.to_string(), merged_sha.to_string()));
         Ok(())
@@ -876,6 +907,7 @@ impl Keeper for StubKeeper {
 
     fn alarm(&self, a: &Alarm, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("alarm");
         s.execs.push(exec.clone());
         if s.alarm_down {
             return Err(KeeperError::Status(500));
@@ -891,6 +923,7 @@ impl Keeper for StubKeeper {
         _ttl_s: u64,
     ) -> Result<Fence, KeeperError> {
         let mut s = self.lock();
+        s.calls.push("acquire_merge_lock");
         if s.lock_unavailable {
             return Err(KeeperError::Http("keeper unavailable".into()));
         }
@@ -906,6 +939,7 @@ impl Keeper for StubKeeper {
 
     fn release_merge_lock(&self, repo: &str, fence: &Fence) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("release_merge_lock");
         s.lock_calls.push(format!("release:{repo}:{}", fence.token));
         match &s.held {
             Some(h) if h == fence => {
@@ -919,6 +953,7 @@ impl Keeper for StubKeeper {
 
     fn ask_question(&self, key: &str, q: &Question, exec: &ExecId) -> Result<i64, KeeperError> {
         let mut s = self.lock();
+        s.calls.push("ask_question");
         s.execs.push(exec.clone());
         if let Some(code) = s.ask_status {
             return Err(KeeperError::Status(code));
@@ -929,6 +964,7 @@ impl Keeper for StubKeeper {
 
     fn record_question_timeout(&self, question_id: i64) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("record_question_timeout");
         s.question_timeouts.push(question_id);
         if s.timeout_panics {
             drop(s); // never poison the stub for the other callers

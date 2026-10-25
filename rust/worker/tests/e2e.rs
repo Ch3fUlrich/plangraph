@@ -2,7 +2,7 @@
 //!
 //! These tests need a server reachable at `PG_TEMPORAL_ADDR` (for example
 //! `http://127.0.0.1:17233`). When that variable is unset every test returns
-//! early, so a checkout without a server still passes; CI that sets the
+//! early, so a checkout without a server still passes (under `CI` a missing address panics, D6); CI
 //! variable exercises the whole path: workflow, activities, git worktrees and
 //! merges.
 //!
@@ -31,7 +31,7 @@ use std::time::Duration;
 use pg_worker::activities::{CardActivities, CardOutput, Deps, TASK_QUEUE};
 use pg_worker::attempt::LegSpec;
 use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
-use pg_worker::keeper::{Claim, Keeper, StubKeeper};
+use pg_worker::keeper::{Claim, Keeper, KeeperError, StubKeeper};
 use pg_worker::phase::{PhaseInput, PhaseOutput};
 use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::{Card, CardInput};
@@ -356,22 +356,41 @@ impl Drop for Env {
     }
 }
 
-/// `Some(Env)` when `PG_TEMPORAL_ADDR` is set, else `None` so the caller can
-/// print the skip line and return.
-async fn env_or_skip(name: &str, script: &str) -> Option<Env> {
-    match std::env::var("PG_TEMPORAL_ADDR") {
-        Ok(addr) if !addr.is_empty() => Some(Env::new(&addr, name, script, true).await),
+/// The skip decision (D6 / I6'), extracted so it is testable without racing
+/// the process env: with no `PG_TEMPORAL_ADDR` a test may skip only outside
+/// CI; under `CI` a skip is a failure, so this panics instead.
+fn temporal_addr_of(ci: Option<&str>, addr: Option<String>) -> Option<String> {
+    match addr {
+        Some(addr) if !addr.is_empty() => Some(addr),
+        _ if ci.is_some() => {
+            panic!("PG_TEMPORAL_ADDR unset under CI: a skipped e2e test is a failed test (D6)")
+        }
         _ => None,
     }
+}
+
+/// Position of `verb` in a keeper call-log slice, panicking when it never ran.
+fn verb_pos(calls: &[&str], verb: &str) -> usize {
+    calls
+        .iter()
+        .position(|v| *v == verb)
+        .unwrap_or_else(|| panic!("{verb} never called: {calls:?}"))
+}
+
+/// `Some(Env)` when `PG_TEMPORAL_ADDR` is set, else `None` so the caller can
+/// print the skip line and return. Panics instead of skipping under `CI`.
+async fn env_or_skip(name: &str, script: &str) -> Option<Env> {
+    let ci = std::env::var("CI").ok();
+    let addr = temporal_addr_of(ci.as_deref(), std::env::var("PG_TEMPORAL_ADDR").ok())?;
+    Some(Env::new(&addr, name, script, true).await)
 }
 
 /// Like `env_or_skip`, but the worker is built and held: nothing polls until
 /// `Env::resume`, so a workflow and its signals queue up first.
 async fn env_or_skip_paused(name: &str, script: &str) -> Option<Env> {
-    match std::env::var("PG_TEMPORAL_ADDR") {
-        Ok(addr) if !addr.is_empty() => Some(Env::new(&addr, name, script, false).await),
-        _ => None,
-    }
+    let ci = std::env::var("CI").ok();
+    let addr = temporal_addr_of(ci.as_deref(), std::env::var("PG_TEMPORAL_ADDR").ok())?;
+    Some(Env::new(&addr, name, script, false).await)
 }
 
 /// Await the card result under the shared deadline, then record its history.
@@ -2569,13 +2588,15 @@ async fn fresh_run_records_observe_patch_and_parks_with_observation() {
             vec![card.to_string()],
             "observe activity must query card_state before park"
         );
+        // Invariant I1: the verb log proves card_state precedes park.
+        let calls = env.keeper.calls();
+        assert!(
+            verb_pos(&calls, "card_state") < verb_pos(&calls, "park"),
+            "{calls:?}"
+        );
 
-        // Invariant I1: park carries the observed state ["waiting"], NOT the live-set fallback.
-        let execs = env.keeper.execs();
-        let park_exec = execs
-            .iter()
-            .find(|e| e.expected_state.is_some())
-            .expect("park must carry expected_state");
+        // Invariant I1: the park entry carries ["waiting"], not the fallback.
+        let park_exec = env.keeper.park_execs().last().expect("park exec").clone();
         assert_eq!(
             park_exec.expected_state,
             Some(vec!["waiting".to_string()]),
@@ -2763,4 +2784,102 @@ async fn stale_state_refusal_reobserves_at_most_twice() {
         env.stop();
     })
     .await;
+}
+
+/// D4 / I3c: a park error that is not the stale state-CAS refusal (403, 422,
+/// transport) needs no fresh observation, so the workflow returns it at once:
+/// no re-observe, and the initial observe is the only `card_state` call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn non_stale_park_errors_do_not_reobserve() {
+    in_local(async {
+        let Some(env) = env_or_skip("park-errors", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_card_state(Some("waiting"));
+        let scenarios = [
+            ("403", KeeperError::Status(403), 1, "403"),
+            ("422", KeeperError::Status(422), 1, "422"),
+            (
+                "transport",
+                KeeperError::Http("connection refused".into()),
+                5,
+                "keeper request failed",
+            ),
+        ];
+        for (name, kerr, attempts, needle) in scenarios {
+            env.keeper.set_park_error(Some(kerr));
+            let base_reads = env.keeper.card_state_calls().len();
+            let base_calls = env.keeper.calls().len();
+            let card = format!("e2e-park-error-{name}");
+            let id = format!("e2e-park-error-{name}-{}", unique());
+            let handle = env.start(&id, env.claim(&card, &["out.txt"], "true")).await;
+            let err = tokio::time::timeout(
+                RESULT_TIMEOUT,
+                handle.get_result(WorkflowGetResultOptions::default()),
+            )
+            .await
+            .expect("card result within 120s")
+            .expect_err("a non-stale park error must fail the workflow, never re-observe");
+            let temporalio_client::errors::WorkflowGetResultError::Failed(failure) = err else {
+                panic!("expected a failed workflow for park {name}, got: {err:?}");
+            };
+            // The error that returned is the park's own error.
+            assert!(
+                format!("{failure:?}").contains(needle),
+                "{name}: {failure:?}"
+            );
+            // I3c: the initial observe is the only read (0 extra card_state
+            // calls) and precedes the park; one park command, no re-observe.
+            let calls = env.keeper.calls();
+            let calls = &calls[base_calls..];
+            assert!(
+                verb_pos(calls, "card_state") < verb_pos(calls, "park"),
+                "{calls:?}"
+            );
+            assert_eq!(
+                env.keeper.card_state_calls().len() - base_reads,
+                1,
+                "{name}: 0 extra reads"
+            );
+            assert_eq!(
+                scheduled_activities(&handle, "observe").await,
+                1,
+                "{name}: re-observed"
+            );
+            assert_eq!(
+                scheduled_activities(&handle, "CardActivities::park").await,
+                1,
+                "{name}: parks"
+            );
+            // Keeper-level attempts: at once (403/422) vs the bounded
+            // transient retries a transport failure spends first (D1).
+            assert_eq!(
+                calls.iter().filter(|v| **v == "park").count(),
+                attempts,
+                "{name}: attempts"
+            );
+            assert!(
+                env.keeper.parked().is_empty(),
+                "{name}: no failed park lands"
+            );
+        }
+        env.stop();
+    })
+    .await;
+}
+
+/// I6' / D6: e2e never silently skips in CI. Outside CI a missing
+/// `PG_TEMPORAL_ADDR` is still a skip and a set one is used; under `CI` the
+/// missing address panics (a skip in CI is a failure).
+#[test]
+#[should_panic(expected = "PG_TEMPORAL_ADDR unset under CI")]
+fn ci_without_temporal_addr_panics_instead_of_skipping() {
+    assert_eq!(temporal_addr_of(None, None), None);
+    assert_eq!(temporal_addr_of(None, Some(String::new())), None);
+    assert_eq!(
+        temporal_addr_of(None, Some("http://x".into())),
+        Some("http://x".into())
+    );
+    temporal_addr_of(Some("1"), None);
 }
