@@ -74,6 +74,9 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
         )
         assert factory.call_count == 0
         assert record["status"] == "failed"
+        assert record["attempts"][0]["skip_reason"].startswith(
+            "not_served_on_host: gateway_base_url_unresolved"
+        )
         assert "not_served_on_host" in (record.get("error") or "")
 
     asyncio.run(run())
@@ -308,5 +311,62 @@ def test_add_host_keys_not_called_on_refusal(tmp_path, monkeypatch):
         assert calls == []
         assert factory.call_count == 0
         assert runner._child_envs == {}
+
+    asyncio.run(run())
+
+
+def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch):
+    """F4: no-URL refusal maps to not_served_on_host and falls through (I6).
+
+    End to end through the real service path (spawn_service dispatch loop,
+    real runner.spawn, mocked process factory): leg 1 is gateway-keyed with
+    no base URL anywhere, leg 2 launches and completes.
+    """
+    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner import resolver
+    from plangraph.spawner.service import SpawnService
+
+    async def no_skip(row, *, env=None):
+        return None
+
+    monkeypatch.setattr(resolver, "host_skip_reason_async", no_skip)
+    mimo_leg = next(l for l in DEFAULT_LEGS if l.model == "mimo/mimo-v2.6-flash")
+    agy_leg = next(l for l in DEFAULT_LEGS if l.model == "gemini-3.8-flash")
+    plan = SpawnPlan(legs=(mimo_leg, agy_leg), skipped=(), p_source="test",
+                     review_seats=(), reasons=())
+
+    def route(self, *args, **kwargs):
+        return plan
+
+    monkeypatch.setattr(SpawnService, "_route", route)
+    launched = []
+
+    async def fake_factory(exe, *args, **kwargs):
+        launched.append(exe)
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"ok", b""))
+        proc.returncode = 0
+        proc.pid = 999
+        return proc
+
+    runner = SpawnerRunner(process_factory=fake_factory)
+    service = spawn_service(runner, tmp_path)
+
+    async def run():
+        record = await service.spawn(card={"estimate_tokens": 1000}, prompt="task",
+                                     wait_seconds=None)
+        assert len(launched) == 1  # only the second leg launches a process
+        assert record["status"] == "completed"
+        first, second = record["attempts"]
+        assert first["leg"]["id"] == mimo_leg.id
+        assert first["status"] == "failed"
+        assert first["skip_reason"].startswith(
+            "not_served_on_host: gateway_base_url_unresolved"
+        )
+        assert second["leg"]["id"] == agy_leg.id
+        assert second["status"] == "completed"
+        assert "render_refused" in [e["event"] for e in record.get("events", [])]
 
     asyncio.run(run())
