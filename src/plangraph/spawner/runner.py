@@ -324,8 +324,8 @@ class SpawnerRunner:
                 job.end_time = time.time()
                 return job
 
-            import shutil
-            resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            from plangraph.routing_support.clients import client_binary
+            resolved_exe = client_binary(cmd[0], child_env) or cmd[0]
             self._adapter_tokens[job_id] = object()
             try:
                 proc = await self.process_factory(

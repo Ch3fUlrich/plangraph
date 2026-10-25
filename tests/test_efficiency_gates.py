@@ -514,3 +514,21 @@ def test_design_role_takes_strongest_non_claude_leg():
     plan = routing.plan_spawn({"estimate_tokens": 20000}, role="design")
     assert tuple(leg.id for leg in plan.legs) == DESIGN_ORDER
     assert not any(leg.claude_family for leg in plan.legs)
+
+
+def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
+    # D-2755: a spawned child without the login PATH still finds its client.
+    from plangraph.routing_support import clients
+    bin_dir = tmp_path / "node" / "v24" / "bin"
+    bin_dir.mkdir(parents=True)
+    exe = bin_dir / "opencode"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    env = {"PATH": str(tmp_path / "empty"), clients.CLIENT_BINS_ENV: str(tmp_path / "none.json")}
+    assert clients.client_binary("opencode", env) is None
+    monkeypatch.setattr(clients, "CLIENT_BIN_DIRS", (str(tmp_path / "node" / "*" / "bin"),))
+    assert clients.client_binary("opencode", env) == str(exe)
+    monkeypatch.setattr(clients, "CLIENT_BIN_DIRS", ())
+    (tmp_path / "bins.json").write_text(json.dumps({"opencode": str(exe)}))
+    env[clients.CLIENT_BINS_ENV] = str(tmp_path / "bins.json")
+    assert clients.client_binary("opencode", env) == str(exe)

@@ -90,6 +90,10 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     unknown.cache_clear = probe.cache_clear
     if request.node.get_closest_marker('real_probe') is None:
         monkeypatch.setattr(resolver, 'served_models', unknown)
+    # D-2755: client binaries come only from PATH in tests (no host file, no install dirs).
+    from plangraph.routing_support import clients as _clients
+    monkeypatch.setenv(_clients.CLIENT_BINS_ENV, os.devnull)
+    monkeypatch.setattr(_clients, 'CLIENT_BIN_DIRS', ())
     original_which = shutil.which
     monkeypatch.setattr(shutil, 'which', lambda command, *a, **kw:
                         (original_which(command, *a, **kw) or command)
