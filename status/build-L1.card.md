@@ -8,7 +8,7 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | r9 88bc89d4: Haiku+dsfree delta FAIL. r10 = ROUND 3/3 brief scope-r10.md (group A store_oversight/auth/store, group B db.py) queued on workst-L1-autoos (lane/keeper-scope-r10a, -r10b from 88bc89d4; behind its 3-writer cap). Next: merge both into r6, keeper tests, delta seat (Haiku + non-Claude), pass -> GO-REQ round 3; fail -> replan |
 | #183 ROUTER-LIVENESS-WATCHDOG | MERGED 31331e80; routing 0e3f3045; liveness-watchdog@router.timer ENABLED 06:08Z (drop-in -> pinned live-liveness 31331e80, keep). Close requested from routing. Rollback: systemctl --user disable --now liveness-watchdog@router.timer |
 | LIVENESS-WATCHDOG-LOWS (D-2705) | writer mimo-pro local (seats/liveness-lows.run.txt); no re-seat -> CI -> mergepath |
-| #184 HARDENING (3 keys) | mergepath at a8efa6d5 (tmp/mp184.log); then evidence merge sha to TEST-SPEED-AFFECTED + RUN-EXIT-NOTIFY, submit 3 |
+| #184 HARDENING (3 keys) | main-merge conflict vs #185 -> agy writer (hardening-merge185.md); Haiku delta seat, CI, mergepath, evidence, submit 3 |
 | RT-P1-EXEC-OWNERSHIP-SQ12 (HIGH, D-2703) | writer workst lane/exec-own-sq12; then 2 seats, GO-REQ; parent stays in_review |
 | PG-L3-MAX-TOKENS #187 | r2 writer mimo-pro local; CI red import guard -> r3 move SEED_MODELS to plangraph/catalog_data.py (decision a); Haiku delta seat; mergepath |
 | #166 KEEPER-PG-RECONNECT | after #164 |
