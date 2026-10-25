@@ -284,7 +284,8 @@ def build_opencode_command(
     extra_flags: Sequence[str] = (),
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
-    cmd = ["opencode", "run", "--model", model_or_combo]
+    # --standalone: the shared background service ignores the child's config overlay
+    cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
     if extra_flags:
@@ -338,7 +339,7 @@ def build_standalone_fallback_command(
         return cmd
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
-    cmd = ["opencode", "run"]
+    cmd = ["opencode", "run", "--standalone"]
     if model:
         cmd.extend(["--model", model])
     cmd.append(prompt)
