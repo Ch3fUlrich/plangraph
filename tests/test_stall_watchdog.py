@@ -107,3 +107,12 @@ def test_scheduler_installation(tmp_path, host):
     bootstrap = Path('deploy/bootstrap.' + ('sh' if host == 'linux' else 'ps1')).read_text()
     assert 'plangraph.spawner.stall_watchdog' in bootstrap
     assert 'install' in bootstrap
+
+
+def test_tick_keeper_unconfigured_skips_with_one_warning(tmp_path, monkeypatch):
+    from plangraph.keeper.cli_verbs import MissingKeeperURL
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
+    monkeypatch.setattr(w, "read_runs", lambda state: [])
+    monkeypatch.setattr(w, "read_claims", lambda: (_ for _ in ()).throw(MissingKeeperURL()))
+    assert w.main(["tick"]) == 0
+    assert (tmp_path / "watchdog/status.txt").read_text().count("keeper skipped MissingKeeperURL") == 1
