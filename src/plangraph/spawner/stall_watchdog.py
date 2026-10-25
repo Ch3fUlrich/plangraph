@@ -79,6 +79,11 @@ def read_runs(state):
             record = json.loads(path.read_text(encoding='utf-8'))
             if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
                 raise ValueError('invalid run record')
+            completion = record.get('completion') if isinstance(record.get('completion'), dict) else {}
+            if completion.get('parent_session') and not record.get('parent_session'):
+                record['parent_session'] = completion['parent_session']
+            if completion.get('item') and not record.get('item_key'):
+                record['item_key'] = completion['item']
             if (path.parent / 'parent.delivered').exists():
                 record['_completion_acknowledged'] = True
             runs.append(record)
