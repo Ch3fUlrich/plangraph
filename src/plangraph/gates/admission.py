@@ -46,7 +46,7 @@ def _card_findings(card):
         out.append({"id": str(raw.get("id") or f"card-F{n}"), "severity": raw.get("severity", "?"),
                     "text": text, "files": raw.get("files") or ()})
     if card.get("seat_outputs"):
-        out.extend(F.findings_from_files(card["seat_outputs"]))
+        out.extend(F.findings_from_files(card["seat_outputs"], card=card))
     return out
 
 

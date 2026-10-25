@@ -74,6 +74,8 @@ class JobInfo:
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
+    liveness: str | None = None
+    exit_class: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -424,7 +426,16 @@ class SpawnerRunner:
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
-            job.status = "completed" if exit_code == 0 else "failed"
+            if job.liveness:
+                from .liveness import LIVENESS_TO_EXIT_CLASS
+                job.exit_class = LIVENESS_TO_EXIT_CLASS.get(job.liveness)
+                job.status = "failed"
+            elif job.exit_class == "cancelled" or job.status == "cancelled":
+                job.exit_class = "cancelled"
+                job.status = "cancelled"
+            else:
+                job.exit_class = "ok" if exit_code == 0 else "worker_crash"
+                job.status = "completed" if exit_code == 0 else "failed"
 
             # Free text is child-controlled, including plausible provider headers.
             # Absence of an authenticated adapter witness must remain explicit.
@@ -432,9 +443,17 @@ class SpawnerRunner:
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
             if job_id in self.jobs:
-                self.jobs[job_id].status = "cancelled"
-                self.jobs[job_id].end_time = time.time()
-                self.jobs[job_id].exit_code = 1
+                job = self.jobs[job_id]
+                if job.liveness:
+                    from .liveness import LIVENESS_TO_EXIT_CLASS
+                    job.exit_class = LIVENESS_TO_EXIT_CLASS.get(job.liveness)
+                    job.status = "failed"
+                else:
+                    job.status = "cancelled"
+                    job.exit_class = "cancelled"
+                job.end_time = time.time()
+                if job.exit_code is None:
+                    job.exit_code = 1
         except Exception as exc:
             job = self.jobs[job_id]
             job.status = 'failed'
@@ -488,7 +507,7 @@ class SpawnerRunner:
 
         return {'ok': True, 'steered': True, 'error': None}
 
-    async def cancel(self, job_id: str) -> dict[str, Any]:
+    async def cancel(self, job_id: str, liveness: str | None = None) -> dict[str, Any]:
         """Cancel a running job."""
         if not isinstance(job_id, str):
             from plangraph.routing_errors import ParameterRefused
@@ -496,6 +515,13 @@ class SpawnerRunner:
         if job_id not in self.jobs:
             raise KeyError(f"Job {job_id} not found")
         job = self.jobs[job_id]
+
+        if liveness is not None:
+            job.liveness = liveness
+            from .liveness import LIVENESS_TO_EXIT_CLASS
+            job.exit_class = LIVENESS_TO_EXIT_CLASS.get(liveness)
+        else:
+            job.exit_class = "cancelled"
 
         proc = self._processes.get(job_id)
         if proc:
@@ -508,10 +534,10 @@ class SpawnerRunner:
         if task and not task.done():
             task.cancel()
 
-        job.status = "cancelled"
+        job.status = "cancelled" if liveness is None else "failed"
         self._nonces.pop(job_id, None)
         job.end_time = time.time()
-        return {"job_id": job_id, "status": "cancelled"}
+        return {"job_id": job_id, "status": job.status, "exit_class": job.exit_class, "liveness": job.liveness}
 
 
 async def kill_process_tree(pid, *, platform=None, command_factory=None):

@@ -128,6 +128,7 @@ def main(argv=None):
     p = commands.add_parser('wait')
     p.add_argument('run_id')
     p.add_argument('--timeout', type=float)
+    p.add_argument('--json', action='store_true')
     for verb in ('result', 'status', 'cancel'):
         commands.add_parser(verb).add_argument('run_id')
     args = parser.parse_args(argv)

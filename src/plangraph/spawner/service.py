@@ -86,10 +86,26 @@ class SpawnService:
                 a.get('skip_reason') or 'harness failed' for a in record.get('attempts', [])) or 'harness failed'
         if record.get('error'):
             record['error'] = '; '.join(p[:300] for p in clean(record['error']).split('; '))[:2000]
-        for stream in ('stdout_tail', 'stderr_tail'):
-            if stream in record:
-                record[stream] = clean(record[stream]).encode()[-4096:].decode('utf-8', errors='ignore')
+        run_dir = self.state / 'runs' / record['run_id']
+        job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
+        for s in ('stdout', 'stderr'):
+            t = clean(record.get(s) if record.get(s) is not None else (getattr(job, s, '') if job else record.get(f'{s}_tail', '')))
+            raw = t.encode('utf-8', errors='replace')
+            if len(raw) > 2097152:
+                record['output_cut'] = True
+                content = raw[:1048576] + b"\n[... output cut ...]\n" + raw[-1048576:]
+            else:
+                content = raw
+            atomic_write_private(run_dir / f"{s}.log", content.decode('utf-8', errors='replace'))
+            record[f'{s}_tail'] = t.encode()[-4096:].decode('utf-8', errors='ignore')
+            record.pop(s, None)
+        record.setdefault('output_cut', False)
+        record['stdout_path'] = record['stdout_log'] = str(run_dir / 'stdout.log')
+        record['stderr_path'] = record['stderr_log'] = str(run_dir / 'stderr.log')
         atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
+        res = {k: record.get(k) for k in ('status', 'exit_code', 'exit_class', 'liveness', 'attempts')}
+        res['output_cut'] = bool(record.get('output_cut', False))
+        atomic_write_private(run_dir / 'result.json', json.dumps(res, indent=2))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
@@ -195,6 +211,11 @@ class SpawnService:
             raise
 
     async def _continue_writer(self, record, output):
+        if (record.get('liveness') or
+            record.get('exit_class') == 'cancelled' or
+            record.get('output_cut') or
+            record.get('status', 'completed') != 'completed'):
+            return
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
         reason = ('nonzero_exit' if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed' else
@@ -344,6 +365,15 @@ class SpawnService:
                         writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                         stdout_tail=record.get('stdout_tail', '') + job.stdout,
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
+                    if job.liveness:
+                        record['liveness'] = job.liveness
+                        record['exit_class'] = job.exit_class
+                    elif job.status == 'cancelled':
+                        record['exit_class'] = 'cancelled'
+                        record['liveness'] = None
+                    elif job.status in ('completed', 'dry_run'):
+                        record.setdefault('exit_class', 'ok')
+                        record.setdefault('liveness', None)
                     self._save(record)
                     if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:
@@ -374,12 +404,32 @@ class SpawnService:
                 pass
         return self.result(record['run_id'])
 
+    async def wait(self, run_id, timeout=None):
+        if timeout is not None and timeout < 0:
+            raise ValueError('timeout must be nonnegative')
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            record = self.result(run_id)
+            if record.get('ended') is not None and record['status'] != 'running':
+                return record
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('run wait timed out: ' + run_id)
+            await asyncio.sleep(.02)
+
     async def cancel(self, run_id):
         record = self.result(run_id)
         if record.get('job_id') in self.runner.jobs:
             await self.runner.cancel(record['job_id'])
+            job = self.runner.jobs[record['job_id']]
+            record['exit_class'] = job.exit_class
+            record['liveness'] = job.liveness
         elif record['status'] == 'running' and record.get('pid'):
             await self.runner.tree_killer(record['pid'])
+            record['exit_class'] = 'cancelled'
+            record['liveness'] = None
+        else:
+            record['exit_class'] = 'cancelled'
+            record['liveness'] = None
         task = self.tasks.get(run_id)
         if task and not task.done():
             task.cancel()

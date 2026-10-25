@@ -5,6 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+_src = str(ROOT / "src")
+sys.path = [_src] + [p for p in sys.path if p != _src and not p.endswith("/tmp/spawn4a/src")]
+for _m in list(sys.modules):
+    if _m == "plangraph" or _m.startswith("plangraph."):
+        del sys.modules[_m]
+
 import pytest
 
 from keeper_util import World, defn, seed, to_claimed, to_in_review
@@ -17,7 +24,6 @@ from plangraph.keeper.stall import stall_alarms
 from plangraph.review.verdict import judge
 from plangraph.routing_errors import SpawnRefused
 
-ROOT = Path(__file__).resolve().parent.parent
 FIX = {"kind": "fix", "note": "seat round findings", "findings": ["F1", "F2"]}
 DESIGN = {"kind": "design", "ref": "docs/design/X.md@abc", "author_model": "claude-opus-5-5",
           "reviewed_by": "deepseek-direct-flash run-1", "invariants": "| I1 | never fail open |"}
@@ -312,7 +318,7 @@ def test_numstat_counting_and_slices():
     assert lane.size_verdict(900, 30, slice_budget=1000)[0] == "ok"
     assert lane.size_verdict(1100, 30, slice_budget=1000)[0] == "fail"
     design = (ROOT / "docs/design/PG-EFFICIENCY-GATES.md").read_text()
-    assert lane.design_slices(design) == {1: 3000, 2: 600, 3: 450}
+    assert lane.design_slices(design) == {1: 3000, 2: 600, 3: 450, 4: 400, 5: 300, 6: 400, 7: 400, 8: 400}
     assert lane.parse_slice_trailer("docs/design/PG-EFFICIENCY-GATES.md#1") == (
         "docs/design/PG-EFFICIENCY-GATES.md", 1)
 
@@ -624,4 +630,150 @@ def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
     (tmp_path / "bins.json").write_text(json.dumps({"opencode": str(exe)}))
     env[clients.CLIENT_BINS_ENV] = str(tmp_path / "bins.json")
     assert clients.client_binary("opencode", env) == str(exe)
+
+
+# ------------------------------------------------------------ Slice 4a liveness plumbing
+def test_spawn_limits_defaults_roles_and_env(monkeypatch):
+    from plangraph.settings import SpawnLimits, spawn_limits
+    for role in ("implement", "fix", "writer"):
+        lim = spawn_limits(role)
+        assert (lim.wall_cap_min, lim.max_cap_min) == (90, 180)
+    for role in ("review", "seat"):
+        lim = spawn_limits(role)
+        assert (lim.wall_cap_min, lim.max_cap_min) == (45, 60)
+    for role in ("design", "default", None):
+        lim = spawn_limits(role)
+        assert (lim.wall_cap_min, lim.max_cap_min) == (60, 120)
+    assert lim.stall_min == 15 and lim.stall_cpu_pct == 2 and lim.floor_mb == 2000
+    assert lim.max_runs == 4 and lim.require_principal is False
+    assert lim.ignore == {}
+    assert "opencode" in lim.truncation and "opencode" in lim.provider_protocol
+    with pytest.raises(Exception):
+        lim.wall_cap_min = 100
+    monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps({"writer": {"wall_cap_min": 10}}))
+    assert spawn_limits("implement").wall_cap_min == 10
+    assert spawn_limits("implement").max_cap_min == 180
+
+
+@pytest.mark.parametrize("override", [
+    {"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}},
+    {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}},
+    {"writer": {"truncation": {"opencode": [123]}}},
+])
+def test_spawn_limits_refusals(monkeypatch, override):
+    from plangraph.settings import SettingsError, spawn_limits
+    monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps(override))
+    with pytest.raises(SettingsError):
+        spawn_limits("writer")
+
+
+def test_liveness_exit_vocabulary():
+    from plangraph.keeper.schema import EXIT_CLASSES
+    from plangraph.spawner.liveness import LIVENESS_TO_EXIT_CLASS, LIVENESS_VALUES, exit_class_for_liveness
+    assert set(LIVENESS_TO_EXIT_CLASS) == set(LIVENESS_VALUES)
+    assert exit_class_for_liveness(None) is None
+    for liv, ec in LIVENESS_TO_EXIT_CLASS.items():
+        assert ec in EXIT_CLASSES, f"{ec} not in EXIT_CLASSES"
+        assert exit_class_for_liveness(liv) == ec
+    assert LIVENESS_TO_EXIT_CLASS["stalled"] == "stall"
+    assert LIVENESS_TO_EXIT_CLASS["capped"] == "timeout"
+    assert LIVENESS_TO_EXIT_CLASS["attempt_timeout"] == "timeout"
+    assert LIVENESS_TO_EXIT_CLASS["truncated"] == "worker_crash"
+    assert LIVENESS_TO_EXIT_CLASS["provider_protocol"] == "worker_crash"
+    assert LIVENESS_TO_EXIT_CLASS["oom"] == "worker_crash"
+    assert LIVENESS_TO_EXIT_CLASS["memguard"] == "outage"
+    assert LIVENESS_TO_EXIT_CLASS["killed"] == "outage"
+    assert LIVENESS_TO_EXIT_CLASS["host_full"] == "outage"
+
+
+def test_run_result_refusals_and_findings(tmp_path):
+    from plangraph.spawner.liveness import LIVENESS_VALUES
+    pass_text = "F1 [HIGH] defect\nVERDICT: PASS\n"
+    for liv in LIVENESS_VALUES:
+        assert F.failure_reason(pass_text, liveness=liv) == f"run liveness {liv}"
+        assert F.seat_outcome(pass_text, liveness=liv)[0] is None
+        assert F.first_review({"a": (pass_text, {"liveness": liv}), "b": pass_text})[0] is None
+    for kw, exp in [({"exit_class": "cancelled"}, "run cancelled"), ({"output_cut": True}, "output cut")]:
+        assert F.failure_reason(pass_text, **kw) == exp
+        assert F.seat_outcome(pass_text, **kw)[0] is None
+        assert F.first_review({"a": (pass_text, kw), "b": pass_text})[0] is None
+
+    run_dir, seat_file = tmp_path / "run-1", tmp_path / "run-1" / "seat.out"
+    run_dir.mkdir(); seat_file.write_text(pass_text)
+    for bad in ({"liveness": "stalled"}, {"exit_class": "cancelled"}, {"output_cut": True}, {"status": "failed"}):
+        (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok", **bad}))
+        assert F.findings_from_files([seat_file]) == []
+    (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
+    assert len(F.findings_from_files([seat_file])) == 1
+
+    standalone = tmp_path / "other.out"
+    standalone.write_text(pass_text)
+    for bad in ({"liveness": "stalled"}, {"output_cut": True}, {"exit_class": "cancelled"}, {"status": "failed"}):
+        assert F.findings_from_files([standalone], card={"seat_classes": {"other": {"status": "completed", **bad}}}) == []
+    assert len(F.findings_from_files([standalone], card={"seat_classes": {"other": {"status": "completed"}}})) == 1
+
+    from plangraph.spawner.service import SpawnService
+    serv = SpawnService(state=tmp_path)
+    called = []
+    serv._spawn = lambda **kw: called.append(kw)
+    for bad in ({"liveness": "stalled"}, {"exit_class": "cancelled"}, {"output_cut": True}, {"status": "failed"}):
+        asyncio.run(serv._continue_writer(dict(run_id="r", role="implement", exit_code=0, cwd=str(tmp_path), **bad), "Remaining gaps: x"))
+    assert called == []
+
+    from tools.lane_gates import seats
+    s1, s2 = tmp_path / "s1", tmp_path / "s2"
+    s1.mkdir(); s2.mkdir()
+    for s in (s1, s2):
+        (s / "stdout.log").write_text("VERDICT: PASS\n")
+        (s / "result.json").write_text(json.dumps({"status": "completed"}))
+    assert seats([str(s1), str(s2)]) == 0
+    (s1 / "result.json").write_text(json.dumps({"status": "completed", "output_cut": True}))
+    assert seats([str(s1), str(s2)]) == 3
+
+
+def test_output_on_disk_under_and_over_2mb(tmp_path):
+    from plangraph.spawner.service import SpawnService
+    serv = SpawnService(state=tmp_path)
+    rec1 = dict(run_id="run-u", status="completed", exit_code=0, stdout_tail="small out", stderr_tail="small err")
+    serv._save(rec1)
+    run_dir = tmp_path / "runs" / "run-u"
+    assert (run_dir / "stdout.log").read_text() == "small out"
+    assert json.loads((run_dir / "result.json").read_text())["output_cut"] is False
+    assert rec1["stdout_path"] == str(run_dir / "stdout.log")
+
+    big_text = "H" * 1048576 + "M" * 500000 + "T" * 1048576
+    rec2 = dict(run_id="run-o", status="completed", exit_code=0, stdout_tail=big_text)
+    serv._save(rec2)
+    run_dir2 = tmp_path / "runs" / "run-o"
+    assert rec2["output_cut"] is True and json.loads((run_dir2 / "result.json").read_text())["output_cut"] is True
+    saved = (run_dir2 / "stdout.log").read_text()
+    assert saved.startswith("H" * 1048576) and saved.endswith("T" * 1048576) and "[... output cut ...]" in saved
+    assert len(rec2["stdout_tail"].encode()) <= 4096
+
+
+def test_cancel_with_class_racing_minus_9():
+    from plangraph.spawner.runner import SpawnerRunner
+    runner = SpawnerRunner()
+    async def run():
+        class FakeProc:
+            pid, returncode = 999, -9
+            async def communicate(self): return b"", b""
+        proc = FakeProc()
+        job = await runner.spawn("t", model_or_combo="omniroute/cx-gpt-6.1-sol", dry_run=True)
+        job.status = "running"; runner.jobs[job.job_id] = job; runner._processes[job.job_id] = proc
+        task = asyncio.create_task(runner._monitor_process(job.job_id, proc, "t"))
+        runner._tasks[job.job_id] = task
+        await runner.cancel(job.job_id, liveness="capped")
+        await asyncio.gather(task, return_exceptions=True)
+        assert (job.liveness, job.exit_class, job.status) == ("capped", "timeout", "failed")
+
+        job2 = await runner.spawn("t2", model_or_combo="omniroute/cx-gpt-6.1-sol", dry_run=True)
+        job2.status = "running"; runner.jobs[job2.job_id] = job2; runner._processes[job2.job_id] = proc
+        task2 = asyncio.create_task(runner._monitor_process(job2.job_id, proc, "t2"))
+        runner._tasks[job2.job_id] = task2
+        await runner.cancel(job2.job_id)
+        await asyncio.gather(task2, return_exceptions=True)
+        assert (job2.liveness, job2.exit_class, job2.status) == (None, "cancelled", "cancelled")
+    asyncio.run(run())
+
 

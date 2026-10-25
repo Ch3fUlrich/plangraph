@@ -18,6 +18,7 @@ Exit 0 pass (warnings printed), 1 a gate failed (seats: changes requested),
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -96,7 +97,18 @@ def seats(paths):
     outputs = {}
     for path in paths:
         try:
-            outputs[Path(path).stem] = Path(path).read_text("utf-8", "replace")
+            p = Path(path)
+            file_path = p / "stdout.log" if p.is_dir() else p
+            res_file = (p if p.is_dir() else p.parent) / "result.json"
+            stem = p.name if p.is_dir() else p.stem
+            raw = file_path.read_text("utf-8", "replace")
+            if res_file.is_file():
+                try:
+                    outputs[stem] = (raw, json.loads(res_file.read_text("utf-8")))
+                except Exception:
+                    outputs[stem] = raw
+            else:
+                outputs[stem] = raw
         except OSError as exc:
             print(f"lane-gates: seats: cannot read {path}: {type(exc).__name__}", file=sys.stderr)
             return 2

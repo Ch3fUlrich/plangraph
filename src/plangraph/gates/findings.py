@@ -138,9 +138,15 @@ def blocking(findings):
     return [f for f in findings if f["severity"] in BLOCKING]
 
 
-def failure_reason(text, status=None, is_error=False):
+def failure_reason(text, status=None, is_error=False, exit_class=None, liveness=None, output_cut=False):
     """Why a seat reply carries no verdict (re-run it), or ``None``."""
-    if status not in (None, "completed", "succeeded", "ok", "stop", "end_turn"):
+    if liveness:
+        return f"run liveness {liveness}"
+    if exit_class == "cancelled":
+        return "run cancelled"
+    if output_cut:
+        return "output cut"
+    if status is not None and status not in ("completed", "succeeded", "ok", "stop", "end_turn"):
         return f"seat run {status}"
     if is_error:
         return "seat harness reported is_error"
@@ -153,7 +159,7 @@ def _body_len(text):
     return len("".join(l for l in text.splitlines() if not _VERDICT_LINE.match(l)).strip())
 
 
-def seat_outcome(raw, verdict=None, status=None, seat="seat"):
+def seat_outcome(raw, verdict=None, status=None, seat="seat", exit_class=None, liveness=None, output_cut=False):
     """``(outcome, reason, findings)``; outcome is ``changes``, ``pass`` or ``None``.
 
     *raw* is the seat output (plain text or a stream-json/JSON wrapper).
@@ -162,7 +168,7 @@ def seat_outcome(raw, verdict=None, status=None, seat="seat"):
     the seat, never count it as a pass.
     """
     text, is_error = seat_text(raw)
-    reason = failure_reason(text, status, is_error)
+    reason = failure_reason(text, status, is_error, exit_class=exit_class, liveness=liveness, output_cut=output_cut)
     if reason:
         return None, reason, []
     findings = parse_findings(text, seat)
@@ -188,31 +194,34 @@ FIRST_REVIEW_SEATS = 2
 
 
 def first_review(outputs, need=FIRST_REVIEW_SEATS):
-    """Round outcome over ``{seat: raw output}``: ``(outcome, reasons)``.
-
-    ``None`` (re-run) when fewer than *need* seats ran or any seat gave no
-    verdict (empty, failed, billing or fence output); else ``changes`` when any
-    seat asks for changes, else ``pass``.
-    """
     reasons, outcomes = [], []
-    for seat, raw in outputs.items():
-        outcome, reason, _ = seat_outcome(raw, seat=seat)
+    for seat, item in outputs.items():
+        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], dict):
+            r = item[1]
+            outcome, reason, _ = seat_outcome(item[0], status=r.get("status"), seat=seat,
+                                              exit_class=r.get("exit_class"), liveness=r.get("liveness"),
+                                              output_cut=bool(r.get("output_cut", False)))
+        else:
+            outcome, reason, _ = seat_outcome(item[0] if isinstance(item, tuple) else item, seat=seat)
         outcomes.append(outcome)
         reasons.append(f"{seat}: {outcome or 'no verdict'} ({reason})")
     if len(outputs) < need:
         return None, reasons + [f"{len(outputs)} seat(s), first review needs {need} with text"]
-    if None in outcomes:
-        return None, reasons
-    return ("changes" if "changes" in outcomes else "pass"), reasons
+    return (None if None in outcomes else ("changes" if "changes" in outcomes else "pass")), reasons
 
 
-def findings_from_files(paths):
-    """Findings of every seat output file; the id prefix is the file stem."""
+def findings_from_files(paths, card=None, seat_classes=None):
+    classes = seat_classes or ((card or {}).get("seat_classes") if isinstance(card, dict) else {}) or {}
     out = []
     for path in paths:
         p = Path(path)
-        text, _ = seat_text(p.read_text(encoding="utf-8", errors="replace"))
-        out.extend(parse_findings(text, p.stem))
+        fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
+        meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
+        if meta and (meta.get("liveness") or meta.get("exit_class") == "cancelled" or meta.get("output_cut") or meta.get("status") not in (None, "completed")):
+            continue
+        if fp.is_file():
+            text, _ = seat_text(fp.read_text("utf-8", "replace"))
+            out.extend(parse_findings(text, stem))
     return out
 
 

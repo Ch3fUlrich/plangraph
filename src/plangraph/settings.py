@@ -25,6 +25,59 @@ class SettingsError(ValueError):
     """Invalid named setting or settings file."""
 
 
+_LIMIT_MAPS = ('ignore', 'truncation', 'provider_protocol')
+_LIMIT_INTS = ('wall_cap_min', 'max_cap_min', 'stall_min', 'stall_cpu_pct', 'floor_mb', 'max_runs')
+_TRUNC_DEF = {"opencode": ["Response still truncated after two output token limit continuations"]}
+_PROTO_DEF = {"opencode": ["tool call delta is missing id or name"]}
+
+
+@dataclass(frozen=True)
+class SpawnLimits:
+    wall_cap_min: int
+    max_cap_min: int
+    stall_min: int = 15
+    stall_cpu_pct: int = 2
+    ignore: dict[str, list[str]] = field(default_factory=dict)
+    floor_mb: int = 2000
+    max_runs: int = 4
+    require_principal: bool = False
+    truncation: dict[str, list[str]] = field(default_factory=lambda: dict(_TRUNC_DEF))
+    provider_protocol: dict[str, list[str]] = field(default_factory=lambda: dict(_PROTO_DEF))
+
+    def __post_init__(self):
+        if any(type(getattr(self, n)) is not int or getattr(self, n) < 0 for n in _LIMIT_INTS):
+            raise SettingsError('spawn_limits: expected non-negative integers')
+        if type(self.require_principal) is not bool:
+            raise SettingsError('require_principal: expected boolean')
+        for n in _LIMIT_MAPS:
+            m = getattr(self, n)
+            if not isinstance(m, dict) or any(not isinstance(k, str) or not isinstance(v, list) or any(not isinstance(i, str) for i in v) for k, v in m.items()):
+                raise SettingsError(f'{n}: expected map of harness to list of strings')
+
+
+def spawn_limits(role: str | None = None, *, root=None) -> SpawnLimits:
+    cat = 'writer' if role in ('implement', 'fix', 'writer') else 'seat' if role in ('review', 'seat') else 'default'
+    base = {'writer': (90, 180), 'seat': (45, 60), 'default': (60, 120)}[cat]
+    vals = {'wall_cap_min': base[0], 'max_cap_min': base[1]}
+    data = _policy_data(root)
+    sec = dict((data or {}).get('spawn_limits') or {})
+    env = os.environ.get('PLANGRAPH_SPAWN_LIMITS')
+    if env:
+        try:
+            for k, v in json.loads(env).items():
+                sec[k] = {**sec.get(k, {}), **v} if isinstance(v, dict) else v
+        except Exception as exc:
+            raise SettingsError(f'PLANGRAPH_SPAWN_LIMITS: {exc}') from None
+    for k, v in sec.items():
+        if k not in ('writer', 'seat', 'default'):
+            raise SettingsError(f'{k}: unknown spawn_limits role')
+        if not isinstance(v, dict) or any(f not in SpawnLimits.__dataclass_fields__ for f in v):
+            raise SettingsError('unknown spawn_limits setting')
+    vals.update(sec.get(cat, {}))
+    return SpawnLimits(**vals)
+
+
+
 @dataclass
 class ReviewMethod:
     mode: Literal['batch', 'per-item'] = 'batch'
