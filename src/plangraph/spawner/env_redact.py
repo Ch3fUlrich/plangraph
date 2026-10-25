@@ -60,7 +60,12 @@ def redact_env_values(text, env):
         providers = json.loads(env.get('OPENCODE_CONFIG_CONTENT', '{}')).get('providers', {})
         for provider in providers.values():
             if isinstance(provider, dict):
-                names.update(n for n in provider.get('env', []) if isinstance(n, str))
+                # Same non-list-env rule as opencode_render: treat any non-list
+                # `env` as absent instead of letting TypeError abort the sweep
+                # and silently drop every collected name.
+                env_list = provider.get('env')
+                names.update(n for n in (env_list if isinstance(env_list, list) else ())
+                             if isinstance(n, str))
         names.update(re.findall(r'\{env:([A-Za-z_][A-Za-z0-9_]*)\}', json.dumps(providers)))
     except (ValueError, TypeError, AttributeError):
         pass

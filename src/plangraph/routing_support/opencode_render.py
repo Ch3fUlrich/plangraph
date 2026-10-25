@@ -24,6 +24,16 @@ def _is_nt() -> bool:
     return os.name == "nt"
 
 
+def _env_names(provider: dict[str, Any]) -> list[Any]:
+    """A provider block's env names; any non-list `env` is treated as absent.
+
+    H5 never-raise posture: `"env": null` (or any other non-list) must not make
+    `GATEWAY_KEY_NAME in ...` raise TypeError out of the render.
+    """
+    env = provider.get("env")
+    return env if isinstance(env, list) else []
+
+
 def _is_valid_url(url: str) -> bool:
     if not isinstance(url, str) or not url.strip():
         return False
@@ -82,7 +92,7 @@ def render_gateway_providers(
         return None
 
     prov_block = providers.get(provider_prefix)
-    has_gw_key = isinstance(prov_block, dict) and GATEWAY_KEY_NAME in prov_block.get("env", [])
+    has_gw_key = isinstance(prov_block, dict) and GATEWAY_KEY_NAME in _env_names(prov_block)
     if provider_prefix not in ("mimo", "omniroute") and not has_gw_key:
         return None
 
@@ -104,13 +114,13 @@ def render_gateway_providers(
     # Step 5: Fill missing env on gateway providers
     for p_name, p_val in providers.items():
         if isinstance(p_val, dict):
-            if p_name in ("mimo", "omniroute") or GATEWAY_KEY_NAME in p_val.get("env", []):
-                if "env" not in p_val or p_val["env"] is None:
+            if p_name in ("mimo", "omniroute") or GATEWAY_KEY_NAME in _env_names(p_val):
+                if not isinstance(p_val.get("env"), list):
                     p_val["env"] = [GATEWAY_KEY_NAME]
 
     if resolved_url:
         for p_val in providers.values():
-            if isinstance(p_val, dict) and GATEWAY_KEY_NAME in p_val.get("env", []):
+            if isinstance(p_val, dict) and GATEWAY_KEY_NAME in _env_names(p_val):
                 settings = p_val.setdefault("settings", {})
                 if isinstance(settings, dict):
                     settings["baseURL"] = resolved_url

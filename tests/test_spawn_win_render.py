@@ -247,3 +247,47 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
             assert sentinel not in record_file.read_text()
 
     asyncio.run(run())
+
+
+def test_render_null_env_treated_as_absent():
+    """F2 (H5): a provider with "env": null never raises and counts as absent."""
+    env = {
+        "OMNIROUTE_BASE_URL": "http://gw:20128",
+        "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
+            "mimo": {"env": None, "settings": {}},
+            "omniroute": {"env": {"weird": 1}, "settings": {}},
+            "custom": {"env": 7, "settings": {}},
+        }}),
+    }
+    reason = render_gateway_providers(env, "mimo/mimo-v2.6-pro")
+    assert reason is None
+    cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    # Gateway providers with a non-list env get the gateway key name filled in.
+    assert cfg["providers"]["mimo"]["env"] == ["AUTOOS_OMNIROUTE_KEY"]
+    assert cfg["providers"]["omniroute"]["env"] == ["AUTOOS_OMNIROUTE_KEY"]
+    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://gw:20128/v1"
+    assert cfg["providers"]["omniroute"]["settings"]["baseURL"] == "http://gw:20128/v1"
+    # A non-gateway provider is left untouched.
+    assert cfg["providers"]["custom"]["env"] == 7
+
+
+def test_render_non_gateway_model_with_null_env_no_raise():
+    """F2: the model-prefix gate itself must survive a non-list env block."""
+    env = {
+        "OMNIROUTE_BASE_URL": "http://gw:20128",
+        "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {"custom": {"env": None}}}),
+    }
+    assert render_gateway_providers(env, "custom/thing") is None
+
+
+def test_redact_env_values_null_env_provider_still_redacts():
+    """F2 sweep: a non-list env in one provider must not abort value redaction."""
+    from plangraph.spawner.env_redact import redact_env_values
+    env = {
+        "PLAIN_NAME": "sentinel-value-1234",
+        "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
+            "a": {"env": None},
+            "b": {"env": ["PLAIN_NAME"]},
+        }}),
+    }
+    assert "sentinel-value-1234" not in redact_env_values("x sentinel-value-1234 y", env)
