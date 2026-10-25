@@ -4,8 +4,8 @@ Runs inside ``pg render`` (no new service). Reads Omnigraph with a read-only tok
 item ``kg_refs`` through ``Supersedes`` to the current node, adds per-project knowledge (title + status only, no
 embeddings) and writes ``kg-export.json`` next to the page plus ``kg-export-status.json`` (dangling refs).
 
-Off without a token: ``PG_KG_URL`` or ``PG_KG_TOKEN_FILE`` unset, or the token file missing/empty -> writes
-``{"enabled": false}`` and exits 0. Any Omnigraph failure also exits 0 (the page must still render).
+Off without a URL; a configured URL without a usable token is a reported misconfiguration.
+Any Omnigraph failure still exits 0 during rendering (the page must still render).
 
 Env: ``PG_KG_URL`` (base URL), ``PG_KG_TOKEN_FILE`` (0600 file), ``PG_KG_GRAPHS`` (comma list of extra graph ids to
 export in full), ``PG_KG_STATUS_FILE`` (status path override). The token is never logged or put in a message.
@@ -405,7 +405,10 @@ def run(items, out_dir, env=None, transport=None):
         token = _read_token(env["PG_KG_TOKEN_FILE"]) if env.get("PG_KG_TOKEN_FILE") else None
         if not env.get("PG_KG_URL") or not token:
             _atomic_write(out_dir / EXPORT_NAME, json.dumps({"enabled": False}))
-            _atomic_write(status_path, json.dumps({"enabled": False, "generated": now}))
+            misconfig = bool(env.get("PG_KG_URL"))
+            _atomic_write(status_path, json.dumps({"enabled": False, "generated": now,
+                "ok": not misconfig, "error_class": "DisabledMisconfig" if misconfig else None,
+                "error_count": int(misconfig)}))
             return 0
         if transport is None:
             transport = OmnigraphClient(env["PG_KG_URL"], token)
@@ -413,6 +416,10 @@ def run(items, out_dir, env=None, transport=None):
         export, dangling, errors = build_export(
             items, transport, extra, deadline=time.monotonic() + DEADLINE_S)
         ok = not errors
+        # Never persist transport exception messages: even a third-party transport may echo credentials.
+        errors = [{"graph": e["graph"], "error": "deadline" if e.get("error") == "deadline" else "KgError",
+                   "missing": bool(e.get("missing"))}
+                  for e in errors]
         kept = None
         prev = _read_enabled(out_dir / EXPORT_NAME)
         if prev is not None and any(not e.get("missing") for e in errors):  # transient failure: keep the last good export
@@ -422,17 +429,72 @@ def run(items, out_dir, env=None, transport=None):
             export, _n = mask_all(export)
             _atomic_write(out_dir / EXPORT_NAME, json.dumps(export, separators=(",", ":"), sort_keys=True))
         _atomic_write(status_path, json.dumps({
-            "enabled": True, "generated": now, "ok": ok, "errors": errors, "kept_previous": kept is not None,
+            "enabled": True, "generated": now, "ok": ok, "errors": errors,
+            "error_class": "KgError" if errors else None, "error_count": len(errors),
+            "kept_previous": kept is not None,
             "graphs": (kept or export).get("graphs", []), "nodes": len((kept or export).get("nodes", {})),
             "dangling": dangling, "unresolved_graphs": (kept or export).get("unresolved_graphs", [])},
             indent=1, sort_keys=True))
     except Exception as exc:  # noqa: BLE001 - the export must never break the render
         print(f"kg-export: skipped ({type(exc).__name__})", file=sys.stderr)
+        try:
+            _atomic_write(status_path, json.dumps({"enabled": bool(env.get("PG_KG_URL")),
+                "generated": now, "ok": False, "error_class": type(exc).__name__, "error_count": 1}))
+        except Exception as status_exc:  # filesystem failure must not break the page either
+            print(f"kg-export: status write failed ({type(status_exc).__name__})", file=sys.stderr)
+    return 0
+
+
+def check(out_dir, max_age=7200, env=None):
+    """Check the last run before freshness: a retained good export cannot hide a failed run."""
+    env = os.environ if env is None else env
+    out_dir = Path(out_dir)
+    line = None
+    try:
+        status = json.loads(Path(env.get("PG_KG_STATUS_FILE") or out_dir / STATUS_NAME).read_text())
+        if not isinstance(status, dict):
+            raise ValueError
+    except (OSError, ValueError):
+        status = {"ok": False, "error_class": "InvalidStatus"}
+    if status.get("error_class") == "DisabledMisconfig":
+        line = "KG-EXPORT-DISABLED-MISCONFIG"
+    elif status.get("ok") is False:
+        # Only locally known class names are printable; status is untrusted input.
+        error = status.get("error_class")
+        allowed = {"KgError", "RuntimeError", "ValueError", "OSError", "PermissionError",
+                   "FileNotFoundError", "UnicodeDecodeError", "InvalidStatus", "TypeError"}
+        line = f"KG-EXPORT-FAILED {error if error in allowed else 'ExportError'}"
+    else:
+        try:
+            age = max(0, time.time() - (out_dir / EXPORT_NAME).stat().st_mtime)
+            if age > max_age:
+                line = f"KG-EXPORT-STALE {int(age)}s"
+        except OSError:
+            line = "KG-EXPORT-STALE missing"
+    if line:
+        print(line)
+        if env.get("AUTOOS_ALERT_INBOX"):
+            try:
+                with Path(env["AUTOOS_ALERT_INBOX"]).open("a", encoding="utf-8") as inbox:
+                    inbox.write(line + "\n")
+            except OSError:
+                print("kg-export: alert append failed (OSError)", file=sys.stderr)
+        return 1
     return 0
 
 
 def main(argv=None):  # pragma: no cover - thin CLI: python3 -m plangraph.kg_export SNAPSHOT OUT_DIR
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "--check":
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--check", required=True, metavar="OUT_DIR")
+        parser.add_argument("--max-age", default="2h")
+        args = parser.parse_args(argv)
+        match = re.fullmatch(r"([0-9]+)([smhd]?)", args.max_age)
+        if not match:
+            parser.error("--max-age requires an integer with optional s/m/h/d suffix")
+        return check(args.check, int(match[1]) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[match[2]])
     if len(argv) != 2:
         print("usage: python3 -m plangraph.kg_export SNAPSHOT.json OUT_DIR", file=sys.stderr)
         return 2
