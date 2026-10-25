@@ -26,7 +26,10 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           "outbox_seen", "audit_log", "audit_findings",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
           "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
-          "jev_shadow", "messages", "message_nonces", "message_envelopes")
+          "jev_shadow", "messages", "message_nonces", "message_envelopes",
+          # BUS-REGISTRY-PERSIST: the host registry; absent in an older source,
+          # which skips it like every other table the source does not have.
+          "bus_hosts")
 _BATCH = 500
 
 

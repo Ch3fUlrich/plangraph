@@ -23,6 +23,7 @@ from . import db_errors
 from .errors import Refused
 from .store_answer import AnswerMixin
 from .store_audit_meta import AuditMetaMixin
+from .store_bus_hosts import BusHostsMixin
 from .store_cards import CardsMixin
 from .store_close import CloseMixin
 from .store_create import CreateMixin
@@ -73,7 +74,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
-            WorkerMixin, JevMixin, MessagesMixin):
+            WorkerMixin, JevMixin, MessagesMixin, BusHostsMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,

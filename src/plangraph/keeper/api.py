@@ -26,6 +26,7 @@ thread calls ``Store.reap`` every 60 s.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -52,6 +53,8 @@ from .api_routes import (READ_CALLS, ROLE_CHECKED_VERBS, ROUTER_VERBS,
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
 _READ_VERBS.add("hosts")
 
+log = logging.getLogger("plangraph.keeper")
+
 
 def _probe_endpoint(endpoint):
     try:
@@ -61,6 +64,13 @@ def _probe_endpoint(endpoint):
             return resp.status == 200
     except Exception:
         return False
+
+
+def _host_row(host):
+    """The stored columns of one Host record; key material never leaves the object."""
+    return {"host": host.host, "node_id": host.node_id, "key_id": host.key_id,
+            "endpoint": host.endpoint, "health": host.health,
+            "last_seen": host.last_seen}
 
 
 # --------------------------------------------------------------------------- #
@@ -237,13 +247,24 @@ class KeeperHandler(BaseHTTPRequestHandler):
             registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
             hosts_data = []
             if registry is not None:
+                # BUS-REGISTRY-PERSIST: the table is the served source (it
+                # survives a restart) and the current inventory decides who is
+                # served -- a row whose host is no longer provisioned is never
+                # served.  Startup restore forces the persisted health to
+                # 'offline', so a pre-restart 'healthy' is never shown.
+                persisted = {row["host"]: row
+                             for row in self.server.store.list_bus_hosts()}
                 for h in registry.hosts.values():
+                    row = persisted.get(h.host) or {}
                     hosts_data.append({
                         "host": h.host,
-                        "endpoint": h.endpoint,
+                        "endpoint": row.get("endpoint", h.endpoint),
                         "key_id": h.key_id,
-                        "health": h.health,
-                        "last_seen": h.last_seen,
+                        "health": row.get("health", h.health),
+                        "last_seen": row.get("last_seen", h.last_seen),
+                        # True only when a durable row backs this entry; the
+                        # startup seed makes that every inventory host.
+                        "persisted": bool(row),
                     })
             return {"hosts": hosts_data}, False
         if name == "messages":
@@ -463,9 +484,8 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.bus_thread = None
         inv_file = os.environ.get("PLANGRAPH_BUS_INVENTORY")
         if inv_file and os.path.isfile(inv_file):
-            from ..fleet_bus import discovery
             try:
-                import json
+                from ..fleet_bus import discovery
                 inv_data = json.loads(Path(inv_file).read_text("utf-8"))
                 hosts = inv_data.get("hosts") or []
                 records = [
@@ -479,18 +499,44 @@ class KeeperHTTPServer(ThreadingHTTPServer):
                 ]
                 agents = inv_data.get("agents") or {}
                 port = inv_data.get("port", 8765)
-                self.bus_registry = discovery.Registry(records, agents=agents, port=port)
+                registry = discovery.Registry(
+                    records, agents=agents, port=port,
+                    on_refresh=self._persist_bus_hosts)
+                # BUS-REGISTRY-PERSIST: the persisted rows load into the hosts
+                # before the first probe, and every refresh upserts them again.
+                self._restore_bus_hosts(registry)
+                self.bus_registry = registry
                 self.bus_stop = threading.Event()
                 self.bus_thread = threading.Thread(
-                    target=self.bus_registry.run,
+                    target=registry.run,
                     args=(self.bus_stop, _probe_endpoint),
                     daemon=True,
                     name="bus-registry",
                 )
                 self.bus_thread.start()
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - a broken bus never breaks the keeper
+                log.error("bus registry setup failed: %s: %s",
+                          type(exc).__name__, exc)
                 self.bus_registry = None
         super().__init__(address, KeeperHandler)
+
+    def _restore_bus_hosts(self, registry):
+        """Load ``bus_hosts`` into the registry before the first probe and seed it.
+
+        ``Registry.restore`` keeps the persisted ``endpoint``/``last_seen`` and
+        forces ``health`` to ``offline``; the re-seeded row makes
+        ``GET /v1/hosts`` read exactly what the registry holds at any moment.
+        """
+        registry.restore(self.store.list_bus_hosts())
+        with self.lock:
+            self.store.upsert_bus_hosts(
+                [_host_row(host) for host in registry.hosts.values()])
+
+    def _persist_bus_hosts(self, hosts):
+        """The registry loop's ``on_refresh`` hook: durable rows, never keys."""
+        rows = [_host_row(host) for host in hosts]
+        with self.lock:   # one connection behind one lock (see the class docstring)
+            self.store.upsert_bus_hosts(rows)
 
     def start_reaper(self):
         if self.reaper is None:

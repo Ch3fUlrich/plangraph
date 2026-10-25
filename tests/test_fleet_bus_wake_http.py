@@ -2,11 +2,15 @@
 
 No socket is ever opened in these tests: both seams take an injected transport
 and assert the exact wire shape.  A synthetic message is part of the
-conversation, not a user prompt, so the wake never hits `/prompt`.
+conversation, not a user prompt, so the wake never hits `/prompt`.  The two
+redirect tests at the end are the exception: redirect policy lives inside the
+transport, so they run loopback servers (G3-7).
 """
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -160,3 +164,81 @@ def test_keeper_messages_poll_requires_an_endpoint_and_a_token():
         KeeperMessagesPoll("", "tok")
     with pytest.raises(ValueError):
         KeeperMessagesPoll(KEEPER_BASE, "")
+
+
+# --------------------------------------------------------- real redirects (G3-7)
+
+def _url(server, path):
+    return f"http://127.0.0.1:{server.server_address[1]}{path}"
+
+
+def _server(hits, redirect_to=None):
+    """Start a loopback server that records ``(path, Authorization)`` per request.
+
+    ``redirect_to`` answers each request with a 302 to it: a path is resolved
+    against this server's own origin (same-origin hop), a full URL is used as
+    given (cross-origin hop).  A same-origin hop redirects exactly once -- the
+    target path itself lands with a 204 -- so a redirect can never loop.
+    """
+    target_path = None if (redirect_to and ":" in redirect_to) else redirect_to
+
+    class Handler(BaseHTTPRequestHandler):
+        def _answer(self):
+            hits.append((self.path, self.headers.get("Authorization")))
+            if redirect_to and self.path != target_path:
+                location = (redirect_to if "://" in redirect_to
+                            else f"http://{self.headers['Host']}{redirect_to}")
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.end_headers()
+            else:
+                self.send_response(204)
+                self.end_headers()
+
+        do_GET = do_POST = _answer
+
+        def log_message(self, *_args):   # keep the test output quiet
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _close(*servers):
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_same_origin_redirect_is_followed_with_the_bearer_token_intact():
+    """A wake behind a same-origin redirect still lands, token and all."""
+    hits = []
+    edge = _server(hits, redirect_to="/synthetic/final")
+    try:
+        sink = SyntheticSink(authorization="Bearer tok")
+        sink.wake(SessionTarget("ses_x", _url(edge, "")), DEFAULT_TEXT)
+    finally:
+        _close(edge)
+    assert hits == [("/api/session/ses_x/synthetic", "Bearer tok"),
+                    ("/synthetic/final", "Bearer tok")]
+
+
+def test_a_cross_origin_redirect_is_refused_and_never_forwards_authorization():
+    """G3-7: the bearer token never crosses an origin boundary.
+
+    The 302 to another host is not followed, so the other origin sees NO
+    request at all; the wake reports busy (retried later, never dropped) and
+    the long-poll would keep its cursor instead of leaking the header.
+    """
+    edge_hits, other_hits = [], []
+    other = _server(other_hits)
+    edge = _server(edge_hits, redirect_to=_url(other, "/steal"))
+    try:
+        sink = SyntheticSink(authorization="Bearer tok")
+        with pytest.raises(WakeBusy):
+            sink.wake(SessionTarget("ses_x", _url(edge, "")), DEFAULT_TEXT)
+    finally:
+        _close(edge, other)
+    assert edge_hits == [("/api/session/ses_x/synthetic", "Bearer tok")]  # earned it
+    assert other_hits == []                                               # foreign: nothing

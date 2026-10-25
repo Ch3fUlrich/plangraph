@@ -95,11 +95,18 @@ Worker park, complete and ask_question may carry optional `expected_state`, a
 string or non-empty list of strings from `SETTABLE_STATES` (any-of). When supplied,
 the card's current state must equal the string or be in the list, and the exec
 identity/attempt checks must still pass. Every list element is validated.
-**EXEC-OBSERVED-STATE:** park and ask_question present the state the run
-observed -- the activity reads `GET /v1/show?key=<card>&fmt=json` through
-`Keeper::card_state` just before the call and sends what it answered, so a card
-a projector event moved while the run was away is compared against what the run
-then read. The live set `["open", "ready", "running", "needs_input",
+**EXEC-OBSERVED-STATE:** park presents the state the run observed -- the
+workflow reads `GET /v1/show?key=<card>&fmt=json` through `Keeper::card_state`
+when it decides to park (its one-shot `observe` activity: the only keeper read
+left, off the runtime threads behind an explicit 5 s cap, `None` meaning
+"observed nothing") and carries that answer in the park activity input, so a
+card a projector event moved while the run was away is compared against what
+the run saw at decision time. The park and ask_question activities forward
+what their input carries -- park its recorded observation, ask the any-of live
+set below -- verbatim and never re-read the keeper: a Temporal retry of a
+delayed park presents the same observation the run made, not the projector's
+newer state, so the compare-and-swap can never become tautological. The live
+set `["open", "ready", "running", "needs_input",
 "waiting"]` is only the fallback for a run that observed nothing: an unreadable
 keeper, a `claimed` card (not in `SETTABLE_STATES`, so the phase-holder rule
 below stays its CAS) or a terminal state, none of which can stand in for an
