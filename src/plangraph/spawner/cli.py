@@ -20,12 +20,16 @@ from plangraph.planner.routing import BenchmarkError, SpawnRefused
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
     from .env_redact import redact_env_values
+    from plangraph.routing_support.host_keys import redaction_env
     import codecs
     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+    # The parent env never holds a file key; compute the redaction env (parent
+    # plus resolvable host keys) once, not per chunk (D-2759).
+    redact_base = redaction_env(os.environ)
     def clean(data):
         if isinstance(data, bytes):
             data = data.decode('utf-8')
-        return redact(redact_env_values(data, os.environ)).encode()
+        return redact(redact_env_values(data, redact_base)).encode()
     pending = b''
     for chunk in chunks:
         pending += decoder.decode(chunk).encode('utf-8')
@@ -195,6 +199,10 @@ def main(argv=None):
                 bootstrap = '''import os, sys, threading
 from plangraph.spawner import cli as supervisor
 from plangraph.spawner.env_redact import redact_env_values
+from plangraph.routing_support.host_keys import redaction_env
+# The parent env never holds a file key; compute the redaction env once at
+# bootstrap top, not per emitted line (D-2759).
+redact_base = redaction_env(os.environ)
 path = sys.argv[1]
 from pathlib import Path
 try:
@@ -215,7 +223,7 @@ def drain():
             pass
         def emit(line):
             nonlocal output
-            data = supervisor.redact(redact_env_values(line.decode("utf-8", errors="replace"), os.environ)).encode()
+            data = supervisor.redact(redact_env_values(line.decode("utf-8", errors="replace"), redact_base)).encode()
             # Bound even a native writer's multi-megabyte unterminated line,
             # but only after redaction so truncation cannot expose a secret suffix.
             data = data[-1024 * 1024:]
@@ -286,6 +294,7 @@ raise SystemExit(code)
                         child.wait()
                         from .env_redact import redact_env_values
                         from .opencode_overlay import overlay_env
+                        from plangraph.routing_support.host_keys import redaction_env
                         text = ''
                         size = 0
                         for path in (Path(str(log_path) + '.1'), log_path):
@@ -300,7 +309,7 @@ raise SystemExit(code)
                         # Discard the possibly partial first line before displaying a suffix.
                         if size > 262144:
                             text = text.partition('\n')[2]
-                        tail = '\n'.join(redact(redact_env_values(text, overlay_env(os.environ))).splitlines()[-20:])
+                        tail = '\n'.join(redact(redact_env_values(text, redaction_env(overlay_env(os.environ)))).splitlines()[-20:])
                         tail = tail.encode()[-4096:].decode('utf-8', errors='ignore')
                         raise ValueError('spawn supervisor failed; check card and override reason' +
                                          ('\n' + tail if tail else ''))

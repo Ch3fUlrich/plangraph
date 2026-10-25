@@ -174,7 +174,9 @@ class SpawnService:
                 from .fixer import split_findings
                 from plangraph.settings import admit_fixer_threshold
                 note = options.get('prompt') or ''
-                groups = split_findings(card_findings(card), limit=admit_fixer_threshold(card))
+                # No keeper item is held for the threshold: the trusted layers are global
+                # and the card's project/phase layers may only tighten (R3).
+                groups = split_findings(card_findings(card), limit=admit_fixer_threshold(card=card))
                 briefs = []
                 for group in groups:
                     child = dict(card, findings=list(group), seat_outputs=None)
