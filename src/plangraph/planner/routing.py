@@ -438,9 +438,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
     from plangraph.routing_support.fixer import split_findings
     from plangraph.settings import admit_fixer_threshold
-    # plan_spawn receives no store-derived keeper item, so only the global
-    # layer applies (R2): the card never selects per-item policy.
-    threshold = admit_fixer_threshold()
+    # plan_spawn receives no store-derived keeper item, so the trusted layers
+    # are global (R2); the card's project/phase layers may only tighten (R3).
+    threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
                      tuple(candidate_details), groups)

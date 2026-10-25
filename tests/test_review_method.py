@@ -995,12 +995,18 @@ def test_production_threshold_paths_pass_card(tmp_path, monkeypatch):
 
     service = SpawnService(runner=object(), state=tmp_path / 'state')
     calls = []
-    async def fake_spawn(self, **kwargs):
-        calls.append(kwargs)
+    # Mirror SpawnService._spawn's signature: spawn() binds against it to split
+    # findings, so a **kwargs fake would silently skip the dispatch path.
+    async def fake_spawn(self, card=None, prompt='', role='implement', writer_families=(),
+                         review_of=None, model=None, leg=None, override_reason=None,
+                         dry_run=False, wait_seconds=0, no_fallthrough=False,
+                         benchmark=None, require_bench=False, review_scope=None):
+        calls.append(card)
         return {'status': 'stub'}
     monkeypatch.setattr(SpawnService, '_spawn', fake_spawn)
     asyncio.run(service.spawn(card=card, prompt='fix', role='implement'))
     assert len(calls) == 3
+    assert all(len(child['findings']) == 4 for child in calls)
 
 
 def test_card_layer_resolution_error_fails_closed(tmp_path, monkeypatch):
