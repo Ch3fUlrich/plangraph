@@ -507,13 +507,13 @@ def test_rule_set_router_only(w):
         w.store.rule_set(w.p("l1main"), [{"id": "RULE-1-1", "description": "x"}])
 
 
-def test_design_role_takes_strongest_non_claude_leg():
-    # D-2754: designs / replans run through the spawner, strongest non-Claude leg first.
+def test_design_role_takes_strongest_leg_first():
+    # D-2754: designs / replans run through the spawner; D-2758 (5): Claude legs allowed.
     from plangraph.planner import routing
     from plangraph.planner.legs import DESIGN_ORDER
     plan = routing.plan_spawn({"estimate_tokens": 20000}, role="design")
     assert tuple(leg.id for leg in plan.legs) == DESIGN_ORDER
-    assert not any(leg.claude_family for leg in plan.legs)
+    assert any(leg.claude_family for leg in plan.legs)
 
 
 def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
@@ -532,3 +532,24 @@ def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
     (tmp_path / "bins.json").write_text(json.dumps({"opencode": str(exe)}))
     env[clients.CLIENT_BINS_ENV] = str(tmp_path / "bins.json")
     assert clients.client_binary("opencode", env) == str(exe)
+
+
+def test_host_keys_from_autoos_sources(tmp_path):
+    # D-2758 (6): the spawner hands the child the host keys the AutoOS path used.
+    from plangraph.routing_support import host_keys
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "configuration").mkdir()
+    (tmp_path / "configuration" / "api-keys.yml").write_text("zen: z\n")
+    (tmp_path / "tools" / "autoos_gateway_key.py").write_text(
+        "def resolve_client_key(env, path):\n    return 'gw-' + path.name\n")
+    (tmp_path / "tools" / "keys_file.py").write_text(
+        "def read_keys(path):\n    return {'zen': 'zen-' + path.name}\n")
+    env = {"AUTOOS_ROOT": str(tmp_path)}
+    host_keys.add_host_keys(env, "mimo/mimo-v2.6-pro", needs_gateway=True)
+    assert env["AUTOOS_OMNIROUTE_KEY"] == "gw-api-keys.yml" and "OPENCODE_API_KEY" not in env
+    env = {"AUTOOS_ROOT": str(tmp_path), "AUTOOS_OMNIROUTE_KEY": "mine"}
+    host_keys.add_host_keys(env, "opencode/glm-5.3-flash-free", needs_gateway=True)
+    assert env["AUTOOS_OMNIROUTE_KEY"] == "mine" and env["OPENCODE_API_KEY"] == "zen-api-keys.yml"
+    env = {"AUTOOS_ROOT": str(tmp_path / "none")}
+    host_keys.add_host_keys(env, "opencode/glm-5.3-flash-free", needs_gateway=True)
+    assert env == {"AUTOOS_ROOT": str(tmp_path / "none")}

@@ -103,7 +103,7 @@ DEFAULT_LEGS = (
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement", "design")),
-    _legacy["agy-sonnet-5.5"],
+    _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "design")),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
 
@@ -118,11 +118,13 @@ WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",
 )
 
-# D-2754: design / research / replan runs (D-2739) take the strongest non-Claude
-# leg first; no Claude leg (D-2046 strict authorship).
+# D-2754: design / research / replan runs (D-2739) take the strongest leg first.
+# D-2758 (5): any model may run in the spawner, Claude included; writer
+# attribution is the CI gate's business, not the router's.
 DESIGN_ORDER: tuple[str, ...] = (
     "mimo-v2.6-pro",
     "cx-gpt-6.1-sol",
+    "agy-sonnet-5.5",
     "agy-gemini-3.8-flash",
 )
 
