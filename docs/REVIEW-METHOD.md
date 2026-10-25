@@ -54,7 +54,10 @@ Policy layers are never loosened by the card (R2): the card's `project`/`phase`/
 Per-item layers come from a trusted keeper `item` (the keeper item's `key`
 plus optional `phase`/`track`, supplied by keeper/planner code that read it from
 the store) passed as `item=` to `enforce_review_scope`, `admit_review_scope`,
-`fixer_threshold` and `admit_fixer_threshold`; those layers may loosen or tighten.
+`fixer_threshold` and `admit_fixer_threshold`; those layers may loosen or
+tighten. `item=` is for keeper/planner callers that hold a store item; no
+production caller passes one yet, so production spawns use the global layers
+plus the card-tighten layers.
 
 Card layers only tighten (R3, D-2784). Spawner callers hold no keeper item, so
 they also evaluate the layers the card's `project`/`phase` select, but those
@@ -64,7 +67,9 @@ card-selected layers resolve to `batch`, and the fixer threshold is
 `min(trusted, card-selected)`. Spoofing card fields therefore cannot admit a
 per-fixer seat or raise the threshold, while a phase/project policy that
 tightens to `batch` or lowers the threshold is honoured on every spawn path
-(CLI, MCP, runner, `SpawnService`, `plan_spawn`). If the card-selected layers
+(every caller that passes the card: spawner CLI, runner and `SpawnService`
+admission; `plan_spawn` and `SpawnService` fixer splitting for the threshold).
+If the card-selected layers
 cannot be resolved, per-fixer is refused and the threshold is the trusted one.
 
 The settings root is never taken from the card (R1): `card["repo_root"]` is

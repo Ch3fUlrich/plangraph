@@ -1027,22 +1027,28 @@ def test_card_layer_resolution_error_fails_closed(tmp_path, monkeypatch):
     assert fixer_threshold(card={'key': 'other:C'}) == 10
 
 
-def test_non_dict_item_uses_global_layers(tmp_path, monkeypatch):
-    """A non-dict item yields no item layers and never crashes (D-2784)."""
-    from plangraph.settings import _item_layers, enforce_review_scope, fixer_threshold
+def test_non_dict_item_refused(tmp_path, monkeypatch):
+    """A non-dict item is refused, not silently dropped to global layers (D-2800)."""
+    from plangraph.settings import (_item_layers, SettingsError,
+                                    enforce_review_scope, fixer_threshold)
+    # None (no keeper item) still yields the global layers.
     assert _item_layers(None) == (None, None)
-    assert _item_layers('demo:1') == (None, None)
-    assert _item_layers(7) == (None, None)
     path = tmp_path / 'policy.json'
     path.write_text(json.dumps({
         'review_method': {'mode': 'per-item', 'fixer_split_threshold': 10},
         'projects': {'demo': {'review_method': {'fixer_split_threshold': 5}}},
     }))
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
-    # A dict item selects the project layer; a non-dict one stays global.
+    assert fixer_threshold(item=None) == 10
     assert fixer_threshold(item={'key': 'demo:1'}) == 5
-    assert fixer_threshold(item='demo:1') == 10
-    enforce_review_scope({}, 'review', 'per-fixer', item='demo:1')
+    # Any other non-dict item is refused everywhere.
+    for bad in ('demo:1', 7):
+        with pytest.raises(SettingsError, match='item: expected a keeper item dict'):
+            _item_layers(bad)
+        with pytest.raises(SettingsError, match='item: expected a keeper item dict'):
+            fixer_threshold(item=bad)
+        with pytest.raises(SettingsError, match='item: expected a keeper item dict'):
+            enforce_review_scope({}, 'review', 'per-fixer', item=bad)
 
 
 def test_root_kwarg_beats_repo_root_env(tmp_path, monkeypatch):

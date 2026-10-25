@@ -84,12 +84,15 @@ def _item_layers(item):
     ``item`` is a keeper item dict ('project', 'key' plus optional
     'phase'/'track') read from the store by keeper or planner code. The card's
     'project'/'phase'/'key' are caller-chosen and must not select a trusted
-    policy layer (review-method R2, fix D-2773). A non-dict item yields no
-    item layers instead of crashing (D-2784); the item key falls back as the
-    phase, as cards did before.
+    policy layer (review-method R2, fix D-2773). ``item=None`` (a caller that
+    holds no keeper item) yields no item layers; any other non-dict item is
+    refused instead of silently dropping the trusted layers (D-2800). The item
+    key falls back as the phase, as cards did before.
     """
-    if not isinstance(item, dict):
+    if item is None:
         return None, None
+    if not isinstance(item, dict):
+        raise SettingsError('item: expected a keeper item dict')
     phase = item.get('phase') or item.get('track') or item.get('key')
     project = item.get('project') or project_of(item.get('key') or phase)
     return project, phase
