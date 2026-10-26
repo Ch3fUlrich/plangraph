@@ -17,18 +17,7 @@ import apply_batch_atomic as atomic
 from keeper_util import defn
 from test_apply_batch import world, srv, token_file, run, item_count, write_batch as _base_write_batch
 
-try:
-    from test_apply_batch import state_of, title_of
-except ImportError:
-    def state_of(w, key):
-        p, i = key.split(":", 1)
-        r = w.conn.execute("SELECT state FROM items WHERE project=? AND id=?", (p, i)).fetchone()
-        return r["state"] if r else None
-
-    def title_of(w, key):
-        p, i = key.split(":", 1)
-        r = w.conn.execute("SELECT title FROM items WHERE project=? AND id=?", (p, i)).fetchone()
-        return r["title"] if r else None
+from test_apply_batch import state_of, title_of
 
 
 def write_batch(tmp_path, ops=None, name="batch", tamper=False, base_seq=None, extra_top=None):

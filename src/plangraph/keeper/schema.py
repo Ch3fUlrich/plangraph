@@ -12,12 +12,24 @@ moves a row *onto* a locked key is as forbidden as one that moves it off.
 from __future__ import annotations
 from .messages_schema import SQLITE as MESSAGES_DDL
 
-__all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
+__all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL",
+           "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "STATES", "EXIT_CLASSES",
+           "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 15
+#: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
+#: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
+#: installed presence-based); the bus steps renumber after it: v15 durable
+#: messages, v16 message nonces/envelopes.  Every step past v12 installs
+#: presence-based in ``db._upgrade``; nothing keys off this number at runtime.
+SCHEMA_VERSION = 16
+
+#: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
+#: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
+#: PostgreSQL Migration 8 alone.  Nothing keys off it at runtime; it names the
+#: delta so docs, CHANGELOG and the parity tests have one figure to quote.
+OVERSIGHT_SCHEMA_VERSION = 14
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -40,7 +52,7 @@ RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-s
 JEV_KINDS = ("harness", "window", "budget", "review", "qc_accept")
 JEV_STATUSES = ("ok", "timeout", "unavailable", "error")
 
-ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
+ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner", "oversight")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",
@@ -49,7 +61,7 @@ EVENT_TYPES = (
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
-    "kind_set", "state_set", "exec_owner_changed",
+    "kind_set", "state_set", "exec_owner_changed", "oversight_token_minted",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -91,6 +103,66 @@ CREATE TABLE IF NOT EXISTS run_tokens (
     revoked_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_run_tokens_key ON run_tokens(key);
+"""
+
+OVERSIGHT_DDL = """
+CREATE TABLE IF NOT EXISTS oversight_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    principal    TEXT NOT NULL,
+    generation   INTEGER NOT NULL,
+    scope        TEXT NOT NULL DEFAULT 'plan-write',
+    minted_by    TEXT,
+    go_decision  TEXT,
+    mint_reason  TEXT,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_oversight_tokens_live ON oversight_tokens(principal, expires_at);
+CREATE TRIGGER IF NOT EXISTS trg_oversight_tokens_revoke_only_update
+BEFORE UPDATE ON oversight_tokens
+WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND OLD.id IS NEW.id AND OLD.token_sha256 IS NEW.token_sha256
+        AND OLD.principal IS NEW.principal
+        AND OLD.generation IS NEW.generation
+        AND OLD.scope IS NEW.scope
+        AND OLD.expires_at IS NEW.expires_at
+        AND OLD.created_at IS NEW.created_at
+        AND OLD.minted_by IS NEW.minted_by
+        AND OLD.go_decision IS NEW.go_decision
+        AND OLD.mint_reason IS NEW.mint_reason
+     )
+BEGIN SELECT RAISE(ABORT, 'oversight tokens are revoke-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_oversight_tokens_append_only_delete
+BEFORE DELETE ON oversight_tokens
+BEGIN SELECT RAISE(ABORT, 'oversight tokens are revoke-only'); END;
+
+CREATE TABLE IF NOT EXISTS oversight_ops (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    token_id    INTEGER NOT NULL,
+    principal   TEXT NOT NULL,
+    generation  INTEGER NOT NULL,
+    batch_ref   TEXT NOT NULL,
+    op_index    INTEGER NOT NULL,
+    op          TEXT NOT NULL,
+    key         TEXT,
+    finding_id  TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    outcome     TEXT NOT NULL CHECK (outcome IN ('applied','denied')),
+    code        TEXT,
+    event_seq   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_oversight_ops_ts ON oversight_ops(principal, ts);
+CREATE INDEX IF NOT EXISTS idx_oversight_ops_key ON oversight_ops(key);
+CREATE TRIGGER IF NOT EXISTS trg_oversight_ops_append_only_update
+BEFORE UPDATE ON oversight_ops
+BEGIN SELECT RAISE(ABORT, 'oversight_ops is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_oversight_ops_append_only_delete
+BEFORE DELETE ON oversight_ops
+BEGIN SELECT RAISE(ABORT, 'oversight_ops is append-only'); END;
 """
 
 #: M2B-OUTBOX: replayed offline entries, deduplicated by the client-generated id.
@@ -511,4 +583,4 @@ CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
-          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL)
+          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL)

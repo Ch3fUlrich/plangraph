@@ -464,6 +464,66 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_principal TEXT COLLATE "C";
 ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_retired_runs TEXT COLLATE "C";
 """
 
+_V8 = """
+CREATE TABLE oversight_tokens (
+    id           BIGINT PRIMARY KEY,
+    token_sha256 TEXT COLLATE "C" NOT NULL UNIQUE,
+    principal    TEXT COLLATE "C" NOT NULL,
+    generation   BIGINT NOT NULL,
+    scope        TEXT COLLATE "C" NOT NULL DEFAULT 'plan-write',
+    minted_by    TEXT COLLATE "C",
+    go_decision  TEXT COLLATE "C",
+    mint_reason  TEXT COLLATE "C",
+    created_at   TEXT COLLATE "C" NOT NULL,
+    expires_at   TEXT COLLATE "C" NOT NULL,
+    revoked_at   TEXT COLLATE "C"
+);
+CREATE INDEX idx_oversight_tokens_live ON oversight_tokens(principal, expires_at);
+CREATE TRIGGER trg_oversight_tokens_revoke_only_update BEFORE UPDATE ON oversight_tokens
+    FOR EACH ROW WHEN (NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND OLD.id IS NOT DISTINCT FROM NEW.id
+        AND OLD.token_sha256 IS NOT DISTINCT FROM NEW.token_sha256
+        AND OLD.principal IS NOT DISTINCT FROM NEW.principal
+        AND OLD.generation IS NOT DISTINCT FROM NEW.generation
+        AND OLD.scope IS NOT DISTINCT FROM NEW.scope
+        AND OLD.expires_at IS NOT DISTINCT FROM NEW.expires_at
+        AND OLD.created_at IS NOT DISTINCT FROM NEW.created_at
+        AND OLD.minted_by IS NOT DISTINCT FROM NEW.minted_by
+        AND OLD.go_decision IS NOT DISTINCT FROM NEW.go_decision
+        AND OLD.mint_reason IS NOT DISTINCT FROM NEW.mint_reason))
+    EXECUTE FUNCTION pgk_reject('oversight tokens are revoke-only');
+CREATE TRIGGER trg_oversight_tokens_append_only_delete BEFORE DELETE ON oversight_tokens
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('oversight tokens are revoke-only');
+
+CREATE TABLE oversight_ops (
+    id          BIGINT PRIMARY KEY,
+    ts          TEXT COLLATE "C" NOT NULL,
+    token_id    BIGINT NOT NULL,
+    principal   TEXT COLLATE "C" NOT NULL,
+    generation  BIGINT NOT NULL,
+    batch_ref   TEXT COLLATE "C" NOT NULL,
+    op_index    BIGINT NOT NULL,
+    op          TEXT COLLATE "C" NOT NULL,
+    key         TEXT COLLATE "C",
+    finding_id  TEXT COLLATE "C" NOT NULL DEFAULT '',
+    reason      TEXT COLLATE "C" NOT NULL DEFAULT '',
+    outcome     TEXT COLLATE "C" NOT NULL CHECK (outcome IN ('applied','denied')),
+    code        TEXT COLLATE "C",
+    event_seq   BIGINT
+);
+CREATE INDEX idx_oversight_ops_ts ON oversight_ops(principal, ts);
+CREATE INDEX idx_oversight_ops_key ON oversight_ops(key);
+CREATE TRIGGER trg_oversight_ops_append_only_update BEFORE UPDATE ON oversight_ops
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('oversight_ops is append-only');
+CREATE TRIGGER trg_oversight_ops_append_only_delete BEFORE DELETE ON oversight_ops
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('oversight_ops is append-only');
+CREATE TRIGGER trg_oversight_ops_append_only_truncate BEFORE TRUNCATE ON oversight_ops
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('oversight_ops is append-only');
+CREATE TRIGGER trg_oversight_tokens_append_only_truncate BEFORE TRUNCATE ON oversight_tokens
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('oversight tokens are revoke-only');
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -472,10 +532,11 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(6, "jev: jev_shadow", _V6),
               Migration(7, "exec ownership: items exec_workflow_id/exec_run_id/exec_attempt"
                            "/exec_principal/exec_retired_runs", _V7),
-              Migration(8, "bus: durable messages", MESSAGES_DDL))
+              Migration(8, "oversight: tokens, ops audit", _V8),
+              Migration(9, "bus: durable messages", MESSAGES_DDL))
 LATEST = MIGRATIONS[-1].version
 
-_TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)
+_TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\);", re.S)
 _COLUMN = re.compile(r'^    "?(\w+)"?\s+\S')
 _NOT_COLUMNS = frozenset({"PRIMARY", "CHECK", "UNIQUE", "CONSTRAINT", "FOREIGN"})
 
@@ -498,5 +559,5 @@ def parse_tables(ddl: str) -> dict:
     for match in re.finditer(
             r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]+);", ddl):
         table, column, declaration = match.groups()
-        out[table].append((column, "NOT NULL" in declaration))
+        out.setdefault(table, []).append((column, "NOT NULL" in declaration))
     return out

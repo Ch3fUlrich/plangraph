@@ -125,7 +125,7 @@ def test_terminal_saved_before_event_builder(tmp_path, monkeypatch):
 def test_sink_failure_retries_without_duplicate_event(tmp_path):
     sink = Mock()
     sink.deliver.side_effect = [RuntimeError('offline'), None, None]
-    service = spawn_service(state=tmp_path, completion_sink=sink)
+    service = spawn_service(state=tmp_path, completion_sink=sink, keeper_sink=sink)
     record = dict(run_id='run-retry', status='completed', exit_code=0, started=1, ended=2)
     service._save(record)
     service._save(record)
@@ -152,7 +152,8 @@ def test_automatic_runner_delivery(tmp_path, monkeypatch, script, rc):
     if rc == 124:
         monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '.03')
     monkeypatch.setattr('plangraph.spawner.runner.build_command', lambda **kw: [sys.executable, '-c', script])
-    service = spawn_service(runner=SpawnerRunner(), state=tmp_path)
+    from plangraph.spawner.notify import FileInbox
+    service = spawn_service(runner=SpawnerRunner(), state=tmp_path, keeper_sink=FileInbox(tmp_path))
     async def run():
         record = await service.spawn(card={'estimate_tokens': 100}, prompt='test', wait_seconds=None)
         assert record['exit_code'] == rc
@@ -170,10 +171,10 @@ def test_invalid_timeout_kills_child(tmp_path, monkeypatch):
     monkeypatch.setattr('plangraph.spawner.runner.build_command', lambda **kw: [sys.executable, '-c', 'import time; time.sleep(60)'])
     async def run():
         runner = SpawnerRunner()
-        job = await runner.spawn('p', 'mimo/mimo-v2.6-flash')
-        await runner._tasks[job.job_id]
-        assert job.exit_code == 124
-        assert job.events == [{'event': 'run_timeout'}]
+        with pytest.raises(ValueError, match='invalid run timeout'):
+            await runner.spawn('p', 'mimo/mimo-v2.6-flash')
+        assert runner._processes == {}
+        assert runner.jobs == {}
     asyncio.run(run())
 
 

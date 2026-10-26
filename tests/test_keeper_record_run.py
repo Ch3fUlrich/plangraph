@@ -204,11 +204,14 @@ def test_old_database_gains_columns(tmp_path):
 
 def test_derived_done_reviewed_merged(w):
     from keeper_util import to_done
+    from evidence_fakes import FakeGit, make_ctx
+    sha = "a" * 40
+    w.store.ctx = make_ctx(git=FakeGit(trailers={"Writer": "gpt-5 run1"}))
     to_claimed(w, "demo:A")
     w.store.record_run(sp(w), "demo:A", started(writer={"model": "m1"}))
     epoch = w.store._item("demo:A")["epoch"]
     w.store.add_evidence_router(w.p("router"), "demo:A", "commit+ci",
-                                {"sha": "abc"})
+                                {"commit": sha})
     w.store.submit(w.p("l1main"), "demo:A", epoch)
     from keeper_util import pass_review
     pass_review(w, "demo:A")

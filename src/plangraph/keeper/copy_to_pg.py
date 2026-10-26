@@ -23,10 +23,11 @@ __all__ = ["run", "TABLES", "CopyError"]
 #: dependency-safe copy order: the chain first, then the cache and its satellites, then design 3,
 #: then the projector tables (migration 3; no foreign keys into the tables above).
 TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_tokens",
+          "jev_shadow", "oversight_tokens", "oversight_ops",
           "outbox_seen", "audit_log", "audit_findings",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
           "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
-          "jev_shadow", "messages", "message_nonces", "message_envelopes",
+          "messages", "message_nonces", "message_envelopes",
           # BUS-REGISTRY-PERSIST: the host registry; absent in an older source,
           # which skips it like every other table the source does not have.
           "bus_hosts")

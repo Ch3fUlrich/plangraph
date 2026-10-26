@@ -9,7 +9,7 @@
 
 use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
-use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper};
+use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper, KeeperError};
 use crate::mergelock::{self, MergeOutcome};
 use crate::question::Question;
 use pg_worker_core::budget;
@@ -340,7 +340,7 @@ impl CardActivities {
 /// How a keeper failure should be treated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Failure {
-    /// The keeper said no and asking again cannot change that: 401, 403, 409, 422.
+    /// The keeper said no; asking again cannot change that: 401, 403, 409, 422, a park `Conflict`.
     Refused,
     /// Plausibly gone in a moment: a transport error, 408, 429 or any 5xx.
     Transient,
@@ -352,7 +352,7 @@ fn classify(e: &crate::keeper::KeeperError) -> Failure {
     use crate::keeper::KeeperError;
     match e {
         KeeperError::Http(_) => Failure::Transient,
-        KeeperError::Status(401 | 403 | 409 | 422) => Failure::Refused,
+        KeeperError::Conflict(_) | KeeperError::Status(401 | 403 | 409 | 422) => Failure::Refused,
         KeeperError::Status(408 | 429 | 500..=599) => Failure::Transient,
         KeeperError::Status(_) | KeeperError::Decode(_) => Failure::Other,
     }
@@ -495,10 +495,16 @@ pub(crate) fn expected_state_of(input: &str) -> Option<Vec<String>> {
 
 /// The `observe` read the park decision gets: `Keeper::card_state` (a blocking
 /// ureq call) off the tokio worker threads in `spawn_blocking`, waiting at most
-/// [`OBSERVE_READ_TIMEOUT`] for it (G3-4). `None` -- timeout, a panicking
-/// blocking task, a keeper that answered nothing -- means "observed nothing",
-/// so the workflow parks on its live-set fallback.
-pub(crate) async fn observe_read(keeper: Arc<dyn Keeper>, card: String) -> Option<String> {
+/// [`OBSERVE_READ_TIMEOUT`] for it (G3-4). `Ok(None)` -- a keeper that holds
+/// no state -- means "observed nothing", so the workflow parks on its live-set
+/// fallback. `Err` (D1b) is a transient read failure -- a timeout, a panicking
+/// blocking task, D1a's keeper `Err` -- which the activity turns into a
+/// retryable failure so Temporal re-runs the read inside one scheduled
+/// activity before anyone degrades.
+pub(crate) async fn observe_read(
+    keeper: Arc<dyn Keeper>,
+    card: String,
+) -> Result<Option<String>, ActivityError> {
     observe_read_within(keeper, card, OBSERVE_READ_TIMEOUT).await
 }
 
@@ -507,13 +513,52 @@ async fn observe_read_within(
     keeper: Arc<dyn Keeper>,
     card: String,
     limit: Duration,
-) -> Option<String> {
+) -> Result<Option<String>, ActivityError> {
     let read = tokio::task::spawn_blocking(move || keeper.card_state(&card));
     match tokio::time::timeout(limit, read).await {
-        Ok(read) => read.ok().flatten(),
-        // Timed out: observed nothing. The blocking task is detached (it can
-        // only finish or sit on its own socket timeout); the activity returns.
-        Err(_) => None,
+        Ok(read) => read
+            .map_err(join_error)
+            .and_then(|res| res.map_err(activity_error)),
+        // Timed out: a transient failure to retry. The blocking task is
+        // detached (it can only finish or sit on its own socket timeout).
+        Err(_) => Err(activity_error("observe read timed out")),
+    }
+}
+
+fn join_error(e: tokio::task::JoinError) -> ActivityError {
+    if e.is_panic() {
+        let p = e.into_panic();
+        let msg = if let Some(s) = p.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = p.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic cause".to_string()
+        };
+        activity_error(format!("park blocking task panicked: {msg}"))
+    } else {
+        activity_error(e)
+    }
+}
+
+/// Park activity failure typing, crate-public so the keeper's 409-body tests can assert it (R4).
+pub(crate) fn keeper_park_error(e: KeeperError) -> ActivityError {
+    if classify(&e) == Failure::Refused {
+        // D2/R4: only the `exec_stale_state` code -- a park-path `Conflict` --
+        // is typed; any other 409 stays non-retryable but untyped.
+        if matches!(&e, KeeperError::Conflict(c) if c == crate::keeper::STALE_STATE_FAILURE) {
+            return ActivityError::application(
+                temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!(e.to_string()))
+                    .type_name(crate::keeper::STALE_STATE_FAILURE.to_owned())
+                    .non_retryable(true)
+                    .build(),
+            );
+        }
+        ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(
+            e.to_string(),
+        ))
+    } else {
+        activity_error(e)
     }
 }
 
@@ -533,9 +578,9 @@ pub(crate) async fn park_path(
     exec: ExecId,
 ) -> Result<(), ActivityError> {
     let packet = ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
-    tokio::task::spawn_blocking(move || keeper.park(&packet, &exec).map_err(activity_error))
+    tokio::task::spawn_blocking(move || keeper.park(&packet, &exec).map_err(keeper_park_error))
         .await
-        .map_err(activity_error)?
+        .map_err(join_error)?
 }
 
 /// The park packet JSON the workflow hands to the `park` activity, with the
@@ -1357,10 +1402,14 @@ impl CardActivities {
     /// decision time.
     ///
     /// The only keeper *read* left in the worker. It runs off the tokio worker
-    /// threads in `spawn_blocking` behind an explicit 5 s timeout (G3-4), and
-    /// `None` -- an unreachable keeper, a slow one, an unreadable or oversized
-    /// body (G3-5) -- means "observed nothing": the workflow parks on its
-    /// live-set fallback exactly as a run that could not read always did.
+    /// threads in `spawn_blocking` behind an explicit 5 s timeout (G3-4). A
+    /// read failure -- an unreachable keeper, a slow one, an unreadable or
+    /// oversized body (G3-5) -- is a *retryable* activity failure (D1b): the
+    /// activity retry policy (5 attempts, 2 s initial) re-runs the read inside
+    /// this one scheduled activity -- no new workflow commands, so replay is
+    /// safe -- and only when those run out does the workflow degrade to its
+    /// live-set fallback, logging the cause. `Ok(None)` -- the keeper holds no
+    /// state -- is "observed nothing", as a run that could not read always was.
     // A short wire name, pinned by `gate_activity_name_and_payload_shapes_are_stable`
     // beside `attempt`; without the override the macro would emit
     // "CardActivities::observe" like `gate`/`probe`/`merge`.
@@ -1370,7 +1419,7 @@ impl CardActivities {
         _ctx: ActivityContext,
         card: String,
     ) -> Result<Option<String>, ActivityError> {
-        Ok(observe_read(self.deps.keeper.clone(), card).await)
+        observe_read(self.deps.keeper.clone(), card).await
     }
 
     /// Park a card: the keeper wants a human to look at the packet.
@@ -1669,7 +1718,7 @@ mod tests {
         let err = keeper
             .park(&g3_packet(), &g3_exec(expected_state_of(&input)))
             .expect_err("stale observation must be refused");
-        assert_eq!(err, KeeperError::Status(409));
+        assert_eq!(err, KeeperError::Conflict("exec_stale_state".to_string()));
         assert!(keeper.parked().is_empty());
         assert!(
             keeper.card_state_calls().is_empty(),
@@ -1710,6 +1759,80 @@ mod tests {
         assert!(stub.card_state_calls().is_empty());
     }
 
+    #[tokio::test]
+    async fn park_path_join_error_preserves_panic_cause() {
+        let stub = Arc::new(StubKeeper::default());
+        stub.set_park_panic(Some("keeper exploded in park"));
+        let keeper: Arc<dyn Keeper> = stub;
+        let input = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["waiting".into()]));
+        let exec = g3_exec(expected_state_of(&input));
+        let err = park_path(keeper, input, exec).await.unwrap_err();
+        assert!(
+            format!("{err:?}").contains("keeper exploded in park"),
+            "JoinError must retain the panic cause, got: {err:?}"
+        );
+    }
+
+    /// R4 (red): a 409 with some other keeper code (`lease_held`, `exec_stale`)
+    /// is not the CAS miss: untyped, so the re-observe loop must never fire.
+    #[tokio::test]
+    async fn park_409_with_another_code_is_not_typed_stale() {
+        for code in ["lease_held", "exec_stale"] {
+            let stub = Arc::new(StubKeeper::default());
+            stub.set_park_error(Some(KeeperError::Conflict(code.to_string())));
+            let keeper: Arc<dyn Keeper> = stub.clone();
+            let input = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["waiting".into()]));
+            let exec = g3_exec(expected_state_of(&input));
+            let err = park_path(keeper, input, exec)
+                .await
+                .expect_err("a refused park must fail");
+            let ActivityError::Application(f) = err else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{code}");
+            assert_eq!(f.type_name(), None, "{code}: non-CAS 409 must not be typed");
+            assert_eq!(stub.park_execs().len(), 1, "{code}: one park exec");
+            assert!(stub.card_state_calls().is_empty(), "{code}: re-observed");
+        }
+    }
+
+    /// D2/D3/R4: only a park 409 carrying `exec_stale_state` is typed so the
+    /// workflow can re-observe; every other refusal stays non-retryable but
+    /// untyped, and a transient 5xx keeps the retry policy's default.
+    #[test]
+    fn only_a_stale_park_refusal_is_typed_and_a_5xx_stays_retryable() {
+        for code in [401, 403, 422] {
+            let ActivityError::Application(f) = keeper_park_error(KeeperError::Status(code)) else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{code}");
+            assert_eq!(f.type_name(), None, "{code}");
+        }
+        // R4: only `exec_stale_state` is the CAS miss; other 409s are untyped.
+        for err in [
+            KeeperError::Status(409),
+            KeeperError::Conflict("lease_held".to_string()),
+            KeeperError::Conflict(String::new()),
+        ] {
+            let ActivityError::Application(f) = keeper_park_error(err.clone()) else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{err:?}");
+            assert_eq!(f.type_name(), None, "{err:?}");
+        }
+        let err = KeeperError::Conflict(crate::keeper::STALE_STATE_FAILURE.to_string());
+        let ActivityError::Application(f) = keeper_park_error(err) else {
+            panic!("a stale park must be an application failure");
+        };
+        assert!(f.is_non_retryable());
+        assert_eq!(f.type_name(), Some(crate::keeper::STALE_STATE_FAILURE));
+        let ActivityError::Application(f) = keeper_park_error(KeeperError::Status(500)) else {
+            panic!("a transient park failure must be an application failure");
+        };
+        assert!(!f.is_non_retryable());
+        assert_eq!(f.type_name(), None);
+    }
+
     /// G3-3: an ask keeps the any-of live-set CAS the ADR documents -- it is
     /// never narrowed to a single state -- and re-reads nothing (G3-1).
     #[test]
@@ -1744,7 +1867,8 @@ mod tests {
     }
 
     /// G3-4: the one keeper read left waits a bounded time off the runtime
-    /// threads, and a stalled keeper is "observed nothing".
+    /// threads, and a stalled keeper is a transient failure to retry (D1b),
+    /// never a silent absence.
     #[tokio::test]
     async fn observe_read_is_bounded_by_the_five_second_cap() {
         assert!(
@@ -1756,17 +1880,18 @@ mod tests {
         stub.set_card_state_delay(Some(Duration::from_millis(500)));
         let read: Arc<dyn Keeper> = stub.clone();
         let started = Instant::now();
-        assert_eq!(
-            observe_read_within(read, "c-1".into(), Duration::from_millis(25)).await,
-            None,
-            "a stalled read answers nothing"
+        assert!(
+            observe_read_within(read, "c-1".into(), Duration::from_millis(25))
+                .await
+                .is_err(),
+            "a stalled read is a transient failure to retry"
         );
         assert!(started.elapsed() < Duration::from_secs(5));
         // An unstalled read hands the observation over.
         stub.set_card_state_delay(None);
         assert_eq!(
-            observe_read(stub.clone(), "c-1".into()).await,
-            Some("waiting".to_string())
+            observe_read(stub.clone(), "c-1".into()).await.ok(),
+            Some(Some("waiting".to_string()))
         );
         assert_eq!(
             stub.card_state_calls(),

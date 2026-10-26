@@ -24,11 +24,15 @@ from plangraph.spawner.clients import (
     build_command,
     build_routing_envelope_headers,
 )
-from plangraph.spawner.resolver import detect_model_family
+from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
+from plangraph.planner.legs import DEFAULT_LEGS
 
 _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
+
+_KEEPER_UNCONFIGURED_WARN_S = 600
+_keeper_unconfigured_last_warned = None
 
 
 from .env_redact import unavailable_reason
@@ -63,8 +67,9 @@ class JobInfo:
     exit_code: int | None = None
     stdout: str = ""
     stderr: str = ""
-    served_model: str | None = None
-    served_family: str | None = None
+    served_model: str | None = 'unwitnessed'
+    served_family: str | None = 'unwitnessed'
+    served_witness_reason: str = 'harness supplied no authenticated served-model telemetry'
     dry_run: bool = False
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
@@ -132,6 +137,29 @@ class SpawnerRunner:
         self._adapter_tokens = {}
         self._child_envs = {}
 
+    def served_witness(self, job_id, model, *, adapter_token):
+        """Record transport telemetry authenticated by an in-process adapter.
+
+        Do not expose this capability to the child: even a child that knows its
+        run nonce cannot attest to its own serving identity. Only a real
+        admitted model id is attestable: a combo alias such as "l2-worker"
+        (no "/") or any id outside the canonical families would otherwise
+        publish the label itself as served_family. A refused witness leaves
+        the job unwitnessed.
+        """
+        if adapter_token is None or adapter_token is not self._adapter_tokens.get(job_id):
+            raise ValueError('invalid adapter token')
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError('missing served model')
+        model = model.strip()
+        family = detect_model_family(model)
+        if '/' not in model or family not in MODEL_FAMILIES:
+            raise ValueError('served model is not an admitted model id: ' + model)
+        job = self.jobs[job_id]
+        job.served_model = model
+        job.served_family = family
+        job.served_witness_reason = 'authenticated gateway adapter telemetry'
+
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
         """Consume trusted gateway transport evidence, never free-text output.
@@ -180,6 +208,14 @@ class SpawnerRunner:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
+        timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
+        if timeout:
+            try:
+                seconds = float(timeout)
+                if not math.isfinite(seconds) or seconds <= 0:
+                    raise ValueError
+            except ValueError:
+                raise ValueError('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         work_dir = cwd or self.default_cwd
 
@@ -224,18 +260,29 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        render_reason = None
         if cmd[0] == 'opencode':
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
+            from plangraph.routing_support.opencode_render import render_gateway_providers
+            render_reason = render_gateway_providers(child_env, model_or_combo)
+            if render_reason is None:
+                # Overlay only copies an env name through when the parent already
+                # holds it; hand the child the host keys from the AutoOS keys file
+                # so mimo and opencode/*-free runs can authenticate (D-2759).
+                from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
+                add_host_keys(child_env, model_or_combo,
+                    needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
-        self._child_envs[job_id] = child_env
+        if render_reason is None:
+            self._child_envs[job_id] = child_env
 
         try:
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)
-                if "/" not in model_or_combo:
+                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in DEFAULT_LEGS):
                     from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
                     combo_legs = [
                         m for m in get_catalog_models()
@@ -263,6 +310,8 @@ class SpawnerRunner:
                     dry_run=True,
                     cwd=work_dir,
                 )
+                if render_reason:
+                    job.events.append({'event': 'render_refused', 'reason': render_reason})
                 self.jobs[job_id] = job
                 return job
 
@@ -279,6 +328,14 @@ class SpawnerRunner:
             )
             self.jobs[job_id] = job
 
+            if render_reason:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = render_reason
+                job.end_time = time.time()
+                job.events.append({'event': 'render_refused', 'reason': render_reason})
+                return job
+
             from .resolver import host_skip_reason_async
             unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
@@ -287,6 +344,9 @@ class SpawnerRunner:
                 job.stderr = unavailable
                 job.end_time = time.time()
                 return job
+            from .resolver import admitted_by_render
+            if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
+                job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
@@ -384,12 +444,10 @@ class SpawnerRunner:
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
 
-            served_model, served_family = extract_served_telemetry(
-                stdout_text + "\n" + stderr_text,
-                fallback_model=requested_model,
-            )
-            job.served_model = served_model
-            job.served_family = served_family
+            # Free text is child-controlled, including plausible provider headers.
+            # Absence of an authenticated adapter witness must remain explicit.
+            job.served_model = job.served_model or 'unwitnessed'
+            job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
             if job_id in self.jobs:
                 self.jobs[job_id].status = "cancelled"
@@ -410,6 +468,9 @@ class SpawnerRunner:
 
     async def status(self, job_id: str | None = None) -> Any:
         """Query status of a specific job or all jobs."""
+        if job_id is not None and not isinstance(job_id, str):
+            from plangraph.routing_errors import ParameterRefused
+            raise ParameterRefused('job_id must be a string')
         if job_id:
             if job_id not in self.jobs:
                 raise KeyError(f"Job {job_id} not found")
@@ -418,6 +479,9 @@ class SpawnerRunner:
 
     async def steer(self, job_id: str, message: str) -> dict[str, Any]:
         """Send steer instruction to an active job."""
+        if not isinstance(job_id, str):
+            from plangraph.routing_errors import ParameterRefused
+            raise ParameterRefused('job_id must be a string')
         if job_id not in self.jobs:
             return {'ok': False, 'steered': False, 'error': 'unknown job'}
         job = self.jobs[job_id]
@@ -444,6 +508,9 @@ class SpawnerRunner:
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a running job."""
+        if not isinstance(job_id, str):
+            from plangraph.routing_errors import ParameterRefused
+            raise ParameterRefused('job_id must be a string')
         if job_id not in self.jobs:
             raise KeyError(f"Job {job_id} not found")
         job = self.jobs[job_id]
@@ -488,10 +555,11 @@ def spawn_service(*args, **kwargs):
             super().__init__(*args, **kwargs)
             from .notify import FileInbox
             self.completion_sink = completion_sink or FileInbox(self.state)
-            self.keeper_sink = keeper_sink or self.completion_sink
+            from .notify import KeeperSink
+            self.keeper_sink = keeper_sink or KeeperSink()
 
         def _save(self, record, *, retry=False):
-            from .notify import completion_event, CommandSink
+            from .notify import completion_event, CommandSink, KeeperNotConfigured
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 for stream in ('stdout', 'stderr'):
@@ -520,6 +588,13 @@ def spawn_service(*args, **kwargs):
                         sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'delivered\n')
+                    except KeeperNotConfigured:
+                        global _keeper_unconfigured_last_warned
+                        now = time.monotonic()
+                        last = _keeper_unconfigured_last_warned
+                        if last is None or (now - last) >= _KEEPER_UNCONFIGURED_WARN_S:
+                            _keeper_unconfigured_last_warned = now
+                            logging.getLogger(__name__).warning('completion delivery skipped: keeper not configured (queued)')
                     except Exception:
                         logging.getLogger(__name__).exception('completion delivery failed: %s', recipient)
                 command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
@@ -574,11 +649,17 @@ def spawn_service(*args, **kwargs):
 
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
-                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
+                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
             # Let the base service handle audited overrides, which never fall through.
-            if model or leg or not card:
-                return await super()._spawn(card, prompt, role, writer_families, review_of,
-                    model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
+            if model is not None or leg is not None or not card:
+                return await super()._spawn(
+                    card=card, prompt=prompt, role=role, writer_families=writer_families,
+                    review_of=review_of, model=model, leg=leg, override_reason=override_reason,
+                    dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=True,
+                    benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
+                )
+            from plangraph.settings import admit_review_scope
+            admit_review_scope(card, role, review_scope)
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
@@ -637,12 +718,15 @@ def spawn_service(*args, **kwargs):
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                            served_model=job.served_model, served_family=job.served_family,
+                            served_witness_reason=job.served_witness_reason,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
-                            served_family=job.served_family, writer_family=job.served_family or chosen.family,
+                            served_family=job.served_family, served_witness_reason=job.served_witness_reason,
+                            writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,
                             events=record.get('events', []) + getattr(job, 'events', []))

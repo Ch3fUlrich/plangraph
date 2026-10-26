@@ -11,3 +11,7 @@ class RouteError(ValueError):
 
 class SpawnRefused(RouteError):
     """A spawn failed mandatory admission or audited-override policy."""
+
+
+class ParameterRefused(SpawnRefused):
+    """Malformed caller parameters, rather than a business-policy refusal."""

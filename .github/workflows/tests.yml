@@ -1,6 +1,6 @@
 # One required status check: ci-gate.
 # Branch protection requires only ci-gate; unselected suites skip, while selected
-# suites that skip or fail will fail the gate. Push to main and workflow_dispatch run everything.
+# suites that skip or fail will fail the gate. Main, nightly and manual runs run everything.
 
 name: tests
 
@@ -10,6 +10,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * *'
 
 # CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
 # but never a workflow_dispatch run (timing measurements must finish).
@@ -70,6 +72,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -116,7 +120,14 @@ jobs:
           install -m 0755 "$dir/gitleaks" ~/.local/bin/gitleaks
           ~/.local/bin/gitleaks version | grep -Fx 8.30.1
       - name: pytest
-        run: python -m pytest -q -n auto --dist loadgroup --durations=30 tests
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python tools/affected_tests.py --base "$BASE_SHA" --run -n auto
+          else
+            python -m pytest -q -n auto --dist loadgroup --durations=30 tests
+          fi
 
   # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
   # committed local assets, so the job never needs network access to a CDN.
@@ -174,6 +185,8 @@ jobs:
       PG_CONTRACT_ABORT_ON_TIMEOUT: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -205,10 +218,16 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
       - name: pytest (contract suite + keeper storage tests on Postgres)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           # keeper modules that never open the SQLite file directly
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES --run -n auto
+            exit $?
+          fi
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
           python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
             tests/test_projector_ddl.py $FILES

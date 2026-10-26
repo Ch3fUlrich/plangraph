@@ -9,6 +9,7 @@ Exposes MCP tools:
   - plangraph_agent_health: Health check reporting runner, catalog, and gateway status
 """
 from __future__ import annotations
+from plangraph.routing_errors import ParameterRefused
 
 import asyncio
 import json
@@ -110,6 +111,7 @@ for _tool in TOOLS_METADATA:
         _tool['inputSchema']['properties'].update({
             'card': {'type': 'object'}, 'override_reason': {'type': 'string'},
             'writer_families': {'type': 'array', 'items': {'type': 'string'}},
+            'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'}})
         _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
@@ -161,13 +163,14 @@ class MCPSpawnerServer:
                 raise exc
             if not arguments.get('card'):
                 from plangraph.planner.routing import SpawnRefused
-                exc = SpawnRefused('spawn by card; card required')
+                exc = ParameterRefused('spawn by card; card required')
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
                 raise exc
             return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
                 role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
                 writer_families=arguments.get('writer_families', ()),
+                review_scope=arguments.get('review_scope'),
                 dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
                 no_fallthrough=arguments.get('no_fallthrough', False), **options)
 
@@ -259,7 +262,7 @@ class MCPSpawnerServer:
                 result = await self.call_tool(tool_name, tool_args)
                 if isinstance(result, dict) and result.get('status') == 'refused':
                     return {'jsonrpc': '2.0', 'id': req_id, 'error': {
-                        'code': -32602, 'message': result.get('error', 'benchmark rows missing'),
+                        'code': -32602 if result.get('refusal') in ('ParameterRefused', 'BenchRequired', 'BenchDataError') else -32000, 'message': result.get('error', 'benchmark rows missing'),
                         'data': {'type': result.get('refusal', 'SpawnRefused'), 'exit_code': result.get('exit_code', 2), 'legs': result.get('legs', []),
                                  'run_id': result.get('run_id')}}}
                 return {
@@ -275,7 +278,7 @@ class MCPSpawnerServer:
             except Exception as exc:
                 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):
-                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc), 'data': {'type': type(exc).__name__, 'exit_code': 3 if isinstance(exc, BenchmarkError) else 2, 'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602 if isinstance(exc, (BenchmarkError, ParameterRefused)) else -32000, 'message': str(exc), 'data': {'type': type(exc).__name__, 'exit_code': 3 if isinstance(exc, BenchmarkError) else 2, 'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,

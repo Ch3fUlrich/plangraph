@@ -79,6 +79,11 @@ def read_runs(state):
             record = json.loads(path.read_text(encoding='utf-8'))
             if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
                 raise ValueError('invalid run record')
+            completion = record.get('completion') if isinstance(record.get('completion'), dict) else {}
+            if completion.get('parent_session') and not record.get('parent_session'):
+                record['parent_session'] = completion['parent_session']
+            if completion.get('item') and not record.get('item_key'):
+                record['item_key'] = completion['item']
             if (path.parent / 'parent.delivered').exists():
                 record['_completion_acknowledged'] = True
             runs.append(record)
@@ -241,13 +246,16 @@ def main(argv=None):
     runs = read_runs(state)
     findings = tick(runs, [], lambda s: read_activity(state, s),
                     deliver=lambda e: deliver_event(state, e))
-    error = None
+    error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],
                          read_claims(), lambda s: read_activity(state, s),
                          deliver=lambda e: deliver_event(state, e))
     except Exception as exc:
-        error = type(exc).__name__
+        if type(exc).__name__ in ('MissingKeeperURL', 'Unreachable'):
+            warning = type(exc).__name__  # keeper not configured/reachable: skip claim rule
+        else:
+            error = type(exc).__name__
     command = os.environ.get('PLANGRAPH_WATCHDOG_DELIVERY')
     if command:
         try:
@@ -257,6 +265,8 @@ def main(argv=None):
     elif findings:
         error = error or 'delivery-bridge-unconfigured'
     text = status(findings)
+    if warning:
+        text += ('\n' if text else '') + '! stall watchdog warning keeper skipped ' + warning
     if error:
         text += ('\n' if text else '') + '! stall watchdog error ' + error
     from plangraph.spawner.private_io import atomic_write_private

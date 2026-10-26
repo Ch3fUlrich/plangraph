@@ -145,7 +145,7 @@ or the input cursor when no rows are delivered. Records contain `id`, server
 
 ## Errors
 
-Errors serialize as `{"error":{"code":"...","message":"..."}}`; `rate_limited` (429)
+Errors serialize as `{"error":{"code":"...","message":"..."}}`; `msg_rate_limited` (429)
 and `replay_window_full` (503) add `"retry_after_s": <int>` inside the error object.
 Messages must not echo request payloads, signatures or secret material.
 Adapters also publish `retry_after_s` as a Retry-After header.
@@ -160,7 +160,7 @@ Adapters also publish `retry_after_s` as a Retry-After header.
 | `not_found` | 404 |
 | `cursor_gone` | 410 |
 | `too_large` | 413 |
-| `rate_limited` | 429 |
+| `msg_rate_limited` | 429 |
 | `replay_window_full` | 503 |
 
 ## keeper message envelope

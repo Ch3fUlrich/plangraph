@@ -2,7 +2,7 @@
 //!
 //! These tests need a server reachable at `PG_TEMPORAL_ADDR` (for example
 //! `http://127.0.0.1:17233`). When that variable is unset every test returns
-//! early, so a checkout without a server still passes; CI that sets the
+//! early, so a checkout without a server still passes (under `CI` a missing address panics, D6); CI
 //! variable exercises the whole path: workflow, activities, git worktrees and
 //! merges.
 //!
@@ -31,7 +31,7 @@ use std::time::Duration;
 use pg_worker::activities::{CardActivities, CardOutput, Deps, TASK_QUEUE};
 use pg_worker::attempt::LegSpec;
 use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
-use pg_worker::keeper::{Claim, Keeper, StubKeeper};
+use pg_worker::keeper::{Claim, Keeper, KeeperError, StubKeeper};
 use pg_worker::phase::{PhaseInput, PhaseOutput};
 use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::{Card, CardInput};
@@ -356,22 +356,41 @@ impl Drop for Env {
     }
 }
 
-/// `Some(Env)` when `PG_TEMPORAL_ADDR` is set, else `None` so the caller can
-/// print the skip line and return.
-async fn env_or_skip(name: &str, script: &str) -> Option<Env> {
-    match std::env::var("PG_TEMPORAL_ADDR") {
-        Ok(addr) if !addr.is_empty() => Some(Env::new(&addr, name, script, true).await),
+/// The skip decision (D6 / I6'), extracted so it is testable without racing
+/// the process env: with no `PG_TEMPORAL_ADDR` a test may skip only outside
+/// CI; under `CI` a skip is a failure, so this panics instead.
+fn temporal_addr_of(ci: Option<&str>, addr: Option<String>) -> Option<String> {
+    match addr {
+        Some(addr) if !addr.is_empty() => Some(addr),
+        _ if ci.is_some() => {
+            panic!("PG_TEMPORAL_ADDR unset under CI: a skipped e2e test is a failed test (D6)")
+        }
         _ => None,
     }
+}
+
+/// Position of `verb` in a keeper call-log slice, panicking when it never ran.
+fn verb_pos(calls: &[&str], verb: &str) -> usize {
+    calls
+        .iter()
+        .position(|v| *v == verb)
+        .unwrap_or_else(|| panic!("{verb} never called: {calls:?}"))
+}
+
+/// `Some(Env)` when `PG_TEMPORAL_ADDR` is set, else `None` so the caller can
+/// print the skip line and return. Panics instead of skipping under `CI`.
+async fn env_or_skip(name: &str, script: &str) -> Option<Env> {
+    let ci = std::env::var("CI").ok();
+    let addr = temporal_addr_of(ci.as_deref(), std::env::var("PG_TEMPORAL_ADDR").ok())?;
+    Some(Env::new(&addr, name, script, true).await)
 }
 
 /// Like `env_or_skip`, but the worker is built and held: nothing polls until
 /// `Env::resume`, so a workflow and its signals queue up first.
 async fn env_or_skip_paused(name: &str, script: &str) -> Option<Env> {
-    match std::env::var("PG_TEMPORAL_ADDR") {
-        Ok(addr) if !addr.is_empty() => Some(Env::new(&addr, name, script, false).await),
-        _ => None,
-    }
+    let ci = std::env::var("CI").ok();
+    let addr = temporal_addr_of(ci.as_deref(), std::env::var("PG_TEMPORAL_ADDR").ok())?;
+    Some(Env::new(&addr, name, script, false).await)
 }
 
 /// Await the card result under the shared deadline, then record its history.
@@ -414,6 +433,29 @@ async fn attempt_outcomes(handle: &Handle) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+/// How many times the workflow *scheduled* activities named `name`: one
+/// `ActivityTaskScheduled` event per workflow command, so an activity Temporal
+/// retried server-side counts once -- which is exactly what separates D1
+/// retries from workflow-level re-observe loops.
+async fn scheduled_activities(handle: &Handle, name: &str) -> usize {
+    let bytes = handle
+        .fetch_history(WorkflowFetchHistoryOptions::default())
+        .to_json()
+        .await
+        .expect("fetch history json");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("history is json");
+    value["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter(|ev| {
+            ev["attributes"]["ActivityTaskScheduledEventAttributes"]["activity_type"]["name"]
+                .as_str()
+                == Some(name)
+        })
+        .count()
 }
 
 /// Standard base64 (padding optional); enough to read history payloads
@@ -2515,6 +2557,329 @@ async fn phase_rerun_reuses_a_closed_card_child_id() {
             completed.iter().any(|(card, _)| card == &c),
             "{completed:?}"
         );
+        env.stop();
     })
     .await;
+}
+
+/// R2-1 / R2-3 / I1: a fresh run that parks schedules `observe`, records the
+/// `park-observe-v1` marker in workflow history, and presents the observed
+/// state in `park`, never the live-set fallback.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_run_records_observe_patch_and_parks_with_observation() {
+    in_local(async {
+        let Some(env) = env_or_skip("observe-park", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-observe-park";
+        // The keeper holds state `waiting` (e.g. usage_limit/outage).
+        env.keeper.set_card_state(Some("waiting"));
+        let claim = env.claim(card, &["out.txt"], "true");
+        let id = format!("e2e-observe-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("observe_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+
+        // Invariant I1: observe was scheduled before park.
+        assert_eq!(
+            env.keeper.card_state_calls(),
+            vec![card.to_string()],
+            "observe activity must query card_state before park"
+        );
+        // Invariant I1: the verb log proves card_state precedes park.
+        let calls = env.keeper.calls();
+        assert!(
+            verb_pos(&calls, "card_state") < verb_pos(&calls, "park"),
+            "{calls:?}"
+        );
+
+        // Invariant I1: the park entry carries ["waiting"], not the fallback.
+        let park_exec = env.keeper.park_execs().last().expect("park exec").clone();
+        assert_eq!(
+            park_exec.expected_state,
+            Some(vec!["waiting".to_string()]),
+            "park must carry recorded observation, not live-set fallback"
+        );
+        assert_eq!(env.keeper.parked().len(), 1, "park must have landed");
+
+        // Invariant I1: OBSERVE_PATCH marker was recorded in workflow history.
+        let bytes = handle
+            .fetch_history(WorkflowFetchHistoryOptions::default())
+            .to_json()
+            .await
+            .expect("fetch history json");
+        let history_val: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("history is valid json");
+        let decoded = decoded_payloads(&history_val).join("\n");
+        assert!(
+            decoded.contains("park-observe-v1"),
+            "workflow history must record park-observe-v1 marker: {decoded}"
+        );
+
+        env.stop();
+    })
+    .await;
+}
+
+/// R2-2 / I3: a transient observe failure (500/timeout/None) makes the first park
+/// send the live-set fallback, which the keeper refuses with 409 exec_stale_state
+/// on a `waiting` card. The workflow must re-observe and land the cap-park.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cap_park_on_waiting_card_lands_after_one_failed_observe() {
+    in_local(async {
+        let Some(env) = env_or_skip("failed-observe-park", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-failed-observe-park";
+        // Card is waiting; simulate one transient read failure (returns None).
+        env.keeper.set_card_state(Some("waiting"));
+        env.keeper.set_card_state_fail_times(1);
+
+        let claim = env.claim(card, &["out.txt"], "true");
+        let id = format!("e2e-failed-observe-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("failed_observe_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+
+        // Invariant I3: the workflow re-observed after fallback refusal and landed the park.
+        assert_eq!(
+            env.keeper.card_state_calls().len(),
+            2,
+            "observe activity must have been re-run after fallback refusal"
+        );
+        assert_eq!(
+            env.keeper.parked().len(),
+            1,
+            "park must land within bounded retries"
+        );
+
+        env.stop();
+    })
+    .await;
+}
+
+/// D1b / I3a: a transient observe read failure is retried by the activity's
+/// retry policy inside one scheduled `observe`, not degraded to the live-set
+/// fallback: two `Err(500)` reads then the state, and the park carries the
+/// observed state ["waiting"].
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transient_observe_failure_is_retried_not_degraded() {
+    in_local(async {
+        let Some(env) = env_or_skip("retried-observe", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-retried-observe";
+        // Card is waiting; the first two reads fail transiently (D1a Err(500)).
+        env.keeper.set_card_state(Some("waiting"));
+        env.keeper.set_card_state_fail_times(2);
+
+        let claim = env.claim(card, &["out.txt"], "true");
+        let id = format!("e2e-retried-observe-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("retried_observe", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+
+        // I3a: one scheduled observe activity: the retries are server-side
+        // attempts, so the workflow issued a single command and replay is safe.
+        assert_eq!(
+            scheduled_activities(&handle, "observe").await,
+            1,
+            "a transient read failure must be retried by the activity, not degraded"
+        );
+        // I3a: two failed reads, then the successful observation.
+        assert_eq!(
+            env.keeper.card_state_calls().len(),
+            3,
+            "two transient failures then the observed state"
+        );
+        // I3a: the park carries the observed state, never the live-set fallback.
+        let execs = env.keeper.execs();
+        let park_exec = execs
+            .iter()
+            .find(|e| e.expected_state.is_some())
+            .expect("park must carry expected_state");
+        assert_eq!(
+            park_exec.expected_state,
+            Some(vec!["waiting".to_string()]),
+            "the retried read must land the observation, not degrade"
+        );
+        assert_eq!(env.keeper.parked().len(), 1, "the park must land");
+
+        env.stop();
+    })
+    .await;
+}
+
+/// D2/D3/D4 (I3b): a park the keeper refuses 409 (`exec_stale_state`, the state
+/// CAS missed) is the one failure a fresh observation can repair, so the
+/// workflow re-observes and parks again -- at most twice. A refusal the
+/// re-observe repairs lands the park on the first re-observe; a keeper that
+/// refuses every park fails the workflow after exactly 2 re-observes, with the
+/// last cause in the failure message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_state_refusal_reobserves_at_most_twice() {
+    in_local(async {
+        let Some(env) = env_or_skip("stale-park", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+
+        // One refused park: the re-observe repairs it and the park lands.
+        env.keeper.set_card_state(Some("waiting"));
+        env.keeper.set_park_refuse_times(1);
+        let claim = env.claim("e2e-stale-park", &["out.txt"], "true");
+        let id = format!("e2e-stale-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+        let out = finish("stale_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        // I3b: lands on re-observe 1: the initial observe plus exactly one more.
+        assert_eq!(scheduled_activities(&handle, "observe").await, 2);
+        assert_eq!(
+            scheduled_activities(&handle, "CardActivities::park").await,
+            2
+        );
+        assert_eq!(env.keeper.parked().len(), 1);
+        // I3b: the landing park presents the re-observed state, not a stale one.
+        let park = env
+            .keeper
+            .execs()
+            .into_iter()
+            .rfind(|e| e.expected_state.is_some())
+            .expect("park exec");
+        assert_eq!(park.expected_state, Some(vec!["waiting".to_string()]));
+
+        // A keeper that refuses every park: bounded at 2 re-observes, then fail.
+        env.keeper.set_park_refuse_times(3);
+        let claim = env.claim("e2e-stale-park-fail", &["out.txt"], "true");
+        let id = format!("e2e-stale-park-fail-{}", unique());
+        let handle = env.start(&id, claim).await;
+        let err = tokio::time::timeout(
+            RESULT_TIMEOUT,
+            handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("card result within 120s")
+        .expect_err("a park that can never land fails the workflow");
+        let temporalio_client::errors::WorkflowGetResultError::Failed(failure) = err else {
+            panic!("expected a failed workflow, got: {err:?}");
+        };
+        let msg = &failure.failure().message;
+        assert!(msg.contains("after 2 re-observes"), "{msg}");
+        assert!(msg.contains("409"), "the last cause must ride in: {msg}");
+        // I3b: initial observe + exactly 2 re-observes, and no park landed.
+        assert_eq!(scheduled_activities(&handle, "observe").await, 3);
+        assert_eq!(
+            scheduled_activities(&handle, "CardActivities::park").await,
+            3
+        );
+        // The stub still holds the first scenario's one landed park: none added.
+        assert_eq!(env.keeper.parked().len(), 1, "no refused park may land");
+
+        env.stop();
+    })
+    .await;
+}
+
+/// D4 / I3c: a park error that is not the stale state-CAS refusal (403, 422,
+/// transport) needs no fresh observation, so the workflow returns it at once:
+/// no re-observe, and the initial observe is the only `card_state` call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn non_stale_park_errors_do_not_reobserve() {
+    in_local(async {
+        let Some(env) = env_or_skip("park-errors", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_card_state(Some("waiting"));
+        let scenarios = [
+            ("403", KeeperError::Status(403), 1, "403"),
+            ("422", KeeperError::Status(422), 1, "422"),
+            (
+                "transport",
+                KeeperError::Http("connection refused".into()),
+                5,
+                "keeper request failed",
+            ),
+        ];
+        for (name, kerr, attempts, needle) in scenarios {
+            env.keeper.set_park_error(Some(kerr));
+            let base_reads = env.keeper.card_state_calls().len();
+            let base_calls = env.keeper.calls().len();
+            let card = format!("e2e-park-error-{name}");
+            let id = format!("e2e-park-error-{name}-{}", unique());
+            let handle = env.start(&id, env.claim(&card, &["out.txt"], "true")).await;
+            let err = tokio::time::timeout(
+                RESULT_TIMEOUT,
+                handle.get_result(WorkflowGetResultOptions::default()),
+            )
+            .await
+            .expect("card result within 120s")
+            .expect_err("a non-stale park error must fail the workflow, never re-observe");
+            let temporalio_client::errors::WorkflowGetResultError::Failed(failure) = err else {
+                panic!("expected a failed workflow for park {name}, got: {err:?}");
+            };
+            // The error that returned is the park's own error.
+            assert!(
+                format!("{failure:?}").contains(needle),
+                "{name}: {failure:?}"
+            );
+            // I3c: the initial observe is the only read (0 extra card_state
+            // calls) and precedes the park; one park command, no re-observe.
+            let calls = env.keeper.calls();
+            let calls = &calls[base_calls..];
+            assert!(
+                verb_pos(calls, "card_state") < verb_pos(calls, "park"),
+                "{calls:?}"
+            );
+            assert_eq!(
+                env.keeper.card_state_calls().len() - base_reads,
+                1,
+                "{name}: 0 extra reads"
+            );
+            assert_eq!(
+                scheduled_activities(&handle, "observe").await,
+                1,
+                "{name}: re-observed"
+            );
+            assert_eq!(
+                scheduled_activities(&handle, "CardActivities::park").await,
+                1,
+                "{name}: parks"
+            );
+            // Keeper-level attempts: at once (403/422) vs the bounded
+            // transient retries a transport failure spends first (D1).
+            assert_eq!(
+                calls.iter().filter(|v| **v == "park").count(),
+                attempts,
+                "{name}: attempts"
+            );
+            assert!(
+                env.keeper.parked().is_empty(),
+                "{name}: no failed park lands"
+            );
+        }
+        env.stop();
+    })
+    .await;
+}
+
+/// I6' / D6: e2e never silently skips in CI. Outside CI a missing
+/// `PG_TEMPORAL_ADDR` is still a skip and a set one is used; under `CI` the
+/// missing address panics (a skip in CI is a failure).
+#[test]
+#[should_panic(expected = "PG_TEMPORAL_ADDR unset under CI")]
+fn ci_without_temporal_addr_panics_instead_of_skipping() {
+    assert_eq!(temporal_addr_of(None, None), None);
+    assert_eq!(temporal_addr_of(None, Some(String::new())), None);
+    assert_eq!(
+        temporal_addr_of(None, Some("http://x".into())),
+        Some("http://x".into())
+    );
+    temporal_addr_of(Some("1"), None);
 }

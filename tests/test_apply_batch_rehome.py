@@ -18,12 +18,8 @@ for _rel in ("tools", "tests"):
 import apply_batch  # noqa: E402,F401
 from apply_batch import BatchError, build_request, validate_op  # noqa: E402
 
-try:
-    import fcntl  # noqa: F401
-except ImportError:
-    KEEPERS = False
-else:
-    KEEPERS = True
+import sys
+KEEPERS = sys.platform != "win32"
 
 if KEEPERS:
     from keeper_util import defn  # noqa: E402

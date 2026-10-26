@@ -6,7 +6,7 @@
       "rate_full": true
     },
     "error": {
-      "code": "rate_limited",
+      "code": "msg_rate_limited",
       "status": 429
     }
   },

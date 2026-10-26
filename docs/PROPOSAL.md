@@ -103,7 +103,7 @@ M4 hardening step, same schema [R2-imm 25–28].
 1 pg ready --project P --brief      # ≤10 lines: id | title | est | unblocks N | prio
 2 pg show ID                        # done criteria, deps, evidence kinds (~300 tokens)
 3 pg claim ID                       # atomic, returns epoch+lease; 409 -> next line of step 1
-4 pg token ID --role writer --run W # keeper issues for worker run W (spawned via autoos-agent, card=ID)
+4 pg token ID --role writer --run W # keeper issues for worker run W (spawned by card via plangraph-spawn, card=ID)
 5 pg heartbeat ID                   # while W runs; pg release ID if abandoned
 6 W: pg evidence ID --commit SHA --ci URL ; pg submit ID
 7 pg token ID --role reviewer --run V   # V = review run, other family; keeper checks run record

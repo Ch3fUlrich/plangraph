@@ -71,7 +71,7 @@ def test_windows_task_utf16_and_disabled(tmp_path):
     ns = {'t': 'http://schemas.microsoft.com/windows/2004/02/mit/task'}
     assert tree.find('.//t:Command', ns).text == 'C:/Program Files/A&B/python.exe'
     assert tree.find('.//t:Arguments', ns).text == '-m plangraph.spawner.stall_watchdog tick'
-    assert tree.find('.//t:WorkingDirectory', ns).text == str(root)
+    assert tree.find('.//t:WorkingDirectory', ns).text == str(root) + '\\src'
     assert calls[-1] == ['schtasks', '/Change', '/TN', 'Plangraph Stall Watchdog', '/DISABLE']
 
 

@@ -15,7 +15,10 @@ closed on any writer it cannot resolve: a commit with no ``Writer`` or
 ``Hand-Edit`` trailer, an unknown model id, or a git error raises
 ``Refused('writer_unknown', ...)`` so a closing verdict never rests on a
 guess.  ``Hand-Edit`` with no ``Writer`` counts as ``anthropic``: a hand edit
-is Claude/operator work, not a model writer.
+is Claude/operator work, not a model writer.  A hand edit the adapter proves
+to be a changelog-only edit is exempt from that count; that proof
+(``changelog_only_edit``) is the single source of truth for the exemption, and
+an adapter without it counts the hand.
 """
 from __future__ import annotations
 
@@ -65,7 +68,10 @@ def writer_families(store, item, ctx):
     git = getattr(ctx, "git", None)
     if git is None:
         raise Refused("writer_unknown", "no git adapter for commit evidence")
-    repo = git.repo_path(item["project"])
+    try:
+        repo = git.repo_path(item["project"])
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        raise Refused("writer_unknown", "cannot resolve project repository") from exc
     if not repo:
         raise Refused("writer_unknown",
                       f"no repo registered for project {item['project']!r}")
@@ -90,10 +96,24 @@ def writer_families(store, item, ctx):
                     raise Refused("writer_unknown",
                                   f"unknown writer model {model!r}")
             elif trailer.get("Hand-Edit"):
+                try:
+                    leaf = trailer.get("_writer_commit", commit)
+                    # ONE source of truth: the adapter's own changelog proof
+                    # decides the exemption.  An adapter without it cannot
+                    # prove a changelog-only edit, so the hand counts.
+                    exempt = getattr(git, "changelog_only_edit", None)
+                    is_exempt = bool(exempt(repo, leaf)) if exempt is not None else False
+                except Exception as exc:  # noqa: BLE001 - fail closed
+                    raise Refused("writer_unknown",
+                                  "cannot read the changelog-only proof") from exc
+                if is_exempt:
+                    continue
                 family = "anthropic"
             else:
                 raise Refused(
                     "writer_unknown",
                     f"commit behind {commit} has neither Writer nor Hand-Edit")
             families.append(family)
+    if not families:
+        raise Refused("writer_unknown", "commit evidence has no resolved writers")
     return families

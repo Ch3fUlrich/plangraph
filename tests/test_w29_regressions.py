@@ -15,7 +15,7 @@ def test_agy_harness_dispatch():
 
 def test_opencode_harness_dispatch():
     assert build_command('hello', 'omniroute/cx-gpt-6.1-sol', client='opencode') == [
-        'opencode', 'run', '--model', 'omniroute/cx-gpt-6.1-sol', 'hello']
+        'opencode', 'run', '--standalone', '--model', 'omniroute/cx-gpt-6.1-sol', 'hello']
 
 
 def test_unknown_harness_rejected():
