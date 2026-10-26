@@ -103,6 +103,14 @@ def run(cfg, *, host=None, port=None, ready=None):
         finally:
             def _cleanup():
                 stop.set()
+                bus_stop = getattr(server, "bus_stop", None)
+                bus_thread = getattr(server, "bus_thread", None)
+                # F3: stop and bounded-join the bus registry before the steps
+                # below, or its loop can outlive/hold off every one of them.
+                if bus_stop is not None:
+                    bus_stop.set()
+                if bus_thread is not None:
+                    bus_thread.join(timeout=2)
                 if prune_thread is not None:
                     prune_thread.join(timeout=5)
                 server.shutdown()
