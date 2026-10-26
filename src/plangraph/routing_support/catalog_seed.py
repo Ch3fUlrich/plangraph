@@ -171,6 +171,16 @@ SEED_PROVIDERS: list[dict[str, Any]] = [
         "updated_at": "2026-10-19T00:00:00Z",
     },
     {
+        "provider_id": "cx",
+        "omniroute_id": "cx",
+        "tier": "subscription",
+        "transport": "gateway",
+        "gateway_mode": "omniroute_acp",
+        "available": 1,
+        "unavailable_reason": None,
+        "updated_at": "2026-10-26T00:00:00Z",
+    },
+    {
         "provider_id": "mimo",
         "omniroute_id": "mimo",
         "tier": "subscription",

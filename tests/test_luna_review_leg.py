@@ -45,3 +45,15 @@ def test_luna_eligible_for_other_written_prs():
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",))
     assert LUNA in [leg.id for leg in plan.legs]
     assert not any(s["leg"] == LUNA for s in plan.skipped)
+
+
+def test_catalog_seeds_luna_with_opencode_harness():
+    from plangraph.routing_support import resolver
+    from plangraph.routing_support.catalog_db import CatalogDB
+    db = CatalogDB(":memory:")
+    db.init_and_seed()
+    rows = [r for r in resolver.get_catalog_models(db) if r["id"] == "omniroute/cx-gpt-6-luna"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["harness"] == "opencode" and row["family"] == "gpt"
+    assert row["context_tokens"] == 900000 and row["trains_on_prompts"] == 0
