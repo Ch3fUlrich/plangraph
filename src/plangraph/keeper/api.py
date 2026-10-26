@@ -453,6 +453,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
         self.fatal_reason = None
+        self._fatal_lock = threading.Lock()
         self.on_fatal = None
         self.snapshot_writer = None
         debounce = float(getattr(config, "snapshot_debounce_s", 0) or 0)
@@ -464,9 +465,10 @@ class KeeperHTTPServer(ThreadingHTTPServer):
 
     def fail(self, reason: str) -> None:
         """Record fatal failure once; calls on_fatal hook (I2, S2)."""
-        if self.fatal_reason is not None:
-            return
-        self.fatal_reason = reason
+        with self._fatal_lock:           # first writer wins (F1): check-and-set is atomic
+            if self.fatal_reason is not None:
+                return
+            self.fatal_reason = reason
         with suppress(Exception):
             print(f"keeper: fatal: {reason}", file=sys.stderr)
         if self.on_fatal is not None:
