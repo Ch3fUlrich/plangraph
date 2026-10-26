@@ -27,10 +27,12 @@ __all__ = [
 
 FAMILIES = (
     (r"gpt|^o\d", "openai"), (r"mimo", "xiaomi"), (r"llama|muse", "meta"),
-    (r"deepseek", "deepseek"), (r"qwen", "alibaba"), (r"gemini", "google"),
+    (r"deepseek", "deepseek"), (r"qwen", "alibaba"), (r"gemini|gemma", "google"),
     (r"claude|sonnet|opus|haiku", "anthropic"),
     (r"glm|zhipu", "zhipu"),
     (r"nemotron", "nvidia"),
+    (r"inkling", "thinkingmachines"),
+    (r"north|cohere", "cohere"),
 )
 
 # Risk tags that need two reviewer families at phase end.
