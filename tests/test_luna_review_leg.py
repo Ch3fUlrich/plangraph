@@ -1,0 +1,47 @@
+"""Review leg cx-gpt-6-luna (D-2983/D-2984): a gpt-family review seat, never a writer.
+
+The leg joins DEFAULT_LEGS right after cx-gpt-6.1-sol and is excluded from any
+review routed for a PR written by its own family (D-2511 family exclusion).
+"""
+from __future__ import annotations
+
+from plangraph.planner.legs import DEFAULT_LEGS, WRITER_ORDER
+from plangraph.planner.routing import plan_spawn
+
+CARD = {"estimate_tokens": 20000, "risk_tags": []}
+LUNA = "cx-gpt-6-luna"
+
+
+def test_luna_leg_in_default_legs():
+    leg = next((leg for leg in DEFAULT_LEGS if leg.id == LUNA), None)
+    assert leg is not None
+    assert (leg.family, leg.harness, leg.model, leg.roles) == (
+        "gpt", "opencode", "omniroute/cx-gpt-6-luna", ("review",))
+    ids = [leg.id for leg in DEFAULT_LEGS]
+    assert ids[ids.index("cx-gpt-6.1-sol") + 1] == LUNA
+
+
+def test_luna_never_writes():
+    assert any(leg.id == LUNA for leg in DEFAULT_LEGS)  # precondition: the leg exists
+    assert LUNA not in WRITER_ORDER
+    for estimate in (1000, 20000, 100000):
+        plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
+        assert LUNA not in [leg.id for leg in plan.legs]
+        assert LUNA not in [c["leg"] for c in plan.candidates]
+
+
+def test_luna_excluded_for_gpt_written_prs():
+    # D-2511: a sol-written PR (writer_families ("gpt",)) never picks luna as a
+    # reviewer.  The skipped record proves it is the family rule doing the work,
+    # not the leg's position in the list.
+    plan = plan_spawn(CARD, role="review", writer_families=("gpt",))
+    assert LUNA not in [leg.id for leg in plan.legs]
+    assert LUNA not in [leg.id for leg in plan.review_seats]
+    assert any(s["leg"] == LUNA and s["reason"] == "excluded_family"
+               for s in plan.skipped)
+
+
+def test_luna_eligible_for_other_written_prs():
+    plan = plan_spawn(CARD, role="review", writer_families=("mimo",))
+    assert LUNA in [leg.id for leg in plan.legs]
+    assert not any(s["leg"] == LUNA for s in plan.skipped)
