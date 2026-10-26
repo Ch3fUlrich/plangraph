@@ -461,7 +461,7 @@ def test_resolver_gemini_argon_smart_model_and_cost_adaptation():
 def test_resolver_codex_luna_only():
     """Verify Codex ACP allows luna-high while rejecting astra-max and sol-* from SQLite CatalogDB."""
     all_rows = get_catalog_models()
-    assert len(all_rows) == 25, "get_catalog_models() must query the full 25-row SQLite CatalogDB"
+    assert len(all_rows) == 26, "get_catalog_models() must query the full 26-row SQLite CatalogDB"
     models = {m["id"]: m for m in all_rows}
 
     assert is_model_available(models["cxa/gpt-6-luna-high"]) is True
