@@ -349,6 +349,8 @@ def test_managed_dir_per_platform_reads_the_child_env(tmp_path, monkeypatch):
     assert _REAL_MANAGED_DIR({}) == Path('C:\\ProgramData', 'opencode')
     monkeypatch.setattr(runner_mod.sys, 'platform', 'linux')
     assert _REAL_MANAGED_DIR({'ProgramData': str(tmp_path)}) == Path('/etc/opencode')
+    monkeypatch.setattr(runner_mod.sys, 'platform', 'darwin')
+    assert _REAL_MANAGED_DIR({'ProgramData': str(tmp_path)}) == Path('/Library/Application Support/opencode')
 
 
 def test_locked_store_db_returns_none_without_blocking(tmp_path):
