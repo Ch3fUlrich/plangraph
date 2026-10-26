@@ -56,6 +56,29 @@ READ_CALLS = {
 RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay"})
 
 
+#: The roles each inline ``_write`` verb can ever admit (a superset of the
+#: store's own check -- claimant verbs are identity-gated, so every role that can
+#: hold a claim).  A caller outside this set is refused (audited, 403) before
+#: its body is validated; a caller inside it keeps the 400 validation.
+_CLAIMANT = ("l1", "worker", "system")
+INLINE_ROLES = {
+    "create_items": ("router", "l1", "oversight"),
+    "import_items": ("router",),
+    "edit_definition": ("router", "l1", "oversight", "worker"),
+    "set_priority": ("router", "oversight"),
+    "claim": ("l1", "worker"),
+    "delegate": _CLAIMANT,
+    "heartbeat": _CLAIMANT,
+    "release": _CLAIMANT + ("router",),
+    "submit": _CLAIMANT,
+    "add_evidence": _CLAIMANT,
+    "add_evidence_router": ("router", "system"),
+    "verdict": ("reviewer",),
+    "cancel": ("router", "l1", "oversight"),
+    "waive_second_family": ("router",),
+}
+
+
 def run_gate(principal, name):
     """A run token is refused (403) before any body parsing outside its verbs."""
     if getattr(principal, "token_id", None) is not None and name not in RUN_VERBS:

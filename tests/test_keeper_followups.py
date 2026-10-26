@@ -452,3 +452,41 @@ def test_miscased_closes_with_valid_token_closes_only_that_key(tmp_path):
         w3.store.close_on_decision(w3.p("router"), KEY, w3.batch_ref)
     assert exc.value.code == "evidence_unverified"
     w3.close()
+
+
+# 203-r4a S3: the inline verbs obey the same order as the routed ones
+from plangraph.keeper import api_routes  # noqa: E402
+
+INLINE_RIGHT_ROLE = {"verdict": "reviewer", "claim": "l1main", "delegate": "l1main",
+                     "heartbeat": "l1main", "submit": "l1main",
+                     "add_evidence": "l1main", "release": "l1main",
+                     "create_items": "l1main", "edit_definition": "l1main",
+                     "cancel": "l1main"}
+
+
+def _post(srv, token, verb, body):
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/{verb}", data=json.dumps(body).encode(), method="POST",
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"})
+    try:
+        return urllib.request.urlopen(request, timeout=10).status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+@pytest.mark.parametrize("verb", sorted(api_routes.INLINE_ROLES))
+def test_inline_verbs_refuse_the_wrong_role_before_the_body(world, srv, verb):
+    def refusals():
+        return world.store.conn.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action=? AND ok=0 AND code=?",
+            (verb, "forbidden")).fetchone()[0]
+    before = refusals()
+    assert _post(srv, world.tokens["reader"], verb, {}) == 403
+    assert refusals() == before + 1                  # audited, not a bare 400
+    # positive control: a role the verb admits still gets the 400 validation
+    right = INLINE_RIGHT_ROLE.get(verb, "router")
+    assert _post(srv, world.tokens[right], verb, {}) == 400

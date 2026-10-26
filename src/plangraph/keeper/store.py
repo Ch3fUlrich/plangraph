@@ -293,6 +293,17 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         with self._write():
             self._audit(principal, action, key, False, exc.code, exc.msg, now)
 
+    def refuse_malformed_body(self, principal, action, key, roles, invalid):
+        """Refuse a malformed body at the seam: the role check comes first.
+
+        A principal outside *roles* gets the audited ``forbidden``; one inside
+        them gets *invalid* (the validation refusal), audited as well.
+        """
+        def verb(now):
+            self._require_role(principal, *roles)
+            raise invalid
+        return self._run(principal, action, key, verb)
+
     # ---------------------------------------------------- authorisation
     @staticmethod
     def _require_role(principal, *roles):
