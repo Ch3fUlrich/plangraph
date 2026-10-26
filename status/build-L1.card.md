@@ -1,4 +1,4 @@
-# build-L1 card · gen-37 (D-2903) · 2026-10-26 05:1xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
+# build-L1 card · gen-38 (D-2928) · 2026-10-26 06:xxZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
 D-2739 (operator): one task loops (no follow-up items), design first for HIGH/>400 lines, slices <=400, 2 text seats, MED in body=changes, fixer>=writer never flash, round>3 -> Opus replan, merge main once before final review.
 D-2749: AutoOS spawner retired; all runs via plangraph spawner; missing feature -> BLOCKED to routing, no fallback.
 D-2744: no deepseek leg (writer or seat, incl opencode free deepseek); mimo-pro, mimo-flash seats only.
@@ -18,18 +18,18 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | spawn-iso #200 / #201 | both DONE (#201: r1 fix-seat post had reset it to claimed; gen-37 resubmitted + posted delta qwen pass -> done) |
 | PG-TEST-SHM-LEAK | DONE: #222 MERGED a26573c3 (main CI 40267831508), evidence ok, qwen pass posted |
 | SPAWN-OPENROUTER-FREE-ENDPOINTS (std, prio 5) | defined D-2805; after shm-leak; account/privacy change = operator OS line |
-| SQ12 (workst-L1-autoos) | slices SQ12-a/-b; workst writes held until SPAWN-WIN-PARITY lands |
+| SQ12 (workst-L1-autoos) | hold lifted; asked workst 06Z to start writer (no PR yet); LAST gate before dogfood |
 | efficiency slice 4 | sent host-wide admission gap (D-2785) + qwen/haiku review legs (D-2789). D-2799 4c argv OK sent gen-33 w/ 5 conditions (accepted); slice 4 on hold for routing (design r4 FIX) |
 | D-2810/D-2815 | defined: SPAWN-PACKET-SCRUB (HIGH prio 3, strong design first, 2 non-Claude seats + judge), SPAWN-HAIKU-LEG (std prio 4). Order S1 > pgr > iso > shm-leak > PACKET-SCRUB > or-free > HAIKU-LEG, budget 2 |
 | coding.vm RAM | 10-25 cleanup: 72 stale /dev/shm/pgtest-* (4.7G) + orphan opencode serve removed; avail 1.8->8.2G |
 Seats: seatpost.py/qwenprompt.py/haikuseat.sh interim OK (D-2789): count toward cap, never edit review.txt/prompt.txt, keep seat dirs; post via post.sh (verdict.judge -> tools/seat_verdict.py reviewer-<family> token).
 Briefs: append status/writer-brief-tail.md (D-2885 no writer Test-Removal/Gate-Edit). Merges: pass commit_message="Plan-Item: <KEY>".
 Traps: zsh -> bash -c; mergepath needs claim; never dump environ; Hand-Edit <=50 lines (D-2853); gate check needs --base/--head; define new lane = JSON to router (D-2230).
-| REVIEW-WITNESS-OPENCODE (HIGH, claimed) | #225 head 001b4d90; seats r2 FIX -> one mimo-pro fixer F1-F4 (see handoff) -> delta seats -> judge GO-REQ |
+| REVIEW-WITNESS-OPENCODE (HIGH, claimed) | #225 r3 fixer mimo-pro run-6a685514 (F1-F4, brief $J/brief-ocw-r3.md); runtime deny test $J/ocprec-retry.sh (free legs all limited 06Z; mimo via plain opencode = model unavailable) -> delta seats -> GO-REQ |
 | ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 MERGED 43aebc1d (GO D-2861), evidence ok (main CI 40235422603); efficiency told, E1a rebased 94e5f316. D-2879 gate/git trailer mismatch -> E1a buildl1-T1 (efficiency owns). Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm after reset). #214 MERGED 7bbd11a6 |
 | SPAWN-ISOLATION-INPLACE fix log (D-2905) | config guard reverts whole shared .git/config -> restore only run-changed keys; item DONE/locked, needs router reopen; after #223 |
 | LS9 keeper migrate | DONE 05:18Z: live a26573c3 schema 8, watch clean; watch first seat post + evidence via new code |
-| bus lane (D-2911, from build-L1-bus) | handoff build-L1-bus/status/build-L1-bus.handoff.md; R2b-1 5020d9ed lane/phase-fix-r2b CI 40270138022; R2b-2 not started (run-fix.sh r2b2); then 1 qwen seat -> PR to phase -> merge main once -> phase GO-REQ (HIGH). Claims BUS-KEEPER/EXEC-OBSERVED-STATE/BUS-DISCOVERY in my hb keys |
+| bus lane (D-2911) | R2b #228 merged phase b3f8b821; main->phase 18a65197 (Gate-Edit D-2937); phase PR #229; merge seat qwen FIX (fatal path vs bus registry) -> R2c mimo-pro fixer lane/phase-fix-r2c (brief build-L1-bus l2-cards/phase-fix-r2/fix-r2c.md) -> re-seat incl api.py hunk -> phase GO-REQ |
 
-| OPENCODE-ORCHESTRATOR-FALLBACK (claimed) | PR #226 (G1/G2 + agy model id), full suite 7559 ok -> CI + 2 non-Claude seats -> merge; tell server-L1-main + workst; G3/G4 via workst |
+| OPENCODE-ORCHESTRATOR-FALLBACK (claimed) | G1/G2 #226 MERGED 7fb8c2d9 (GO D-2935), evidence ok (CI 40275872068); G3 workst writer after SQ12; G4 after bus |
 | D-2918 B/C | C: spawnfix.sh -> $J/retired-autoos. B: move ls9/gspawn2/postm/seat/chain/stallwatch scripts into repo (tools/ or ops/) w/ tests + --dry-run, small PRs, after LS9 |
