@@ -353,8 +353,10 @@ def test_s1_escape_after_log_is_one_line_total(tmp_path, monkeypatch, capsys):
         w.close()
     assert status == 500                            # the last-resort answer still goes out
     err = capsys.readouterr().err
-    assert [ln for ln in err.splitlines() if ln.startswith("keeper:")] \
+    assert [ln for ln in err.splitlines() if ln.startswith("keeper: request failed:")] \
         == ["keeper: request failed: ConnectionLost"]   # the escape never logs a 2nd line
+    assert [ln for ln in err.splitlines() if ln.startswith("keeper: fatal:")] \
+        == ["keeper: fatal: postgres connection lost"]  # S2 F2: still fatal, once
 
 
 def test_s1_health_503_when_lost(tmp_path):
