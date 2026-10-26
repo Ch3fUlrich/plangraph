@@ -152,6 +152,61 @@ def test_bus_persist_connection_lost_is_fatal(tmp_path):
         w.close()
 
 
+# ------------------------------------------------------------------ J2 / L1
+def test_restore_connection_lost_is_fatal(tmp_path, monkeypatch):
+    """J2/L1: ConnectionLost in the first _restore_bus_hosts upsert fails loud
+    and exits 75; any other exception keeps today's non-fatal path."""
+    inv = tmp_path / "bus_inventory.json"
+    inv.write_text(json.dumps({"hosts": [{"host": "h1", "node_id": "n1",
+                                          "key_id": "k1",
+                                          "key_file": str(tmp_path / "h1.key")}],
+                               "agents": {}, "port": 8765}), encoding="utf-8")
+    monkeypatch.setenv("PLANGRAPH_BUS_INVENTORY", str(inv))
+    w_lost, cfg_lost = _world(tmp_path, "lost")
+    w_oth, cfg_oth = _world(tmp_path, "other")
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *a, **kw: _FakeLock())
+    conn = {"now": w_lost.conn}
+    monkeypatch.setattr(kdb, "open_db", lambda *a, **kw: conn["now"])
+    fault = {"exc": ConnectionLost("statement")}
+
+    def failing_upsert(self, rows):
+        raise fault["exc"]
+
+    monkeypatch.setattr(Store, "upsert_bus_hosts", failing_upsert)
+    made, served, seen = [], [], []
+    real_make = api.make_server
+
+    def spy_make(*args, **kw):
+        server = real_make(*args, **kw)
+        made.append(server)
+        real_serve = server.serve_forever
+
+        def recording_serve(*serve_args, **serve_kw):
+            served.append(1)
+            return real_serve(*serve_args, **serve_kw)
+
+        server.serve_forever = recording_serve
+        return server
+
+    monkeypatch.setattr(api, "make_server", spy_make)
+    # the fault: a lost session at the very first bus write exits 75 loudly
+    rc, _ = _run_with_backstop(cfg_lost, seen.append, 3.5)
+    assert rc == 75
+    assert served == []                  # never accepted a request
+    assert made[0].fatal_reason == "postgres session lost (bus registry)"
+    # positive control: every other exception keeps today's non-fatal path
+    fault["exc"] = ValueError("bad rows")
+    conn["now"] = w_oth.conn
+    served.clear()
+    rc, _ = _run_with_backstop(cfg_oth, seen.append, 1.2)
+    assert rc == 0
+    assert made[1].fatal_reason is None  # non-fatal: keeper keeps serving
+    assert served == [1]
+    for world in (w_lost, w_oth):
+        with suppress(Exception):  # run() already closed the shared connection
+            world.close()
+
+
 # ------------------------------------------------------------------ I12 / F3
 class _JoinSpy:             # records join() calls; the real thread still runs
     def __init__(self, real):
