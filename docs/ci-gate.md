@@ -10,11 +10,12 @@ Branch protection on `main` requires only the `ci-gate` check — no review requ
 
 A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a non-Claude `Writer:` trailer and, when tests are removed or renamed, a `Test-Removal:` trailer naming every removed test (`Test-Removal: D-<n> <test id>[, <test id>...]`). Exempt shas are listed in `tools/ci_commit_exempt.txt`.
 
-A Claude Writer passes only in the form `claude-<model> <id>` (optional trailing note in parentheses), where `<id>` is a spawner run id (`run-<32 hex>`), a Claude Code session id (`session_<id>`), or a uuid; any other Writer value carrying a Claude marker is refused as `claude writer without run or session id`.
+A Claude Writer passes only in the form `claude-<model> <id>` (optional trailing note in parentheses, no `:` inside), where `<id>` is a spawner run id (`run-<32 hex>`), a Claude Code session id (`session_<id>`), or a uuid; the id is checked for shape only, never looked up. Any other Writer value carrying a Claude marker is refused as `claude writer without run or session id`.
 
 ## Known limits of the commit gate
 
 - Gate-Edit ids are checked for shape (D-<digits>) only, not against the decision log. A `Test-Removal:` trailer is read only from the final trailer block and must name every test the commit removes or renames: `Test-Removal: D-<n> <test id>[, <test id>...]`; a bare `D-<n>` is refused.
+- Claude Writer run/session ids are likewise checked for shape only, never looked up: an invented `run-<32 hex>` (e.g. 32 zeros) passes.
 - The first push of a new ref (all-zero before sha) is not gated, a pull request into main still is.
 - Merge commits are skipped, their parent commits are checked.
 - The Claude marker list matches the Writer value by substring and relies on the writer naming itself.
