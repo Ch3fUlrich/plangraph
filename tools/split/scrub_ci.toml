@@ -1512,3 +1512,15 @@ path = "rust/worker/tests/fixtures/phase_defer.json"
 rule = "high-entropy"
 value_sha256 = "eb6473f3fbe9f708378a75fa6fee314608fa537bea9a60b30f329aa33ab13792"
 why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "tests/test_ci_commit_gate.py"
+rule = "credential-shape"
+value_sha256 = "af896a5f354b5297fb7dde9efe8f2b1de11e2fc5315fe28ce1d7468c1953b7ab"
+why = "synthetic path-escape vector for canon_path (system path literal, no credential)"
+
+[[scrub.allow_value]]
+path = "tests/test_efficiency_gates.py"
+rule = "credential-shape"
+value_sha256 = "bde609ced7207b5cff984b69fa166c22847d50b845f059eb3f5a905e18aeed05"
+why = "synthetic secret-name path fixture for the door/secret matcher"

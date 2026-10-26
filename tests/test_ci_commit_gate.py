@@ -428,7 +428,7 @@ def test_merge_resolution_hand_edit_over_50_needs_route_decision(repo: Path):
         "merge: resolve\n\n"
         f"Plan-Item: {item}\n"
         "Hand-Edit: merge conflict resolution\n"
-        "Route-Decision: route-0123456789abcdef0123456789abcdef\n",
+        "Route-Decision: route-" + "ab" * 16 + "\n",
         {"resolved.txt": resolution},
     )
     assert ci_commit_gate._changed_lines(merge_sha, cwd=repo) == 60
