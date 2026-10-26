@@ -25,11 +25,11 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 Seats: seatpost.py/qwenprompt.py/haikuseat.sh interim OK (D-2789): count toward cap, never edit review.txt/prompt.txt, keep seat dirs; post via post.sh (verdict.judge -> tools/seat_verdict.py reviewer-<family> token).
 Briefs: append status/writer-brief-tail.md (D-2885 no writer Test-Removal/Gate-Edit). Merges: pass commit_message="Plan-Item: <KEY>".
 Traps: zsh -> bash -c; mergepath needs claim; never dump environ; Hand-Edit <=50 lines (D-2853); gate check needs --base/--head; define new lane = JSON to router (D-2230).
-| REVIEW-WITNESS-OPENCODE (HIGH prio 9, claimed, D-2921) | REVIEW-VERDICT-PARSE DONE via #224. #223 closed -> #225 lane/review-witness-opencode head 001b4d90 (same tree as 7c744e1c, retrailered). Haiku+qwen seats running ($J/seat-ocw2-*; post with NEW key) -> judge GO-REQ per sha -> merge -> evidence. Then agy fix -> server-L1-main after merge |
+| REVIEW-WITNESS-OPENCODE (HIGH, claimed) | #225 head 001b4d90; seats r2 FIX -> one mimo-pro fixer F1-F4 (see handoff) -> delta seats -> judge GO-REQ |
 | ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 MERGED 43aebc1d (GO D-2861), evidence ok (main CI 40235422603); efficiency told, E1a rebased 94e5f316. D-2879 gate/git trailer mismatch -> E1a buildl1-T1 (efficiency owns). Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm after reset). #214 MERGED 7bbd11a6 |
 | SPAWN-ISOLATION-INPLACE fix log (D-2905) | config guard reverts whole shared .git/config -> restore only run-changed keys; item DONE/locked, needs router reopen; after #223 |
-| LS9 keeper migrate (D-2912, TOP) | LIVE: keeper a26573c3 schema 8 since 05:03:05Z (drop-in z8), step-5 checks all pass, sent routing; 15-min watch bg until ~05:19Z -> "LS9 DONE" or rollback A. Then D-2913 bus round trip w/ workst |
+| LS9 keeper migrate | DONE 05:18Z: live a26573c3 schema 8, watch clean; watch first seat post + evidence via new code |
 | bus lane (D-2911, from build-L1-bus) | handoff build-L1-bus/status/build-L1-bus.handoff.md; R2b-1 5020d9ed lane/phase-fix-r2b CI 40270138022; R2b-2 not started (run-fix.sh r2b2); then 1 qwen seat -> PR to phase -> merge main once -> phase GO-REQ (HIGH). Claims BUS-KEEPER/EXEC-OBSERVED-STATE/BUS-DISCOVERY in my hb keys |
 
-| OPENCODE-ORCHESTRATOR-FALLBACK (claimed) | wt oc-orch-g12: G1/G2 6e4dde81 + agy leg id fix 275e8717 (workst bug), Hand-Edit; full suite queued after seats ($J/g12full.log) -> PR + seats; G3/G4 via workst writers |
+| OPENCODE-ORCHESTRATOR-FALLBACK (claimed) | PR #226 (G1/G2 + agy model id), full suite 7559 ok -> CI + 2 non-Claude seats -> merge; tell server-L1-main + workst; G3/G4 via workst |
 | D-2918 B/C | C: spawnfix.sh -> $J/retired-autoos. B: move ls9/gspawn2/postm/seat/chain/stallwatch scripts into repo (tools/ or ops/) w/ tests + --dry-run, small PRs, after LS9 |
