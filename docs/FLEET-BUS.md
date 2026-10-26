@@ -178,3 +178,35 @@ The keeper messages write API accepts an optional signing and idempotency envelo
 - Unsigned posts by an authenticated principal still work (back-compat; existing tests stay green).
 - When using the PostgreSQL keeper backend, `PG_DSN` must connect directly to PostgreSQL, never through a transaction pooler (such as PgBouncer in transaction pooling mode), because long-poll waiters hold dedicated listener connections using session-level `LISTEN` / `UNLISTEN` semantics.
 
+## Wake daemon
+
+`python3 -m plangraph.fleet_bus.wake --config <file>` runs the wake hook as a daemon: it long-polls the keeper `messages` read and turns each new row into at most one synthetic wake in the target session (`POST /api/session/<id>/synthetic` with `{"text": "fleet-wake", "resume": true}`).  The one-wake-per-burst debounce and the at-least-once bound are exactly what `src/plangraph/fleet_bus/wake.py`'s module docstring states (a crash between the wake and the cursor save replays at most one wake; a 20 s window coalesces a burst into one wake plus one follow-up).
+
+The config is one JSON file:
+
+    {
+      "keeper_url": "http://127.0.0.1:4096",
+      "token_file": "keeper.token",
+      "session_base": "http://127.0.0.1:4096",
+      "state_file": "wake.state",
+      "sessions": {"router": {"session": "ses_r1", "kind": "opencode"}},
+      "authorization_file": "wake-auth"
+    }
+
+- `keeper_url`, `token_file`, `session_base`, `state_file` and `sessions` are required; every session entry needs `session` and `kind`, and may override the shared base with its own `base`.
+- `authorization_file` is optional; its stripped contents become the `Authorization` header of the wake POST, so no credential sits in the config.
+- The token file is read (stripped) into memory only: the token is never logged and never written to the state file.
+
+Fail closed: a missing or unparsable config file, a missing or mistyped key, an empty session map, or a missing or empty secret file prints exactly one line `fleet-wake: bad config: <reason>` on stderr and exits 2 before any poll or sink is built -- no wake, no request.  The reason names keys, types and exception classes only; it never echoes a value, so neither the token nor the file contents can leak through it.
+
+Run it as a user unit: `deploy/systemd/fleet-wake.service.example` (example only) shows the shape -- `Type=simple`, `Restart=on-failure`, `RestartSec=20` and `ExecStart=/usr/bin/python3 -m plangraph.fleet_bus.wake --config ...` -- with no address, bearer or hostname inline.
+
+## Host registry persistence
+
+The discovery registry's host state survives a keeper restart in the `bus_hosts` table (`src/plangraph/keeper/store_bus_hosts.py`):
+
+- **the table** holds one row per provisioned host -- `host`, `node_id`, `key_id`, `endpoint`, `health`, `last_seen`, `updated_ts` -- upserted by the keeper after every registry refresh (`api._persist_bus_hosts`).
+- **restore forces `health` offline**: `api._restore_bus_hosts` loads the rows through `Registry.restore` before the first probe; it restores `endpoint` and `last_seen` exactly as stored but forces `health` to `offline`, so a pre-restart `healthy` is never trusted before a fresh probe confirms it.
+- **`GET /v1/hosts` is joined with the inventory**: it serves exactly the provisioned hosts (`registry.hosts`), each joined with its persisted row (`persisted: true` when one backs it); a stored row whose host is no longer provisioned is never served.
+- **no key path is stored**: `key_file`/`key_path`/`key_dir` are dropped on write; key material stays in the per-host files the inventory names.
+
