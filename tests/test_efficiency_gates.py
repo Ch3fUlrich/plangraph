@@ -302,6 +302,24 @@ def test_keeper_item_reader_status(tmp_path, status, body, expect):
 
 
 # ------------------------------------------------------------ §0.2b/f lane gates
+def _slice_rows(text):
+    """Every data row of the ``## Slices`` table, parsed structurally only.
+
+    Markdown tables read ``| header |`` / ``|---|`` / data rows, so the rows
+    after the first two ``|`` lines of the section are the table's data rows
+    whatever their cells hold -- a second, independent look at the table the
+    ``lane.design_slices`` regex parses (qwen-R4).
+    """
+    rows, inside = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            inside = line.strip().lower() == "## slices"
+            continue
+        if inside and line.startswith("|"):
+            rows.append(line)
+    return rows[2:]
+
+
 def test_numstat_counting_and_slices():
     text = "10\t5\tsrc/a.py\n-\t-\timg.png\n300\t0\tuv.lock\n2\t2\tsrc/{old => new}/b.py\n"
     assert lane.count_numstat(text) == (20, 3, ["src/a.py", "img.png", "src/new/b.py"])
@@ -319,6 +337,26 @@ def test_numstat_counting_and_slices():
     assert {n: slices[n] for n in (1, 2, 3)} == {1: 3000, 2: 600, 3: 450}
     assert sorted(slices) == list(range(1, len(slices) + 1))
     assert all(type(v) is int and v > 0 for v in slices.values())
+    # qwen-R4: drop-detection against the table as WRITTEN, not against the
+    # result (the count above derives from the parse, so it cannot see a row
+    # that vanished).  Every data row of the design's table must land in the
+    # parse -- a row the regex drops (trailing or not) and a budget cell that
+    # is not a whole number both show up here as a missing row -- while table
+    # growth and value changes stay free.
+    rows = _slice_rows(design)
+    assert rows, "the ## Slices table is gone; update this test with the design"
+    assert len(slices) == len(rows), (
+        f"{len(rows)} rows in the ## Slices table, but design_slices parsed"
+        f" {sorted(slices)}")
+    for n, row in zip(sorted(slices), rows):
+        # the budget is the max_lines column of that row, verbatim -- a column
+        # mis-parse cannot pass as some other positive int
+        assert str(slices[n]) == row.split("|")[3].strip(), row
+    # the detector itself detects a drop: a trailing row the parse cannot match
+    # (a budget typo) is one row the parse does not cover
+    mini = ("## Slices\n\n| slice | scope | max_lines |\n|---|---|---|\n"
+            "| 1 | a | 10 |\n| 2 | b | 12k |\n")
+    assert len(_slice_rows(mini)) == 2 and len(lane.design_slices(mini)) == 1
     assert lane.parse_slice_trailer("docs/design/PG-EFFICIENCY-GATES.md#1") == (
         "docs/design/PG-EFFICIENCY-GATES.md", 1)
 
