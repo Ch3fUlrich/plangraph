@@ -1,12 +1,17 @@
-"""R2c: keeper fatal paths vs the bus registry (BUS-REGISTRY-PERSIST).
+"""R2c/R2d: keeper fatal paths vs the bus registry (BUS-REGISTRY-PERSIST).
 
 I10: fail() before on_fatal is wired still exits daemon.run 75 within 3 s.
 I11: ConnectionLost in the bus persistence hook is fatal, other errors are not.
-I12: _cleanup stops and joins the bus registry before server.shutdown()."""
+I12: _cleanup stops and joins the bus registry before server.shutdown().
+J1/M1: fatal_reason set during make_server exits 75 before any request.
+J2/L1: ConnectionLost in the first _restore_bus_hosts upsert exits 75.
+J3: the clean exit (return 0, no os._exit) is asserted explicitly and a
+    cleaner timeout is a different observable (os._exit(0) -> SystemExit).
+J4: tests bind port 0 and read the bound port from the server, never a
+    bind-then-close free-port reservation (TOCTOU)."""
 import json
 import os
 import signal
-import socket
 import threading
 import time
 from contextlib import suppress
@@ -31,15 +36,12 @@ class _FakeLock:            # the template's always-alive keeper lock
 def _world(tmp_path, name):
     sub = tmp_path / name
     sub.mkdir(exist_ok=True)
-    with socket.socket() as s:          # one free TCP port per daemon run
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
     path = sub / "keeper.json"
     path.write_text(json.dumps({
         "db": str(sub / "keeper.db"),
         "snapshot": str(sub / "plan.snapshot.json"),
-        "bind": f"127.0.0.1:{port}"}), encoding="utf-8")
-    path.chmod(0o600)
+        "bind": "127.0.0.1:0"}), encoding="utf-8")   # J4: port 0; the bound
+    path.chmod(0o600)                               # port comes from the server
     return World(sub), config.load_config(path)
 
 
@@ -219,16 +221,24 @@ class _JoinSpy:             # records join() calls; the real thread still runs
 
 
 def test_cleanup_stops_bus_registry_first(tmp_path, monkeypatch):
-    """I12: _cleanup sets bus_stop and joins bus_thread before server.shutdown()."""
+    """I12/J3: _cleanup sets bus_stop and joins bus_thread before server.shutdown();
+    the clean exit is asserted explicitly and a cleaner timeout differs from it."""
     inv = tmp_path / "bus_inventory.json"
     inv.write_text(json.dumps({"hosts": [{"host": "h1", "node_id": "n1",
                                           "key_id": "k1",
                                           "key_file": str(tmp_path / "h1.key")}],
                                "agents": {}, "port": 8765}), encoding="utf-8")
     monkeypatch.setenv("PLANGRAPH_BUS_INVENTORY", str(inv))
-    monkeypatch.setattr(os, "_exit", lambda code: None)  # never kill the worker
+    exits = []
+
+    def _record_exit(code):      # J3: never kill the worker, but record the
+        exits.append(code)       # code and stop run() like the real _exit
+        raise SystemExit(code)
+
+    monkeypatch.setattr(os, "_exit", _record_exit)
     w, cfg = _world(tmp_path, "bus")                     # worlds before the
     w2, cfg2 = _world(tmp_path, "nobus")                 # open_db stub below
+    w3, cfg3 = _world(tmp_path, "hang")
     monkeypatch.setattr(kdb, "lock_keeper", lambda *a, **kw: _FakeLock())
     conn = {"now": w.conn}
     monkeypatch.setattr(kdb, "open_db", lambda *a, **kw: conn["now"])
@@ -236,6 +246,7 @@ def test_cleanup_stops_bus_registry_first(tmp_path, monkeypatch):
 
     def spy(server):
         assert server.bus_thread is not None      # the real registry started
+        assert server.server_address[1] > 0       # J4: bound port from the server
         threads.append(server.bus_thread)
         spies.append(_JoinSpy(server.bus_thread))
         server.bus_thread = spies[-1]
@@ -249,6 +260,7 @@ def test_cleanup_stops_bus_registry_first(tmp_path, monkeypatch):
 
     rc, _ = _run_with_backstop(cfg, spy, 2.5)
     assert rc == 0                                # positive outcome: clean exit
+    assert exits == []                # J3: clean path returns 0, no os._exit
     assert spies[0].joins == [2]                  # F3: bounded join, before shutdown
     assert order == [True]                        # F3: bus_stop already set there
     threads[0].join(timeout=5)
@@ -261,7 +273,36 @@ def test_cleanup_stops_bus_registry_first(tmp_path, monkeypatch):
     seen = []
     rc, _ = _run_with_backstop(cfg2, seen.append, 1.2)
     assert rc == 0
+    assert exits == []                # J3: still the clean path, no os._exit
     assert seen[-1].fatal_reason is None
     assert seen[-1].bus_thread is None            # nothing to stop or join
     with suppress(Exception):
         w2.close()
+    # J3: a cleaner timeout is a different observable -- os._exit(0) on a
+    # normal shutdown, never a fatal code.
+    release = threading.Event()
+    conn["now"] = w3.conn
+    monkeypatch.setattr(daemon, "SHUTDOWN_TIMEOUT", 0.2)
+    seen3 = []
+
+    def hang_spy(server):
+        real_shutdown = server.shutdown
+
+        def hanging_shutdown():
+            release.wait()               # the cleaner cannot finish...
+            real_shutdown()
+
+        server.shutdown = hanging_shutdown
+        seen3.append(server)
+
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            _run_with_backstop(cfg3, hang_spy, 1.2)
+        assert excinfo.value.code == 0   # normal shutdown: never reported fatal
+        assert exits == [0]              # os._exit(0): distinct from return 0
+        assert seen3[-1].fatal_reason is None
+    finally:
+        release.set()                    # ...until the test lets it finish
+        time.sleep(0.2)
+        with suppress(Exception):
+            w3.close()
