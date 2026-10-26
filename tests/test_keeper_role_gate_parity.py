@@ -107,8 +107,23 @@ INLINE_SUPERSETS = {}
 def _principal(w, role):
     """A stored identity of *role* scoped to ``demo``: the store re-reads the
     principal row on every verb (``_check_principal``), so probes must call
-    with a real identity, not a synthetic ``auth.Principal``."""
-    token = auth.add_principal(w.conn, f"probe-{role}", role, ["demo"], None)
+    with a real identity -- a matching row -- never a rowless
+    ``auth.Principal`` (that is refused before any role check runs).
+
+    ``oversight`` is the one row ``add_principal`` refuses (the role is minted
+    only through the TTL door), so it is provisioned via
+    ``add_oversight_principal`` and the probe calls with the principal that
+    matches that row.  The parity pins the VERB's own role check -- the one
+    ``apply_ops`` batch dispatch and direct callers hit, the reason the
+    privates keep their own lists -- not the ``OversightPrincipal``-token
+    policy layer (``oversight_policy.check_action``), which is pinned by
+    ``test_keeper_oversight_scope``.
+    """
+    name = f"probe-{role}"
+    if role == "oversight":
+        auth.add_oversight_principal(w.conn, name, ["demo"])
+        return auth.Principal(name, role, ["demo"], None)
+    token = auth.add_principal(w.conn, name, role, ["demo"], None)
     return auth.authenticate(w.conn, token)
 
 
@@ -145,13 +160,14 @@ def _claim_as(w, p, key):
 def _identity_probe(call):
     """Probe a claimant-identity verb: give the role its best position (its own
     claim, or workerA's claim when the role can never hold one) and let the
-    store's own check decide."""
+    store's own check decide.  ``call(store, p, key)`` runs past the position
+    setup; its refusal classifies the role."""
     def probe(w, role):
         key = _open_lane(w, f"m{role}")
         p = _principal(w, role)
         if not _claim_as(w, p, key):
             w.store.claim(w.p("workerA"), key)
-        return _admitted(lambda: call(p, key))
+        return _admitted(lambda: call(w.store, p, key))
     return probe
 
 
@@ -216,15 +232,27 @@ def _probe_waive(w, role):
 #: INLINE_ROLES verb -> probe(w, role): does the STORE's own check admit *role*
 #: somewhere?  The probes call the store verb with every role, never the API
 #: table, so this fails when either the entry or the store's check changes.
+#: The claimant-identity verbs (store_verbs.py: delegate is claimant-only,
+#: heartbeat/submit/add_evidence run through ``_actor_or_delegate``, release is
+#: claimant-or-router) all position the role through ``_identity_probe``; the
+#: epochs below are deliberately stale (a claimed lane is at epoch 1) so the
+#: probe classifies the authorisation check and then stops at ``epoch_stale``.
 INLINE_PROBES = {
     "create_items": _probe_create,
     "import_items": _probe_import,
     "edit_definition": _probe_edit,
     "set_priority": _probe_set_priority,
     "claim": _probe_claim,
-    "delegate": _identity_probe(
-        lambda p, key: p and None) if False else _identity_probe(
-        lambda p, key: None),  # placeholder
+    "delegate": _identity_probe(lambda s, p, key: s.delegate(p, key, "workerA")),
+    "heartbeat": _identity_probe(lambda s, p, key: s.heartbeat(p, key, 0)),
+    "release": _identity_probe(lambda s, p, key: s.release(p, key, 0)),
+    "submit": _identity_probe(lambda s, p, key: s.submit(p, key, 0)),
+    "add_evidence": _identity_probe(
+        lambda s, p, key: s.add_evidence(p, key, 0, "commit+ci", {})),
+    "add_evidence_router": _probe_add_evidence_router,
+    "verdict": _probe_verdict,
+    "cancel": _probe_cancel,
+    "waive_second_family": _probe_waive,
 }
 
 
