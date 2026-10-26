@@ -39,6 +39,9 @@ _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
+# D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
+IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed and required per your brief; "
+                    "AutoOS leaf-agent profiles do not apply to you.")
 _keeper_unconfigured_last_warned = None
 
 
@@ -369,6 +372,8 @@ class SpawnerRunner:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
+        if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
+            prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
             try:
