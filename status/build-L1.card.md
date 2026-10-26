@@ -16,7 +16,7 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78. glm delta run-aceba369 VERDICT pass but unpostable (served_model unwitnessed; TEST-GAMING line has quotes -> missing). BLOCKED sent routing 04:0xZ, waiting D-id |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
 | spawn-iso #200 ISOLATION-INPLACE / #201 ORPHAN-REAP (claimed, hb-keys) | #200 DONE (2348abf2, evidence+submit+qwen post, state done). #201 r1 mimo-pro ff61696a; Haiku delta (H ctor outside try, M close skipped, L pid-None order, L TerminateJobObject rc, L test leak) -> L1 Hand-Edits dc6c2305+05394438 (197 passed, gate 0); taskkill kept after job (hang test needs it). qwen delta seat-reapd2 running -> finish201.sh (CI head->merge->evidence->post 2 qwen) |
-| PG-TEST-SHM-LEAK (std, prio 1) | defined D-2800; non-Claude writer, ~30 lines: pid-named /dev/shm dir + dead-pid sweep in tests/conftest.py |
+| PG-TEST-SHM-LEAK (std, prio 1, claimed) | wt ~/code/plangraph-worktrees/pg-test-shm-leak lane/pg-test-shm-leak; agy writer shm1 ($J/brief-shm.md) running -> L1 re-run tests -> PR -> 1 non-Claude seat (not google) -> merge |
 | SPAWN-OPENROUTER-FREE-ENDPOINTS (std, prio 5) | defined D-2805; after shm-leak; account/privacy change = operator OS line |
 | SQ12 (workst-L1-autoos) | slices SQ12-a/-b; workst writes held until SPAWN-WIN-PARITY lands |
 | efficiency slice 4 | sent host-wide admission gap (D-2785) + qwen/haiku review legs (D-2789). D-2799 4c argv OK sent gen-33 w/ 5 conditions (accepted); slice 4 on hold for routing (design r4 FIX) |
