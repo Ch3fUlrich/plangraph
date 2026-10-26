@@ -300,3 +300,29 @@ def test_deny_block_all_conditions_present_denies_and_witnesses(tmp_path, monkey
     assert {'event': 'opencode_tools_denied'} in job.events
     assert job.request_side_model == REQUESTED
     assert job.witness_kind == 'request-side-opencode-store'
+
+
+def test_locked_store_db_returns_none_without_blocking(tmp_path):
+    import threading
+    import time
+    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
+    db = tmp_path / 'opencode' / 'opencode.db'
+    locker = sqlite3.connect(db)
+    locker.execute('BEGIN EXCLUSIVE')
+    out = {}
+
+    def probe():
+        start = time.monotonic()
+        out['value'] = _opencode_served_model(db, 't')
+        out['elapsed'] = time.monotonic() - start
+
+    th = threading.Thread(target=probe, daemon=True)
+    th.start()
+    th.join(5)
+    stalled = th.is_alive()
+    locker.rollback()
+    locker.close()
+    th.join(2)
+    assert not stalled, 'store read blocked on a locked db'
+    assert out['value'] is None
+    assert out['elapsed'] < 5

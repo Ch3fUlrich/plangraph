@@ -169,7 +169,9 @@ def _opencode_served_model(db_path, title) -> str | None:
     """
     try:
         from urllib.parse import quote
-        conn = sqlite3.connect('file:' + quote(str(db_path)) + '?mode=ro', uri=True)
+        # 2s timeout: a locked/busy store must never block the monitor
+        # (D-2921 F2); it just stays unwitnessed.
+        conn = sqlite3.connect('file:' + quote(str(db_path)) + '?mode=ro', uri=True, timeout=2.0)
         try:
             rows = conn.execute('SELECT id FROM session_v2 WHERE title = ?', (title,)).fetchall()
             models = set()
