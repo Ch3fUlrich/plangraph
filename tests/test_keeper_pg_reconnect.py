@@ -299,9 +299,11 @@ def test_s1_one_line_no_dsn(tmp_path, capsys):
         w.close()
     assert status == 503
     err = capsys.readouterr().err
-    lines = [ln for ln in err.splitlines() if ln.startswith("keeper:")]
-    assert lines == ["keeper: request failed: ConnectionLost"]   # I10: one fixed line
-    assert "postgres" not in err and "host=" not in err          # never driver text
+    req_lines = [ln for ln in err.splitlines() if ln.startswith("keeper: request failed:")]
+    assert req_lines == ["keeper: request failed: ConnectionLost"]   # I10: one fixed line per request
+    fatal_lines = [ln for ln in err.splitlines() if ln.startswith("keeper: fatal:")]
+    assert fatal_lines == ["keeper: fatal: postgres connection lost"] # S2 fatal line
+    assert "host=" not in err                                        # never driver text
 
 
 def test_s1_escape_after_status_is_one_line_no_second_status(tmp_path, monkeypatch, capsys):
@@ -574,6 +576,32 @@ def test_s1_mid_txn_kill_commits_nothing(tmp_path):
 
 
 # ------------------------------------------------------------- S2 fatal exit
+def test_s2_lock_alive_reflects_session_state():
+    """PgKeeperLock.alive returns False on None/closed/broken raw or readable descriptor."""
+    lock = db_pg.PgKeeperLock(None)
+    assert not lock.alive()
+
+    raw = FakeRaw()
+    lock = db_pg.PgKeeperLock(raw)
+    raw.broken = True
+    assert not lock.alive()
+    raw.broken = False
+    raw.closed = True
+    assert not lock.alive()
+
+    s1, s2 = socket.socketpair()
+    try:
+        raw_sock = FakeRaw()
+        raw_sock.fileno = s1.fileno
+        sock_lock = db_pg.PgKeeperLock(raw_sock)
+        assert sock_lock.alive()
+
+        s2.close()
+        assert not sock_lock.alive()
+    finally:
+        s1.close()
+
+
 def test_s2_fatal_from_handler_sets_stop(tmp_path):
     w = World(tmp_path)
     w.store.conn = ConnProxy(w.store.conn, fail=ConnectionLost("statement"))
