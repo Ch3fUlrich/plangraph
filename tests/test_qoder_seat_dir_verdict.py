@@ -74,6 +74,15 @@ def test_extra_cannot_override_judged_verdict(tmp_path):
     assert ev["part"] == 9
 
 
+
+def test_extra_may_only_make_judged_fields_stricter(tmp_path):
+    """seat.py's failed run (verdict None) and a caller gaming finding win
+    over a parsed PASS / 'no'."""
+    ev = _write(tmp_path, PASS_TEXT, material="",
+                extra={"verdict": None, "test_gaming": "yes"})
+    assert ev["verdict"] is None
+    assert ev["test_gaming"] == "yes"
+
 def test_seat_verdict_dry_run_no_longer_refuses_pass(tmp_path):
     """tools/seat_verdict.py --dry-run accepts a written PASS seat dir."""
     out = tmp_path / "seat"
