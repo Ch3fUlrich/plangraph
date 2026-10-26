@@ -1127,6 +1127,12 @@ def test_hand_edit_auth_path_rename_exact(repo: Path) -> None:
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
     sha = _commit(repo, 'fix: move\n\nHand-Edit: move\nPlan-Item: demo:ITEM\n')
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py']
+    # positive control (haiku-G6): the same rename between non-door paths passes
+    ok_base = _commit(repo, 'base2\n\nWriter: mimo-v2.6-flash run-2\n', files={'docs/a.py': 'x\n'})
+    (repo / 'docs2').mkdir()
+    _git(repo, 'mv', 'docs/a.py', 'docs2/a.py')
+    ok = _commit(repo, 'fix: move safe\n\nHand-Edit: move\nPlan-Item: demo:ITEM\n')
+    assert check(ok_base, ok, cwd=repo) == []
 
 
 @pytest.mark.parametrize("refuse", [False, True])
@@ -1348,7 +1354,67 @@ def test_e1_history_walk_is_topological(repo: Path):
     assert check(base, _head(repo), cwd=repo) == []
 
 
-def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
+def _mktree_paths(repo: Path, paths: dict[str, str], parent: str) -> str:
+    """Tree sha for a mapping of literal paths to file contents, on parent's tree.
+
+    Path segments become tree entry names verbatim, so '.', '..' and
+    backslash names are stored exactly as git's plumbing accepts them
+    (haiku-G6: real git, not a monkeypatched _touched_paths).  The parent's
+    files are kept and crafted paths override them leaf by leaf, so the
+    commit's diff shows only the crafted paths.
+    """
+    def blob(content: str) -> str:
+        proc = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo,
+                              env=_git_env(), input=content, capture_output=True,
+                              text=True, check=True)
+        return proc.stdout.strip()
+
+    def mktree(lines: list[str]) -> str:
+        proc = subprocess.run(["git", "mktree"], cwd=repo, env=_git_env(),
+                              input="\n".join(lines) + "\n", capture_output=True,
+                              text=True, check=True)
+        return proc.stdout.strip()
+
+    def flush(node: dict) -> str:
+        lines = []
+        for name, value in node.items():
+            if isinstance(value, dict):
+                lines.append(f"040000 tree {flush(value)}\t{name}")
+            else:
+                lines.append(f"100644 blob {value}\t{name}")
+        return mktree(lines)
+
+    tree: dict = {}
+
+    def graft(mapping: dict, path: str, sha: str) -> None:
+        node = mapping
+        parts = path.split("/")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = sha
+
+    for line in _git(repo, "ls-tree", "-r", parent).splitlines():
+        meta, leaf_path = line.split("\t", 1)
+        graft(tree, leaf_path, meta.split()[2])
+    for path, content in paths.items():
+        graft(tree, path, blob(content))
+    return flush(tree)
+
+
+def _commit_mktree(repo: Path, message: str, paths: dict[str, str], parent: str) -> str:
+    """Commit with a crafted tree (see _mktree_paths); worktree untouched."""
+    tree = _mktree_paths(repo, paths, parent)
+    proc = subprocess.run(["git", "commit-tree", tree, "-p", parent, "-m", message],
+                          cwd=repo, env=_git_env(), capture_output=True,
+                          text=True, check=True)
+    return proc.stdout.strip()
+
+
+def test_e1_canonical_and_malformed_paths_through_real_git(repo: Path):
+    # haiku-G6: the canon path forms must meet a real git diff.  git's
+    # plumbing stores tree entries named '.' and '..' and diff-tree reports
+    # their paths verbatim ('./src/...', '../x.py'); the old test
+    # monkeypatched _touched_paths, so no canon form ever went through git.
     base = _head(repo)
     f = repo / "src\\plangraph\\keeper\\x.py"
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -1357,12 +1423,27 @@ def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     _git(repo, "commit", "-qm", "docs: backslash door\n\nHand-Edit: backslash\nPlan-Item: demo:ITEM\n")
     s_bs = _head(repo)
     assert check(base, s_bs, cwd=repo) == [f"{s_bs}: hand-edit touches auth/door surface: src\\plangraph\\keeper\\x.py"]
-    s_dot = _he(repo, 1)
-    monkeypatch.setattr(ci_commit_gate, "_touched_paths", lambda sha, cwd=None: ["./src/plangraph/keeper/x.py"])
+    s_dot = _commit_mktree(
+        repo, "docs: dot door\n\nHand-Edit: dot\nPlan-Item: demo:ITEM\n",
+        {"./src/plangraph/keeper/x.py": "x\n"}, s_bs)
     assert check(s_bs, s_dot, cwd=repo) == [f"{s_dot}: hand-edit touches auth/door surface: ./src/plangraph/keeper/x.py"]
-    s_dotdot = _he(repo, 1)
-    monkeypatch.setattr(ci_commit_gate, "_touched_paths", lambda sha, cwd=None: ["../x.py"])
+    s_dotdot = _commit_mktree(
+        repo, "docs: dotdot escape\n\nHand-Edit: dd\nPlan-Item: demo:ITEM\n",
+        {"../x.py": "x\n"}, s_dot)
     assert check(s_dot, s_dotdot, cwd=repo) == [f"{s_dotdot}: hand-edit touches malformed path: ../x.py"]
+    # positive controls: the same crafted shapes without the fault pass
+    s_bs_ok = _commit_mktree(
+        repo, "docs: backslash safe\n\nHand-Edit: bs-ok\nPlan-Item: demo:ITEM\n",
+        {"src\\docs\\x.py": "x\n"}, s_dotdot)
+    assert check(s_dotdot, s_bs_ok, cwd=repo) == []
+    s_dot_ok = _commit_mktree(
+        repo, "docs: dot safe\n\nHand-Edit: dot-ok\nPlan-Item: demo:ITEM\n",
+        {"./docs/x.md": "x\n"}, s_bs_ok)
+    assert check(s_bs_ok, s_dot_ok, cwd=repo) == []
+    s_plain_ok = _commit_mktree(
+        repo, "docs: plain safe\n\nHand-Edit: plain-ok\nPlan-Item: demo:ITEM\n",
+        {"docs/y.md": "x\n"}, s_dot_ok)
+    assert check(s_dot_ok, s_plain_ok, cwd=repo) == []
 
 
 def test_e1_range_ceiling_bucket_sum(repo: Path):
