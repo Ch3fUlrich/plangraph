@@ -589,7 +589,7 @@ class SpawnerRunner:
                 self._stdin_payloads[job_id] = prompt.encode("utf-8")
 
             self._adapter_tokens[job_id] = object()
-            if role in ("implement", "fix"):
+            if role != "review":
                 guard = self._init_git_config_guard(work_dir)
                 if guard is not None:
                     self._git_guards[job_id] = guard
