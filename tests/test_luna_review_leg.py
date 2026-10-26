@@ -66,19 +66,33 @@ def test_catalog_registers_kimi_with_opencode_harness():
     from plangraph.routing_support.catalog_db import CatalogDB
     db = CatalogDB(":memory:")
     db.init_and_seed()
-    rows = [r for r in resolver.get_catalog_models(db) if r["id"] == "opencode-go/kimi-k3-max"]
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["harness"] == "opencode" and row["family"] == "kimi"
-    # The override admission (spawner/service.py) also needs these.
-    assert row["tier"] in ("trial", "free", "subscription", "paid")
-    assert type(row["context_tokens"]) is int and row["context_tokens"] > 0
-    assert resolver.detect_model_family("opencode-go/kimi-k3-max") == "kimi"
+    for model_id in ("opencode-go/kimi-k3.1-pro", "opencode-go/kimi-k3"):
+        rows = [r for r in resolver.get_catalog_models(db) if r["id"] == model_id]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["harness"] == "opencode" and row["family"] == "kimi"
+        # The override admission (spawner/service.py) also needs these.
+        assert row["tier"] in ("trial", "free", "subscription", "paid")
+        assert type(row["context_tokens"]) is int and row["context_tokens"] > 0
+        assert resolver.detect_model_family(model_id) == "kimi"
 
 
 def test_kimi_harness_does_not_make_kimi_a_routed_leg():
     # Registration only admits a hand-picked seat; routing never offers kimi.
     for role in ("implement", "review"):
         plan = plan_spawn(CARD, role=role)
-        assert "opencode-go/kimi-k3-max" not in [leg.model for leg in plan.legs]
-        assert "opencode-go/kimi-k3-max" not in [leg.model for leg in plan.review_seats]
+        for model_id in ("opencode-go/kimi-k3.1-pro", "opencode-go/kimi-k3"):
+            assert model_id not in [leg.model for leg in plan.legs]
+            assert model_id not in [leg.model for leg in plan.review_seats]
+
+
+def test_catalog_kimi_ids_match_opencode_models_listing():
+    # D-3068: `opencode models` lists kimi-k3.1-pro and kimi-k3, not kimi-k3-max.
+    from plangraph.routing_support import resolver
+    from plangraph.routing_support.catalog_db import CatalogDB
+    db = CatalogDB(":memory:")
+    db.init_and_seed()
+    rows = {r["id"]: r for r in resolver.get_catalog_models(db) if r["family"] == "kimi"}
+    assert set(rows) == {"opencode-go/kimi-k3.1-pro", "opencode-go/kimi-k3"}
+    for row in rows.values():
+        assert row["harness"] == "opencode" and row["trains_on_prompts"] == 0

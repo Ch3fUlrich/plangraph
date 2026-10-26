@@ -632,7 +632,7 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "updated_at": "2026-10-19T00:00:00Z",
     },
     {
-        "model_id": "opencode-go/kimi-k3-max",
+        "model_id": "opencode-go/kimi-k3.1-pro",
         "master_rank": 15,
         "aa_intelligence": 44.0,
         "coding_index": None,
