@@ -57,3 +57,28 @@ def test_catalog_seeds_luna_with_opencode_harness():
     row = rows[0]
     assert row["harness"] == "opencode" and row["family"] == "gpt"
     assert row["context_tokens"] == 900000 and row["trains_on_prompts"] == 0
+
+
+def test_catalog_registers_kimi_with_opencode_harness():
+    # D-3033: kimi (opencode go) is a hand-picked review seat; the override path
+    # (spawner/service.py) refuses a catalog row without an explicit harness.
+    from plangraph.routing_support import resolver
+    from plangraph.routing_support.catalog_db import CatalogDB
+    db = CatalogDB(":memory:")
+    db.init_and_seed()
+    rows = [r for r in resolver.get_catalog_models(db) if r["id"] == "opencode-go/kimi-k3-max"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["harness"] == "opencode" and row["family"] == "kimi"
+    # The override admission (spawner/service.py) also needs these.
+    assert row["tier"] in ("trial", "free", "subscription", "paid")
+    assert type(row["context_tokens"]) is int and row["context_tokens"] > 0
+    assert resolver.detect_model_family("opencode-go/kimi-k3-max") == "kimi"
+
+
+def test_kimi_harness_does_not_make_kimi_a_routed_leg():
+    # Registration only admits a hand-picked seat; routing never offers kimi.
+    for role in ("implement", "review"):
+        plan = plan_spawn(CARD, role=role)
+        assert "opencode-go/kimi-k3-max" not in [leg.model for leg in plan.legs]
+        assert "opencode-go/kimi-k3-max" not in [leg.model for leg in plan.review_seats]
