@@ -806,3 +806,23 @@ def test_cancel_liveness_validated():
     asyncio.run(run())
 
 
+
+# ------------------------------------------------------------ round 2a: missing result.json fails closed
+def test_run_dir_without_result_json_refuses_the_seat(tmp_path):
+    # haiku-D1, haiku-D2, qwen-D3 (class: a missing result.json fails open).
+    # _save writes stdout.log before result.json, so a run dir with only
+    # stdout.log is reachable; both seat paths must refuse it like the
+    # missing-stdout case, never count the raw reply as a verdict.
+    from tools.lane_gates import seats
+    pass_text = "F1 [LOW] nit\nVERDICT: PASS\n"
+    s1, s2 = tmp_path / "run-1", tmp_path / "run-2"
+    for s in (s1, s2):
+        s.mkdir()
+        (s / "stdout.log").write_text(pass_text)
+    assert seats([str(s1), str(s2)]) == 2  # refused loudly, never "first review PASS"
+    with pytest.raises(OSError):
+        F.findings_from_files([s1])  # admission path refuses loudly like the missing stdout.log
+    for s in (s1, s2):  # positive control: the same run dirs with result.json are accepted
+        (s / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
+    assert seats([str(s1), str(s2)]) == 0
+    assert len(F.findings_from_files([s1])) == 1

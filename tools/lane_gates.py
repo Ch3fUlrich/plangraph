@@ -100,6 +100,10 @@ def seats(paths):
             p = Path(path)
             fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
             raw = fp.read_text("utf-8", "replace")
+            if p.is_dir() and not res.is_file():
+                # I16: fail closed on a missing result.json exactly like the missing
+                # stdout.log above (haiku-D1, qwen-D3); _save writes stdout.log first.
+                raise OSError(f"missing result.json for run dir {p}")
             if res.is_file():
                 try: meta = json.loads(res.read_text("utf-8"))
                 except Exception: meta = None

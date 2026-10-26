@@ -218,6 +218,8 @@ def findings_from_files(paths, card=None, seat_classes=None):
     for path in paths:
         p = Path(path)
         fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
+        if p.is_dir() and not res.is_file():
+            raise OSError(f"missing result.json for run dir {p}")  # I16: fail closed like the missing stdout.log (haiku-D2, qwen-D3)
         try: meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
         except (OSError, ValueError): meta = None
         if not isinstance(meta, dict) and (meta is not None or res.is_file()):
