@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 import pytest
-from conftest import _sweep_dead_pgtest_dirs
+from pgtest_shm import _sweep_dead_pgtest_dirs
 
 
 def test_sweep_dead_pgtest_dirs(tmp_path):
@@ -16,9 +16,9 @@ def test_sweep_dead_pgtest_dirs(tmp_path):
     else:
         pytest.skip(f"PID {dead_pid} was recycled")
 
-    dead_dir = tmp_path / f"pgtest-{dead_pid}-run"
+    dead_dir = tmp_path / f"pg{dead_pid}-run"
     dead_dir.mkdir()
-    live_dir = tmp_path / f"pgtest-{os.getpid()}-run"
+    live_dir = tmp_path / f"pg{os.getpid()}-run"
     live_dir.mkdir()
     legacy_dir = tmp_path / "pgtest-abc123xy"
     legacy_dir.mkdir()
@@ -26,7 +26,7 @@ def test_sweep_dead_pgtest_dirs(tmp_path):
     other_dir.mkdir()
     target_dir = tmp_path / "target"
     target_dir.mkdir()
-    symlink_path = tmp_path / f"pgtest-{dead_pid}-l"
+    symlink_path = tmp_path / f"pg{dead_pid}-l"
     symlink_path.symlink_to(target_dir)
 
     _sweep_dead_pgtest_dirs(tmp_path)

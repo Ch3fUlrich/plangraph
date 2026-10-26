@@ -16,35 +16,11 @@ import sys
 import tempfile
 import pytest
 from pathlib import Path
+from pgtest_shm import _sweep_dead_pgtest_dirs
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
-
-
-def _sweep_dead_pgtest_dirs(root) -> None:
-    try:
-        entries = os.scandir(root)
-    except OSError:
-        return
-    mypid = os.getpid()
-    with entries:
-        for entry in entries:
-            try:
-                m = re.fullmatch(r"pgtest-(\d+)-.+", entry.name)
-                if not m or not entry.is_dir(follow_symlinks=False):
-                    continue
-                pid = int(m.group(1))
-                if pid <= 0 or pid == mypid:
-                    continue
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    shutil.rmtree(entry.path, ignore_errors=True)
-                except (PermissionError, OSError):
-                    pass
-            except OSError:
-                continue
 
 
 def _use_tmpfs_tempdir() -> None:
@@ -54,7 +30,7 @@ def _use_tmpfs_tempdir() -> None:
         # The controller's TMPDIR is inherited. Give non-pytest daemon helpers
         # their own worker root too (tmp_path is already isolated by xdist).
         parent = os.environ.get("TMPDIR")
-        path = tempfile.mkdtemp(prefix=f"pgtest-{worker}-", dir=parent)
+        path = tempfile.mkdtemp(prefix=f"pg-{worker}-", dir=parent)
         atexit.register(shutil.rmtree, path, ignore_errors=True)
         os.environ["TMPDIR"] = path
         tempfile.tempdir = path
@@ -71,7 +47,7 @@ def _use_tmpfs_tempdir() -> None:
         if st.f_bavail * st.f_frsize < 256 * 1024 * 1024:
             return
         _sweep_dead_pgtest_dirs(shm)
-        path = tempfile.mkdtemp(prefix=f"pgtest-{os.getpid()}-", dir=shm)
+        path = tempfile.mkdtemp(prefix=f"pg{os.getpid()}-", dir=shm)
     except OSError:
         return
     atexit.register(shutil.rmtree, path, ignore_errors=True)
