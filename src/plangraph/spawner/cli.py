@@ -111,7 +111,7 @@ def main(argv=None):
         p.add_argument('--card', type=_card)
         p.add_argument('--require-bench', action='store_true')
         p.add_argument('--bench-db', action='append')
-        p.add_argument('--role', choices=('implement', 'review'), default='implement')
+        p.add_argument('--role', choices=('implement', 'review', 'orchestrate'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
         p.add_argument('--json', action='store_true')

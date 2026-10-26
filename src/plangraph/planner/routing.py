@@ -324,8 +324,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             raise SpawnRefused(f'{field} has invalid value')
     if any(t not in RISK_TAGS for t in card.get('risk_tags', ())):
         raise SpawnRefused('risk_tags has invalid value')
-    if role not in ("implement", "review"):
-        raise ValueError("role must be implement|review")
+    if role not in ("implement", "review", "orchestrate"):
+        raise ValueError("role must be implement|review|orchestrate")
     from plangraph.routing_support.risk import evaluate_risk
     assessment = evaluate_risk(paths=card.get('paths', card.get('write_set', ())),
                                bucket=card.get('bucket', 'S1'),
