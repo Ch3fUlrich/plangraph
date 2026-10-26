@@ -98,7 +98,7 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement", "orchestrate")),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",)),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),

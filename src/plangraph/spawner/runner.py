@@ -42,10 +42,49 @@ _KEEPER_UNCONFIGURED_WARN_S = 600
 # D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
 IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed and required per your brief; "
                     "AutoOS leaf-agent profiles do not apply to you.")
+ORCHESTRATE_HEADER = ("You are an L1-queue orchestrator: spawn only via the plangraph-spawner MCP, "
+                      "never merge or push to main, write your report and stop.")
 _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import unavailable_reason
+
+
+ROLE_INSTRUCTIONS = {
+    'implement': 'You are a writer for one plan item. Commit on your own lane branch in this worktree as the brief says. Never push to main, merge, or touch other branches. Never spawn agents. Give a final report then stop.\n',
+    'orchestrate': 'You are an orchestrator working an L1 queue. You may and should spawn workers and reviewers only via the plangraph-spawner MCP tools and read their results. Never merge or push to main. Never commit code yourself. Give a final report then stop.\n',
+}
+
+
+def _orchestrate_mcp_config(cfg, env) -> dict:
+    """Install only the orchestrator servers; credentials stay in inherited env."""
+    cfg = dict(cfg)
+    cfg['mcp'] = {
+        name: {'type': 'local', 'command': [sys.executable, '-m', module], 'enabled': True}
+        for name, module in (('plangraph', 'plangraph.keeper.mcp'),
+                             ('plangraph-spawner', 'plangraph.spawner.mcp'))
+    }
+    return cfg
+
+
+# SPAWN-ROLE-INSTRUCTIONS F4: the orchestrate header's 'never merge or push to
+# main / never commit' must be machine-enforced, not prose. opencode permission
+# syntax takes per-glob verdicts under permission.bash.
+ORCHESTRATE_BASH_DENY = ('git push*', 'git merge*', 'git commit*', 'git rebase*', 'git reset*')
+
+
+def _orchestrate_bash_permissions(cfg) -> dict:
+    """Deny history-writing git verbs for orchestrate; keep every other setting."""
+    cfg = dict(cfg)
+    permission = dict(cfg.get('permission') or {})
+    bash = permission.get('bash')
+    # The string shorthand ("bash": "ask") is the policy for every command.
+    bash = dict(bash) if isinstance(bash, dict) else ({'*': bash} if isinstance(bash, str) else {})
+    for glob in ORCHESTRATE_BASH_DENY:
+        bash[glob] = 'deny'
+    permission['bash'] = bash
+    cfg['permission'] = permission
+    return cfg
 
 
 def redact(value):
@@ -297,6 +336,7 @@ class SpawnerRunner:
         self._adapter_tokens = {}
         self._child_envs = {}
         self._ocdata_dirs = {}
+        self._occfg_dirs = {}
         self._reaped_jobs = set()
         self._git_guards = {}
         self._stdin_payloads = {}
@@ -374,6 +414,8 @@ class SpawnerRunner:
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
+        if role == "orchestrate" and not prompt.startswith(ORCHESTRATE_HEADER):
+            prompt = ORCHESTRATE_HEADER + "\n\n" + prompt
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
             try:
@@ -428,6 +470,7 @@ class SpawnerRunner:
         child_env = build_child_env(extra_env, headers=envelope_headers)
         render_reason = None
         tools_event = None
+        orchestrate_events = []
         if cmd[0] == 'opencode':
             # Name the session so the monitor can witness the served model
             # (D-2898). --title goes right after the --model pair so it always
@@ -438,6 +481,8 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
+            if role == 'orchestrate':
+                cmd[title_at + 2:title_at + 2] = ['--agent', 'orchestrator']
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
@@ -449,6 +494,21 @@ class SpawnerRunner:
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+            if role == 'orchestrate':
+                cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(
+                    _orchestrate_bash_permissions(_orchestrate_mcp_config(cfg, child_env)),
+                    sort_keys=True)
+                orchestrate_events.append({'event': 'orchestrate_mcp',
+                                           'servers': ['plangraph', 'plangraph-spawner']})
+                if all(name in os.environ for name in ('FLEET_MSG_INVENTORY', 'FLEET_MSG_HOST')):
+                    for name in ('FLEET_MSG_INVENTORY', 'FLEET_MSG_HOST', 'FLEET_MSG_SPOOL',
+                                 'FLEET_MSG_WAKE', 'FLEET_MSG_STATUS_FILE'):
+                        if name in os.environ:
+                            child_env[name] = os.environ[name]
+                    child_env['PLANGRAPH_ORCH_INBOX'] = job_id
+                else:
+                    orchestrate_events.append({'event': 'orchestrate_no_bus'})
             if role == 'review':
                 # D-2905 (1): a spawner-owned per-job store dir, created before
                 # launch and read only after child exit -- the shared store is
@@ -491,6 +551,60 @@ class SpawnerRunner:
                     pass  # unparseable config cannot be proven denied below
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+            if role in ROLE_INSTRUCTIONS:
+                import tempfile
+                from plangraph.routing_support.opencode_overlay import _strip_jsonc
+                from plangraph.spawner.private_io import atomic_write_private
+                cfg_dir = Path(tempfile.mkdtemp(prefix='pg-occfg-'))  # mode 0700
+                self._occfg_dirs[job_id] = str(cfg_dir)
+                try:
+                    role_file = cfg_dir / 'role-instructions.md'
+                    # SPAWN-ROLE-INSTRUCTIONS F1: the copied global config can
+                    # hold inline provider keys, so both files are written
+                    # owner-only (0600), never with umask defaults.
+                    atomic_write_private(role_file, ROLE_INSTRUCTIONS[role])
+                    global_root = Path(os.environ.get('XDG_CONFIG_HOME') or
+                                       Path.home() / '.config') / 'opencode'
+                    global_cfg = {}
+                    try:
+                        # OpenCode loads json then jsonc, with the latter taking precedence.
+                        found = False
+                        for name in ('opencode.json', 'opencode.jsonc'):
+                            source = global_root / name
+                            if source.exists():
+                                parsed = json.loads(_strip_jsonc(source.read_text()))
+                                if not isinstance(parsed, dict):
+                                    raise ValueError('not an object')
+                                global_cfg.update(parsed)
+                                found = True
+                        if not found:
+                            raise FileNotFoundError
+                    except (OSError, ValueError, TypeError):
+                        global_cfg = {}
+                        orchestrate_events.append({'event': 'global_config_unreadable'})
+                    global_cfg['instructions'] = [str(role_file)]
+                    (cfg_dir / 'opencode').mkdir(mode=0o700)
+                    atomic_write_private(cfg_dir / 'opencode' / 'opencode.json', json.dumps(global_cfg))
+                    # SPAWN-ROLE-INSTRUCTIONS F2: the global dir holds more than
+                    # the two config files (plugins, agent md); every other
+                    # entry stays reachable through the child's XDG_CONFIG_HOME
+                    # as a symlink to the original -- copying would fork it.
+                    try:
+                        entries = sorted(global_root.iterdir())
+                    except OSError:
+                        entries = []
+                    for entry in entries:
+                        if entry.name in ('opencode.json', 'opencode.jsonc'):
+                            continue
+                        os.symlink(os.path.abspath(str(entry)), cfg_dir / 'opencode' / entry.name)
+                    cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                    cfg['instructions'] = [str(role_file)]
+                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                    child_env['XDG_CONFIG_HOME'] = str(cfg_dir)
+                except BaseException:
+                    import shutil
+                    shutil.rmtree(self._occfg_dirs.pop(job_id), ignore_errors=True)
+                    raise
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -537,6 +651,7 @@ class SpawnerRunner:
                     job.events.append({'event': 'render_refused', 'reason': render_reason})
                 if tools_event:
                     job.events.append(tools_event)
+                job.events.extend(orchestrate_events)
                 self.jobs[job_id] = job
                 return job
 
@@ -554,6 +669,7 @@ class SpawnerRunner:
             self.jobs[job_id] = job
             if tools_event:
                 job.events.append(tools_event)
+            job.events.extend(orchestrate_events)
 
             if render_reason:
                 job.status = 'failed'
@@ -561,6 +677,19 @@ class SpawnerRunner:
                 job.stderr = render_reason
                 job.end_time = time.time()
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
+                return job
+
+            if role == 'orchestrate' and cmd[0] != 'opencode':
+                # SPAWN-ROLE-INSTRUCTIONS F3: the orchestrate header commands
+                # spawning via plangraph-spawner MCP tools; a non-opencode
+                # harness has none, so refuse before any launch. A dry run
+                # keeps its plan-preview contract (pinned by
+                # test_orchestrate_non_opencode): it never launches.
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = 'orchestrate requires the opencode harness'
+                job.end_time = time.time()
+                job.events.append({'event': 'orchestrate_needs_opencode'})
                 return job
 
             from .resolver import host_skip_reason_async
@@ -653,6 +782,10 @@ class SpawnerRunner:
                 self._child_envs.pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
+                cfg_dir = self._occfg_dirs.pop(job_id, None)
+                if cfg_dir is not None:
+                    import shutil
+                    shutil.rmtree(cfg_dir, ignore_errors=True)
                 oc_dir = self._ocdata_dirs.pop(job_id, None)
                 if oc_dir is not None:
                     import shutil
@@ -662,6 +795,10 @@ class SpawnerRunner:
                 # runs its own finally; sweep its store dir once it settles
                 # (no-op when the monitor already cleaned up).
                 def _sweep(_task, _self=self, _jid=job_id):
+                    _cfg = _self._occfg_dirs.pop(_jid, None)
+                    if _cfg is not None:
+                        import shutil
+                        shutil.rmtree(_cfg, ignore_errors=True)
                     _oc = _self._ocdata_dirs.pop(_jid, None)
                     if _oc is not None:
                         import shutil
@@ -825,6 +962,10 @@ class SpawnerRunner:
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+            cfg_dir = self._occfg_dirs.pop(job_id, None)
+            if cfg_dir is not None:
+                import shutil
+                shutil.rmtree(cfg_dir, ignore_errors=True)
             oc_dir = self._ocdata_dirs.pop(job_id, None)
             if oc_dir is not None:
                 import shutil
