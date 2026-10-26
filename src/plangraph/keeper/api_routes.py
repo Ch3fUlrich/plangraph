@@ -25,7 +25,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
-               "set_legacy_state", "apply_ops", "migrate_descriptions",
+               "set_legacy_state", "waive_floor", "apply_ops",
+               "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                 "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
                # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
@@ -154,6 +155,12 @@ def _set_legacy_state(store, principal, body, need):
                                   need(body, "state"), body.get("note", ""))
 
 
+def _waive_floor(store, principal, body, need):
+    # decision is validated by the verb after its role gate: a non-router gets 403 first
+    return store.waive_floor(principal, need(body, "key"),
+                             body.get("decision"), body.get("sha_floor"))
+
+
 def _set_kind(store, principal, body, need):
     extra = set(body) - {"key", "kind"}
     if extra and getattr(principal, "role", None) == "router":   # a non-router gets 403 first
@@ -264,6 +271,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
                 "set_legacy_state": _set_legacy_state,
+                "waive_floor": _waive_floor,
                 "apply_ops": _apply_ops,
                 "record_run": _record_run}
 

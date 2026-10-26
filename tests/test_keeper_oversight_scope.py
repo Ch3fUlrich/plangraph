@@ -425,6 +425,7 @@ _VERB_CALLS = {
         p, "plangraph:DEC", "batch@sha"),
     "set_legacy_state": lambda s, p: s.set_legacy_state(
         p, "plangraph:OTHER", "claimed", ""),
+    "waive_floor": lambda s, p: s.waive_floor(p, "plangraph:OTHER", "D-1"),
     "add_evidence_router": lambda s, p: s.add_evidence_router(
         p, "plangraph:OTHER", "decision", {"id": "D-1"}),
     "rehome": lambda s, p: s.rehome(p, "plangraph:OTHER", "demo"),

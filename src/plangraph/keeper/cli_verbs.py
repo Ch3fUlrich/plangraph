@@ -400,6 +400,13 @@ def cmd_legacy(args, session):
                  lambda r: f"{r.get('key')} -> {r.get('state')}")
 
 
+def cmd_waive_floor(args, session):
+    return write(session, "waive_floor",
+                 {"key": args.key, "decision": args.decision,
+                  "sha_floor": args.sha_floor},
+                 lambda r: f"{r.get('key')} floor waived ({r.get('decision')})")
+
+
 def cmd_priority(args, session):
     return write(session, "set_priority", {"key": args.key, "n": args.n},
                  lambda r: f"{r.get('key')} priority {r.get('priority')}")

@@ -141,7 +141,7 @@ def test_tools_list_count_and_budget(api):
                api.client)
     (reply,) = replies(text)
     tools = reply["result"]["tools"]
-    assert len(tools) == 36  # +set_kind (PG-SET-KIND), +withdraw_review (D-867), +mint_run_token (M2B), +create, +edit (PG-MCP-WRITE), +record_run, +answer/needs_you/answers (MODEL-KINDS), +audit_meta (PG-AUDIT-META), +reopen (PG-ROUTER-REOPEN), +fleet_msg_send, +fleet_msg_read (BUS-ANY-AGENT-CLI)
+    assert len(tools) == 37  # +set_kind (PG-SET-KIND), +withdraw_review (D-867), +mint_run_token (M2B), +create, +edit (PG-MCP-WRITE), +record_run, +answer/needs_you/answers (MODEL-KINDS), +audit_meta (PG-AUDIT-META), +reopen (PG-ROUTER-REOPEN), +fleet_msg_send, +fleet_msg_read (BUS-ANY-AGENT-CLI), +waive_floor (D-3066)
     assert {tool["name"] for tool in tools} == {tool["name"] for tool in TOOLS}
     assert len(text.encode("utf-8")) < 9000  # the ~2,500-token budget
 
