@@ -376,6 +376,64 @@ def test_merge_commit_measured_by_combined_diff(repo: Path):
     assert ci_commit_gate._touched_paths(resolved, cwd=repo) == ["resolved.txt"]
 
 
+def test_merge_resolution_hand_edit_over_50_needs_route_decision(repo: Path):
+    '''A merge whose resolution carries 60 Hand-Edit lines is capped like any commit.'''
+    base = _head(repo)
+    _branch(repo, "side", "feat: side\n\nWriter: mimo-v2.6-flash run-side\n", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "feat: main\n\nWriter: mimo-v2.6-flash run-main\n", files={"main.txt": "main\n"})
+    resolution = "".join(f"line {n}\n" for n in range(60))
+    item = "plangraph:TEST-E1A"
+    merge_sha = _merge_resolution(
+        repo,
+        "side",
+        "merge: resolve\n\n"
+        f"Plan-Item: {item}\n"
+        "Hand-Edit: merge conflict resolution\n"
+        "Route-Decision: route-0123456789abcdef0123456789abcdef\n",
+        {"resolved.txt": resolution},
+    )
+    assert ci_commit_gate._changed_lines(merge_sha, cwd=repo) == 60
+    # Positive control: the very same merge passes with a well-formed Route-Decision.
+    assert check(base, merge_sha, cwd=repo) == []
+
+    _git(repo, "commit", "-q", "--amend", "-m", "merge: resolve\n\n"
+        f"Plan-Item: {item}\n"
+        "Hand-Edit: merge conflict resolution\n")
+    merge_sha = _head(repo)
+    assert check(base, merge_sha, cwd=repo) == [
+        f"{merge_sha}: hand-edit over 50 lines for {item} without Route-Decision"
+    ]
+
+
+def test_merge_resolution_touching_door_path_refused(repo: Path):
+    '''A merge whose resolution touches a door path is refused like any Hand-Edit.'''
+    base = _head(repo)
+    _branch(repo, "side", "feat: side\n\nWriter: mimo-v2.6-flash run-side\n", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "feat: main\n\nWriter: mimo-v2.6-flash run-main\n", files={"main.txt": "main\n"})
+    message = (
+        "merge: resolve\n\n"
+        "Plan-Item: plangraph:TEST-E1A-DOOR\n"
+        "Hand-Edit: merge conflict resolution\n"
+    )
+    merge_sha = _merge_resolution(
+        repo, "side", message, {"tools/seat_verdict.py": "x = 1\n"}
+    )
+    assert "tools/seat_verdict.py" in ci_commit_gate._touched_paths(merge_sha, cwd=repo)
+    assert check(base, merge_sha, cwd=repo) == [
+        f"{merge_sha}: hand-edit touches auth/door surface: tools/seat_verdict.py"
+    ]
+
+    # Positive control: the same merge resolution touching a plain path passes.
+    (repo / "tools" / "seat_verdict.py").unlink()
+    (repo / "notes.txt").write_text("note\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--amend", "-m", message)
+    merge_sha = _head(repo)
+    assert check(base, merge_sha, cwd=repo) == []
+
+
 def test_exempt_sha_skips_all_rules(repo: Path, tmp_path: Path):
     base = _head(repo)
     sha = _commit(repo, "feat: no trailer at all")
