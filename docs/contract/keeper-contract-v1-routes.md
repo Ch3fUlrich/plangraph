@@ -17,7 +17,7 @@ Query parameters common to reads: `fmt=json|text`, `project=<name>`.
 Open. `200 {"status":"ok"}` [Health].
 
 ### `GET /v1/whoami`
-Any role. `200 {name, role, projects[], family|null}` [WhoAmI].
+Any role. `200 {name, role, projects[], family|null, features[]}` [WhoAmI].
 
 ### `GET /v1/ready`
 Any role. Query: `n` (default 10), `all` (any value: no limit), `project`,

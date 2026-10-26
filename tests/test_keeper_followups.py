@@ -217,7 +217,8 @@ import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from plangraph.keeper import importer  # noqa: E402
-from plangraph.keeper.api_routes import ROUTER_VERBS, WRITE_VERBS  # noqa: E402
+from plangraph.keeper.api_routes import (ROLE_CHECKED_VERBS,  # noqa: E402
+                                         ROUTER_VERBS, WRITE_VERBS)
 from plangraph.keeper.store_create import KNOWN_ITEM_FIELDS  # noqa: E402
 
 DOCS = Path(__file__).resolve().parents[1] / "docs"
@@ -252,13 +253,23 @@ def test_allow_new_does_not_cover_items_other_ops_create(w):
 
 
 # mint_run_token is router-or-l1 (own project), covered in test_keeper_run_tokens*
+ROUTED_BODIES = [
+    # schema-messy: every field some routed verb reads, so only a strict-body
+    # (unexpected fields) check can stand between the caller and the verb
+    {"key": "demo:A", "batch_ref": "x", "state": "claimed", "ops": []},
+    # missing every required field: the role refusal must come first here too,
+    # never the route's required-field validation
+    {},
+]
+
+
+@pytest.mark.parametrize("body", ROUTED_BODIES)
 @pytest.mark.parametrize("verb", sorted(set(ROUTER_VERBS) - {"mint_run_token"}))
-def test_router_verbs_are_routed_writes(world, srv, verb):
+def test_router_verbs_are_routed_writes(world, srv, verb, body):
     assert verb in WRITE_VERBS
     import json
     import urllib.error
     import urllib.request
-    body = {"key": "demo:A", "batch_ref": "x", "state": "claimed", "ops": []}
     request = urllib.request.Request(
         f"{srv.base_url}/v1/{verb}", data=json.dumps(body).encode(),
         method="POST", headers={"Authorization": f"Bearer {world.tokens['l1main']}",
@@ -266,6 +277,94 @@ def test_router_verbs_are_routed_writes(world, srv, verb):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(request, timeout=10)
     assert exc.value.code == 403   # routed to the verb, which refuses non-routers
+
+
+@pytest.mark.parametrize("body", ROUTED_BODIES)
+@pytest.mark.parametrize("verb", sorted(ROLE_CHECKED_VERBS))
+def test_role_checked_verbs_refuse_a_reader_before_the_body(world, srv, verb, body):
+    # the store names the roles these verbs admit (router, l1, system, spawner,
+    # worker); a reader is admitted by none of them, so the role refusal must
+    # precede any body-shape or required-field validation -- the same contract
+    # as the router verbs above (a bad body from the wrong role is 403, not 400)
+    assert verb in WRITE_VERBS
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/{verb}", data=json.dumps(body).encode(),
+        method="POST", headers={"Authorization": f"Bearer {world.tokens['reader']}",
+                                "Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(request, timeout=10)
+    assert exc.value.code == 403   # routed to the verb, which refuses the role
+
+
+# ------------------------------ role refusals are audited (fix round 2, R1/R2)
+import ast  # noqa: E402
+
+#: Every role the store admits anywhere; a routed handler must name none of
+#: them (R2: the store is the single role authority, the route table must not
+#: hard-duplicate its lists).
+ROLE_NAMES = {"router", "l1", "worker", "reviewer", "reader", "system",
+              "spawner", "oversight"}
+
+#: The routed write verbs the wrong-role probe below covers (R1): every router
+#: verb plus the two PG-EFFICIENCY-GATES verbs whose handlers were hoisted too.
+R1_VERBS = sorted(set(ROUTER_VERBS) | {"log_item", "rule_set"})
+
+
+@pytest.mark.parametrize("verb", R1_VERBS)
+def test_wrong_role_refusal_is_audited(world, srv, verb):
+    # "every refusal is audited" (docs/contract/keeper-contract-v1.md): the
+    # role refusal must come from inside Store._run, so it writes its
+    # audit_log row, re-checks the principal and (for oversight) records the
+    # denial -- a hoisted handler check answers 403 before _run ever runs and
+    # audits nothing.
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/{verb}", data=json.dumps({}).encode(),
+        method="POST", headers={"Authorization": f"Bearer {world.tokens['reader']}",
+                                "Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(request, timeout=10)
+    assert exc.value.code == 403
+    rows = world.conn.execute(
+        "SELECT ok, code FROM audit_log WHERE actor=? AND action=?",
+        ("reader", verb)).fetchall()
+    assert [(r[0], r[1]) for r in rows] == [(0, "forbidden")], (
+        f"{verb}: the wrong-role 403 must leave exactly one audited refusal")
+
+
+def _routed_handlers():
+    import plangraph.keeper.api_routes as routes
+    names = {fn.__name__ for fn in list(routes.ROUTER_VERBS.values())
+             + list(routes.ROLE_CHECKED_VERBS.values())}
+    return routes.__file__, [
+        node for node in ast.walk(
+            ast.parse(open(routes.__file__, encoding="utf-8").read()))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in names]
+
+
+def test_routed_handlers_hold_no_role_check():
+    # R1/R2: the role refusal lives inside Store._run, never in a route
+    # handler -- a handler check is raised before the seam, so it writes no
+    # audit row and skips the principal re-read.  R2: the handlers must not
+    # carry the store's role lists either, or a widened store silently 403s
+    # the newly admitted role.
+    path, handlers = _routed_handlers()
+    assert len(handlers) >= 15, path
+    for fn in handlers:
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr == "_require_role":
+                raise AssertionError(f"{fn.name}: role check hoisted into the handler")
+            if isinstance(node, ast.Constant) and node.value in ROLE_NAMES:
+                raise AssertionError(
+                    f"{fn.name}: handler names the role {node.value!r};"
+                    " the store is the single role authority")
 
 
 def test_known_item_fields_cover_every_items_column(w):
@@ -353,3 +452,63 @@ def test_miscased_closes_with_valid_token_closes_only_that_key(tmp_path):
         w3.store.close_on_decision(w3.p("router"), KEY, w3.batch_ref)
     assert exc.value.code == "evidence_unverified"
     w3.close()
+
+
+# 203-r4a S3: the inline verbs obey the same order as the routed ones
+from plangraph.keeper import api_routes  # noqa: E402
+
+INLINE_RIGHT_ROLE = {"verdict": "reviewer", "claim": "l1main", "delegate": "l1main",
+                     "heartbeat": "l1main", "submit": "l1main",
+                     "add_evidence": "l1main", "release": "l1main",
+                     "create_items": "l1main", "edit_definition": "l1main",
+                     "cancel": "l1main"}
+
+
+def _post(srv, token, verb, body):
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/{verb}", data=json.dumps(body).encode(), method="POST",
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"})
+    try:
+        return urllib.request.urlopen(request, timeout=10).status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+@pytest.mark.parametrize("verb", sorted(api_routes.INLINE_ROLES))
+def test_inline_verbs_refuse_the_wrong_role_before_the_body(world, srv, verb):
+    def refusals():
+        return world.store.conn.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action=? AND ok=0 AND code=?",
+            (verb, "forbidden")).fetchone()[0]
+    before = refusals()
+    assert _post(srv, world.tokens["reader"], verb, {}) == 403
+    assert refusals() == before + 1                  # audited, not a bare 400
+    # positive control: a role the verb admits still gets the 400 validation
+    right = INLINE_RIGHT_ROLE.get(verb, "router")
+    assert _post(srv, world.tokens[right], verb, {}) == 400
+
+
+def test_edit_definition_admits_the_system_claim_holder(world, srv):
+    # 203-r5 T1: INLINE_ROLES must not be narrower than the store's own check.
+    # The store admits a system claim-holder a depends_on edit (holder_edit in
+    # store_create.py:_edit, holding the claim worker_claim_lease gave it,
+    # store_verbs.py:125-131), so a system caller with a missing field must
+    # keep the 400 validation -- never the role 403 the narrower table gave.
+    seed(world, [("A", [])])
+    key = "demo:A"
+    assert world.store.worker_claim_lease(world.p("system"), key)["key"] == key
+
+    def refusals(code):
+        return world.conn.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE actor=? AND action=?"
+            " AND ok=0 AND code=?", ("system", "edit_definition", code)
+        ).fetchone()[0]
+    before = refusals("validation")
+    assert _post(srv, world.tokens["system"], "edit_definition", {"key": key}) == 400
+    assert refusals("validation") == before + 1      # the 400 is audited too
+    # positive control: the role gate still refuses a reader before the body
+    assert _post(srv, world.tokens["reader"], "edit_definition", {"key": key}) == 403

@@ -31,6 +31,7 @@ import tempfile
 import threading
 import urllib.parse
 from contextlib import suppress
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -116,7 +117,16 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 self._json(401, {"error": exc.code, "msg": exc.msg})
                 return
             try:
-                api_routes.run_gate(principal, name)
+                try:
+                    api_routes.run_gate(principal, name)
+                except Refused as gate:
+                    # a refusal outside the verb seam is still audited
+                    server.store.audit_run_gate_refusal(
+                        principal, name,
+                        (body or {}).get("key") if isinstance(body, dict)
+                        and isinstance(body.get("key"), str)
+                        else self._one(query, "key"), gate)
+                    raise
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
                 else:
@@ -292,7 +302,16 @@ class KeeperHandler(BaseHTTPRequestHandler):
             if name in ("create_items", "import_items") and isinstance(body, list):
                 body = {"items": body}
             else:
-                raise Refused("validation", "body must be a JSON object")
+                # 203-r5 T3: a non-dict body is refused at the role-first seam
+                # like any other malformed body, never before it (qwen-S3
+                # class): a wrong-role caller gets the audited 403, an
+                # admitted role the -- now audited -- 400.  Inline verbs pass
+                # their INLINE_ROLES entry (the same list the _inline_call
+                # seam uses); routed verbs pass None, deferring to ROLE_GATE
+                # inside _run (roles live only in the store, qwen-R2).
+                store.refuse_malformed_body(
+                    principal, name, None, api_routes.INLINE_ROLES.get(name),
+                    Refused("validation", "body must be a JSON object"))
         if name in api_routes.WORKER_VERBS:   # RT-P1-KEEPER: the store resolves the card
             return api_routes.worker_write(store, principal, name, extra, body)
         if name in api_routes.JEV_VERBS:      # RT-P1-JEV-SHADOW: the store resolves card
@@ -301,48 +320,17 @@ class KeeperHandler(BaseHTTPRequestHandler):
             body["key"] = store.resolve_key(body["key"])
         if name in inbox.routes.WRITE_VERBS:
             return inbox.routes.write(store, principal, name, body)
-        if name in ("create_items", "import_items"):
-            items = body.get("items")
-            if not isinstance(items, list):
-                raise Refused("validation", "items must be a list")
-            return getattr(store, name)(principal, items)
-        if name == "edit_definition":
-            return store.edit_definition(principal, self._need(body, "key"),
-                                         self._need(body, "fields"))
-        if name == "set_priority":
-            return store.set_priority(principal, self._need(body, "key"),
-                                      self._int(body.get("n", body.get("priority")), "n"))
-        if name == "claim":
-            lease = body.get("lease_s", body.get("lease"))
-            return store.claim(principal, self._need(body, "key"),
-                               lease_s=None if lease is None else self._int(lease, "lease_s"))
-        if name == "delegate":
-            return store.delegate(principal, self._need(body, "key"),
-                                  self._need(body, "worker", "worker_principal"))
-        if name in ("heartbeat", "release", "submit"):
-            return getattr(store, name)(principal, self._need(body, "key"),
-                                        self._need(body, "epoch"))
-        if name == "add_evidence":
-            return store.add_evidence(principal, self._need(body, "key"),
-                                      self._need(body, "epoch"),
-                                      self._need(body, "kind"),
-                                      body.get("ref") or {})
-        if name == "add_evidence_router":
-            return store.add_evidence_router(principal, self._need(body, "key"),
-                                             self._need(body, "kind"),
-                                             body.get("ref") or {})
-        if name == "verdict":
-            ok = body.get("ok")
-            if not isinstance(ok, bool):   # "false" must never pass a review
-                raise Refused("validation", "ok is required and must be a boolean")
-            return store.verdict(principal, self._need(body, "key"), ok,
-                                 body.get("reason") or "")
-        if name == "cancel":
-            return store.cancel(principal, self._need(body, "key"),
-                                body.get("reason") or "")
-        if name == "waive_second_family":
-            return store.waive_second_family(principal, self._need(body, "key"),
-                                             self._need(body, "decision_id"))
+        if name in api_routes.INLINE_ROLES:
+            try:
+                call = self._inline_call(name, body, store, principal)
+            except Refused as exc:
+                if exc.code == "validation":   # the role refusal comes first, audited
+                    key = body.get("key")
+                    store.refuse_malformed_body(
+                        principal, name, key if isinstance(key, str) else None,
+                        api_routes.INLINE_ROLES[name], exc)
+                raise
+            return call()
         if name in ROUTER_VERBS:
             return ROUTER_VERBS[name](store, principal, body, self._need)
         if name in ROLE_CHECKED_VERBS:
@@ -350,6 +338,49 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "reap":
             return store.reap(principal)
         raise Refused("not_found", f"no write verb {name!r}")
+
+    def _inline_call(self, name, body, store, principal):
+        """Validate an inline verb's body; return the store call, not yet made."""
+        if name in ("create_items", "import_items"):
+            items = body.get("items")
+            if not isinstance(items, list):
+                raise Refused("validation", "items must be a list")
+            return partial(getattr(store, name), principal, items)
+        if name == "edit_definition":
+            return partial(store.edit_definition, principal,
+                           self._need(body, "key"), self._need(body, "fields"))
+        if name == "set_priority":
+            return partial(store.set_priority, principal, self._need(body, "key"),
+                           self._int(body.get("n", body.get("priority")), "n"))
+        if name == "claim":
+            lease = body.get("lease_s", body.get("lease"))
+            return partial(store.claim, principal, self._need(body, "key"),
+                           lease_s=None if lease is None else self._int(lease, "lease_s"))
+        if name == "delegate":
+            return partial(store.delegate, principal, self._need(body, "key"),
+                           self._need(body, "worker", "worker_principal"))
+        if name in ("heartbeat", "release", "submit"):
+            return partial(getattr(store, name), principal,
+                           self._need(body, "key"), self._need(body, "epoch"))
+        if name == "add_evidence":
+            return partial(store.add_evidence, principal, self._need(body, "key"),
+                           self._need(body, "epoch"), self._need(body, "kind"),
+                           body.get("ref") or {})
+        if name == "add_evidence_router":
+            return partial(store.add_evidence_router, principal,
+                           self._need(body, "key"), self._need(body, "kind"),
+                           body.get("ref") or {})
+        if name == "verdict":
+            ok = body.get("ok")
+            if not isinstance(ok, bool):   # "false" must never pass a review
+                raise Refused("validation", "ok is required and must be a boolean")
+            return partial(store.verdict, principal, self._need(body, "key"), ok,
+                           body.get("reason") or "")
+        if name == "cancel":
+            return partial(store.cancel, principal, self._need(body, "key"),
+                           body.get("reason") or "")
+        return partial(store.waive_second_family, principal,   # waive_second_family
+                       self._need(body, "key"), self._need(body, "decision_id"))
 
     @staticmethod
     def _int(value, name):  # a malformed number is a 400, never a 500

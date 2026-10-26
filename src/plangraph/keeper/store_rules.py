@@ -113,6 +113,10 @@ class RuleMixin:
                 if row is not None and row["state"] == "cancelled":
                     # cancelled keys are locked (schema triggers): retiring is final.
                     raise Refused("locked", f"{r['key']} is retired; add the rule under a new id")
+                if row is not None and row["state"] in ("claimed", "in_review"):
+                    # a decisions card a worker holds is not a rule row: rewriting it
+                    # to done would leave its exec owner in place, un-fenced
+                    raise Refused("conflict", f"{r['key']} is {row['state']}, not a rule row")
                 existing[r["key"]] = row is not None
             known = {row["key"] for row in self.conn.execute(
                 "SELECT key FROM items WHERE project = ?", (RULE_PROJECT,))} | set(keys)
@@ -143,6 +147,18 @@ class RuleMixin:
                 self._append(principal, r["key"], "rule_set",
                              {"state": r["state"], "description": r["description"],
                               "depends_on": r["depends_on"]}, now)
+                # No exec clear here (qwen-R3): a rule row has no exec
+                # lifecycle to hand back.  Rules have "no lifecycle
+                # (claim/review) applies" (module docstring above; design table
+                # PG-EFFICIENCY-GATES, "in force / retired" row) -- a rule row
+                # is done/cancelled from its creating transaction, so it is
+                # never claimable and ``_exec_check`` can never record an exec
+                # owner on it (it records only for the holder of a claimed
+                # card).  With no owner ever to clear, a clear would only fence
+                # a run this item type has no notion of; the guard covers the
+                # write through the explicit STATE_WRITER_EXCEPTIONS entry
+                # (tests/test_keeper_exec_clear_guard.py) instead.  Design I8
+                # needs nothing more: latest ``rule_set`` wins on replay.
                 self.conn.execute(
                     "UPDATE items SET state=?, title=?, description=?, source=?, note=?,"
                     " lease_until=NULL, updated_at=? WHERE key=?",

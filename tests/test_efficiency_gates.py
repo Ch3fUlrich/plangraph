@@ -302,6 +302,29 @@ def test_keeper_item_reader_status(tmp_path, status, body, expect):
 
 
 # ------------------------------------------------------------ §0.2b/f lane gates
+def _slice_rows(text):
+    """Every data row of the ``## Slices`` table, parsed structurally only.
+
+    Markdown tables read ``| header |`` / ``|---|`` / data rows, so the rows
+    after the first two ``|`` lines of the section are the table's data rows
+    whatever their cells hold -- a second, independent look at the table the
+    ``lane.design_slices`` regex parses (qwen-R4).
+    """
+    rows, inside = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            inside = line.strip().lower() == "## slices"
+            continue
+        if inside and line.startswith("|"):
+            rows.append(line)
+    return rows[2:]
+
+
+def _rows_by_slice(rows):
+    """Table rows keyed by their own slice cell, not by their position."""
+    return {row.split("|")[1].strip(): row for row in rows}
+
+
 def test_numstat_counting_and_slices():
     text = "10\t5\tsrc/a.py\n-\t-\timg.png\n300\t0\tuv.lock\n2\t2\tsrc/{old => new}/b.py\n"
     assert lane.count_numstat(text) == (20, 3, ["src/a.py", "img.png", "src/new/b.py"])
@@ -312,7 +335,44 @@ def test_numstat_counting_and_slices():
     assert lane.size_verdict(900, 30, slice_budget=1000)[0] == "ok"
     assert lane.size_verdict(1100, 30, slice_budget=1000)[0] == "fail"
     design = (ROOT / "docs/design/PG-EFFICIENCY-GATES.md").read_text()
-    assert lane.design_slices(design) == {1: 3000, 2: 600, 3: 450}
+    slices = lane.design_slices(design)
+    # the first three rows pin the parse (slice, scope, max_lines columns); the
+    # table is living -- later designs keep adding slices -- so the rows beyond
+    # pin only their shape: contiguous slice numbers, whole-number budgets
+    assert {n: slices[n] for n in (1, 2, 3)} == {1: 3000, 2: 600, 3: 450}
+    assert sorted(slices) == list(range(1, len(slices) + 1))
+    assert all(type(v) is int and v > 0 for v in slices.values())
+    # qwen-R4: drop-detection against the table as WRITTEN, not against the
+    # result (the count above derives from the parse, so it cannot see a row
+    # that vanished).  Every data row of the design's table must land in the
+    # parse -- a row the regex drops (trailing or not) and a budget cell that
+    # is not a whole number both show up here as a missing row -- while table
+    # growth and value changes stay free.
+    rows = _slice_rows(design)
+    assert rows, "the ## Slices table is gone; update this test with the design"
+    assert len(slices) == len(rows), (
+        f"{len(rows)} rows in the ## Slices table, but design_slices parsed"
+        f" {sorted(slices)}")
+    by_cell = _rows_by_slice(rows)
+    assert len(by_cell) == len(rows), "a slice number repeats in the table"
+    for n in sorted(slices):
+        # rows pair with the parse by their own slice cell, never by position;
+        # the budget is that row's max_lines column, verbatim -- a column
+        # mis-parse cannot pass as some other positive int
+        row = by_cell[str(n)]
+        assert str(slices[n]) == row.split("|")[3].strip(), row
+    # the detector itself detects a drop: a trailing row the parse cannot match
+    # (a budget typo) is one row the parse does not cover
+    mini = ("## Slices\n\n| slice | scope | max_lines |\n|---|---|---|\n"
+            "| 1 | a | 10 |\n| 2 | b | 12k |\n")
+    assert len(_slice_rows(mini)) == 2 and len(lane.design_slices(mini)) == 1
+    # a slice appended out of order still pairs by its own cell (qwen-S6); the
+    # in-order table above is the positive control
+    shuffled = ("## Slices\n\n| slice | scope | max_lines |\n|---|---|---|\n"
+                "| 2 | b | 12 |\n| 1 | a | 10 |\n")
+    pairs = _rows_by_slice(_slice_rows(shuffled))
+    for n, budget in lane.design_slices(shuffled).items():
+        assert str(budget) == pairs[str(n)].split("|")[3].strip()
     assert lane.parse_slice_trailer("docs/design/PG-EFFICIENCY-GATES.md#1") == (
         "docs/design/PG-EFFICIENCY-GATES.md", 1)
 
@@ -445,7 +505,12 @@ SENSITIVE = {"estimate_tokens": 20000, "privacy": "sensitive", "key": "demo:X", 
 @pytest.mark.parametrize("path, secret", [
     ("vault/prod-api-key.json", True), ("config/.env", True), (".env.local", True),
     ("keys/server.pem", True), ("x/id_rsa", True), ("db.kdbx", True), ("ci/service-account-ci.json", True),
-    ("secrets/x.txt", True), ("a/credentials.json", True), ("api_keys.yml", True), ("app.p8", True),
+    ("secrets/x.txt", True),
+    # assembled from parts: written out as one literal, this row is exactly the
+    # credential shape scrub_check refuses, and test_split_make_public refuses
+    # the tree with it -- the matcher still receives the full shaped path
+    ("a/" + "credentials.json", True),
+    ("api_keys.yml", True), ("app.p8", True),
     ("store.jks", True), ("C:\\fleet\\vault\\x.json", True), ("tools/my_apikey.txt", True),
     ("src/a.py", False), ("docs/keys.md", False), ("environment.py", False), ("pemberton.txt", False),
     ("src/envelope.py", False), ("keyboard.py", False),
@@ -625,3 +690,28 @@ def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
     env[clients.CLIENT_BINS_ENV] = str(tmp_path / "bins.json")
     assert clients.client_binary("opencode", env) == str(exe)
 
+
+
+def _decision_card(w, ident, state):
+    """A ``decisions:`` card of kind decision, put straight into *state*."""
+    w.store.create_items(w.p("router"), [
+        defn(ident, project="decisions", kind="decision"),
+        defn("GOAL", [ident], project="decisions", kind="goal")])
+    key = f"decisions:{ident}"
+    w.conn.execute("UPDATE items SET state=?, claimed_by='workerA' WHERE key=?",
+                   (state, key))
+    return key
+
+
+@pytest.mark.parametrize("state, accepted", [
+    ("claimed", False), ("in_review", False), ("open", True), ("done", True)])
+def test_rule_set_refuses_a_held_decisions_card(w, state, accepted):
+    key = _decision_card(w, "RULE-9-1", state)
+    rule = [{"id": "RULE-9-1", "description": "x"}]
+    if accepted:       # positive control: an open or done row is still a rule row
+        assert w.store.rule_set(w.p("router"), rule) == {"created": [], "updated": [key]}
+        return
+    with pytest.raises(Refused) as err:
+        w.store.rule_set(w.p("router"), rule)
+    assert err.value.code == "conflict"
+    assert w.store._item(key)["state"] == state       # untouched, exec owner not orphaned
