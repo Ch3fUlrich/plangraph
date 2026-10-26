@@ -354,9 +354,9 @@ def test_writer_order_d2683_writer_family_exclusion():
     # (d) writer-family exclusion still applies for review; exclude_families applies for implement
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    # E3b item 5: unverified new seats are skipped; grandfathered Sonnet
-    # precedes glm after excluding the qwen writer family.
-    assert plan_rev.first_leg.id == "agy-sonnet-5.5"
+    # Unverified new seats are skipped; glm is the first verified non-Claude
+    # seat after excluding qwen. Claude remains the last resort.
+    assert plan_rev.first_leg.id == "opencode-glm-5.3-flash-free"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "mimo-v2.6-pro"
     # F2: writer_families does not exclude implement legs
@@ -463,6 +463,5 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     )
     assert nxt_agy is not None
     assert nxt_agy.id == "mimo-v2.6-pro"
-
 
 

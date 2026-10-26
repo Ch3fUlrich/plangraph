@@ -101,12 +101,12 @@ def _seat_ids(plan):
 
 
 def test_seat_order_beats_tier_position():
-    # Every family ahead of anthropic and zhipu is a writer: the code-owned
-    # order seats sonnet (subscription tier) before glm (free tier).
+    # Every earlier non-Claude family is a writer: glm is the final non-Claude
+    # seat, with Sonnet retained after it as the last resort.
     writers = ("alibaba", "xiaomi", "nvidia", "google", "thinkingmachines", "cohere")
     plan = plan_spawn(_card("high"), role="review", writer_families=writers,
                       leg_reader=_leg_state(), legs=DEFAULT_LEGS)
-    assert _seat_ids(plan) == ["agy-sonnet-5.5", "opencode-glm-5.3-flash-free"]
+    assert _seat_ids(plan) == ["opencode-glm-5.3-flash-free", "agy-sonnet-5.5"]
     assert plan.error is None
     # negative control: block anthropic too and only glm is left, with the
     # existing error text kept when fewer seats than n are found
@@ -166,6 +166,30 @@ def test_glm_is_picked_only_when_every_earlier_family_is_blocked():
                       leg_reader=_leg_state(limited=("sonnet-5.5", "agy/sonnet-5.5"),
                                             verified=("opencode-glm-5.3-flash-free",)),
                       legs=DEFAULT_LEGS)
+    assert _seat_ids(plan) == ["opencode-glm-5.3-flash-free"]
+
+
+@pytest.mark.parametrize("blocked", ["excluded", "unavailable"])
+def test_claude_review_remains_selectable_as_last_resort(blocked):
+    non_claude = ("alibaba", "xiaomi", "nvidia", "google", "thinkingmachines", "cohere", "zhipu")
+    claude = next(leg for leg in DEFAULT_LEGS if leg.id == "agy-sonnet-5.5")
+    plan = plan_spawn(
+        _card(), role="review", legs=DEFAULT_LEGS,
+        exclude_families=non_claude if blocked == "excluded" else (),
+        leg_reader=_leg_state(available=(claude.model, "agy/" + claude.model)
+                             if blocked == "unavailable" else None),
+    )
+    assert _seat_ids(plan) == [claude.id]
+
+
+def test_glm_review_precedes_every_claude_but_follows_other_non_claude():
+    plan = plan_spawn(_card(), role="review", legs=DEFAULT_LEGS,
+                      writer_families=("alibaba", "xiaomi", "nvidia", "google", "thinkingmachines"),
+                      leg_reader=_leg_state())
+    assert _seat_ids(plan) == ["or-north-mini-free"]
+    plan = plan_spawn(_card(), role="review", legs=DEFAULT_LEGS,
+                      writer_families=("alibaba", "xiaomi", "nvidia", "google", "thinkingmachines", "cohere"),
+                      leg_reader=_leg_state())
     assert _seat_ids(plan) == ["opencode-glm-5.3-flash-free"]
 
 

@@ -53,7 +53,7 @@ def test_seats_and_impossible_fence():
     assert [l.family for l in p.review_seats] == ["qwen"]
     assert all(model_family(l.model) != "openai" for l in p.legs)
     assert plan_spawn(CARD, role="review",
-                      writer_families=("qwen",)).first_leg.id == "agy-sonnet-5.5"
+                      writer_families=("qwen",)).first_leg.id == "opencode-glm-5.3-flash-free"
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gemini", "mimo", "claude"))
     assert not p.review_seats and p.error == "two distinct review families unavailable"

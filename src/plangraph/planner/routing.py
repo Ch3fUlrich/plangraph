@@ -489,7 +489,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             return (verify(leg_id, now) if verify is not None
                     else leg_id in GRANDFATHERED_VERIFIED)
 
-        for seat_id in SEAT_ORDER:
+        # D-2913: verification must never promote Claude ahead of a non-Claude
+        # seat. Stable partition preserves the code-owned order within each group.
+        seat_order = sorted(SEAT_ORDER, key=lambda sid: bool(by_id[sid].claude_family)
+                            if sid in by_id else False)
+        for seat_id in seat_order:
             leg = by_id.get(seat_id)
             if leg is None:
                 continue
