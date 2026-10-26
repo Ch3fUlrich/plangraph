@@ -110,7 +110,9 @@ MALFORMED_WRITER = 'malformed Writer trailer'
 MALFORMED_HAND_EDIT = 'malformed Hand-Edit trailer'
 GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
 #: A Hand-Edit commit may change at most this many lines (added + deleted).
-HAND_EDIT_MAX_LINES = 10
+#: Interim safety ceiling (operator 2026-10-25); the decision moves to spawner
+#: route (ORCH-EFFICIENCY-ENFORCE).
+HAND_EDIT_MAX_LINES = 50
 
 #: Default exempt file, REPO-RELATIVE so CI reads it from the base commit.
 DEFAULT_EXEMPT = 'tools/ci_commit_exempt.txt'

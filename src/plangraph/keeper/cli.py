@@ -215,6 +215,16 @@ def _add_admin(sub):
     revoke = commands.add_parser("revoke")
     revoke.add_argument("name")
 
+    mint_oversight = commands.add_parser(
+        "mint-oversight-token",
+        help="R2: mint a scoped oversight token (local only; writes plaintext to --token-out)")
+    mint_oversight.add_argument("name")
+    mint_oversight.add_argument("--go", default=None,
+                                help="D-NNN operator decision granting oversight-live")
+    mint_oversight.add_argument("--reason", default="")
+    mint_oversight.add_argument("--token-out", dest="token_out", required=True,
+                                help="file that receives the plaintext token (0600)")
+
     commands.add_parser("verify", help="verify the hash chain and cache")
 
     copy = commands.add_parser("copy-to-pg", help="W3: copy a SQLite keeper snapshot into an empty Postgres keeper")

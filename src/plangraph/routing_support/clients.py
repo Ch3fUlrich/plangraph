@@ -22,6 +22,9 @@ GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 #: Environment variable naming the provider-level gateway base URL override.
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
+#: Harnesses whose prompts are delivered via stdin instead of argv (I9).
+STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode",)
+
 
 def gateway_url(env: Mapping[str, str] | None = None,
                 config: Mapping[str, Any] | None = None) -> str | None:
@@ -284,12 +287,12 @@ def build_opencode_command(
     extra_flags: Sequence[str] = (),
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
-    cmd = ["opencode", "run", "--model", model_or_combo]
+    # --standalone: the shared background service ignores the child's config overlay
+    cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
     if extra_flags:
         cmd.extend(extra_flags)
-    cmd.append(prompt)
     return cmd
 
 
@@ -338,10 +341,9 @@ def build_standalone_fallback_command(
         return cmd
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
-    cmd = ["opencode", "run"]
+    cmd = ["opencode", "run", "--standalone"]
     if model:
         cmd.extend(["--model", model])
-    cmd.append(prompt)
     return cmd
 
 

@@ -31,7 +31,7 @@ def test_risk_reaches_planner_ranking(monkeypatch):
         seen.append(kwargs.get('risk'))
         return original(*args, **kwargs)
     monkeypatch.setattr(resolver, 'rank_candidates', rank)
-    plan_spawn({'estimate_tokens': 1000, 'risk': 'critical'}, role='implement',
+    plan_spawn({'estimate_tokens': 1000, 'risk': 'critical'}, role='review',
                leg_reader=lambda *a, **kw: {'state': 'ok', 'evidence': None},
                benchmark={leg.model: {'aa_intelligence': 90, 'verified_tok_per_s': 100}
                           for leg in DEFAULT_LEGS})

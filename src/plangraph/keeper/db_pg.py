@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from . import schema_pg
-from .errors import KeeperLocked
+from .errors import ConnectionLost, KeeperLocked
 
 __all__ = ["PgConnection", "PgRow", "PgKeeperLock", "open_pg", "lock_pg", "migrate",
            "translate", "translate_control", "adapt_params", "guard", "DdlDenied",
@@ -178,7 +179,10 @@ class PgCursor:
 
 # --------------------------------------------------------------- connection
 class PgConnection:
-    """One psycopg connection (autocommit; the store issues its own BEGIN/COMMIT)."""
+    """One psycopg connection (autocommit; the store issues its own BEGIN/COMMIT).
+
+    S1: lost is permanent for this connection; S2 exits, S3 reconnects at the request boundary.
+    """
 
     backend = "postgres"
 
@@ -186,14 +190,34 @@ class PgConnection:
         self._raw = raw
         self.schema = schema
         self._open = True
+        self._lost = False            # KEEPER-PG-RECONNECT: lost is permanent for this connection (S1); S2 exits, S3 reconnects
 
     # -- sqlite3.Connection surface used by the store
     def execute(self, sql, params=()):
         control = translate_control(sql)
-        if control is not None:
-            return self._control(control)
-        guard(sql)
-        return self._run(sql, params)
+        if self._lost:                                     # I3: nothing runs again on a lost session
+            if control == "rollback":
+                return PgCursor([], 0)                     # I4: a lost transaction needs no rollback
+            raise ConnectionLost("statement")              # lost before this statement: the txn is gone (F3)
+        with self._classify("commit" if control == "commit" else "statement"):
+            if control is not None:
+                return self._control(control)
+            guard(sql)
+            return self._run(sql, params)
+
+    @contextmanager
+    def _classify(self, phase):
+        """Turn a raw failure into ConnectionLost only on a broken session (I8)."""
+        try:
+            yield
+        except Exception as exc:
+            if self._broken():
+                self._lost = True
+                raise ConnectionLost(phase) from exc
+            raise                        # lock_timeout etc.: today's path unchanged
+
+    def _broken(self) -> bool:
+        return bool(getattr(self._raw, "broken", False) or getattr(self._raw, "closed", False))
 
     def _run(self, sql, params=()):
         args = adapt_params(params)
@@ -213,7 +237,8 @@ class PgConnection:
                 self._raw.execute("SELECT pg_advisory_xact_lock(%s, hashtext(current_schema()))",
                                   (_WRITE_LOCK,))
             except BaseException:
-                self._raw.execute("ROLLBACK")      # a failed BEGIN IMMEDIATE leaves no transaction
+                if not self._broken():   # a dead session: ConnectionLost must win (I3)
+                    self._raw.execute("ROLLBACK")   # a failed BEGIN IMMEDIATE leaves no transaction
                 raise
         else:
             self._raw.execute(control.upper())
@@ -221,21 +246,38 @@ class PgConnection:
 
     @property
     def in_transaction(self) -> bool:
+        if self._lost:
+            return False                 # the transaction died with the session
         return int(self._raw.info.transaction_status) != 0     # pq.TransactionStatus.IDLE
+
+    @property
+    def lost(self) -> bool:
+        """True once the session was lost (permanent for this connection; no reconnect in S1)."""
+        return self._lost
 
     def commit(self):
         """``sqlite3.Connection.commit``: end an open transaction, else nothing."""
+        if self._lost:
+            # Lost BEFORE this COMMIT: the transaction died with the session and
+            # nothing was committed (F3).  Only a loss raised BY the COMMIT
+            # statement itself leaves the outcome unknown.
+            raise ConnectionLost("statement")
         if self.in_transaction:
-            self._raw.execute("COMMIT")
+            with self._classify("commit"):
+                self._raw.execute("COMMIT")
 
     def rollback(self):
+        if self._lost:
+            return                          # the lost transaction is already gone server-side
         if self.in_transaction:
-            self._raw.execute("ROLLBACK")
+            with self._classify("statement"):
+                self._raw.execute("ROLLBACK")
 
     def close(self):
         if self._open:
             self._open = False
-            self._raw.close()
+            with suppress(Exception):       # closing a dead session must never raise
+                self._raw.close()
 
 
 # ----------------------------------------------------------------- opening

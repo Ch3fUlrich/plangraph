@@ -73,6 +73,9 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
+    state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
+    monkeypatch.setenv('XDG_STATE_HOME', str(state))
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
     # Credential scrubbing below also removes GIT_CONFIG_KEY_*; do not leave
     # an inherited count pointing at missing key/value pairs in subprocesses.
     for name in list(os.environ):
@@ -82,6 +85,13 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
         if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I) or name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
                                     'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':
             monkeypatch.delenv(name)
+    # An inherited OPENCODE_CONFIG_CONTENT is a gateway endpoint source (its
+    # providers.mimo/omniroute settings.baseURL defeats the I6 fail-closed
+    # path); tests opt into config with monkeypatch.setenv, never inherit it.
+    monkeypatch.delenv('OPENCODE_CONFIG_CONTENT', raising=False)
+    # Admission renders gateway providers like launch (I6): a dead-port URL keeps
+    # gateway legs admissible; no-URL tests delenv it themselves.
+    monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')
     from plangraph.spawner import resolver
     probe = resolver.served_models
     probe.cache_clear()

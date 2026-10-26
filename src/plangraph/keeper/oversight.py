@@ -298,12 +298,13 @@ def r6_projector(conn, now):
                 f" last {row['updated_at'] or 'unknown'})",
                 row["updated_at"] or ""))
     if _table_exists(conn, "projector_alarms"):
-        # Oversight's own rows (workflow_id='oversight') are outputs of this
-        # module, not projector conditions: reporting them would feed back.
+        # Oversight's own rows (workflow_id in ('oversight','oversight-guard'))
+        # are outputs of oversight, not projector conditions: reporting them
+        # would feed back (oversight-guard is the token's alarm, not the check's).
         for alarm in conn.execute(
                 "SELECT kind, key, detail, raised_at FROM projector_alarms"
                 " WHERE cleared_at IS NULL AND (workflow_id IS NULL"
-                " OR workflow_id <> 'oversight')"
+                " OR workflow_id NOT IN ('oversight','oversight-guard'))"
                 " ORDER BY id"):
             reason = f"R6:reconcile_alarm:{alarm['kind']}:{alarm['key'] or ''}"
             # The finding key carries the alarm kind so two open alarms that
