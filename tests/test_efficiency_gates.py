@@ -646,7 +646,7 @@ def test_spawn_limits_defaults_roles_and_env(tmp_path, monkeypatch):
     with pytest.raises(Exception): spawn_limits(None).wall_cap_min = 100
     monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps({"writer": {"wall_cap_min": 10}})); assert (spawn_limits("implement").wall_cap_min, spawn_limits("implement").max_cap_min) == (10, 180)
     monkeypatch.delenv("PLANGRAPH_SPAWN_LIMITS"); monkeypatch.setenv("PLANGRAPH_SETTINGS", "policy.json")
-    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": {"seat": {"stall_min": 30}}})); assert spawn_limits("review", root=tmp_path).stall_min == 30 and spawn_limits("design", root=tmp_path).stall_min == 15  # positive control: a valid cross-bucket override is accepted
+    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": {"seat": {"stall_min": 30}}})); assert spawn_limits("review", root=tmp_path).stall_min == 30 and spawn_limits("design", root=tmp_path).stall_min == 15 and spawn_limits("writer", root=tmp_path).stall_min == 15  # positive control (qwen-D7): a valid cross-bucket override is accepted on every request and only its own bucket feels it
 
 
 # haiku-D6/qwen-D10: restored as its own parametrized test — 497257e3 folded it into a loop inside
@@ -656,16 +656,20 @@ def test_spawn_limits_defaults_roles_and_env(tmp_path, monkeypatch):
     {"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}},
     {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}},
     {"writer": {"truncation": {"opencode": [123]}}},
+    # qwen-D7: bad values in a bucket the call does not select are refused too.
+    {"seat": {"wall_cap_min": -1}}, {"default": {"require_principal": "yes"}},
 ])
 def test_spawn_limits_refusals(tmp_path, monkeypatch, override):
     from plangraph.settings import SettingsError, spawn_limits
     monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps(override))
-    with pytest.raises(SettingsError):
-        spawn_limits("writer")
+    for role in ("implement", "review", "design"):  # qwen-D7: every section/env bucket is validated, not only the one the request selects
+        with pytest.raises(SettingsError):
+            spawn_limits(role)
     monkeypatch.delenv("PLANGRAPH_SPAWN_LIMITS"); monkeypatch.setenv("PLANGRAPH_SETTINGS", "policy.json")  # qwen-C9: the settings-file section refuses the same shapes (I1)
     (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": override}))
-    with pytest.raises(SettingsError):
-        spawn_limits("writer", root=tmp_path)
+    for role in ("implement", "review", "design"):
+        with pytest.raises(SettingsError):
+            spawn_limits(role, root=tmp_path)
 
 
 def test_liveness_exit_vocabulary():

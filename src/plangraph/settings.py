@@ -27,6 +27,7 @@ class SettingsError(ValueError):
 
 _LIMIT_MAPS = ('ignore', 'truncation', 'provider_protocol')
 _LIMIT_INTS = ('wall_cap_min', 'max_cap_min', 'stall_min', 'stall_cpu_pct', 'floor_mb', 'max_runs')
+_LIMIT_BASE = {'writer': (90, 180), 'seat': (45, 60), 'default': (60, 120)}
 _TRUNC_DEF = {"opencode": ["Response still truncated after two output token limit continuations"]}
 _PROTO_DEF = {"opencode": ["tool call delta is missing id or name"]}
 
@@ -47,16 +48,18 @@ class SpawnLimits:
 
 def spawn_limits(role: str | None = None, *, root=None) -> SpawnLimits:
     cat = 'writer' if role in ('implement', 'fix', 'writer') else 'seat' if role == 'review' else 'default'
-    base = {'writer': (90, 180), 'seat': (45, 60), 'default': (60, 120)}[cat]
-    vals = {'wall_cap_min': base[0], 'max_cap_min': base[1]}
+    vals = {'wall_cap_min': _LIMIT_BASE[cat][0], 'max_cap_min': _LIMIT_BASE[cat][1]}
     data = _policy_data(root); sec = dict((data or {}).get('spawn_limits') or {}); env = os.environ.get('PLANGRAPH_SPAWN_LIMITS')
     if env:
         try:
             for k, v in json.loads(env).items(): sec[k] = {**sec.get(k, {}), **v} if isinstance(v, dict) else v
         except Exception as exc: raise SettingsError(f'PLANGRAPH_SPAWN_LIMITS: {exc}') from None
     for k, v in sec.items():
-        if k not in ('writer', 'seat', 'default'): raise SettingsError(f'{k}: unknown spawn_limits role')
+        if k not in _LIMIT_BASE: raise SettingsError(f'{k}: unknown spawn_limits role')
         if not isinstance(v, dict) or any(f not in SpawnLimits.__dataclass_fields__ for f in v): raise SettingsError('unknown spawn_limits setting')
+        # qwen-D7: values are validated for every bucket, not only the one this call selects —
+        # a bad override must refuse on any request, never just on the requests that read it.
+        SpawnLimits(**{**{'wall_cap_min': _LIMIT_BASE[k][0], 'max_cap_min': _LIMIT_BASE[k][1]}, **v})
     vals.update(sec.get(cat, {}))
     return SpawnLimits(**vals)
 
