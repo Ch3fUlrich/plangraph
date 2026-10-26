@@ -1136,8 +1136,8 @@ def test_pg_migration_7_matches_the_sqlite_ddl():
     assert not {"oversight_tokens", "oversight_ops"} & set(earlier)
 
 
-def test_all_pg_migrations_apply_in_order_exec_7_then_oversight_8():
-    """Merge of origin/main #140: migrations 1..8 apply in order, no gaps.
+def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
+    """migrations 1..9 apply in order, no gaps.
 
     Applied through the parity parser (``parse_tables`` over the ``MIGRATIONS``
     list, no live Postgres): 7 is main's exec ownership of ``items``, 8 is our

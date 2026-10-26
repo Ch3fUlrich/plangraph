@@ -163,6 +163,10 @@ pub enum KeeperError {
     Http(String),
     #[error("keeper returned unexpected status {0}")]
     Status(u16),
+    /// A park 409 refusal carrying the flat body's `{"error": code}` -- `""`
+    /// when unparsable. Park path only; every other verb keeps [`Self::Status`].
+    #[error("keeper refused 409: {0}")]
+    Conflict(String),
     #[error("keeper response could not be decoded: {0}")]
     Decode(String),
 }
@@ -376,12 +380,43 @@ impl HttpKeeper {
             Err(e) => Err(KeeperError::Http(e.to_string())),
         }
     }
+
+    /// POST a JSON body whose only accepted success code is 204 -- the park
+    /// request path only. A 409's flat refusal body (`{"error": code}`,
+    /// api.py) is read up to [`PARK_REFUSAL_MAX_BODY`] and carried in
+    /// [`KeeperError::Conflict`] (`""` when unparsable -- refused, never typed
+    /// here); every other status and verb keeps [`KeeperError::Status`].
+    fn post204_park(&self, path: &str, body: &impl Serialize) -> Result<(), KeeperError> {
+        let url = self.url(path);
+        match self.post(&url).send_json(body) {
+            Ok(resp) if resp.status() == 204 => Ok(()),
+            Ok(resp) => Err(KeeperError::Status(resp.status())),
+            Err(ureq::Error::Status(409, resp)) => {
+                let mut buf = Vec::new();
+                let _ = resp
+                    .into_reader()
+                    .take(PARK_REFUSAL_MAX_BODY)
+                    .read_to_end(&mut buf);
+                let code = serde_json::from_slice::<serde_json::Value>(&buf)
+                    .ok()
+                    .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+                    .unwrap_or_default();
+                Err(KeeperError::Conflict(code))
+            }
+            Err(ureq::Error::Status(code, _)) => Err(KeeperError::Status(code)),
+            Err(e) => Err(KeeperError::Http(e.to_string())),
+        }
+    }
 }
 
 /// Largest `GET /v1/show` body the worker buffers for a card-state observation
 /// (G3-5): the show JSON is a few hundred bytes, so anything past this cap is
 /// refused as [`KeeperError::Decode`] (D1a) instead of being read whole.
 const CARD_STATE_MAX_BODY: u64 = 64 * 1024;
+
+/// Largest park 409 refusal body the worker buffers (R4): the flat refusal
+/// JSON is a few dozen bytes, so anything past this cap is not worth reading.
+const PARK_REFUSAL_MAX_BODY: u64 = 4096;
 
 impl Keeper for HttpKeeper {
     /// D1a: a read failure is visible as an error -- non-2xx [`KeeperError::Status`],
@@ -469,7 +504,7 @@ impl Keeper for HttpKeeper {
 
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError> {
         let body = serde_json::to_value(p).expect("park packet serializes");
-        self.post204("/v1/park", &with_exec(body, exec))
+        self.post204_park("/v1/park", &with_exec(body, exec))
     }
 
     fn complete(&self, card: &str, merged_sha: &str, exec: &ExecId) -> Result<(), KeeperError> {
@@ -874,11 +909,12 @@ impl Keeper for StubKeeper {
         }
         if s.park_refuse_times > 0 {
             s.park_refuse_times -= 1;
-            return Err(KeeperError::Status(409));
+            // The keeper's CAS-miss code (R4): only it drives re-observe.
+            return Err(KeeperError::Conflict(STALE_STATE_FAILURE.to_string()));
         }
         // The keeper's state CAS, stub-equivalent (EXEC-OBSERVED-STATE): an
-        // expectation that misses the state the stub holds is refused 409, so a
-        // park that presents a stale observation can be tested without a server.
+        // expectation that misses the state the stub holds is refused 409 with
+        // the `exec_stale_state` code, so a stale observation is testable.
         // A live-set fallback is never accepted when the held state is waiting
         // or needs_input (matches store_worker._exec_expect_state, I4).
         if let (Some(expected), Some(state)) = (&exec.expected_state, &s.card_state) {
@@ -887,10 +923,10 @@ impl Keeper for StubKeeper {
                     .iter()
                     .all(|s| expected.iter().any(|e| e == s));
             if is_live_set && (state == "waiting" || state == "needs_input") {
-                return Err(KeeperError::Status(409));
+                return Err(KeeperError::Conflict(STALE_STATE_FAILURE.to_string()));
             }
             if !expected.iter().any(|e| e == state) {
-                return Err(KeeperError::Status(409));
+                return Err(KeeperError::Conflict(STALE_STATE_FAILURE.to_string()));
             }
         }
         s.parked.push(p.clone());
@@ -1120,6 +1156,69 @@ mod tests {
         server.join().expect("server thread");
     }
 
+    /// R4 (red): a 409 whose flat body carries `exec_stale_state` is the CAS
+    /// miss -- typed so the workflow re-observes; the body is read, not dropped.
+    #[test]
+    fn park_409_exec_stale_state_body_is_typed_stale() {
+        let (base, server) = serve_once(
+            409,
+            "Conflict",
+            r#"{"error":"exec_stale_state","msg":"card moved on"}"#,
+        );
+        let err = HttpKeeper::new(&base)
+            .park(&park(), &exec())
+            .expect_err("a 409 park must be refused");
+        server.join().expect("server thread");
+        assert_eq!(err, KeeperError::Conflict("exec_stale_state".to_string()));
+        let temporalio_sdk::activities::ActivityError::Application(f) =
+            crate::activities::keeper_park_error(err)
+        else {
+            panic!("a refused park must be an application failure");
+        };
+        assert!(f.is_non_retryable());
+        assert_eq!(f.type_name(), Some(STALE_STATE_FAILURE));
+    }
+
+    /// R4 (red): a 409 whose body carries no parsable code cannot be told
+    /// apart from a CAS miss: non-retryable but UNtyped, never a re-observe.
+    #[test]
+    fn park_409_without_a_code_is_not_typed_stale() {
+        for body in ["", r#"{"msg":"conflict"}"#, r#"{"error":7}"#, "not json"] {
+            let (base, server) = serve_once(409, "Conflict", body);
+            let err = HttpKeeper::new(&base)
+                .park(&park(), &exec())
+                .expect_err("a 409 park must be refused");
+            server.join().expect("server thread");
+            assert_eq!(err, KeeperError::Conflict(String::new()), "{body:?}");
+            let temporalio_sdk::activities::ActivityError::Application(f) =
+                crate::activities::keeper_park_error(err)
+            else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{body:?}");
+            assert_eq!(f.type_name(), None, "{body:?}");
+        }
+    }
+
+    /// I5'/D5: the connect deadline is real. A non-routable address (RFC 5737
+    /// TEST-NET-1) must return Err within 2 s at a 200 ms connect deadline.
+    #[test]
+    fn http_card_state_connect_deadline_is_enforced() {
+        let keeper = HttpKeeper::new("http://192.0.2.1:9")
+            .with_read_deadlines(Duration::from_millis(200), Duration::from_secs(5));
+        let started = std::time::Instant::now();
+        let got = keeper.card_state("c-1");
+        let elapsed = started.elapsed();
+        assert!(
+            got.is_err(),
+            "a non-routable connect must not read as Ok: {got:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "connect deadline ignored: {elapsed:?}"
+        );
+    }
+
     /// G3-2: the wait-cap park after usage_limit/outage presents the
     /// observation the workflow recorded when it decided, so it lands even
     /// while `GET /v1/show` -- the read the old park path depended on -- fails.
@@ -1170,7 +1269,7 @@ mod tests {
         stub.set_card_state(Some("waiting"));
         assert_eq!(
             stub.park(&park(), &exec_live).unwrap_err(),
-            KeeperError::Status(409),
+            KeeperError::Conflict(STALE_STATE_FAILURE.to_string()),
             "bare live set must be refused on waiting card"
         );
         // Concrete observation on waiting lands.
@@ -1181,7 +1280,7 @@ mod tests {
         stub.set_card_state(Some("needs_input"));
         assert_eq!(
             stub.park(&park(), &exec_live).unwrap_err(),
-            KeeperError::Status(409),
+            KeeperError::Conflict(STALE_STATE_FAILURE.to_string()),
             "bare live set must be refused on needs_input card"
         );
 

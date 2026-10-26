@@ -340,7 +340,7 @@ impl CardActivities {
 /// How a keeper failure should be treated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Failure {
-    /// The keeper said no and asking again cannot change that: 401, 403, 409, 422.
+    /// The keeper said no; asking again cannot change that: 401, 403, 409, 422, a park `Conflict`.
     Refused,
     /// Plausibly gone in a moment: a transport error, 408, 429 or any 5xx.
     Transient,
@@ -352,7 +352,7 @@ fn classify(e: &crate::keeper::KeeperError) -> Failure {
     use crate::keeper::KeeperError;
     match e {
         KeeperError::Http(_) => Failure::Transient,
-        KeeperError::Status(401 | 403 | 409 | 422) => Failure::Refused,
+        KeeperError::Conflict(_) | KeeperError::Status(401 | 403 | 409 | 422) => Failure::Refused,
         KeeperError::Status(408 | 429 | 500..=599) => Failure::Transient,
         KeeperError::Status(_) | KeeperError::Decode(_) => Failure::Other,
     }
@@ -541,12 +541,12 @@ fn join_error(e: tokio::task::JoinError) -> ActivityError {
     }
 }
 
-fn keeper_park_error(e: KeeperError) -> ActivityError {
+/// Park activity failure typing, crate-public so the keeper's 409-body tests can assert it (R4).
+pub(crate) fn keeper_park_error(e: KeeperError) -> ActivityError {
     if classify(&e) == Failure::Refused {
-        if matches!(e, KeeperError::Status(409)) {
-            // D2: a 409 is the park state-CAS miss (exec_stale_state): typed,
-            // so the workflow can tell it apart and re-observe, and
-            // non-retryable so Temporal never replays a stale park.
+        // D2/R4: only the `exec_stale_state` code -- a park-path `Conflict` --
+        // is typed; any other 409 stays non-retryable but untyped.
+        if matches!(&e, KeeperError::Conflict(c) if c == crate::keeper::STALE_STATE_FAILURE) {
             return ActivityError::application(
                 temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!(e.to_string()))
                     .type_name(crate::keeper::STALE_STATE_FAILURE.to_owned())
@@ -1718,7 +1718,7 @@ mod tests {
         let err = keeper
             .park(&g3_packet(), &g3_exec(expected_state_of(&input)))
             .expect_err("stale observation must be refused");
-        assert_eq!(err, KeeperError::Status(409));
+        assert_eq!(err, KeeperError::Conflict("exec_stale_state".to_string()));
         assert!(keeper.parked().is_empty());
         assert!(
             keeper.card_state_calls().is_empty(),
@@ -1773,11 +1773,32 @@ mod tests {
         );
     }
 
-    /// D2/D3: a park refused 409 is the state-CAS miss -- typed
-    /// `exec_stale_state` so the workflow can re-observe, and non-retryable so
-    /// Temporal never replays a stale park. The other refusals stay
-    /// non-retryable but untyped, and a transient 5xx keeps the retry policy's
-    /// default (retryable).
+    /// R4 (red): a 409 with some other keeper code (`lease_held`, `exec_stale`)
+    /// is not the CAS miss: untyped, so the re-observe loop must never fire.
+    #[tokio::test]
+    async fn park_409_with_another_code_is_not_typed_stale() {
+        for code in ["lease_held", "exec_stale"] {
+            let stub = Arc::new(StubKeeper::default());
+            stub.set_park_error(Some(KeeperError::Conflict(code.to_string())));
+            let keeper: Arc<dyn Keeper> = stub.clone();
+            let input = park_json_with_attempt(&g3_packet(), Some(4), Some(vec!["waiting".into()]));
+            let exec = g3_exec(expected_state_of(&input));
+            let err = park_path(keeper, input, exec)
+                .await
+                .expect_err("a refused park must fail");
+            let ActivityError::Application(f) = err else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{code}");
+            assert_eq!(f.type_name(), None, "{code}: non-CAS 409 must not be typed");
+            assert_eq!(stub.park_execs().len(), 1, "{code}: one park exec");
+            assert!(stub.card_state_calls().is_empty(), "{code}: re-observed");
+        }
+    }
+
+    /// D2/D3/R4: only a park 409 carrying `exec_stale_state` is typed so the
+    /// workflow can re-observe; every other refusal stays non-retryable but
+    /// untyped, and a transient 5xx keeps the retry policy's default.
     #[test]
     fn only_a_stale_park_refusal_is_typed_and_a_5xx_stays_retryable() {
         for code in [401, 403, 422] {
@@ -1787,7 +1808,20 @@ mod tests {
             assert!(f.is_non_retryable(), "{code}");
             assert_eq!(f.type_name(), None, "{code}");
         }
-        let ActivityError::Application(f) = keeper_park_error(KeeperError::Status(409)) else {
+        // R4: only `exec_stale_state` is the CAS miss; other 409s are untyped.
+        for err in [
+            KeeperError::Status(409),
+            KeeperError::Conflict("lease_held".to_string()),
+            KeeperError::Conflict(String::new()),
+        ] {
+            let ActivityError::Application(f) = keeper_park_error(err.clone()) else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{err:?}");
+            assert_eq!(f.type_name(), None, "{err:?}");
+        }
+        let err = KeeperError::Conflict(crate::keeper::STALE_STATE_FAILURE.to_string());
+        let ActivityError::Application(f) = keeper_park_error(err) else {
             panic!("a stale park must be an application failure");
         };
         assert!(f.is_non_retryable());

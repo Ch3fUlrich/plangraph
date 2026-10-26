@@ -449,6 +449,24 @@ def test_bus_statuses_are_static():
         assert api_routes.STATUS[code] == http_status
 
 
+def test_bus_error_statuses_match_keeper_status():
+    """R4: every ERROR_STATUS code raisable through post_message keeps its
+    status in api_routes.STATUS (find them: `git grep -n 'BusError(' src/plangraph`).
+
+    Excluded and why: not_found (never raised), cursor_gone (pull path only),
+    bad_request (api.py's `STATUS.get(code, 400)` fallback is its answer,
+    asserted below).
+    """
+    from plangraph.fleet_bus.contract import ERROR_STATUS
+
+    raisable = ["skew", "unknown_kid", "bad_signature", "replayed_nonce",
+                "replay_window_full", "too_large", "msg_rate_limited"]
+    for code in raisable:
+        assert api_routes.STATUS[code] == ERROR_STATUS[code], code
+    # The one raisable code without a STATUS entry: the API's 400 fallback.
+    assert api_routes.STATUS.get("bad_request", 400) == ERROR_STATUS["bad_request"]
+
+
 def test_oversight_r3_holds_after_a_bus_post_message_in_the_same_process(srv, host_registry):
     """R2a': a bus post_message must not mutate api_routes.STATUS (oversight R3 keeps 403 forbidden, no rate_limited)."""
     srv.server.bus_registry = host_registry
