@@ -25,7 +25,7 @@ ERROR_STATUS = {
     "not_found": 404,
     "too_large": 413,
     "cursor_gone": 410,
-    "rate_limited": 429,
+    "msg_rate_limited": 429,
     "replay_window_full": 503,
 }
 
@@ -110,7 +110,7 @@ class RateLimiter:
         active = {identity: times for identity, times in active.items() if times}
         times = active.setdefault(sender, deque())
         if len(times) >= RATE_PER_MIN:
-            raise BusError("rate_limited", retry_after_s=max(1, math.ceil(times[0] + 60 - now)))
+            raise BusError("msg_rate_limited", retry_after_s=max(1, math.ceil(times[0] + 60 - now)))
         times.append(now)
         self.senders = active
 

@@ -8,13 +8,14 @@
 //! |--------|----------------|--------------------------|--------------------|
 //! | POST   | `/v1/claim`    | `{"worker": ..}`          | 200 `Claim` \| 204 |
 //! | POST   | `/v1/worker_claim` | `{"worker": ..,"card": ..}` | 200 `Claim` \| 204 |
+//! | GET    | `/v1/show`     | query `key=<card>&fmt=json` | 200 `{"key","state",..}` (the state observation) |
 //! | POST   | `/v1/phase_plan` | `{"key"}`              | 200 `PhasePlan`    |
 //! | POST   | `/v1/phase_finish` | `{"key","branch","head"}` | 200 `PhaseFinish` |
 //! | POST   | `/v1/attempts` | `AttemptReport` + `workflow_id`/`run_id`/`attempt` (all three or none; no `expected_state`) | 204 |
-//! | POST   | `/v1/park`     | `ParkPacket`             | 204                |
+//! | POST   | `/v1/park`     | `ParkPacket` (+ `attempt`, `expected_state` when known)             | 204                |
 //! | POST   | `/v1/complete` | `{"card","merged_sha"}` + `workflow_id`/`run_id`/`attempt` (+ `expected_state` when the activity input carries one) | 204 |
 //! | POST   | `/v1/alarms`   | `Alarm` (`{"card","reason","attempt"?}`) + `workflow_id`/`run_id`/`attempt` (no `expected_state`) | 204 |
-//! | POST   | `/v1/ask_question` | `{"key","text","default_answer","deadline","risk_tags"}` + `workflow_id`/`run_id`/`attempt` + `expected_state` (the live set) | 200 `{"id",..}` |
+//! | POST   | `/v1/ask_question` | `{"key","text","default_answer","deadline","risk_tags"}` + `workflow_id`/`run_id`/`attempt` + `expected_state` (the observed state, else the live set) | 200 `{"id",..}` |
 //! | POST   | `/v1/answer_question` | `{"question_id","source":"question_timeout"}` | 200 |
 //! | POST   | `/v1/locks/<repo>/acquire` | `{"owner", "ttl_s"}` | 200 `Fence`    |
 //! | POST   | `/v1/locks/<repo>/release` | `Fence`              | 204            |
@@ -27,6 +28,7 @@ use crate::question::Question;
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -78,8 +80,10 @@ pub struct Alarm {
     pub attempt: Option<u32>,
 }
 
-/// The single source of truth for the `expected_state` every worker park and
-/// question ask sends: the states a card may be in while this run still owns it.
+/// The fallback `expected_state` a worker park and question ask sends when the
+/// run observed nothing: the states a card may be in while this run still owns
+/// it (`workflow.rs` replaces it with the state its `observe` activity captured
+/// at decision time whenever that answered one -- EXEC-OBSERVED-STATE).
 ///
 /// Worker-run writes may precede state projection. The run/attempt fence rejects
 /// stale retries; this CAS preserves newer actor states and excludes the agent
@@ -92,7 +96,32 @@ pub struct Alarm {
 /// until the workflow's retries ran out. Stale-duplicate protection comes from
 /// the run/attempt fence plus the keeper's idempotent duplicate-park success,
 /// never from leaving `waiting` out of this list.
+///
+/// The keeper still refuses this fallback on a `waiting`/`needs_input` card a
+/// projector event wrote while the run was away: it only says "I observed
+/// nothing", and a park closes the card. An observing run sends what it
+/// captured instead ([`expected_state_for`]).
 pub const WORKER_LIVE_STATES: &[&str] = &["open", "ready", "running", "waiting", "needs_input"];
+
+/// The `expected_state` a park or ask sends (EXEC-OBSERVED-STATE): the state the
+/// workflow observed when it decided to park or ask (the `observe` activity's
+/// answer, carried in the activity input), otherwise
+/// the live-set `fallback` the workflow handed over.
+///
+/// An observation is only usable while it names a live state: `claimed` is not
+/// in `SETTABLE_STATES` (it names a claim, so the keeper's phase-holder rule is
+/// the CAS for it), and a terminal state would only turn a stale verb into a
+/// different refusal. Those observations fall back, exactly like a worker that
+/// read nothing.
+pub fn expected_state_for(
+    observed: Option<String>,
+    fallback: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match observed {
+        Some(state) if WORKER_LIVE_STATES.contains(&state.as_str()) => Some(vec![state]),
+        _ => fallback,
+    }
+}
 
 /// Which execution a keeper call belongs to: the workflow, this run of it, and
 /// the card attempt number (monotone per run — deliberately *not* Temporal's
@@ -105,8 +134,11 @@ pub struct ExecId {
     pub workflow_id: Option<String>,
     pub run_id: Option<String>,
     pub attempt: Option<u32>,
-    /// Last observed card state for compare-and-set; absent for legacy callers
-    /// and alarms. Roll out keeper support before deploying this worker.
+    /// The state this call expects: the observation the workflow captured when
+    /// it decided to park or ask (carried in the activity input), or the
+    /// live-set fallback when it observed nothing. Absent
+    /// for legacy callers and alarms. Roll out keeper support before deploying
+    /// this worker.
     pub expected_state: Option<Vec<String>>,
 }
 
@@ -119,12 +151,22 @@ pub struct Fence {
     pub owner: String,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+/// The `ApplicationFailure` type the worker raises when the keeper refuses a
+/// park with 409 -- the state CAS missed, `exec_stale_state`. The park activity
+/// types its failure with it and the workflow's re-observe loop keys on it, so
+/// both sides name it here.
+pub const STALE_STATE_FAILURE: &str = "exec_stale_state";
+
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum KeeperError {
     #[error("keeper request failed: {0}")]
     Http(String),
     #[error("keeper returned unexpected status {0}")]
     Status(u16),
+    /// A park 409 refusal carrying the flat body's `{"error": code}` -- `""`
+    /// when unparsable. Park path only; every other verb keeps [`Self::Status`].
+    #[error("keeper refused 409: {0}")]
+    Conflict(String),
     #[error("keeper response could not be decoded: {0}")]
     Decode(String),
 }
@@ -133,6 +175,17 @@ pub enum KeeperError {
 /// the real service and by [`StubKeeper`] in tests.
 pub trait Keeper: Send + Sync {
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError>;
+    /// The card's state as the keeper holds it right now: the observation a
+    /// park CAS presents (EXEC-OBSERVED-STATE), read by the workflow's `observe`
+    /// activity at decision time and carried in the `park` input. `Ok(None)`
+    /// means "observed nothing" (an older keeper, a body with no state) and the
+    /// caller then falls back to [`WORKER_LIVE_STATES`] instead of failing the
+    /// call. A read failure is visible (D1a) as `Err` -- HTTP non-2xx
+    /// [`KeeperError::Status`], transport [`KeeperError::Http`], an oversized
+    /// or undecodable body [`KeeperError::Decode`] (G3-5) -- so a later slice
+    /// can retry it server-side before any degrade. Blocking (ureq): call it
+    /// from `spawn_blocking`, never on a tokio worker thread (G3-4).
+    fn card_state(&self, card: &str) -> Result<Option<String>, KeeperError>;
     /// Claim one named card for the phase runner; `None` means the keeper has nothing for it (not ready / taken).
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError>;
     /// Read-only plan of phase `key`; the keeper never writes for it.
@@ -208,8 +261,21 @@ fn with_exec(mut body: serde_json::Value, exec: &ExecId) -> serde_json::Value {
 pub struct HttpKeeper {
     base: String,
     agent: ureq::Agent,
+    /// Dedicated agent for reads (D5: used only by `card_state`) with strict
+    /// connect and read deadlines, so a hung keeper cannot hang a workflow.
+    read_agent: ureq::Agent,
     /// Bearer token the keeper requires on every verb; `None` sends none.
     token: Option<String>,
+}
+
+/// The deadline-bounded agent for reads. One home for its construction (D5):
+/// `new()` and [`HttpKeeper::with_read_deadlines`] must differ only in the
+/// deadlines they pass.
+fn read_agent(connect: Duration, read: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(connect)
+        .timeout_read(read)
+        .build()
 }
 
 impl HttpKeeper {
@@ -245,8 +311,16 @@ impl HttpKeeper {
         HttpKeeper {
             base,
             agent,
+            read_agent: read_agent(Duration::from_secs(2), Duration::from_secs(5)),
             token: None,
         }
+    }
+
+    /// Override the read agent's connect/read deadlines (D5). `new()` keeps
+    /// the 2 s connect / 5 s read defaults.
+    pub fn with_read_deadlines(mut self, connect: Duration, read: Duration) -> Self {
+        self.read_agent = read_agent(connect, read);
+        self
     }
 
     /// Send `Authorization: Bearer <token>` on every request. An empty token
@@ -259,6 +333,16 @@ impl HttpKeeper {
     /// A POST request to `url`, carrying the bearer token when one is set.
     fn post(&self, url: &str) -> ureq::Request {
         let req = self.agent.post(url);
+        match &self.token {
+            Some(t) => req.set("Authorization", &format!("Bearer {t}")),
+            None => req,
+        }
+    }
+
+    /// A GET request to `url`, carrying the bearer token when one is set.
+    /// Uses `read_agent` with connect and read deadlines.
+    fn get(&self, url: &str) -> ureq::Request {
+        let req = self.read_agent.get(url);
         match &self.token {
             Some(t) => req.set("Authorization", &format!("Bearer {t}")),
             None => req,
@@ -296,9 +380,78 @@ impl HttpKeeper {
             Err(e) => Err(KeeperError::Http(e.to_string())),
         }
     }
+
+    /// POST a JSON body whose only accepted success code is 204 -- the park
+    /// request path only. A 409's flat refusal body (`{"error": code}`,
+    /// api.py) is read up to [`PARK_REFUSAL_MAX_BODY`] and carried in
+    /// [`KeeperError::Conflict`] (`""` when unparsable -- refused, never typed
+    /// here); every other status and verb keeps [`KeeperError::Status`].
+    fn post204_park(&self, path: &str, body: &impl Serialize) -> Result<(), KeeperError> {
+        let url = self.url(path);
+        match self.post(&url).send_json(body) {
+            Ok(resp) if resp.status() == 204 => Ok(()),
+            Ok(resp) => Err(KeeperError::Status(resp.status())),
+            Err(ureq::Error::Status(409, resp)) => {
+                let mut buf = Vec::new();
+                let _ = resp
+                    .into_reader()
+                    .take(PARK_REFUSAL_MAX_BODY)
+                    .read_to_end(&mut buf);
+                let code = serde_json::from_slice::<serde_json::Value>(&buf)
+                    .ok()
+                    .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+                    .unwrap_or_default();
+                Err(KeeperError::Conflict(code))
+            }
+            Err(ureq::Error::Status(code, _)) => Err(KeeperError::Status(code)),
+            Err(e) => Err(KeeperError::Http(e.to_string())),
+        }
+    }
 }
 
+/// Largest `GET /v1/show` body the worker buffers for a card-state observation
+/// (G3-5): the show JSON is a few hundred bytes, so anything past this cap is
+/// refused as [`KeeperError::Decode`] (D1a) instead of being read whole.
+const CARD_STATE_MAX_BODY: u64 = 64 * 1024;
+
+/// Largest park 409 refusal body the worker buffers (R4): the flat refusal
+/// JSON is a few dozen bytes, so anything past this cap is not worth reading.
+const PARK_REFUSAL_MAX_BODY: u64 = 4096;
+
 impl Keeper for HttpKeeper {
+    /// D1a: a read failure is visible as an error -- non-2xx [`KeeperError::Status`],
+    /// transport [`KeeperError::Http`], an oversized or undecodable body
+    /// [`KeeperError::Decode`] -- so it can be retried before any degrade.
+    fn card_state(&self, card: &str) -> Result<Option<String>, KeeperError> {
+        // `fmt=json`: `show` defaults to its text form. Only a 2xx that carries
+        // a state is an observation (`Ok(None)` is absence, not failure).
+        let path = format!("/v1/show?key={}&fmt=json", encode_segment(card));
+        let resp = match self.get(&self.url(&path)).call() {
+            Ok(resp) if (200..300).contains(&resp.status()) => resp,
+            Ok(resp) => return Err(KeeperError::Status(resp.status())),
+            Err(ureq::Error::Status(code, _)) => return Err(KeeperError::Status(code)),
+            Err(e) => return Err(KeeperError::Http(e.to_string())),
+        };
+        // G3-5: buffer at most CARD_STATE_MAX_BODY + 1 bytes; a larger body is
+        // refused as undecodable (D1a) instead of being buffered whole.
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .take(CARD_STATE_MAX_BODY + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| KeeperError::Http(e.to_string()))?;
+        if buf.len() as u64 > CARD_STATE_MAX_BODY {
+            return Err(KeeperError::Decode(format!(
+                "show body exceeds {CARD_STATE_MAX_BODY} bytes"
+            )));
+        }
+        let value: serde_json::Value =
+            serde_json::from_slice(&buf).map_err(|e| KeeperError::Decode(e.to_string()))?;
+        Ok(value
+            .get("state")
+            .and_then(|s| s.as_str())
+            .map(str::to_owned))
+    }
+
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
         self.claim_with(
             "/v1/worker_claim",
@@ -351,7 +504,7 @@ impl Keeper for HttpKeeper {
 
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError> {
         let body = serde_json::to_value(p).expect("park packet serializes");
-        self.post204("/v1/park", &with_exec(body, exec))
+        self.post204_park("/v1/park", &with_exec(body, exec))
     }
 
     fn complete(&self, card: &str, merged_sha: &str, exec: &ExecId) -> Result<(), KeeperError> {
@@ -462,9 +615,73 @@ struct StubState {
     alarm_down: bool,
     /// When set, `ask_question` fails with this status every time.
     ask_status: Option<u16>,
+    /// What `card_state` reports. `None` (the default) is a keeper the worker
+    /// observed nothing on, so park and ask keep the live-set fallback.
+    card_state: Option<String>,
+    /// The cards `card_state` was asked for, in order.
+    card_state_calls: Vec<String>,
+    /// Make `card_state` hang that long first (G3-4: a stalled read).
+    card_state_delay: Option<Duration>,
+    /// Number of card_state calls that should fail with `Status(500)`
+    /// (simulating transient read failure).
+    card_state_fail_times: usize,
+    /// When set, `park` panics with this message.
+    park_panic: Option<String>,
+    /// When set, `park` fails with this error every time, unrecorded (I3c).
+    park_error: Option<KeeperError>,
+    park_execs: Vec<ExecId>,
+    /// Number of `park` calls refused 409 without recording the park (the
+    /// state-CAS miss, `exec_stale_state`), so the re-observe loop is drivable.
+    park_refuse_times: usize,
+    calls: Vec<&'static str>,
 }
 
 impl StubKeeper {
+    /// When set, `park` panics with `msg`.
+    pub fn set_park_panic(&self, msg: Option<&str>) {
+        self.lock().park_panic = msg.map(str::to_owned);
+    }
+
+    /// Make the next `times` `park` calls refuse 409 (stale state), unrecorded.
+    pub fn set_park_refuse_times(&self, times: usize) {
+        self.lock().park_refuse_times = times;
+    }
+
+    /// Make every `park` call fail with `err`, unrecorded (`None` restores).
+    pub fn set_park_error(&self, err: Option<KeeperError>) {
+        self.lock().park_error = err;
+    }
+
+    /// Every keeper verb in call order (D6): the ordered call log.
+    pub fn calls(&self) -> Vec<&'static str> {
+        self.lock().calls.clone()
+    }
+
+    /// Exec identity of every `park` call, in call order.
+    pub fn park_execs(&self) -> Vec<ExecId> {
+        self.lock().park_execs.clone()
+    }
+
+    /// Number of card_state calls that should fail with `Status(500)`.
+    pub fn set_card_state_fail_times(&self, times: usize) {
+        self.lock().card_state_fail_times = times;
+    }
+
+    /// Make `card_state` answer `state` (`None` again to observe nothing).
+    pub fn set_card_state(&self, state: Option<&str>) {
+        self.lock().card_state = state.map(str::to_owned);
+    }
+
+    /// Cards `card_state` was asked for, in order.
+    pub fn card_state_calls(&self) -> Vec<String> {
+        self.lock().card_state_calls.clone()
+    }
+
+    /// Make `card_state` sleep that long before answering (a stalled read).
+    pub fn set_card_state_delay(&self, delay: Option<Duration>) {
+        self.lock().card_state_delay = delay;
+    }
+
     pub fn push_card_claim(&self, c: Claim) {
         self.lock().card_claims.push(c);
     }
@@ -586,8 +803,33 @@ impl StubKeeper {
 }
 
 impl Keeper for StubKeeper {
+    fn card_state(&self, card: &str) -> Result<Option<String>, KeeperError> {
+        let (delay, fail) = {
+            let mut state = self.lock();
+            state.calls.push("card_state");
+            state.card_state_calls.push(card.to_string());
+            let fail = if state.card_state_fail_times > 0 {
+                state.card_state_fail_times -= 1;
+                true
+            } else {
+                false
+            };
+            (state.card_state_delay, fail)
+        };
+        if let Some(delay) = delay {
+            std::thread::sleep(delay);
+        }
+        if fail {
+            // D1a: a transient read failure is visible as an error, not an
+            // absence, so it can be retried before any degrade.
+            return Err(KeeperError::Status(500));
+        }
+        Ok(self.lock().card_state.clone())
+    }
+
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("claim_card");
         state
             .claim_card_calls
             .push((worker.to_string(), card.to_string()));
@@ -600,6 +842,7 @@ impl Keeper for StubKeeper {
 
     fn phase_plan(&self, key: &str) -> Result<crate::phase::PhasePlan, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("phase_plan");
         state.plan_calls.push(key.to_string());
         if state.plans.is_empty() {
             return Err(KeeperError::Status(404));
@@ -618,6 +861,7 @@ impl Keeper for StubKeeper {
         head: &str,
     ) -> Result<crate::phase::PhaseFinish, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("phase_finish");
         state
             .finish_calls
             .push((key.to_string(), branch.to_string(), head.to_string()));
@@ -633,6 +877,7 @@ impl Keeper for StubKeeper {
 
     fn claim_next(&self, _worker: &str) -> Result<Option<Claim>, KeeperError> {
         let mut state = self.lock();
+        state.calls.push("claim_next");
         if state.queue.is_empty() {
             Ok(None)
         } else {
@@ -642,6 +887,7 @@ impl Keeper for StubKeeper {
 
     fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("report_attempt");
         s.attempt_execs.push(ExecId {
             expected_state: None,
             ..exec.clone()
@@ -652,13 +898,44 @@ impl Keeper for StubKeeper {
 
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("park");
+        if let Some(msg) = &s.park_panic {
+            panic!("{msg}");
+        }
         s.execs.push(exec.clone());
+        s.park_execs.push(exec.clone());
+        if let Some(err) = &s.park_error {
+            return Err(err.clone());
+        }
+        if s.park_refuse_times > 0 {
+            s.park_refuse_times -= 1;
+            // The keeper's CAS-miss code (R4): only it drives re-observe.
+            return Err(KeeperError::Conflict(STALE_STATE_FAILURE.to_string()));
+        }
+        // The keeper's state CAS, stub-equivalent (EXEC-OBSERVED-STATE): an
+        // expectation that misses the state the stub holds is refused 409 with
+        // the `exec_stale_state` code, so a stale observation is testable.
+        // A live-set fallback is never accepted when the held state is waiting
+        // or needs_input (matches store_worker._exec_expect_state, I4).
+        if let (Some(expected), Some(state)) = (&exec.expected_state, &s.card_state) {
+            let is_live_set = expected.len() == WORKER_LIVE_STATES.len()
+                && WORKER_LIVE_STATES
+                    .iter()
+                    .all(|s| expected.iter().any(|e| e == s));
+            if is_live_set && (state == "waiting" || state == "needs_input") {
+                return Err(KeeperError::Conflict(STALE_STATE_FAILURE.to_string()));
+            }
+            if !expected.iter().any(|e| e == state) {
+                return Err(KeeperError::Conflict(STALE_STATE_FAILURE.to_string()));
+            }
+        }
         s.parked.push(p.clone());
         Ok(())
     }
 
     fn complete(&self, card: &str, merged_sha: &str, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("complete");
         s.execs.push(exec.clone());
         s.completed.push((card.to_string(), merged_sha.to_string()));
         Ok(())
@@ -666,6 +943,7 @@ impl Keeper for StubKeeper {
 
     fn alarm(&self, a: &Alarm, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("alarm");
         s.execs.push(exec.clone());
         if s.alarm_down {
             return Err(KeeperError::Status(500));
@@ -681,6 +959,7 @@ impl Keeper for StubKeeper {
         _ttl_s: u64,
     ) -> Result<Fence, KeeperError> {
         let mut s = self.lock();
+        s.calls.push("acquire_merge_lock");
         if s.lock_unavailable {
             return Err(KeeperError::Http("keeper unavailable".into()));
         }
@@ -696,6 +975,7 @@ impl Keeper for StubKeeper {
 
     fn release_merge_lock(&self, repo: &str, fence: &Fence) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("release_merge_lock");
         s.lock_calls.push(format!("release:{repo}:{}", fence.token));
         match &s.held {
             Some(h) if h == fence => {
@@ -709,6 +989,7 @@ impl Keeper for StubKeeper {
 
     fn ask_question(&self, key: &str, q: &Question, exec: &ExecId) -> Result<i64, KeeperError> {
         let mut s = self.lock();
+        s.calls.push("ask_question");
         s.execs.push(exec.clone());
         if let Some(code) = s.ask_status {
             return Err(KeeperError::Status(code));
@@ -719,6 +1000,7 @@ impl Keeper for StubKeeper {
 
     fn record_question_timeout(&self, question_id: i64) -> Result<(), KeeperError> {
         let mut s = self.lock();
+        s.calls.push("record_question_timeout");
         s.question_timeouts.push(question_id);
         if s.timeout_panics {
             drop(s); // never poison the stub for the other callers
@@ -748,6 +1030,280 @@ mod tests {
         for state in ["claimed", "parked", "failed", "done", "cancelled"] {
             assert!(!super::WORKER_LIVE_STATES.contains(&state));
         }
+    }
+
+    /// EXEC-OBSERVED-STATE: the state the run observed is what park and ask
+    /// send; the live set stands only when there was no usable observation.
+    #[test]
+    fn expected_state_is_the_observation_or_the_live_set_fallback() {
+        let live = || {
+            super::WORKER_LIVE_STATES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        };
+        // A projector-written `waiting` the run read is the CAS it presents,
+        // so the wait-cap park after usage_limit/outage still lands.
+        assert_eq!(
+            super::expected_state_for(Some("waiting".to_owned()), Some(live())),
+            Some(vec!["waiting".to_owned()])
+        );
+        // `claimed` names a claim, not a settable state, and a terminal state
+        // would only swap one refusal for another: both keep the fallback.
+        for observed in ["claimed", "parked", "failed", "done", "cancelled"] {
+            assert_eq!(
+                super::expected_state_for(Some(observed.to_owned()), Some(live())),
+                Some(live()),
+                "{observed} is not an observation the keeper accepts"
+            );
+        }
+        assert_eq!(super::expected_state_for(None, Some(live())), Some(live()));
+        assert_eq!(super::expected_state_for(None, None), None);
+    }
+
+    /// The observation the worker reads: `GET /v1/show?key=<card>&fmt=json`.
+    #[test]
+    fn http_card_state_reads_the_show_json() {
+        let (base, server) = serve_once(200, "OK", r#"{"key":"c-1","state":"waiting"}"#);
+        let keeper = HttpKeeper::new(&base).with_token(" s3cret ");
+        assert_eq!(keeper.card_state("c-1"), Ok(Some("waiting".to_string())));
+        let captured = server.join().expect("server thread");
+        assert_eq!(captured.method, "GET");
+        assert_eq!(captured.path, "/v1/show?key=c-1&fmt=json");
+        assert!(
+            captured
+                .head
+                .to_ascii_lowercase()
+                .contains("authorization: bearer s3cret\r\n"),
+            "{}",
+            captured.head
+        );
+    }
+
+    /// D1a: a read failure is visible as an error, not flattened to "observed
+    /// nothing" -- non-2xx -> `Status`, an oversized or undecodable body ->
+    /// `Decode` -- and only a 2xx that carries a state is an observation. The
+    /// causes stay distinct so a later slice can retry the transient ones
+    /// server-side before the workflow degrades to its fallback.
+    #[test]
+    fn http_card_state_reports_failures_as_errors() {
+        // non-2xx -> Status.
+        let (base, server) = serve_once(500, "Internal Server Error", r#"{"error":"boom"}"#);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert_eq!(got, Err(KeeperError::Status(500)));
+        server.join().expect("server thread");
+
+        // Oversized body -> Decode.
+        let pad = "x".repeat(super::CARD_STATE_MAX_BODY as usize + 1);
+        let body = format!(r#"{{"key":"c-1","state":"waiting","pad":"{pad}"}}"#);
+        let (base, server) = serve_once(200, "OK", &body);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert!(matches!(got, Err(KeeperError::Decode(_))));
+        server.join().expect("server thread");
+
+        // Undecodable body -> Decode.
+        let (base, server) = serve_once(200, "OK", "not json");
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert!(matches!(got, Err(KeeperError::Decode(_))));
+        server.join().expect("server thread");
+
+        // 200 with a state -> Ok(Some).
+        let (base, server) = serve_once(200, "OK", r#"{"key":"c-1","state":"waiting"}"#);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert_eq!(got, Ok(Some("waiting".to_string())));
+        server.join().expect("server thread");
+    }
+
+    /// D1a: absence and failure are distinct answers. A 2xx body with no state
+    /// is "observed nothing" -- the call still goes out, with the live-set
+    /// fallback it already carried -- while a non-2xx is an error.
+    #[test]
+    fn http_card_state_absence_differs_from_failure() {
+        let (base, server) = serve_once(404, "Not Found", r#"{"error":"not_found"}"#);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert_eq!(got, Err(KeeperError::Status(404)));
+        server.join().expect("server thread");
+
+        let (base, server) = serve_once(200, "OK", r#"{"key":"c-1"}"#);
+        assert_eq!(HttpKeeper::new(&base).card_state("c-1"), Ok(None));
+        server.join().expect("server thread");
+    }
+
+    /// I5' / D5: the card_state read deadline is real. A server that accepts
+    /// and never answers is a hung read, not a slow one: at a 200 ms read
+    /// deadline the call returns Err within 1 s instead of blocking until the
+    /// peer happens to close. The server keeps the socket open past the
+    /// assertion window, so only the deadline can end the call.
+    #[test]
+    fn http_card_state_read_deadline_is_enforced() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("read local addr");
+        // Accept the request, then never write a byte back.
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().expect("accept one request");
+            std::thread::sleep(Duration::from_millis(2_500));
+        });
+        let keeper = HttpKeeper::new(&format!("http://{addr}"))
+            .with_read_deadlines(Duration::from_secs(2), Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        let got = keeper.card_state("c-1");
+        let elapsed = started.elapsed();
+        assert!(got.is_err(), "a silent server must not read as Ok: {got:?}");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "read deadline ignored: {elapsed:?}"
+        );
+        server.join().expect("server thread");
+    }
+
+    /// R4 (red): a 409 whose flat body carries `exec_stale_state` is the CAS
+    /// miss -- typed so the workflow re-observes; the body is read, not dropped.
+    #[test]
+    fn park_409_exec_stale_state_body_is_typed_stale() {
+        let (base, server) = serve_once(
+            409,
+            "Conflict",
+            r#"{"error":"exec_stale_state","msg":"card moved on"}"#,
+        );
+        let err = HttpKeeper::new(&base)
+            .park(&park(), &exec())
+            .expect_err("a 409 park must be refused");
+        server.join().expect("server thread");
+        assert_eq!(err, KeeperError::Conflict("exec_stale_state".to_string()));
+        let temporalio_sdk::activities::ActivityError::Application(f) =
+            crate::activities::keeper_park_error(err)
+        else {
+            panic!("a refused park must be an application failure");
+        };
+        assert!(f.is_non_retryable());
+        assert_eq!(f.type_name(), Some(STALE_STATE_FAILURE));
+    }
+
+    /// R4 (red): a 409 whose body carries no parsable code cannot be told
+    /// apart from a CAS miss: non-retryable but UNtyped, never a re-observe.
+    #[test]
+    fn park_409_without_a_code_is_not_typed_stale() {
+        for body in ["", r#"{"msg":"conflict"}"#, r#"{"error":7}"#, "not json"] {
+            let (base, server) = serve_once(409, "Conflict", body);
+            let err = HttpKeeper::new(&base)
+                .park(&park(), &exec())
+                .expect_err("a 409 park must be refused");
+            server.join().expect("server thread");
+            assert_eq!(err, KeeperError::Conflict(String::new()), "{body:?}");
+            let temporalio_sdk::activities::ActivityError::Application(f) =
+                crate::activities::keeper_park_error(err)
+            else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{body:?}");
+            assert_eq!(f.type_name(), None, "{body:?}");
+        }
+    }
+
+    /// I5'/D5: the connect deadline is real. A non-routable address (RFC 5737
+    /// TEST-NET-1) must return Err within 2 s at a 200 ms connect deadline.
+    #[test]
+    fn http_card_state_connect_deadline_is_enforced() {
+        let keeper = HttpKeeper::new("http://192.0.2.1:9")
+            .with_read_deadlines(Duration::from_millis(200), Duration::from_secs(5));
+        let started = std::time::Instant::now();
+        let got = keeper.card_state("c-1");
+        let elapsed = started.elapsed();
+        assert!(
+            got.is_err(),
+            "a non-routable connect must not read as Ok: {got:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "connect deadline ignored: {elapsed:?}"
+        );
+    }
+
+    /// G3-2: the wait-cap park after usage_limit/outage presents the
+    /// observation the workflow recorded when it decided, so it lands even
+    /// while `GET /v1/show` -- the read the old park path depended on -- fails.
+    #[test]
+    fn http_cap_park_lands_while_show_fails() {
+        let (base, server) = serve_n(2, |req| {
+            if req.method == "GET" {
+                (500, r#"{"error":"show is down"}"#.to_string())
+            } else {
+                (204, String::new())
+            }
+        });
+        let keeper = HttpKeeper::new(&base);
+        // Reading the card now fails, visibly (D1a): no observation could be
+        // made this way...
+        assert_eq!(keeper.card_state("c-1"), Err(KeeperError::Status(500)));
+        // ...but the park carries the observation the workflow recorded, and
+        // the park path never retries the read.
+        let exec = ExecId {
+            expected_state: Some(vec!["waiting".to_string()]),
+            ..exec()
+        };
+        keeper.park(&park(), &exec).expect("cap-park lands");
+        let seen = server.join().expect("server thread");
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].method, "POST");
+        assert_eq!(seen[1].path, "/v1/park");
+        assert_eq!(body_of(&seen[1])["expected_state"], "waiting");
+    }
+
+    #[test]
+    fn stub_park_refuses_bare_live_set_on_waiting_and_needs_input() {
+        let stub = StubKeeper::default();
+        let live_set: Vec<String> = super::WORKER_LIVE_STATES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let exec_live = ExecId {
+            expected_state: Some(live_set),
+            ..exec()
+        };
+        let exec_waiting = ExecId {
+            expected_state: Some(vec!["waiting".to_string()]),
+            ..exec()
+        };
+
+        // Invariant I4: live-set fallback is refused on waiting.
+        stub.set_card_state(Some("waiting"));
+        assert_eq!(
+            stub.park(&park(), &exec_live).unwrap_err(),
+            KeeperError::Conflict(STALE_STATE_FAILURE.to_string()),
+            "bare live set must be refused on waiting card"
+        );
+        // Concrete observation on waiting lands.
+        stub.park(&park(), &exec_waiting)
+            .expect("observed waiting lands");
+
+        // Invariant I4: live-set fallback is refused on needs_input.
+        stub.set_card_state(Some("needs_input"));
+        assert_eq!(
+            stub.park(&park(), &exec_live).unwrap_err(),
+            KeeperError::Conflict(STALE_STATE_FAILURE.to_string()),
+            "bare live set must be refused on needs_input card"
+        );
+
+        // Bare live set on running is accepted.
+        stub.set_card_state(Some("running"));
+        stub.park(&park(), &exec_live)
+            .expect("bare live set on running lands");
+    }
+
+    /// The stub observes nothing until a test says otherwise, so every stub
+    /// driven park and ask keeps the fallback the workflow handed over. A
+    /// scripted transient failure (D1a) is a `Status(500)` error, not an
+    /// absence.
+    #[test]
+    fn stub_card_state_starts_absent_and_records_the_reads() {
+        let keeper = StubKeeper::default();
+        assert_eq!(keeper.card_state("c-1"), Ok(None));
+        keeper.set_card_state(Some("waiting"));
+        assert_eq!(keeper.card_state("c-2"), Ok(Some("waiting".to_string())));
+        keeper.set_card_state_fail_times(1);
+        assert_eq!(keeper.card_state("c-3"), Err(KeeperError::Status(500)));
+        assert_eq!(keeper.card_state("c-4"), Ok(Some("waiting".to_string())));
+        assert_eq!(keeper.card_state_calls().join(","), "c-1,c-2,c-3,c-4");
     }
 
     #[test]
@@ -976,6 +1532,51 @@ mod tests {
                 .expect("write response");
             stream.flush().expect("flush response");
             captured
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    /// A server that answers `n` requests by routing each one through `route`,
+    /// and yields every request it saw, in order (G3-2: an outage on one verb
+    /// while another still works).
+    fn serve_n(
+        n: usize,
+        route: impl Fn(&Captured) -> (u16, String) + Send + 'static,
+    ) -> (String, JoinHandle<Vec<Captured>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("read local addr");
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..n {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let captured = read_request(&mut stream);
+                let (status, body) = route(&captured);
+                let mut response = format!("HTTP/1.1 {status} Routed\r\n");
+                if status != 204 {
+                    response.push_str(&format!("Content-Length: {}\r\n", body.len()));
+                }
+                response.push_str("Content-Type: application/json\r\nConnection: close\r\n\r\n");
+                response.push_str(&body);
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+                seen.push(captured);
+            }
+            listener.set_nonblocking(true).expect("set nonblocking");
+            std::thread::sleep(Duration::from_millis(50));
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let captured = read_request(&mut stream);
+                    panic!(
+                        "unexpected extra request beyond {n}: {} {}",
+                        captured.method, captured.path
+                    );
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => panic!("error checking for extra request: {e}"),
+            }
+            seen
         });
         (format!("http://{addr}"), handle)
     }

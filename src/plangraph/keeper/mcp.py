@@ -129,6 +129,11 @@ TOOLS = (
     _tool("record_run", "Spawner: record which models ran on a claimed item.",
           {"key": {"type": "string"}, "run": {"type": "object"}},
           ("key", "run")),
+    _tool("fleet_msg_send", "Bus: signed write {to, text}; queued in the spool if the peer is down.",
+          {"to": {"type": "string"}, "text": {"type": "string"}},
+          ("to", "text")),
+    _tool("fleet_msg_read", "Bus: message rows for this host; since is a sequence or a timestamp.",
+          {"since": {"type": "string"}}),
 )
 
 #: name -> (HTTP method, /v1/<verb>).  All other args pass through.
@@ -157,6 +162,9 @@ _ROUTES = {
     "record_run": ("POST", "record_run"),
     "mint_run_token": ("POST", "mint_run_token"),
 }
+
+#: Tools served by the fleet-bus client itself (signed write, cursor read).
+_BUS_TOOLS = ("fleet_msg_send", "fleet_msg_read")
 
 
 class _Transport(Exception):
@@ -240,6 +248,19 @@ def _tool_error(mid, message):
 def _call_tool(mid, params, client):
     name = params.get("name") if isinstance(params, dict) else None
     args = params.get("arguments") if isinstance(params, dict) else None
+    if name in _BUS_TOOLS:
+        # The bus client signs and queues locally; no keeper HTTP round trip.
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return _error(mid, -32602, "arguments must be an object")
+        from ..fleet_bus import client as bus_client
+        try:
+            text, is_error = bus_client.call_tool(name, args), False
+        except (bus_client.Refused, bus_client.TransportError) as exc:
+            text, is_error = str(exc), True
+        return _result(mid, {"content": [{"type": "text", "text": text}],
+                             "isError": is_error})
     if name not in _ROUTES:
         return _error(mid, -32602, f"unknown tool: {name}")
     if args is None:

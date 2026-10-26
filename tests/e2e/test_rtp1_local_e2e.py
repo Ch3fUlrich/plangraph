@@ -46,9 +46,10 @@ ROOT = Path(__file__).resolve().parents[2]
 ITEM, WID = "demo:E2E-1", "card:demo:E2E-1"
 BUILD_ID = "e2e-local"
 FIXTURES = TESTS / "fixtures" / "review"
-#: The states the worker's live-set ask/park CAS pins.  ``waiting`` is in it:
-#: the projector writes waiting after usage_limit/outage and on a timer, so the
-#: cap-park must still land there.
+#: The live-set fallback the worker sends when it observes no state; with a
+#: readable keeper it parks/asks with the observed state instead.  ``waiting``
+#: is in the set: the projector writes waiting after usage_limit/outage and on
+#: a timer, so the cap-park must still land there.
 WORKER_LIVE_SET = ("open", "ready", "running", "needs_input", "waiting")
 
 
@@ -156,8 +157,8 @@ def _flow(rig, tmp_path):
 
     mark("stack_up")
     # No synthetic running state: worker_attempt is a read-only check and the
-    # worker's live-set ask/park CAS (WORKER_LIVE_SET, waiting included) must
-    # accept the seeded pre-projection card.
+    # worker's ask/park expectation (observed state, WORKER_LIVE_SET fallback,
+    # waiting included) must accept the seeded pre-projection card.
     assert item_state(world, ITEM) == r.initial_state
     assert r.initial_state in WORKER_LIVE_SET
     loop = asyncio.new_event_loop()

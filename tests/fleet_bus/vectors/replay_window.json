@@ -3,6 +3,6 @@
   {"name":"V2-auth-before-cursor","fn":"check_read","inputs":{"headers":{"X-Fleet-From":"reader","X-Fleet-Ts":"1700000000","X-Fleet-Nonce":"read","X-Fleet-Sig":"bad"},"cursor":"1-000001","unchanged":true},"error":{"code":"bad_signature","status":401}},
   {"name":"V3-full-no-eviction","fn":"replay_window","error":{"code":"replay_window_full","status":503}},
   {"name":"V4-purge-message-ts","fn":"replay_window","inputs":{"now":1700000071},"expect":{"fresh":1700000071}},
-  {"name":"V5-rate-flood","fn":"validate_post","inputs":{"rate_full":true},"error":{"code":"rate_limited","status":429}},
+  {"name":"V5-rate-flood","fn":"validate_post","inputs":{"rate_full":true},"error":{"code":"msg_rate_limited","status":429}},
   {"name":"V6-now-plus-retry","fn":"validate_post","inputs":{"now":1700000001,"rate_full":true,"retry_after_s":60},"error":{"code":"skew","status":401}}
 ]

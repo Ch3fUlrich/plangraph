@@ -64,34 +64,45 @@ def run(cfg, *, host=None, port=None, ready=None):
         store = Store(conn, ctx=config_mod.verifier_context(cfg),
                       batch_roots=cfg.batch_roots)
         server = api.make_server(store, cfg, host=host, port=port)
-        if anchor.enabled(cfg):   # M2B-ANCHOR: refuse a rolled-back or forked DB before serving
-            server.anchorer = anchor.Anchorer(cfg, last=anchor.check_start(conn, cfg))
-        outage.check_and_record(store, server.system, cfg)   # M2B-OUTBOX: freeze clocks over a downtime
-        if server.anchorer is not None:
-            server.anchorer.record(conn, "start")
-        server.start_reaper()
-        try:   # KEEPER-SNAPSHOT-PG: a crash may have skipped the debounced rewrite; re-derive it
-            with server.lock:      # the reaper is already running: same lock as every other build
-                api.write_snapshot(server, server.system)
-        except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
-            print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
+        # M1: fail() may already have been recorded while the server was being
+        # built (bus restore, a hook). Notice it before the writes below can
+        # trip over a dead session and before serve_forever could accept one
+        # request -- never wait for the watchdog's first tick.
+        if not getattr(server, "fatal_reason", None):
+            if anchor.enabled(cfg):   # M2B-ANCHOR: refuse a rolled-back or forked DB before serving
+                server.anchorer = anchor.Anchorer(cfg, last=anchor.check_start(conn, cfg))
+            outage.check_and_record(store, server.system, cfg)   # M2B-OUTBOX: freeze clocks over a downtime
+            if server.anchorer is not None:
+                server.anchorer.record(conn, "start")
+            server.start_reaper()
+            try:   # KEEPER-SNAPSHOT-PG: a crash may have skipped the debounced rewrite; re-derive it
+                with server.lock:      # the reaper is already running: same lock as every other build
+                    api.write_snapshot(server, server.system)
+            except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
+                print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
         stop = threading.Event()
         server.on_fatal = stop.set
         _install_signals(stop)
-        thread = threading.Thread(target=server.serve_forever, daemon=True,
-                                  name="keeper-http")
-        thread.start()
+        thread = None
+        if not getattr(server, "fatal_reason", None):   # M1: never serve an already-fatal server
+            thread = threading.Thread(target=server.serve_forever, daemon=True,
+                                      name="keeper-http")
+            thread.start()
         prune_thread = None
         bp = getattr(cfg, "backup_prune", None) or {}
-        if bp.get("enabled"):   # opt-in; default off
+        if thread is not None and bp.get("enabled"):   # opt-in; default off
             prune_thread = threading.Thread(
                 target=_backup_prune_loop, args=(bp, stop),
                 daemon=True, name="keeper-backup-prune")
             prune_thread.start()
-        if ready is not None:
+        if ready is not None and thread is not None:
             ready(server)
         try:
-            while not stop.wait(1.0):
+            while thread is not None and not stop.wait(1.0):
+                if getattr(server, "fatal_reason", None):
+                    # F1: fail() may land while on_fatal is unwired (pre-run()
+                    # construction, or a hook that raised): notice it ourselves.
+                    break
                 alive = getattr(lock, "alive", None)
                 if alive and not alive():
                     server.fail("postgres keeper lock session lost")
@@ -99,12 +110,22 @@ def run(cfg, *, host=None, port=None, ready=None):
         finally:
             def _cleanup():
                 stop.set()
+                bus_stop = getattr(server, "bus_stop", None)
+                bus_thread = getattr(server, "bus_thread", None)
+                # F3: stop and bounded-join the bus registry before the steps
+                # below, or its loop can outlive/hold off every one of them.
+                if bus_stop is not None:
+                    bus_stop.set()
+                if bus_thread is not None:
+                    bus_thread.join(timeout=2)
                 if prune_thread is not None:
                     prune_thread.join(timeout=5)
-                server.shutdown()
+                if thread is not None:   # M1: no serve thread -> shutdown() would block forever
+                    server.shutdown()
                 server.stop_reaper()
                 server.server_close()
-                thread.join(timeout=5)
+                if thread is not None:
+                    thread.join(timeout=5)
 
             cleaner = threading.Thread(
                 target=_cleanup, daemon=True, name="keeper-shutdown")

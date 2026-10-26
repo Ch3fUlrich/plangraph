@@ -10,6 +10,7 @@ Every UPDATE trigger tests **both** the old and the new key: a statement that
 moves a row *onto* a locked key is as forbidden as one that moves it off.
 """
 from __future__ import annotations
+from .messages_schema import SQLITE as MESSAGES_DDL
 
 __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL",
            "TABLES", "TRIGGERS",
@@ -17,12 +18,12 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
            "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-#: Code-level schema version.  Main pins this at 13 (its schema tests assert it),
-#: so the oversight feature does NOT bump it: ``db._upgrade`` installs
-#: ``OVERSIGHT_DDL`` presence-based at open, like every other post-ship table
-#: (``ALIASES_DDL``, ``RUN_TOKENS_DDL``, ``JEV_DDL``), and main's v12 -> v13
-#: exec-column upgrade path stays exactly as it shipped.
-SCHEMA_VERSION = 13
+#: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
+#: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
+#: installed presence-based); the bus steps renumber after it: v15 durable
+#: messages, v16 message nonces/envelopes.  Every step past v12 installs
+#: presence-based in ``db._upgrade``; nothing keys off this number at runtime.
+SCHEMA_VERSION = 16
 
 #: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
 #: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
@@ -581,5 +582,5 @@ CREATE INDEX idx_edges_dst ON edges(dst);
 CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
-SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
+SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL)

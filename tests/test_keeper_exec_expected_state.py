@@ -6,7 +6,9 @@ from keeper_util import World, seed, seed_exec_owner, to_claimed
 from test_keeper_exec_verbs import RUN1, complete, owner, park, state
 
 #: The worker's live set: ``waiting`` is in it because the projector writes
-#: waiting after usage_limit/outage and on a timer, and the cap-park must land.
+#: waiting after usage_limit/outage and on a timer.  Under EXEC-OBSERVED-STATE
+#: it is a no-observation FALLBACK: it never stands in for the state a run
+#: observed (see ``test_live_set_is_not_a_park_observation``).
 LIVE_SET = ["open", "ready", "running", "needs_input", "waiting"]
 
 
@@ -72,14 +74,61 @@ def test_stale_state_cannot_acquire_first_owner(w, doors, verb, body):
 
 @pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])
 @pytest.mark.parametrize("expected", [{}, {"expected_state": None},
-                                      {"expected_state": "waiting"},
-                                      {"expected_state": LIVE_SET}])
+                                      {"expected_state": "waiting"}])
 def test_matching_or_absent_expected_state_preserves_existing_behavior(w, doors, verb, body, expected):
     key = waiting(w)
     assert doors.http("workerA", "POST", f"/v1/{verb}",
                       body(key, **expected, **RUN1)) == (204, "")
     assert state(w, key) == ("parked" if verb == "park" else "waiting")
     assert owner(w, key) == ("wf-1", "run-1", 1)
+
+
+@pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])
+def test_live_set_is_not_a_park_observation(w, doors, verb, body):
+    """EXEC-OBSERVED-STATE: the live set says "I observed nothing".
+
+    A park closes the card, so onto the ``waiting`` a projector event wrote
+    while this run was away it needs that state as an observation; a complete
+    does not move the card and keeps the sq5 live-set CAS it shipped with.
+    """
+    key = waiting(w)
+    before = dict(w.store._item(key))
+    status, response = doors.http("workerA", "POST", f"/v1/{verb}",
+                                  body(key, expected_state=LIVE_SET, **RUN1))
+    if verb == "complete":
+        assert (status, response) == (204, "")
+        assert state(w, key) == "waiting"
+        assert owner(w, key) == ("wf-1", "run-1", 1)
+        return
+    assert (status, response["error"]) == (409, "exec_stale_state")
+    assert dict(w.store._item(key)) == before
+    # The same run, having OBSERVED waiting, parks there: the wait-cap park
+    # after usage_limit/outage still lands.
+    assert doors.http("workerA", "POST", "/v1/park",
+                      body(key, expected_state="waiting", **RUN1)) == (204, "")
+    assert state(w, key) == "parked"
+    assert owner(w, key) == ("wf-1", "run-1", 1)
+
+
+def test_worker_reads_the_observation_it_parks_with(w, doors):
+    """EXEC-OBSERVED-STATE's read side: a worker token may observe the state.
+
+    ``GET /v1/show?key=<card>&fmt=json`` is the seam ``Keeper::card_state``
+    reads (rust/worker/src/keeper.rs); the state it answers with is the
+    ``expected_state`` park and ask send when they could read one, while a run
+    that read nothing keeps the live-set fallback.
+    """
+    key = waiting(w)
+    status, info = doors.http("workerA", "GET", f"/v1/show?key={key}&fmt=json")
+    assert (status, info["state"]) == (200, "waiting")
+    # The fallback alone loses the park on the projector's waiting card ...
+    status, response = doors.http("workerA", "POST", "/v1/park",
+                                  park(key, expected_state=LIVE_SET, **RUN1))
+    assert (status, response["error"]) == (409, "exec_stale_state")
+    # ... the observation that same run just read wins it back.
+    assert doors.http("workerA", "POST", "/v1/park",
+                      park(key, expected_state=info["state"], **RUN1)) == (204, "")
+    assert state(w, key) == "parked"
 
 
 @pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])

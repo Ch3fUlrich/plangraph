@@ -107,13 +107,96 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
     conn.close()
 
 
-def test_schema_version_is_thirteen():
-    assert schema.SCHEMA_VERSION == 13
+def test_schema_version_is_sixteen():
+    assert schema.SCHEMA_VERSION == 16
+
+
+def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path):
+    """A schema-v15 database (no message_nonces/message_envelopes) upgrades to v16:
+    rows and hash chain kept, new tables created with append-only triggers."""
+    path = tmp_path / "v15.db"
+    conn = kdb.open_db(path, create=True, backend="sqlite")
+    token = auth.add_principal(conn, "router", "router", [])
+    store = Store(conn, clock=Clock())
+    store.create_items(auth.authenticate(conn, token),
+                       [defn("A", [], kind="lane"), defn("GOAL", ["A"], kind="goal")])
+    store.post_message(auth.authenticate(conn, token), **{
+        "from": "relay", "to": "keeper", "body": {"upgrade": "v16"}
+    })
+    before_item = dict(store._item("demo:A"))
+    before_msgs = store.messages(auth.authenticate(conn, token), key="")
+    chain = keeper_events.read_events(conn)
+    conn.close()
+
+    raw = sqlite3.connect(str(path), isolation_level=None)
+    for trg in ("trg_message_nonces_no_update", "trg_message_nonces_no_delete",
+                "trg_message_envelopes_no_update", "trg_message_envelopes_no_delete"):
+        raw.execute(f"DROP TRIGGER IF EXISTS {trg}")
+    raw.execute("DROP TABLE IF EXISTS message_nonces")
+    raw.execute("DROP TABLE IF EXISTS message_envelopes")
+    raw.execute("PRAGMA user_version=15")
+    assert "message_nonces" not in tables(raw)
+    assert "message_envelopes" not in tables(raw)
+    assert "messages" in tables(raw)
+    raw.close()
+
+    conn = kdb.open_db(path, backend="sqlite")
+    assert schema.SCHEMA_VERSION == 16
+    assert "message_nonces" in tables(conn)
+    assert "message_envelopes" in tables(conn)
+    triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    assert {"trg_message_nonces_no_update", "trg_message_nonces_no_delete",
+            "trg_message_envelopes_no_update", "trg_message_envelopes_no_delete"} <= triggers
+    row = dict(Store(conn, clock=Clock())._item("demo:A"))
+    assert row == before_item
+    after_msgs = Store(conn, clock=Clock()).messages(auth.authenticate(conn, token), key="")
+    assert [m["hash"] for m in after_msgs] == [m["hash"] for m in before_msgs]
+    assert keeper_events.read_events(conn) == chain
+    assert keeper_events.verify_chain(conn) == []
+    assert keeper_events.verify_integrity(conn) == []
+    conn.close()
+
+
+def test_v14_db_upgrades_to_v15_creates_messages_and_keeps_chain(tmp_path):
+    """A schema-v14 database (no messages table) upgrades to v15 when opened:
+    rows and hash chain kept, messages table created with append-only triggers."""
+    path = tmp_path / "v13.db"
+    conn = kdb.open_db(path, create=True, backend="sqlite")
+    token = auth.add_principal(conn, "router", "router", [])
+    store = Store(conn, clock=Clock())
+    store.create_items(auth.authenticate(conn, token),
+                       [defn("A", [], kind="lane"), defn("GOAL", ["A"], kind="goal")])
+    store.put_card(auth.authenticate(conn, token), "demo:A",
+                   {"outcome": "survive v15 upgrade", "check_kind": "regression"})
+    before_item = dict(store._item("demo:A"))
+    chain = keeper_events.read_events(conn)
+    conn.close()
+
+    raw = sqlite3.connect(str(path), isolation_level=None)
+    for trg in ("trg_messages_no_update", "trg_messages_no_delete"):
+        raw.execute(f"DROP TRIGGER IF EXISTS {trg}")
+    raw.execute("DROP TABLE messages")
+    raw.execute("PRAGMA user_version=13")
+    assert "messages" not in tables(raw)
+    raw.close()
+
+    conn = kdb.open_db(path, backend="sqlite")
+    assert schema.SCHEMA_VERSION == 16
+    assert "messages" in tables(conn)
+    triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
+    row = dict(Store(conn, clock=Clock())._item("demo:A"))
+    assert row == before_item
+    assert keeper_events.read_events(conn) == chain
+    assert keeper_events.verify_chain(conn) == []
+    assert keeper_events.verify_integrity(conn) == []
+    conn.close()
+    kdb.open_db(path, backend="sqlite").close()
 
 
 def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     path = tmp_path / "v12.db"
-    conn = kdb.open_db(path, create=True)
+    conn = kdb.open_db(path, create=True, backend="sqlite")
     token = auth.add_principal(conn, "router", "router", [])
     store = Store(conn, clock=Clock())
     store.create_items(auth.authenticate(conn, token),
@@ -131,10 +214,10 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     assert not {"exec_workflow_id", "exec_run_id", "exec_attempt"} & {
         row[1] for row in raw.execute("PRAGMA table_info(items)")}
     raw.close()
-    conn = kdb.open_db(path)
+    conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 13
+    assert schema.SCHEMA_VERSION == 16
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None
@@ -287,6 +370,93 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         conn = kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         conn.close()
     finally:
+        raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+        raw.close()
+
+
+#: RT-P1-BUS tables (SQLite v15/v16, PG Migration 9) and main's oversight pair (v14 / Migration 8).
+BUS_TABLES = {"messages", "message_nonces", "message_envelopes", "bus_hosts"}
+OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
+
+
+def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
+    conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
+    assert schema.SCHEMA_VERSION == 16
+    assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
+    conn.close()
+
+
+def test_main_v14_sqlite_db_with_oversight_upgrades_to_v16(tmp_path):
+    """Main's shipped shape (v13 + oversight v14, no bus tables) gains the bus tables
+    on open; the oversight tables, rows and hash chain stay."""
+    path = tmp_path / "main-v14.db"
+    conn = kdb.open_db(path, create=True, backend="sqlite")
+    token = auth.add_principal(conn, "router", "router", [])
+    store = Store(conn, clock=Clock())
+    store.create_items(auth.authenticate(conn, token),
+                       [defn("A", [], kind="lane"), defn("GOAL", ["A"], kind="goal")])
+    before_item = dict(store._item("demo:A"))
+    chain = keeper_events.read_events(conn)
+    conn.close()
+
+    raw = sqlite3.connect(str(path), isolation_level=None)
+    for name, in raw.execute("SELECT name FROM sqlite_master WHERE type='trigger'"
+                             " AND (name LIKE 'trg_message%' OR name LIKE 'trg_bus_hosts%')").fetchall():
+        raw.execute(f"DROP TRIGGER {name}")
+    for table in BUS_TABLES:
+        raw.execute(f"DROP TABLE IF EXISTS {table}")
+    raw.execute("PRAGMA user_version=14")
+    assert not BUS_TABLES & tables(raw)
+    assert OVERSIGHT_TABLES <= tables(raw)
+    raw.close()
+
+    conn = kdb.open_db(path, backend="sqlite")
+    assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
+    assert dict(Store(conn, clock=Clock())._item("demo:A")) == before_item
+    assert keeper_events.read_events(conn) == chain
+    assert keeper_events.verify_chain(conn) == []
+    assert keeper_events.verify_integrity(conn) == []
+    conn.close()
+
+
+@needs_pg
+def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
+    """A fresh Postgres schema migrates 1..9; one at main's Migration 8 (oversight,
+    no bus tables) is refused by the merged code, then migrate runs 9 alone."""
+    import uuid
+
+    import psycopg
+
+    from plangraph.keeper import db_pg, schema_pg
+
+    raw = psycopg.connect(PG_DSN, autocommit=True, prepare_threshold=None)
+    fresh = "t_schemaup_" + uuid.uuid4().hex[:12]
+    name = "t_schemaup_" + uuid.uuid4().hex[:12]
+
+    def pg_tables(schema_name):
+        return {row[0] for row in raw.execute(
+            "SELECT table_name FROM information_schema.tables"
+            " WHERE table_schema=%s", (schema_name,))}
+
+    try:
+        full = schema_pg.MIGRATIONS
+        assert schema_pg.LATEST == 9
+        assert db_pg.migrate(raw, fresh) == list(range(1, 10))
+        assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
+
+        monkeypatch.setattr(schema_pg, "MIGRATIONS", full[:8])
+        assert db_pg.migrate(raw, name) == list(range(1, 9))
+        assert OVERSIGHT_TABLES <= pg_tables(name)
+        assert not BUS_TABLES & pg_tables(name)
+        monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
+        path = tmp_path / "pg-main.db"
+        with pytest.raises(RuntimeError, match="code needs 9"):
+            kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
+        assert db_pg.migrate(raw, name) == [9]
+        assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(name)
+        kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name).close()
+    finally:
+        raw.execute(f'DROP SCHEMA IF EXISTS "{fresh}" CASCADE')
         raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
         raw.close()
 

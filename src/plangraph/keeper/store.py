@@ -23,6 +23,7 @@ from . import db_errors
 from .errors import Refused
 from .store_answer import AnswerMixin
 from .store_audit_meta import AuditMetaMixin
+from .store_bus_hosts import BusHostsMixin
 from .store_cards import CardsMixin
 from .store_close import CloseMixin
 from .store_create import CreateMixin
@@ -49,6 +50,7 @@ from .store_verbs import VerbsMixin
 from .store_waiver import WaiverMixin
 from .store_worker import WorkerMixin
 from .store_jev import JevMixin
+from .store_messages import MessagesMixin
 
 __all__ = ["Store", "Refused", "iso", "parse_iso"]
 
@@ -73,7 +75,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
-            WorkerMixin, OversightMixin, JevMixin):
+            WorkerMixin, OversightMixin, JevMixin, MessagesMixin, BusHostsMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -123,7 +125,11 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             self.conn.execute("ROLLBACK")
             raise
         else:
-            self.conn.execute("COMMIT")
+            try:
+                self.conn.execute("COMMIT")
+            except BaseException:
+                self.conn.execute("ROLLBACK")
+                raise
 
     # -------------------------------------------------------------- audit
     def _audit(self, principal, action, key, ok, code="", msg="", now=None):

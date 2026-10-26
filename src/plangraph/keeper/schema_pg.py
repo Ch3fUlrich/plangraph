@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
 from .schema import EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, WINDOW_CLASSES
+from .messages_schema import PG as MESSAGES_DDL
 
 __all__ = ["Migration", "MIGRATIONS", "LATEST", "parse_tables", "table_bodies",
            "BOOTSTRAP"]
@@ -531,11 +532,12 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(6, "jev: jev_shadow", _V6),
               Migration(7, "exec ownership: items exec_workflow_id/exec_run_id/exec_attempt"
                            "/exec_principal/exec_retired_runs", _V7),
-              Migration(8, "oversight: tokens, ops audit", _V8))
+              Migration(8, "oversight: tokens, ops audit", _V8),
+              Migration(9, "bus: durable messages", MESSAGES_DDL))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\);", re.S)
-_COLUMN = re.compile(r"^    (\w+)\s+\S")
+_COLUMN = re.compile(r'^    "?(\w+)"?\s+\S')
 _NOT_COLUMNS = frozenset({"PRIMARY", "CHECK", "UNIQUE", "CONSTRAINT", "FOREIGN"})
 
 
