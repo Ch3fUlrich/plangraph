@@ -36,7 +36,7 @@ def test_atomic_write_retries_winerror_5(tmp_path, monkeypatch):
 
 
 def test_atomic_write_winerror_5_exhausted(tmp_path, monkeypatch):
-    """(b) winerror 5 forever: raises after 25 calls, no temp, under 5 s (patch time.sleep)."""
+    """(b) winerror 5 forever: raises after 24 calls, no temp, under 5 s (patch time.sleep)."""
     target = tmp_path / "record.json"
     calls = []
 
@@ -56,8 +56,8 @@ def test_atomic_write_winerror_5_exhausted(tmp_path, monkeypatch):
     elapsed = time.perf_counter() - start
 
     assert excinfo.value.winerror == 5
-    assert len(calls) == 25
-    assert len(slept) == 24
+    assert len(calls) == 24
+    assert len(slept) == 23
     assert elapsed < 5.0
     assert list(tmp_path.glob(".record.json-*")) == []
 
@@ -67,7 +67,7 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
 
     Covers the write alone and a save operation whose record read shares the
     synchronous stretch with the write (SpawnService.cancel): two read sleeps
-    plus 24 write sleeps must still sum to at most 3.0 s.
+    plus 23 write sleeps must still sum to at most 3.0 s.
     """
     target = tmp_path / "record.json"
     calls = []
@@ -85,13 +85,14 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         private_io.atomic_write_private(target, '{"status": "budget"}')
 
-    assert len(calls) == 25
-    assert len(slept) == 24
+    assert len(calls) == 24
+    assert len(slept) == 23
     assert sum(slept) <= 3.0
     assert list(tmp_path.glob(".record.json-*")) == []
 
     # Combined save-path budget: one record read plus one record write in the
-    # same synchronous stretch, both retrying winerror 5 to exhaustion.
+    # same synchronous stretch. The read hits winerror 5 twice then succeeds
+    # on its third call; only the write retries winerror 5 to exhaustion.
     run_id = "run-budget1"
     run_dir = tmp_path / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -118,9 +119,62 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
         asyncio.run(SpawnService(state=tmp_path).cancel(run_id))
 
     assert len(reads) == 3
-    assert len(calls) == 25
-    assert len(slept) == 26
+    assert len(calls) == 24
+    assert len(slept) == 25
     assert sum(slept) <= 3.0
+
+
+def test_save_path_two_reads_write_sleep_budget(tmp_path, monkeypatch):
+    """Two save-path record reads plus the record write stay in the budget.
+
+    The review spawn save stretch reads the record twice before saving: the
+    family lookup and the excluded-family check (service.py calls
+    result(review_of, attempts=SAVE_READ_ATTEMPTS) in both places), with no
+    await between the reads and the later save. Two read_text_retry calls at
+    SAVE_READ_ATTEMPTS that exhaust on winerror 5, then atomic_write_private
+    exhausting on winerror 5: 2 x 2 read sleeps plus 23 write sleeps must
+    still sum to at most 3.0 s.
+    """
+    source = tmp_path / "runs" / "run-reviewsrc" / "record.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('{"run_id": "run-reviewsrc"}', encoding="utf-8")
+    target = tmp_path / "runs" / "run-newrecord" / "record.json"
+
+    reads = []
+    real_read_text = Path.read_text
+
+    def fake_read_text(self, *args, **kwargs):
+        if self.name == "record.json":
+            reads.append(1)
+            exc = PermissionError("sharing violation")
+            exc.winerror = 5
+            raise exc
+        return real_read_text(self, *args, **kwargs)
+
+    writes = []
+
+    def fake_replace(src, dst):
+        writes.append((src, dst))
+        exc = PermissionError("access denied")
+        exc.winerror = 5
+        raise exc
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    monkeypatch.setattr(os, "replace", fake_replace)
+    slept = []
+    monkeypatch.setattr(private_io.time, "sleep", slept.append)
+
+    for _ in range(2):
+        with pytest.raises(PermissionError):
+            private_io.read_text_retry(source, attempts=private_io.SAVE_READ_ATTEMPTS)
+    with pytest.raises(PermissionError):
+        private_io.atomic_write_private(target, '{"status": "budget"}')
+
+    assert len(reads) == 6
+    assert len(writes) == 24
+    assert len(slept) == 27
+    assert sum(slept) <= 3.0
+    assert list(tmp_path.glob("runs/*/.record.json-*")) == []
 
 
 def test_save_path_read_attempts_lowered(tmp_path, monkeypatch):

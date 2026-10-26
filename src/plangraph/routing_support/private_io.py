@@ -5,12 +5,13 @@ import tempfile
 import time
 
 #: os.replace retries sleep min(0.01 * (attempt + 1), 0.2), so the attempt cap
-#: is chosen from the sleep budget, not the other way round: 25 attempts sleep
-#: 2.9 s worst case, inside the 3.0 s total I13/V6 allows a save operation to
-#: block. A read sharing that synchronous stretch gets SAVE_READ_ATTEMPTS
-#: attempts at 0.05 s sleeps (0.1 s worst case), so read plus write sum to
-#: 3.0 s in either order.
-ATOMIC_WRITE_ATTEMPTS = 25
+#: is chosen from the sleep budget, not the other way round: 24 attempts sleep
+#: 2.7 s worst case. The longest synchronous save stretch reads the record
+#: twice before writing (the family lookup and the excluded-family check in a
+#: review spawn), and each read gets SAVE_READ_ATTEMPTS attempts at 0.05 s
+#: sleeps (0.2 s worst case together), so two reads plus the write sum to
+#: 2.9 s, inside the 3.0 s total I13/V6 allows a save operation to block.
+ATOMIC_WRITE_ATTEMPTS = 24
 SAVE_READ_ATTEMPTS = 3
 
 
