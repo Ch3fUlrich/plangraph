@@ -640,18 +640,32 @@ _BAD_META = ({"liveness": "stalled"}, {"exit_class": "cancelled"}, {"output_cut"
 
 
 def test_spawn_limits_defaults_roles_and_env(tmp_path, monkeypatch):
-    from plangraph.settings import SettingsError, spawn_limits
-    def refuses(fn):
-        with pytest.raises(SettingsError): fn()
+    from plangraph.settings import spawn_limits
     for roles, caps in ((("implement", "fix", "writer"), (90, 180)), (("review",), (45, 60)), (("design", "seat", "default", None), (60, 120))):  # design role map: writer = implement/fix/writer, seat = review, default = every other role
         for role in roles: lim = spawn_limits(role); assert (lim.wall_cap_min, lim.max_cap_min) == caps; assert (lim.stall_min, lim.stall_cpu_pct, lim.floor_mb, lim.max_runs, lim.require_principal, lim.ignore) == (15, 2, 2000, 4, False, {}); assert "opencode" in lim.truncation and "opencode" in lim.provider_protocol  # qwen-C9: defaults on every role, not only the default one
     with pytest.raises(Exception): spawn_limits(None).wall_cap_min = 100
     monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps({"writer": {"wall_cap_min": 10}})); assert (spawn_limits("implement").wall_cap_min, spawn_limits("implement").max_cap_min) == (10, 180)
-    bads = ({"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}}, {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}}, {"writer": {"truncation": {"opencode": [123]}}})
-    for override in bads: monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps(override)); refuses(lambda: spawn_limits("writer"))
+    monkeypatch.delenv("PLANGRAPH_SPAWN_LIMITS"); monkeypatch.setenv("PLANGRAPH_SETTINGS", "policy.json")
+    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": {"seat": {"stall_min": 30}}})); assert spawn_limits("review", root=tmp_path).stall_min == 30 and spawn_limits("design", root=tmp_path).stall_min == 15  # positive control: a valid cross-bucket override is accepted
+
+
+# haiku-D6/qwen-D10: restored as its own parametrized test — 497257e3 folded it into a loop inside
+# test_spawn_limits_defaults_roles_and_env (the name is part of "no test deleted", and a loop stops at
+# the first bad shape instead of reporting each).
+@pytest.mark.parametrize("override", [
+    {"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}},
+    {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}},
+    {"writer": {"truncation": {"opencode": [123]}}},
+])
+def test_spawn_limits_refusals(tmp_path, monkeypatch, override):
+    from plangraph.settings import SettingsError, spawn_limits
+    monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps(override))
+    with pytest.raises(SettingsError):
+        spawn_limits("writer")
     monkeypatch.delenv("PLANGRAPH_SPAWN_LIMITS"); monkeypatch.setenv("PLANGRAPH_SETTINGS", "policy.json")  # qwen-C9: the settings-file section refuses the same shapes (I1)
-    for bad in bads: (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": bad})); refuses(lambda: spawn_limits("writer", root=tmp_path))
-    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": {"seat": {"stall_min": 30}}})); assert spawn_limits("review", root=tmp_path).stall_min == 30 and spawn_limits("design", root=tmp_path).stall_min == 15
+    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": override}))
+    with pytest.raises(SettingsError):
+        spawn_limits("writer", root=tmp_path)
 
 
 def test_liveness_exit_vocabulary():
