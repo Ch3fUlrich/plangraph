@@ -758,19 +758,26 @@ def test_output_on_disk_under_and_over_2mb(tmp_path):
 
 
 def test_cancel_with_class_racing_minus_9():
+    # haiku-C5: the monitor must actually run before the assertions read the job. The
+    # synchronous tree_killer never suspends, so task.cancel() landed on a monitor that
+    # had taken no step yet and every assertion held from cancel() alone. A killer that
+    # yields once hands the monitor its step; `ran` proves it took it.
     from plangraph.spawner.runner import SpawnerRunner
-    runner = SpawnerRunner()
     async def run():
+        ran = []
         class FakeProc:
             pid, returncode = 999, -9
-            async def communicate(self): return b"", b""
+            async def communicate(self): ran.append(1); return b"", b""
         proc = FakeProc()
+        async def yielding_killer(pid): await asyncio.sleep(0)
+        runner = SpawnerRunner(tree_killer=yielding_killer)
         async def case(prompt, liv, expected):
             j = await runner.spawn(prompt, model_or_combo="omniroute/cx-gpt-6.1-sol", dry_run=True)
             j.status = "running"; runner.jobs[j.job_id] = j; runner._processes[j.job_id] = proc
             t = asyncio.create_task(runner._monitor_process(j.job_id, proc, prompt)); runner._tasks[j.job_id] = t
             await runner.cancel(j.job_id, liveness=liv)
             await asyncio.gather(t, return_exceptions=True)
+            assert ran, "the monitor never ran; the classification would hold from cancel() alone"
             assert (j.liveness, j.exit_class, j.status) == expected
         await case("t", "capped", ("capped", "timeout", "failed")); await case("t2", None, (None, "cancelled", "cancelled"))
     asyncio.run(run())
