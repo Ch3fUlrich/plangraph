@@ -68,4 +68,17 @@ def test_catalog_registers_kimi_with_opencode_harness():
     db.init_and_seed()
     rows = [r for r in resolver.get_catalog_models(db) if r["id"] == "opencode-go/kimi-k3-max"]
     assert len(rows) == 1
-    assert rows[0]["harness"] == "opencode" and rows[0]["family"] == "kimi"
+    row = rows[0]
+    assert row["harness"] == "opencode" and row["family"] == "kimi"
+    # The override admission (spawner/service.py) also needs these.
+    assert row["tier"] in ("trial", "free", "subscription", "paid")
+    assert type(row["context_tokens"]) is int and row["context_tokens"] > 0
+    assert resolver.detect_model_family("opencode-go/kimi-k3-max") == "kimi"
+
+
+def test_kimi_harness_does_not_make_kimi_a_routed_leg():
+    # Registration only admits a hand-picked seat; routing never offers kimi.
+    for role in ("implement", "review"):
+        plan = plan_spawn(CARD, role=role)
+        assert "opencode-go/kimi-k3-max" not in [leg.model for leg in plan.legs]
+        assert "opencode-go/kimi-k3-max" not in [leg.model for leg in plan.review_seats]
