@@ -461,10 +461,14 @@ def test_bus_error_statuses_match_keeper_status():
 
     raisable = ["skew", "unknown_kid", "bad_signature", "replayed_nonce",
                 "replay_window_full", "too_large", "msg_rate_limited"]
+    excluded = {"not_found", "cursor_gone", "bad_request"}
+    # A new ERROR_STATUS code must be classified here, never silently skipped.
+    assert set(raisable) | excluded == set(ERROR_STATUS)
     for code in raisable:
         assert api_routes.STATUS[code] == ERROR_STATUS[code], code
     # The one raisable code without a STATUS entry: the API's 400 fallback.
-    assert api_routes.STATUS.get("bad_request", 400) == ERROR_STATUS["bad_request"]
+    assert "bad_request" not in api_routes.STATUS
+    assert ERROR_STATUS["bad_request"] == 400
 
 
 def test_oversight_r3_holds_after_a_bus_post_message_in_the_same_process(srv, host_registry):
