@@ -386,7 +386,7 @@ jobs:
           git show "$BASE:tools/ci_commit_gate.py" > "$RUNNER_TEMP/ci_commit_gate_base.py"
           python3 "$RUNNER_TEMP/ci_commit_gate_base.py" check --base "$BASE" --head "$HEAD" --exempt tools/ci_commit_exempt.txt
       # PG-EFFICIENCY-GATES (D-2739 §0.2b/f): lane size and base pin, from the BASE
-      # copy once main has it (the PR that adds it runs its own copy once).
+      # copy once main has it (the introducing PR skips: bootstrap, D-3070).
       - name: Lane gates
         if: ${{ always() && github.event_name == 'pull_request' }}
         env:
@@ -399,5 +399,5 @@ jobs:
             git archive "$PR_BASE" tools/lane_gates.py src/plangraph/gates | tar -x -C "$RUNNER_TEMP/lg"
             python3 "$RUNNER_TEMP/lg/tools/lane_gates.py" check --base "$PR_BASE" --head "$PR_HEAD"
           else
-            python3 tools/lane_gates.py check --base "$PR_BASE" --head "$PR_HEAD"
+            echo "lane-gates: bootstrap skip, base has no tools/lane_gates.py (D-3070)"
           fi
