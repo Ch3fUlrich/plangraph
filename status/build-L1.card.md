@@ -1,4 +1,4 @@
-# build-L1 card · gen-35 -> gen-36 handoff · 2026-10-26 01:10Z · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
+# build-L1 card · gen-36 · 2026-10-26 01:2xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
 D-2739 (operator): one task loops (no follow-up items), design first for HIGH/>400 lines, slices <=400, 2 text seats, MED in body=changes, fixer>=writer never flash, round>3 -> Opus replan, merge main once before final review.
 D-2749: AutoOS spawner retired; all runs via plangraph spawner; missing feature -> BLOCKED to routing, no fallback.
 D-2744: no deepseek leg (writer or seat, incl opencode free deepseek); mimo-pro, mimo-flash seats only.
@@ -11,8 +11,8 @@ Spawn (D-2749/D-2795): jobs/0bbdff0b/tmp/gspawn2.sh <wt> <brief> <tag> <reason> 
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | item | state / next |
 |---|---|
-| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216/#217/#218 MERGED (main 2bdde74a, evidence ok). S3 #213 head 338b4f6a (r2 mimo-pro + L1 1-line stub Hand-Edit); CI 40251267395 green; delta Haiku fix refuted ($J/seat-s3d2-haiku/refutation-L1.txt); MERGED d66bf9e5 (D-2879, CI 40251787608, evidence ok); told workst (mimo-leg test, release 4 Server lanes + AO seat) + server-L1-main [c46235]. S2 b9e7094d: 2 test_w29 fails -> fix, PR, seats |
-| KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); queue when budget frees; 2 seats + judge GO; live redeploy = own GO |
+| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216/#217/#218 MERGED (main 2bdde74a, evidence ok). S3 #213 head 338b4f6a (r2 mimo-pro + L1 1-line stub Hand-Edit); CI 40251267395 green; delta Haiku fix refuted ($J/seat-s3d2-haiku/refutation-L1.txt); MERGED d66bf9e5 (D-2879, CI 40251787608, evidence ok); told workst (mimo-leg test, release 4 Server lanes + AO seat) + server-L1-main [c46235]. S2 PR #219 head cb3bbb88 (L1 Hand-Edit w29 stdin asserts, 409 passed); seats mimo-pro+qwen queued (seats-s2.sh, job 2a4532d1) -> GO-REQ. workst GREEN mimo-leg run-f5ad2f0f |
+| KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); writer agy queued 01:2xZ ($J/pgrs2.log); 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78 (D-2824). in_review until #211 merges -> post seat-rms-f2b-haiku unchanged |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
 | spawn-iso (#200/#201, held from dead L2) | stalled run-feb506c2 cancelled. Re-spawn after pgr-fix2 (order S1 > pgr > iso > shm-leak) |
@@ -24,5 +24,5 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | coding.vm RAM | 10-25 cleanup: 72 stale /dev/shm/pgtest-* (4.7G) + orphan opencode serve removed; avail 1.8->8.2G |
 Seats: seatpost.py/qwenprompt.py/haikuseat.sh interim OK (D-2789): count toward cap, never edit review.txt/prompt.txt, keep seat dirs; post via post.sh (verdict.judge -> tools/seat_verdict.py reviewer-<family> token).
 Traps: zsh -> bash -c; mergepath needs claim; never dump environ; Hand-Edit <=50 lines (D-2853); gate check needs --base/--head; define new lane = JSON to router (D-2230).
-| REVIEW-VERDICT-PARSE (std, claimed) | PR #212 head 0777d452, qwen delta pass; finish212.sh: CI -> merge -> evidence -> submit -> post |
-| ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 MERGED 43aebc1d (GO D-2861), evidence ok (main CI 40235422603); efficiency told, E1a rebased 94e5f316. Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm after reset). #214 MERGED 7bbd11a6 |
+| REVIEW-VERDICT-PARSE (std, claimed) | DONE (#212 merged e49b5df8; #211 closed) |
+| ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 MERGED 43aebc1d (GO D-2861), evidence ok (main CI 40235422603); efficiency told, E1a rebased 94e5f316. D-2879 gate/git trailer mismatch -> E1a buildl1-T1 (efficiency owns). Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm after reset). #214 MERGED 7bbd11a6 |
