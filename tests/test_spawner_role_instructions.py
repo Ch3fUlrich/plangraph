@@ -1,6 +1,8 @@
 """Role config isolation without launching a model or reading real user config."""
 import asyncio
 import json
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -133,3 +135,79 @@ def test_config_cleaned_after_reap_or_spawn_failure(seat, monkeypatch, fail):
     assert seen['launched']
     assert seen.get('reaped', False) is not fail
     assert not seen['directory'].exists()
+
+
+def test_config_files_private_and_provider_key_isolated(seat, monkeypatch):
+    """F1: both per-job config files are 0600, and an inline provider key from
+    the global config lands only in that owner-only file -- never in
+    OPENCODE_CONFIG_CONTENT or the job events."""
+    root, config = seat
+    secret = 'sentinel-inline-provider-key-9241'
+    (root / 'opencode.json').write_text(json.dumps(
+        {**config, 'providers': {'mimo': {'options': {'apiKey': secret}}}}))
+    real_rmtree = shutil.rmtree
+    monkeypatch.setattr(shutil, 'rmtree', lambda path, **kw: None)
+    job, seen = capture(monkeypatch, 'orchestrate')
+    directory = seen['directory']
+    try:
+        assert (directory / 'role-instructions.md').stat().st_mode & 0o777 == 0o600
+        written = directory / 'opencode' / 'opencode.json'
+        assert written.stat().st_mode & 0o777 == 0o600
+        assert json.loads(written.read_text())['providers']['mimo']['options']['apiKey'] == secret
+        assert secret not in seen['env']['OPENCODE_CONFIG_CONTENT']
+        assert secret not in json.dumps(job.events)
+    finally:
+        real_rmtree(directory, ignore_errors=True)
+
+
+def test_global_dir_entries_symlinked(seat, monkeypatch):
+    """F2: every other entry of the global opencode dir (plugins, agent md)
+    stays reachable through the child's XDG_CONFIG_HOME as a symlink to the
+    original -- never copied."""
+    root, config = seat
+    (root / 'agent').mkdir()
+    (root / 'agent' / 'x.md').write_text('agent markdown body')
+    (root / 'plugin').mkdir()
+    (root / 'plugin' / 'y.js').write_text('plugin source body')
+    real_rmtree = shutil.rmtree
+    removed = []
+    monkeypatch.setattr(shutil, 'rmtree', lambda path, **kw: removed.append(str(path)))
+    job, seen = capture(monkeypatch, 'implement')
+    opencode = seen['directory'] / 'opencode'
+    try:
+        assert (opencode / 'agent').is_symlink()
+        assert (opencode / 'plugin').is_symlink()
+        assert (opencode / 'agent').readlink() == Path(root / 'agent')
+        assert (opencode / 'agent' / 'x.md').read_text() == 'agent markdown body'
+        assert (opencode / 'plugin' / 'y.js').read_text() == 'plugin source body'
+        assert (opencode / 'opencode.json').is_file()
+        assert not (opencode / 'opencode.json').is_symlink()
+        assert any('pg-occfg-' in name for name in removed)  # cleanup still runs
+    finally:
+        real_rmtree(seen['directory'], ignore_errors=True)
+
+
+def test_occfg_removed_on_render_refusal(seat, monkeypatch):
+    """An early return before launch (render_refused) still pops and removes
+    the per-job config dir."""
+    from plangraph.routing_support import opencode_render
+    monkeypatch.setattr(opencode_render, 'render_gateway_providers',
+                        lambda *a: 'refused: no providers')
+    created = []
+    original = tempfile.mkdtemp
+    def hooked(*args, **kwargs):
+        name = original(*args, **kwargs)
+        if kwargs.get('prefix') == 'pg-occfg-':
+            created.append(name)
+        return name
+    monkeypatch.setattr(tempfile, 'mkdtemp', hooked)
+    runner = module.SpawnerRunner()
+    async def factory(*a, **kw):
+        raise AssertionError('a refused run must not launch')
+    runner.process_factory = factory
+    job = asyncio.run(runner.spawn('brief', model_or_combo='mimo/mimo-v2.6-pro',
+                                   role='orchestrate', dry_run=False))
+    assert job.status == 'failed'
+    assert {'event': 'render_refused', 'reason': 'refused: no providers'} in job.events
+    assert created and not any(Path(name).exists() for name in created)
+    assert job.job_id not in runner._occfg_dirs

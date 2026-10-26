@@ -67,6 +67,25 @@ def _orchestrate_mcp_config(cfg, env) -> dict:
     return cfg
 
 
+# SPAWN-ROLE-INSTRUCTIONS F4: the orchestrate header's 'never merge or push to
+# main / never commit' must be machine-enforced, not prose. opencode permission
+# syntax takes per-glob verdicts under permission.bash.
+ORCHESTRATE_BASH_DENY = ('git push*', 'git merge*', 'git commit*', 'git rebase*', 'git reset*')
+
+
+def _orchestrate_bash_permissions(cfg) -> dict:
+    """Deny history-writing git verbs for orchestrate; keep every other setting."""
+    cfg = dict(cfg)
+    permission = dict(cfg.get('permission') or {})
+    bash = permission.get('bash')
+    bash = dict(bash) if isinstance(bash, dict) else {}
+    for glob in ORCHESTRATE_BASH_DENY:
+        bash[glob] = 'deny'
+    permission['bash'] = bash
+    cfg['permission'] = permission
+    return cfg
+
+
 def redact(value):
     """Scrub credential-shaped strings recursively before persistence or display."""
     if isinstance(value, dict):
@@ -477,7 +496,8 @@ class SpawnerRunner:
             if role == 'orchestrate':
                 cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                 child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(
-                    _orchestrate_mcp_config(cfg, child_env), sort_keys=True)
+                    _orchestrate_bash_permissions(_orchestrate_mcp_config(cfg, child_env)),
+                    sort_keys=True)
                 orchestrate_events.append({'event': 'orchestrate_mcp',
                                            'servers': ['plangraph', 'plangraph-spawner']})
                 if all(name in os.environ for name in ('FLEET_MSG_INVENTORY', 'FLEET_MSG_HOST')):
@@ -533,11 +553,15 @@ class SpawnerRunner:
             if role in ROLE_INSTRUCTIONS:
                 import tempfile
                 from plangraph.routing_support.opencode_overlay import _strip_jsonc
+                from plangraph.spawner.private_io import atomic_write_private
                 cfg_dir = Path(tempfile.mkdtemp(prefix='pg-occfg-'))  # mode 0700
                 self._occfg_dirs[job_id] = str(cfg_dir)
                 try:
                     role_file = cfg_dir / 'role-instructions.md'
-                    role_file.write_text(ROLE_INSTRUCTIONS[role])
+                    # SPAWN-ROLE-INSTRUCTIONS F1: the copied global config can
+                    # hold inline provider keys, so both files are written
+                    # owner-only (0600), never with umask defaults.
+                    atomic_write_private(role_file, ROLE_INSTRUCTIONS[role])
                     global_root = Path(os.environ.get('XDG_CONFIG_HOME') or
                                        Path.home() / '.config') / 'opencode'
                     global_cfg = {}
@@ -559,7 +583,19 @@ class SpawnerRunner:
                         orchestrate_events.append({'event': 'global_config_unreadable'})
                     global_cfg['instructions'] = [str(role_file)]
                     (cfg_dir / 'opencode').mkdir(mode=0o700)
-                    (cfg_dir / 'opencode' / 'opencode.json').write_text(json.dumps(global_cfg))
+                    atomic_write_private(cfg_dir / 'opencode' / 'opencode.json', json.dumps(global_cfg))
+                    # SPAWN-ROLE-INSTRUCTIONS F2: the global dir holds more than
+                    # the two config files (plugins, agent md); every other
+                    # entry stays reachable through the child's XDG_CONFIG_HOME
+                    # as a symlink to the original -- copying would fork it.
+                    try:
+                        entries = sorted(global_root.iterdir())
+                    except OSError:
+                        entries = []
+                    for entry in entries:
+                        if entry.name in ('opencode.json', 'opencode.jsonc'):
+                            continue
+                        os.symlink(os.path.abspath(str(entry)), cfg_dir / 'opencode' / entry.name)
                     cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                     cfg['instructions'] = [str(role_file)]
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
@@ -640,6 +676,19 @@ class SpawnerRunner:
                 job.stderr = render_reason
                 job.end_time = time.time()
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
+                return job
+
+            if role == 'orchestrate' and cmd[0] != 'opencode':
+                # SPAWN-ROLE-INSTRUCTIONS F3: the orchestrate header commands
+                # spawning via plangraph-spawner MCP tools; a non-opencode
+                # harness has none, so refuse before any launch. A dry run
+                # keeps its plan-preview contract (pinned by
+                # test_orchestrate_non_opencode): it never launches.
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = 'orchestrate requires the opencode harness'
+                job.end_time = time.time()
+                job.events.append({'event': 'orchestrate_needs_opencode'})
                 return job
 
             from .resolver import host_skip_reason_async

@@ -79,3 +79,40 @@ def test_orchestrate_non_opencode(seat):
     assert job.command[0] != 'opencode'
     assert 'OPENCODE_CONFIG_CONTENT' not in env
     assert not any(e['event'].startswith('orchestrate_') for e in job.events)
+
+
+def test_orchestrate_non_opencode_refused_before_launch(seat):
+    """F3: a non-opencode harness has no plangraph-spawner MCP tools, so an
+    orchestrate run is refused before any process starts."""
+    runner = SpawnerRunner()
+    started = []
+    async def factory(*args, **kwargs):
+        started.append(args)
+        raise AssertionError('a refused run must not launch')
+    runner.process_factory = factory
+    job = asyncio.run(runner.spawn('do the brief', model_or_combo='mimo/mimo-v2.6-pro',
+                                   role='orchestrate', dry_run=False, client='claude'))
+    assert job.status == 'failed'
+    assert job.events == [{'event': 'orchestrate_needs_opencode'}]
+    assert not started
+
+
+def test_orchestrate_git_verb_deny_permissions(seat):
+    """F4: 'never merge or push to main / never commit' is machine-enforced in
+    OPENCODE_CONFIG_CONTENT for orchestrate, merged into any existing bash
+    permission map; implement keeps its map untouched."""
+    seat.setenv('OPENCODE_CONFIG_CONTENT', json.dumps(
+        {'mcp': {'original': {'enabled': False}},
+         'permission': {'bash': {'npm*': 'allow'}, 'edit': 'ask'}}))
+    deny = {'git push*': 'deny', 'git merge*': 'deny', 'git commit*': 'deny',
+            'git rebase*': 'deny', 'git reset*': 'deny'}
+    job, env = spawn('orchestrate')
+    permission = json.loads(env['OPENCODE_CONFIG_CONTENT'])['permission']
+    assert permission['bash'] == {'npm*': 'allow', **deny}
+    assert permission['edit'] == 'ask'
+    job, env = spawn('implement')
+    assert json.loads(env['OPENCODE_CONFIG_CONTENT'])['permission'] == (
+        {'bash': {'npm*': 'allow'}, 'edit': 'ask'})
+    seat.setenv('OPENCODE_CONFIG_CONTENT', '{"mcp":{"original":{"enabled":false}}}')
+    job, env = spawn('orchestrate')
+    assert json.loads(env['OPENCODE_CONFIG_CONTENT'])['permission']['bash'] == deny
