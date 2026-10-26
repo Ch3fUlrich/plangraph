@@ -1,8 +1,8 @@
 """Live availability probe for review seats (E3b item 4, D-2913).
 
 ``available(legs, probe, now)`` splits candidate legs into reachable ids and
-per-leg reasons.  The probe is always injected (tests pass a fake; the spawner
-passes the ``opencode models`` runner): an opencode leg counts only when its
+per-leg reasons.  The probe is injectable (default: ``opencode models``):
+an opencode leg counts only when its
 exact model id is listed in the probe output, and that output is cached 10
 minutes under the spawner state dir so one listing serves a whole planning
 window.  qodercli/agy legs have no listing; their binary must be on PATH.
@@ -10,6 +10,7 @@ Anything else is unavailable with a reason, never guessed.
 """
 import json
 import os
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,15 @@ def _write_cache(now, output):
         pass  # a read-only state dir must not break routing
 
 
+def _models():
+    """Bound the live listing command; a failed listing admits no models."""
+    try:
+        return subprocess.run(["opencode", "models"], capture_output=True,
+                              text=True, check=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def available(legs, probe, now):
     """Return ``(ok_ids, {leg_id: reason})`` by live reachability.
 
@@ -69,7 +79,7 @@ def available(legs, probe, now):
             if listing is None:
                 listing = _read_cache(now)
                 if listing is None:
-                    listing = probe()
+                    listing = (probe or _models)()
                     _write_cache(now, listing)
                 listing = set(str(listing).split())
             if leg.model in listing:

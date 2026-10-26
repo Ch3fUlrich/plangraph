@@ -318,10 +318,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     The implement role ignores benchmark permutation (operator order D-2683).
     ``exclude_families`` excludes the specified family names from candidate legs.
     Readers may be a LegStateStore or a callable with the leg_status contract.
-    ``probe`` turns on the live availability gate (E3b item 4): an injected
-    zero-argument listing probe (tests pass a fake, the spawner the
-    ``opencode models`` runner).  ``None`` keeps the gate off so planning stays
-    hermetic.
+    ``probe`` injects a zero-argument listing probe; the default runs
+    ``opencode models``, cached for ten minutes in the spawner state dir.
     Account/combo scope comes from the card and is never a wildcard.
     """
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -410,12 +408,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
 
     states = {l.id: _leg_status(l) for l in candidates}
     limited = {key for key, state in states.items() if state["state"] == "limited"}
-    probe_reasons = {}
-    if role == "review" and probe is not None:
-        # E3b item 4: the live gate runs only with an injected probe, so unit
-        # tests stay hermetic and the caller decides when to probe live.
-        from plangraph.routing_support.probe import available as probe_available
-        _ok_ids, probe_reasons = probe_available(candidates, probe, now)
+    from plangraph.routing_support.probe import available as probe_available
+    _ok_ids, probe_reasons = probe_available(candidates, probe, now)
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []

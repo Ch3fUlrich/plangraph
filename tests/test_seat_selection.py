@@ -283,6 +283,30 @@ def test_probe_skips_an_unlisted_model_id(monkeypatch, tmp_path):
                for s in plan.skipped)
 
 
+from plangraph.routing_support.probe import _models as _production_models
+
+
+def test_plan_probe_all_roles_and_default_cache(monkeypatch, tmp_path):
+    from dataclasses import replace
+    import subprocess
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
+    monkeypatch.setattr("plangraph.routing_support.probe.which", lambda name: name)
+    calls = []
+    def listing(*args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, _listing(exclude=(NEMOTRON_MODEL,)))
+    monkeypatch.setattr(subprocess, "run", listing)
+    monkeypatch.setattr("plangraph.routing_support.probe._models", _production_models)
+    now = datetime(2026, 10, 26, 12, 0)
+    legs = tuple(replace(l, roles=("implement", "review", "design")) for l in DEFAULT_LEGS)
+    for role in ("implement", "review", "design"):
+        plan = plan_spawn(_card("high"), role=role, leg_reader=_leg_state(), now=now, legs=legs)
+        assert any(s["leg"] == "or-nemotron-3-ultra-free"
+                   and s["reason"].startswith("probe: ") for s in plan.skipped)
+        assert NEMOTRON_MODEL not in [l.model for l in (*plan.legs, *plan.review_seats)]
+    assert len(calls) == 1
+
+
 def test_probe_cache_is_used_on_the_second_call(monkeypatch, tmp_path):
     monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
     legs = [leg for leg in DEFAULT_LEGS

@@ -83,6 +83,10 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
                                     'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':
             monkeypatch.delenv(name)
     from plangraph.spawner import resolver
+    from plangraph.routing_support import probe as live_probe
+    from plangraph.planner.legs import DEFAULT_LEGS
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(root / 'spawn-state'))
+    monkeypatch.setattr(live_probe, '_models', lambda: ' '.join(l.model for l in DEFAULT_LEGS))
     probe = resolver.served_models
     probe.cache_clear()
     def unknown(config, **kwargs):
