@@ -437,10 +437,12 @@ class SpawnerRunner:
             # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
             # find an exited root pid, so an orphan (`opencode serve`) would outlive
             # the run (SPAWN-ORPHAN-REAP). Failure never fails the run: taskkill runs.
+            # Descendants started before assign() escape the job (no CREATE_SUSPENDED
+            # under asyncio); taskkill /T in _reap_process still covers them.
             if _is_nt():
-                self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
                 self._win_jobs = getattr(self, '_win_jobs', {})
                 try:
+                    self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
                     handle = self.win_job_api.create_job()
                     try:
                         self.win_job_api.assign(handle, proc.pid)
@@ -476,9 +478,6 @@ class SpawnerRunner:
         if job_id in reaped:
             return
         reaped.add(job_id)
-        pid = getattr(proc, 'pid', None)
-        if pid is None:
-            return
         # F3: kill the run's Job Object first, then pop it — taskkill /T cannot
         # find a root pid that has already exited (SPAWN-ORPHAN-REAP).
         win_job = getattr(self, '_win_jobs', {}).pop(job_id, None)
@@ -486,11 +485,18 @@ class SpawnerRunner:
             api = getattr(self, 'win_job_api', None)
             try:
                 api.terminate(win_job)
-                api.close(win_job)
             except Exception as exc:
                 job = self.jobs.get(job_id)
                 if job is not None:
                     job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
+            finally:
+                try:
+                    api.close(win_job)
+                except Exception:
+                    pass  # handle already invalid; the terminate result is recorded
+        pid = getattr(proc, 'pid', None)
+        if pid is None:
+            return
         try:
             res = self.tree_killer(pid)
             if asyncio.iscoroutine(res):
@@ -727,7 +733,8 @@ class WinJobApi:
             k32.CloseHandle(v(proc))
 
     def terminate(self, handle):
-        self._k32.TerminateJobObject(ctypes.c_void_p(handle), 1)
+        if not self._k32.TerminateJobObject(ctypes.c_void_p(handle), 1):
+            raise OSError('TerminateJobObject failed')
 
     def close(self, handle):
         self._k32.CloseHandle(ctypes.c_void_p(handle))
