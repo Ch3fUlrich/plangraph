@@ -116,3 +116,11 @@ def test_orchestrate_git_verb_deny_permissions(seat):
     seat.setenv('OPENCODE_CONFIG_CONTENT', '{"mcp":{"original":{"enabled":false}}}')
     job, env = spawn('orchestrate')
     assert json.loads(env['OPENCODE_CONFIG_CONTENT'])['permission']['bash'] == deny
+
+
+def test_orchestrate_bash_string_shorthand_kept(seat):
+    """A string bash policy keeps applying to every other command."""
+    seat.setenv('OPENCODE_CONFIG_CONTENT', json.dumps({'permission': {'bash': 'ask'}}))
+    job, env = spawn('orchestrate')
+    bash = json.loads(env['OPENCODE_CONFIG_CONTENT'])['permission']['bash']
+    assert bash['*'] == 'ask' and bash['git push*'] == 'deny'

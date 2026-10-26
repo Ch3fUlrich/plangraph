@@ -78,7 +78,8 @@ def _orchestrate_bash_permissions(cfg) -> dict:
     cfg = dict(cfg)
     permission = dict(cfg.get('permission') or {})
     bash = permission.get('bash')
-    bash = dict(bash) if isinstance(bash, dict) else {}
+    # The string shorthand ("bash": "ask") is the policy for every command.
+    bash = dict(bash) if isinstance(bash, dict) else ({'*': bash} if isinstance(bash, str) else {})
     for glob in ORCHESTRATE_BASH_DENY:
         bash[glob] = 'deny'
     permission['bash'] = bash
