@@ -108,6 +108,44 @@ paths = ['''^tests/test_md_sync_plan\.py$''']
 regexes = ['''^Zx81kQ92LmPq77Vb$''']
 
 [[allowlists]]
+# Reason: the w30 regression pins that an unavailable harness's stderr never reaches the run
+# record, so the test has to name the synthetic gateway value as ONE plain literal the leak
+# gate can read: no split fragments to reassemble around the scanner.  Fake -- it only ever
+# exists inside the pytest tmp_path as a dummy env var for a fake binary.  Scope is this file
+# AND this exact value only (condition = AND): any other credential-shaped string written
+# into the same file (including a real token value) is still reported.
+description = "synthetic gateway token the w30 regression asserts never leaks"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_w30_regressions\.py$''']
+regexes = ['''^opaque-test-SECRET123$''']
+
+[[allowlists]]
+# Earlier revisions of the same w30 test (history only) used this dummy env value instead.
+# Same scope rule: this file AND this exact synthetic value only (condition = AND).
+description = "earlier synthetic gateway token in the w30 regression (history)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_w30_regressions\.py$''']
+regexes = ['''^sk-test-SECRET123$''']
+
+[[allowlists]]
+# Reason: the w28 regression pins that the same synthetic gateway value never reaches error
+# text or the stored record, so the test names it as ONE plain literal the leak gate can read:
+# no split fragments to reassemble around the scanner.  Fake, no credential of any kind.  The
+# current tree's copy sits on lines the entropy gate does not fire on, but the older revisions
+# of this file that a full history scan still walks DO report it (the same setenv call, line
+# 24) -- a single-commit snapshot cannot reproduce that here, so this entry is what keeps
+# `gitleaks git --log-opts=--all` green on the real clone.  Scope is this file AND this exact
+# value only (condition = AND): any other credential-shaped string in this file is still
+# reported.
+description = "synthetic gateway token the w28 regression asserts never leaks"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_w28_regressions\.py$''']
+regexes = ['''^opaque-testsecret$''']
+
+[[allowlists]]
 description = "test sentinel for OPENCODE_API_KEY in worker-core sandbox_env tests (fake)"
 condition = "AND"
 targetRules = ["generic-api-key"]

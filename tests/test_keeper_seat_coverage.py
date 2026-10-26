@@ -16,7 +16,22 @@ from pathlib import Path
 import pytest
 
 from evidence_fakes import FakeDecisions, FakeGit, make_ctx
-from keeper_util import World, seed, to_in_review
+from keeper_seat_helpers import (
+    DECISION,
+    PHASE_SHA,
+    SHA_A,
+    SHA_B,
+    RaisingGit,
+    _cov,
+    git_with,
+    merge_git,
+    to_review_merge,
+    to_review_with_commits,
+    verdict_events,
+    w,  # noqa: F401 - the review world fixture
+    writer,
+)
+from keeper_util import seed, to_in_review
 from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 from plangraph.review import family as review_family
@@ -24,74 +39,123 @@ from plangraph.review import family as review_family
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import seat_verdict as sv  # noqa: E402
 
-SHA_A = "a" * 40
-SHA_B = "b" * 40
-DECISION = "D-2217"
 
-# name, role, family -- real family names, all on project demo.
-EXTRA_PRINCIPALS = [
-    ("claimant", "l1", "meta"),
-    ("workerMeta", "worker", "meta"),
-    ("rAnthropic1", "reviewer", "anthropic"),
-    ("rAnthropic2", "reviewer", "anthropic"),
-    ("rAlibaba", "reviewer", "alibaba"),
-    ("rXiaomi", "reviewer", "xiaomi"),
-    ("rDeepseek", "reviewer", "deepseek"),
-    ("rGoogle", "reviewer", "google"),
-]
-
-
-@pytest.fixture
-def w(tmp_path):
-    world = World(tmp_path)
-    for name, role, family in EXTRA_PRINCIPALS:
-        token = auth.add_principal(world.conn, name, role, ["demo"],
-                                   family=family)
-        world.tokens[name] = token
-        world.principals[name] = auth.authenticate(world.conn, token)
-    yield world
-    world.close()
+@pytest.mark.parametrize("model,code", [
+    ("mimo-v2", None), ("claude-haiku", "same_family"),
+    ("unknown-model", "writer_unknown"),
+])
+def test_anthropic_claimant_uses_evidence_writer(w, model, code):
+    token = auth.add_principal(w.conn, "anthropicL1", "l1", ["demo"], family="anthropic")
+    w.principals["claimant"] = auth.authenticate(w.conn, token)
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(model + " run1")})
+    if code:
+        with pytest.raises(Refused) as exc:
+            w.store._reviewer_family_ok(w.p("rAnthropic1"), w.store._item(key))
+        assert exc.value.code == code
+    else:
+        assert w.store.verdict(w.p("rAnthropic1"), key, True)["state"] == "done"
 
 
-def _cov():
-    """The module under test; imported here so the file collects while red."""
-    from plangraph.keeper import coverage
-    return coverage
+@pytest.mark.parametrize("writer_model,expected", [(None, "same_family"),
+                                                   ("mimo-v2", None),
+                                                   ("unknown-model", "family_unknown")])
+def test_no_commit_writer_model_then_legacy_fallback(w, writer_model, expected):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    to_in_review(w, key, who="claimant")
+    w.conn.execute("UPDATE items SET claimed_by='legacy-owner', owner_family='anthropic', writer_model=? WHERE key=?",
+                   (writer_model, key))
+    item = w.store._item(key)
+    assert item["writer_model"] == writer_model
+    if expected:
+        with pytest.raises(Refused) as exc:
+            w.store._reviewer_family_ok(w.p("rAnthropic1"), item, w.store.ctx)
+        assert exc.value.code == expected
+    else:
+        w.store._reviewer_family_ok(w.p("rAnthropic1"), item, w.store.ctx)
 
 
-def writer(value):
-    """A ``Writer:`` trailer value (``<model-id> <run id>``)."""
-    return {"Writer": value}
+def test_old_and_unverified_evidence_cannot_spoof_writer(w):
+    item = {"key": "demo:A", "project": "demo", "epoch": 2,
+            "claimed_by": "legacy-owner", "owner_family": "anthropic", "delegate": None}
+    w.store._evidence = lambda key: [
+        {"epoch": epoch, "verified": verified, "kind": "commit+ci",
+         "ref": {"commit": SHA_A}} for epoch, verified in [(1, True), (2, False)]]
+    with pytest.raises(Refused) as exc:
+        w.store._reviewer_family_ok(w.p("rAnthropic1"), item, make_ctx(git=FakeGit()))
+    assert exc.value.code == "same_family"
+    w.store._reviewer_family_ok(w.p("rGoogle"), item, make_ctx(git=FakeGit()))
 
 
-def git_with(trailers_by_sha):
-    return FakeGit(trailers_by_sha=trailers_by_sha)
+def test_delegate_cannot_override_verified_writer(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer("claude-haiku run1")})
+    item = dict(w.store._item(key), delegate="workerMeta")
+    with pytest.raises(Refused) as exc:
+        w.store._reviewer_family_ok(w.p("rAnthropic1"), item, w.store.ctx)
+    assert exc.value.code == "same_family"
 
 
-class RaisingGit(FakeGit):
-    """``git show`` fails for every commit: the check must fail closed."""
+@pytest.mark.parametrize("proof,paths,code", [
+    (True, ["CHANGELOG.md"], None),
+    # The proof ALONE decides: a contradicting changed_paths is not consulted.
+    (True, ["src/example.py"], None),
+    # ...and it vetoes an all-CHANGELOG changed_paths just the same.
+    (False, ["CHANGELOG.md"], "same_family"),
+    # An adapter without the proof counts the hand, whatever changed_paths says.
+    (None, ["CHANGELOG.md"], "same_family"),
+    (None, None, "same_family"),
+    # A proof that cannot be read still fails closed.
+    ("error", ["CHANGELOG.md"], "writer_unknown"),
+])
+def test_hand_edit_paths_determine_writer_exemption(w, proof, paths, code):
+    """``changelog_only_edit`` is the ONE source of truth for the exemption."""
+    class PathsGit(FakeGit):
+        def changed_paths(self, repo, sha):
+            if paths is None:
+                raise RuntimeError("git failed")
+            return paths
 
-    def trailers(self, repo, sha):
-        raise RuntimeError("git show failed")
+        def changelog_only_edit(self, repo, sha):
+            if proof == "error":
+                raise RuntimeError("git failed")
+            return proof is True
+
+    if proof is None:
+        del PathsGit.changelog_only_edit      # the adapter cannot prove it
+    trailers = {SHA_A: {"Hand-Edit": "D-2626"}, SHA_B: writer("gpt-5 run1")}
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, trailers, git=PathsGit(trailers_by_sha=trailers))
+    if code:
+        with pytest.raises(Refused) as exc:
+            w.store.verdict(w.p("rAnthropic1"), key, True)
+        assert exc.value.code == code
+    else:
+        assert w.store.verdict(w.p("rAnthropic1"), key, True)["state"] == "done"
 
 
-def to_review_with_commits(w, key, trailers_by_sha, *, git=None):
-    """Claim as ``claimant``, attach one commit+ci row per sha, and submit."""
-    w.store.ctx = make_ctx(git=git or git_with(trailers_by_sha))
-    epoch = w.store.claim(w.p("claimant"), key, lease_s=7200)["epoch"]
-    for sha in trailers_by_sha:
-        out = w.store.add_evidence(w.p("claimant"), key, epoch, "commit+ci",
-                                   {"commit": sha})
-        assert out["verified"] is True
-    w.store.submit(w.p("claimant"), key, epoch)
-    assert w.store._item(key)["state"] == "in_review"
-    return epoch
+def test_git_changed_paths_is_nul_delimited_and_fails_closed(monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.keeper.evidence_git import GitAdapter
+    git = GitAdapter()
+    def run(repo, args):
+        assert "--no-renames" in args and "-z" in args
+        assert args[-2:] == ["--end-of-options", SHA_A]
+        return SimpleNamespace(returncode=0, stdout="CHANGELOG.md\0src/a\nb.py\0")
+    monkeypatch.setattr(git, "_run", run)
+    assert git.changed_paths("repo", SHA_A) == ["CHANGELOG.md", "src/a\nb.py"]
+    monkeypatch.setattr(git, "_run", lambda *a: SimpleNamespace(returncode=1))
+    with pytest.raises(RuntimeError):
+        git.changed_paths("repo", SHA_A)
+    with pytest.raises(ValueError):
+        git.changed_paths("repo", "--bad")
 
 
-def verdict_events(w, key):
-    return w.conn.execute(
-        "SELECT payload FROM events WHERE key=? AND type='review_verdict'"
-        " ORDER BY seq", (key,)).fetchall()
+def test_hand_edit_leaf_identity_is_not_merge_identity(monkeypatch):
+    from plangraph.keeper.evidence_git import GitAdapter
+    git = GitAdapter()
+    monkeypatch.setattr(git, "trailers", lambda *a: {"Hand-Edit": "D-2626"})
+    assert git._writer_trailer("repo", SHA_A)["_writer_commit"] == SHA_A
 
 
 # --------------------------------------------------------------------------
@@ -116,7 +180,9 @@ def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     round_no = w.store._item(refused)["round"]
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    assert exc.value.code == "coverage"
+    # rXiaomi is one of the commit writers: D-2458 refuses the ACCEPT seat at
+    # the family gate, before the closing coverage gate ever runs.
+    assert exc.value.code == "same_family"
     assert "xiaomi" in exc.value.msg
     item = w.store._item(refused)
     assert item["state"] == "in_review"
@@ -203,7 +269,9 @@ def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed)
         return
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p(seat), key, True, "not covered")
-    assert exc.value.code == "coverage"
+    # The seat shares a family with a commit writer, so D-2458 refuses the
+    # ACCEPT seat at the family gate; the closing gate below is never reached.
+    assert exc.value.code == "same_family"
     assert blamed in exc.value.msg
     assert w.store._item(key)["state"] == "in_review"
     assert verdict_events(w, key) == []
@@ -282,8 +350,6 @@ def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")})
 
-    # The reviewer's own family is the uncovered writer family, but ok=False
-    # still just returns the item to claimed.
     result = w.store.verdict(w.p("rXiaomi"), key, False, "needs work")
     assert result["state"] == "claimed"
     assert w.store._item(key)["state"] == "claimed"
@@ -306,7 +372,9 @@ def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
 
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), key, True, "second")
-    assert exc.value.code == "coverage"
+    # A later seat from the writer's family is refused at the family gate
+    # (D-2458); the refusal still appends nothing.
+    assert exc.value.code == "same_family"
     item = w.store._item(key)
     assert item["state"] == "in_review"
     assert item["round"] == round_no
@@ -375,30 +443,6 @@ def test_coverage_reuses_the_review_family_table():
 # ADDENDUM: the evidence commit is the PR MERGE commit (12-14) ...
 # --------------------------------------------------------------------------
 
-MERGE_SHA = "e" * 40
-PHASE_SHA = "f" * 40
-
-
-def merge_git(branch_trailers, sha=MERGE_SHA, merge_trailers=None):
-    """A ``FakeGit`` whose evidence *sha* is a merge commit.
-
-    The merge commit itself carries only ``Plan-Item`` (that is what L1
-    attaches); ``writer_trailers`` yields one dict per branch commit -- the
-    flattened list the adapter returns for a merge, or for a PHASE merge whose
-    parent2 range holds inner PR merges (D-2308).
-    """
-    return FakeGit(
-        trailers_by_sha={sha: merge_trailers or {"Plan-Item": "demo:MERGE"}},
-        branch_trailers_by_sha={sha: [dict(d) for d in branch_trailers]},
-    )
-
-
-def to_review_merge(w, key, git, sha=MERGE_SHA):
-    """Claim as ``claimant``, attach the merge sha as commit+ci, submit."""
-    return to_review_with_commits(
-        w, key, {sha: git.trailers_by_sha.get(sha, {})}, git=git)
-
-
 def test_merge_evidence_takes_the_writers_from_the_branch_commits(w):
     covered, refused = seed(
         w, [("A", []), ("B", [])],
@@ -416,7 +460,9 @@ def test_merge_evidence_takes_the_writers_from_the_branch_commits(w):
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    assert exc.value.code == "coverage"
+    # The branch commits resolved rXiaomi's own family: D-2458 refuses the
+    # ACCEPT seat at the family gate.
+    assert exc.value.code == "same_family"
     assert "xiaomi" in exc.value.msg
     assert w.store._item(refused)["state"] == "in_review"
     assert len(verdict_events(w, refused)) == 1
@@ -447,10 +493,11 @@ def test_hand_edit_branch_commit_counts_as_anthropic(w):
     assert set(_cov().writer_families(
         w.store, w.store._item(key), w.store.ctx)) == {"anthropic"}
 
-    # Claude's own hand may not cover itself on a standard item...
+    # Claude's own hand may not take a standard ACCEPT seat...
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rAnthropic1"), key, True, "hand edit")
-    assert exc.value.code == "coverage"
+    # ...the hand resolved to anthropic, so the family gate refuses it (D-2458).
+    assert exc.value.code == "same_family"
     assert "anthropic" in exc.value.msg
     assert w.store._item(key)["state"] == "in_review"
     assert verdict_events(w, key) == []
@@ -483,8 +530,8 @@ def test_phase_merge_uses_the_flattened_leaf_trailers(w):
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    assert exc.value.code == "coverage"
+    # The leaf writers resolved rXiaomi's family: D-2458 refuses the ACCEPT.
+    assert exc.value.code == "same_family"
     assert "xiaomi" in exc.value.msg
     assert w.store._item(refused)["state"] == "in_review"
     assert len(verdict_events(w, refused)) == 1
-

@@ -21,6 +21,11 @@ discards the round's earlier verdicts.  A second change request only reopens
 when it is consecutive *within the current epoch*: change requests from earlier
 claims are ignored and a passing verdict resets the count.
 
+The writer-family gate (``_reviewer_family_ok``) covers BOTH seats of BOTH
+tiers: a reviewer whose family is among the item's authoritative writers may
+file a change request (``ok=False``) but may never record an ACCEPT seat
+(D-2458), so no ``verdict(ok=True)`` can be recorded by a writer's own family.
+
 The waiver path (D-217) lives in ``store_waiver``: once the router records a
 verified decision, ``_waiver_active`` is true and the second passing verdict on
 a ``high`` item may share the first reviewer's family.  It is a no-op on a
@@ -177,7 +182,10 @@ class ReviewMixin:
         if principal.name in (item["claimed_by"], item["delegate"]):
             raise Refused("same_principal", "reviewer is the claimant")
         self._require_project(principal, item["project"])
-        self._reviewer_family_ok(principal, item)
+        # ``change_request=not ok``: the family gate is strict for every ACCEPT
+        # seat and only lets a change request (ok=False) through.
+        self._reviewer_family_ok(principal, item, self._ctx(item, now),
+                                 change_request=not ok)
         if not ok:
             return self._verdict_changes(principal, key, reason, item, now)
         self._require_evidence(item)
@@ -208,7 +216,8 @@ class ReviewMixin:
                 raise Refused("conflict",
                               f"{key} evidence changed under the transaction")
             self._require_project(principal, fresh["project"])
-            self._reviewer_family_ok(principal, fresh)
+            self._reviewer_family_ok(principal, fresh, self._ctx(fresh, now),
+                                     change_request=not ok)
             prior = self._round_verdicts(fresh)
             if any(v.get("reviewer") == principal.name for v in prior):
                 raise Refused("same_principal",
@@ -317,7 +326,9 @@ class ReviewMixin:
             if principal.name in (fresh["claimed_by"], fresh["delegate"]):
                 raise Refused("same_principal", "reviewer is the claimant")
             self._require_project(principal, fresh["project"])
-            self._reviewer_family_ok(principal, fresh)
+            # This branch is only ever reached with ``ok=False``.
+            self._reviewer_family_ok(principal, fresh, self._ctx(fresh, now),
+                                     change_request=True)
             prior = self._epoch_change_streak(fresh)
             second = prior >= 1
             state = "open" if second else "claimed"

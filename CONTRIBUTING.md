@@ -8,10 +8,17 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 
 ```bash
-python -m pip install -r requirements-ci.txt
-python -m pytest -q                        # the whole suite
-python -m pytest -q tests/test_views.py    # a small change: the affected tests only
+python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist
+python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR / L2
+python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
+
+The affected selector falls back to the full suite for unmapped Python source,
+shared fixtures and suite configuration; documentation/status/build artifacts do
+not trigger a full run. Do not bypass a conservative fallback on PRs.
+Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
+the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
+systemd user scope. Use `affected` or `full` to measure each separately.
 
 ## Lanes
 

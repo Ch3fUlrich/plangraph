@@ -12,6 +12,7 @@ from plangraph.keeper.api import KeeperHandler
 from plangraph.keeper import api_routes
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase, shadow
+from plangraph.settings import enforce_review_scope
 from plangraph.planner.legs import DEFAULT_LEGS
 
 @pytest.fixture
@@ -51,7 +52,7 @@ def make_phase(w):
 def code_of(exc):
     return getattr(exc, "code", None) or exc.args[0]
 
-PLAN_KEYS = {"phase", "ready", "blocked", "cards",
+PLAN_KEYS = {"review_method", "review_scope", "phase", "ready", "blocked", "cards",
              "overlaps", "skipped", "busy"}
 CARD_KEYS = {"key", "state", "write_set", "ready", "findings",
              "start_allowed", "start_reason", "route",
@@ -71,6 +72,7 @@ def test_two_ready_cards_disjoint(w, repo):
 
     assert set(plan) == PLAN_KEYS
     assert plan["phase"] == "demo:PH-X"
+    assert plan["review_method"]["mode"] == "batch"
     assert plan["ready"] is True
     assert plan["blocked"] == []
     assert plan["skipped"] == [] and plan["busy"] == [] and plan["overlaps"] == []
@@ -88,6 +90,24 @@ def test_two_ready_cards_disjoint(w, repo):
         assert c["route"]["harness"] == "opencode"
         assert c["route"]["window_class"] == "128k"
         assert not (set(c["route"]["legs"]) & non_opencode)
+
+def test_loosened_phase_under_batch_global_stamps_batch_and_spawns(w, repo, monkeypatch):
+    (repo / "p.json").write_text('{"review_method": {"mode": "batch"}, "phases": {"demo:PH-X": {"review_method": {"mode": "per-item"}}}}')
+    monkeypatch.setenv("PLANGRAPH_SETTINGS", "p.json")
+    make_phase(w)
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["review_scope"] == "batch"  # D-2817: what spawn admits
+    enforce_review_scope({"phase": "demo:PH-X", "review_scope": plan["review_scope"]}, "review", None, root=repo)
+
+
+def test_per_item_global_and_phase_stamps_per_fixer_and_spawns(w, repo, monkeypatch):
+    (repo / "p.json").write_text('{"review_method": {"mode": "per-item"}}')
+    monkeypatch.setenv("PLANGRAPH_SETTINGS", "p.json")
+    make_phase(w)
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["review_scope"] == "per-fixer"  # D-2817: spawn admits it here
+    enforce_review_scope({"phase": "demo:PH-X", "review_scope": plan["review_scope"]}, "review", None, root=repo)
+
 
 def test_needs_input_and_ready_cards_are_planned(w, repo):
     make_phase(w)
@@ -202,6 +222,7 @@ def test_guards(w, repo):
 
     plan = phase.plan_phase(w.store, w.p("system"), "demo:PH-X", repo_root=repo)
     assert plan["phase"] == "demo:PH-X"
+    assert plan["review_method"]["mode"] == "batch"
 
 def test_reader_and_l1_forbidden(w, repo):
     make_phase(w)

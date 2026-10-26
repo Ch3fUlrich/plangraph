@@ -1,0 +1,38 @@
+# Generic external liveness watchdog -- systemd user timer TEMPLATE.
+#
+# Drives periodic execution of liveness-watchdog@%i.service:
+#   Runs /usr/bin/env python3 %h/code/plangraph/tools/liveness_watchdog.py
+#   with config %h/.config/plangraph/liveness/%i.toml (--apply).
+#
+# Fires 5 minutes after boot (OnBootSec=5min) and every 10 minutes after the
+# previous pass ends (OnUnitInactiveSec=10min), with 1-minute accuracy
+# (AccuracySec=1min) and without catch-up on missed runs (Persistent=false).
+#
+# Install and enable for an instance name (user session, no root):
+#   1. mkdir -p ~/.config/systemd/user
+#   2. cp deploy/liveness/liveness-watchdog@.service deploy/liveness/liveness-watchdog@.timer ~/.config/systemd/user/
+#   3. write the config: %h/.config/plangraph/liveness/<name>.toml
+#   4. systemctl --user daemon-reload
+#   5. systemctl --user enable --now liveness-watchdog@<name>.timer
+#   6. linger so the timer fires without an active login session:
+#      loginctl enable-linger "$USER"
+#   7. verify status and schedule:
+#      systemctl --user list-timers 'liveness-watchdog@*'
+#      systemctl --user status liveness-watchdog@<name>.timer
+#   8. disable / stop:
+#      systemctl --user disable --now liveness-watchdog@<name>.timer
+#
+# Note: Enabling a live instance requires operator/router GO.
+
+[Unit]
+Description=Liveness watchdog timer (%i)
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+AccuracySec=1min
+Persistent=false
+Unit=liveness-watchdog@%i.service
+
+[Install]
+WantedBy=timers.target

@@ -91,7 +91,18 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
     if state in _TERMINAL_STATES:
         raise Refused("bad_state", f"{key} is {state}")
 
-    project = key.split(":", 1)[0]
+    from dataclasses import asdict
+    from plangraph.settings import review_method, SettingsError, project_of
+    try:
+        method = review_method(project_of(key), key, root=repo_root)
+        trusted = review_method(None, None, root=repo_root)  # what spawn admits (D-2817)
+    except SettingsError as exc:
+        detail = str(exc)
+        msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid:'
+        raise Refused("validation", msg) from None
+    project = project_of(key)
+    # Card layers only tighten at spawn (R3), so per-fixer needs the global layers too.
+    review_scope_value = "batch" if "batch" in (method.mode, trusted.mode) else "per-fixer"
     if now is None:
         now = datetime.now(timezone.utc)
     source = source or policy.StaticSource()
@@ -163,7 +174,11 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
             card, key=dst, repo_root=Path(repo_root),
             running_write_sets=running, leg_max_request=leg_max)
 
+        review_fields = ({"role": "review", "project": project, "phase": key, "review_scope":
+                          review_scope_value}
+                         if card.get("role") == "review" else {})
         cards.append({
+            **review_fields,
             "key": dst,
             "state": card_state,
             "write_set": _write_set(card),
@@ -207,6 +222,8 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
 
     return {
         "phase": key,
+        "review_method": asdict(method),
+        "review_scope": review_scope_value,
         "ready": ready,
         "blocked": blocked,
         "cards": cards,

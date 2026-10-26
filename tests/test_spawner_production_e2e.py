@@ -659,6 +659,17 @@ class ProductionGatewayChildRunner(SpawnerRunner):
             dry_run=False,
         )
         self.jobs[job_id] = job
+        # Only the in-process transport adapter may witness the identity. Child
+        # stdout remains untrusted even when it looks like gateway headers.
+        self._adapter_tokens[job_id] = object()
+        request = urllib.request.Request(
+            self.gateway_url + '/v1/chat/completions',
+            data=json.dumps({'model': model_or_combo, 'messages': [
+                {'role': 'user', 'content': prompt}]}).encode(),
+            headers={'Content-Type': 'application/json', **envelope_headers})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.served_witness(job_id, response.headers['X-OmniRoute-Selected-Model'],
+                                adapter_token=self._adapter_tokens[job_id])
 
         proc = await asyncio.create_subprocess_exec(
             cmd[0],

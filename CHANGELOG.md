@@ -5,6 +5,14 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## Unreleased
 
 - **RT-P1-EXEC-OWNERSHIP EXEC-OBSERVED-STATE:** the worker sends the state it observed as `expected_state` on park and ask: the activity reads `GET /v1/show?key=<card>&fmt=json` through the new `Keeper::card_state` (best-effort; unreadable/`claimed`/terminal answers send no observation) and the live set is only the fallback when nothing was observed (`expected_state_for`). The keeper refuses a park that presents only the live-set fallback while the card sits in `waiting` or `needs_input` -- the projector-written away states -- with `exec_stale_state` (`"the live set is not an observation"`), while the same-run, same-attempt park that presents the observed state parks there, so the wait-cap park after usage_limit/outage still lands. ask and complete keep the any-of live-set CAS (an ask never moves the card, a complete does not close it). Covered by a flipped projector-path test (LIVE_SET park now refused), real-order refusal/observed-park cases, an observation-not-a-fallback test, a keeper HTTP read-side test, and Rust unit tests for `expected_state_for`, `HttpKeeper::card_state` and `StubKeeper`; `docs/adr-exec-ownership.md` follows.
+- **ORCH-EFFICIENCY-ENFORCE (D-2853) interim:** hand-edit cap raised 10 -> 50 changed lines as an interim safety ceiling (operator 2026-10-25); the decision moves to spawner route in a later slice.
+- **REVIEW-VERDICT-PARSE (D-2825):** seat replies whose last VERDICT line is a fix naming only LOW-severity findings count as pass (D-2472/D-2821 clean policy), with low_only added to Verdict evidence.
+- **KEEPER-PG-RECONNECT S1 (fail-loud):** a lost Postgres session never closes an HTTP request silently and never half-applies a write: `ConnectionLost` classifies a broken session (lost is permanent for this connection (S1); S2 exits, S3 reconnects; lock_timeout and friends keep today's path), every request answers one status line (503 `unavailable`, `outcome unknown` when lost at commit, 500 otherwise), rollback on a lost session is a no-op while commit raises, `/v1/health` answers 503 when the connection is lost, and one fixed `keeper: request failed: <type>` stderr line per failed request never carries driver text. SQLite data path unchanged; the request escape guard (one fail line, last-resort 500) applies to both backends. No reconnect in this slice.
+- **REVIEW-METHOD-SETTING fix (D-2773):** the review-policy settings root is never taken from the card (`card["repo_root"]` ignored everywhere) and project/phase layers come only from a trusted keeper `item` (`key` plus optional `phase`/`track`), never loosened by card `project`/`phase`/`key`; spawner callers and plan_spawn hold no keeper item, so card-selected project/phase layers are evaluated but may only tighten (per-fixer refused if the trusted OR card layers say batch, and an error resolving the card layers fails closed to batch; fixer threshold = min of both, the trusted one if card layers cannot be resolved; D-2784), and a review spawn with no explicit scope is admitted in any mode by design -- only an explicit per-fixer scope is refused; a non-dict keeper item is refused (D-2800); phase plans stamp `per-fixer` only when spawn would admit it (D-2817).
+- **RT-OVERSIGHT-KEEPER-SCOPE:** add scoped, expiring oversight tokens, local GO-gated minting, fail-closed plan-refinement policy, append-only applied/denied audit and hourly budgets. SQLite v14 and PostgreSQL Migration 8 add oversight tables only; RT-P1-BUS renumbers after it: SQLite v15 (messages) + v16 (nonces/envelopes), PostgreSQL Migration 9; preserve main's JEV schema, all five exec ownership columns, shipped migrations and batch precondition/dry-run/dependency forms.
+- Exclude proven CHANGELOG.md-only Hand-Edit commits from keeper writer families; path inspection failures refuse writer resolution.
+
+- **KEEPER-SEAT-FAMILY-WRITER:** isolate reviewer families from verified current-epoch commit writers, then writer_model, retaining fail-closed legacy claimant/delegate fallback.
 - **KG export health:** report every export failure and missing-token misconfiguration without leaking credentials; add freshness and failure checks with optional alert inbox and systemd examples targeting the live Omnigraph URL.
 
 - Install gitleaks 8.30.1 in the CI pytest job from the pinned GitHub release (tarball plus checksums file fetched with `curl -fsSL`, the asset's own line grepped out of the downloaded checksums file and checked with `sha256sum -c`, fail-closed on mismatch or missing line), extract the single binary to `~/.local/bin`, and require `gitleaks version` to print `8.30.1` before pytest runs.
@@ -191,3 +199,15 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - Add keeper-owned tailnet identity registry, MagicDNS resolution, retry/health
   lifecycle and file-only per-host write authentication. Unknown nodes are
   observable but never enrolled. No sample store is added.
+# D-2458 keeper writer-family review corrections
+
+- Fail closed with `writer_unknown` when verified commit evidence resolves to no
+  writers, including an entirely exempt CHANGELOG Hand-Edit chain.
+- Restore closing-seat coverage refusals and allow writer-family change requests;
+  direct family-gate callers remain strict and accept an optional context.
+- CHANGELOG Hand-Edit exemption requires a proven non-merge addition/modification
+  of root `CHANGELOG.md`. Missing adapter capability counts the hand; deletions
+  and merges are never exempt. Leaf commit identity is used for path/status checks.
+- Known gap: merge-conflict-only authorship detection is not implemented by the
+  merge writer traversal (which enumerates branch leaves). A Hand-Edit merge that
+  reaches the resolver is counted as anthropic, never CHANGELOG-exempt.

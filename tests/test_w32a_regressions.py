@@ -30,7 +30,10 @@ def test_entrypoint_attempt_parity(tmp_path, monkeypatch, factory, rc):
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **kw: None)
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None))
     assert calls == [l.model for l in legs[:1 if rc == 0 else 2]]
-    assert len(result['attempts']) == len(calls)
+    assert len(result['attempts']) == len(legs)
+    assert len([a for a in result['attempts'] if a['status'] != 'skipped']) == len(calls)
+    if rc == 0:
+        assert result['attempts'][1]['skip_reason'] == 'earlier_leg_succeeded'
     assert result['status'] == 'completed'
 
 
@@ -53,7 +56,9 @@ def test_missing_harness_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None))
     assert (result['status'], result['exit_code']) == ('failed', 1)
-    assert result['attempts'] == [dict(leg='agy', status='skipped', skip_reason=reason)]
+    assert result['attempts'] == [dict(leg='agy', status='skipped', skip_reason=reason,
+        served_model='unwitnessed', served_family='unwitnessed',
+        served_witness_reason='no authenticated harness telemetry; skipped or unobserved leg')]
     assert reason in result['error']
 
 
