@@ -183,6 +183,28 @@ def _opencode_served_model(db_path, title) -> str | None:
     return next(iter(models)) if len(models) == 1 else None
 
 
+#: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
+#: the engine's internal Permission.Ruleset actions): a review child must have
+#: all of them denied (D-2905 (1)).
+_DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'grep',
+                 'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
+                 'webfetch', 'websearch')
+
+
+def _opencode_tools_denied(config_json) -> bool:
+    """True only when the FINAL child config denies every tool (D-2905 (1)).
+
+    Re-parses the env value the child actually receives: a deny block that a
+    later merge clobbered is not evidence.
+    """
+    try:
+        permission = json.loads(config_json or '{}').get('permission')
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return isinstance(permission, dict) and all(
+        permission.get(tool) == 'deny' for tool in _DENIED_TOOLS)
+
+
 class NonceCapacity(RuntimeError):
     """All nonce slots belong to live runs."""
 
@@ -329,6 +351,7 @@ class SpawnerRunner:
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
         render_reason = None
+        tools_event = None
         if cmd[0] == 'opencode':
             # Name the session so the monitor can witness the served model (D-2898).
             cmd.extend(['--title', f'plangraph-{job_id}'])
@@ -351,6 +374,18 @@ class SpawnerRunner:
                 oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')  # mode 0700
                 self._ocdata_dirs[job_id] = oc_dir
                 child_env['XDG_DATA_HOME'] = oc_dir
+                # D-2905 (1): deny every tool for the review seat, then record
+                # the spawner's own check of the FINAL env value.
+                try:
+                    cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                    if not isinstance(cfg, dict):
+                        raise ValueError('not an object')
+                    cfg['permission'] = {tool: 'deny' for tool in _DENIED_TOOLS}
+                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                except (ValueError, TypeError):
+                    pass  # unparseable config cannot be proven denied below
+                tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
+                    child_env.get('OPENCODE_CONFIG_CONTENT') or '') else 'opencode_tools_not_denied'}
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -395,6 +430,8 @@ class SpawnerRunner:
                 )
                 if render_reason:
                     job.events.append({'event': 'render_refused', 'reason': render_reason})
+                if tools_event:
+                    job.events.append(tools_event)
                 self.jobs[job_id] = job
                 return job
 
@@ -410,6 +447,8 @@ class SpawnerRunner:
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
+            if tools_event:
+                job.events.append(tools_event)
 
             if render_reason:
                 job.status = 'failed'
@@ -568,8 +607,11 @@ class SpawnerRunner:
                     and exit_code == 0
                     and (not job.served_model or job.served_model == 'unwitnessed')):
                 oc_dir = self._ocdata_dirs.get(job_id)
+                denied = _opencode_tools_denied(
+                    self._child_envs.get(job_id, {}).get('OPENCODE_CONFIG_CONTENT') or '')
                 m = (_opencode_served_model(Path(oc_dir) / 'opencode' / 'opencode.db',
-                                            f'plangraph-{job_id}') if oc_dir else None)
+                                            f'plangraph-{job_id}')
+                     if oc_dir and denied else None)
                 if m is not None and m == requested_model:
                     try:
                         self.served_witness(job_id, m, adapter_token=self._adapter_tokens.get(job_id))
