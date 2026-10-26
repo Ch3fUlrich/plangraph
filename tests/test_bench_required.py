@@ -33,7 +33,7 @@ def test_missing_ranked_last_in_tier(as_list):
                        "reason": "no benchmark row"},)
     assert any(WRITERS[0].id in r and "no benchmark row" in r for r in p.reasons)
     assert [l.id for l in p.legs if l.tier == "subscription"] == [
-        "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash", "cx-gpt-6.1-sol"]
+        "cx-gpt-6.1-sol", "mimo-v2.6-pro", "agy-gemini-3.8-flash", "mimo-v2.6-flash"]
     assert p.to_dict()["gaps"] == p.gaps
     assert not plan(benchmark=rows(WRITERS)).gaps
 
@@ -48,7 +48,7 @@ def test_absent_explicit_operator_order():
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*agy-gemini-3.8-flash"):
+    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*cx-gpt-6.1-sol"):
         plan(benchmark=data, strict=True)
 
 

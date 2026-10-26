@@ -171,6 +171,13 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                 w_idx = len(WRITER_ORDER)
             return (w_idx, tier_idx, pos)
         eligible.sort(key=sort_key)
+    elif effective_role == "review":
+        # D-2983/D-3005: review preference crosses quota tiers. The catalog
+        # owns the operator order; custom legs retain their tier preference.
+        review_order = [leg.id for leg in DEFAULT_LEGS if "review" in leg.roles]
+        eligible.sort(key=lambda t: (
+            review_order.index(t[2].id) if t[2].id in review_order else len(review_order),
+            t[0], t[1]))
     else:
         eligible.sort(key=lambda t: (t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)

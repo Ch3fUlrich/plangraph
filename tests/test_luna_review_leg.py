@@ -1,6 +1,6 @@
 """Review leg cx-gpt-6-luna (D-2983/D-2984): a gpt-family review seat, never a writer.
 
-The leg joins DEFAULT_LEGS right after cx-gpt-6.1-sol and is excluded from any
+The leg joins DEFAULT_LEGS first for review and is excluded from any
 review routed for a PR written by its own family (D-2511 family exclusion).
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ def test_luna_leg_in_default_legs():
     assert (leg.family, leg.harness, leg.model, leg.roles) == (
         "gpt", "opencode", "omniroute/cx-gpt-6-luna", ("review",))
     ids = [leg.id for leg in DEFAULT_LEGS]
-    assert ids[ids.index("cx-gpt-6.1-sol") + 1] == LUNA
+    assert ids[0] == LUNA
 
 
 def test_luna_never_writes():

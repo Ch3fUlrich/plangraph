@@ -100,8 +100,8 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     assert [leg["id"] for leg in bare["legs"]] == [
-        "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
+        "cx-gpt-6-luna", "qodercli-qwen3.8-flash",
+        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash"]
 
 
@@ -114,7 +114,7 @@ def test_unmapped_leg_no_p(tmp_path, capsys):
         assert rows[leg_id]["model_id"] == model_id
     plan = route_json(tmp_path, capsys, "--bench-db", str(db))
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("opencode-glm-5.3-flash-free", "opencode-deepseek-v4.1-flash-free"):
+    for leg in ("opencode-glm-5.3-flash-free",):
         assert leg not in LEG_BENCHMARK_MODEL
         assert by_leg[leg]["u_core"] is None and by_leg[leg]["p_source"] == "prior"
     assert by_leg["agy-gemini-3.8-flash"]["p_source"] == "measured"

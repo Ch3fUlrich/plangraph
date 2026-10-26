@@ -15,7 +15,7 @@ CARD = {"estimate_tokens": 1000}
 def test_writer_live_limit_reset_and_scope(tmp_path):
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    assert p.first_leg.model == "gemini-3.8-flash"
+    assert p.first_leg.model == "omniroute/cx-gpt-6.1-sol"
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
@@ -46,22 +46,21 @@ def test_override(tmp_path):
 
 def test_seats_and_impossible_fence():
     p = plan_spawn(CARD, role="review", writer_families=("gpt",))
-    assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
+    assert [l.family for l in p.review_seats] == ["qwen", "glm"]
     assert all(l.family != "claude" for l in p.legs)
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
+    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gpt"
     p = plan_spawn(CARD, role="review",
-                   writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"))
+                   writer_families=("qwen", "glm", "gpt", "gemini", "mimo"))
     assert not p.review_seats and p.error
 
 
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
-        "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-        "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash",
-        "mimo-v2.6-flash", "mimo-v2.6-pro", "deepseek"]
+        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash", "mimo-v2.6-flash",
+        "openrouter-free", "cx-gpt-6.1-sol", "mimo-v2.6-pro"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
-        "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
+        "cx-gpt-6-luna", "qodercli-qwen3.8-flash",
+        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash"]
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
@@ -73,8 +72,8 @@ def test_benchmark_within_tier_only():
     rows = {l.model: {"aa_intelligence": 40 + i * 10, "cost_per_task_usd": 0,
                       "pool_burn_weight": 0} for i, l in enumerate(writer)}
     p = plan_spawn(CARD, role="implement", benchmark=rows)
-    assert p.first_leg.family == "gemini"
-    assert p.legs[-1].tier == "paid" and p.p_source == "operator-order"
+    assert p.first_leg.family == "gpt"
+    assert p.legs[-1].id == "mimo-v2.6-flash" and p.p_source == "operator-order"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons
     p_rev = plan_spawn(CARD, role="review", benchmark=rows)
     assert p_rev.p_source == "benchmark"

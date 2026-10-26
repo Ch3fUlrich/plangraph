@@ -75,21 +75,20 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
          ("128k", "256k", "1m"), 180000, False, claude=True,
          note="Antigravity quota, not Claude Max"),
-    _leg("deepseek", "paid", "opencode", "omniroute/deepseek", "deepseek",
-         ("128k", "256k"), 100000, False, note="pay-as-you-go, only if really needed"),
 )
 
 # D-2148/D-1704/D-2569: role orders are policy, not resolver fallbacks.
 from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
+    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",)),
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
-    Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
-        "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
-        roles=("review", "implement")),
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
         roles=("review", "implement")),
+    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     _legacy["opencode-zen-free"],
     _legacy["or-north-mini-code-free"],
     _legacy["or-laguna-s-2.1-free"],
@@ -99,25 +98,19 @@ DEFAULT_LEGS = (
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
-    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",)),
-    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement", "orchestrate")),
     _legacy["agy-sonnet-5.5"],
-    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
 
-# D-2683 operator writer order
+# D-2983/D-3005 operator writer order; D-2744 removes DeepSeek legs.
 WRITER_ORDER: tuple[str, ...] = (
-    "agy-gemini-3.8-flash",
+    "cx-gpt-6.1-sol",
     "mimo-v2.6-pro",
+    "agy-gemini-3.8-flash",
     "openrouter-free",
-    "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free",
     "mimo-v2.6-flash",
-    "cx-gpt-6.1-sol",
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
