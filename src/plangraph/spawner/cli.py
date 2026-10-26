@@ -114,6 +114,8 @@ def main(argv=None):
         p.add_argument('--role', choices=('implement', 'review', 'design'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
+        # haiku-F5: output is always JSON; --json stays accepted because fleet spawn wrappers pass it.
+        p.add_argument('--json', action='store_true', help='accepted for compatibility; output is always JSON')
         if verb == 'spawn':
             p.add_argument('prompt')
             p.add_argument('--review-scope', choices=['per-fixer', 'batch'])

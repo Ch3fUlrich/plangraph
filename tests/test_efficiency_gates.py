@@ -1309,16 +1309,17 @@ def test_f5_plain_wait_strips_the_paths_from_a_current_record(tmp_path):
     assert out["stdout_path"] == out["stdout_log"] == str(tmp_path / "runs" / "run-w5" / "stdout.log")
 
 
-def test_f5_route_and_spawn_have_no_json_flag(capsys):
-    # haiku-F5: route/spawn accepted --json (cli.py) while nothing read it — the output was
-    # always JSON. The flag is removed; --help no longer lists it on route (checked below) and
-    # passing it is refused. Positive control: wait still takes --json, because that one IS read.
+def test_f5_route_and_spawn_json_is_a_documented_no_op(tmp_path, capsys):
+    # haiku-F5: route/spawn print JSON with or without --json. The flag stays accepted
+    # (fleet spawn wrappers pass it) and --help says it is a no-op.
     from plangraph.spawner.cli import main
-    with pytest.raises(SystemExit):
-        main(['route', '--card', '{"estimate_tokens":1}', '--json'])
+    card = '{"estimate_tokens":1000}'
+    assert main(['--state', str(tmp_path), 'route', '--card', card, '--role', 'implement', '--json']) == 0
+    with_flag = json.loads(capsys.readouterr().out)
+    assert main(['--state', str(tmp_path), 'route', '--card', card, '--role', 'implement']) == 0
+    assert json.loads(capsys.readouterr().out) == with_flag  # control: identical output without it
     with pytest.raises(SystemExit):
         main(['route', '--help'])
-    assert '--json' not in capsys.readouterr().out
-    with pytest.raises(SystemExit):
-        main(['wait', '--help'])
-    assert '--json' in capsys.readouterr().out
+    assert 'output is always JSON' in capsys.readouterr().out
+    with pytest.raises(SystemExit):  # an unknown flag is still refused
+        main(['route', '--card', card, '--no-such-flag'])
