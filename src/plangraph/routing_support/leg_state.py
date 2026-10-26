@@ -16,6 +16,14 @@ from email.utils import parsedate_to_datetime
 
 REPROBE_MINUTES = 10
 
+# E3b (D-2913) "verified before counted": a leg counts as a review seat only
+# after a passing verify within VERIFY_MAX_AGE. The legs that already served
+# as seats are grandfathered in code; a later failed or expired verify
+# revokes even that state.
+VERIFY_MAX_AGE = 7 * 24 * 60 * 60
+GRANDFATHERED_VERIFIED = frozenset({
+    "qodercli-qwen3.8-flash", "agy-sonnet-5.5", "opencode-glm-5.3-flash-free"})
+
 
 class LegStateError(ValueError):
     """Not a provider limit response."""
@@ -68,6 +76,8 @@ class LegStateStore:
             id INTEGER PRIMARY KEY, leg_key TEXT, account TEXT, combo TEXT,
             status INTEGER, body_excerpt TEXT, retry_after_s REAL, reset_at REAL,
             ts REAL, caller TEXT, source TEXT)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS leg_verifies (
+            id INTEGER PRIMARY KEY, leg_key TEXT, ok INTEGER, run_id TEXT, ts REAL)""")
         return db
 
     def record_provider_response(self, leg, status, body, headers, caller, now=None, account=None, combo=None):
@@ -88,6 +98,40 @@ class LegStateStore:
             raise LegStateError("requires successful provider response caller")
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
+
+    def record_verify(self, leg, ok, run_id, now=None):
+        """Record one `probe --verify <leg>` outcome (E3b item 5)."""
+        if not isinstance(leg, str) or not leg.strip():
+            raise LegStateError("requires leg")
+        if type(ok) is not bool:
+            raise LegStateError("requires ok boolean")
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise LegStateError("requires run_id")
+        with self._connect() as db:
+            db.execute("INSERT INTO leg_verifies VALUES (NULL,?,?,?,?)",
+                       (leg, 1 if ok else 0, run_id,
+                        time.time() if now is None else now))
+
+    def verified(self, leg, now=None):
+        """True only when the last verify passed within VERIFY_MAX_AGE.
+
+        No verify record falls back to the code-owned grandfathered legs;
+        a failed or expired verify revokes even that state.
+        """
+        now = time.time() if now is None else now
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return leg in GRANDFATHERED_VERIFIED
+        try:
+            with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
+                db.row_factory = sqlite3.Row
+                row = db.execute(
+                    "SELECT ok, ts FROM leg_verifies WHERE leg_key=? AND ts<=? "
+                    "ORDER BY ts DESC, id DESC LIMIT 1", (leg, now)).fetchone()
+        except (sqlite3.Error, OSError):
+            return leg in GRANDFATHERED_VERIFIED
+        if row is None:
+            return leg in GRANDFATHERED_VERIFIED
+        return bool(row["ok"]) and now - row["ts"] < VERIFY_MAX_AGE
 
     def leg_status(self, leg, now=None, account=None, combo=None):
         now = time.time() if now is None else now

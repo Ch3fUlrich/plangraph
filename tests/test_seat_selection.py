@@ -11,6 +11,7 @@ import pytest
 from plangraph.planner.legs import DEFAULT_LEGS, SEAT_ORDER
 from plangraph.planner.routing import plan_spawn, validate_model
 from plangraph.review.family import FamilyError, check_cross_family, model_family
+from plangraph.routing_support.leg_state import LegStateError, LegStateStore
 from plangraph.routing_support.probe import available
 
 # The six console-openrouter / opencode free review legs of the slice, with
@@ -282,3 +283,45 @@ def test_probe_binary_check_for_qodercli_and_agy(monkeypatch, tmp_path):
     assert ok_ids == ["or-nemotron-3-ultra-free"]
     assert reasons == {"qodercli-qwen3.8-flash": "qodercli not on PATH",
                        "agy-sonnet-5.5": "agy not on PATH"}
+
+
+# --- E3b item 5: verified before counted (D-2913) ---
+
+
+def _store(tmp_path):
+    return LegStateStore(tmp_path / "state.sqlite")
+
+
+def test_record_verify_requires_leg_ok_and_run(tmp_path):
+    store = _store(tmp_path)
+    for args in (("", True, "run-1"), ("or-gemma-4-31b-free", True, ""),
+                 ("or-gemma-4-31b-free", 1, "run-1")):
+        with pytest.raises(LegStateError):
+            store.record_verify(*args)
+    assert store.verified("or-gemma-4-31b-free", 0.0) is False
+
+
+def test_verified_counts_only_a_fresh_pass(tmp_path):
+    store = _store(tmp_path)
+    now = 1_000_000.0
+    leg = "or-nemotron-3-ultra-free"
+    # negative control: the 6 new legs ship unverified (no verify record)
+    assert store.verified(leg, now) is False
+    store.record_verify(leg, False, "run-1", now)
+    assert store.verified(leg, now) is False        # a failed verify never counts
+    store.record_verify(leg, True, "run-2", now)
+    assert store.verified(leg, now) is True         # a passing verify counts
+    assert store.verified(leg, now + 6 * 86400) is True
+    # negative control: a 7-day-old verify does not count
+    assert store.verified(leg, now + 7 * 86400) is False
+
+
+def test_grandfathered_legs_verified_in_code_and_revocable(tmp_path):
+    store = _store(tmp_path)
+    now = 1_000_000.0
+    # legs that already served as seats are grandfathered as verified in code
+    for leg in ("qodercli-qwen3.8-flash", "agy-sonnet-5.5", "opencode-glm-5.3-flash-free"):
+        assert store.verified(leg, now) is True, leg
+    # negative control: a failed verify revokes the grandfathered state again
+    store.record_verify("agy-sonnet-5.5", False, "run-3", now)
+    assert store.verified("agy-sonnet-5.5", now) is False
