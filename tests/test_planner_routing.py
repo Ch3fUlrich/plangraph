@@ -160,7 +160,7 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 7 legs: trains_on_data" in r.reasons
+        assert "excluded 13 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -354,7 +354,9 @@ def test_writer_order_d2683_writer_family_exclusion():
     # (d) writer-family exclusion still applies for review; exclude_families applies for implement
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    # D-2744: deepseek is no longer a review leg, so the first non-qwen
+    # review leg is glm (E3b item 2 pin).
+    assert plan_rev.first_leg.id == "opencode-glm-5.3-flash-free"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "mimo-v2.6-pro"
     # F2: writer_families does not exclude implement legs
