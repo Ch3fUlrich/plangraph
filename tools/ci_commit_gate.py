@@ -242,7 +242,8 @@ def gate_path_verdict(path: str | Path) -> str | None:
     canon = canon_path(path)
     if canon is None:
         return 'malformed'
-    if any(fnmatch.fnmatchcase(canon, pattern) for pattern in AUTH_DOOR_PATHS):
+    # Door matching is case-folded like the secret check below (E1a seats G5/G7).
+    if any(fnmatch.fnmatchcase(canon.lower(), pattern) for pattern in AUTH_DOOR_PATHS):
         return 'door'
     if _secret_path(canon):
         return 'secret'

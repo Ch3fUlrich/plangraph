@@ -29,7 +29,9 @@ def canon_path(path: str | Path) -> str | None:
 
 def door_path(path: str | Path) -> bool:
     canon = canon_path(path)
-    return canon is not None and any(fnmatch.fnmatchcase(canon, pat) for pat in AUTH_DOOR_PATHS)
+    # Case-folded like the secret check: TOOLS/seat_verdict.py aliases the
+    # real door on a case-insensitive checkout (E1a seats G5/G7).
+    return canon is not None and any(fnmatch.fnmatchcase(canon.lower(), pat) for pat in AUTH_DOOR_PATHS)
 
 def blocked_path(path: str | Path) -> str | None:
     canon = canon_path(path)
@@ -47,11 +49,13 @@ FIXTURE_ROWS: tuple[tuple[str, str | None, str], ...] = (
     ("src/plangraph/keeper/store.py", "door", "writer"), ("src/plangraph/spawner/auth.py", "door", "writer"),
     ("roles.py", "door", "writer"), ("scopes.py", "door", "writer"),
     ("src/roles.py", "door", "writer"), ("src/scopes.py", "door", "writer"),
-    ("tools/seat_verdict.py", "door", "writer"), ("ops/pg.sh", "door", "writer"),
+    ("tools/seat_verdict.py", "door", "writer"), ("TOOLS/SEAT_VERDICT.PY", "door", "writer"),
+    ("ops/pg.sh", "door", "writer"),
     ("tools/ci_commit_gate.py", "door", "writer"), ("./tools/ci_commit_gate.py", "door", "writer"),
     ("tools\\ci_commit_gate.py", "door", "writer"), ("tools/ci_commit_exempt.txt", "door", "writer"),
     ("tools/gate_wiring_check.py", "door", "writer"), (".github/workflows/tests.yml", "door", "writer"),
-    (".github/workflows/ci.yml", "door", "writer"), (".github/CODEOWNERS", "door", "writer"),
+    (".github/workflows/ci.yml", "door", "writer"), (".GITHUB/workflows/ci.yml", "door", "writer"),
+    (".github/CODEOWNERS", "door", "writer"),
     ("vault/x.json", "secret", "writer"), ("config/.env", "secret", "writer"),
     (".env", "secret", "writer"), (".env.local", "secret", "writer"),
     ("secrets/prod.json", "secret", "writer"), ("secret/deploy.key", "secret", "writer"),
