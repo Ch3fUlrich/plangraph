@@ -354,9 +354,9 @@ def test_writer_order_d2683_writer_family_exclusion():
     # (d) writer-family exclusion still applies for review; exclude_families applies for implement
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    # D-2744: deepseek is no longer a review leg, so the first non-qwen
-    # review leg is glm (E3b item 2 pin).
-    assert plan_rev.first_leg.id == "opencode-glm-5.3-flash-free"
+    # E3b item 5: unverified new seats are skipped; grandfathered Sonnet
+    # precedes glm after excluding the qwen writer family.
+    assert plan_rev.first_leg.id == "agy-sonnet-5.5"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "mimo-v2.6-pro"
     # F2: writer_families does not exclude implement legs
