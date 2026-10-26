@@ -203,7 +203,7 @@ class BridgeRaw:
 
 
 # -------------------------------------------------------------- unit (fake raw)
-def test_s1_lost_is_permanent():
+def test_s1_lost_is_sticky_until_boundary():
     raw = FakeRaw(status=2)
     conn = db_pg.PgConnection(raw, "k_x")
     raw.fail, raw.broken = FakeDbError("gone"), True
