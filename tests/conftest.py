@@ -22,6 +22,31 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 
+def _sweep_dead_pgtest_dirs(root) -> None:
+    try:
+        entries = os.scandir(root)
+    except OSError:
+        return
+    mypid = os.getpid()
+    with entries:
+        for entry in entries:
+            try:
+                m = re.fullmatch(r"pgtest-(\d+)-.+", entry.name)
+                if not m or not entry.is_dir(follow_symlinks=False):
+                    continue
+                pid = int(m.group(1))
+                if pid <= 0 or pid == mypid:
+                    continue
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+                except (PermissionError, OSError):
+                    pass
+            except OSError:
+                continue
+
+
 def _use_tmpfs_tempdir() -> None:
     # The suite is fsync-bound (SQLite commits); tmpfs avoids slow-disk stalls.
     worker = os.environ.get("PYTEST_XDIST_WORKER")
@@ -45,7 +70,8 @@ def _use_tmpfs_tempdir() -> None:
         st = os.statvfs(shm)
         if st.f_bavail * st.f_frsize < 256 * 1024 * 1024:
             return
-        path = tempfile.mkdtemp(prefix="pgtest-", dir=shm)
+        _sweep_dead_pgtest_dirs(shm)
+        path = tempfile.mkdtemp(prefix=f"pgtest-{os.getpid()}-", dir=shm)
     except OSError:
         return
     atexit.register(shutil.rmtree, path, ignore_errors=True)
