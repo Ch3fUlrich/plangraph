@@ -20,7 +20,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 import plangraph.spawner.runner as runner_module
-from plangraph.spawner.runner import SpawnerRunner
+from plangraph.spawner.runner import IMPLEMENT_HEADER, SpawnerRunner
+
+
+def _sent(prompt):
+    """The prompt an implement-role spawn sends (D-2966 header first)."""
+    return IMPLEMENT_HEADER + "\n\n" + prompt
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +44,7 @@ def test_opencode_prompt_via_stdin_and_not_in_argv(monkeypatch):
     async def run():
         special = "hello %^&|\"<> \n\t café 🚀 \n"
         prompt = special + ("A" * (70000 - len(special)))
-        prompt_bytes = prompt.encode("utf-8")
+        prompt_bytes = _sent(prompt).encode("utf-8")
 
         proc = AsyncMock()
         proc.returncode = 0
@@ -118,7 +123,7 @@ def test_hermetic_real_process_stdin_count(tmp_path, monkeypatch):
 
         assert job.status == "completed"
         assert job.exit_code == 0
-        assert job.stdout == "70000"
+        assert job.stdout == str(len(_sent(prompt).encode("utf-8")))
         for arg in job.command:
             assert prompt not in arg
 
@@ -242,7 +247,7 @@ def test_timeout_path_with_stdin_kills_and_records_124(monkeypatch):
         killer.assert_awaited_once_with(proc.pid)
 
         assert len(communicate_calls) == 2
-        assert communicate_calls[0] == prompt.encode("utf-8")
+        assert communicate_calls[0] == _sent(prompt).encode("utf-8")
         assert communicate_calls[1] is None
 
         assert job.status == "failed"
@@ -257,7 +262,7 @@ def test_dry_run_stdout_no_prompt_text():
     async def run():
         runner = SpawnerRunner()
         prompt = "SECRET_PROMPT_TEXT_ABC123"
-        prompt_len = len(prompt.encode("utf-8"))
+        prompt_len = len(_sent(prompt).encode("utf-8"))
 
         job = await runner.spawn(
             prompt=prompt,
@@ -269,7 +274,7 @@ def test_dry_run_stdout_no_prompt_text():
         assert f"[stdin: {prompt_len} bytes]" in job.stdout
         for arg in job.command:
             assert prompt not in arg
-        assert job.task_prompt == prompt
+        assert job.task_prompt == _sent(prompt)
 
     asyncio.run(run())
 
