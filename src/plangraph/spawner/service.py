@@ -79,7 +79,10 @@ class SpawnService:
             if isinstance(value, dict):
                 return {k: v if k in IDENTIFIER_KEYS else clean(v) for k, v in value.items()}
             return value
+        host = record.get('host')
         record.update(clean(record))
+        if host is not None:
+            record['host'] = host   # top-level run host is an identifier (D-2960); nested 'host' keys stay redacted
         for attempt in record.get('attempts', []):
             if attempt.get('skip_reason'):
                 attempt['skip_reason'] = clean(attempt['skip_reason'])[:300]
