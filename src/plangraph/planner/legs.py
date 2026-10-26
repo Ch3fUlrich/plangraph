@@ -99,6 +99,8 @@ DEFAULT_LEGS = (
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement", "design")),
+    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",)),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review", "design")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",

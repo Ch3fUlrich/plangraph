@@ -538,7 +538,7 @@ def host_skip_reason(row, *, probe=None, env=None):
     if not model or '/' not in model:
         return None
     child = host_probe_env(env)
-    from .opencode_overlay import OVERLAY_UNKNOWN
+    from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING
     if child.get(OVERLAY_UNKNOWN):
         return None
     # Probe the config the launch will use: S1 renders the gateway providers per run.
@@ -562,7 +562,12 @@ def host_skip_reason(row, *, probe=None, env=None):
     variants = {m for m in listing if m.startswith(base + '#')}
     present = models is None or (base in {m.split('#', 1)[0] for m in listing}
         and ('#' not in model or not variants or model.lower() in variants))
-    return None if present else 'not_served_on_host: ' + model
+    if present:
+        return None
+    reason = 'not_served_on_host: ' + model
+    if child.get(OVERLAY_ROOT_MISSING):
+        reason += f' (root_provider_config_missing: {child[OVERLAY_ROOT_MISSING]})'
+    return reason
 
 
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
@@ -730,7 +735,7 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
     # Explicit harness registration, not an inference from gateway transport.
-    if d.get('id') == 'mimo/mimo-v2.6-pro':
+    if d.get('id') in ('mimo/mimo-v2.6-pro', 'omniroute/cx-gpt-6-luna', 'opencode-go/kimi-k3-max'):
         d.setdefault('harness', 'opencode')
     return d
 

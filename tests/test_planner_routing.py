@@ -16,7 +16,7 @@ D25_IDS = [
     "opencode-glm-5.3-flash-free", "opencode-zen-free", "or-north-mini-code-free",
     "or-laguna-s-2.1-free", "or-nemotron-3-super-free", "ovh-gpt-oss-120b",
     "openrouter-free",
-    "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro",
+    "cx-gpt-6.1-sol", "cx-gpt-6-luna", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro",
     "agy-sonnet-5.5", "deepseek",
 ]
 
@@ -141,8 +141,8 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "or-nemotron-3-super-free",
-                      "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash",
-                      "mimo-v2.6-pro", "agy-sonnet-5.5", "deepseek"]
+                      "cx-gpt-6.1-sol", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
+                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
 
 
