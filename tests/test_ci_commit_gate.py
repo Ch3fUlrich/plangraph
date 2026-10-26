@@ -498,16 +498,16 @@ def test_deleted_test_file_without_trailer_fails(repo: Path):
 
 
 def test_deleted_test_file_with_trailer_passes(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
-        "Test-Removal: D-2047\n",
+        "Test-Removal: D-2047 test_alpha\n",
         remove=("tests/test_x.py",),
     )
     assert check(base, sha, cwd=repo) == []
@@ -515,16 +515,16 @@ def test_deleted_test_file_with_trailer_passes(repo: Path):
 
 def test_lowercase_test_removal_trailer_passes(repo: Path):
     """The trailer key is case-insensitive, like ``writer:``."""
-    base = _head(repo)
     _commit(
         repo,
         "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
-        "test-removal: D-1\n",
+        "test-removal: D-1 test_alpha\n",
         remove=("tests/test_x.py",),
     )
     assert check(base, sha, cwd=repo) == []
@@ -620,16 +620,16 @@ def test_removed_test_function_without_trailer_fails(repo: Path):
 
 
 def test_removed_async_test_function_with_trailer_passes(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_y.py": "async def test_beta():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "refactor: drop the test body\n\nWriter: mimo-v2.6-flash run-2\n"
-        "Test-Removal: D-94\n",
+        "Test-Removal: D-94 test_beta\n",
         files={"tests/test_y.py": "async def helper():\n    pass\n"},
     )
     assert check(base, sha, cwd=repo) == []
@@ -641,6 +641,158 @@ def test_test_removal_trailer_without_removed_test_is_not_a_violation(repo: Path
         repo,
         "feat: no test touched\n\nWriter: mimo-v2.6-flash run-1\n"
         "Test-Removal: D-2047\n",
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_bare_d_id_test_removal_trailer_names_nothing_and_is_refused(repo: Path):
+    """buildl1-T2: `Test-Removal: D-<n>` alone names nothing and is refused."""
+    _commit(
+        repo,
+        "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
+        "Test-Removal: D-2047\n",
+        remove=("tests/test_x.py",),
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Positive control: the same removal naming what it removes passes.
+    _commit(
+        repo,
+        "test: re-add coverage\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_alpha\n",
+        remove=("tests/test_x.py",),
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_removed_test_missing_from_named_test_removal_list_is_refused(repo: Path):
+    """buildl1-T2: every removed test must be named, not merely some."""
+    _commit(
+        repo,
+        "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={
+            "tests/test_x.py": "def test_alpha():\n    pass\n\ndef test_gamma():\n    pass\n"
+        },
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "refactor: drop one test\n\nWriter: mimo-v2.6-flash run-2\n"
+        "Test-Removal: D-2047 test_gamma\n",
+        files={"tests/test_x.py": "def test_gamma():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Positive control: the same removal naming the removed test passes.
+    _commit(
+        repo,
+        "test: re-seed\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={
+            "tests/test_x.py": "def test_alpha():\n    pass\n\ndef test_gamma():\n    pass\n"
+        },
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "refactor: drop one test again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_alpha\n",
+        files={"tests/test_x.py": "def test_gamma():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_renamed_test_must_be_named_by_its_removed_name(repo: Path):
+    """buildl1-T2: a rename removes a name; the trailer names what it removes."""
+    _commit(
+        repo,
+        "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={"tests/test_z.py": "def test_old():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: rename test\n\nWriter: mimo-v2.6-flash run-2\nTest-Removal: D-2047\n",
+        files={"tests/test_z.py": "def test_new():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Naming the new name instead still leaves the removal unnamed.
+    _commit(
+        repo,
+        "test: re-seed\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={"tests/test_z.py": "def test_old():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: rename test again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_new\n",
+        files={"tests/test_z.py": "def test_other():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Positive control: the trailer naming the removed (old) name passes.
+    _commit(
+        repo,
+        "test: re-seed again\n\nWriter: mimo-v2.6-flash run-5\n",
+        files={"tests/test_z.py": "def test_old():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: rename test once more\n\nWriter: mimo-v2.6-flash run-6\n"
+        "Test-Removal: D-2047 test_old\n",
+        files={"tests/test_z.py": "def test_new():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_test_removal_trailer_outside_final_block_does_not_satisfy(repo: Path):
+    """buildl1-T2: the trailer is read only from the final trailer block."""
+    _commit(
+        repo,
+        "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage\n\nTest-Removal: D-2047 test_alpha\n\n"
+        "Writer: mimo-v2.6-flash run-2\n",
+        remove=("tests/test_x.py",),
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: trailer outside final block",
+        f"{sha}: test removal without Test-Removal trailer",
+    ]
+    # Positive control: the same trailer inside the final block passes.
+    _commit(
+        repo,
+        "test: re-seed\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_alpha\n",
+        remove=("tests/test_x.py",),
     )
     assert check(base, sha, cwd=repo) == []
 
@@ -887,7 +1039,7 @@ def test_js_test_removal_needs_trailer(repo: Path):
     )
     sha = _commit(
         repo,
-        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\nTest-Removal: D-1\n',
+        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\nTest-Removal: D-1 does x\n',
         remove=('tests/foo.test.js',),
     )
     assert check(base, sha, cwd=repo) == []
