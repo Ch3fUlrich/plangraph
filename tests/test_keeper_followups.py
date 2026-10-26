@@ -490,3 +490,25 @@ def test_inline_verbs_refuse_the_wrong_role_before_the_body(world, srv, verb):
     # positive control: a role the verb admits still gets the 400 validation
     right = INLINE_RIGHT_ROLE.get(verb, "router")
     assert _post(srv, world.tokens[right], verb, {}) == 400
+
+
+def test_edit_definition_admits_the_system_claim_holder(world, srv):
+    # 203-r5 T1: INLINE_ROLES must not be narrower than the store's own check.
+    # The store admits a system claim-holder a depends_on edit (holder_edit in
+    # store_create.py:_edit, holding the claim worker_claim_lease gave it,
+    # store_verbs.py:125-131), so a system caller with a missing field must
+    # keep the 400 validation -- never the role 403 the narrower table gave.
+    seed(world, [("A", [])])
+    key = "demo:A"
+    assert world.store.worker_claim_lease(world.p("system"), key)["key"] == key
+
+    def refusals(code):
+        return world.conn.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE actor=? AND action=?"
+            " AND ok=0 AND code=?", ("system", "edit_definition", code)
+        ).fetchone()[0]
+    before = refusals("validation")
+    assert _post(srv, world.tokens["system"], "edit_definition", {"key": key}) == 400
+    assert refusals("validation") == before + 1      # the 400 is audited too
+    # positive control: the role gate still refuses a reader before the body
+    assert _post(srv, world.tokens["reader"], "edit_definition", {"key": key}) == 403

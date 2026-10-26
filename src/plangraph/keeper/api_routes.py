@@ -64,7 +64,11 @@ _CLAIMANT = ("l1", "worker", "system")
 INLINE_ROLES = {
     "create_items": ("router", "l1", "oversight"),
     "import_items": ("router",),
-    "edit_definition": ("router", "l1", "oversight", "worker"),
+    # router/l1/oversight may manage (store_create.py:_edit -> _may_manage);
+    # a claim-holder editing depends_on on its own claim (holder_edit there)
+    # is admitted too, and worker_claim_lease lets system hold a claim -- so
+    # the entry must carry every claimant role, not just worker.
+    "edit_definition": ("router", "oversight") + _CLAIMANT,
     "set_priority": ("router", "oversight"),
     "claim": ("l1", "worker"),
     "delegate": _CLAIMANT,
