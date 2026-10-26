@@ -74,8 +74,7 @@ class JobInfo:
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
-    liveness: str | None = None
-    exit_class: str | None = None
+    liveness: str | None = None; exit_class: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -426,14 +425,9 @@ class SpawnerRunner:
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
-            if job.liveness:
-                from .liveness import exit_class_for_liveness
-                job.exit_class = exit_class_for_liveness(job.liveness); job.status = "failed"
-            elif job.exit_class == "cancelled" or job.status == "cancelled":
-                job.exit_class = "cancelled"; job.status = "cancelled"
-            else:
-                job.exit_class = "ok" if exit_code == 0 else "worker_crash"
-                job.status = "completed" if exit_code == 0 else "failed"
+            if job.liveness: from .liveness import exit_class_for_liveness; job.exit_class = exit_class_for_liveness(job.liveness); job.status = "failed"
+            elif job.exit_class == "cancelled" or job.status == "cancelled": job.exit_class = "cancelled"; job.status = "cancelled"
+            else: job.exit_class = "ok" if exit_code == 0 else "worker_crash"; job.status = "completed" if exit_code == 0 else "failed"
 
             # Free text is child-controlled, including plausible provider headers.
             # Absence of an authenticated adapter witness must remain explicit.
@@ -442,11 +436,8 @@ class SpawnerRunner:
         except asyncio.CancelledError:
             if job_id in self.jobs:
                 job = self.jobs[job_id]
-                if job.liveness:
-                    from .liveness import exit_class_for_liveness
-                    job.exit_class = exit_class_for_liveness(job.liveness); job.status = "failed"
-                else:
-                    job.status = "cancelled"; job.exit_class = "cancelled"
+                if job.liveness: from .liveness import exit_class_for_liveness; job.exit_class = exit_class_for_liveness(job.liveness); job.status = "failed"
+                else: job.status = "cancelled"; job.exit_class = "cancelled"
                 job.end_time = time.time()
                 if job.exit_code is None: job.exit_code = 1
         except Exception as exc:
@@ -514,12 +505,9 @@ class SpawnerRunner:
         if liveness is not None:
             # haiku-C8/qwen-C4: refuse unknown liveness BEFORE touching the job (I13).
             from .liveness import LIVENESS_VALUES, exit_class_for_liveness
-            if liveness not in LIVENESS_VALUES:
-                from plangraph.routing_errors import ParameterRefused
-                raise ParameterRefused(f'unknown liveness {liveness!r}')
+            if liveness not in LIVENESS_VALUES: from plangraph.routing_errors import ParameterRefused; raise ParameterRefused(f'unknown liveness {liveness!r}')
             job.liveness = liveness; job.exit_class = exit_class_for_liveness(liveness)
-        else:
-            job.exit_class = "cancelled"
+        else: job.exit_class = "cancelled"
 
         proc = self._processes.get(job_id)
         if proc:
@@ -735,10 +723,8 @@ def spawn_service(*args, **kwargs):
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             events=record.get('events', []) + getattr(job, 'events', []))
-                        # Per-attempt classification (haiku-C4/qwen-C3): the last attempt wins,
-                        # plain failures get check_fail (I13).
-                        from .liveness import classify_attempt
-                        record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
+                        # Per-attempt classification (haiku-C4/qwen-C3): the last attempt wins; plain failures get check_fail (I13).
+                        from .liveness import classify_attempt; record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
                         if (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run:
                                 await self._continue_writer(record, job.stdout)

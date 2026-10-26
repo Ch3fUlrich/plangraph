@@ -88,45 +88,32 @@ class SpawnService:
         if record.get('error'):
             record['error'] = '; '.join(p[:300] for p in clean(record['error']).split('; '))[:2000]
         run_dir = self.state / 'runs' / record['run_id']
-        job_id = record.get('job_id')
-        job = getattr(self.runner, 'jobs', {}).get(job_id)
-        # The logs hold the full output of every attempt and output_cut measures it all (I17);
-        # a later _save must never shrink them back to the 4 KB tail (haiku-C3, qwen-C5).
-        # Per stream: done (finished jobs' output) + cur (current job's best known text).
-        # An attempt's tail supersedes a shorter live snapshot of the same job and never
-        # appends beside it; a job switch folds cur into done, so every fall-through
-        # attempt's text stays in the log and the tails (w28, w36).
+        job_id = record.get('job_id'); job = getattr(self.runner, 'jobs', {}).get(job_id)
+        # The logs hold the full output of every attempt and output_cut measures it all (I17); a later _save
+        # never shrinks them. Per stream: done (finished jobs' output) + cur (current job's best known text),
+        # an attempt tail supersedes a shorter live snapshot of the same job, a job switch folds cur into done (w28, w36).
         accs = self.__dict__.setdefault('_accs', {})
-        attempts = record.get('attempts') or []
-        cur_job = accs.get((record['run_id'], 'job'))
+        attempts = record.get('attempts') or []; cur_job = accs.get((record['run_id'], 'job'))
         for s in ('stdout', 'stderr'):
             done, cur, n_att = accs.get((record['run_id'], s), (None, '', 0))
-            if done is None:
-                done = record.get(s) if record.get(s) is not None else record.get(f'{s}_tail', '')
-                n_att = len(attempts) if done else 0
+            if done is None: done = record.get(s) if record.get(s) is not None else record.get(f'{s}_tail', ''); n_att = len(attempts) if done else 0
             for a in attempts[n_att:]:
                 piece = a.get(f'{s}_tail') or ''
                 if not piece: continue
-                if a.get('job_id') in (None, cur_job, job_id):
-                    if len(piece) >= len(cur): cur = piece
-                else:
-                    done += piece
-            if cur_job is not None and job_id != cur_job:
-                done, cur = done + cur, ''
+                if a.get('job_id') in (None, cur_job, job_id): cur = piece if len(piece) >= len(cur) else cur
+                else: done += piece
+            if cur_job is not None and job_id != cur_job: done, cur = done + cur, ''
             live = getattr(job, s, None) if job is not None else None
             if live is not None and len(live) >= len(cur):
                 cur = live
             accs[(record['run_id'], s)] = (done, cur, len(attempts))
-            full = done + cur
-            t = clean(full); raw = t.encode('utf-8', errors='replace')
-            if len(raw) > 2097152:
-                record['output_cut'] = True; content = raw[:1048576] + b"\n[... output cut ...]\n" + raw[-1048576:]
+            full = done + cur; t = clean(full); raw = t.encode('utf-8', errors='replace')
+            if len(raw) > 2097152: record['output_cut'] = True; content = raw[:1048576] + b"\n[... output cut ...]\n" + raw[-1048576:]
             else: content = raw
             atomic_write_private(run_dir / f"{s}.log", content.decode('utf-8', errors='replace'))
             record[f'{s}_tail'] = t.encode()[-4096:].decode('utf-8', errors='ignore'); record.pop(s, None)
         accs[(record['run_id'], 'job')] = record.get('job_id'); record.setdefault('output_cut', False)
-        record['stdout_path'] = record['stdout_log'] = str(run_dir / 'stdout.log')
-        record['stderr_path'] = record['stderr_log'] = str(run_dir / 'stderr.log')
+        record['stdout_path'] = record['stdout_log'] = str(run_dir / 'stdout.log'); record['stderr_path'] = record['stderr_log'] = str(run_dir / 'stderr.log')
         atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
         res = {k: record.get(k) for k in ('status', 'exit_code', 'exit_class', 'liveness', 'attempts')}
         res['output_cut'] = bool(record.get('output_cut', False)); atomic_write_private(run_dir / 'result.json', json.dumps(res, indent=2))
@@ -235,12 +222,9 @@ class SpawnService:
             raise
 
     async def _continue_writer(self, record, output):
-        if (record.get('liveness') or record.get('exit_class') == 'cancelled' or
-            record.get('output_cut') or record.get('status', 'completed') != 'completed'):
-            # The reason table below never runs for a refused record, but a failed
-            # status must still name why no continuation was made (w31a).
-            if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed':
-                record['continuation_reason'] = 'nonzero_exit'
+        if (record.get('liveness') or record.get('exit_class') == 'cancelled' or record.get('output_cut') or record.get('status', 'completed') != 'completed'):
+            # A refused record never reaches the reason table below, but a failed status still names why (w31a).
+            if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed': record['continuation_reason'] = 'nonzero_exit'
             return
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
@@ -390,10 +374,8 @@ class SpawnService:
                         served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                         writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                         events=record.get('events', []) + getattr(job, 'events', []))
-                    # Per-attempt, not setdefault: the record carries the LAST attempt's
-                    # (liveness, exit_class) — stale values must not stick (haiku-C4), and a
-                    # plain failure needs a class (qwen-C3, I13).
-                    record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
+                    # Per-attempt, not setdefault: the record carries the LAST attempt's (liveness, exit_class) — stale must not stick (haiku-C4, qwen-C3, I13).
+                    from .liveness import classify_attempt; record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
                     self._save(record)
                     if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:

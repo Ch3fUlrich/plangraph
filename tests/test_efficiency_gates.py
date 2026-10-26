@@ -641,28 +641,17 @@ _BAD_META = ({"liveness": "stalled"}, {"exit_class": "cancelled"}, {"output_cut"
 
 def test_spawn_limits_defaults_roles_and_env(tmp_path, monkeypatch):
     from plangraph.settings import SettingsError, spawn_limits
-    # design role map: writer = implement/fix/writer, seat = review, default = every other role
-    for roles, caps in ((("implement", "fix", "writer"), (90, 180)), (("review",), (45, 60)), (("design", "seat", "default", None), (60, 120))):
-        for role in roles:
-            lim = spawn_limits(role)
-            assert (lim.wall_cap_min, lim.max_cap_min) == caps
-            assert (lim.stall_min, lim.stall_cpu_pct, lim.floor_mb, lim.max_runs, lim.require_principal, lim.ignore) == (15, 2, 2000, 4, False, {})  # qwen-C9: defaults on every role, not only the default one
-            assert "opencode" in lim.truncation and "opencode" in lim.provider_protocol
+    def refuses(fn):
+        with pytest.raises(SettingsError): fn()
+    for roles, caps in ((("implement", "fix", "writer"), (90, 180)), (("review",), (45, 60)), (("design", "seat", "default", None), (60, 120))):  # design role map: writer = implement/fix/writer, seat = review, default = every other role
+        for role in roles: lim = spawn_limits(role); assert (lim.wall_cap_min, lim.max_cap_min) == caps; assert (lim.stall_min, lim.stall_cpu_pct, lim.floor_mb, lim.max_runs, lim.require_principal, lim.ignore) == (15, 2, 2000, 4, False, {}); assert "opencode" in lim.truncation and "opencode" in lim.provider_protocol  # qwen-C9: defaults on every role, not only the default one
     with pytest.raises(Exception): spawn_limits(None).wall_cap_min = 100
-    monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps({"writer": {"wall_cap_min": 10}}))
-    assert (spawn_limits("implement").wall_cap_min, spawn_limits("implement").max_cap_min) == (10, 180)
-    bads = ({"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}},
-            {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}}, {"writer": {"truncation": {"opencode": [123]}}})
-    for override in bads:
-        monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps(override))
-        with pytest.raises(SettingsError): spawn_limits("writer")
-    monkeypatch.delenv("PLANGRAPH_SPAWN_LIMITS")
-    monkeypatch.setenv("PLANGRAPH_SETTINGS", "policy.json")  # qwen-C9: the settings-file section refuses the same shapes (I1)
-    for bad in bads:
-        (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": bad}))
-        with pytest.raises(SettingsError): spawn_limits("writer", root=tmp_path)
-    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": {"seat": {"stall_min": 30}}}))
-    assert spawn_limits("review", root=tmp_path).stall_min == 30 and spawn_limits("design", root=tmp_path).stall_min == 15
+    monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps({"writer": {"wall_cap_min": 10}})); assert (spawn_limits("implement").wall_cap_min, spawn_limits("implement").max_cap_min) == (10, 180)
+    bads = ({"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}}, {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}}, {"writer": {"truncation": {"opencode": [123]}}})
+    for override in bads: monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps(override)); refuses(lambda: spawn_limits("writer"))
+    monkeypatch.delenv("PLANGRAPH_SPAWN_LIMITS"); monkeypatch.setenv("PLANGRAPH_SETTINGS", "policy.json")  # qwen-C9: the settings-file section refuses the same shapes (I1)
+    for bad in bads: (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": bad})); refuses(lambda: spawn_limits("writer", root=tmp_path))
+    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": {"seat": {"stall_min": 30}}})); assert spawn_limits("review", root=tmp_path).stall_min == 30 and spawn_limits("design", root=tmp_path).stall_min == 15
 
 
 def test_liveness_exit_vocabulary():
@@ -670,8 +659,7 @@ def test_liveness_exit_vocabulary():
     from plangraph.spawner.liveness import LIVENESS_TO_EXIT_CLASS as M, LIVENESS_VALUES, exit_class_for_liveness as ecfl
     assert set(M) == set(LIVENESS_VALUES) and ecfl(None) is None
     for liv, ec in M.items(): assert ec in EXIT_CLASSES and ecfl(liv) == ec
-    with pytest.raises(ValueError):
-        ecfl("bogus")  # unknown liveness must refuse, never silent None (I13)
+    with pytest.raises(ValueError): ecfl("bogus")  # unknown liveness must refuse, never silent None (I13)
     assert M == {"truncated": "worker_crash", "provider_protocol": "worker_crash", "stalled": "stall", "capped": "timeout",
                  "attempt_timeout": "timeout", "oom": "worker_crash", "memguard": "outage", "killed": "outage", "host_full": "outage"}
 
@@ -679,120 +667,88 @@ def test_liveness_exit_vocabulary():
 def test_run_result_refusals_and_findings(tmp_path):
     from plangraph.spawner.liveness import LIVENESS_VALUES
     pass_text = "F1 [HIGH] defect\nVERDICT: PASS\n"
-    for liv in LIVENESS_VALUES:
-        assert F.failure_reason(pass_text, liveness=liv) == f"run liveness {liv}"; assert F.seat_outcome(pass_text, liveness=liv)[0] is None
-        assert F.first_review({"a": (pass_text, {"liveness": liv}), "b": pass_text})[0] is None
-    for kw, exp in [({"exit_class": "cancelled"}, "run cancelled"), ({"output_cut": True}, "output cut")]:
-        assert F.failure_reason(pass_text, **kw) == exp; assert F.seat_outcome(pass_text, **kw)[0] is None
-        assert F.first_review({"a": (pass_text, kw), "b": pass_text})[0] is None
-    run_dir, seat_file = tmp_path / "run-1", tmp_path / "run-1" / "seat.out"
-    run_dir.mkdir(); seat_file.write_text(pass_text)
-    for bad in _BAD_META:
-        (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok", **bad})); assert F.findings_from_files([seat_file]) == []
+    for liv in LIVENESS_VALUES: assert F.failure_reason(pass_text, liveness=liv) == f"run liveness {liv}"; assert F.seat_outcome(pass_text, liveness=liv)[0] is None; assert F.first_review({"a": (pass_text, {"liveness": liv}), "b": pass_text})[0] is None
+    for kw, exp in [({"exit_class": "cancelled"}, "run cancelled"), ({"output_cut": True}, "output cut")]: assert F.failure_reason(pass_text, **kw) == exp; assert F.seat_outcome(pass_text, **kw)[0] is None; assert F.first_review({"a": (pass_text, kw), "b": pass_text})[0] is None
+    run_dir, seat_file = tmp_path / "run-1", tmp_path / "run-1" / "seat.out"; run_dir.mkdir(); seat_file.write_text(pass_text)
+    for bad in _BAD_META: (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok", **bad})); assert F.findings_from_files([seat_file]) == []
     (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"})); assert len(F.findings_from_files([seat_file])) == 1
-    for junk in ("{not json", "null", "[]", '"junk"'):
-        (run_dir / "result.json").write_text(junk); assert F.findings_from_files([seat_file]) == [], junk  # haiku-C2, qwen-C2: unreadable/non-dict result.json refuses the seat
-    for meta in (None, [], "junk", 3):
-        assert F.first_review({"a": (PASS_SEAT, meta), "b": PASS_SEAT})[0] is None  # haiku-C2, qwen-C1: no verdict from such a seat
+    for junk in ("{not json", "null", "[]", '"junk"'): (run_dir / "result.json").write_text(junk); assert F.findings_from_files([seat_file]) == [], junk  # haiku-C2, qwen-C2: unreadable/non-dict result.json refuses the seat
+    for meta in (None, [], "junk", 3): assert F.first_review({"a": (PASS_SEAT, meta), "b": PASS_SEAT})[0] is None  # haiku-C2, qwen-C1: no verdict from such a seat
     assert F.first_review({"a": (PASS_SEAT, {"status": "completed"}), "b": PASS_SEAT})[0] == "pass"
     (run_dir / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
     with pytest.raises(OSError): F.findings_from_files([run_dir])  # qwen-C2: missing stdout.log refuses loudly, never skips
     (run_dir / "stdout.log").write_text(pass_text); assert len(F.findings_from_files([run_dir])) == 1
     standalone = tmp_path / "other.out"; standalone.write_text(pass_text)
-    for bad in _BAD_META:
-        assert F.findings_from_files([standalone], card={"seat_classes": {"other": {"status": "completed", **bad}}}) == []
+    for bad in _BAD_META: assert F.findings_from_files([standalone], card={"seat_classes": {"other": {"status": "completed", **bad}}}) == []
     assert len(F.findings_from_files([standalone], card={"seat_classes": {"other": {"status": "completed"}}})) == 1
-    from plangraph.spawner.service import SpawnService
-    from types import SimpleNamespace
-    from plangraph.routing_support.fixer import render_fixer_brief
+    from plangraph.spawner.service import SpawnService; from types import SimpleNamespace; from plangraph.routing_support.fixer import render_fixer_brief
     serv = SpawnService(state=tmp_path); called = []
     async def fake_spawn(**kw):  # haiku-C6/qwen-C6: _continue_writer calls runner.spawn, not self._spawn
         called.append(kw); return SimpleNamespace(job_id="j1", status="completed", exit_code=0, stdout="")
     serv.runner.spawn = fake_spawn
-    for bad in _BAD_META:
-        asyncio.run(serv._continue_writer(dict(run_id="r", role="implement", exit_code=0, cwd=str(tmp_path), **bad), "Remaining gaps: x"))
+    for bad in _BAD_META: asyncio.run(serv._continue_writer(dict(run_id="r", role="implement", exit_code=0, cwd=str(tmp_path), **bad), "Remaining gaps: x"))
     assert called == []  # a refused record must never reach the spawn call site
-    good = dict(run_id="run-r2", role="implement", exit_code=0, cwd=str(tmp_path), status="completed",
-                chosen_leg={"model": "m", "harness": "h"})
+    good = dict(run_id="run-r2", role="implement", exit_code=0, cwd=str(tmp_path), status="completed", chosen_leg={"model": "m", "harness": "h"})
     asyncio.run(serv._continue_writer(good, "Remaining gaps: x"))
     assert [kw["model_or_combo"] for kw in called] == ["m"]  # positive control: a good record DOES spawn the continuation
     assert called[0]["prompt"] == render_fixer_brief([{"text": "x"}])  # with the fixer brief built from the gaps
     assert good["continuation_reason"] == "remaining_gaps" and good["continuation_run_id"]
     from tools.lane_gates import seats
     s1, s2 = tmp_path / "s1", tmp_path / "s2"; s1.mkdir(); s2.mkdir()
-    for s in (s1, s2):
-        (s / "stdout.log").write_text("VERDICT: PASS\n"); (s / "result.json").write_text(json.dumps({"status": "completed"}))
+    for s in (s1, s2): (s / "stdout.log").write_text("VERDICT: PASS\n"); (s / "result.json").write_text(json.dumps({"status": "completed"}))
     assert seats([str(s1), str(s2)]) == 0
     (s1 / "result.json").write_text(json.dumps({"status": "completed", "output_cut": True})); assert seats([str(s1), str(s2)]) == 3
-    for junk in ("{not json", "null", "[]", '"junk"'):
-        (s1 / "result.json").write_text(junk); assert seats([str(s1), str(s2)]) == 3, junk  # haiku-C1, qwen-C1: corrupt result.json never falls back to the raw reply
+    for junk in ("{not json", "null", "[]", '"junk"'): (s1 / "result.json").write_text(junk); assert seats([str(s1), str(s2)]) == 3, junk  # haiku-C1, qwen-C1: corrupt result.json never falls back to the raw reply
     (s1 / "result.json").write_text(json.dumps({"status": "completed"})); assert seats([str(s1), str(s2)]) == 0
 
 
 def test_output_on_disk_under_and_over_2mb(tmp_path):
-    from types import SimpleNamespace
-    from plangraph.spawner.service import SpawnService
+    from types import SimpleNamespace; from plangraph.spawner.service import SpawnService
     serv = SpawnService(state=tmp_path)
-    # haiku-C7: the under-cap case is a real few KB of harness-like output, not a few bytes
-    kb = "".join("step %04d: ok\n" % i for i in range(200))
-    rec1 = dict(run_id="run-u", status="completed", exit_code=0, stdout_tail=kb, stderr_tail="small err")
-    serv._save(rec1)
+    kb = "".join("step %04d: ok\n" % i for i in range(200))  # haiku-C7: the under-cap case is a real few KB of harness-like output, not a few bytes
+    rec1 = dict(run_id="run-u", status="completed", exit_code=0, stdout_tail=kb, stderr_tail="small err"); serv._save(rec1)
     run_dir = tmp_path / "runs" / "run-u"
     assert (run_dir / "stdout.log").read_text() == kb and rec1["stdout_tail"] == kb
     assert json.loads((run_dir / "result.json").read_text())["output_cut"] is False and rec1["stdout_path"] == str(run_dir / "stdout.log")
     big_text = "H" * 1048576 + "M" * 500000 + "T" * 1048576
-    rec2 = dict(run_id="run-o", status="completed", exit_code=0, stdout_tail=big_text)
-    serv._save(rec2)
+    rec2 = dict(run_id="run-o", status="completed", exit_code=0, stdout_tail=big_text); serv._save(rec2)
     run_dir2 = tmp_path / "runs" / "run-o"
     assert rec2["output_cut"] is True and json.loads((run_dir2 / "result.json").read_text())["output_cut"] is True
     saved = (run_dir2 / "stdout.log").read_text(); assert saved.startswith("H" * 1048576) and saved.endswith("T" * 1048576) and "[... output cut ...]" in saved
     assert len(rec2["stdout_tail"].encode()) <= 4096
     serv.runner.jobs["j9"] = SimpleNamespace(stdout="ATTEMPT-TWO", stderr="e2")
-    rec3 = dict(run_id="run-t", status="completed", exit_code=0, job_id="j9", stdout_tail="ATTEMPT-ONE", stderr_tail="e1")
-    serv._save(rec3)
+    rec3 = dict(run_id="run-t", status="completed", exit_code=0, job_id="j9", stdout_tail="ATTEMPT-ONE", stderr_tail="e1"); serv._save(rec3)
     log = tmp_path / "runs" / "run-t" / "stdout.log"; assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWO"  # haiku-C3, qwen-C5: every attempt's text, not just the live one
     serv.runner.jobs["jA"] = SimpleNamespace(stdout="ATTEMPT-THREE", stderr="e3"); rec3["job_id"] = "jA"
     serv._save(rec3); assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWOATTEMPT-THREE"  # a fall-through attempt appends
     serv.runner.jobs["jc"] = SimpleNamespace(stdout="A" * 1100000, stderr="")
-    rec4 = dict(run_id="run-c", status="completed", exit_code=0, job_id="jc")
-    serv._save(rec4); assert rec4["output_cut"] is False  # positive control: one attempt under 2 MB is kept whole
+    rec4 = dict(run_id="run-c", status="completed", exit_code=0, job_id="jc"); serv._save(rec4); assert rec4["output_cut"] is False  # positive control: one attempt under 2 MB is kept whole
     serv.runner.jobs["jd"] = SimpleNamespace(stdout="B" * 1100000, stderr=""); rec4["job_id"] = "jd"
     serv._save(rec4); assert rec4["output_cut"] is True  # I17: the cut measures the accumulated attempts
     cut_log = (tmp_path / "runs" / "run-c" / "stdout.log").read_text(); serv.runner.jobs.clear()
-    serv._save(serv.result("run-c"))  # job gone: the log is never rewritten from the 4 KB tail
-    assert (tmp_path / "runs" / "run-c" / "stdout.log").read_text() == cut_log
+    serv._save(serv.result("run-c")); assert (tmp_path / "runs" / "run-c" / "stdout.log").read_text() == cut_log  # job gone: the log is never rewritten from the 4 KB tail
     from plangraph.spawner.runner import spawn_service
-    dsp = spawn_service(state=tmp_path / "dsp")
-    dsp.runner.jobs["j9"] = SimpleNamespace(stdout="ATTEMPT-TWO", stderr="e2")
+    dsp = spawn_service(state=tmp_path / "dsp"); dsp.runner.jobs["j9"] = SimpleNamespace(stdout="ATTEMPT-TWO", stderr="e2")
     dsp._save(dict(run_id="run-d", status="completed", exit_code=0, job_id="j9", stdout_tail="ATTEMPT-ONE", stderr_tail="e1"))
     assert (tmp_path / "dsp" / "runs" / "run-d" / "stdout.log").read_text() == "ATTEMPT-ONEATTEMPT-TWO"  # qwen-C5: DispatchService._save must not clobber the tail from the live job
 
 
 def test_wait_json_returns_the_paths(tmp_path):
-    # haiku-C9/qwen-C8: the design's output-on-disk row says "`wait --json` returns the
-    # paths"; cli.py accepted --json on wait and never read it. A record stored without
-    # the path fields (every record written before this slice) returned none at all.
+    # haiku-C9/qwen-C8: the design's output-on-disk row says "`wait --json` returns the paths"; cli.py accepted --json on wait and never read it; a record stored before this slice returned no paths at all.
     import contextlib, io, time
-    from plangraph.spawner.service import SpawnService
-    from plangraph.spawner.cli import main
+    from plangraph.spawner.service import SpawnService; from plangraph.spawner.cli import main
     serv = SpawnService(state=tmp_path)
     serv._save(dict(run_id="run-w1", status="completed", exit_code=0, stdout="out", stderr="e", ended=time.time()))
     old = tmp_path / "runs" / "run-w2"; old.mkdir(parents=True)  # pre-slice record: no path fields
     (old / "record.json").write_text(json.dumps({"run_id": "run-w2", "status": "completed", "exit_code": 0, "ended": 1.0}))
     for run_id, run_dir in (("run-w1", tmp_path / "runs" / "run-w1"), ("run-w2", old)):
         cap = io.StringIO()
-        with contextlib.redirect_stdout(cap):
-            assert main(["--state", str(tmp_path), "wait", run_id, "--json"]) == 0
-        out = json.loads(cap.getvalue())
-        assert out["stdout_path"] == out["stdout_log"] == str(run_dir / "stdout.log")
-        assert out["stderr_path"] == out["stderr_log"] == str(run_dir / "stderr.log")
+        with contextlib.redirect_stdout(cap): assert main(["--state", str(tmp_path), "wait", run_id, "--json"]) == 0
+        out = json.loads(cap.getvalue()); assert out["stdout_path"] == out["stdout_log"] == str(run_dir / "stdout.log"); assert out["stderr_path"] == out["stderr_log"] == str(run_dir / "stderr.log")
 
 
 def test_cancel_with_class_racing_minus_9():
-    # haiku-C5: the monitor must actually run before the assertions read the job. The
-    # synchronous tree_killer never suspends, so task.cancel() landed on a monitor that
-    # had taken no step yet and every assertion held from cancel() alone. A killer that
-    # yields once hands the monitor its step; `ran` proves it took it.
+    # haiku-C5: the monitor must actually run before the assertions read the job — the synchronous tree_killer never suspends, so task.cancel() landed on a monitor that had taken no step yet and every assertion held from cancel() alone. A killer that yields once hands the monitor its step; `ran` proves it took it.
     from plangraph.spawner.runner import SpawnerRunner
     async def run():
         ran = []
@@ -803,20 +759,16 @@ def test_cancel_with_class_racing_minus_9():
         async def yielding_killer(pid): await asyncio.sleep(0)
         runner = SpawnerRunner(tree_killer=yielding_killer)
         async def case(prompt, liv, expected):
-            j = await runner.spawn(prompt, model_or_combo="omniroute/cx-gpt-6.1-sol", dry_run=True)
-            j.status = "running"; runner.jobs[j.job_id] = j; runner._processes[j.job_id] = proc
+            j = await runner.spawn(prompt, model_or_combo="omniroute/cx-gpt-6.1-sol", dry_run=True); j.status = "running"; runner.jobs[j.job_id] = j; runner._processes[j.job_id] = proc
             t = asyncio.create_task(runner._monitor_process(j.job_id, proc, prompt)); runner._tasks[j.job_id] = t
-            await runner.cancel(j.job_id, liveness=liv)
-            await asyncio.gather(t, return_exceptions=True)
-            assert ran, "the monitor never ran; the classification would hold from cancel() alone"
-            assert (j.liveness, j.exit_class, j.status) == expected
+            await runner.cancel(j.job_id, liveness=liv); await asyncio.gather(t, return_exceptions=True)
+            assert ran, "the monitor never ran; the classification would hold from cancel() alone"; assert (j.liveness, j.exit_class, j.status) == expected
         await case("t", "capped", ("capped", "timeout", "failed")); await case("t2", None, (None, "cancelled", "cancelled"))
     asyncio.run(run())
 
 
 def test_attempt_classification_reset_and_plain_failures(tmp_path, monkeypatch):
-    # haiku-C4: each attempt resets liveness/exit_class (the last attempt wins, never stale);
-    # qwen-C3: both execute() paths classify every attempt, plain failures included (I13).
+    # haiku-C4: each attempt resets liveness/exit_class (the last attempt wins, never stale); qwen-C3: both execute() paths classify every attempt, plain failures included (I13).
     from types import SimpleNamespace; from plangraph.planner.legs import Leg; from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner.runner import SpawnerRunner, spawn_service; from plangraph.spawner.service import SpawnService
     async def passthrough(plan, dry_run=False):  # plan_for_launch_async is awaited (runner.py)
@@ -826,24 +778,20 @@ def test_attempt_classification_reset_and_plain_failures(tmp_path, monkeypatch):
         return SimpleNamespace(job_id=jid, status=status, liveness=liveness, exit_class=exit_class, exit_code=0 if status in ("completed", "dry_run") else 1,
                                stdout="out", stderr="", served_model="m", served_family="f", served_witness_reason=None, events=[], cwd=None)
     async def drive(service, jobs, legs):
-        service._route = lambda *a, **k: SpawnPlan(tuple(legs), (), "route", (), ())
-        service._continue_writer = lambda *a, **k: asyncio.sleep(0)
+        service._route = lambda *a, **k: SpawnPlan(tuple(legs), (), "route", (), ()); service._continue_writer = lambda *a, **k: asyncio.sleep(0)
         todo = iter(jobs)
         async def fake_spawn(**kw):
             j = next(todo)
-            if j.liveness:
-                service.runner.provider_responses[j.job_id] = {"stop": True}  # force fall-through to the next leg
+            if j.liveness: service.runner.provider_responses[j.job_id] = {"stop": True}  # force fall-through to the next leg
             return j
-        service.runner.spawn = fake_spawn
-        return await service._spawn(card={"privacy": "private"}, prompt="t", role="implement", wait_seconds=None)
+        service.runner.spawn = fake_spawn; return await service._spawn(card={"privacy": "private"}, prompt="t", role="implement", wait_seconds=None)
     leg = lambda i: Leg(f"leg{i}", "paid", "opencode", f"model{i}", "fam", (), 200000, True, roles=("implement",))
     for name, make in (("SpawnService", lambda: SpawnService(runner=SpawnerRunner(default_cwd=str(tmp_path)), state=tmp_path / "s1")),
                        ("DispatchService", lambda: spawn_service(runner=SpawnerRunner(default_cwd=str(tmp_path)), state=tmp_path / "s2"))):
         service = make(); rec = asyncio.run(drive(service, [job("a1", "failed", "truncated", "worker_crash"), job("a2", "completed")], [leg(1), leg(2)]))
         assert (rec["liveness"], rec["exit_class"]) == (None, "ok"), name  # haiku-C4: a completed attempt resets, never stale 'truncated'
         assert rec["status"] == "completed" and len(rec["attempts"]) == 2, name
-        rec2 = asyncio.run(drive(service, [job("b1", "failed")], [leg(3)]))
-        assert (rec2["liveness"], rec2.get("exit_class")) == (None, "check_fail"), name  # qwen-C3: plain failures too, never null
+        rec2 = asyncio.run(drive(service, [job("b1", "failed")], [leg(3)])); assert (rec2["liveness"], rec2.get("exit_class")) == (None, "check_fail"), name  # qwen-C3: plain failures too, never null
         res = json.loads((Path(service.state) / "runs" / rec2["run_id"] / "result.json").read_text()); assert res["exit_class"] == "check_fail", name  # qwen-C3: result.json on the CLI/MCP path carries the class
 
 
@@ -852,8 +800,7 @@ def test_cancel_liveness_validated():
     runner = SpawnerRunner()
     async def run():
         job = await runner.spawn("t", model_or_combo="omniroute/cx-gpt-6.1-sol", dry_run=True); job.status = "running"; runner.jobs[job.job_id] = job
-        with pytest.raises(ParameterRefused):
-            await runner.cancel(job.job_id, liveness="bogus")  # haiku-C8, qwen-C4: unknown liveness refused
+        with pytest.raises(ParameterRefused): await runner.cancel(job.job_id, liveness="bogus")  # haiku-C8, qwen-C4: unknown liveness refused
         assert (job.liveness, job.exit_class) == (None, None)  # nothing classified outside EXIT_CLASSES (I13)
         await runner.cancel(job.job_id, liveness="capped"); assert (job.liveness, job.exit_class) == ("capped", "timeout")  # positive control
     asyncio.run(run())

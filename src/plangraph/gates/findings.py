@@ -191,11 +191,16 @@ FIRST_REVIEW_SEATS = 2
 
 
 def first_review(outputs, need=FIRST_REVIEW_SEATS):
+    """Round outcome over ``{seat: raw output}``: ``(outcome, reasons)``.
+
+    ``None`` (re-run) when fewer than *need* seats ran or any seat gave no
+    verdict (empty, failed, billing or fence output); else ``changes`` when any
+    seat asks for changes, else ``pass``.
+    """
     reasons, outcomes = [], []
     for seat, item in outputs.items():
         if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], dict):
-            r = item[1]; outcome, reason, _ = seat_outcome(item[0], status=r.get("status"), seat=seat,
-                exit_class=r.get("exit_class"), liveness=r.get("liveness"), output_cut=bool(r.get("output_cut", False)))
+            r = item[1]; outcome, reason, _ = seat_outcome(item[0], status=r.get("status"), seat=seat, exit_class=r.get("exit_class"), liveness=r.get("liveness"), output_cut=bool(r.get("output_cut", False)))
         elif isinstance(item, tuple):
             outcome, reason = None, "unreadable result.json"
         else:
@@ -219,8 +224,7 @@ def findings_from_files(paths, card=None, seat_classes=None):
             continue  # I16: unreadable or non-dict result.json refuses the seat
         if meta and (meta.get("liveness") or meta.get("exit_class") == "cancelled" or meta.get("output_cut") or meta.get("status") not in (None, "completed")):
             continue
-        text, _ = seat_text(fp.read_text("utf-8", "replace"))
-        out.extend(parse_findings(text, stem))
+        text, _ = seat_text(fp.read_text("utf-8", "replace")); out.extend(parse_findings(text, stem))
     return out
 
 
