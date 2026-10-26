@@ -244,8 +244,18 @@ def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
 # D-2921 F1: the deny block must hold against every other config layer.
 from plangraph.spawner import opencode_overlay  # noqa: E402
 from plangraph.spawner.runner import _DENIED_TOOLS  # noqa: E402
+from plangraph.spawner import runner as runner_mod  # noqa: E402
 
-_FULL_CFG = {'permission': {t: 'deny' for t in _DENIED_TOOLS}, 'mcp': {}, 'plugin': []}
+_FULL_CFG = {'permission': {t: 'deny' for t in ('*',) + _DENIED_TOOLS}, 'mcp': {}, 'plugin': []}
+
+
+@pytest.fixture(autouse=True)
+def _empty_managed_dir(tmp_path, monkeypatch):
+    """Hermetic: point opencode's managed config dir at an empty tmp dir."""
+    managed = tmp_path / 'managed-opencode'
+    managed.mkdir()
+    monkeypatch.setattr(runner_mod, '_opencode_managed_dir', lambda: managed)
+    return managed
 
 
 def _deny_env(home):
@@ -286,6 +296,7 @@ def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None, extra=None
 @pytest.mark.parametrize('freeze,bad_cfg,extra', [
     ((), json.dumps({**_FULL_CFG, 'mcp': {'evil': {}}}), {}),
     ((), json.dumps({**_FULL_CFG, 'plugin': ['evil']}), {}),
+    ((), json.dumps({**_FULL_CFG, 'permission': {t: 'deny' for t in _DENIED_TOOLS}}), {}),
     (('OPENCODE_DISABLE_PROJECT_CONFIG',), None, {}),
     (('OPENCODE_DISABLE_CLAUDE_CODE',), None, {}),
     (('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',), None, {}),
@@ -298,7 +309,7 @@ def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None, extra=None
      {'HOME': 'jobhome', 'XDG_CONFIG_HOME': 'config', 'OPENCODE_CONFIG_DIR': 'jobhome',
       'OPENCODE_CONFIG': 'pg-bad.json'}),
     (('OPENCODE_CONFIG',), None, {'OPENCODE_CONFIG': 'outside.json'}),
-], ids=['mcp', 'plugin', 'disable_project_config', 'disable_claude_code', 'disable_claude_code_skills',
+], ids=['mcp', 'plugin', 'no_wildcard_deny', 'disable_project_config', 'disable_claude_code', 'disable_claude_code_skills',
         'config_dir', 'config_file', 'home_outside', 'xdg_config_home_outside', 'stray_opencode_env',
         'config_content_not_empty', 'config_outside_dir'])
 def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path, monkeypatch, freeze, bad_cfg, extra):
@@ -319,6 +330,15 @@ def test_deny_block_all_conditions_present_denies_and_witnesses(tmp_path, monkey
     assert {'event': 'opencode_tools_denied'} in job.events
     assert job.request_side_model == REQUESTED
     assert job.witness_kind == 'request-side-opencode-store'
+
+
+@pytest.mark.parametrize('name', ['opencode.json', 'opencode.jsonc'])
+def test_managed_config_file_yields_not_denied(tmp_path, monkeypatch, _empty_managed_dir, name):
+    (_empty_managed_dir / name).write_text('{}')
+    job, _ = _freeze_leg(tmp_path, monkeypatch,
+                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+    assert {'event': 'opencode_tools_not_denied'} in job.events
+    assert job.witness_kind is None
 
 
 def test_locked_store_db_returns_none_without_blocking(tmp_path):

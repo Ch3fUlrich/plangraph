@@ -17,6 +17,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -194,6 +195,15 @@ _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'gre
                  'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
                  'webfetch', 'websearch')
 
+
+def _opencode_managed_dir() -> Path:
+    """opencode's system (managed) config dir; env cannot relocate it."""
+    if sys.platform == 'darwin':
+        return Path('/Library/Application Support/opencode')
+    if sys.platform == 'win32':
+        return Path(os.environ.get('ProgramData') or 'C:\\ProgramData', 'opencode')
+    return Path('/etc/opencode')
+
 #: The only OPENCODE_* env names a review child may carry. Anything else a
 #: caller sets (e.g. OPENCODE_CLI_CONFIG_CONTENT, OPENCODE_TEST_HOME) is
 #: dropped before launch so no caller-set override can re-enable a tool or add
@@ -207,8 +217,9 @@ _REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
 def _opencode_tools_denied(config_json, env) -> bool:
     """True only when the child's final config AND env prove every tool denied.
 
-    Checked, all required: 'permission' maps every _DENIED_TOOLS key to
-    'deny'; 'mcp' is {} and 'plugin' is [] in config_json; HOME,
+    Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
+    to 'deny'; the managed config dir (_opencode_managed_dir, which no env can
+    move) holds no opencode.json/opencode.jsonc; 'mcp' is {} and 'plugin' is [] in config_json; HOME,
     XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
     the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
     inside that dir whose content parses to {};
@@ -226,7 +237,10 @@ def _opencode_tools_denied(config_json, env) -> bool:
         return False
     permission = cfg.get('permission')
     if not isinstance(permission, dict) or not all(
-            permission.get(tool) == 'deny' for tool in _DENIED_TOOLS):
+            permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
+        return False
+    managed = _opencode_managed_dir()
+    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
         return False
     if cfg.get('mcp') != {} or cfg.get('plugin') != []:
         return False
@@ -457,7 +471,7 @@ class SpawnerRunner:
                     cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                     if not isinstance(cfg, dict):
                         raise ValueError('not an object')
-                    cfg['permission'] = {tool: 'deny' for tool in _DENIED_TOOLS}
+                    cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
                     cfg['mcp'] = {}   # D-2921 F1: drop every MCP server
                     cfg['plugin'] = []  # D-2921 F1: drop every plugin
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
