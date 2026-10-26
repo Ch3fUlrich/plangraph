@@ -220,8 +220,12 @@ def canon_path(path: str | Path) -> str | None:
     p = str(path).replace('\\', '/')
     while p.startswith('./'):
         p = p[2:]
+    # Any '..' segment is malformed before normalising, even one that would
+    # resolve away (a/b/../x.py), per the design's shared-lists row (seats G10).
+    if any(seg == '..' for seg in p.split('/')):
+        return None
     norm = posixpath.normpath(p)
-    if norm.startswith('/') or posixpath.isabs(norm) or any(seg == '..' for seg in norm.split('/')):
+    if norm.startswith('/') or posixpath.isabs(norm):
         return None
     return norm
 

@@ -22,8 +22,12 @@ def canon_path(path: str | Path) -> str | None:
     p = str(path).replace('\\', '/')
     while p.startswith('./'):
         p = p[2:]
+    # Any '..' segment is malformed before normalising, even one that would
+    # resolve away (a/b/../x.py), per the design's shared-lists row (seats G10).
+    if any(seg == '..' for seg in p.split('/')):
+        return None
     norm = posixpath.normpath(p)
-    if norm.startswith('/') or posixpath.isabs(norm) or any(s == '..' for s in norm.split('/')):
+    if norm.startswith('/') or posixpath.isabs(norm):
         return None
     return norm
 
@@ -66,7 +70,8 @@ FIXTURE_ROWS: tuple[tuple[str, str | None, str], ...] = (
     ("keystore.jks", "secret", "writer"), ("credentials.json", "secret", "writer"),
     ("api_keys.json", "secret", "writer"), ("service-account.json", "secret", "writer"),
     ("../x.py", "malformed", "writer"), ("/etc/x", "malformed", "writer"),
-    ("a/../../x.py", "malformed", "writer"), ("/var/log/x.txt", "malformed", "writer"),
+    ("a/../../x.py", "malformed", "writer"), ("a/b/../x.py", "malformed", "writer"),
+    ("/var/log/x.txt", "malformed", "writer"),
     ("../", "malformed", "writer"),
     ("docs/tokens.md", "secret", "writer"), ("docs/oauth.md", None, "direct_edit"),
     ("tools/token_count.py", "secret", "writer"), ("docs/keys.md", None, "direct_edit"),
