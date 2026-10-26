@@ -665,6 +665,27 @@ def test_s2_fail_concurrent_once(tmp_path, capsys):
     assert len(fired) == 1
 
 
+def test_s2_fail_after_503_write_raises(tmp_path, monkeypatch):
+    """F2: a dead client must not skip the fatal; fail() runs after the 503 write."""
+    w = World(tmp_path)
+    w.store.conn = ConnProxy(w.store.conn, fail=ConnectionLost("statement"))
+    doors = Doors(w, tmp_path)
+    real_json = api.KeeperHandler._json
+
+    def write_boom(self, status, payload):
+        if status == 503:
+            raise BrokenPipeError("client gone")    # the 503 write itself fails
+        return real_json(self, status, payload)
+
+    try:
+        monkeypatch.setattr(api.KeeperHandler, "_json", write_boom)
+        doors.http("reader", "GET", "/v1/whoami")
+    finally:
+        doors.close()
+        w.close()
+    assert doors.server.fatal_reason == "postgres connection lost"
+
+
 def test_s2_dead_lock_session_exits_75(tmp_path, monkeypatch):
     w = World(tmp_path)
     port = free_port()
