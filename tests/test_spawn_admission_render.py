@@ -1,6 +1,7 @@
 """Host admission probes the per-run rendered gateway config (SPAWN-WIN-PARITY S1 fix, D-2864)."""
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -28,10 +29,21 @@ def _listing(seen):  # stand-in for `opencode models` on an NT-like host without
 
 def test_mimo_leg_admitted_when_gateway_url_set(monkeypatch):
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:9/v1")
-    seen = []
     row = {"harness": "opencode", "model": "mimo/mimo-v2.6-pro"}
-    assert r.host_skip_reason(row, probe=_listing(seen)) is None
-    assert seen and seen[0]["mimo"]["settings"]["baseURL"] == "http://127.0.0.1:9/v1"
+    # A keyless `opencode models` gets 401 from the gateway and lists no mimo rows (D-2868).
+    assert r.host_skip_reason(row, probe=lambda child: {"omniroute/x"}) is None
+
+
+def test_async_admission_lists_rendered_config_and_never_leaks_key(monkeypatch, caplog):
+    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", "sk-sentinel-d2868")
+    seen = []
+    monkeypatch.setattr(r, "_served_models_real", lambda config, **kw: seen.append(config) or {"omniroute/x"})
+    row = {"harness": "opencode", "model": "mimo/mimo-v2.6-pro"}
+    with caplog.at_level("DEBUG"):
+        assert asyncio.run(r.host_skip_reason_async(row)) is None
+    assert seen and json.loads(seen[0])["providers"]["mimo"]["settings"]["baseURL"] == "http://127.0.0.1:9/v1"
+    assert "sk-sentinel-d2868" not in seen[0] + caplog.text
 
 
 def test_mimo_leg_without_base_url_refused_before_probe():
@@ -39,3 +51,26 @@ def test_mimo_leg_without_base_url_refused_before_probe():
     row = {"harness": "opencode", "model": "mimo/mimo-v2.6-pro"}
     assert r.host_skip_reason(row, probe=_listing(seen)) == REFUSAL_UNRESOLVED
     assert seen == []
+
+
+def test_runner_records_admitted_by_render(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.runner import SpawnerRunner, spawn_service
+    from plangraph.spawner.service import SpawnService
+    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setattr(r, "_served_models_real", lambda config, **kw: set())  # keyless listing: no mimo rows
+    leg = next(l for l in DEFAULT_LEGS if l.model == "mimo/mimo-v2.6-flash")
+    plan = SpawnPlan(legs=(leg,), skipped=(), p_source="test", review_seats=(), reasons=())
+    monkeypatch.setattr(SpawnService, "_route", lambda self, *a, **kw: plan)
+
+    async def factory(exe, *args, **kwargs):
+        proc = AsyncMock(returncode=0, pid=999)
+        proc.communicate = AsyncMock(return_value=(b"ok", b""))
+        return proc
+
+    service = spawn_service(SpawnerRunner(process_factory=factory), tmp_path)
+    record = asyncio.run(service.spawn(card={"estimate_tokens": 1000}, prompt="task", wait_seconds=None))
+    assert record["status"] == "completed"
+    assert "admitted_by_render" in [e["event"] for e in record.get("events", [])]
