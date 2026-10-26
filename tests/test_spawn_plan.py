@@ -94,3 +94,14 @@ def test_load_legs_bad_roles(tmp_path, roles):
     path.write_text(json.dumps({"legs": [raw]}))
     with pytest.raises(ValueError, match="roles"):
         load_legs(path)
+
+
+def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
+    # OPENCODE-ORCHESTRATOR-FALLBACK G1/G2: an orchestrator leg off Claude, mimo-pro first
+    assert plan_spawn(CARD, role="orchestrate").first_leg.id == "mimo-v2.6-pro"
+    with pytest.raises(ValueError, match="implement|review|orchestrate"):
+        plan_spawn(CARD, role="drive")
+    from plangraph.spawner.cli import main
+    assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
+                 "--role", "orchestrate"]) == 0
+    assert "mimo-v2.6-pro" in capsys.readouterr().out

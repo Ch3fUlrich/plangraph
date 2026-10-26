@@ -102,7 +102,7 @@ DEFAULT_LEGS = (
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
-        "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement",)),
+        "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement", "orchestrate")),
     _legacy["agy-sonnet-5.5"],
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
