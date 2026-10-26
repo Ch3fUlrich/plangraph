@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import signal
 import time
 
 import pytest
@@ -463,10 +464,14 @@ def test_run_exit_reaps_surviving_grandchild(tmp_path):
         await runner._tasks[job.job_id]
         assert job.exit_code == 0
         grandchild = int(pid_file.read_text())
-        deadline = time.time() + 5
-        while not _pid_gone(grandchild):
-            assert time.time() < deadline, f'grandchild {grandchild} survived the run'
-            time.sleep(0.05)
+        try:
+            deadline = time.time() + 5
+            while not _pid_gone(grandchild):
+                assert time.time() < deadline, f'grandchild {grandchild} survived the run'
+                time.sleep(0.05)
+        finally:
+            if not _pid_gone(grandchild):  # never leak the sleeper on failure
+                os.kill(grandchild, signal.SIGKILL)
 
     asyncio.run(run())
 
@@ -545,3 +550,27 @@ def test_win_job_assign_failure_falls_back_to_taskkill(monkeypatch):
     assert killed == [4242] and runner._win_jobs == {}
 
 
+
+
+def test_win_job_close_runs_when_terminate_raises(monkeypatch):
+    class TerminateFails(FakeWinJob):
+        def terminate(self, handle):
+            self.calls.append(('terminate', handle))
+            raise OSError('TerminateJobObject failed')
+    api = TerminateFails()
+    runner, job, killed = _run_nt(monkeypatch, api, FakeChild())
+    assert ('close', 'job-handle') in api.calls  # handle never leaks
+    assert {'event': 'reap_failed', 'error': 'OSError'} in job.events
+    assert killed == [4242] and runner._win_jobs == {}
+
+
+def test_win_job_api_constructor_failure_falls_back(monkeypatch):
+    from plangraph.spawner import runner as runner_mod
+
+    def no_kernel32():
+        raise OSError('kernel32 unavailable')
+    monkeypatch.setattr(runner_mod, 'WinJobApi', no_kernel32)
+    runner, job, killed = _run_nt(monkeypatch, None, FakeChild())
+    assert job.status == 'completed'
+    assert {'event': 'win_job_unavailable'} in job.events
+    assert killed == [4242] and runner._win_jobs == {}
