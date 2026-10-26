@@ -143,6 +143,8 @@ class RuleMixin:
                 self._append(principal, r["key"], "rule_set",
                              {"state": r["state"], "description": r["description"],
                               "depends_on": r["depends_on"]}, now)
+                # Decision state changes must not retain execution ownership either.
+                self._exec_clear(self.conn, r["key"], principal, now)
                 self.conn.execute(
                     "UPDATE items SET state=?, title=?, description=?, source=?, note=?,"
                     " lease_until=NULL, updated_at=? WHERE key=?",

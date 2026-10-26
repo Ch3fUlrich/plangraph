@@ -167,6 +167,8 @@ APPLY_OPS_FIELDS = frozenset({"ops", "batch_ref", "base_seq", "dry_run"})
 
 
 def _apply_ops(store, principal, body, need):
+    # Authorization precedes strict-body validation, as for other router writes.
+    store._require_role(principal, "router")
     extra = set(body) - APPLY_OPS_FIELDS
     if extra:
         raise Refused("validation", f"unexpected fields {sorted(extra)}")

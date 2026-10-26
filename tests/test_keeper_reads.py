@@ -59,7 +59,8 @@ def test_percent(w):
 def test_whoami(w):
     who = w.store.whoami(w.p("l1main"))
     assert who == {"name": "l1main", "role": "l1", "projects": ["demo"],
-                   "family": "teama"}
+                   "family": "teama",
+                   "features": ["apply_ops.dry_run", "apply_ops.strict_body"]}
 
 
 def test_snapshot_head_and_fields(w):
