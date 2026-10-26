@@ -96,7 +96,18 @@ class SpawnService:
         attempts = record.get('attempts') or []; cur_job = accs.get((record['run_id'], 'job'))
         for s in ('stdout', 'stderr'):
             done, cur, n_att = accs.get((record['run_id'], s), (None, '', 0))
-            if done is None: done = record.get(s) if record.get(s) is not None else record.get(f'{s}_tail', ''); n_att = len(attempts) if done else 0
+            if done is None:
+                # Cold _save (a fresh service over an old run): rebuild the accumulation. The attempt
+                # tails each hold their job's full text; the record's display tail is only the last 4 KB
+                # of all of it, so it never rebuilds a log that attempts can (qwen-D1, I17).
+                done = record.get(s); n_att = len(attempts) if done is not None else 0
+                if done is None:
+                    tails = [a.get(f'{s}_tail') or '' for a in attempts]
+                    done = ''.join(tails) if any(tails) else record.get(f'{s}_tail', '')
+                    try: on_disk = (run_dir / f'{s}.log').read_text(encoding='utf-8', errors='replace')
+                    except OSError: on_disk = ''
+                    if len(on_disk) > len(done): done = on_disk  # what the warm run wrote is authoritative
+                    n_att = len(attempts) if done else 0
             for a in attempts[n_att:]:
                 piece = a.get(f'{s}_tail') or ''
                 if not piece: continue

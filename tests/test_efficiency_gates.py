@@ -826,3 +826,45 @@ def test_run_dir_without_result_json_refuses_the_seat(tmp_path):
         (s / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
     assert seats([str(s1), str(s2)]) == 0
     assert len(F.findings_from_files([s1])) == 1
+
+
+# ------------------------------------------------------------ round 2a: a cold _save rebuilds the accumulation
+def test_cold_save_rebuilds_output_accumulation(tmp_path):
+    # qwen-D1 (I17): plangraph-spawn cancel (cli.py) and the watchdog's
+    # spawn_service(state=...).retry_completions() (stall_watchdog.py:245) both build a fresh
+    # service and re-save a record read back from disk. That cold _save must rebuild the
+    # accumulation from the log on disk (the full text) — never rewrite the log from the
+    # record's 4 KB display tail. The warm re-save is the positive control: the same record
+    # through a service that still holds _accs keeps the log whole either way.
+    import contextlib, io
+    from plangraph.spawner.service import SpawnService
+    from plangraph.spawner.cli import main
+    from plangraph.spawner.runner import spawn_service
+    big = "step ok\n" * 3000  # > 4 KB: the display tail alone cannot hold it
+    serv = SpawnService(state=tmp_path)
+    serv._save(dict(run_id="run-c1", status="running", exit_code=None, stdout_tail=big,
+                    stderr_tail="e", started=1.0, ended=None, attempts=[]))
+    log = tmp_path / "runs" / "run-c1" / "stdout.log"
+    assert log.read_text() == big  # control: the warm save wrote the whole text
+    serv._save(serv.result("run-c1"))
+    assert log.read_text() == big  # control: a warm re-save keeps it (the _accs path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert main(["--state", str(tmp_path), "cancel", "run-c1"]) == 1  # a cancelled run exits 1
+    assert log.read_text() == big  # the cancel path's fresh service rebuilt from the log, not the tail
+    serv._save(dict(run_id="run-c2", status="completed", exit_code=0, stdout_tail=big,
+                    stderr_tail="e", started=1.0, ended=2.0, attempts=[]))
+    log2 = tmp_path / "runs" / "run-c2" / "stdout.log"
+    assert log2.read_text() == big
+    spawn_service(state=tmp_path).retry_completions()  # the watchdog's cold re-save (run-c2 is pending)
+    assert log2.read_text() == big
+    assert (tmp_path / "runs" / "run-c1" / "stdout.log").read_text() == big  # and its re-save of run-c1
+    # pre-slice records carry no logs: the attempt tails (each its job's full text) rebuild it
+    run3 = tmp_path / "runs" / "run-c3"
+    run3.mkdir(parents=True)
+    (run3 / "record.json").write_text(json.dumps({"run_id": "run-c3", "status": "completed", "exit_code": 0,
+        "ended": 1.0, "stdout_tail": "bbb", "stderr_tail": "",
+        "attempts": [{"leg": {"id": "l1"}, "status": "completed", "stdout_tail": "ONE" + "a" * 5000, "stderr_tail": "e"},
+                     {"leg": {"id": "l2"}, "status": "completed", "stdout_tail": "TWO" + "b" * 5000, "stderr_tail": "e"}]}))
+    cold = SpawnService(state=tmp_path)
+    cold._save(cold.result("run-c3"))
+    assert (run3 / "stdout.log").read_text() == "ONE" + "a" * 5000 + "TWO" + "b" * 5000  # every attempt, not the tail
