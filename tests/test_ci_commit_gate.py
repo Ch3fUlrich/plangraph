@@ -1083,19 +1083,30 @@ def test_hand_edit_fifty_changed_lines_passes(repo):
     assert check(base, sha, cwd=repo) == []
 
 
-def test_hand_edit_fifty_one_changed_lines_refused(repo):
+def test_hand_edit_401_changed_lines_refused_with_exact_reasons(repo):
+    # haiku-G12: the cap is 400 (D-2853), so the refused shape is 401 lines and
+    # the name says so; every reason is asserted exactly, not with any().
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
     sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 401})
-    violations = check(base, sha, cwd=repo)
-    assert any('hand-edit exceeds 400 changed lines' in v for v in violations)
-    assert any('hand-edit total over ceiling for (none)' in v for v in violations)
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: hand-edit exceeds 400 changed lines',
+        f'{sha}: hand-edit without Plan-Item',
+        f'{sha}: hand-edit over 50 lines for (none) without Route-Decision',
+        f'{sha}: hand-edit total over ceiling for (none)',
+    ]
 
 
 def test_hand_edit_deleted_lines_count(repo):
+    # haiku-G12: deleted lines count toward the ceiling; the full violation
+    # list is asserted exactly (G12: any() hid a grown list).
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 500})
     sha = _commit(repo, 'docs: rewrite\n\nHand-Edit: rewrite\n', {'docs/y.md': 'new\n'})
-    violations = check(base, sha, cwd=repo)
-    assert any('hand-edit exceeds 400 changed lines' in v for v in violations)
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: hand-edit exceeds 400 changed lines',
+        f'{sha}: hand-edit without Plan-Item',
+        f'{sha}: hand-edit over 50 lines for (none) without Route-Decision',
+        f'{sha}: hand-edit total over ceiling for (none)',
+    ]
 
 
 def test_root_level_roles_file_hand_edit_refused(repo):
