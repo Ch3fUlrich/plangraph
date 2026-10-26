@@ -16,7 +16,9 @@ import logging
 import math
 import os
 import re
+import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -112,6 +114,8 @@ class JobInfo:
     served_model: str | None = 'unwitnessed'
     served_family: str | None = 'unwitnessed'
     served_witness_reason: str = 'harness supplied no authenticated served-model telemetry'
+    request_side_model: str | None = None
+    witness_kind: str | None = None
     dry_run: bool = False
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
@@ -160,6 +164,117 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
     return served_model, served_family
 
 
+def _opencode_served_model(db_path, title) -> str | None:
+    """Served model witnessed in opencode's session store for one titled session (D-2898).
+
+    Only a unanimous assistant model id counts; anything else stays unwitnessed.
+    """
+    try:
+        from urllib.parse import quote
+        # 2s timeout: a locked/busy store must never block the monitor
+        # (D-2921 F2); it just stays unwitnessed.
+        conn = sqlite3.connect('file:' + quote(str(db_path)) + '?mode=ro', uri=True, timeout=2.0)
+        try:
+            rows = conn.execute('SELECT id FROM session_v2 WHERE title = ?', (title,)).fetchall()
+            models = set()
+            for (data,) in conn.execute(
+                    "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant'",
+                    (rows[0][0],) if len(rows) == 1 else (None,)):
+                model = json.loads(data)['model']
+                models.add(model['providerID'] + '/' + model['id'])
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+        return None
+    return next(iter(models)) if len(models) == 1 else None
+
+
+#: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
+#: the engine's internal Permission.Ruleset actions): a review child must have
+#: all of them denied (D-2905 (1)).
+_DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'grep',
+                 'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
+                 'webfetch', 'websearch')
+
+
+def _opencode_managed_dir(env: Mapping) -> Path:
+    """opencode's system (managed) config dir as the child will resolve it.
+
+    Fixed on Linux/macOS; on win32 opencode reads ProgramData from its own
+    env, so the CHILD env is read here (the same value the child sees).
+    """
+    if sys.platform == 'darwin':
+        return Path('/Library/Application Support/opencode')
+    if sys.platform == 'win32':
+        return Path(env.get('ProgramData') or 'C:\\ProgramData', 'opencode')
+    return Path('/etc/opencode')
+
+#: The only OPENCODE_* env names a review child may carry. Anything else a
+#: caller sets (e.g. OPENCODE_CLI_CONFIG_CONTENT, OPENCODE_TEST_HOME) is
+#: dropped before launch so no caller-set override can re-enable a tool or add
+#: a config layer (REVIEW-WITNESS-OPENCODE R1).
+_REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
+                              'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
+                              'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
+                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
+
+
+def _opencode_tools_denied(config_json, env) -> bool:
+    """True only when the child's final config AND env prove every tool denied.
+
+    Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
+    to 'deny'; the managed config dir (_opencode_managed_dir, resolved from
+    the child env) holds no opencode.json/opencode.jsonc; 'mcp' is {} and
+    'plugin' is [] in config_json; HOME,
+    XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
+    the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
+    inside that dir whose content parses to {};
+    OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE and
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS are each '1'; and no OPENCODE_* env
+    name outside _REVIEW_OPENCODE_ENV_ALLOW is present. This proves only the
+    env/config shape: the runtime behaviour of opencode is not proven by this
+    function (an L1 runtime probe covers that).
+    """
+    try:
+        cfg = json.loads(config_json or '{}')
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    permission = cfg.get('permission')
+    if not isinstance(permission, dict) or not all(
+            permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
+        return False
+    if cfg.get('mcp') != {} or cfg.get('plugin') != []:
+        return False
+    if not isinstance(env, Mapping):
+        return False
+    managed = _opencode_managed_dir(env)
+    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
+        return False
+    for name in env:
+        if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:
+            return False
+    if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') != '1'):
+        return False
+    try:
+        job_dir = Path(env.get('XDG_DATA_HOME') or '')
+        if not job_dir.name:
+            return False
+        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
+            path = Path(env.get(key) or '')
+            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
+                return False
+        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
+        return (bool(cfg_path.name) and cfg_path.is_file()
+                and cfg_path.resolve().is_relative_to(job_dir.resolve())
+                and json.loads(cfg_path.read_text()) == {})
+    except (OSError, ValueError):
+        return False
+
+
 class NonceCapacity(RuntimeError):
     """All nonce slots belong to live runs."""
 
@@ -178,6 +293,7 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
+        self._ocdata_dirs = {}
         self._reaped_jobs = set()
         self._git_guards = {}
         self._stdin_payloads = {}
@@ -306,7 +422,17 @@ class SpawnerRunner:
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
         render_reason = None
+        tools_event = None
         if cmd[0] == 'opencode':
+            # Name the session so the monitor can witness the served model
+            # (D-2898). --title goes right after the --model pair so it always
+            # precedes any positional/prompt argument ('opencode run' takes
+            # [<message...>]); the prompt itself rides on stdin.
+            try:
+                title_at = cmd.index('--model') + 2
+            except ValueError:
+                title_at = len(cmd)  # no positional exists on that path
+            cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
@@ -318,6 +444,48 @@ class SpawnerRunner:
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+            if role == 'review':
+                # D-2905 (1): a spawner-owned per-job store dir, created before
+                # launch and read only after child exit -- the shared store is
+                # child-writable and proves nothing about the served model.
+                import tempfile
+                oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')  # mode 0700
+                self._ocdata_dirs[job_id] = oc_dir
+                child_env['XDG_DATA_HOME'] = oc_dir
+                # D-2921 F1: close every other config layer -- no repo, user,
+                # Claude Code, MCP or plugin tool may re-enable anything.
+                child_env['OPENCODE_DISABLE_PROJECT_CONFIG'] = '1'
+                child_env['OPENCODE_DISABLE_CLAUDE_CODE'] = '1'
+                child_env['OPENCODE_CONFIG_DIR'] = oc_dir
+                empty_cfg = Path(oc_dir) / 'pg-empty.json'
+                empty_cfg.write_text('{}')
+                child_env['OPENCODE_CONFIG'] = str(empty_cfg)
+                # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
+                # config layer at all -- HOME and XDG_CONFIG_HOME live in the
+                # per-job dir and every caller-set OPENCODE_* override outside
+                # _REVIEW_OPENCODE_ENV_ALLOW is dropped.
+                child_env['HOME'] = oc_dir
+                xdg_config = os.path.join(oc_dir, 'config')
+                os.mkdir(xdg_config, 0o700)
+                child_env['XDG_CONFIG_HOME'] = xdg_config
+                child_env['OPENCODE_DISABLE_CLAUDE_CODE_SKILLS'] = '1'
+                for name in [n for n in child_env
+                             if str(n).startswith('OPENCODE_') and n not in _REVIEW_OPENCODE_ENV_ALLOW]:
+                    del child_env[name]
+                # D-2905 (1): deny every tool for the review seat, then record
+                # the spawner's own check of the FINAL env value.
+                try:
+                    cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                    if not isinstance(cfg, dict):
+                        raise ValueError('not an object')
+                    cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
+                    cfg['mcp'] = {}   # D-2921 F1: drop every MCP server
+                    cfg['plugin'] = []  # D-2921 F1: drop every plugin
+                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                except (ValueError, TypeError):
+                    pass  # unparseable config cannot be proven denied below
+                tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
+                    child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -362,6 +530,8 @@ class SpawnerRunner:
                 )
                 if render_reason:
                     job.events.append({'event': 'render_refused', 'reason': render_reason})
+                if tools_event:
+                    job.events.append(tools_event)
                 self.jobs[job_id] = job
                 return job
 
@@ -377,6 +547,8 @@ class SpawnerRunner:
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
+            if tools_event:
+                job.events.append(tools_event)
 
             if render_reason:
                 job.status = 'failed'
@@ -476,6 +648,20 @@ class SpawnerRunner:
                 self._child_envs.pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
+                oc_dir = self._ocdata_dirs.pop(job_id, None)
+                if oc_dir is not None:
+                    import shutil
+                    shutil.rmtree(oc_dir, ignore_errors=True)
+            else:
+                # D-2921 F3: a monitor cancelled before its first step never
+                # runs its own finally; sweep its store dir once it settles
+                # (no-op when the monitor already cleaned up).
+                def _sweep(_task, _self=self, _jid=job_id):
+                    _oc = _self._ocdata_dirs.pop(_jid, None)
+                    if _oc is not None:
+                        import shutil
+                        shutil.rmtree(_oc, ignore_errors=True)
+                self._tasks[job_id].add_done_callback(_sweep)
 
     async def _reap_process(self, job_id: str, proc: Any) -> None:
         reaped = getattr(self, '_reaped_jobs', None)
@@ -583,6 +769,28 @@ class SpawnerRunner:
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
 
+            # D-2905 (2): the session store is request-side metadata written by
+            # a child that could forge it -- record kind
+            # 'request-side-opencode-store', never 'served'. Only a review
+            # leg's spawner-owned store is read (D-2905 (1)), only when the
+            # spawner found every tool denied, and only on exit 0.
+            if (job.command and job.command[0] == 'opencode' and job.role == 'review'
+                    and exit_code == 0):
+                oc_dir = self._ocdata_dirs.get(job_id)
+                denied = _opencode_tools_denied(
+                    env.get('OPENCODE_CONFIG_CONTENT') or '', env)
+                # R2: the store read may block up to its 2s sqlite timeout on a
+                # locked db; a thread keeps the monitor loop responsive.
+                m = (await asyncio.to_thread(_opencode_served_model,
+                                             Path(oc_dir) / 'opencode' / 'opencode.db',
+                                             f'plangraph-{job_id}')
+                     if oc_dir and denied else None)
+                if m is not None and m == requested_model:
+                    job.request_side_model = m
+                    job.witness_kind = 'request-side-opencode-store'
+                elif oc_dir and denied:
+                    job.events.append({'event': 'opencode_witness_unavailable'})
+
             # Free text is child-controlled, including plausible provider headers.
             # Absence of an authenticated adapter witness must remain explicit.
             job.served_model = job.served_model or 'unwitnessed'
@@ -612,6 +820,10 @@ class SpawnerRunner:
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+            oc_dir = self._ocdata_dirs.pop(job_id, None)
+            if oc_dir is not None:
+                import shutil
+                shutil.rmtree(oc_dir, ignore_errors=True)
             getattr(self, '_reaped_jobs', set()).discard(job_id)
 
     @staticmethod
@@ -927,7 +1139,8 @@ def spawn_service(*args, **kwargs):
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
-                served_family=None, writer_family=None, status='running', started=time.time(),
+                served_family=None, request_side_model=None, witness_kind=None,
+                writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
@@ -979,12 +1192,14 @@ def spawn_service(*args, **kwargs):
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                             served_model=job.served_model, served_family=job.served_family,
                             served_witness_reason=job.served_witness_reason,
+                            request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
+                            request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,

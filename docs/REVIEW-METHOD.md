@@ -82,6 +82,7 @@ Only per-fixer refusal and fixer threshold are enforced.
 (published in plan, not enforced): they do not configure routing seats, enforce family diversity,
 limit rounds, or trigger replanning. No seat-count admission API is provided.
 The sample `max_rounds` override above changes displayed policy only.
+Interim (D-2905): opencode free seat legs with every tool denied count by their request-side session-store model (witness_kind request-side-opencode-store); a response-side source (gateway logs) replaces this when it exists.
 
 Batch ONE-review is an advisory plan-time orchestration convention, not an admission
 guarantee: admission has no batch count. The phase planner currently cannot
