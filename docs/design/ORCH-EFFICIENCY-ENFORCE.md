@@ -50,10 +50,14 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 | 16 | E1b `lane_gates.py hand-edits`: Route-Decision ids checked against keeper route entries (crit 2, part 2; needs E3c) | 200 |
 | 17 | E3c route wiring: route record + keeper `route` entry, plan fields, `--ctx-*`/`--orch-model` flags, spawn refusal (crit 1, part 2) | 250 |
 | 13 | E7b per-owner completion inbox, one run identity key, claim epoch on events, `watch --owner` (crit 7, part 2) | 300 |
+| 18 | E12 risk-scaled review policy: one `review_policy(risk)` table read by `lane_gates seats`, admission and E3b (Q-INV-6, D-2907) | 250 |
+| 19 | E14 governor: daily Claude budget per role + the spawner `claude-sonnet` implement leg (Q-INV-5, Q-INV-7, D-2910 b) | 300 |
+| 20 | E13 code merge/close for standard and none lanes on CI green + countable seats (Q-INV-2) | 300 |
+| 21 | E15 in-flight cap: at most 2 claimed items per L1 owner (Q-INV-9) | 150 |
 
 Build order with slice 4 (one task loop, routing D-2837, D-2840):
 
-4a (written, `a43a7ff8`) -> E1a -> E2 (4b), with E5 in parallel (D-2844: no dependency, no cost) -> 4a3 -> E7a -> E7b -> E9 -> E11 -> E10a -> E3b -> E3a -> E3c -> E1b -> 4a2 -> E4a -> E4b -> 4c (scope and OOM) -> E6 -> E8 -> E10 -> phase review. The operator may reorder the rest (Q-INV-1, routing report 2026-10-25-throughput-cost-investigation §6); until then this order holds (D-2844).
+4a (written, `a43a7ff8`) -> E1a -> E2 (4b), with E5 + E12 in parallel (D-2844: no dependency, no cost) -> 4a3 -> E7a -> E7b -> E9 -> E11 -> E10a -> E14 -> E3b -> E3a -> E3c -> E1b -> E13 -> 4a2 -> E4a -> E4b + E15 -> 4c (scope and OOM) -> E6 -> E8 -> E10 -> phase review. Q-INV-1 (operator, D-2907): the full ORCH-EFFICIENCY-ENFORCE item goes first, before other build work this week; the order inside it stays as above.
 
 - 4a3 moves ahead of E7a (seat r2 G5): E7's owner fallback is the 4a3 principal name. E7a carries its own user-manager probe (`systemctl --user is-system-running`, injected), so it does not wait for 4c; 4c later reuses that probe for the scope launch.
 - E7 and E9 follow E2 because they share the run-liveness code (the supervisor that polls the run also heartbeats the claim and writes the completion), D-2840.
@@ -380,6 +384,48 @@ E10 tests:
 | `est_lines: true` | bool as int | writer |
 | door path only in `write_set` | hidden scope | writer |
 
+## Operator answers D-2907 (folded 2026-10-26)
+
+| question | answer | where it lands |
+|---|---|---|
+| Q-INV-1 | the whole ENFORCE item first | build order above |
+| Q-INV-2 | code merges and closes standard and none lanes on CI green + countable seats | E13 |
+| Q-INV-5 | a code governor with a daily Claude budget per role | E14 |
+| Q-INV-6 | risk-scaled review | E12 |
+| Q-INV-7 | a Claude Sonnet headless writer is allowed from fix round 2 on HIGH or > 200-line lanes, about 6 runs/day; seats stay non-Claude | E14 leg + budget; until E14 lands, one direct `claude -p` run per approved round (D-2910 a) |
+| Q-INV-8 | at most 3 always-on Opus sessions on coding.vm | Capacity |
+| Q-INV-9 | 2 items in flight per L1 | E15 |
+| route cost | subscription and free tiers: marginal model cost ~0 | E3a below |
+
+E3a amendment (D-2907): every leg and orchestrator model on a subscription or free tier gets price 0 in `route_model.prices` (0 is a price, not a missing one, so the `prices missing` guard still catches an unlisted model). The cost terms then vanish and `decide` compares `L*time_dir` with `L*time_del`, i.e. by time, under the quota-headroom guard, which stays a hard guard. A paid leg re-enters the money terms by its listed price, with no code change. The route record keeps every term (zeros included), so E10 can show the effect.
+
+### E12 risk-scaled review (slice 18)
+
+| piece | where | behaviour |
+|---|---|---|
+| policy table | pure `gates.review_policy.required(risk, kind) -> Policy` | `kind=code`, `risk=high`: 2 counted seat families, at least one of them a test-running seat (its result says `tests_run: true`, i.e. its reply quotes a pytest summary line that the parser finds), plus a Haiku seat, plus a judge GO per sha. `kind=code`, `risk=standard` or none: CI green + 1 counted seat; a seat whose findings are all LOW passes by code (no fix round, no re-seat). `kind=design`: 1 strong-model review. Unknown risk -> the high row (fail closed) |
+| consumers | `tools/lane_gates.py seats --risk R --kind K`, `gates.admission` (fix-round trigger), E3b (`seats_needed`), E13 | all read the one table; a test pins that no consumer hardcodes a seat count |
+
+E12 tests: one row per (risk, kind); unknown risk -> high; a LOW-only standard seat passes with no fix card; a high lane with 2 families and no test-running seat -> not satisfied; a parity test that greps the consumers for literal seat counts.
+
+### E13 code merge and close for standard and none lanes (slice 20)
+
+`tools/lane_gates.py merge-ready <pr>` returns ready when: risk is standard or none (a HIGH lane is never merged by code); CI on the head sha is green; E12's policy holds on the counted seats for that sha; and no FIX verdict is open. When ready, `lane_gates.py merge <pr>` merges through the forge API (merge commit, never force) and posts the keeper close with the evidence (sha, CI run, seat runs). Every refusal names its reason. A HIGH lane prints `needs judge GO` and does nothing. Tests: each refusal alone; a standard lane with green CI and one counted LOW-only seat -> merged and closed (forge and keeper fakes); a HIGH lane -> refused.
+
+### E14 governor and the claude-sonnet leg (slice 19)
+
+| piece | where | behaviour |
+|---|---|---|
+| leg | spawner catalog seed: `claude-sonnet` (harness `claude`, model `sonnet`, tier subscription, `claude_family: true`, roles `[implement]` only) | the runner starts `claude -p --model sonnet --session-id <uuid>` in its own session (setsid), with the prompt on stdin and a tool allow-list (Read, Grep, Glob, Edit, Write, the test command, git add/commit/diff/status/log), denying network, gh, push and pattern kills; run id <-> session id in the record |
+| admission | `SpawnService.spawn`, before launch | the leg is chosen only when the card is a fix card with round >= 2 and (risk high or `est_lines` > 200) (Q-INV-7); never for role review (seats stay non-Claude) |
+| budget | `spawn_limits.governor.daily_claude_runs` per role (default `{implement: 6}`), counted from the run records of the current UTC day | over budget -> `SpawnRefused("governor: claude budget <n>/<cap> for <role>")`; the count and the cap go into the record and the digest |
+
+After E14 merges, D-2749 holds again: no direct Claude runs. Tests: the admission rule both ways; the 7th run of the day refused; a review role never routes to the leg; the argv and the denied tools are pinned.
+
+### E15 in-flight cap (slice 21)
+
+The keeper refuses a `claim` when the claiming L1 owner already holds 2 items in `claimed` or `in_review` (Q-INV-9; config `limits.l1_in_flight`, default 2). The refusal is audited, names both held keys, and is HIGH (keeper engine, judge). Tests: the 3rd claim refused; a release frees the slot; a different owner is unaffected.
+
 ## Follow-on work for what the slices above do not fix (D-2844, routing report §6; operator asked to work these, 2026-10-25)
 
 ### E11 wake budget (wake policy, slice 12)
@@ -419,6 +465,7 @@ The L1 asks routing for the GO D-ids at steps 3 and 4. Until step 4, E5/E6/E9 ar
 |---|---|---|
 | MCP off for writer/seat runs (D-2846) | PG-EFFICIENCY-GATES slice `#9` 4a-mcp: `overlay_env(base_env, mcp_off=())` adds `{"mcp": {name: {"enabled": false}}}` for every MCP server name in the effective config (`~/.config/opencode/opencode.json` and `config.json` `mcp` keys, the AutoOS root overlay `mcp.servers`, plus the fixed five: context7, graphify, omnigraph, playwright, serena); the runner passes it for writer and seat roles (`spawn_limits.mcp_off`, default true). Measured 2026-10-25 on coding.vm: each `opencode run` tree carries ~680 MB RSS of these five servers (serena 118 MB, graphify 85, context7 155, omnigraph 139, playwright 182, incl. npm/uv wrappers), so 4 runs free about 2.7 GB; host-wide, 183 MCP processes held 9.4 GB | build-L1-efficiency, right after the 4a fix round |
 | fallback legs (D-2822: a failed first leg ends the run) | PG-EFFICIENCY-GATES 4a2 fall-through | in the order above |
+| Opus sessions on coding.vm (Q-INV-8) | at most 3 always-on Opus sessions; build-L1-efficiency stops once ENFORCE is done (D-2908 (4)) | router |
 | restore the workstation as a run host | host operation: needs the operator (host changes are outside the router delegation) | operator, on return |
 
 ## Open facts
