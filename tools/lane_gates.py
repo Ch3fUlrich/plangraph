@@ -13,7 +13,8 @@
 (§0.2c): every seat must return text and at least two seats must run.
 
 Exit 0 pass (warnings printed), 1 a gate failed (seats: changes requested),
-2 git or usage error, 3 seats gave no round verdict (re-run the empty seats).
+2 git or usage error or a seat without result.json, 3 seats gave no round verdict
+(re-run the empty seats).
 """
 from __future__ import annotations
 

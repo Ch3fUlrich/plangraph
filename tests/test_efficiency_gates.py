@@ -1309,7 +1309,8 @@ def test_f5_plain_wait_strips_the_paths_from_a_current_record(tmp_path):
     assert out["stdout_path"] == out["stdout_log"] == str(tmp_path / "runs" / "run-w5" / "stdout.log")
 
 
-def test_f5_route_and_spawn_json_is_a_documented_no_op(tmp_path, capsys):
+def test_f5_route_and_spawn_json_is_a_documented_no_op(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv('COLUMNS', '200')  # argparse must not wrap the help phrase
     # haiku-F5: route/spawn print JSON with or without --json. The flag stays accepted
     # (fleet spawn wrappers pass it) and --help says it is a no-op.
     from plangraph.spawner.cli import main
