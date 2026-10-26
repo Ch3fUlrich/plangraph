@@ -50,6 +50,12 @@ _keeper_unconfigured_last_warned = None
 from .env_redact import unavailable_reason
 
 
+ROLE_INSTRUCTIONS = {
+    'implement': 'You are a writer for one plan item. Commit on your own lane branch in this worktree as the brief says. Never push to main, merge, or touch other branches. Never spawn agents. Give a final report then stop.\n',
+    'orchestrate': 'You are an orchestrator working an L1 queue. You may and should spawn workers and reviewers only via the plangraph-spawner MCP tools and read their results. Never merge or push to main. Never commit code yourself. Give a final report then stop.\n',
+}
+
+
 def _orchestrate_mcp_config(cfg, env) -> dict:
     """Install only the orchestrator servers; credentials stay in inherited env."""
     cfg = dict(cfg)
@@ -310,6 +316,7 @@ class SpawnerRunner:
         self._adapter_tokens = {}
         self._child_envs = {}
         self._ocdata_dirs = {}
+        self._occfg_dirs = {}
         self._reaped_jobs = set()
         self._git_guards = {}
         self._stdin_payloads = {}
@@ -523,6 +530,45 @@ class SpawnerRunner:
                     pass  # unparseable config cannot be proven denied below
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+            if role in ROLE_INSTRUCTIONS:
+                import tempfile
+                from plangraph.routing_support.opencode_overlay import _strip_jsonc
+                cfg_dir = Path(tempfile.mkdtemp(prefix='pg-occfg-'))  # mode 0700
+                self._occfg_dirs[job_id] = str(cfg_dir)
+                try:
+                    role_file = cfg_dir / 'role-instructions.md'
+                    role_file.write_text(ROLE_INSTRUCTIONS[role])
+                    global_root = Path(os.environ.get('XDG_CONFIG_HOME') or
+                                       Path.home() / '.config') / 'opencode'
+                    global_cfg = {}
+                    try:
+                        # OpenCode loads json then jsonc, with the latter taking precedence.
+                        found = False
+                        for name in ('opencode.json', 'opencode.jsonc'):
+                            source = global_root / name
+                            if source.exists():
+                                parsed = json.loads(_strip_jsonc(source.read_text()))
+                                if not isinstance(parsed, dict):
+                                    raise ValueError('not an object')
+                                global_cfg.update(parsed)
+                                found = True
+                        if not found:
+                            raise FileNotFoundError
+                    except (OSError, ValueError, TypeError):
+                        global_cfg = {}
+                        orchestrate_events.append({'event': 'global_config_unreadable'})
+                    global_cfg['instructions'] = [str(role_file)]
+                    (cfg_dir / 'opencode').mkdir(mode=0o700)
+                    (cfg_dir / 'opencode' / 'opencode.json').write_text(json.dumps(global_cfg))
+                    cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                    cfg['instructions'] = [str(role_file)]
+                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                    child_env['XDG_CONFIG_HOME'] = str(cfg_dir)
+                    orchestrate_events.append({'event': 'role_instructions', 'role': role})
+                except BaseException:
+                    import shutil
+                    shutil.rmtree(self._occfg_dirs.pop(job_id), ignore_errors=True)
+                    raise
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -687,6 +733,10 @@ class SpawnerRunner:
                 self._child_envs.pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
+                cfg_dir = self._occfg_dirs.pop(job_id, None)
+                if cfg_dir is not None:
+                    import shutil
+                    shutil.rmtree(cfg_dir, ignore_errors=True)
                 oc_dir = self._ocdata_dirs.pop(job_id, None)
                 if oc_dir is not None:
                     import shutil
@@ -696,6 +746,10 @@ class SpawnerRunner:
                 # runs its own finally; sweep its store dir once it settles
                 # (no-op when the monitor already cleaned up).
                 def _sweep(_task, _self=self, _jid=job_id):
+                    _cfg = _self._occfg_dirs.pop(_jid, None)
+                    if _cfg is not None:
+                        import shutil
+                        shutil.rmtree(_cfg, ignore_errors=True)
                     _oc = _self._ocdata_dirs.pop(_jid, None)
                     if _oc is not None:
                         import shutil
@@ -859,6 +913,10 @@ class SpawnerRunner:
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+            cfg_dir = self._occfg_dirs.pop(job_id, None)
+            if cfg_dir is not None:
+                import shutil
+                shutil.rmtree(cfg_dir, ignore_errors=True)
             oc_dir = self._ocdata_dirs.pop(job_id, None)
             if oc_dir is not None:
                 import shutil
