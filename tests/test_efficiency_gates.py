@@ -449,6 +449,8 @@ SENSITIVE = {"estimate_tokens": 20000, "privacy": "sensitive", "key": "demo:X", 
     ("keys/server.pem", True), ("x/id_rsa", True), ("db.kdbx", True), ("ci/service-account-ci.json", True),
     ("secrets/x.txt", True), ("a/credentials.json", True), ("api_keys.yml", True), ("app.p8", True),
     ("store.jks", True), ("C:\\fleet\\vault\\x.json", True), ("tools/my_apikey.txt", True),
+    ("github_token.txt", True), ("auth_token.json", True), ("docs/tokens.md", True),
+    ("tools/token_count.py", True),
     ("src/a.py", False), ("docs/keys.md", False), ("environment.py", False), ("pemberton.txt", False),
     ("src/envelope.py", False), ("keyboard.py", False),
 ])

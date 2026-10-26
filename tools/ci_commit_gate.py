@@ -131,7 +131,7 @@ HAND_EDIT_MAX_LINES = 400
 SECRET_NAME_PATTERNS: tuple[str, ...] = (
     "*.key", "*.pem", "*.p12", "*.pfx", "*.kdbx", "*.p8", "*.jks",
     ".env", ".env.*", "credentials*.json", "api_keys.*", "api-keys.*", "id_rsa*", "id_ed25519*",
-    "*api-key*", "*api_key*", "*apikey*", "*secret*", "*credential*",
+    "*api-key*", "*api_key*", "*apikey*", "*secret*", "*token*", "*credential*",
     "service-account*.json",
 )
 #: Directory names whose whole content counts as secret, copied from gates/privacy.py.
