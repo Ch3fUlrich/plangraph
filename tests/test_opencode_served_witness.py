@@ -5,6 +5,7 @@ import sqlite3
 from types import SimpleNamespace
 
 from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner
 
@@ -96,3 +97,8 @@ def test_title_flag_on_opencode_leg_and_not_on_plain_leg(tmp_path):
     opencode_job, plain_job = asyncio.run(run())
     assert opencode_job.command[-2:] == ['--title', 'plangraph-' + opencode_job.job_id]
     assert '--title' not in plain_job.command
+
+
+def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
+    assert parse_test_gaming('TEST-GAMING: no - searched the "batch in" stamp: 0 hits\nVERDICT: pass') == ('no', None)
+    assert parse_test_gaming('TEST-GAMING: no - searched the "batch in" stamp: 3 hits')[0] != 'no'
