@@ -334,3 +334,64 @@ def test_send(tmp_path, capsys, monkeypatch, review, literal):
     assert literal in raw and json.loads(raw)["key"] == "demo:A"
     cap = capsys.readouterr()
     assert TOKEN not in cap.out + cap.err and "http=200" in cap.out
+
+
+# D-2905 (2): request-side opencode store witness, interim until a
+# response-side source (gateway logs) exists.
+def test_request_side_opencode_store_witness_family_counts(tmp_path, capsys):
+    assert run(tmp_path, "w1", "VERDICT: pass", served_model="unwitnessed",
+               witness_kind="request-side-opencode-store",
+               request_side_model="opencode/glm-5.3-flash-free",
+               extra=("--dry-run",)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["family"] == "zhipu"
+    reason = payload["body"]["reason"]
+    assert "witness=request-side-opencode-store" in reason
+    assert "opencode/glm-5.3-flash-free" in reason
+
+
+def test_request_side_witness_refused_without_kind(tmp_path, capsys):
+    assert run(tmp_path, "w2", "VERDICT: pass", served_model="unwitnessed",
+               request_side_model="opencode/glm-5.3-flash-free") == 2
+    err = capsys.readouterr().err
+    assert "family None of model 'unwitnessed' is unknown" in err
+
+
+@pytest.mark.parametrize("model", ["mimo/mimo-v2.6-pro", "opencode/glm-5.3"])
+def test_request_side_witness_refused_non_opencode_free_model(tmp_path, capsys, model):
+    assert run(tmp_path, "w3", "VERDICT: pass", served_model="unwitnessed",
+               witness_kind="request-side-opencode-store",
+               request_side_model=model) == 2
+    err = capsys.readouterr().err
+    assert "family None of model 'unwitnessed' is unknown" in err
+
+
+@pytest.mark.parametrize("kind", ["served", "response-side-gateway", "", None, "Request-Side-Opencode-Store"])
+def test_request_side_witness_refused_other_witness_kind(tmp_path, capsys, kind):
+    assert run(tmp_path, "w4", "VERDICT: pass", served_model="unwitnessed",
+               witness_kind=kind,
+               request_side_model="opencode/glm-5.3-flash-free") == 2
+    err = capsys.readouterr().err
+    assert "family None of model 'unwitnessed' is unknown" in err
+
+
+def test_served_model_witnessed_ignores_request_side(tmp_path, capsys):
+    assert run(tmp_path, "w5", "VERDICT: pass", served_model="glm-5.3-flash-free",
+               witness_kind="request-side-opencode-store",
+               request_side_model="mimo/mimo-v2.6-pro",
+               extra=("--dry-run",)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["family"] == "zhipu"
+    assert "witness=" not in payload["body"]["reason"]
+    assert "mimo/mimo-v2.6-pro" not in payload["body"]["reason"]
+
+
+def test_build_reason_marks_request_side_witness():
+    ev = {"served_model": "unwitnessed", "correlation_id": "c",
+          "prompt_sha256": "0123456789abcdef"}
+    marked = sv.build_reason(ev, True, "VERDICT: PASS", 0,
+                             witness="opencode/glm-5.3-flash-free")
+    assert "witness=request-side-opencode-store" in marked
+    assert "opencode/glm-5.3-flash-free" in marked
+    assert sv.build_reason(ev, True, "VERDICT: PASS", 0) == \
+        "seat unwitnessed PASS corr c prompt 0123456789ab"
