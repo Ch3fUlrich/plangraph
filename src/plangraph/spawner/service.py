@@ -97,17 +97,21 @@ class SpawnService:
         for s in ('stdout', 'stderr'):
             done, cur, n_att = accs.get((record['run_id'], s), (None, '', 0))
             if done is None:
-                # Cold _save (a fresh service over an old run): rebuild the accumulation. The attempt
-                # tails each hold their job's full text; the record's display tail is only the last 4 KB
-                # of all of it, so it never rebuilds a log that attempts can (qwen-D1, I17).
+                # Cold _save (a fresh service over an old run): rebuild the accumulation. Each attempt
+                # tail holds its job's full text; the record's display tail is only the last 4 KB of the
+                # whole accumulation, so it is used only where no attempt tail and no live job carries
+                # the text (qwen-D1, haiku-D7: I17, a later _save never shrinks or doubles the log).
                 done = record.get(s); n_att = len(attempts) if done is not None else 0
                 if done is None:
                     tails = [a.get(f'{s}_tail') or '' for a in attempts]
-                    done = ''.join(tails) if any(tails) else record.get(f'{s}_tail', '')
+                    done = ''.join(tails)
+                    tail = record.get(f'{s}_tail', '') or ''
+                    cur = getattr(job, s, None) or ''
+                    if not any(tails) and tail and tail not in cur: cur = tail + cur
                     try: on_disk = (run_dir / f'{s}.log').read_text(encoding='utf-8', errors='replace')
                     except OSError: on_disk = ''
-                    if len(on_disk) > len(done): done = on_disk  # what the warm run wrote is authoritative
-                    n_att = len(attempts) if done else 0
+                    if len(on_disk) > len(done) + len(cur): done, cur = '', on_disk  # the warm run's log wins
+                    n_att = len(attempts)
             for a in attempts[n_att:]:
                 piece = a.get(f'{s}_tail') or ''
                 if not piece: continue
@@ -130,6 +134,11 @@ class SpawnService:
         res['output_cut'] = bool(record.get('output_cut', False)); atomic_write_private(run_dir / 'result.json', json.dumps(res, indent=2))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
+            # Same end-of-run pruning for the per-run accumulation and task handle: a long-lived
+            # supervisor must not retain every run's full output in memory (haiku-D7, qwen-D9).
+            for key in [k for k in accs if k[0] == record['run_id']]:
+                accs.pop(key, None)
+            self.tasks.pop(record['run_id'], None)
 
     def ps(self):
         from .stall_watchdog import read_runs

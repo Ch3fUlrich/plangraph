@@ -928,3 +928,27 @@ def test_output_cut_saved_before_continue_writer(tmp_path, monkeypatch):
     called = drive(dsp2, big)
     aio.run(dsp2._spawn(card={'title': 't'}, prompt='p', role='implement', wait_seconds=None))
     assert len(called) == 1  # output_cut must have stopped the continuation
+
+
+def test_accs_pruned_when_record_ends(tmp_path):
+    # haiku-D7, qwen-D9: a long-lived supervisor must drop the per-run accumulation (and task
+    # handle) when the record ends — the same end-of-run pruning _child_envs already gets.
+    from types import SimpleNamespace
+    from plangraph.spawner.service import SpawnService
+    serv = SpawnService(state=tmp_path)
+    big = "step ok\n" * 3000
+    rec = dict(run_id="run-p1", status="completed", exit_code=0, job_id="jp", started=1.0, ended=None, attempts=[])
+    serv._save(rec)
+    serv.runner.jobs["jp"] = SimpleNamespace(stdout=big, stderr="")
+    serv.tasks["run-p1"] = object()  # the scheduled execute() task, keyed like _spawn does
+    serv._save(rec)
+    assert any(k[0] == "run-p1" for k in serv._accs)  # control: held while the run is open
+    rec["ended"] = 2.0
+    serv._save(rec)
+    assert not any(k[0] == "run-p1" for k in serv._accs)  # the full output must not live on in memory
+    assert "run-p1" not in serv.tasks
+    log = tmp_path / "runs" / "run-p1" / "stdout.log"
+    assert log.read_text() == big  # control: the log on disk is whole
+    serv._save(serv.result("run-p1"))  # a later re-save shares the pruning and never shrinks the log
+    assert log.read_text() == big
+    assert not any(k[0] == "run-p1" for k in serv._accs)
