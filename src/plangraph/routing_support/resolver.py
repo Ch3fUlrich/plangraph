@@ -728,7 +728,7 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
     # Explicit harness registration, not an inference from gateway transport.
-    if d.get('id') == 'mimo/mimo-v2.6-pro':
+    if d.get('id') in ('mimo/mimo-v2.6-pro', 'omniroute/cx-gpt-6-luna'):
         d.setdefault('harness', 'opencode')
     return d
 
