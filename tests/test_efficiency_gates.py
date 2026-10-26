@@ -1055,3 +1055,22 @@ def test_terminal_re_save_keeps_the_resident_jobs_text_once(tmp_path):
     dsp.runner.jobs["j2"] = SimpleNamespace(stdout="TWO", stderr="")
     dsp._save(dsp.result("run-e2"))
     assert (run2 / "stdout.log").read_text() == "ONETWO"  # done + cur, each job once
+
+
+# ------------------------------------------------------------ round 3: continuation_reason is a defined, enforced vocabulary
+def test_continuation_reason_vocabulary_is_defined_and_enforced():
+    # haiku-E3: the refused branch's round-2 values ('liveness', 'cancelled', 'output_cut')
+    # were written but neither defined nor consumed anywhere. Round 2 decided every refusal
+    # names why (w31a keeps 'nonzero_exit' for a failed status), so the values stay; they are
+    # now a defined, closed vocabulary that the write site enforces. The cause -> value map is
+    # proven in test_run_result_refusals_and_findings (["liveness", "cancelled", "output_cut",
+    # "nonzero_exit"]).
+    from plangraph.spawner.service import CONTINUATION_REASONS, set_continuation_reason
+    assert CONTINUATION_REASONS == {'nonzero_exit', 'liveness', 'cancelled', 'output_cut',
+                                    'continuation_limit', 'not_writer', 'clean_report',
+                                    'remaining_gaps', 'spawn_failed'}
+    rec = {}
+    for reason in sorted(CONTINUATION_REASONS):  # positive control: every defined value stores
+        assert set_continuation_reason(rec, reason) == reason and rec['continuation_reason'] == reason
+    with pytest.raises(ValueError):
+        set_continuation_reason(rec, 'liveness_check')  # an undefined token never lands

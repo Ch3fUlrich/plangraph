@@ -15,6 +15,28 @@ from .runner import SpawnerRunner
 from .liveness import classify_attempt
 
 
+#: Closed vocabulary for the record field `continuation_reason` (haiku-E3). The design rows
+#: only say `_continue_writer` returns at once on refusal (I13) and that every refusal names
+#: why (w31a keeps 'nonzero_exit' for a failed status; haiku-D8/qwen-D11 named the other
+#: refusal causes) without pinning tokens, so the values are defined here — per cause — and
+#: the write site enforces the set. Extend it deliberately, never write outside it.
+CONTINUATION_REASONS = frozenset({
+    'nonzero_exit',       # the run did not complete cleanly: nonzero exit or failed status
+    'liveness',           # refused by I13: the record carries a liveness value
+    'cancelled',          # refused by I13: a hand cancel (exit_class 'cancelled')
+    'output_cut',         # refused by I13: the output crossed 2 MB and was cut
+    'continuation_limit', 'not_writer', 'clean_report', 'remaining_gaps',  # the table below
+    'spawn_failed'})      # the continuation spawn itself raised
+
+
+def set_continuation_reason(record, reason):
+    """Store *reason* as the record's continuation_reason; an undefined token is refused."""
+    if reason not in CONTINUATION_REASONS:
+        raise ValueError(f'undefined continuation_reason: {reason!r}')
+    record['continuation_reason'] = reason
+    return reason
+
+
 class SpawnService:
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -253,9 +275,9 @@ class SpawnService:
     async def _continue_writer(self, record, output):
         if (record.get('liveness') or record.get('exit_class') == 'cancelled' or record.get('output_cut') or record.get('status', 'completed') != 'completed'):
             # Every refusal cause names why (w31a: a failed status names 'nonzero_exit'; haiku-D8/qwen-D11: the other causes used to leave no reason at all).
-            record['continuation_reason'] = ('nonzero_exit' if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed'
-                                             else 'cancelled' if record.get('exit_class') == 'cancelled'
-                                             else 'output_cut' if record.get('output_cut') else 'liveness')
+            set_continuation_reason(record, 'nonzero_exit' if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed'
+                                    else 'cancelled' if record.get('exit_class') == 'cancelled'
+                                    else 'output_cut' if record.get('output_cut') else 'liveness')
             return
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
@@ -265,7 +287,7 @@ class SpawnService:
                   'continuation_limit' if record.get('continuation') else
                   'not_writer' if record.get('role') != 'implement' else
                   'clean_report' if not gaps else 'remaining_gaps')
-        record['continuation_reason'] = reason
+        set_continuation_reason(record, reason)
         if reason != 'remaining_gaps' or record.get('continuation_run_id'):
             return
         child = dict(run_id='run-' + uuid.uuid4().hex, parent_run_id=record['run_id'],
@@ -290,7 +312,8 @@ class SpawnService:
             child.update(status=job.status, exit_code=job.exit_code, stdout_tail=job.stdout)
             await self._continue_writer(child, job.stdout)
         except Exception as exc:
-            child.update(status='failed', exit_code=1, error=str(exc), continuation_reason='spawn_failed')
+            child.update(status='failed', exit_code=1, error=str(exc))
+            set_continuation_reason(child, 'spawn_failed')
         finally:
             child['ended'] = time.time()
             self._save(child)
