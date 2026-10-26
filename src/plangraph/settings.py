@@ -34,9 +34,13 @@ _PROTO_DEF = {"opencode": ["tool call delta is missing id or name"]}
 
 @dataclass(frozen=True)
 class SpawnLimits:
+    # Field order is the design's positional signature (haiku-E4): a compaction (497257e3,
+    # 38ea3bc7) moved ignore behind require_principal, so a positional call silently
+    # misassigned. Keywords (settings.py's own calls) are unaffected either way.
     wall_cap_min: int; max_cap_min: int
-    stall_min: int = 15; stall_cpu_pct: int = 2; floor_mb: int = 2000; max_runs: int = 4; require_principal: bool = False
+    stall_min: int = 15; stall_cpu_pct: int = 2
     ignore: dict[str, list[str]] = field(default_factory=dict)
+    floor_mb: int = 2000; max_runs: int = 4; require_principal: bool = False
     truncation: dict[str, list[str]] = field(default_factory=lambda: dict(_TRUNC_DEF)); provider_protocol: dict[str, list[str]] = field(default_factory=lambda: dict(_PROTO_DEF))
 
     def __post_init__(self):

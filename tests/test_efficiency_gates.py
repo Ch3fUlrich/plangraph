@@ -1074,3 +1074,20 @@ def test_continuation_reason_vocabulary_is_defined_and_enforced():
         assert set_continuation_reason(rec, reason) == reason and rec['continuation_reason'] == reason
     with pytest.raises(ValueError):
         set_continuation_reason(rec, 'liveness_check')  # an undefined token never lands
+
+
+# ------------------------------------------------------------ round 3: SpawnLimits keeps the design's field order
+def test_spawn_limits_field_order_matches_the_design():
+    # haiku-E4: the design signature is SpawnLimits(wall_cap_min, max_cap_min, stall_min,
+    # stall_cpu_pct, ignore, floor_mb, max_runs, require_principal, truncation,
+    # provider_protocol) (docs/design/PG-EFFICIENCY-GATES.md limits-reader row); the
+    # compaction (497257e3, 38ea3bc7) put ignore after require_principal, so a positional
+    # constructor silently misassigned. The keyword form — what settings.py uses — was never
+    # affected: that is the positive control.
+    from plangraph.settings import SpawnLimits
+    lim = SpawnLimits(90, 180, 15, 2, {"opencode": ["x"]}, 2000, 4, False)
+    assert (lim.ignore, lim.floor_mb, lim.max_runs, lim.require_principal) == ({"opencode": ["x"]}, 2000, 4, False)
+    assert tuple(SpawnLimits.__dataclass_fields__) == ("wall_cap_min", "max_cap_min", "stall_min",
+        "stall_cpu_pct", "ignore", "floor_mb", "max_runs", "require_principal", "truncation", "provider_protocol")
+    kw = SpawnLimits(wall_cap_min=90, max_cap_min=180, ignore={"opencode": ["x"]})
+    assert kw.ignore == {"opencode": ["x"]} and kw.floor_mb == 2000 and kw.require_principal is False
