@@ -537,6 +537,18 @@ matches the effective one.
   python -m plangraph.spawner.catalog_db export-combos [--output PATH]
   ```
 
+### Provisioning the catalog DB (D3)
+
+```bash
+python3 -m plangraph.spawner.catalog_db init-and-seed
+```
+
+With no arguments this creates the default production DB
+(`~/.cache/plangraph/spawner_catalog.db`) idempotently: re-running reproduces the
+same rows, no duplicates. `PLANGRAPH_CATALOG_DB` overrides the path; `--db-path
+PATH` works in either position (`... --db-path P init-and-seed` or `...
+init-and-seed --db-path P`) and writes only `P`.
+
 ---
 
 ## 8. Host Bootstrap & AutoOS Delegation
