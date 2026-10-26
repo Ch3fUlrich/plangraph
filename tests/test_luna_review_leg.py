@@ -57,3 +57,15 @@ def test_catalog_seeds_luna_with_opencode_harness():
     row = rows[0]
     assert row["harness"] == "opencode" and row["family"] == "gpt"
     assert row["context_tokens"] == 900000 and row["trains_on_prompts"] == 0
+
+
+def test_catalog_registers_kimi_with_opencode_harness():
+    # D-3033: kimi (opencode go) is a hand-picked review seat; the override path
+    # (spawner/service.py) refuses a catalog row without an explicit harness.
+    from plangraph.routing_support import resolver
+    from plangraph.routing_support.catalog_db import CatalogDB
+    db = CatalogDB(":memory:")
+    db.init_and_seed()
+    rows = [r for r in resolver.get_catalog_models(db) if r["id"] == "opencode-go/kimi-k3-max"]
+    assert len(rows) == 1
+    assert rows[0]["harness"] == "opencode" and rows[0]["family"] == "kimi"
