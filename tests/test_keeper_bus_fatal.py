@@ -14,8 +14,12 @@ import threading
 import time
 from contextlib import suppress
 
+import pytest
+from door_util import Doors
 from keeper_util import World
+from plangraph.fleet_bus import discovery
 from plangraph.keeper import config, daemon, db as kdb
+from plangraph.keeper.errors import ConnectionLost
 
 
 def free_port():
@@ -87,3 +91,38 @@ def test_fatal_before_on_fatal_wiring_exits_75(tmp_path, monkeypatch):
     for world in (w_ctl, w_fat):
         with suppress(Exception):  # run() already closed the shared connection
             world.close()
+
+
+# ------------------------------------------------------------------ I11 / F2
+class _StubStore:
+    """Store stand-in whose ``upsert_bus_hosts`` raises a prepared exception."""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def upsert_bus_hosts(self, rows):
+        raise self.exc
+
+
+def test_bus_persist_connection_lost_is_fatal(tmp_path):
+    """I11: ConnectionLost in _persist_bus_hosts is fatal, a ValueError is not."""
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    host = discovery.Host("h1", "n1", "k1", tmp_path / "h1.key")
+    try:
+        # positive control: the healthy path persists and never goes fatal
+        assert doors.server._persist_bus_hosts([host]) is None
+        assert doors.server.store.list_bus_hosts()[0]["host"] == "h1"
+        assert doors.server.fatal_reason is None
+        # every other exception keeps today's path (discovery logs it, not fatal)
+        doors.server.store = _StubStore(ValueError("bad rows"))
+        with pytest.raises(ValueError):
+            doors.server._persist_bus_hosts([host])
+        assert doors.server.fatal_reason is None
+        # the fault: a lost session fails loud instead of being swallowed
+        doors.server.store = _StubStore(ConnectionLost("statement"))
+        assert doors.server._persist_bus_hosts([host]) is None  # never re-raises
+        assert doors.server.fatal_reason == "postgres session lost (bus registry)"
+    finally:
+        doors.close()
+        w.close()

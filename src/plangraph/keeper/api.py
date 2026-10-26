@@ -586,8 +586,14 @@ class KeeperHTTPServer(ThreadingHTTPServer):
     def _persist_bus_hosts(self, hosts):
         """The registry loop's ``on_refresh`` hook: durable rows, never keys."""
         rows = [_host_row(host) for host in hosts]
-        with self.lock:   # one connection behind one lock (see the class docstring)
-            self.store.upsert_bus_hosts(rows)
+        try:
+            with self.lock:   # one connection behind one lock (see the class docstring)
+                self.store.upsert_bus_hosts(rows)
+        except ConnectionLost:
+            # F2: the reaper's fail() equivalent (see Reaper.run) -- without it
+            # discovery's log swallows the loss and the daemon never exits 75.
+            self.fail("postgres session lost (bus registry)")
+            return          # never re-raise: discovery must stay non-fatal here
 
     def start_reaper(self):
         if self.reaper is None:
