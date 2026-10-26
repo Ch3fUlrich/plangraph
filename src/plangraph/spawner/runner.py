@@ -723,8 +723,9 @@ def spawn_service(*args, **kwargs):
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             events=record.get('events', []) + getattr(job, 'events', []))
-                        # Per-attempt classification (haiku-C4/qwen-C3): the last attempt wins; plain failures get check_fail (I13).
-                        from .liveness import classify_attempt; record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
+                        # Per-attempt classification (haiku-C4/qwen-C3): the last attempt wins; the monitor's
+                        # class for the same attempt is kept (nonzero exit -> worker_crash, qwen-D8, I13).
+                        from .liveness import classify_attempt; record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness, getattr(job, 'exit_class', None))
                         # Save before continuing (qwen-D2): _save computes output_cut from the accumulated
                         # logs (I17) and _continue_writer must see it — the base loop orders it the same way.
                         self._save(record)

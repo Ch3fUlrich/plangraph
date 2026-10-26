@@ -791,8 +791,9 @@ def test_attempt_classification_reset_and_plain_failures(tmp_path, monkeypatch):
         service = make(); rec = asyncio.run(drive(service, [job("a1", "failed", "truncated", "worker_crash"), job("a2", "completed")], [leg(1), leg(2)]))
         assert (rec["liveness"], rec["exit_class"]) == (None, "ok"), name  # haiku-C4: a completed attempt resets, never stale 'truncated'
         assert rec["status"] == "completed" and len(rec["attempts"]) == 2, name
-        rec2 = asyncio.run(drive(service, [job("b1", "failed")], [leg(3)])); assert (rec2["liveness"], rec2.get("exit_class")) == (None, "check_fail"), name  # qwen-C3: plain failures too, never null
-        res = json.loads((Path(service.state) / "runs" / rec2["run_id"] / "result.json").read_text()); assert res["exit_class"] == "check_fail", name  # qwen-C3: result.json on the CLI/MCP path carries the class
+        rec2 = asyncio.run(drive(service, [job("b1", "failed", exit_class="worker_crash")], [leg(3)])); assert (rec2["liveness"], rec2.get("exit_class")) == (None, "worker_crash"), name  # qwen-D8: the monitor's class for the attempt (runner.py nonzero exit -> worker_crash) wins, never check_fail
+        res = json.loads((Path(service.state) / "runs" / rec2["run_id"] / "result.json").read_text()); assert res["exit_class"] == "worker_crash", name  # qwen-D8: result.json on the CLI/MCP path carries the class
+        rec3 = asyncio.run(drive(service, [job("b3", "failed")], [leg(4)])); assert rec3.get("exit_class") == "check_fail", name  # no monitor class at all: the status fallback still applies
 
 
 def test_cancel_liveness_validated():

@@ -394,8 +394,8 @@ class SpawnService:
                         served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                         writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                         events=record.get('events', []) + getattr(job, 'events', []))
-                    # Per-attempt, not setdefault: the record carries the LAST attempt's (liveness, exit_class) — stale must not stick (haiku-C4, qwen-C3, I13).
-                    from .liveness import classify_attempt; record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
+                    # Per-attempt, not setdefault: the record carries the LAST attempt's (liveness, exit_class) — stale must not stick (haiku-C4, qwen-C3, I13). The monitor's class for the same attempt wins (qwen-D8).
+                    from .liveness import classify_attempt; record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness, getattr(job, 'exit_class', None))
                     self._save(record)
                     if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:
