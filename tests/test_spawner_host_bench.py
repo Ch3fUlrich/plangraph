@@ -55,3 +55,13 @@ def test_record_host_field(tmp_path, monkeypatch):
     path.write_text(json.dumps({"run_id": old_id, "status": "completed"}))
     old = service.result(old_id)
     assert old["run_id"] == old_id and "host" not in old
+
+
+def test_catalog_db_path_both_orders(tmp_path):
+    """I2/D1: a global --db-path reaches the subcommand in either position."""
+    default = tmp_path / "spawner_catalog.db"
+    first, second = tmp_path / "first.db", tmp_path / "second.db"
+    assert catalog_db.main(["--db-path", str(first), "init-and-seed"]) == 0
+    assert catalog_db.main(["init-and-seed", "--db-path", str(second)]) == 0
+    assert first.is_file() and second.is_file()
+    assert not default.exists()
