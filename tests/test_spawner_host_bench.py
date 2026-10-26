@@ -161,3 +161,17 @@ def test_record_host_never_redacted(tmp_path, monkeypatch):
     # Positive control: the same value elsewhere in the record is still redacted.
     refused = service.save_refusal(SpawnRefused("leak bench-host-secretlike"))
     assert "bench-host-secretlike" not in json.dumps({k: v for k, v in service.result(refused["run_id"]).items() if k != "host"})
+
+
+def test_nested_host_key_still_redacted(tmp_path, monkeypatch):
+    """D-2960 seat MED: only the top-level run host is exempt; a nested 'host' is cleaned."""
+    service = SpawnService(state=tmp_path / "state")
+    monkeypatch.setenv("PLANGRAPH_HOST", "bench-host-secretlike")
+    monkeypatch.setenv("AUTH_HOST_TOKEN", "bench-host-secretlike")
+    run_id = "run-" + "nestedhost01"
+    service._save(dict(run_id=run_id, role="implement", status="running", started=1.0, ended=None,
+                       attempts=[{"leg": {"id": "x", "host": "bench-host-secretlike"}}],
+                       stdout_tail="", exit_code=None, cwd=str(tmp_path)))
+    stored = service.result(run_id)
+    assert stored["host"] == "bench-host-secretlike"
+    assert "bench-host-secretlike" not in json.dumps(stored["attempts"])

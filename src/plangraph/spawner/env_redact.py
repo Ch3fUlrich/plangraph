@@ -2,7 +2,7 @@
 import json
 import re
 
-IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key', 'host'})
+IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
 
 
 def _is_numeric(value):
