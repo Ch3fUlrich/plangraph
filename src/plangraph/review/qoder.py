@@ -23,8 +23,6 @@ from typing import Any, Callable
 
 from . import verdict
 
-from . import verdict
-
 __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT",
@@ -233,7 +231,9 @@ def write_seat_dir(out_dir: Path, result: QoderResult,
     The parsed verdict fields always come from ``verdict.judge`` over the
     reply and ``material`` (the diff/context the seat saw), so a caller that
     passes no ``extra`` still leaves a seat dir tools/seat_verdict.py can
-    gate on.  ``extra`` is applied last but never overwrites judge fields.
+    gate on.  ``extra`` is applied last but never overwrites judge fields,
+    except that it may make them stricter (a caller's failed run clears the
+    verdict; a caller's gaming finding stands).
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -245,5 +245,9 @@ def write_seat_dir(out_dir: Path, result: QoderResult,
     evidence.update(judged)
     if extra:
         evidence.update({k: v for k, v in extra.items() if k not in judged})
+        if "verdict" in extra and extra["verdict"] != "pass":
+            evidence["verdict"] = extra["verdict"]
+        if extra.get("test_gaming") not in (None, "no"):
+            evidence["test_gaming"] = extra["test_gaming"]
     (out / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n",
                                        encoding="utf-8")
