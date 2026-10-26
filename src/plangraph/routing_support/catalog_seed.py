@@ -791,6 +791,15 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "benchmark_source": "AA-v4.3.2-2026-10",
         "updated_at": "2026-10-19T00:00:00Z",
     },
+    {
+        "model_id": "omniroute/cx-gpt-6-luna",
+        "master_rank": None,
+        "aa_intelligence": 38.4,
+        "verified_tok_per_s": 180.0,
+        "cost_per_task_usd": 0.07,
+        "benchmark_source": "AA-v4.3.2-2026-10 (gpt-6-luna, as cxa/gpt-6-luna-high)",
+        "updated_at": "2026-10-26T00:00:00Z",
+    },
 ]
 
 # The 4 Role Routes

@@ -271,7 +271,7 @@ def test_export_json_and_combos_roundtrip(memory_db: CatalogDB, tmp_path: Path) 
     exported_data = memory_db.export_json(export_file)
     assert export_file.is_file()
     assert len(exported_data["models"]) == 25
-    assert len(exported_data["benchmarks"]) == 24
+    assert len(exported_data["benchmarks"]) == 25
     assert len(exported_data["routes"]) == 4
 
     # Import into fresh DB
