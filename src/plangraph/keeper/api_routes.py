@@ -156,8 +156,9 @@ def _set_legacy_state(store, principal, body, need):
 
 
 def _waive_floor(store, principal, body, need):
+    # decision is validated by the verb after its role gate: a non-router gets 403 first
     return store.waive_floor(principal, need(body, "key"),
-                             need(body, "decision"), body.get("sha_floor"))
+                             body.get("decision"), body.get("sha_floor"))
 
 
 def _set_kind(store, principal, body, need):
