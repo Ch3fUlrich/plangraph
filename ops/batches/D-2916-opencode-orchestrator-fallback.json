@@ -1,0 +1,24 @@
+{
+  "decision": "D-2916 (operator D-2913 (2))",
+  "items": [
+    {
+      "key": "plangraph:OPENCODE-ORCHESTRATOR-FALLBACK",
+      "project": "plangraph",
+      "kind": "lane",
+      "track": "RETHINK",
+      "owner": "build-L1",
+      "priority": 9,
+      "review_tier": "high",
+      "title": "A plangraph-spawned OpenCode orchestrator can run the fleet while Claude is rate-limited (G1-G4)",
+      "description": "D-2916 / operator D-2913 (2). workst-L1-autoos found on main a26573c3 that a plangraph-spawned OpenCode orchestrator does not start. G1: SpawnService.route refuses role 'orchestrate' (ValueError 'role must be implement|review'; spawner/cli.py:15,114 choices implement|review; only spawner/mcp.py:41 lists orchestrate|drive). G2: no strong non-Claude orchestrate leg (mimo-v2.6-pro lacks the role; only weak free legs + agy-sonnet). G3: the orchestrator child config is providers-only: no plangraph keeper/spawner MCP and no inbox, so it cannot spawn, read results or get messages. G4: a run is one `opencode run` bounded by --wait; no long-lived re-wake (needs the bus inbox + wake daemon, D-2562). Plan: G1+G2 small (L1 hand-edit off door paths), G3 one slice, G4 with bus R2b + the cross-host round trip. Writers on workst-L1-autoos, which tests each piece on workst. Runs in parallel with ORCH-EFFICIENCY-ENFORCE. G4 needs RT-P1-BUS-WAKE (bus R2b wake daemon); not a hard dep so G1-G3 can be claimed now.",
+      "done_criteria": "G1 spawner route/cli/mcp accept role orchestrate (+drive) with tests; G2 >=1 non-Claude strong leg (mimo-v2.6-pro) carries orchestrate in legs + resolver test; G3 orchestrate child gets keeper+spawner MCP and its bus inbox in the opencode config, proven by a live workst run that spawns one L3 and reads its result; G4 the orchestrator is re-woken by a bus message via the wake daemon (live round trip workst<->coding.vm); merged, CI green, 2 non-Claude seats + router judge GO."
+    }
+  ],
+  "edges": [
+    {
+      "gate": "plangraph:PH-RT-RUNTIME",
+      "depends_on": "plangraph:OPENCODE-ORCHESTRATOR-FALLBACK",
+      "why": "D-2913 (2): the runtime phase needs a non-Claude orchestrator path that works when Claude is rate-limited; it shares the bus wake path with RT-P1-BUS-WAKE"
+    }
+  ]
+}
