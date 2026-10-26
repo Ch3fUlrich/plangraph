@@ -8,11 +8,11 @@ The `ci-gate` job fails if any selected suite failed, was skipped, or was cancel
 
 Branch protection on `main` requires only the `ci-gate` check — no review requirement, admins not enforced. Rollback: delete the protection.
 
-A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a non-Claude `Writer:` trailer and a `Test-Removal:` trailer when tests are removed. Exempt shas are listed in `tools/ci_commit_exempt.txt`.
+A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a non-Claude `Writer:` trailer and, when tests are removed or renamed, a `Test-Removal:` trailer naming every removed test (`Test-Removal: D-<n> <test id>[, <test id>...]`). Exempt shas are listed in `tools/ci_commit_exempt.txt`.
 
 ## Known limits of the commit gate
 
-- Gate-Edit and Test-Removal ids are checked for shape (D-<digits>) only, not against the decision log.
+- Gate-Edit ids are checked for shape (D-<digits>) only, not against the decision log. A `Test-Removal:` trailer is read only from the final trailer block and must name every test the commit removes or renames: `Test-Removal: D-<n> <test id>[, <test id>...]`; a bare `D-<n>` is refused.
 - The first push of a new ref (all-zero before sha) is not gated, a pull request into main still is.
 - Merge commits are skipped, their parent commits are checked.
 - The Claude marker list matches the Writer value by substring and relies on the writer naming itself.

@@ -46,8 +46,27 @@ PLAN_ITEM_RE = re.compile(r'^Plan-Item: (\S.*)$')
 ROUTE_DECISION_LINES = 50
 ROUTE_DECISION_RE = re.compile(r'^Route-Decision: route-[0-9a-f]{32}$')
 
-#: A test-removal trailer, accepted case-insensitively on any line.
-TEST_REMOVAL_RE = re.compile(r'^Test-Removal:\s*D-\d+\s*$', re.IGNORECASE)
+#: A test identifier as it may appear in a Test-Removal trailer (test ids in
+#: this repo carry dots, brackets, quotes, colons, slashes -- and JS/bats
+#: titles carry spaces).  Commas separate ids, so they may not appear in one.
+TEST_ID = r"[\w][\w.:/\[\]' -]*"
+
+#: A test-removal trailer must name what it removes (buildl1-T2): the
+#: ``D-<n>`` record id followed by every removed or renamed test id,
+#: comma-separated.  Case-insensitive on the key.
+TEST_REMOVAL_RE = re.compile(
+    r'^Test-Removal:\s*D-\d+\s+(?P<tests>'
+    + TEST_ID
+    + r'(?:\s*,\s*'
+    + TEST_ID
+    + r')*)\s*$',
+    re.IGNORECASE,
+)
+
+#: A bare ``Test-Removal: D-<n>`` with no test named -- kept so the gate can
+#: tell "no acknowledgement at all" from "acknowledged but named nothing"
+#: and say which it is (buildl1-T2).
+BARE_TEST_REMOVAL_RE = re.compile(r'^Test-Removal:\s*D-\d+\s*$', re.IGNORECASE)
 
 #: A gate-edit commit must carry exactly ``Gate-Edit: D-<digits>``.
 GATE_EDIT_RE = re.compile(r'^Gate-Edit: D-\d+$')
@@ -116,6 +135,7 @@ OPEN_PR_SKIP_NOTICE = 'ci-commit-gate: open PR merge check skipped (no --open-he
 MISSING_WRITER = 'missing Writer trailer'
 CLAUDE_WRITER = 'claude writer'
 TEST_REMOVAL_VIOLATION = 'test removal without Test-Removal trailer'
+TEST_REMOVAL_NAMING_VIOLATION = 'test removal not named in Test-Removal'
 MALFORMED_WRITER = 'malformed Writer trailer'
 MALFORMED_HAND_EDIT = 'malformed Hand-Edit trailer'
 GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
@@ -258,10 +278,19 @@ def gate_path_verdict(path: str | Path) -> str | None:
     return None
 
 
+#: Any Test-Removal-shaped line at all -- strict or bare or malformed -- for
+#: stray detection only (D-2879): a Test-Removal outside the final block must
+#: be flagged whatever its shape, since the keeper never sees it.
+TEST_REMOVAL_ANY_RE = re.compile(r'^Test-Removal:', re.IGNORECASE)
+
 #: Strict trailer lines that must live in the final trailer block (D-2879).
 STRICT_TRAILER_RES: tuple[re.Pattern[str], ...] = (
     WRITER_RE, HAND_EDIT_RE, PLAN_ITEM_RE, ROUTE_DECISION_RE, GATE_EDIT_RE, TEST_REMOVAL_RE,
 )
+
+#: Shapes flagged when found outside the final trailer block: the strict
+#: trailers plus every Test-Removal-shaped line, however malformed.
+STRAY_TRAILER_RES: tuple[re.Pattern[str], ...] = STRICT_TRAILER_RES + (TEST_REMOVAL_ANY_RE,)
 
 
 def _trailer_block_lines(message: str, cwd: str | Path | None = None) -> list[str]:
@@ -305,7 +334,7 @@ def _stray_trailer_lines(message: str) -> list[str]:
     for paragraph in paragraphs[:-1]:
         stray.extend(
             line for line in paragraph
-            if any(pattern.match(line) for pattern in STRICT_TRAILER_RES)
+            if any(pattern.match(line) for pattern in STRAY_TRAILER_RES)
         )
     return stray
 
@@ -323,8 +352,23 @@ def _has_trailer(lines: list[str], pattern: re.Pattern[str]) -> bool:
     return any(pattern.match(line) is not None for line in lines)
 
 
-def _has_test_removal_trailer(lines: list[str]) -> bool:
-    return any(TEST_REMOVAL_RE.match(line) is not None for line in lines)
+def _named_test_removals(lines: list[str]) -> set[str]:
+    '''Test ids named by strict ``Test-Removal:`` trailers in lines (buildl1-T2).
+
+    Comma-separated ids accumulate across trailers; ids may contain spaces
+    (JS/bats titles), so the value splits on commas only.
+    '''
+    named: set[str] = set()
+    for line in lines:
+        match = TEST_REMOVAL_RE.match(line)
+        if match:
+            named.update(part.strip() for part in match.group('tests').split(','))
+    return named
+
+
+def _has_bare_test_removal_trailer(lines: list[str]) -> bool:
+    '''True for ``Test-Removal: D-<n>`` with nothing named (buildl1-T2).'''
+    return any(BARE_TEST_REMOVAL_RE.match(line) is not None for line in lines)
 
 
 def _parent_shas(sha: str, cwd: str | Path | None = None) -> list[str]:
@@ -442,16 +486,24 @@ def _names_at(rev: str | None, path: str, cwd: str | Path | None = None) -> set[
     return names if names is not None else set()
 
 
-def _commit_removes_test(
+def _commit_removed_tests(
     sha: str,
     base: str,
     head: str,
     cwd: str | Path | None = None,
     paths: list[str] | None = None,
-) -> bool:
+) -> set[str]:
+    '''Names of tests this commit removes or renames (buildl1-T2).
+
+    A name counts when it is gone at sha and still gone at head, so tests the
+    PR re-adds later are not removals.  Extractor files contribute their test
+    names; a deleted test file with no name extractor contributes its path,
+    the only id that names what it removes.
+    '''
     parent = _parent_sha(sha, cwd=cwd)
     if paths is None:
         paths = _touched_paths(sha, cwd=cwd)
+    removed: set[str] = set()
     for path in paths:
         if not TEST_PATH_RE.search(path):
             continue
@@ -463,7 +515,7 @@ def _commit_removes_test(
                 and _show_file(sha, path, cwd=cwd) is None
                 and _show_file(head, path, cwd=cwd) is None
             ):
-                return True
+                removed.add(path)
             continue
 
         parent_names = _names_at(parent, path, cwd=cwd)
@@ -475,8 +527,8 @@ def _commit_removes_test(
         head_names = _names_at(head, path, cwd=cwd)
         for name in removed_names:
             if name in base_names and name not in head_names:
-                return True
-    return False
+                removed.add(name)
+    return removed
 
 
 def _exempt_at_base(base: str, rel: str, cwd: str | Path | None = None) -> set[str] | None:
@@ -709,10 +761,18 @@ def check(
         ):
             violations.append(f'{sha}: {GATE_EDIT_VIOLATION}')
 
-        if not _has_test_removal_trailer(all_lines) and _commit_removes_test(
-            sha, base, head, cwd=cwd, paths=touched
-        ):
-            violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
+        removed_tests = _commit_removed_tests(sha, base, head, cwd=cwd, paths=touched)
+        if removed_tests:
+            # The trailer is read only from the final trailer block (round-A
+            # parser) and must name what it removes: a bare ``D-<n>`` names
+            # nothing and is refused with the naming reason, distinct from no
+            # trailer at all (buildl1-T2).
+            named = _named_test_removals(block_lines)
+            if not removed_tests <= named:
+                if named or _has_bare_test_removal_trailer(block_lines):
+                    violations.append(f'{sha}: {TEST_REMOVAL_NAMING_VIOLATION}')
+                else:
+                    violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
 
     # The refusal names the commit whose running sum crossed the ceiling:
     # walk the bucket's commits in the history walk's oldest-first order and
