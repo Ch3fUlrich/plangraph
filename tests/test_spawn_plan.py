@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 
 import pytest
 
@@ -98,8 +99,11 @@ def test_load_legs_bad_roles(tmp_path, roles):
 
 def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
     # OPENCODE-ORCHESTRATOR-FALLBACK G1/G2: an orchestrator leg off Claude, mimo-pro first
-    assert plan_spawn(CARD, role="orchestrate").first_leg.id == "mimo-v2.6-pro"
-    with pytest.raises(ValueError, match="implement|review|orchestrate"):
+    plan = plan_spawn(CARD, role="orchestrate")
+    assert plan.first_leg.id == "mimo-v2.6-pro"
+    # fallthrough: agy-sonnet runs on Antigravity quota, not Claude Max; never deepseek (D-2744)
+    assert [l.id for l in plan.legs] == ["mimo-v2.6-pro", "agy-sonnet-5.5"]
+    with pytest.raises(ValueError, match=re.escape("role must be implement|review|orchestrate")):
         plan_spawn(CARD, role="drive")
     from plangraph.spawner.cli import main
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
