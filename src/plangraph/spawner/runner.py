@@ -578,6 +578,16 @@ class SpawnerRunner:
                 if oc_dir is not None:
                     import shutil
                     shutil.rmtree(oc_dir, ignore_errors=True)
+            else:
+                # D-2921 F3: a monitor cancelled before its first step never
+                # runs its own finally; sweep its store dir once it settles
+                # (no-op when the monitor already cleaned up).
+                def _sweep(_task, _self=self, _jid=job_id):
+                    _oc = _self._ocdata_dirs.pop(_jid, None)
+                    if _oc is not None:
+                        import shutil
+                        shutil.rmtree(_oc, ignore_errors=True)
+                self._tasks[job_id].add_done_callback(_sweep)
 
     async def _monitor_process(
         self,

@@ -326,3 +326,76 @@ def test_locked_store_db_returns_none_without_blocking(tmp_path):
     assert not stalled, 'store read blocked on a locked db'
     assert out['value'] is None
     assert out['elapsed'] < 5
+
+
+def _record_mkdtemp(monkeypatch):
+    """Record each pg-ocdata dir the runner creates (TMPDIR tricks are banned)."""
+    import tempfile
+    made = []
+    real = tempfile.mkdtemp
+
+    def wrapper(*args, **kwargs):
+        d = real(*args, **kwargs)
+        made.append(d)
+        return d
+
+    monkeypatch.setattr(tempfile, 'mkdtemp', wrapper)
+    return made
+
+
+def test_dry_run_review_leg_removes_ocdata_dir(tmp_path, monkeypatch):
+    made = _record_mkdtemp(monkeypatch)
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+
+    async def run():
+        return await runner.spawn('p', model_or_combo=REQUESTED, role='review',
+                                  client='opencode', cwd=str(tmp_path), dry_run=True)
+    job = asyncio.run(run())
+    assert job.dry_run
+    assert made and all(Path(d).name.startswith('pg-ocdata-') for d in made)
+    assert not any(Path(d).exists() for d in made)
+    assert runner._ocdata_dirs == {}
+
+
+def test_render_refused_review_leg_removes_ocdata_dir(tmp_path, monkeypatch):
+    made = _record_mkdtemp(monkeypatch)
+    monkeypatch.setattr('plangraph.routing_support.opencode_render.render_gateway_providers',
+                        lambda *a, **k: 'mock render refusal')
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+
+    async def run():
+        return await runner.spawn('p', model_or_combo=REQUESTED, role='review',
+                                  client='opencode', cwd=str(tmp_path))
+    job = asyncio.run(run())
+    assert {'event': 'render_refused', 'reason': 'mock render refusal'} in job.events
+    assert made and not any(Path(d).exists() for d in made)
+    assert runner._ocdata_dirs == {}
+
+
+def test_cancelled_monitor_task_removes_ocdata_dir(tmp_path, monkeypatch):
+    async def probe(*args, **kwargs):
+        return None
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
+
+    async def factory(*args, **kwargs):
+        async def communicate(*a, **k):
+            await asyncio.Event().wait()
+        return SimpleNamespace(pid=123, returncode=None, communicate=communicate)
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+
+    async def run():
+        job = await runner.spawn('p', model_or_combo=REQUESTED, role='review',
+                                 client='opencode', cwd=str(tmp_path),
+                                 extra_env={}, wait_seconds=0)
+        oc_dir = runner._ocdata_dirs[job.job_id]  # stored before cleanup
+        assert Path(oc_dir).name.startswith('pg-ocdata-')
+        # Cancelled between creation and its finally: the monitor never starts,
+        # so its own finally can never clean up (D-2921 F3).
+        runner._tasks[job.job_id].cancel()
+        await asyncio.gather(runner._tasks[job.job_id], return_exceptions=True)
+        await asyncio.sleep(0.2)
+        return oc_dir
+    oc_dir = asyncio.run(run())
+    assert not Path(oc_dir).exists()
+    assert runner._ocdata_dirs == {}
