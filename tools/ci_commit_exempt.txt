@@ -130,3 +130,32 @@ d9b46912d0a504a43808c02340fbdafbffab9df9
 91e47fec42044aafcbf5d984e4485ee8dc79602d
 # #229 phase pre-gate history (D-2938): operator's own 1-line test commit
 b0648e545bde543746853650d30c10c211c7de19
+# D-2955 Gate-Edit: ORCH-EFFICIENCY-ENFORCE design-doc commits by Opus under operator override D-2739
+# D-2739 operator override, lane/decisions-keeper docs/design
+088d816b9273568c5debc9774be2b3c6a33fd2d9
+# D-2739 operator override, lane/decisions-keeper docs/design
+0c47b72f78aff9165430aedeb0b786ebd9cd6624
+# D-2739 operator override, lane/decisions-keeper docs/design
+0d03549816492ad95383607e6ee6e60d33b86d27
+# D-2739 operator override, lane/decisions-keeper docs/design
+34a33758338e8b63080b2f049b618db924470ef8
+# D-2739 operator override, lane/decisions-keeper docs/design
+354792db5502ec41c7d1940b0460afb21ba5d261
+# D-2739 operator override, lane/decisions-keeper docs/design
+46de8734930c0378dc2735d2506c0871c92c71be
+# D-2739 operator override, lane/decisions-keeper docs/design
+a0a773aa22e36c8b6926c5dd1d6267a9a06c1c86
+# D-2739 operator override, lane/decisions-keeper docs/design
+ae99395057acb8917f4d23891245d377f37c1da4
+# D-2739 operator override, lane/decisions-keeper docs/design
+bb45eb267c5069b8adf00a454e4c9aced5b3e28d
+# D-2739 operator override, lane/decisions-keeper docs/design
+c9969c5f481273cbad7e3911b02f011363148e75
+# D-2739 operator override, lane/decisions-keeper docs/design
+cb5a4e2380c58d04dae9e1e055924f6cc541e30e
+# D-2739 operator override, lane/decisions-keeper docs/design
+e1b58b48621a28607ad3c6720214cd2440473aba
+# D-2739 operator override, lane/decisions-keeper docs/design
+e93f4bbdccf7534773bcf91dfd35250ebe2c7f13
+# D-2739 operator override, lane/decisions-keeper docs/design
+ffc9fd0574eabd0845fdf213468602edd7957559
