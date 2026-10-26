@@ -85,14 +85,15 @@ CLAUDE_MARKERS: tuple[str, ...] = (
 )
 
 #: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
-#: trailing parenthetical note; <id> must name the run that produced the commit:
+#: trailing parenthetical note; the note may not contain ':' so it cannot carry
+#: a second Writer value. <id> must name the run that produced the commit:
 #: a spawner run id, a Claude Code session id, or a uuid (D-2955).
 CLAUDE_WRITER_RE = re.compile(
     r'^claude-[a-z0-9.-]+ '
     r'(?:run-[0-9a-f]{32}'
     r'|session_[A-Za-z0-9]+'
     r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
-    r'(?: \(.+\))?\Z'
+    r'(?: \([^:]+\))?\Z'
 )
 
 #: Test file paths: under a tests/test directory, ``test_*`` files,
