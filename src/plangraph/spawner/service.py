@@ -88,17 +88,36 @@ class SpawnService:
         if record.get('error'):
             record['error'] = '; '.join(p[:300] for p in clean(record['error']).split('; '))[:2000]
         run_dir = self.state / 'runs' / record['run_id']
-        job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
+        job_id = record.get('job_id')
+        job = getattr(self.runner, 'jobs', {}).get(job_id)
         # The logs hold the full output of every attempt and output_cut measures it all (I17);
         # a later _save must never shrink them back to the 4 KB tail (haiku-C3, qwen-C5).
+        # Per stream: done (finished jobs' output) + cur (current job's best known text).
+        # An attempt's tail supersedes a shorter live snapshot of the same job and never
+        # appends beside it; a job switch folds cur into done, so every fall-through
+        # attempt's text stays in the log and the tails (w28, w36).
         accs = self.__dict__.setdefault('_accs', {})
-        same_job = accs.get((record['run_id'], 'job')) == record.get('job_id')
+        attempts = record.get('attempts') or []
+        cur_job = accs.get((record['run_id'], 'job'))
         for s in ('stdout', 'stderr'):
-            acc, snap = accs.get((record['run_id'], s), (None, 0))
-            if acc is None: acc = record.get(s) if record.get(s) is not None else record.get(f'{s}_tail', '')
-            live = getattr(job, s, '') if job is not None else None
-            full = acc if live is None else (acc[: len(acc) - snap] if same_job else acc) + live
-            accs[(record['run_id'], s)] = (full, len(live or ''))
+            done, cur, n_att = accs.get((record['run_id'], s), (None, '', 0))
+            if done is None:
+                done = record.get(s) if record.get(s) is not None else record.get(f'{s}_tail', '')
+                n_att = len(attempts) if done else 0
+            for a in attempts[n_att:]:
+                piece = a.get(f'{s}_tail') or ''
+                if not piece: continue
+                if a.get('job_id') in (None, cur_job, job_id):
+                    if len(piece) >= len(cur): cur = piece
+                else:
+                    done += piece
+            if cur_job is not None and job_id != cur_job:
+                done, cur = done + cur, ''
+            live = getattr(job, s, None) if job is not None else None
+            if live is not None and len(live) >= len(cur):
+                cur = live
+            accs[(record['run_id'], s)] = (done, cur, len(attempts))
+            full = done + cur
             t = clean(full); raw = t.encode('utf-8', errors='replace')
             if len(raw) > 2097152:
                 record['output_cut'] = True; content = raw[:1048576] + b"\n[... output cut ...]\n" + raw[-1048576:]
@@ -218,6 +237,10 @@ class SpawnService:
     async def _continue_writer(self, record, output):
         if (record.get('liveness') or record.get('exit_class') == 'cancelled' or
             record.get('output_cut') or record.get('status', 'completed') != 'completed'):
+            # The reason table below never runs for a refused record, but a failed
+            # status must still name why no continuation was made (w31a).
+            if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed':
+                record['continuation_reason'] = 'nonzero_exit'
             return
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
