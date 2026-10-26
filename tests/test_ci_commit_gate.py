@@ -318,6 +318,16 @@ def test_claude_writer_re_rejects_trailing_newline() -> None:
     assert ci_commit_gate.CLAUDE_WRITER_RE.fullmatch(value) is None
 
 
+def test_claude_writer_note_may_not_embed_a_writer_value(repo: Path) -> None:
+    """The trailing note is free text except ':': it may not carry a second Writer."""
+    base = _head(repo)
+    writer = "claude-opus-5-5 run-" + "ab" * 16 + " (Writer: mimo-v2.6-pro run-1)"
+    sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: claude writer without run or session id"
+    ]
+
+
 def test_commit_without_any_writer_trailer_still_fails(repo: Path):
     base = _head(repo)
     sha = _commit(repo, "feat: served model\n")
