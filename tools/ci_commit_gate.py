@@ -119,6 +119,9 @@ TEST_REMOVAL_VIOLATION = 'test removal without Test-Removal trailer'
 MALFORMED_WRITER = 'malformed Writer trailer'
 MALFORMED_HAND_EDIT = 'malformed Hand-Edit trailer'
 GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
+#: A Hand-Edit needs exactly one Plan-Item trailer, else it joins no per-item
+#: running sum and evades the Route-Decision rule (E1a, delta4 seat M10).
+MISSING_PLAN_ITEM = 'hand-edit without Plan-Item'
 #: A Hand-Edit commit may change at most this many lines (added + deleted).
 #: Per-commit ceiling (ORCH-EFFICIENCY-ENFORCE E1a); above ROUTE_DECISION_LINES a
 #: Route-Decision trailer is required, so 50 stays the interim cap until E3c.
@@ -570,16 +573,19 @@ def check(
             continue
         h_items = _trailer_values(h_block, PLAN_ITEM_RE)
         h_item = h_items[0] if h_items else '(none)'
+        # Bucket keys compare case-folded so spelling variants share one
+        # running sum (E1a, seat G4); messages keep the commit's own spelling.
+        h_key = h_item.casefold()
         h_changed = _changed_lines(h_sha, cwd=cwd) or 0
-        history_running_sums[h_item] = history_running_sums.get(h_item, 0) + h_changed
-        if history_running_sums[h_item] > ROUTE_DECISION_LINES:
-            exceeded_50[h_item] = True
+        history_running_sums[h_key] = history_running_sums.get(h_key, 0) + h_changed
+        if history_running_sums[h_key] > ROUTE_DECISION_LINES:
+            exceeded_50[h_key] = True
 
         rd_trailers = [
             line for line in h_block
             if line.split(':', 1)[0].strip().lower() == 'route-decision'
         ]
-        if exceeded_50.get(h_item):
+        if exceeded_50.get(h_key):
             if len(rd_trailers) != 1 or not ROUTE_DECISION_RE.match(rd_trailers[0]):
                 rd_violations[h_sha] = (
                     f'hand-edit over {ROUTE_DECISION_LINES} lines for {h_item} without Route-Decision'
@@ -593,6 +599,7 @@ def check(
 
     range_bucket_lines: dict[str, int] = {}
     range_bucket_shas: dict[str, list[str]] = {}
+    range_bucket_names: dict[str, str] = {}
 
     for sha, message in _iter_commits(base, head, cwd=cwd):
         if sha.lower() in exempt_set:
@@ -658,10 +665,16 @@ def check(
                 violations.append(f'{sha}: hand-edit exceeds {HAND_EDIT_MAX_LINES} changed lines')
 
             items = _trailer_values(block_lines, PLAN_ITEM_RE)
+            if len(items) != 1:
+                # Exactly one Plan-Item, else the commit joins no per-item sum
+                # and evades the Route-Decision rule (E1a, delta4 seat M10).
+                violations.append(f'{sha}: {MISSING_PLAN_ITEM}')
             item = items[0] if items else '(none)'
+            key = item.casefold()
             lines_count = changed or 0
-            range_bucket_lines[item] = range_bucket_lines.get(item, 0) + lines_count
-            range_bucket_shas.setdefault(item, []).append(sha)
+            range_bucket_lines[key] = range_bucket_lines.get(key, 0) + lines_count
+            range_bucket_shas.setdefault(key, []).append(sha)
+            range_bucket_names.setdefault(key, item)
 
             if sha in rd_violations:
                 violations.append(f'{sha}: {rd_violations[sha]}')
@@ -681,10 +694,12 @@ def check(
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
 
-    for item, total in range_bucket_lines.items():
+    for key, total in range_bucket_lines.items():
         if total > HAND_EDIT_MAX_LINES:
-            tipping_sha = range_bucket_shas[item][0]
-            violations.append(f'{tipping_sha}: hand-edit total over ceiling for {item}')
+            tipping_sha = range_bucket_shas[key][0]
+            violations.append(
+                f'{tipping_sha}: hand-edit total over ceiling for {range_bucket_names[key]}'
+            )
 
     return violations
 
