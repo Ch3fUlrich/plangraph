@@ -72,7 +72,7 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
     _leg("agy-gemini-3.8-flash", "subscription", "agy", "gemini-3.8-flash", "gemini",
          ("128k", "256k", "1m"), 900000, False,
          note="gemini after its Friday-evening reset"),
-    _leg("agy-sonnet-5.5", "subscription", "agy", "sonnet-5.5", "claude",
+    _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
          ("128k", "256k", "1m"), 180000, False, claude=True,
          note="Antigravity quota, not Claude Max"),
     _leg("deepseek", "paid", "opencode", "omniroute/deepseek", "deepseek",

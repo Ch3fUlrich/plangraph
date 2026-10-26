@@ -105,3 +105,10 @@ def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "orchestrate"]) == 0
     assert "mimo-v2.6-pro" in capsys.readouterr().out
+
+
+def test_agy_leg_models_use_agy_model_ids():
+    # `agy models` ids: agy refuses the bare "sonnet-5.5" (workst run-1897ba45, 2026-10-26)
+    agy = {l.id: l.model for l in DEFAULT_LEGS if l.harness == "agy"}
+    assert agy == {"agy-gemini-3.8-flash": "gemini-3.8-flash",
+                   "agy-sonnet-5.5": "claude-sonnet-5-5-medium"}
