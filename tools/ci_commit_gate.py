@@ -1,7 +1,9 @@
 '''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
-Trailer checks use ``git log --no-merges base..head``. Merge parents are checked
-separately when open PR heads are supplied. Exempt commits skip only trailer rules;
+Trailer checks use ``git log base..head``. Merge commits are checked like any
+other commit when they carry a Writer or Hand-Edit trailer and are measured by
+their combined diff; a git-authored merge without those trailers is ignored.
+Merge parents are checked separately when open PR heads are supplied. Exempt commits skip only trailer rules;
 an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
@@ -182,9 +184,9 @@ def _git_text(args: list[str], cwd: str | Path | None = None) -> str:
 
 
 def _iter_commits(base: str, head: str, cwd: str | Path | None = None) -> list[tuple[str, str]]:
-    '''Return (sha, message) for git log --no-merges base..head (newest first).'''
+    '''Return (sha, message) for git log base..head (newest first), merges included.'''
     out = _git_text(
-        ['log', '--no-merges', '-z', '--format=%H%n%B', f'{base}..{head}'], cwd=cwd
+        ['log', '-z', '--format=%H%n%B', f'{base}..{head}'], cwd=cwd
     )
     commits: list[tuple[str, str]] = []
     for record in out.split('\0'):
@@ -197,7 +199,7 @@ def _iter_commits(base: str, head: str, cwd: str | Path | None = None) -> list[t
 
 def _history_commits(head: str, cwd: str | Path | None = None) -> list[tuple[str, str]]:
     '''Return (sha, message) reachable from head, oldest first.'''
-    out = _git_text(['log', '--no-merges', '--reverse', '-z', '--format=%H%n%B', head], cwd=cwd)
+    out = _git_text(['log', '--reverse', '-z', '--format=%H%n%B', head], cwd=cwd)
     commits: list[tuple[str, str]] = []
     for record in out.split('\0'):
         if not record.strip():
@@ -516,7 +518,7 @@ def _changed_lines(sha: str, cwd: str | Path | None = None) -> int | None:
 def hand_edit_commits(
     base: str, head: str, cwd: str | Path | None = None
 ) -> list[tuple[str, str]]:
-    '''Return (sha, reason) for non-merge commits with a strict Hand-Edit.'''
+    '''Return (sha, reason) for commits with a strict Hand-Edit.'''
     commits: list[tuple[str, str]] = []
     for sha, message in _iter_commits(base, head, cwd=cwd):
         values = _trailer_values(_trailer_block_lines(message, cwd=cwd), HAND_EDIT_RE)
@@ -602,6 +604,17 @@ def check(
         block_writer_values = _trailer_values(block_lines, WRITER_RE)
         block_hand_edit_values = _trailer_values(block_lines, HAND_EDIT_RE)
         has_hand_edit = bool(block_hand_edit_values)
+
+        if (
+            not has_hand_edit
+            and not block_writer_values
+            and len(_parent_shas(sha, cwd=cwd)) > 1
+        ):
+            # A git-authored merge (git merge, GitHub's "Merge pull request")
+            # carries no Writer/Hand-Edit trailer: there is nothing hand-written
+            # to attribute or cap, so it is ignored. A merge that carries one is
+            # checked like any other commit, measured by its combined diff (E1a).
+            continue
 
         malformed_writer = any(
             MALFORMED_WRITER_RE.match(line) is not None
