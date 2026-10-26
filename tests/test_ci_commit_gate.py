@@ -279,6 +279,15 @@ def test_valid_writer_passes(repo: Path):
         "claude-opus-5-5 run-" + "ab" * 16 + " (writer: x)",
         "claude-opus-5-5 run-" + "ab" * 16 + " (Writer : x)",
         "claude-opus-5-5 run-" + "ab" * 16 + " (writer : x)",
+        # Note shape and id-shape near-misses (D-2967): the note is a single
+        # parenthesised span of non-')' text and the case rule is strict.
+        "claude-opus-5-5 run-" + "ab" * 16 + " (a) x",  # text after the note
+        "claude-opus-5-5 run-" + "ab" * 16 + " (a (b))",  # nested parens
+        "claude-opus-5-5 run-" + "ab" * 16 + " ()",  # empty note
+        "claude-opus-5-5 run-" + "ab" * 16 + "a",  # 33 hex
+        "Claude-opus-5-5 run-" + "ab" * 16,  # model not lowercase
+        "claude-opus-5-5 run-" + "AB" * 16,  # run hex not lowercase
+        "claude-opus-5-5\trun-" + "ab" * 16,  # tab instead of the space
     ],
 )
 def test_claude_family_writers_fail(repo: Path, writer: str):
