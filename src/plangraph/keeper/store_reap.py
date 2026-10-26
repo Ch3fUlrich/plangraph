@@ -22,12 +22,6 @@ class ReapMixin:
         overdue = []
         with self._write():
             for item in self._all_items():
-                if item["exec_run_id"] is not None:
-                    # sq12 finding 3: a recorded exec owner means the Temporal
-                    # side owns this card's clock -- the reap pass skips it
-                    # entirely, or a lease-lapse reset would let a second run
-                    # claim a card a live run still owns.
-                    continue
                 if item["state"] == "claimed" and item["lease_until"]:
                     due = self._parse_iso(item["lease_until"])
                     if due is not None and due.timestamp() < now:

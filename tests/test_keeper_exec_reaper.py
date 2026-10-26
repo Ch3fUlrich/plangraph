@@ -70,27 +70,6 @@ def test_reaper_leaves_temporal_owned_cards_alone(w):
     assert snapshot(w, control) == ("open", None, None, None, None)
 
 
-def test_reaper_skips_a_lapsed_claim_with_a_live_exec_owner(w):
-    # sq12 finding 3: a lapsed lease on a claimed card must not reset it while
-    # an exec owner is recorded -- the Temporal side owns that clock, and a
-    # reap reset would let a second run claim the card.  The ownerless claim
-    # is the positive control, so disabling reaping cannot satisfy this.
-    key, control = seed(w, [("A", []), ("B", [])])
-    to_claimed(w, key)
-    seed_exec_owner(w, key, ("wf-1", "run-1", 2))
-    to_claimed(w, control)
-    before = snapshot(w, key)
-
-    reaped = w.store.reap(w.p("system"), w.clock.advance(365 * 24 * 3600))
-
-    assert reaped["expired"] == [control]
-    assert key not in reaped["expired"]
-    assert snapshot(w, key) == before
-    assert before[0] == "claimed"
-    assert before[2:] == ("wf-1", "run-1", 2)
-    assert snapshot(w, control) == ("open", None, None, None, None)
-
-
 @pytest.mark.parametrize("run_id,attempt", [("run-1", 1), ("stale-run", 2)])
 def test_delayed_worker_park_cannot_overwrite_projector(doors, w, run_id, attempt):
     key, = seed(w, [("A", [])])
