@@ -372,7 +372,7 @@ class SpawnerRunner:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
-        if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
+        if role in ("implement", "fix") and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
