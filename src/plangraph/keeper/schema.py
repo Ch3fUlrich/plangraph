@@ -59,7 +59,7 @@ EVENT_TYPES = (
     "lease_expired", "evidence_added", "submitted", "changes_requested",
     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
     "priority_set", "heartbeat",
-    "waiver_set", "legacy_state_set", "run_recorded", "answered",
+    "waiver_set", "legacy_state_set", "floor_waived", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
     "kind_set", "state_set", "exec_owner_changed", "oversight_token_minted",
 )
