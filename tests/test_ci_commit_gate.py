@@ -1228,6 +1228,22 @@ def test_e1_door_match_case_folded(repo: Path):
     assert check(s1, s2, cwd=repo) == []
 
 
+def test_e1_canon_rejects_resolvable_dotdot(repo: Path):
+    # mimopro-G10: the shared-lists row makes any '..' segment malformed
+    # before normalising, not only the escaping form.
+    from plangraph.gates import doors
+    base = _head(repo)
+    s_ok = _he(repo, 1, path="a/b/x.py")
+    assert check(base, s_ok, cwd=repo) == []
+    assert ci_commit_gate.canon_path("a/b/../x.py") is None
+    assert ci_commit_gate.gate_path_verdict("a/b/../x.py") == "malformed"
+    assert doors.canon_path("a/b/../x.py") is None
+    assert doors.blocked_path("a/b/../x.py") == "malformed"
+    # positive control: the same path without the '..' canonicalises and passes
+    assert ci_commit_gate.canon_path("a/b/x.py") == "a/b/x.py"
+    assert ci_commit_gate.gate_path_verdict("a/b/x.py") is None
+
+
 def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     base = _head(repo)
     f = repo / "src\\plangraph\\keeper\\x.py"
