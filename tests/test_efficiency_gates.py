@@ -639,20 +639,30 @@ def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
 _BAD_META = ({"liveness": "stalled"}, {"exit_class": "cancelled"}, {"output_cut": True}, {"status": "failed"})
 
 
-def test_spawn_limits_defaults_roles_and_env(monkeypatch):
+def test_spawn_limits_defaults_roles_and_env(tmp_path, monkeypatch):
     from plangraph.settings import SettingsError, spawn_limits
-    for roles, caps in ((("implement", "fix", "writer"), (90, 180)), (("review", "seat"), (45, 60)), (("design", "default", None), (60, 120))):
+    # design role map: writer = implement/fix/writer, seat = review, default = every other role
+    for roles, caps in ((("implement", "fix", "writer"), (90, 180)), (("review",), (45, 60)), (("design", "seat", "default", None), (60, 120))):
         for role in roles:
-            assert (spawn_limits(role).wall_cap_min, spawn_limits(role).max_cap_min) == caps
-    lim = spawn_limits(None)
-    assert (lim.stall_min, lim.stall_cpu_pct, lim.floor_mb, lim.max_runs, lim.require_principal, lim.ignore) == (15, 2, 2000, 4, False, {})
-    assert "opencode" in lim.truncation and "opencode" in lim.provider_protocol
-    with pytest.raises(Exception): lim.wall_cap_min = 100
+            lim = spawn_limits(role)
+            assert (lim.wall_cap_min, lim.max_cap_min) == caps
+            assert (lim.stall_min, lim.stall_cpu_pct, lim.floor_mb, lim.max_runs, lim.require_principal, lim.ignore) == (15, 2, 2000, 4, False, {})  # qwen-C9: defaults on every role, not only the default one
+            assert "opencode" in lim.truncation and "opencode" in lim.provider_protocol
+    with pytest.raises(Exception): spawn_limits(None).wall_cap_min = 100
     monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps({"writer": {"wall_cap_min": 10}}))
     assert (spawn_limits("implement").wall_cap_min, spawn_limits("implement").max_cap_min) == (10, 180)
-    for override in ({"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}}, {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}}, {"writer": {"truncation": {"opencode": [123]}}}):
+    bads = ({"bad_role": {}}, {"writer": {"bad_key": 1}}, {"writer": {"wall_cap_min": -1}},
+            {"writer": {"require_principal": "yes"}}, {"writer": {"ignore": "nope"}}, {"writer": {"truncation": {"opencode": [123]}}})
+    for override in bads:
         monkeypatch.setenv("PLANGRAPH_SPAWN_LIMITS", json.dumps(override))
         with pytest.raises(SettingsError): spawn_limits("writer")
+    monkeypatch.delenv("PLANGRAPH_SPAWN_LIMITS")
+    monkeypatch.setenv("PLANGRAPH_SETTINGS", "policy.json")  # qwen-C9: the settings-file section refuses the same shapes (I1)
+    for bad in bads:
+        (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": bad}))
+        with pytest.raises(SettingsError): spawn_limits("writer", root=tmp_path)
+    (tmp_path / "policy.json").write_text(json.dumps({"spawn_limits": {"seat": {"stall_min": 30}}}))
+    assert spawn_limits("review", root=tmp_path).stall_min == 30 and spawn_limits("design", root=tmp_path).stall_min == 15
 
 
 def test_liveness_exit_vocabulary():

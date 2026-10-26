@@ -49,7 +49,7 @@ class SpawnLimits:
 
 
 def spawn_limits(role: str | None = None, *, root=None) -> SpawnLimits:
-    cat = 'writer' if role in ('implement', 'fix', 'writer') else 'seat' if role in ('review', 'seat') else 'default'
+    cat = 'writer' if role in ('implement', 'fix', 'writer') else 'seat' if role == 'review' else 'default'
     base = {'writer': (90, 180), 'seat': (45, 60), 'default': (60, 120)}[cat]
     vals = {'wall_cap_min': base[0], 'max_cap_min': base[1]}
     data = _policy_data(root); sec = dict((data or {}).get('spawn_limits') or {})
