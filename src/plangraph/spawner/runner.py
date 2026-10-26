@@ -699,8 +699,11 @@ class SpawnerRunner:
                 oc_dir = self._ocdata_dirs.get(job_id)
                 denied = _opencode_tools_denied(
                     env.get('OPENCODE_CONFIG_CONTENT') or '', env)
-                m = (_opencode_served_model(Path(oc_dir) / 'opencode' / 'opencode.db',
-                                            f'plangraph-{job_id}')
+                # R2: the store read may block up to its 2s sqlite timeout on a
+                # locked db; a thread keeps the monitor loop responsive.
+                m = (await asyncio.to_thread(_opencode_served_model,
+                                             Path(oc_dir) / 'opencode' / 'opencode.db',
+                                             f'plangraph-{job_id}')
                      if oc_dir and denied else None)
                 if m is not None and m == requested_model:
                     job.request_side_model = m

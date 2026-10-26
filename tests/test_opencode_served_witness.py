@@ -430,3 +430,54 @@ def test_review_child_env_drops_stray_opencode_names_and_rehomes_home(tmp_path, 
     env = ctx['env']
     assert 'OPENCODE_CLI_CONFIG_CONTENT' not in env
     assert Path(env['HOME']).resolve().is_relative_to(Path(env['XDG_DATA_HOME']).resolve())
+
+
+def test_locked_store_read_does_not_stall_the_monitor_loop(tmp_path, monkeypatch):
+    """R2: the store read is threaded -- a locked store blocks only its thread,
+    and another coroutine still runs before the read returns."""
+    import time
+
+    async def probe(*args, **kwargs):
+        return None
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
+    done = {}
+    real_read = _opencode_served_model
+
+    def read(*args):
+        out = real_read(*args)
+        done['read_returned'] = time.monotonic()
+        return out
+    monkeypatch.setattr('plangraph.spawner.runner._opencode_served_model', read)
+    lockers = []
+
+    async def factory(*args, **kwargs):
+        argv = list(args)
+        data_home = Path(kwargs['env'].get('XDG_DATA_HOME') or '')
+        _store(data_home, [('s1', argv[argv.index('--title') + 1])], [('s1', 'glm-5.3-flash-free')])
+        locker = sqlite3.connect(data_home / 'opencode' / 'opencode.db')
+        locker.execute('BEGIN EXCLUSIVE')  # hold the store locked across the read
+        lockers.append(locker)
+
+        async def communicate():
+            return b'ok', b''
+        return SimpleNamespace(pid=123, returncode=0, communicate=communicate)
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+
+    async def run():
+        job = await runner.spawn('prompt', model_or_combo=REQUESTED, role='review',
+                                client='opencode', cwd=str(tmp_path),
+                                extra_env={}, wait_seconds=0)
+
+        async def nap():
+            await asyncio.sleep(0.05)
+            done['slept'] = time.monotonic()
+        sleeper = asyncio.create_task(nap())
+        await runner._tasks[job.job_id]
+        await sleeper
+    asyncio.run(run())
+    for locker in lockers:
+        locker.rollback()
+        locker.close()
+    assert 'read_returned' in done
+    assert done['slept'] < done['read_returned'], 'monitor loop stalled on the locked-store read'
