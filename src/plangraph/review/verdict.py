@@ -1,8 +1,9 @@
 """Review-reply parsing: verdict, test-gaming, payload helpers.
 
-The verdict parse is identical to ``tools/seat_verdict.py``: the last
+The verdict parse mirrors ``tools/seat_verdict.py``: the last
 ``VERDICT:`` line decides and fenced, quoted, indented, and hunk lines
-all count. Only the test-gaming check and the finish-reason gating
+all count. D-3070 adds the seat-contract words ``ACCEPT`` (pass) and
+``REQUEST_CHANGES`` (fix) here. Only the test-gaming check and the finish-reason gating
 here are stricter.
 """
 
@@ -24,8 +25,11 @@ __all__ = [
 
 VERDICTS = ("pass", "fix", "halt")
 
-PASS_WORDS = frozenset({"pass", "approve"})
-FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+PASS_WORDS = frozenset({"pass", "approve", "accept"})
+# _FIRST_WORD stops at "_", so REQUEST_CHANGES tokenizes to "request";
+# both spellings are listed so the seat contract maps either way (D-3070).
+FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject",
+                       "request", "request_changes"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
 # [*_`]* before/after the word: markdown-bold labels like **MED**: or
 # _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
