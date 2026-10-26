@@ -148,3 +148,16 @@ def test_seed_idempotent(tmp_path):
     assert all(first.values())
     assert catalog_db.main(["init-and-seed"]) == 0
     assert counts() == first
+
+
+def test_record_host_never_redacted(tmp_path, monkeypatch):
+    """D-2960: host is an identifier; an env value equal to it never redacts it."""
+    service = SpawnService(state=tmp_path / "state")
+    monkeypatch.setenv("PLANGRAPH_HOST", "bench-host-secretlike")
+    monkeypatch.setenv("HOSTNAME", "bench-host-secretlike")
+    monkeypatch.setenv("AUTH_HOST_TOKEN", "bench-host-secretlike")
+    record = service.save_refusal(SpawnRefused("host redaction probe"))
+    assert service.result(record["run_id"])["host"] == "bench-host-secretlike"
+    # Positive control: the same value elsewhere in the record is still redacted.
+    refused = service.save_refusal(SpawnRefused("leak bench-host-secretlike"))
+    assert "bench-host-secretlike" not in json.dumps({k: v for k, v in service.result(refused["run_id"]).items() if k != "host"})
