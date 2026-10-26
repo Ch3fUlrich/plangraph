@@ -2,19 +2,22 @@
 import asyncio
 import json
 import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
-from plangraph.spawner.runner import SpawnerRunner
+from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
 
 REQUESTED = 'opencode/glm-5.3-flash-free'
 
 
-def _store(tmp_path, sessions, assistants):
+def _store(home, sessions, assistants):
     """Build the store: sessions [(id, title)], assistant models [(session_id, model_id)]."""
-    db = tmp_path / 'opencode' / 'opencode.db'
+    db = home / 'opencode' / 'opencode.db'
     db.parent.mkdir(parents=True, exist_ok=True)
     db.unlink(missing_ok=True)  # each run seeds the store fresh
     with sqlite3.connect(db) as conn:
@@ -27,63 +30,120 @@ def _store(tmp_path, sessions, assistants):
                           for i, (sid, mid) in enumerate(assistants)])
 
 
-def _run_leg(tmp_path, monkeypatch, seed):
-    """One fake opencode leg; seed(title) fills the store once spawn names the session."""
+def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=None):
+    """One fake opencode leg; seed(title, data_home) fills the store once spawn names the session."""
     async def probe(*args, **kwargs):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
 
+    ctx = {}
+
     async def factory(*args, **kwargs):
         argv = list(args)
-        seed(argv[argv.index('--title') + 1])
+        ctx['env'] = dict(kwargs['env'])
+        data_home = Path(kwargs['env'].get('XDG_DATA_HOME') or '')
+        if data_home.exists():
+            ctx['mode'] = data_home.stat().st_mode & 0o777
+        seed(argv[argv.index('--title') + 1], data_home)
         async def communicate():
             return b'ok', b''
-        return SimpleNamespace(pid=123, returncode=0, communicate=communicate)
+        return SimpleNamespace(pid=123, returncode=exit_code, communicate=communicate)
 
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 
     async def run():
-        job = await runner.spawn('prompt', model_or_combo=REQUESTED, client='opencode',
+        job = await runner.spawn('prompt', model_or_combo=REQUESTED, role=role, client='opencode',
                                 cwd=str(tmp_path),
-                                extra_env={'XDG_DATA_HOME': str(tmp_path)}, wait_seconds=3)
+                                extra_env={'XDG_DATA_HOME': str(tmp_path), **(extra_env or {})},
+                                wait_seconds=3)
         await runner._tasks[job.job_id]
         return job
-    return asyncio.run(run())
+    return asyncio.run(run()), ctx
 
 
 def test_one_assistant_model_equal_to_requested_is_witnessed(tmp_path, monkeypatch):
-    job = _run_leg(tmp_path, monkeypatch,
-                   lambda t: _store(tmp_path, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+    job, _ = _run_leg(tmp_path, monkeypatch,
+                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
     assert job.served_model == 'opencode/glm-5.3-flash-free'
     assert job.served_family == 'glm'
     assert job.served_witness_reason == 'opencode session store'
 
 
 def test_different_served_model_stays_unwitnessed_with_event(tmp_path, monkeypatch):
-    job = _run_leg(tmp_path, monkeypatch,
-                   lambda t: _store(tmp_path, [('s1', t)], [('s1', 'deepseek-v4.1-flash-free')]))
+    job, _ = _run_leg(tmp_path, monkeypatch,
+                      lambda t, home: _store(home, [('s1', t)], [('s1', 'deepseek-v4.1-flash-free')]))
     assert job.served_model == 'unwitnessed'
     assert {'event': 'opencode_witness_unavailable'} in job.events
 
 
 def test_two_models_in_one_session_stay_unwitnessed(tmp_path, monkeypatch):
-    job = _run_leg(tmp_path, monkeypatch, lambda t: _store(
-        tmp_path, [('s1', t)], [('s1', 'glm-5.3-flash-free'), ('s1', 'deepseek-v4.1-flash-free')]))
+    job, _ = _run_leg(tmp_path, monkeypatch, lambda t, home: _store(
+        home, [('s1', t)], [('s1', 'glm-5.3-flash-free'), ('s1', 'deepseek-v4.1-flash-free')]))
     assert job.served_model == 'unwitnessed'
 
 
 def test_no_or_duplicate_title_row_stays_unwitnessed(tmp_path, monkeypatch):
-    job = _run_leg(tmp_path, monkeypatch,
-                   lambda t: _store(tmp_path, [('s1', 'plangraph-other')], [('s1', 'glm-5.3-flash-free')]))
+    job, _ = _run_leg(tmp_path, monkeypatch,
+                      lambda t, home: _store(home, [('s1', 'plangraph-other')], [('s1', 'glm-5.3-flash-free')]))
     assert job.served_model == 'unwitnessed'
-    job = _run_leg(tmp_path, monkeypatch,
-                   lambda t: _store(tmp_path, [('s1', t), ('s2', t)], [('s1', 'glm-5.3-flash-free')]))
+    job, _ = _run_leg(tmp_path, monkeypatch,
+                      lambda t, home: _store(home, [('s1', t), ('s2', t)], [('s1', 'glm-5.3-flash-free')]))
     assert job.served_model == 'unwitnessed'
 
 
 def test_missing_session_db_stays_unwitnessed(tmp_path, monkeypatch):
-    job = _run_leg(tmp_path, monkeypatch, lambda t: None)
+    job, _ = _run_leg(tmp_path, monkeypatch, lambda t, home: None)
     assert job.served_model == 'unwitnessed'
+
+
+def test_review_leg_store_dir_is_private_and_removed_after_run(tmp_path, monkeypatch):
+    job, ctx = _run_leg(tmp_path, monkeypatch,
+                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+    home = Path(ctx['env']['XDG_DATA_HOME'])
+    assert home != tmp_path          # never the shared, child-writable store
+    assert ctx['mode'] == 0o700      # spawner-private before launch
+    assert not home.exists()         # removed once the run ended
+
+
+def test_non_review_leg_reads_no_store_and_keeps_caller_xdg(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr('plangraph.spawner.runner._opencode_served_model',
+                        lambda *a, **k: calls.append(a) or None)
+    job, ctx = _run_leg(tmp_path, monkeypatch,
+                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                        role='implement')
+    assert Path(ctx['env']['XDG_DATA_HOME']) == tmp_path
+    assert calls == []
+    assert job.served_model == 'unwitnessed'
+
+
+def test_session_store_db_opened_read_only(tmp_path, monkeypatch):
+    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
+    db = tmp_path / 'opencode' / 'opencode.db'
+    captured = {}
+    real_connect = sqlite3.connect
+
+    def spy(database, *args, **kwargs):
+        captured['uri'] = database
+        captured['conn'] = real_connect(database, *args, **kwargs)
+        return captured['conn']
+
+    monkeypatch.setattr('plangraph.spawner.runner.sqlite3.connect', spy)
+    assert _opencode_served_model(db, 't') == 'opencode/glm-5.3-flash-free'
+    assert captured['uri'].startswith('file:') and captured['uri'].endswith('?mode=ro')
+    before = db.read_bytes()
+    with pytest.raises(sqlite3.Error):
+        captured['conn'].execute("INSERT INTO session_v2 VALUES ('sX', 'x')")
+    assert db.read_bytes() == before
+    ro = real_connect(captured['uri'], uri=True)
+    with pytest.raises(sqlite3.OperationalError):
+        ro.execute("INSERT INTO session_v2 VALUES ('sY', 'y')")
+
+
+def test_db_path_with_space_and_reserved_chars_opens(tmp_path):
+    home = tmp_path / 'we ird?dir#x'
+    _store(home, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
+    assert _opencode_served_model(home / 'opencode' / 'opencode.db', 't') == 'opencode/glm-5.3-flash-free'
 
 
 def test_title_flag_on_opencode_leg_and_not_on_plain_leg(tmp_path):

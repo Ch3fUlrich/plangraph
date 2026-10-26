@@ -166,7 +166,8 @@ def _opencode_served_model(db_path, title) -> str | None:
     Only a unanimous assistant model id counts; anything else stays unwitnessed.
     """
     try:
-        conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+        from urllib.parse import quote
+        conn = sqlite3.connect('file:' + quote(str(db_path)) + '?mode=ro', uri=True)
         try:
             rows = conn.execute('SELECT id FROM session_v2 WHERE title = ?', (title,)).fetchall()
             models = set()
@@ -200,6 +201,7 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
+        self._ocdata_dirs = {}
         self._git_guards = {}
         self._stdin_payloads = {}
 
@@ -341,6 +343,14 @@ class SpawnerRunner:
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+            if role == 'review':
+                # D-2905 (1): a spawner-owned per-job store dir, created before
+                # launch and read only after child exit -- the shared store is
+                # child-writable and proves nothing about the served model.
+                import tempfile
+                oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')  # mode 0700
+                self._ocdata_dirs[job_id] = oc_dir
+                child_env['XDG_DATA_HOME'] = oc_dir
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -480,6 +490,10 @@ class SpawnerRunner:
                 self._child_envs.pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
+                oc_dir = self._ocdata_dirs.pop(job_id, None)
+                if oc_dir is not None:
+                    import shutil
+                    shutil.rmtree(oc_dir, ignore_errors=True)
 
     async def _monitor_process(
         self,
@@ -548,13 +562,14 @@ class SpawnerRunner:
             job.status = "completed" if exit_code == 0 else "failed"
 
             # Witness an opencode leg only from opencode's session store, only
-            # for the requested model id (D-2898).
-            if (job.command and job.command[0] == 'opencode' and exit_code == 0
+            # for the requested model id (D-2898). D-2905 (1): only a review
+            # leg reads the store, and only from its spawner-owned per-job dir.
+            if (job.command and job.command[0] == 'opencode' and job.role == 'review'
+                    and exit_code == 0
                     and (not job.served_model or job.served_model == 'unwitnessed')):
-                child_env = self._child_envs.get(job_id, os.environ)
-                db_path = (Path(child_env.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share')
-                           / 'opencode' / 'opencode.db')
-                m = _opencode_served_model(db_path, f'plangraph-{job_id}')
+                oc_dir = self._ocdata_dirs.get(job_id)
+                m = (_opencode_served_model(Path(oc_dir) / 'opencode' / 'opencode.db',
+                                            f'plangraph-{job_id}') if oc_dir else None)
                 if m is not None and m == requested_model:
                     try:
                         self.served_witness(job_id, m, adapter_token=self._adapter_tokens.get(job_id))
@@ -589,6 +604,10 @@ class SpawnerRunner:
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+            oc_dir = self._ocdata_dirs.pop(job_id, None)
+            if oc_dir is not None:
+                import shutil
+                shutil.rmtree(oc_dir, ignore_errors=True)
 
     @staticmethod
     def _init_git_config_guard(work_dir: str | Path | None) -> tuple[Path, bytes, str] | None:
