@@ -12,6 +12,9 @@ UNKNOWN_PROVIDERS = object()
 OVERLAY_UNKNOWN = '_PLANGRAPH_OVERLAY_UNKNOWN'
 
 
+_missing_warned = False
+_missing_path = None
+
 def credential_names(node):
     """Environment references only; never return credential values."""
     if isinstance(node, dict):
@@ -61,15 +64,20 @@ def _strip_jsonc(text):
 
 
 def load_root_providers(root=None):
-    global _parse_warned
+    global _parse_warned, _missing_warned, _missing_path
     root = root or os.environ.get('AUTOOS_ROOT') or Path.home() / 'code/AutoOS'
     path = Path(root) / 'opencode.jsonc'
+    _missing_path = None
     try:
-        text = path.read_text()
+        text = path.read_text(encoding='utf-8')
         text = _strip_jsonc(text)
         providers = json.loads(text).get('providers')
         return copy.deepcopy(providers) if isinstance(providers, dict) else None
     except FileNotFoundError:
+        _missing_path = path
+        if not _missing_warned:
+            logging.getLogger(__name__).warning('root_provider_config_missing path=%s', path)
+            _missing_warned = True
         return None
     except (OSError, ValueError, TypeError, AttributeError):
         if not _parse_warned:
@@ -78,8 +86,10 @@ def load_root_providers(root=None):
         return UNKNOWN_PROVIDERS
 
 
+
+
 def overlay_env(base_env):
-    global _content_warned
+    global _content_warned, _missing_path
     env = dict(base_env)
     try:
         existing = json.loads(env.get('OPENCODE_CONFIG_CONTENT', '{}'))
@@ -91,6 +101,7 @@ def overlay_env(base_env):
             _content_warned = True
         env[OVERLAY_UNKNOWN] = '1'
         return env
+    _missing_path = None
     providers = load_root_providers()
     if providers is UNKNOWN_PROVIDERS:
         env[OVERLAY_UNKNOWN] = '1'

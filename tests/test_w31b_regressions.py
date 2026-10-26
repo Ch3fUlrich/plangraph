@@ -31,7 +31,8 @@ def test_unknown_and_declared_alias_admitted(model):
     assert r.host_skip_reason({'model': model, 'harness': 'opencode'}, env=env, probe=lambda e: {'x/y'}) is None
 
 
-def test_listing_case_variant_and_absence():
+def test_listing_case_variant_and_absence(monkeypatch):
+    monkeypatch.setattr(o, 'load_root_providers', lambda: {})
     probe = lambda e: {'omniroute/cx-gpt-6.1-sol#high'}
     assert r.host_skip_reason({'model': 'OMNIROUTE/CX-GPT-6.1-SOL', 'harness': 'opencode'}, probe=probe) is None
     assert r.host_skip_reason({'model': 'other/absent', 'harness': 'opencode'}, probe=probe) == 'not_served_on_host: other/absent'

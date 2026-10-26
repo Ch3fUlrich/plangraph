@@ -560,7 +560,13 @@ def host_skip_reason(row, *, probe=None, env=None):
     variants = {m for m in listing if m.startswith(base + '#')}
     present = models is None or (base in {m.split('#', 1)[0] for m in listing}
         and ('#' not in model or not variants or model.lower() in variants))
-    return None if present else 'not_served_on_host: ' + model
+    if present:
+        return None
+    from . import opencode_overlay
+    reason = 'not_served_on_host: ' + model
+    if opencode_overlay._missing_path is not None:
+        reason += f' (root_provider_config_missing: {opencode_overlay._missing_path})'
+    return reason
 
 
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
