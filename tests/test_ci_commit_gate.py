@@ -300,6 +300,16 @@ def test_claude_writer_with_run_or_session_id_passes(repo: Path, writer: str):
         "claude-opus-5-5 (D-2739 operator override)",
         "sonnet-5.5",
         "Claude Opus",
+        # Near-miss negatives of the accepted forms: each must fail, so that
+        # loosening CLAUDE_WRITER_RE to a bare ^claude- prefix is caught here.
+        "claude-sonnet-5-5 run-" + "ab" * 15 + "c",  # 31 hex
+        "claude-sonnet-5-5 run-" + "ab" * 16 + "c",  # 33 hex
+        "claude-sonnet-5-5 run-" + "AB" * 16,  # uppercase hex
+        "claude-opus-5-5 session_",  # empty session id
+        "claude-opus-5-5  run-" + "ab" * 16,  # double space
+        "claude-opus-5-5 run-" + "ab" * 16 + " trailing",  # trailing text
+        "claude-opus-5-5 run-" + "ab" * 16 + " (D-2931",  # unclosed note
+        "claude-opus-5-5 run-" + "ab" * 16 + " ()",  # empty note
     ],
 )
 def test_claude_writer_without_run_or_session_id_fails(repo: Path, writer: str):
