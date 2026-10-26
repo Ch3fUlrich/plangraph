@@ -8,19 +8,52 @@ server (``PG_DSN``, provided by the CI pytest-postgres job) and import psycopg
 only inside the test body.  Kills always target one backend by pid: CI runs
 this suite with ``-n auto``.
 """
+import errno
 import http.client
+import json
 import os
+import signal
+import socket
+import subprocess
+import sys
+import threading
 import time
+import uuid
+from pathlib import Path
 
 import pytest
 
 from door_util import Doors
 from keeper_util import World, seed
-from plangraph.keeper import api, db_pg
+from plangraph.keeper import api, config, daemon, db as kdb, db_pg
 from plangraph.keeper.errors import ConnectionLost
 
 DSN = os.environ.get("PG_DSN")
 needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (CI pytest-postgres provides one)")
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def wait_health(port, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+            conn.request("GET", "/v1/health")
+            resp = conn.getresponse()
+            if resp.status == 200:
+                conn.close()
+                return
+            conn.close()
+        except Exception:
+            time.sleep(0.05)
+    raise AssertionError("daemon did not become healthy")
 
 
 # ----------------------------------------------------------- fake driver raw
@@ -170,7 +203,7 @@ class BridgeRaw:
 
 
 # -------------------------------------------------------------- unit (fake raw)
-def test_s1_lost_is_sticky_until_boundary():
+def test_s1_lost_is_permanent():
     raw = FakeRaw(status=2)
     conn = db_pg.PgConnection(raw, "k_x")
     raw.fail, raw.broken = FakeDbError("gone"), True
@@ -422,6 +455,28 @@ def test_s1_sent_set_only_after_status_line():
     assert getattr(h, "_sent", False) is False
 
 
+def test_s1_mid_send_response_failure_no_second_status():
+    """A failure mid send_response leaves _headers_buffer with one status line; _escape must not buffer a 500."""
+    h = api.KeeperHandler.__new__(api.KeeperHandler)
+    h.protocol_version = "HTTP/1.1"
+    h.responses = api.KeeperHandler.responses
+    h.request_version = "HTTP/1.1"
+
+    def mid_boom(self, code, message=None):
+        self.send_response_only(code, message)
+        raise OSError("failed mid send_response")
+
+    h.send_response = lambda code, message=None: mid_boom(h, code, message)
+
+    def handle(method):
+        h._send(200, b"{}", "application/json")
+
+    h._handle = handle
+    h._request("GET")
+    assert len(h._headers_buffer) == 1
+    assert b"200" in h._headers_buffer[0]
+
+
 def test_s1_commit_break_is_503_outcome_unknown(tmp_path):
     """Fake raw broken only at COMMIT: the write answers 503 outcome unknown."""
     w = World(tmp_path)
@@ -516,3 +571,163 @@ def test_s1_mid_txn_kill_commits_nothing(tmp_path):
     finally:
         admin.close()
         w.close()
+
+
+# ------------------------------------------------------------- S2 fatal exit
+def test_s2_fatal_from_handler_sets_stop(tmp_path):
+    w = World(tmp_path)
+    w.store.conn = ConnProxy(w.store.conn, fail=ConnectionLost("statement"))
+    doors = Doors(w, tmp_path)
+    stopped = threading.Event()
+    doors.server.on_fatal = stopped.set
+    try:
+        status, body = doors.http("reader", "GET", "/v1/whoami")
+    finally:
+        doors.close()
+        w.close()
+    assert status == 503
+    assert body == {"error": "unavailable", "msg": "keeper database unavailable"}
+    assert getattr(doors.server, "fatal_reason", None) == "postgres connection lost"
+    assert stopped.is_set()
+
+
+def test_s2_dead_lock_session_exits_75(tmp_path, monkeypatch):
+    w = World(tmp_path)
+    port = free_port()
+    cfg_path = tmp_path / "keeper.json"
+    cfg_path.write_text(json.dumps({
+        "db": str(tmp_path / "keeper.db"),
+        "snapshot": str(tmp_path / "plan.snapshot.json"),
+        "bind": f"127.0.0.1:{port}",
+    }), encoding="utf-8")
+    cfg_path.chmod(0o600)
+    cfg = config.load_config(cfg_path)
+
+    class FakeLock:
+        def __init__(self):
+            self.checks = 0
+
+        def alive(self):
+            self.checks += 1
+            return self.checks <= 1  # turns False after first tick
+
+        def release(self):
+            pass
+
+    fake_lock = FakeLock()
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *args, **kwargs: fake_lock)
+    monkeypatch.setattr(kdb, "open_db", lambda *args, **kwargs: w.conn)
+
+    timer = threading.Timer(3.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    timer.start()
+    try:
+        t0 = time.monotonic()
+        rc = daemon.run(cfg)
+        duration = time.monotonic() - t0
+    finally:
+        timer.cancel()
+
+    assert rc == 75
+    assert duration < 5.0
+
+
+def test_s2_shutdown_bounded(tmp_path, monkeypatch):
+    w = World(tmp_path)
+    port = free_port()
+    cfg_path = tmp_path / "keeper.json"
+    cfg_path.write_text(json.dumps({
+        "db": str(tmp_path / "keeper.db"),
+        "snapshot": str(tmp_path / "plan.snapshot.json"),
+        "bind": f"127.0.0.1:{port}",
+    }), encoding="utf-8")
+    cfg_path.chmod(0o600)
+    cfg = config.load_config(cfg_path)
+
+    unblock = threading.Event()
+    real_close = api.KeeperHTTPServer.server_close
+
+    def blocking_close(self):
+        unblock.wait(timeout=2.0)
+        real_close(self)
+
+    monkeypatch.setattr(api.KeeperHTTPServer, "server_close", blocking_close)
+    monkeypatch.setattr(kdb, "open_db", lambda *args, **kwargs: w.conn)
+    monkeypatch.setattr(daemon, "SHUTDOWN_TIMEOUT", 0.2, raising=False)
+
+    exited = []
+    monkeypatch.setattr(os, "_exit", exited.append)
+
+    def trigger_fatal(srv):
+        srv.fail("fatal before shutdown")
+
+    timer = threading.Timer(3.5, lambda: (unblock.set(), os.kill(os.getpid(), signal.SIGTERM)))
+    timer.start()
+    try:
+        rc = daemon.run(cfg, ready=trigger_fatal)
+    finally:
+        unblock.set()
+        timer.cancel()
+
+    assert 75 in exited or rc == 75
+
+
+@needs_pg
+def test_s2_daemon_exits_75_within_10s(tmp_path):
+    psycopg = pytest.importorskip("psycopg")
+    app_name = f"pg_app_{uuid.uuid4().hex[:12]}"
+    w = World(tmp_path, backend="postgres", dsn=DSN)
+    schema = w.conn.schema
+    tok = w.tok("reader")
+    w.close()
+
+    port = free_port()
+    cfg_path = tmp_path / "keeper.json"
+    cfg_path.write_text(json.dumps({
+        "db": str(tmp_path / "keeper.db"),
+        "backend": "postgres",
+        "dsn": DSN,
+        "pg_schema": schema,
+        "snapshot": str(tmp_path / "plan.snapshot.json"),
+        "bind": f"127.0.0.1:{port}",
+    }), encoding="utf-8")
+    cfg_path.chmod(0o600)
+
+    env = dict(os.environ)
+    env["PGAPPNAME"] = app_name
+    env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+
+    try:
+        wait_health(port)
+        admin = _admin(psycopg)
+        try:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = %s",
+                (app_name,))
+        finally:
+            admin.close()
+
+        got = None
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/v1/whoami", headers={"Authorization": f"Bearer {tok}"})
+            resp = conn.getresponse()
+            got = resp.status
+            conn.close()
+        except (ConnectionRefusedError, BrokenPipeError):
+            got = "refused"
+        except OSError as exc:
+            if exc.errno == errno.ECONNREFUSED:
+                got = "refused"
+            else:
+                raise
+        assert got in (503, "refused")
+
+        assert proc.wait(timeout=10) == 75
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+
