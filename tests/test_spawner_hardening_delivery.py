@@ -388,6 +388,39 @@ def test_tree_killer_permission_error_tolerated():
     asyncio.run(run())
 
 
+def test_reap_failure_recorded_not_swallowed():
+    """PermissionError from the tree killer gives exactly one reap_failed event.
+
+    The bare except in _reap_process silently swallowed mis-kills and
+    Windows/unrelated failures (F2): keep ProcessLookupError silent (the group
+    is already gone) but surface anything else as a type-name-only event.
+    """
+    from plangraph.spawner.runner import SpawnerRunner
+
+    class FakeProcess:
+        pid = 9876
+        returncode = 0
+
+        async def communicate(self):
+            return b'stdout', b'stderr'
+
+    async def fake_factory(*args, **kwargs):
+        return FakeProcess()
+
+    def fake_tree_killer(pid):
+        raise PermissionError('operation not permitted')
+
+    async def run():
+        runner = SpawnerRunner(process_factory=fake_factory, tree_killer=fake_tree_killer)
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.status == 'completed'
+        assert [e for e in job.events if e.get('event') == 'reap_failed'] == [
+            {'event': 'reap_failed', 'error': 'PermissionError'}]
+
+    asyncio.run(run())
+
+
 def _pid_gone(pid):
     """True once pid is dead or a zombie awaiting a non-reaping init."""
     try:

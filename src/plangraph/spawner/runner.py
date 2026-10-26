@@ -465,10 +465,14 @@ class SpawnerRunner:
             res = self.tree_killer(pid)
             if asyncio.iscoroutine(res):
                 await res
-        except (ProcessLookupError, PermissionError):
-            pass
-        except Exception:
-            pass
+        except ProcessLookupError:
+            pass  # the run's process group is already gone
+        except Exception as exc:
+            # F2: never swallow a mis-kill or platform failure silently; type
+            # name only, no message text or pid list. Never raise out of here.
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
 
     async def _monitor_process(
         self,
