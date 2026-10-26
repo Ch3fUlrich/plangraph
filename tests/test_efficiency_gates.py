@@ -868,3 +868,63 @@ def test_cold_save_rebuilds_output_accumulation(tmp_path):
     cold = SpawnService(state=tmp_path)
     cold._save(cold.result("run-c3"))
     assert (run3 / "stdout.log").read_text() == "ONE" + "a" * 5000 + "TWO" + "b" * 5000  # every attempt, not the tail
+
+
+def test_output_cut_saved_before_continue_writer(tmp_path, monkeypatch):
+    # qwen-D2: dispatch execute() (runner.py) must _save — which computes output_cut from the
+    # accumulated logs (I17) — BEFORE _continue_writer reads it, mirroring the base ordering
+    # (service.py: save, then continue). Otherwise a run whose output crossed 2 MB mid-job
+    # continues the writer with output_cut still stale-false.
+    from dataclasses import dataclass, asdict
+    from types import SimpleNamespace
+    import asyncio as aio
+    import plangraph.gates.privacy as privacy
+    import plangraph.settings as settings
+    monkeypatch.setattr(privacy, 'admit_run_tree', lambda *a, **k: None)
+    monkeypatch.setattr(settings, 'admit_review_scope', lambda *a, **k: None)
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
+
+    @dataclass
+    class FakeLeg:
+        id: str = 'l1'; model: str = 'm'; harness: str = 'h'; family: str = 'fam'
+    class FakePlan:
+        legs = [FakeLeg()]; skipped = []; error = None; first_leg = legs[0]
+        def to_dict(self): return {'skipped': [], 'legs': [asdict(self.legs[0])]}
+
+    def drive(svc, output):
+        called = []
+        state = {'n': 0}
+        async def fake_spawn(**kw):
+            called.append(kw); state['n'] += 1
+            job = SimpleNamespace(job_id=f'j{state["n"]}', status='completed', exit_code=0,
+                stdout='', stderr='', liveness=None, cwd=None, served_model=None,
+                served_family=None, served_witness_reason=None)
+            # the first job's output only appears after the mid-flight save (as in a real job)
+            out = output if state['n'] == 1 else ''
+            async def fill(): job.stdout = out
+            svc.runner._tasks[job.job_id] = fill()
+            svc.runner.jobs[job.job_id] = job
+            return job
+        svc.runner.spawn = fake_spawn
+        svc._route = lambda *a, **k: FakePlan()
+        return called
+
+    big = "Remaining gaps: x\n" + "z" * 2097152  # crosses the 2 MB cut with a gap that would continue
+    small = "Remaining gaps: x\n"
+
+    from plangraph.spawner.service import SpawnService
+    base = SpawnService(state=tmp_path / 'base')
+    called = drive(base, big)
+    aio.run(base._spawn(card={'title': 't'}, prompt='p', role='implement', wait_seconds=None))
+    assert len(called) == 1  # positive control: the base ordering (save, then continue) never continued
+
+    from plangraph.spawner.runner import spawn_service
+    dsp = spawn_service(state=tmp_path / 'dsp')
+    called = drive(dsp, small)  # control: under the cut, with gaps, the dispatch path DOES continue
+    aio.run(dsp._spawn(card={'title': 't'}, prompt='p', role='implement', wait_seconds=None))
+    assert len(called) == 2
+
+    dsp2 = spawn_service(state=tmp_path / 'dsp2')
+    called = drive(dsp2, big)
+    aio.run(dsp2._spawn(card={'title': 't'}, prompt='p', role='implement', wait_seconds=None))
+    assert len(called) == 1  # output_cut must have stopped the continuation

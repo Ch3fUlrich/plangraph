@@ -725,6 +725,9 @@ def spawn_service(*args, **kwargs):
                             events=record.get('events', []) + getattr(job, 'events', []))
                         # Per-attempt classification (haiku-C4/qwen-C3): the last attempt wins; plain failures get check_fail (I13).
                         from .liveness import classify_attempt; record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
+                        # Save before continuing (qwen-D2): _save computes output_cut from the accumulated
+                        # logs (I17) and _continue_writer must see it — the base loop orders it the same way.
+                        self._save(record)
                         if (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run:
                                 await self._continue_writer(record, job.stdout)
