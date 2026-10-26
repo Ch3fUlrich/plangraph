@@ -92,6 +92,10 @@ def run(cfg, *, host=None, port=None, ready=None):
             ready(server)
         try:
             while not stop.wait(1.0):
+                if getattr(server, "fatal_reason", None):
+                    # F1: fail() may land while on_fatal is unwired (pre-run()
+                    # construction, or a hook that raised): notice it ourselves.
+                    break
                 alive = getattr(lock, "alive", None)
                 if alive and not alive():
                     server.fail("postgres keeper lock session lost")
