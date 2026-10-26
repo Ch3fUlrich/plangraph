@@ -1219,6 +1219,15 @@ def test_copy_to_pg_includes_both_oversight_tables():
     assert order.index("oversight_tokens") < order.index("oversight_ops")
 
 
+def test_copy_tables_are_unique():
+    from plangraph.keeper import copy_to_pg
+
+    dupes = [t for t in copy_to_pg.TABLES
+             if list(copy_to_pg.TABLES).count(t) > 1]
+    assert len(copy_to_pg.TABLES) == len(set(copy_to_pg.TABLES)), \
+        f"duplicated copy tables would be copied twice: {sorted(set(dupes))}"
+
+
 # ------------------------- every refusal is audited (fix round 1, MEDIUM)
 def _denied_rows(w):
     return list(w.conn.execute(
