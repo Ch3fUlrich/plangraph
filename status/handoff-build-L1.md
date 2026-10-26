@@ -3,7 +3,7 @@
 Read first: status/build-L1.card.md. J = /home/s/.claude/jobs/0bbdff0b/tmp (scripts, briefs, seat dirs). Notes: status/notes-build-L1.md.
 FIRST:
 - hb loop runs detached ($J/hb.sh 90, log $J/hb.log; last ok 00:45Z). Restart only if stale >10 min. Keys: ops/hb-keys.txt.
-- Live state: `PYTHONPATH=~/code/plangraph-worktrees/spawner-host-keys/src python3 -m plangraph.spawner.cli ps`; `gh pr list -R Ch3fUlrich/plangraph`. No runs of mine are live at handoff.
+- Live state: `PYTHONPATH=~/code/plangraph-worktrees/spawner-main/src python3 -m plangraph.spawner.cli ps`; `gh pr list -R Ch3fUlrich/plangraph`. No runs of mine are live at handoff.
 - Spawn only via `$J/gspawn2.sh <wt> <brief> <tag> <reason> <leg>` (host gate inside; budget 3). Fill the Writer RUNID by filter-branch over the writer commits only, before pushing.
 - Hand-Edit cap is 50 lines (D-2853, #215 merged). Run the commit gate as `python3 tools/ci_commit_gate.py check --base $(git merge-base origin/main HEAD) --head HEAD` (without args it exits 2 = usage).
 - Never use pkill/pgrep patterns that also match your own command line (killed my own shell twice). Kill by PID, or from a script file.

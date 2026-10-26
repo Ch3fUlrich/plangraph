@@ -7,7 +7,7 @@ Rules: D-2643/2644 batch review at end; D-2534 phase-batch; D-2539 Haiku first w
 Writers D-2683/2684: agy gemini > mimo-pro > OR free/opencode free (~01Z) > mimo-flash; never Claude; cx out ~10-30. agy -p never a seat (L24). D-2706: floor MemAvailable 2000 MB (incl. projected RSS), max 4 writers here, rest -> workst-L1-autoos. One compaction = recycle (new session from handoff).
 Router 10:3xZ: D-2706 floor 2000 MB incl projected RSS REPLACES D-2686 4000.
 D-2716: no new writers on coding.vm until <=4 agent-run procs; route to workst.
-Spawn (D-2749/D-2795): jobs/0bbdff0b/tmp/gspawn2.sh <wt> <brief> <tag> <reason> <leg> (host gate D-2823 pgrep opencode|qodercli|agy runs<4 + MemAvailable>=2000 IN the spawn cmd; my budget max 3 concurrent, D-2840). PYTHONPATH=spawner-host-keys/src. Legs: mimo-v2.6-pro, agy-gemini-3.8-flash. Fill Writer RUNID via filter-branch before push.
+Spawn (D-2749/D-2795; D-2892 spawner code = detached ~/code/plangraph-worktrees/spawner-main, gspawn2 refreshes it to origin/main): jobs/0bbdff0b/tmp/gspawn2.sh <wt> <brief> <tag> <reason> <leg> (host gate D-2823 pgrep opencode|qodercli|agy runs<4 + MemAvailable>=2000 IN the spawn cmd; my budget max 3 concurrent, D-2840). PYTHONPATH=spawner-main/src. Legs: mimo-v2.6-pro, agy-gemini-3.8-flash. Fill Writer RUNID via filter-branch before push.
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | item | state / next |
 |---|---|
