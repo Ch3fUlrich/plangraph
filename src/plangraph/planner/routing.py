@@ -22,7 +22,7 @@ import time
 from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 from plangraph.routing_errors import RouteError, SpawnRefused
 
-from .legs import DEFAULT_LEGS, DESIGN_ORDER, TIERS, WRITER_ORDER, Leg
+from .legs import DEFAULT_LEGS, DESIGN_ORDER, SEAT_ORDER, TIERS, WRITER_ORDER, Leg
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
@@ -370,7 +370,28 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
+    from plangraph.review.family import model_family, writer_key
+
+    def _family_of(leg_obj):
+        # E3b (D-2913): the keeper's family table is the identity, so qodercli
+        # qwen and or-qwen3.8-27b are one family whatever the label spells.
+        fam = model_family(leg_obj.model)
+        if fam is None:
+            fam = model_family(leg_obj.family) or str(leg_obj.family or "").strip().lower()
+        return fam
+
+    def _family_name(value):
+        return model_family(value) or str(value or "").strip().lower()
+
+    # An unknown writer family is refused, never guessed (FamilyError).
+    writer_set = (frozenset(writer_key(f) for f in writer_families)
+                  if role == "review" else frozenset())
     excluded = (set(writer_families) if role == "review" else set()) | set(exclude_families)
+    if role == "review":
+        # Writer-family and deepseek legs leave the route under their own label
+        # too, so both writer spellings plan identically.
+        excluded |= {leg.family for leg in candidates
+                     if _family_of(leg) in writer_set or _family_of(leg) == "deepseek"}
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and st["state"] != "limited" and "/" not in leg_obj.model:
@@ -390,6 +411,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         reason = None
         if leg.id in limited:
             reason = "limited"
+        elif role == "review" and _family_of(leg) == "deepseek":
+            reason = "deepseek_seat"
         elif leg.family in excluded:
             reason = "excluded_family"
         else:
@@ -434,15 +457,26 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             if positions:
                 source = "benchmark"
     seats = []
-    families = set(excluded)
+    n = 2 if ranking_risk in ('high', 'critical') else 1
     if role == "review":
-        for leg in ordered:
-            if leg.family not in families:
-                seats.append(leg)
-                families.add(leg.family)
-            if len(seats) == 2:
+        # E3b (D-2913): walk the code-owned seat order (SEAT_ORDER), never the
+        # tier position, so glm cannot jump ahead of the families before it.
+        # Seat families come from the family table; the writer's family (either
+        # spelling), deepseek (D-2744) and seated families never seat again.
+        families = {_family_name(f) for f in excluded} | {"deepseek"} | writer_set
+        by_id = {leg.id: leg for leg in ordered}
+        for seat_id in SEAT_ORDER:
+            leg = by_id.get(seat_id)
+            if leg is None:
+                continue
+            fam = _family_of(leg)
+            if fam in families:
+                continue
+            seats.append(leg)
+            families.add(fam)
+            if len(seats) == n:
                 break
-    error = "two distinct review families unavailable" if role == "review" and len(seats) < 2 else None
+    error = "two distinct review families unavailable" if role == "review" and len(seats) < n else None
     if error:
         reasons.append(error)
     order = {leg.id: i for i, leg in enumerate(ordered)}
