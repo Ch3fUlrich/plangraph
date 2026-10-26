@@ -1274,6 +1274,24 @@ def test_e1_binary_hand_edit_never_counts_zero(repo: Path):
     assert check(base, s2, cwd=repo) == []
 
 
+def test_e1_range_ceiling_names_tipping_commit(repo: Path):
+    # haiku-G9 / mimopro-G4: the refusal names the commit whose running sum
+    # crossed the ceiling, not the newest commit of the bucket.
+    base = _head(repo)
+    c1 = _he(repo, 300, item="demo:ITEM", rd=True)
+    c2 = _he(repo, 200, item="demo:ITEM", rd=True)
+    c3 = _he(repo, 50, item="demo:ITEM", rd=True)
+    assert check(base, c3, cwd=repo) == [
+        f"{c2}: hand-edit total over ceiling for demo:ITEM"]
+    # positive control: the same shape of three commits staying at the
+    # 400-line ceiling pass
+    _git(repo, "reset", "--hard", base)
+    _he(repo, 200, item="demo:ITEM", rd=True)
+    _he(repo, 150, item="demo:ITEM", rd=True)
+    d3 = _he(repo, 50, item="demo:ITEM", rd=True)
+    assert check(base, d3, cwd=repo) == []
+
+
 def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     base = _head(repo)
     f = repo / "src\\plangraph\\keeper\\x.py"

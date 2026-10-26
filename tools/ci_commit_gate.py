@@ -614,7 +614,7 @@ def check(
             )
 
     range_bucket_lines: dict[str, int] = {}
-    range_bucket_shas: dict[str, list[str]] = {}
+    range_bucket_entries: dict[str, list[tuple[str, int]]] = {}
     range_bucket_names: dict[str, str] = {}
 
     for sha, message in _iter_commits(base, head, cwd=cwd):
@@ -689,7 +689,7 @@ def check(
             key = item.casefold()
             lines_count = _counted(changed)
             range_bucket_lines[key] = range_bucket_lines.get(key, 0) + lines_count
-            range_bucket_shas.setdefault(key, []).append(sha)
+            range_bucket_entries.setdefault(key, []).append((sha, lines_count))
             range_bucket_names.setdefault(key, item)
 
             if sha in rd_violations:
@@ -710,9 +710,21 @@ def check(
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
 
+    # The refusal names the commit whose running sum crossed the ceiling:
+    # walk the bucket's commits in the history walk's oldest-first order and
+    # stop at the first one over the cap, not the newest (seats G4/G9).
+    history_order = {h_sha: i for i, (h_sha, _) in enumerate(history)}
     for key, total in range_bucket_lines.items():
         if total > HAND_EDIT_MAX_LINES:
-            tipping_sha = range_bucket_shas[key][0]
+            running = 0
+            tipping_sha = None
+            for sha, lines in sorted(
+                range_bucket_entries[key], key=lambda entry: history_order.get(entry[0], 0)
+            ):
+                running += lines
+                if running > HAND_EDIT_MAX_LINES:
+                    tipping_sha = sha
+                    break
             violations.append(
                 f'{tipping_sha}: hand-edit total over ceiling for {range_bucket_names[key]}'
             )
