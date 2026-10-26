@@ -244,30 +244,56 @@ def gate_path_verdict(path: str | Path) -> str | None:
     return None
 
 
-def _trailer_block_lines(message: str) -> list[str]:
-    '''Return non-blank lines in the maximal trailing trailer-shaped paragraphs.'''
-    paragraphs: list[list[str]] = []
-    current: list[str] = []
+#: Strict trailer lines that must live in the final trailer block (D-2879).
+STRICT_TRAILER_RES: tuple[re.Pattern[str], ...] = (
+    WRITER_RE, HAND_EDIT_RE, PLAN_ITEM_RE, ROUTE_DECISION_RE, GATE_EDIT_RE, TEST_REMOVAL_RE,
+)
+
+
+def _trailer_block_lines(message: str, cwd: str | Path | None = None) -> list[str]:
+    '''Return trailer lines exactly as git reads them: `git interpret-trailers --parse`.
+
+    Only the final paragraph is a trailer block (D-2879): earlier paragraphs
+    contribute nothing and a mixed final paragraph yields none, which is the
+    set the keeper's %(trailers) readers see.  Strict trailer-shaped lines the
+    parser drops are refused separately via _stray_trailer_lines.
+    '''
+    proc = subprocess.run(
+        ['git', 'interpret-trailers', '--parse'],
+        input=message.encode('utf-8', errors='replace'),
+        cwd=cwd,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode('utf-8', errors='replace').strip().splitlines()
+        raise GateError(
+            f'git interpret-trailers failed: {detail[0] if detail else "unknown error"}'
+        )
+    out = proc.stdout.decode('utf-8', errors='replace')
+    return [line for line in out.splitlines() if line.strip()]
+
+
+def _stray_trailer_lines(message: str) -> list[str]:
+    '''Strict trailer-shaped lines outside the final paragraph (D-2879).
+
+    git drops these, so a commit could otherwise pass carrying Writer /
+    Hand-Edit trailers the keeper never sees.
+    '''
+    paragraphs: list[list[str]] = [[]]
     for line in message.splitlines():
         if line.strip():
-            current.append(line)
-        elif current:
-            paragraphs.append(current)
-            current = []
-    if current:
-        paragraphs.append(current)
-
-    if not paragraphs:
-        return []
-    if not all(TRAILER_LINE_RE.match(line) for line in paragraphs[-1]):
-        return []
-
-    block: list[str] = []
-    for paragraph in reversed(paragraphs):
-        if not all(TRAILER_LINE_RE.match(line) for line in paragraph):
-            break
-        block = paragraph + block
-    return block
+            paragraphs[-1].append(line)
+        elif paragraphs[-1]:
+            paragraphs.append([])
+    if len(paragraphs) > 1 and not paragraphs[-1]:
+        paragraphs.pop()
+    stray: list[str] = []
+    for paragraph in paragraphs[:-1]:
+        stray.extend(
+            line for line in paragraph
+            if any(pattern.match(line) for pattern in STRICT_TRAILER_RES)
+        )
+    return stray
 
 
 def _trailer_values(lines: list[str], pattern: re.Pattern[str]) -> list[str]:
@@ -422,7 +448,7 @@ def hand_edit_commits(
     '''Return (sha, reason) for non-merge commits with a strict Hand-Edit.'''
     commits: list[tuple[str, str]] = []
     for sha, message in _iter_commits(base, head, cwd=cwd):
-        values = _trailer_values(_trailer_block_lines(message), HAND_EDIT_RE)
+        values = _trailer_values(_trailer_block_lines(message, cwd=cwd), HAND_EDIT_RE)
         if values:
             commits.append((sha, values[0]))
     return commits
@@ -434,7 +460,7 @@ def autoos_spawn_commits(
     '''Return (sha, writer) for commits whose Writer names an AutoOS run id (D-2749).'''
     commits: list[tuple[str, str]] = []
     for sha, message in _iter_commits(base, head, cwd=cwd):
-        for value in _trailer_values(_trailer_block_lines(message), WRITER_RE):
+        for value in _trailer_values(_trailer_block_lines(message, cwd=cwd), WRITER_RE):
             if AUTOOS_RUN_RE.search(value) and not PLANGRAPH_RUN_RE.search(value):
                 commits.append((sha, value))
                 break
@@ -466,7 +492,7 @@ def check(
     for h_sha, h_message in history:
         if h_sha.lower() in exempt_set:
             continue
-        h_block = _trailer_block_lines(h_message)
+        h_block = _trailer_block_lines(h_message, cwd=cwd)
         if not _trailer_values(h_block, HAND_EDIT_RE):
             continue
         h_items = _trailer_values(h_block, PLAN_ITEM_RE)
@@ -486,8 +512,10 @@ def check(
                     f'hand-edit over {ROUTE_DECISION_LINES} lines for {h_item} without Route-Decision'
                 )
         elif len(rd_trailers) > 1:
+            # Duplicate trailers are refused ("two trailers are refused too"),
+            # but the over-50 reason is false here; name the real defect.
             rd_violations[h_sha] = (
-                f'hand-edit over {ROUTE_DECISION_LINES} lines for {h_item} without Route-Decision'
+                f'hand-edit carries multiple Route-Decision trailers for {h_item}'
             )
 
     range_bucket_lines: dict[str, int] = {}
@@ -498,7 +526,7 @@ def check(
             continue
 
         all_lines = message.splitlines()
-        block_lines = _trailer_block_lines(message)
+        block_lines = _trailer_block_lines(message, cwd=cwd)
         all_writer_values = _trailer_values(all_lines, WRITER_RE)
         block_writer_values = _trailer_values(block_lines, WRITER_RE)
         block_hand_edit_values = _trailer_values(block_lines, HAND_EDIT_RE)
@@ -526,6 +554,9 @@ def check(
             for line in all_lines
         ):
             violations.append(f'{sha}: {MALFORMED_HAND_EDIT}')
+
+        if _stray_trailer_lines(message):
+            violations.append(f'{sha}: trailer outside final block')
 
         touched = _touched_paths(sha, cwd=cwd)
         if has_hand_edit:
