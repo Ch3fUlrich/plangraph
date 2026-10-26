@@ -481,3 +481,15 @@ def test_locked_store_read_does_not_stall_the_monitor_loop(tmp_path, monkeypatch
         locker.close()
     assert 'read_returned' in done
     assert done['slept'] < done['read_returned'], 'monitor loop stalled on the locked-store read'
+
+
+def test_unlocked_store_returns_the_model(tmp_path):
+    """R3: positive control for the locked-store read: the same store, once
+    unlocked, yields the model."""
+    _store(tmp_path, [('s1', 't')], [('s1', 'glm-5.3-flash-free')])
+    db = tmp_path / 'opencode' / 'opencode.db'
+    locker = sqlite3.connect(db)
+    locker.execute('BEGIN EXCLUSIVE')
+    locker.rollback()
+    locker.close()
+    assert _opencode_served_model(db, 't') == 'opencode/glm-5.3-flash-free'
