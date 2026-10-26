@@ -104,11 +104,13 @@ OPEN_HEAD_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 OPEN_PR_SKIP_NOTICE = 'ci-commit-gate: open PR merge check skipped (no --open-heads)\n'
 
 MISSING_WRITER = 'missing Writer trailer'
-CLAUDE_WRITER = 'claude writer without run or session id'
+CLAUDE_WRITER = 'claude writer not in form claude-<model> <run|session|uuid id> [(note)]'
 #: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
-#: trailing parenthetical note; the note may not contain a second Writer
-#: marker (case-insensitive, optional spaces before ':') or a newline. <id> is shape only (never looked up):
-#: a spawner run id, a Claude Code session id, or a uuid (D-2955, D-2967).
+#: trailing parenthetical note; ``)`` is forbidden inside the note (no nested
+#: parens), as are a newline and a second Writer marker (case-insensitive,
+#: optional spaces before ':'). Case rule: ``claude-<model>`` and the run-hex
+#: id are lowercase only, a uuid may be any case. <id> is shape only (never
+#: looked up): a spawner run id, a Claude Code session id, or a uuid (D-2955, D-2967).
 CLAUDE_WRITER_RE = re.compile(
     r'^claude-[a-z0-9.-]+ '
     r'(?:run-[0-9a-f]{32}'

@@ -284,7 +284,7 @@ def test_valid_writer_passes(repo: Path):
 def test_claude_family_writers_fail(repo: Path, writer: str):
     base = _head(repo)
     sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer without run or session id"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer not in form claude-<model> <run|session|uuid id> [(note)]"]
 
 
 @pytest.mark.parametrize(
@@ -316,7 +316,7 @@ def test_claude_writer_followed_by_clean_writer_still_fails(repo: Path):
         "Writer: mimo-v2.6-flash run-1\n"
     )
     sha = _commit(repo, message)
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer without run or session id"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer not in form claude-<model> <run|session|uuid id> [(note)]"]
 
 
 def test_claude_writer_re_rejects_newline_inside_note() -> None:
