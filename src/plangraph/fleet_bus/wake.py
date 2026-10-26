@@ -56,10 +56,14 @@ else is treated as busy, so no transient failure can swallow a wake.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import math
 import os
+import signal
+import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -394,3 +398,110 @@ class WakeHook:
             return
         self._dirty = False
         self.state.save()
+
+
+def _read_secret(path, what):
+    """Read one stripped secret file; missing, unreadable or empty is one safe error."""
+    try:
+        value = Path(path).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        raise ValueError(f"{what} is missing") from None
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"{what} is unreadable ({type(exc).__name__})") from None
+    if not value:
+        raise ValueError(f"{what} is empty")
+    return value
+
+
+def load_config(path):
+    """Parse the daemon config into ``(sessions, keeper_url, token, state_path,
+    authorization)``; *sessions* maps a recipient to a :class:`SessionTarget`.
+    Required keys: ``keeper_url``, ``token_file``, ``session_base``,
+    ``state_file``, ``sessions`` (each entry: ``session``, ``kind``, optional
+    ``base``); ``authorization_file`` is optional.  The token is read stripped
+    and returned only.  Problems raise ``ValueError`` with a safe reason naming
+    keys, types and exception classes -- never a value.
+    """
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise ValueError("config file is missing") from None
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"config file is unreadable ({type(exc).__name__})") from None
+    try:
+        data = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise ValueError("config file is not valid JSON") from None
+    if not isinstance(data, dict):
+        raise ValueError("config must be a JSON object")
+
+    def need(key, optional=False):
+        value = data.get(key)
+        if value is None and optional:
+            return ""
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"config key {key} must be a nonempty string")
+        return value
+
+    keeper_url = need("keeper_url")
+    token_file = need("token_file")
+    session_base = need("session_base")
+    state_path = need("state_file")
+    entries = data.get("sessions")
+    if not isinstance(entries, dict) or not entries:
+        raise ValueError("config key sessions must be a nonempty object")
+    sessions = {}
+    for name, entry in entries.items():
+        if not isinstance(name, str) or not name or not isinstance(entry, dict):
+            raise ValueError("sessions must map a recipient name to an object")
+        session, kind = entry.get("session"), entry.get("kind")
+        base = entry.get("base") or session_base
+        if not all(isinstance(v, str) and v for v in (session, kind, base)):
+            raise ValueError("session entry needs nonempty session, kind and base")
+        sessions[name] = SessionTarget(session=session, base=base, kind=kind)
+    token = _read_secret(token_file, "token file")
+    auth_file = need("authorization_file", optional=True)
+    authorization = _read_secret(auth_file, "authorization file") if auth_file else ""
+    return sessions, keeper_url, token, state_path, authorization
+
+
+def main(argv=None, *, stop=None):
+    """Run the wake daemon from one config file; return the exit code.
+
+    ``--config`` names the file :func:`load_config` describes.  A bad config
+    fails closed: one ``fleet-wake: bad config: <reason>`` stderr line, exit 2,
+    before any poll or sink is built; a good one runs :meth:`WakeHook.run`
+    until *stop* (a SIGTERM/SIGINT event by default) and exits 0.
+    """
+    parser = argparse.ArgumentParser(
+        prog="fleet-wake", description="wake sessions from keeper message rows")
+    parser.add_argument("--config", required=True, help="the daemon config file")
+    args = parser.parse_args(argv)
+    try:
+        sessions, keeper_url, token, state_path, authorization = load_config(
+            args.config)
+    except ValueError as exc:
+        print(f"fleet-wake: bad config: {exc}", file=sys.stderr)
+        return 2
+    # Imported here: wake_http imports this module (a cycle it cannot break).
+    from .wake_http import KeeperMessagesPoll, SyntheticSink
+    sink = SyntheticSink(authorization=authorization)
+    poll = KeeperMessagesPoll(keeper_url, token)
+    if stop is None:
+        stop = threading.Event()
+
+        def _on_signal(_signum, _frame):
+            stop.set()
+
+        signal.signal(signal.SIGTERM, _on_signal)
+        signal.signal(signal.SIGINT, _on_signal)
+    hook = WakeHook(sessions, sink, WakeState(state_path))
+    hook.run(poll, stop)
+    return 0
+
+
+if __name__ == "__main__":
+    # A ``-m`` run executes this file as ``__main__``; re-enter through the
+    # package name so wake_http sees ONE module (its WakeRefused must be ours).
+    from plangraph.fleet_bus import wake as _wake
+    raise SystemExit(_wake.main())

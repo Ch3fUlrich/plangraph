@@ -1,0 +1,17 @@
+# Example only: a user unit for the fleet-bus wake daemon.  Copy it to
+# ~/.config/systemd/user/fleet-wake.service and adjust paths for the machine.
+# Nothing here is a secret: the keeper token lives in the file the config names,
+# and the config path is the only site-specific value.
+
+[Unit]
+Description=plangraph fleet-bus wake daemon
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m plangraph.fleet_bus.wake --config %h/.config/plangraph/fleet-wake.json
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=default.target
