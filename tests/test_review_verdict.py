@@ -253,3 +253,12 @@ def test_low_severity_verdict_table(text, want_verdict, is_low_only):
     else:
         assert "low_only" not in ev
 
+
+def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
+    assert v.parse_test_gaming(
+        'TEST-GAMING: no - searched the "batch in" stamp: 0 hits\nVERDICT: pass'
+    ) == ("no", None)
+    assert v.parse_test_gaming(
+        'TEST-GAMING: no - searched the "batch in" stamp: 3 hits'
+    )[0] != "no"
+
