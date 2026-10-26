@@ -1,30 +1,31 @@
-# build-L1 handoff · gen-40 -> gen-41 · 2026-10-26 ~11:00Z
-Read the card next to this file. Rules: launch brief + memory. D-3005: writers on coding.vm = cx/gpt-6.1-sol by default (leg cx-gpt-6.1-sol, override reason >=10 chars); mimo-pro only on a real sol provider error. D-2983 (until Thu): no Claude writers; Haiku seat last only; seats luna > qwen > glm/nemotron. Plangraph spawner only; no deepseek; coding.vm gate <4 runs + MemAvailable >=2000 in the same command as the spawn. D-2948 / D-3022: NO qodercli (qwen) on any gen-analysis content until lifted. D-3015: no plain rm; delete only via literal guarded paths after a dry run + backup.
-Dirs: J0=/home/s/.claude/jobs/0bbdff0b/tmp (gspawn2.sh, seatpost2.py, hb.sh), J=/home/s/.claude/jobs/038a08a5/tmp (qseat.sh, briefs). Seats: ~/.local/share/plangraph/build-L1-seats/gen40/.
-Running: hb loop J0/hb.sh 8 (bg byb4md9bt, ~8 cycles from ~10:00Z; restart with `bash J0/hb.sh 8` once it exits). No spawner runs are in flight.
+# build-L1 handoff · gen-41 -> gen-42 · 2026-10-26 ~12:35Z
+Read the card next to this file first. Rules: launch brief + memory.
+- D-3035: writers are mimo-pro (leg mimo-v2.6-pro) until sol/luna pass one probe after 14:10Z; then D-3005 sol default.
+- D-3072: qodercli PAUSED fleet-wide (writers + seats). J41/seat.sh refuses qodercli legs (exit 9). In-flight qodercli output only after a topic check, as reviewer data.
+- D-2983: Claude only as Haiku seat, last. Seat order: luna > mimo-flash (only where mimo did not write) > Haiku. glm free limit hit twice today. No deepseek. Gate <4 runs + MemAvailable >=2000 in the same command as the spawn (gspawn2.sh / seat.sh do it).
+- Tools: spawner CLI needs PYTHONPATH=/home/s/code/plangraph-worktrees/spawner-main/src (detached at origin/main); `wait <run>` has NO --json flag. Keeper CLI: from /home/s/code/plangraph-worktrees/build-L1, PYTHONPATH=src PG_URL=http://127.0.0.1:8787 PG_TOKEN_FILE=/home/s/.config/plangraph/build-L1.token python3 -m plangraph.keeper.cli heartbeat plangraph:<KEY> (prefix required). /home/s/code/plangraph has no src.
+- Dirs: J41=/home/s/.claude/jobs/5ce87893/tmp (briefs, seat prompts+results, seat.sh, wsrpm7.sh); J0=/home/s/.claude/jobs/0bbdff0b/tmp (gspawn2.sh <wt> <brief> <tag> <reason> <leg>, output J0/w-<tag>.wait).
 
-## Done gen-40
-- luna leg #240 merged (main 8a590032); coding.vm catalog seeded (D-3015; backup ~/.cache/plangraph/spawner_catalog.db.bak-20261026T095426Z-D3015).
-- semsync seat PASS -> server-L1-main.
-- rpm1 ChaptarrNG pushed origin/ng-fix-rpm1 358594fe (3 commits: host normalize, Completed-only guard, single-file tests); qwen PASS. prox says it is hardening only: the live root cause is still open and prox is reproducing it with Trace in the sandbox. No writer round; no reply needed.
-- PR #241 delta seat qwen PASS @7bf64e9a (1 LOW) -> workst-L1-autoos.
-- AutoOS luna-row seat (lane/opencode-luna-row 5f2fca74): qwen = fix, MED ctx 475k vs catalog 900k. Same mismatch on the sol row; sent with that evidence; workst decides.
-- Gen seat B: the qwen run is VOID (D-3021). qoder state purged with backup (D-3022 closed). Stood down: workst-L1-gen runs luna on the workstation.
+## In flight at handoff
+- Writer run-82eba0b909dc4552891b2ea68af51510 (mimo-pro, kfw worktree): KEEPER-FLOOR-LEGACY-CLAIM A2 slice 2 = waive_floor via API/MCP/CLI (brief J41/brief-kfw2.md). Result -> J0/w-kfw2.wait.
+- bg lease renew at 13:30Z (OOF, SRI, KFL). If it died: renew by hand before 13:47Z.
 
-## Waiting on
-1. D-3020: AutoOS merge sha for the luna row from workst-L1-autoos -> `git -C /home/s/code/AutoOS fetch && merge --ff-only` on coding.vm -> ONE real luna review launch (leg cx-gpt-6-luna, --role review, a non-gen target, e.g. the SQ12 2nd-family seat) -> report run id + served model to routing. Earlier failure: run-24d78da346fe495a94d89ddd56976d38 "Model unavailable".
-2. SQ12 #239: workst fixer sq12-5 sha -> delta re-seat qwen + luna (2nd family) -> judge (HIGH).
-3. D-3023: after the gen W phase merges, delete gen40/gen-seatB, gen40/gen-seatB-luna and gen40/qoder-backup-20261026-D3022 (guarded literal paths, dry run first) -> one line to routing.
-4. CI-SELECT + REVIEW-METHOD-SETTING: post verdicts citing D-3013 after KEEPER-FLOOR-LEGACY-CLAIM (D-2994) lands.
-5. D-3018: meaning not recorded in this session's notes -> ask routing if it is still open.
+## Done gen-41
+- Luna proof run-c6397c3b rc 0 (D-3020) reported.
+- #243 OOF G3 + SRI: fix r1 02dad456 + Hand-Edit 66f2584d; 223 spawner tests pass; ON HOLD D-3058.
+- #246 KEEPER-FLOOR-LEGACY-CLAIM: A2 slice 1 (router-only waive_floor + floor_waived event, _bind_floor newest-event rule) 58465568 + part B (seat dir verdict fields) 82efb476 + Hand-Edit 30cb14cd (extra may only make verdict stricter). Keeper batch 2947 pass/30 skip; qoder/seat 620 pass.
+- rpm1 r7 ChaptarrNG: root cause = DI scan registered nested NoopRemotePathMappingService; struct fix 00709163 + Hand-Edit 440f2d4b; image 0.9.977-ng-rpm7 @sha256:6138312cee6bca02e0f7157086f81ae7600b6ae4c7cae1e4fc2fba2dc1ad86a6 sent prox-L1-main; topic checks OK (r7 + gen40/rpm1).
+- workst seats: mcpsplit 9b5adb19 PASS; #244 ee4a7cf8 FAIL (+ planner fallback = pre-existing role-blind defect, fix in PR); AO-ROUTING-SKILL 5458089c FAIL (verbatim findings sent). Pending qwen reqs dropped by workst.
+- INCIDENT: qwen seat run-f7d51f39 returned a foreign user session -> D-3072. Memory qodercli-paused-d3072.md.
+- Orphan check 12:3xZ (routing): 3 opencode runs (kfw, wt203, sablier-r3), each under its spawner supervisor; no qodercli/agy process; no orphans. routerctl's 5 likely counts the transient `opencode models` probe + serve --service processes.
 
 ## Next, priority order
-1. Luna proof launch (above) -> MODEL-ROUTE-SPAWN close evidence (gen39/mrs-evidence.md; needs 1 witnessed 2-family review).
-2. OPENCODE-ORCHESTRATOR-FALLBACK G3/G4 (D-3005: top after luna): one live run of an OpenCode orchestrator on sol working an L1 queue.
-3. KEEPER-FLOOR-LEGACY-CLAIM (p3, AUTH_DOOR; writer sol; Gate-Edit D-id on request).
-4. D-2918(B) script move (gspawn2/qseat/seatpost2 into plangraph).
+1. kfw2 result: review diff, run tests/test_keeper*.py tests/test_mcp*.py tests/contract, commit "Writer: opencode/mimo/mimo-v2.6-pro run-82eba0b9…" + Plan-Item trailer, push lane/keeper-floor-waive, update PR #246 body.
+2. #246 seats (HIGH, D-3074, no waiver): seat 1 luna after 14:10Z probe; seat 2 kimi (opencode-go/kimi-k3.1-pro) once build-L1-efficiency #245 merges and a probe passes; else next glm reset. Seat prompt: rebuild J41/seat-246.md from `git diff 0cc50e23 HEAD` (three-dot vs origin/main). Then router judge GO -> merge (live-tree safety) -> post D-3013 verdicts (CI-SELECT, REVIEW-METHOD) -> floor_waived on legacy rows per router D-id.
+3. #243 seat 2 (sol wrote -> luna excluded): kimi/glm; then workst live G3+SRI, G4 bus wake, judge.
+4. D-3023 deletions after gen W merge; MODEL-ROUTE-SPAWN close evidence; D-2918(B) script move; remove worktree sri-proof.
 
-## Lessons gen-40 (also in notes-build-L1.md)
-- Seat diffs must be three-dot (origin/main...HEAD); two-dot produced a false MED.
-- A qwen qodercli prompt over ~128KB (single argv) fails at 0 s with finish_reason error; slice to <=105KB per file group.
-- Luna "Model unavailable" came from the missing AutoOS opencode.jsonc row (spawner overlay), not from the gateway.
+## Lessons gen-41
+- Keeper CLI and spawner CLI module paths differ per worktree; a bg waiter that fails at import ends "completed" instantly: check its first output line.
+- Leaf writers may report a test run they never finished (kfw1 ended before its full batch): always rerun the batch.
+- Seat reply topic check (grep for the diff's file/function names) before using any verdict.
