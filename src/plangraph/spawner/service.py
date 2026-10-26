@@ -243,12 +243,16 @@ class SpawnService:
 
     async def _continue_writer(self, record, output):
         if (record.get('liveness') or record.get('exit_class') == 'cancelled' or record.get('output_cut') or record.get('status', 'completed') != 'completed'):
-            # A refused record never reaches the reason table below, but a failed status still names why (w31a).
-            if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed': record['continuation_reason'] = 'nonzero_exit'
+            # Every refusal cause names why (w31a: a failed status names 'nonzero_exit'; haiku-D8/qwen-D11: the other causes used to leave no reason at all).
+            record['continuation_reason'] = ('nonzero_exit' if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed'
+                                             else 'cancelled' if record.get('exit_class') == 'cancelled'
+                                             else 'output_cut' if record.get('output_cut') else 'liveness')
             return
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
-        reason = ('nonzero_exit' if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed' else
+        # The guard above already refused every non-completed status; keying on exit_code only keeps
+        # the table from refusing a second time, which would mask a deleted guard in the negative control (haiku-D3/qwen-D6).
+        reason = ('nonzero_exit' if record.get('exit_code') != 0 else
                   'continuation_limit' if record.get('continuation') else
                   'not_writer' if record.get('role') != 'implement' else
                   'clean_report' if not gaps else 'remaining_gaps')

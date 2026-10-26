@@ -686,7 +686,13 @@ def test_run_result_refusals_and_findings(tmp_path):
     async def fake_spawn(**kw):  # haiku-C6/qwen-C6: _continue_writer calls runner.spawn, not self._spawn
         called.append(kw); return SimpleNamespace(job_id="j1", status="completed", exit_code=0, stdout="")
     serv.runner.spawn = fake_spawn
-    for bad in _BAD_META: asyncio.run(serv._continue_writer(dict(run_id="r", role="implement", exit_code=0, cwd=str(tmp_path), **bad), "Remaining gaps: x"))
+    # haiku-D3/qwen-D6: the refused records are spawn-shaped (chosen_leg included) and their output has gaps, so deleting the I13 guard sends every shape into the spawn call — the control fails on the guard itself, never on a KeyError or the unrelated reason table.
+    reasons = []
+    for bad in _BAD_META:
+        rec = dict(run_id="run-r", role="implement", exit_code=0, cwd=str(tmp_path), chosen_leg={"model": "m", "harness": "h"}, **bad)
+        asyncio.run(serv._continue_writer(rec, "Remaining gaps: x"))
+        reasons.append(rec.get("continuation_reason"))
+    assert reasons == ["liveness", "cancelled", "output_cut", "nonzero_exit"]  # haiku-D8/qwen-D11: every refusal cause names why, an output_cut record with exit 0 included
     assert called == []  # a refused record must never reach the spawn call site
     good = dict(run_id="run-r2", role="implement", exit_code=0, cwd=str(tmp_path), status="completed", chosen_leg={"model": "m", "harness": "h"})
     asyncio.run(serv._continue_writer(good, "Remaining gaps: x"))
