@@ -14,6 +14,7 @@ import os
 import re
 import time
 import uuid
+import ctypes
 import logging
 import math
 import subprocess
@@ -433,6 +434,23 @@ class SpawnerRunner:
             self._processes[job_id] = proc
             self._nonces[job_id] = nonce
 
+            # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
+            # find an exited root pid, so an orphan (`opencode serve`) would outlive
+            # the run (SPAWN-ORPHAN-REAP). Failure never fails the run: taskkill runs.
+            if _is_nt():
+                self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
+                self._win_jobs = getattr(self, '_win_jobs', {})
+                try:
+                    handle = self.win_job_api.create_job()
+                    try:
+                        self.win_job_api.assign(handle, proc.pid)
+                    except Exception:
+                        self.win_job_api.close(handle)
+                        raise
+                    self._win_jobs[job_id] = handle
+                except Exception:
+                    job.events.append({'event': 'win_job_unavailable'})
+
             # Start background monitor
             task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
             self._tasks[job_id] = task
@@ -461,6 +479,18 @@ class SpawnerRunner:
         pid = getattr(proc, 'pid', None)
         if pid is None:
             return
+        # F3: kill the run's Job Object first, then pop it — taskkill /T cannot
+        # find a root pid that has already exited (SPAWN-ORPHAN-REAP).
+        win_job = getattr(self, '_win_jobs', {}).pop(job_id, None)
+        if win_job is not None:
+            api = getattr(self, 'win_job_api', None)
+            try:
+                api.terminate(win_job)
+                api.close(win_job)
+            except Exception as exc:
+                job = self.jobs.get(job_id)
+                if job is not None:
+                    job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
         try:
             res = self.tree_killer(pid)
             if asyncio.iscoroutine(res):
@@ -645,6 +675,62 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None):
     else:
         import signal
         os.killpg(pid, signal.SIGKILL)
+
+
+class _JobBasicLimitInformation(ctypes.Structure):
+    _fields_ = [(n, t) for n, t in (
+        ('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+        ('LimitFlags', ctypes.c_uint32), ('MinimumWorkingSetSize', ctypes.c_size_t),
+        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', ctypes.c_uint32),
+        ('Affinity', ctypes.c_size_t), ('PriorityClass', ctypes.c_uint32),
+        ('SchedulingClass', ctypes.c_uint32))]
+
+
+class _JobExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [('BasicLimitInformation', _JobBasicLimitInformation), ('IoInfo', ctypes.c_uint64 * 6),
+                ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+
+class WinJobApi:
+    """Kill-on-close Windows Job Object scope per run (SPAWN-ORPHAN-REAP F3).
+
+    Created lazily on nt only; tests inject a fake into ``SpawnerRunner.win_job_api``
+    so no ctypes loader runs off Windows. KILL_ON_JOB_CLOSE kills every descendant
+    when the handle closes — what taskkill /T cannot do once the root pid exited."""
+
+    def __init__(self):
+        k32 = self._k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateJobObjectW.restype = k32.OpenProcess.restype = ctypes.c_void_p
+
+    def create_job(self):
+        k32, v = self._k32, ctypes.c_void_p
+        handle = k32.CreateJobObjectW(None, None)
+        if not handle:
+            raise OSError(ctypes.get_last_error(), 'CreateJobObjectW')
+        info = _JobExtendedLimitInformation()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(v(handle), 9, ctypes.byref(info), ctypes.sizeof(info)):
+            k32.CloseHandle(v(handle))
+            raise OSError(ctypes.get_last_error(), 'SetInformationJobObject')
+        return handle
+
+    def assign(self, handle, pid):
+        k32, v = self._k32, ctypes.c_void_p
+        proc = k32.OpenProcess(0x101, False, pid)  # PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        if not proc:
+            raise OSError(ctypes.get_last_error(), 'OpenProcess')
+        try:
+            if not k32.AssignProcessToJobObject(v(handle), v(proc)):
+                raise OSError(ctypes.get_last_error(), 'AssignProcessToJobObject')
+        finally:
+            k32.CloseHandle(v(proc))
+
+    def terminate(self, handle):
+        self._k32.TerminateJobObject(ctypes.c_void_p(handle), 1)
+
+    def close(self, handle):
+        self._k32.CloseHandle(ctypes.c_void_p(handle))
 
 
 def spawn_service(*args, **kwargs):
