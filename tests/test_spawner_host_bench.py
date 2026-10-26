@@ -65,3 +65,66 @@ def test_catalog_db_path_both_orders(tmp_path):
     assert catalog_db.main(["init-and-seed", "--db-path", str(second)]) == 0
     assert first.is_file() and second.is_file()
     assert not default.exists()
+
+
+def seeded_db(tmp_path):
+    """Provision a seeded catalog DB through the CLI (D3 provision path)."""
+    db = tmp_path / "seeded.db"
+    assert catalog_db.main(["--db-path", str(db), "init-and-seed"]) == 0
+    return db
+
+
+def route_json(tmp_path, capsys, *extra):
+    from plangraph.spawner.cli import main as cli_main
+    capsys.readouterr()  # drain earlier prints; only the route JSON is parsed
+    assert cli_main(["--state", str(tmp_path / "state"), "route", "--card", json.dumps(CARD),
+                     "--role", "review", "--json", *extra]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_review_route_uses_benchmark_p(tmp_path, capsys):
+    """I3/D2: seeded rows reach review ranking through the leg-id map."""
+    db = seeded_db(tmp_path)
+    rows = benchmark_options(False, str(db))["benchmark"]
+    assert {"qoder/qwen3.8-flash-next", "agy/gemini-3.8-flash-tiered-high",
+            "agy/claude-sonnet-5-5-medium", "mimo/mimo-v2.6-pro",
+            "mimo/mimo-v2.6-flash"} <= set(rows)
+    plan = route_json(tmp_path, capsys, "--bench-db", str(db))
+    assert plan["p_source"] == "benchmark"
+    by_leg = {c["leg"]: c for c in plan["candidates"]}
+    for leg in ("qodercli-qwen3.8-flash", "agy-gemini-3.8-flash", "mimo-v2.6-flash"):
+        assert by_leg[leg]["u_core"] is not None, leg
+        assert by_leg[leg]["p_source"] == "measured", leg
+    # Without a DB: no p anywhere and the order is today's operator order.
+    bare = route_json(tmp_path, capsys)
+    assert bare["p_source"] == "operator-order"
+    assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
+    assert [leg["id"] for leg in bare["legs"]] == [
+        "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
+        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+
+
+def test_unmapped_leg_no_p(tmp_path, capsys):
+    """I4/D2: a leg missing from the map/DB gets no p (mapped leg: positive control)."""
+    from plangraph.spawner.bench_entry import LEG_BENCHMARK_MODEL
+    db = seeded_db(tmp_path)
+    rows = benchmark_options(False, str(db))["benchmark"]
+    for leg_id, model_id in LEG_BENCHMARK_MODEL.items():
+        assert rows[leg_id]["model_id"] == model_id
+    plan = route_json(tmp_path, capsys, "--bench-db", str(db))
+    by_leg = {c["leg"]: c for c in plan["candidates"]}
+    for leg in ("opencode-glm-5.3-flash-free", "opencode-deepseek-v4.1-flash-free"):
+        assert leg not in LEG_BENCHMARK_MODEL
+        assert by_leg[leg]["u_core"] is None and by_leg[leg]["p_source"] == "prior"
+    assert by_leg["agy-gemini-3.8-flash"]["p_source"] == "measured"
+
+
+def test_implement_order_unchanged_by_benchmark(tmp_path):
+    """D-2683: implement ignores benchmark p; ordering stays operator order."""
+    from plangraph.planner.routing import plan_spawn
+    db = seeded_db(tmp_path)
+    rows = benchmark_options(False, str(db))["benchmark"]
+    with_bench = plan_spawn(CARD, role="implement", benchmark=rows).to_dict()
+    bare = plan_spawn(CARD, role="implement").to_dict()
+    assert with_bench["p_source"] == "operator-order" == bare["p_source"]
+    assert [leg["id"] for leg in with_bench["legs"]] == [leg["id"] for leg in bare["legs"]]
