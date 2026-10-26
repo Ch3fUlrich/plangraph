@@ -722,10 +722,12 @@ def test_output_on_disk_under_and_over_2mb(tmp_path):
     from types import SimpleNamespace
     from plangraph.spawner.service import SpawnService
     serv = SpawnService(state=tmp_path)
-    rec1 = dict(run_id="run-u", status="completed", exit_code=0, stdout_tail="small out", stderr_tail="small err")
+    # haiku-C7: the under-cap case is a real few KB of harness-like output, not a few bytes
+    kb = "".join("step %04d: ok\n" % i for i in range(200))
+    rec1 = dict(run_id="run-u", status="completed", exit_code=0, stdout_tail=kb, stderr_tail="small err")
     serv._save(rec1)
     run_dir = tmp_path / "runs" / "run-u"
-    assert (run_dir / "stdout.log").read_text() == "small out"
+    assert (run_dir / "stdout.log").read_text() == kb and rec1["stdout_tail"] == kb
     assert json.loads((run_dir / "result.json").read_text())["output_cut"] is False and rec1["stdout_path"] == str(run_dir / "stdout.log")
     big_text = "H" * 1048576 + "M" * 500000 + "T" * 1048576
     rec2 = dict(run_id="run-o", status="completed", exit_code=0, stdout_tail=big_text)
