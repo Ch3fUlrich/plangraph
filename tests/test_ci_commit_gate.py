@@ -835,7 +835,7 @@ def test_hand_edit_without_writer_passes(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'fix: tweak\n\nHand-Edit: typo in docs\n',
+        'fix: tweak\n\nHand-Edit: typo in docs\nPlan-Item: demo:ITEM\n',
         files={'docs/x.md': 'x'},
     )
     assert check(base, sha, cwd=repo) == []
@@ -845,7 +845,7 @@ def test_hand_edit_on_auth_surface_refused(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'fix: tweak\n\nHand-Edit: typo in docs\n',
+        'fix: tweak\n\nHand-Edit: typo in docs\nPlan-Item: demo:ITEM\n',
         files={'src/plangraph/keeper/mcp.py': 'x'},
     )
     assert check(base, sha, cwd=repo) == [
@@ -1006,7 +1006,7 @@ def test_hand_edit_does_not_satisfy_gate_edit(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'fix: tweak\n\nHand-Edit: typo\n',
+        'fix: tweak\n\nHand-Edit: typo\nPlan-Item: demo:ITEM\n',
         files={'.github/workflows/x.yml': 'name: x\n'},
     )
     assert check(base, sha, cwd=repo) == [
@@ -1072,14 +1072,14 @@ def test_hand_edit_auth_path_rename_refused(repo):
     base = _head(repo)
     (repo / 'docs').mkdir()
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
-    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
+    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\nPlan-Item: demo:ITEM\n')
     violations = check(base, sha, cwd=repo)
     assert f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py' in violations
 
 
 def test_hand_edit_fifty_changed_lines_passes(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 50})
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\nPlan-Item: demo:ITEM\n', {'docs/x.md': 'l\n' * 50})
     assert check(base, sha, cwd=repo) == []
 
 
@@ -1100,7 +1100,7 @@ def test_hand_edit_deleted_lines_count(repo):
 
 def test_root_level_roles_file_hand_edit_refused(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'roles: add\n\nHand-Edit: add\n', {'roles.py': 'x\n'})
+    sha = _commit(repo, 'roles: add\n\nHand-Edit: add\nPlan-Item: demo:ITEM\n', {'roles.py': 'x\n'})
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: roles.py']
 
 
@@ -1114,7 +1114,7 @@ def test_hand_edit_auth_path_rename_exact(repo: Path) -> None:
     base = _head(repo)
     (repo / 'docs').mkdir()
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
-    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
+    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\nPlan-Item: demo:ITEM\n')
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py']
 
 
@@ -1144,7 +1144,7 @@ VALID_ROUTE_DECISION = "Route-Decision: route-" + "a" * 32
 _he_counter = 0
 
 
-def _he(repo: Path, n: int, item: str | None = None, rd: bool = False,
+def _he(repo: Path, n: int, item: str | None = "demo:ITEM", rd: bool = False,
         path: str | None = None, extra: str = "") -> str:
     global _he_counter
     _he_counter += 1
@@ -1209,7 +1209,7 @@ def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("x\n", encoding="utf-8")
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "docs: backslash door\n\nHand-Edit: backslash\n")
+    _git(repo, "commit", "-qm", "docs: backslash door\n\nHand-Edit: backslash\nPlan-Item: demo:ITEM\n")
     s_bs = _head(repo)
     assert check(base, s_bs, cwd=repo) == [f"{s_bs}: hand-edit touches auth/door surface: src\\plangraph\\keeper\\x.py"]
     s_dot = _he(repo, 1)
@@ -1229,6 +1229,43 @@ def test_e1_range_ceiling_bucket_sum(repo: Path):
     c1_two = _he(repo, 210, item="demo:ITEM_A", rd=True)
     c2_two = _he(repo, 210, item="demo:ITEM_B", rd=True)
     assert check(base, c2_two, cwd=repo) == []
+
+
+def test_e1_hand_edit_without_plan_item_refused(repo: Path):
+    # delta4-M10: a Hand-Edit with no Plan-Item joins no per-item sum and
+    # would evade the Route-Decision rule, so it is refused outright.
+    base = _head(repo)
+    bad = _he(repo, 5, item=None)
+    assert check(base, bad, cwd=repo) == [f"{bad}: hand-edit without Plan-Item"]
+    # positive control: the same edit with exactly one Plan-Item passes
+    ok = _he(repo, 5, item="demo:ITEM")
+    assert check(bad, ok, cwd=repo) == []
+    # exactly one: a second Plan-Item trailer is refused too
+    two = _he(repo, 5, item="demo:ITEM", extra="Plan-Item: demo:OTHER\n")
+    assert check(ok, two, cwd=repo) == [f"{two}: hand-edit without Plan-Item"]
+
+
+def test_e1_plan_item_keys_case_folded(repo: Path):
+    # haiku-G4: bucket keys compare case-folded, so `demo:ITEM` and
+    # `demo:item` share one bucket and one running sum instead of each
+    # hiding under the 50-line trigger.
+    base = _head(repo)
+    c1 = _he(repo, 30, item="demo:ITEM")
+    assert check(base, c1, cwd=repo) == []
+    c2 = _he(repo, 30, item="demo:item")
+    assert check(base, c2, cwd=repo) == [
+        f"{c2}: hand-edit over 50 lines for demo:item without Route-Decision"]
+    # positive control: the same pair passes with a Route-Decision on the second
+    _git(repo, "reset", "--hard", base)
+    _he(repo, 30, item="demo:ITEM")
+    r2 = _he(repo, 30, item="demo:item", rd=True)
+    assert check(base, r2, cwd=repo) == []
+    # the range ceiling bucket is shared too: 210 + 210 exceeds 400 once
+    _git(repo, "reset", "--hard", base)
+    _he(repo, 210, item="demo:ITEM", rd=True)
+    b2 = _he(repo, 210, item="demo:item", rd=True)
+    assert check(base, b2, cwd=repo) == [
+        f"{b2}: hand-edit total over ceiling for demo:item"]
 
 
 def test_e1_check_vectors(repo: Path):
@@ -1299,7 +1336,7 @@ def test_e1_strict_trailer_in_prose_paragraph_refused(repo: Path):
     # positive control: the same Hand-Edit in the final trailer block gets the door refusal
     ok = _commit(
         repo,
-        "docs: sneak\n\nprose line here\n\nHand-Edit: edit\nWriter: mimo-v2.6-flash run-1\n",
+        "docs: sneak\n\nprose line here\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\nWriter: mimo-v2.6-flash run-1\n",
         {"tools/seat_verdict.py": "y\n"},
     )
     assert check(sha, ok, cwd=repo) == [
