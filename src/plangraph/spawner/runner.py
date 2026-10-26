@@ -196,12 +196,16 @@ _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'gre
                  'webfetch', 'websearch')
 
 
-def _opencode_managed_dir() -> Path:
-    """opencode's system (managed) config dir; env cannot relocate it."""
+def _opencode_managed_dir(env: Mapping) -> Path:
+    """opencode's system (managed) config dir as the child will resolve it.
+
+    Fixed on Linux/macOS; on win32 opencode reads ProgramData from its own
+    env, so the CHILD env is read here (the same value the child sees).
+    """
     if sys.platform == 'darwin':
         return Path('/Library/Application Support/opencode')
     if sys.platform == 'win32':
-        return Path(os.environ.get('ProgramData') or 'C:\\ProgramData', 'opencode')
+        return Path(env.get('ProgramData') or 'C:\\ProgramData', 'opencode')
     return Path('/etc/opencode')
 
 #: The only OPENCODE_* env names a review child may carry. Anything else a
@@ -218,8 +222,9 @@ def _opencode_tools_denied(config_json, env) -> bool:
     """True only when the child's final config AND env prove every tool denied.
 
     Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
-    to 'deny'; the managed config dir (_opencode_managed_dir, which no env can
-    move) holds no opencode.json/opencode.jsonc; 'mcp' is {} and 'plugin' is [] in config_json; HOME,
+    to 'deny'; the managed config dir (_opencode_managed_dir, resolved from
+    the child env) holds no opencode.json/opencode.jsonc; 'mcp' is {} and
+    'plugin' is [] in config_json; HOME,
     XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
     the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
     inside that dir whose content parses to {};
@@ -239,12 +244,12 @@ def _opencode_tools_denied(config_json, env) -> bool:
     if not isinstance(permission, dict) or not all(
             permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
         return False
-    managed = _opencode_managed_dir()
-    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
-        return False
     if cfg.get('mcp') != {} or cfg.get('plugin') != []:
         return False
     if not isinstance(env, Mapping):
+        return False
+    managed = _opencode_managed_dir(env)
+    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
         return False
     for name in env:
         if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:

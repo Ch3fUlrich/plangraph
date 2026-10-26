@@ -246,6 +246,8 @@ from plangraph.spawner import opencode_overlay  # noqa: E402
 from plangraph.spawner.runner import _DENIED_TOOLS  # noqa: E402
 from plangraph.spawner import runner as runner_mod  # noqa: E402
 
+_REAL_MANAGED_DIR = runner_mod._opencode_managed_dir  # before the autouse patch
+
 _FULL_CFG = {'permission': {t: 'deny' for t in ('*',) + _DENIED_TOOLS}, 'mcp': {}, 'plugin': []}
 
 
@@ -254,7 +256,7 @@ def _empty_managed_dir(tmp_path, monkeypatch):
     """Hermetic: point opencode's managed config dir at an empty tmp dir."""
     managed = tmp_path / 'managed-opencode'
     managed.mkdir()
-    monkeypatch.setattr(runner_mod, '_opencode_managed_dir', lambda: managed)
+    monkeypatch.setattr(runner_mod, '_opencode_managed_dir', lambda env: managed)
     return managed
 
 
@@ -339,6 +341,14 @@ def test_managed_config_file_yields_not_denied(tmp_path, monkeypatch, _empty_man
                          lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
     assert {'event': 'opencode_tools_not_denied'} in job.events
     assert job.witness_kind is None
+
+
+def test_managed_dir_per_platform_reads_the_child_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_mod.sys, 'platform', 'win32')
+    assert _REAL_MANAGED_DIR({'ProgramData': str(tmp_path)}) == tmp_path / 'opencode'
+    assert _REAL_MANAGED_DIR({}) == Path('C:\\ProgramData', 'opencode')
+    monkeypatch.setattr(runner_mod.sys, 'platform', 'linux')
+    assert _REAL_MANAGED_DIR({'ProgramData': str(tmp_path)}) == Path('/etc/opencode')
 
 
 def test_locked_store_db_returns_none_without_blocking(tmp_path):
