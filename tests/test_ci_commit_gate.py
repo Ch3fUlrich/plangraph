@@ -291,7 +291,7 @@ def test_claude_family_writers_fail(repo: Path, writer: str):
     "writer",
     [
         "claude-sonnet-5-5 run-" + "ab" * 16,
-        "claude-opus-5-5 session_0119mTiP8y4maDh8C4dV6abu",
+        "claude-opus-5-5 session_" + "Ab1" * 8,
         "claude-haiku-4-5 123e4567-e89b-12d3-a456-426614174000 (D-2739 operator override: Opus writes, no L2)",
     ],
 )
