@@ -92,7 +92,7 @@ CLAUDE_WRITER_RE = re.compile(
     r'(?:run-[0-9a-f]{32}'
     r'|session_[A-Za-z0-9]+'
     r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
-    r'(?: \(.+\))?$'
+    r'(?: \(.+\))?\Z'
 )
 
 #: Test file paths: under a tests/test directory, ``test_*`` files,
@@ -717,7 +717,7 @@ def check(
         # in the accepted form (D-2955); anything else still cannot write.
         if any(
             marker in value.lower()
-            and CLAUDE_WRITER_RE.match(value) is None
+            and CLAUDE_WRITER_RE.fullmatch(value) is None
             for value in all_writer_values
             for marker in CLAUDE_MARKERS
         ):
