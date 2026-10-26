@@ -163,11 +163,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
                     api_routes.run_gate(principal, name)
                 except Refused as gate:
                     # a refusal outside the verb seam is still audited
-                    server.store.audit_run_gate_refusal(
-                        principal, name,
-                        (body or {}).get("key") if isinstance(body, dict)
-                        and isinstance(body.get("key"), str)
-                        else self._one(query, "key"), gate)
+                    audit = getattr(server.store, "audit_run_gate_refusal", None)
+                    with suppress(Exception):  # absent or broken: still the refusal
+                        audit and audit(
+                            principal, name,
+                            (body or {}).get("key") if isinstance(body, dict)
+                            and isinstance(body.get("key"), str)
+                            else self._one(query, "key"), gate)
                     raise
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)

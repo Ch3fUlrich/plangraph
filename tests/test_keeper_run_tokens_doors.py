@@ -122,3 +122,19 @@ def test_run_token_outside_run_verbs_is_refused_and_audited(d, method, path):
     # positive control: a RUN_VERB through the same token still works
     assert d.http("runw", "POST", "/v1/heartbeat",
                   {"key": "demo:A", "epoch": epoch})[0] == 200
+
+
+def test_run_gate_refusal_survives_broken_audit(d, monkeypatch):
+    """D-3070: the refusal is the response even when its audit call raises."""
+    w = d.world
+    to_claimed(w, "demo:A")
+    w.tokens["runw"] = d.http("l1main", "POST", "/v1/mint_run_token",
+                              body())[1]["token"]
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("audit store down")
+
+    monkeypatch.setattr(w.store, "audit_run_gate_refusal", broken)
+    status, err = d.http("runw", "POST", "/v1/set_priority",
+                         {"key": "demo:A", "n": 1})
+    assert status == 403 and err["msg"] == "a run token may not call this verb"
