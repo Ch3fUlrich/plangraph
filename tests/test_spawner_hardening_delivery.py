@@ -1,4 +1,8 @@
+import asyncio
 import json
+import os
+import time
+
 import pytest
 
 from plangraph.spawner.cli import _drain_chunks
@@ -380,6 +384,56 @@ def test_tree_killer_permission_error_tolerated():
         assert job.status == 'completed'
         assert job.exit_code == 0
         assert killed_pids == [9876]
+
+    asyncio.run(run())
+
+
+def _pid_gone(pid):
+    """True once pid is dead or a zombie awaiting a non-reaping init."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        state = open(f'/proc/{pid}/stat').read().rsplit(') ', 1)[1][0]
+    except OSError:
+        return False
+    return state == 'Z'
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX process groups')
+def test_run_exit_reaps_surviving_grandchild(tmp_path):
+    """A child that outlives its run must not survive the run's scope (SPAWN-ORPHAN-REAP).
+
+    The incident (`opencode.exe serve` outliving its run by 3 h) is a surviving
+    grandchild holding ports: prove by real pids, with the default tree killer,
+    that the reaper reaches it — the stubbed tree_killer tests cannot.
+    """
+    import sys
+    from plangraph.spawner.runner import SpawnerRunner
+
+    pid_file = tmp_path / 'grandchild.pid'
+    script = tmp_path / 'run_that_orphans.py'
+    script.write_text(
+        "import subprocess, sys\n"
+        # stdio to DEVNULL: the run's pipes must close at exit so the job completes
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],\n"
+        "    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n")
+
+    async def script_factory(*args, **kwargs):
+        return await asyncio.create_subprocess_exec(sys.executable, str(script), **kwargs)
+
+    async def run():
+        runner = SpawnerRunner(process_factory=script_factory)  # default tree killer
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.exit_code == 0
+        grandchild = int(pid_file.read_text())
+        deadline = time.time() + 5
+        while not _pid_gone(grandchild):
+            assert time.time() < deadline, f'grandchild {grandchild} survived the run'
+            time.sleep(0.05)
 
     asyncio.run(run())
 
