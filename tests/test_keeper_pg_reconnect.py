@@ -633,6 +633,38 @@ def test_s2_health_503_when_fatal_conn_healthy(tmp_path):
     assert (status, body) == (503, {"status": "unavailable"})
 
 
+def test_s2_fail_concurrent_once(tmp_path, capsys):
+    """F1: concurrent fail() callers print one fatal line and call on_fatal once."""
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    fired = []
+    doors.server.on_fatal = lambda: fired.append(True)
+    n = 8
+    barrier = threading.Barrier(n)
+
+    def hit():
+        barrier.wait()
+        doors.server.fail("postgres keeper lock session lost")
+
+    threads = [threading.Thread(target=hit) for _ in range(n)]
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)         # widen the check-then-set race window
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+    finally:
+        sys.setswitchinterval(old_interval)
+        doors.close()
+        w.close()
+    assert all(not t.is_alive() for t in threads)
+    err = capsys.readouterr().err
+    fatal = [ln for ln in err.splitlines() if ln.startswith("keeper: fatal:")]
+    assert fatal == ["keeper: fatal: postgres keeper lock session lost"]
+    assert len(fired) == 1
+
+
 def test_s2_dead_lock_session_exits_75(tmp_path, monkeypatch):
     w = World(tmp_path)
     port = free_port()
