@@ -15,6 +15,8 @@ from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
 
+#: Capabilities a client may check before relying on them (D-1498/D-2760).
+KEEPER_FEATURES = ("apply_ops.dry_run", "apply_ops.strict_body")
 _DONE = "done"
 _ACTIVE = ("claimed", "in_review")
 _MERGED_KINDS = ("commit+ci", "commit")
@@ -100,7 +102,8 @@ class ReadMixin:
         return self._run(principal, "whoami", None,
                          lambda now: {"name": principal.name, "role": principal.role,
                                       "projects": list(principal.projects or []),
-                                      "family": principal.family})
+                                      "family": principal.family,
+                                      "features": list(KEEPER_FEATURES)})
 
     # -------------------------------------------------------------- show
     def _run_derived(self, key, item, evidence=None):
@@ -178,6 +181,11 @@ class ReadMixin:
         if rows:
             info["jev_shadow"] = [jev_report.row_view(r) for r in rows]
             info["jev_agreement"] = jev_report.agreement_report(rows)["overall"]
+        # PG-EFFICIENCY-GATES: review rounds, fix log, design -- only when there
+        # is any, so an item without them keeps its exact previous show output.
+        gates = self.gates_summary(key)
+        if gates["rounds"] or gates["fix_log"]:
+            info["gates"] = gates
         info.update(self._run_derived(key, item))
         return info
 

@@ -22,7 +22,7 @@ import time
 from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 from plangraph.routing_errors import RouteError, SpawnRefused
 
-from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg
+from .legs import DEFAULT_LEGS, DESIGN_ORDER, TIERS, WRITER_ORDER, Leg
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
@@ -136,7 +136,13 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         window_class = WINDOW_CLASSES[idx + 1]
         reasons.append(f"overflow: window class upgraded to {window_class}")
 
-    no_train = bool(_NO_TRAIN_TAGS.intersection(tags))
+    privacy = card.get("privacy")
+    if privacy not in (None, "public", "private", "sensitive"):
+        raise ValueError("privacy must be public, private or sensitive")
+    # D-2683/D-2760 gap 3: a sensitive card reaches only the marked models.
+    from plangraph.gates.privacy import sensitive_leg_ok
+    sensitive = privacy == "sensitive"
+    no_train = bool(_NO_TRAIN_TAGS.intersection(tags)) or sensitive
     window_fits = _fits(effective, window_class)
     dropped: dict[str, int] = {}
     eligible: list[tuple[int, int, Leg]] = []
@@ -147,6 +153,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "excluded_family"
         elif no_train and leg.trains_on_data:
             why = "trains_on_data"
+        elif sensitive and not sensitive_leg_ok(leg):
+            why = "privacy_sensitive (D-2683)"
         elif window_class not in leg.windows:
             why = "window_class"
         elif not window_fits:
@@ -162,13 +170,14 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     if not eligible:
         raise RouteError(f"no eligible leg for {window_class} (effective {effective}): "
                          + "; ".join(reasons), exclusion_reasons=dropped)
-    if effective_role == "implement":
+    if effective_role in ("implement", "design"):
+        order = WRITER_ORDER if effective_role == "implement" else DESIGN_ORDER
         def sort_key(t):
             tier_idx, pos, leg = t
             try:
-                w_idx = WRITER_ORDER.index(leg.id)
+                w_idx = order.index(leg.id)
             except ValueError:
-                w_idx = len(WRITER_ORDER)
+                w_idx = len(order)
             return (w_idx, tier_idx, pos)
         eligible.sort(key=sort_key)
     else:
@@ -309,6 +318,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     """
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required")
+    from plangraph.gates.privacy import admit_card
+    admit_card(card)  # first: a sensitive card's refusal names D-2683
     for field in ('paths', 'write_set', 'risk_tags'):
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):
@@ -324,8 +335,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             raise SpawnRefused(f'{field} has invalid value')
     if any(t not in RISK_TAGS for t in card.get('risk_tags', ())):
         raise SpawnRefused('risk_tags has invalid value')
-    if role not in ("implement", "review", "orchestrate"):
-        raise ValueError("role must be implement|review|orchestrate")
+    if role not in ("implement", "review", "design", "orchestrate"):
+        raise ValueError("role must be implement|review|orchestrate|design")
     from plangraph.routing_support.risk import evaluate_risk
     assessment = evaluate_risk(paths=card.get('paths', card.get('write_set', ())),
                                bucket=card.get('bucket', 'S1'),
@@ -407,7 +418,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     ordered = list(route.legs)
     reasons = [*route.reasons, *bench_reasons]
     source = "operator-order"
-    if benchmark is not None and role != "implement":
+    if benchmark is not None and role == "review":
         from plangraph.routing_support.resolver import rank_candidates
         for tier in TIERS:
             tier_positions = [i for i, l in enumerate(ordered) if l.tier == tier]

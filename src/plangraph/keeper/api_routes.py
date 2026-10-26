@@ -35,7 +35,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                # worker_claim is POST transport: it returns a Claim to a worker
                "worker_claim",
                "attempts", "park", "complete", "alarms", "locks",
-               "jev_shadow", "jev_outcome"}
+               "jev_shadow", "jev_outcome", "log_item", "rule_set"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 READ_VERBS.add("messages")
 WRITE_VERBS.add("post_message")
@@ -56,6 +56,33 @@ READ_CALLS = {
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
 RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay"})
+
+
+#: The roles each inline ``_write`` verb can ever admit (a superset of the
+#: store's own check -- claimant verbs are identity-gated, so every role that can
+#: hold a claim).  A caller outside this set is refused (audited, 403) before
+#: its body is validated; a caller inside it keeps the 400 validation.
+_CLAIMANT = ("l1", "worker", "system")
+INLINE_ROLES = {
+    "create_items": ("router", "l1", "oversight"),
+    "import_items": ("router",),
+    # router/l1/oversight may manage (store_create.py:_edit -> _may_manage);
+    # a claim-holder editing depends_on on its own claim (holder_edit there)
+    # is admitted too, and worker_claim_lease lets system hold a claim -- so
+    # the entry must carry every claimant role, not just worker.
+    "edit_definition": ("router", "oversight") + _CLAIMANT,
+    "set_priority": ("router", "oversight"),
+    "claim": ("l1", "worker"),
+    "delegate": _CLAIMANT,
+    "heartbeat": _CLAIMANT,
+    "release": _CLAIMANT + ("router",),
+    "submit": _CLAIMANT,
+    "add_evidence": _CLAIMANT,
+    "add_evidence_router": ("router", "system"),
+    "verdict": ("reviewer",),
+    "cancel": ("router", "l1", "oversight"),
+    "waive_second_family": ("router",),
+}
 
 
 def run_gate(principal, name):
@@ -133,11 +160,18 @@ def jev_write(store, principal, name, body):
     return store.jev_outcome(principal, body)
 
 
-# Router-only verbs: ``(store, principal, body, need) -> result``.  ``need`` is
-# the handler's required-field reader.
+# Routed verbs: ``(store, principal, body, need) -> result``.  ``need`` is the
+# handler's required-field reader.  PG-EFFICIENCY-GATES fix round 2 (qwen-R1):
+# a handler never checks the role (the store is the single role authority) and
+# never raises on the body before the store's audited ``Store._run`` seam has
+# gated the role -- the body reads below run inside the seam's ``fn``, so a
+# wrong role is refused 403 and audited (ok=0, code forbidden) BEFORE any
+# body-shape or required-field validation.
 def _close_on_decision(store, principal, body, need):
-    return store.close_on_decision(principal, need(body, "key"),
-                                   need(body, "batch_ref"))
+    def work(now):
+        return store._close_on_decision(principal, need(body, "key"),
+                                        need(body, "batch_ref"), now)
+    return store._run(principal, "close_on_decision", body.get("key"), work)
 
 
 def _withdraw_review(store, principal, body, need):
@@ -150,21 +184,42 @@ def _reopen(store, principal, body, need):
 
 
 def _set_legacy_state(store, principal, body, need):
-    return store.set_legacy_state(principal, need(body, "key"),
-                                  need(body, "state"), body.get("note", ""))
+    def work(now):
+        return store._set_legacy_state(principal, need(body, "key"),
+                                       need(body, "state"),
+                                       body.get("note", ""), now)
+    return store._run(principal, "set_legacy_state", body.get("key"), work)
+
+
+#: D-1498/D-2760: an unknown body key is refused, never ignored (an old keeper
+#: that ignored ``dry_run`` applied a "dry run" batch for real).
+SET_KIND_FIELDS = frozenset({"key", "kind"})
+APPLY_OPS_FIELDS = frozenset({"ops", "batch_ref", "base_seq", "dry_run"})
 
 
 def _set_kind(store, principal, body, need):
-    extra = set(body) - {"key", "kind"}
-    if extra and getattr(principal, "role", None) == "router":   # a non-router gets 403 first
-        raise Refused("validation", f"unexpected fields {sorted(extra)}")
-    return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
+    def work(now):
+        extra = set(body) - SET_KIND_FIELDS
+        if extra:
+            raise Refused("validation", f"unexpected fields {sorted(extra)}")
+        return store._set_kind(principal, need(body, "key"),
+                               body.get("kind"), now)
+    return store._run(principal, "set_kind", body.get("key"), work)
 
 
 def _apply_ops(store, principal, body, need):
-    return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
-                           base_seq=body.get("base_seq"),
-                           dry_run=body.get("dry_run"))
+    def work(now):
+        # Strict body (D-1498/D-2760) before the ops read, for callers the
+        # verb admits -- a role refusal can never be masked by body validation
+        # because the role gate already ran before this fn.
+        extra = set(body) - APPLY_OPS_FIELDS
+        if extra:
+            raise Refused("validation", f"unexpected fields {sorted(extra)}")
+        return store._apply_ops_audited(principal, need(body, "ops"),
+                                        body.get("batch_ref"), now,
+                                        base_seq=body.get("base_seq"),
+                                        dry_run=body.get("dry_run"))
+    return store._run(principal, "apply_ops", None, work)
 
 
 def _migrate_descriptions(store, principal, body, need):
@@ -172,24 +227,33 @@ def _migrate_descriptions(store, principal, body, need):
 
 
 def _rehome(store, principal, body, need):
-    # the store checks the role first, then new_project (so a non-router gets 403)
-    return store.rehome(principal, need(body, "key"), body.get("new_project"),
-                        body.get("host"))
+    def work(now):
+        return store._rehome(principal, need(body, "key"),
+                             body.get("new_project"), body.get("host"), now)
+    return store._run(principal, "rehome", body.get("key"), work)
 
 
 def _record_run(store, principal, body, need):
-    return store.record_run(principal, need(body, "key"), body.get("run"))
+    def work(now):
+        return store._record_run(principal, need(body, "key"),
+                                 body.get("run"), now)
+    return store._run(principal, "record_run", body.get("key"), work)
 
 
 def _answer(store, principal, body, need):
-    return store.answer(principal, need(body, "key"), body.get("text"),
-                        body.get("decision_id"))
+    def work(now):
+        return store._answer(principal, need(body, "key"), body.get("text"),
+                             body.get("decision_id"), now)
+    return store._run(principal, "answer", body.get("key"), work)
 
 
 def _mint_run_token(store, principal, body, need):
-    # router or an l1 of the item's project: the store decides which
-    return store.mint_run_token(principal, need(body, "key"),
-                                need(body, "role"), need(body, "run_id"))
+    # router or an l1 of the item's project: the store decides which (the
+    # project check follows the body reads inside the store).
+    def work(now):
+        return store._mint(principal, need(body, "key"), need(body, "role"),
+                           need(body, "run_id"), now)
+    return store._run(principal, "mint_run_token", body.get("key"), work)
 
 
 def _set_metrics(store, principal, body, need):
@@ -207,15 +271,17 @@ def _replay(store, principal, body, need):
 
 
 def _phase_plan(store, principal, body, need):
-    # Role first: a non-router/system principal gets 403 before env or key checks.
-    store._require_role(principal, "router", "system")
-    from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
-    key = need(body, "key")
-    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
-    if not repo_root or not os.path.isdir(repo_root):
-        raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
-    # repo_root is server-side only; plan_phase also re-checks the role first.
-    return plan_phase(store, principal, key, repo_root=repo_root, now=None)
+    def work(_now):
+        # The role gate (Store._run, ROLE_GATE) already refused a wrong role
+        # before any env or key check; plan_phase re-checks the role itself too.
+        from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
+        key = need(body, "key")
+        repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+        if not repo_root or not os.path.isdir(repo_root):
+            raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
+        # repo_root is server-side only.
+        return plan_phase(store, principal, key, repo_root=repo_root, now=None)
+    return store._run(principal, "phase_plan", body.get("key"), work)
 
 #: Seam for tests: the keeper's own GitHub adapter, built from the server environment only.
 def _github_from_env():
@@ -223,33 +289,56 @@ def _github_from_env():
     return RestGitHub.from_env()
 
 def _phase_finish(store, principal, body, need):
-    # Role first: a non-router/system principal gets 403 before env, key or GitHub access checks.
-    store._require_role(principal, "router", "system")
-    from ..planner.phase_finish import finish_phase
-    key, branch, head = need(body, "key"), need(body, "branch"), need(body, "head")
-    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
-    if not repo_root or not os.path.isdir(repo_root):
-        raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
-    github = _github_from_env()
-    if github is None:
-        raise Refused("unavailable", "phase_finish GitHub access is not configured")
-    # repo_root, the repo slug and the token file come from the server environment only, never the body.
-    return finish_phase(store, principal, key, branch, head, repo_root=repo_root, github=github)
+    def work(_now):
+        # The role gate (Store._run, ROLE_GATE) already refused a wrong role
+        # before env, key or GitHub access checks; finish_phase re-checks too.
+        from ..planner.phase_finish import finish_phase
+        key, branch, head = need(body, "key"), need(body, "branch"), need(body, "head")
+        repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+        if not repo_root or not os.path.isdir(repo_root):
+            raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
+        github = _github_from_env()
+        if github is None:
+            raise Refused("unavailable", "phase_finish GitHub access is not configured")
+        # repo_root, the repo slug and the token file come from the server environment only, never the body.
+        return finish_phase(store, principal, key, branch, head, repo_root=repo_root, github=github)
+    return store._run(principal, "phase_finish", body.get("key"), work)
 
 def _worker_claim(store, principal, body, need):
-    # Role first: a non-worker principal gets 403 before key or env access checks.
-    # The phase runner's system principal also claims cards, so this is not worker-only.
-    store._require_role(principal, "worker", "system")
-    key = need(body, "card")
-    # body.worker is informational (a worker process id) and is ignored.
-    # The calling principal from the token is the only identity.
-    # Repo root and base branch come from the server environment only, never the body.
-    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
-    base_branch = os.environ.get("PG_PHASE_BASE_BRANCH") or "main"
-    from ..planner.worker_claim import worker_claim
-    return worker_claim(
-        store, principal, key, repo_root=repo_root, base_branch=base_branch
-    )
+    def work(_now):
+        # The role gate (Store._run, ROLE_GATE) already refused a wrong role
+        # before key or env access checks; worker_claim re-checks the role too.
+        key = need(body, "card")
+        # body.worker is informational (a worker process id) and is ignored.
+        # The calling principal from the token is the only identity.
+        # Repo root and base branch come from the server environment only, never the body.
+        repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+        base_branch = os.environ.get("PG_PHASE_BASE_BRANCH") or "main"
+        from ..planner.worker_claim import worker_claim
+        return worker_claim(
+            store, principal, key, repo_root=repo_root, base_branch=base_branch
+        )
+    return store._run(principal, "worker_claim", body.get("card"), work)
+
+
+def _requeue(store, principal, body, need):
+    def work(now):
+        return store._requeue(principal, need(body, "key"),
+                              body.get("reason", ""), now)
+    return store._run(principal, "requeue", body.get("key"), work)
+
+
+def _log_item(store, principal, body, need):
+    def work(now):
+        return store._log_item(principal, need(body, "key"),
+                               body.get("entry"), now)
+    return store._run(principal, "log_item", body.get("key"), work)
+
+
+def _rule_set(store, principal, body, need):
+    def work(now):
+        return store._rule_set(principal, need(body, "rules"), now)
+    return store._run(principal, "rule_set", None, work)
 
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
@@ -258,8 +347,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,
                 "set_kind": _set_kind,
-                "requeue": lambda store, principal, body, need: store.requeue(
-                    principal, need(body, "key"), body.get("reason", "")),
+                "requeue": _requeue,
                 "answer": _answer,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
@@ -268,10 +356,19 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "record_run": _record_run}
 
 
-#: Write verbs whose store method checks the role itself and admits more than the
-#: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
+#: Write verbs whose STORE path checks the role itself and admits more than the
+#: router (set_metrics: router, system; governor_override: router, l1, system,
+#: spawner), so they are not in ROUTER_VERBS.  The role lists live only in the
+#: store (``store.ROLE_GATE`` / the store method's own first check) -- this
+#: table names verbs, never roles (qwen-R2).
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,
                       "phase_finish": _phase_finish,
-                      "worker_claim": _worker_claim}
+                      "worker_claim": _worker_claim,
+                      # PG-EFFICIENCY-GATES: router or the project L1
+                      # (store.ROLE_GATE + store._log_item's project check)
+                      "log_item": _log_item,
+                      # PG-EFFICIENCY-GATES slice 2 (D-2746): router only
+                      # (store.ROLE_GATE)
+                      "rule_set": _rule_set}

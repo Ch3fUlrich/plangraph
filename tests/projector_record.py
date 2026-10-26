@@ -5,7 +5,7 @@ activity ``attempt`` against a Temporal server, drives the scenarios below, fetc
 writes ``<scenario>.json`` = {"workflow_id", "run_id", "history": <proto-JSON dict>} after scrubbing
 host-specific values.
 
-    python tests/projector_record.py --out tests/fixtures/temporal
+    python3 tests/projector_record.py --out tests/fixtures/temporal
 
 Env: TEMPORAL_ADDRESS (default 127.0.0.1:17233), TEMPORAL_NAMESPACE (default "default").
 """

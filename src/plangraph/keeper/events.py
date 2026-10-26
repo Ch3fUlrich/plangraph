@@ -145,7 +145,7 @@ def fold(events, unknown=None):
     Such an event never touches item state -- it is only recorded in the
     optional *unknown* list as ``{"seq", "type", "key"}``.  Types that are in
     ``EVENT_TYPES`` but have no branch here (``review_verdict``,
-    ``token_minted``, ``outage_recorded``) are known no-ops: they are replayed
+    ``token_minted``, ``outage_recorded``, ``item_logged``) are known no-ops: they are replayed
     by ``token_fold``/the store and are never reported as unknown.
     ``oversight_token_minted`` is keyless, so it returns above its branch: the
     ``oversight_tokens`` ledger is not event-sourced and replay never rebuilds
@@ -173,6 +173,11 @@ def fold(events, unknown=None):
             for field in ("priority", "model", "review_tier") + SMALL_FIELDS:
                 if field in payload:
                     item[field] = payload[field]
+        elif kind == "rule_set":   # PG-EFFICIENCY-GATES slice 2: a standing rule (done) or retired (cancelled)
+            item["state"] = payload.get("state", item["state"])
+            if "description" in payload:
+                item["description"] = payload["description"]
+            item["lease_until"] = None
         elif kind == "exec_owner_changed":
             # Ownership has its own audit events; lifecycle replay is unchanged.
             pass

@@ -8,9 +8,9 @@ Python 3.11+ (CI runs 3.12). `tests/conftest.py` puts `src/` on `sys.path`, so t
 install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 
 ```bash
-python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist
-python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR / L2
-python -m pytest -q -n auto tests            # main merge + nightly full suite
+python3 -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist
+python3 tools/affected_tests.py --base origin/main --run -n auto  # writers / PR / L2
+python3 -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
 The affected selector falls back to the full suite for unmapped Python source,
@@ -38,7 +38,7 @@ Co-Authored-By: <author> <noreply@example.com>
 
 This repo is public: never commit a password, token, hostname, IP address, e-mail address
 or home path — not in a diff, not in a commit message. Keep
-`python -m pytest -q tests/test_split_make_public.py` green: it is the guard that keeps the
+`python3 -m pytest -q tests/test_split_make_public.py` green: it is the guard that keeps the
 public split public, and it fails on exactly those leaks. CI runs on GitHub-hosted runners
 only.
 

@@ -1,12 +1,12 @@
 # Keeper runbook
 
 One keeper = one SQLite DB, one writer, HTTP on loopback, YAML import/export.
-`pg` below is `python -m plangraph.keeper.cli` (`daemon`/`mcp` are modules).
+`pg` below is `python3 -m plangraph.keeper.cli` (`daemon`/`mcp` are modules).
 Keep all state in one directory owned by the keeper's unix user:
 
     export KEEPER=$HOME/keeper
     mkdir -p "$KEEPER" && chmod 700 "$KEEPER"
-    pg() { python -m plangraph.keeper.cli "$@"; }
+    pg() { python3 -m plangraph.keeper.cli "$@"; }
 ## 1. Init and config
 Write `$KEEPER/keeper.json`; any mode other than **600** is refused:
 
@@ -44,14 +44,14 @@ Roles: router, l1, worker, reviewer, reader, system (system is internal).
 Each token is shown once: save it to `$KEEPER/tokens/<name>.token`, mode 600.
 A reviewer whose family equals the claimant's or delegate's is refused.
 ## 3. Run
-    python -m plangraph.keeper.daemon --config "$PG_CONFIG"   # SIGTERM/SIGINT stops it
+    python3 -m plangraph.keeper.daemon --config "$PG_CONFIG"   # SIGTERM/SIGINT stops it
     export PG_URL=http://127.0.0.1:8765
     export PG_TOKEN_FILE="$KEEPER/tokens/router.token"
     pg ready --brief            # one compact line per ready item
     pg show KEY
     pg claim KEY --lease 2h
     pg verdict KEY --pass
-    PG_URL=$PG_URL PG_TOKEN_FILE=$PG_TOKEN_FILE python -m plangraph.keeper.mcp
+    PG_URL=$PG_URL PG_TOKEN_FILE=$PG_TOKEN_FILE python3 -m plangraph.keeper.mcp
 
 `pg` exit codes: 0 ok, 2 refused, 3 unreachable.  With the daemon down a read
 (`pg ready`) answers from `plan.snapshot.json` read-only and says so on stderr;

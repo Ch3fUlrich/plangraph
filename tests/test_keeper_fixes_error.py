@@ -94,6 +94,13 @@ def test_bad_fixes_target_refused(w, bad):
     assert _item(w, "demo:F") is None
 
 
+@pytest.mark.parametrize("bad", [5, ["A"]])
+def test_bad_corrects_type_refused(w, bad):
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(w.p("router"), [defn("F", corrects=bad)])
+    assert exc.value.code == "validation" and "corrects" in exc.value.msg
+
+
 def test_edit_fixes_and_limit(w):
     w.store.create_items(w.p("router"), [
         defn("F1", fixes="A"), defn("F2", fixes="A"), defn("X"),

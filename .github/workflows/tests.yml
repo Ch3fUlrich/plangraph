@@ -63,7 +63,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: scrub_check (public patterns)
-        run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
+        run: python3 tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
 
   pytest:
     needs: select
@@ -88,7 +88,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install test deps
-        run: python -m pip install --quiet -r requirements-ci.txt
+        run: python3 -m pip install --quiet -r requirements-ci.txt
       - name: Install Temporal CLI 1.9.1
         run: |
           dir=$(mktemp -d)
@@ -124,9 +124,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --run -n auto
+            python3 tools/affected_tests.py --base "$BASE_SHA" --run -n auto
           else
-            python -m pytest -q -n auto --dist loadgroup --durations=30 tests
+            python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests
           fi
 
   # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
@@ -141,16 +141,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test deps
-        run: python -m pip install --quiet -r requirements-ci.txt
+        run: python3 -m pip install --quiet -r requirements-ci.txt
       - name: Restore Playwright browser cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
       - name: Install Chromium
-        run: python -m playwright install --with-deps chromium
+        run: python3 -m playwright install --with-deps chromium
       - name: browser tests
-        run: python -m pytest -q tests/browser -m browser
+        run: python3 -m pytest -q tests/browser -m browser
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -203,7 +203,7 @@ jobs:
         # On GitHub-hosted runners the service container is published on localhost.
         run: echo "PG_DSN=postgresql://postgres@localhost:$PG_PORT/keeper" >> "$GITHUB_ENV"
       - name: Install test deps
-        run: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
+        run: python3 -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
       - name: Install Temporal CLI 1.9.1
         run: |
           dir=$(mktemp -d)
@@ -225,11 +225,11 @@ jobs:
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES --run -n auto
+            python3 tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES --run -n auto
             exit $?
           fi
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
-          python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
+          python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
             tests/test_projector_ddl.py $FILES
 
   rust:
@@ -385,3 +385,19 @@ jobs:
           fi
           git show "$BASE:tools/ci_commit_gate.py" > "$RUNNER_TEMP/ci_commit_gate_base.py"
           python3 "$RUNNER_TEMP/ci_commit_gate_base.py" check --base "$BASE" --head "$HEAD" --exempt tools/ci_commit_exempt.txt
+      # PG-EFFICIENCY-GATES (D-2739 §0.2b/f): lane size and base pin, from the BASE
+      # copy once main has it (the introducing PR skips: bootstrap, D-3070).
+      - name: Lane gates
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if git cat-file -e "$PR_BASE:tools/lane_gates.py" 2>/dev/null; then
+            mkdir -p "$RUNNER_TEMP/lg/tools"
+            git archive "$PR_BASE" tools/lane_gates.py src/plangraph/gates | tar -x -C "$RUNNER_TEMP/lg"
+            python3 "$RUNNER_TEMP/lg/tools/lane_gates.py" check --base "$PR_BASE" --head "$PR_HEAD"
+          else
+            echo "lane-gates: bootstrap skip, base has no tools/lane_gates.py (D-3070)"
+          fi

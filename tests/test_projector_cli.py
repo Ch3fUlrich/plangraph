@@ -1,4 +1,4 @@
-"""``python -m plangraph.projector`` driven in-process against a tmp keeper config.
+"""``python3 -m plangraph.projector`` driven in-process against a tmp keeper config.
 
 Runs on whichever backend ``PG_KEEPER_BACKEND`` selects (``keeper_util.World``).
 """

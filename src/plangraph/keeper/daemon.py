@@ -1,6 +1,6 @@
 """Keeper daemon: run the HTTP API with the singleton flock.
 
-``python -m plangraph.keeper.daemon --config C`` opens the configured DB,
+``python3 -m plangraph.keeper.daemon --config C`` opens the configured DB,
 takes the exclusive ``db.lock_keeper`` lock (so only one writer runs per host),
 serves the API, and runs the reaper.  ``SIGTERM``/``SIGINT`` shut the server
 down cleanly and release the lock.

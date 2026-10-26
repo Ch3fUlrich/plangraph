@@ -97,3 +97,44 @@ def test_mcp_tool_routes():
     names = {t["name"] for t in mcp.TOOLS}
     assert "mint_run_token" in names
     assert mcp._ROUTES["mint_run_token"] == ("POST", "mint_run_token")
+
+
+def _refusals(world, action):
+    return world.store.conn.execute(
+        "SELECT actor,code,msg FROM audit_log WHERE action=? AND ok=0",
+        (action,)).fetchall()
+
+
+@pytest.mark.parametrize("method,path", [("POST", "/v1/set_priority"),
+                                         ("GET", "/v1/show?key=demo:A")])
+def test_run_token_outside_run_verbs_is_refused_and_audited(d, method, path):
+    w = d.world
+    epoch = to_claimed(w, "demo:A")
+    w.tokens["runw"] = d.http("l1main", "POST", "/v1/mint_run_token",
+                              body())[1]["token"]
+    action = path.split("/")[2].split("?")[0]
+    before = len(_refusals(w, action))
+    status, err = d.http("runw", method, path,
+                         {"key": "demo:A", "n": 1} if method == "POST" else None)
+    assert status == 403 and err["msg"] == "a run token may not call this verb"
+    rows = _refusals(w, action)
+    assert len(rows) == before + 1 and rows[-1]["code"] == "forbidden"
+    # positive control: a RUN_VERB through the same token still works
+    assert d.http("runw", "POST", "/v1/heartbeat",
+                  {"key": "demo:A", "epoch": epoch})[0] == 200
+
+
+def test_run_gate_refusal_survives_broken_audit(d, monkeypatch):
+    """D-3070: the refusal is the response even when its audit call raises."""
+    w = d.world
+    to_claimed(w, "demo:A")
+    w.tokens["runw"] = d.http("l1main", "POST", "/v1/mint_run_token",
+                              body())[1]["token"]
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("audit store down")
+
+    monkeypatch.setattr(w.store, "audit_run_gate_refusal", broken)
+    status, err = d.http("runw", "POST", "/v1/set_priority",
+                         {"key": "demo:A", "n": 1})
+    assert status == 403 and err["msg"] == "a run token may not call this verb"

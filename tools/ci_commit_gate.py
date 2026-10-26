@@ -126,6 +126,11 @@ GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
 #: Interim safety ceiling (operator 2026-10-25); the decision moves to spawner
 #: route (ORCH-EFFICIENCY-ENFORCE).
 HAND_EDIT_MAX_LINES = 50
+#: An AutoOS spawner run id (``YYYYMMDD-HHMMSS-<name>-<hex>``); the plangraph
+#: spawner writes ``run-<32 hex>``.  D-2749: no agent spawns through AutoOS.
+AUTOOS_RUN_RE = re.compile(r'(?:^|[\s-])\d{8}-\d{6}-[\w.-]*-[0-9a-f]{6}\b')
+PLANGRAPH_RUN_RE = re.compile(r'\brun-[0-9a-f]{32}\b')
+AUTOOS_SPAWN = 'autoos spawner run id (D-2749: spawn through the plangraph spawner)'
 
 #: Default exempt file, REPO-RELATIVE so CI reads it from the base commit.
 DEFAULT_EXEMPT = 'tools/ci_commit_exempt.txt'
@@ -369,6 +374,19 @@ def hand_edit_commits(
     return commits
 
 
+def autoos_spawn_commits(
+    base: str, head: str, cwd: str | Path | None = None
+) -> list[tuple[str, str]]:
+    '''Return (sha, writer) for commits whose Writer names an AutoOS run id (D-2749).'''
+    commits: list[tuple[str, str]] = []
+    for sha, message in _iter_commits(base, head, cwd=cwd):
+        for value in _trailer_values(_trailer_block_lines(message), WRITER_RE):
+            if AUTOOS_RUN_RE.search(value) and not PLANGRAPH_RUN_RE.search(value):
+                commits.append((sha, value))
+                break
+    return commits
+
+
 def check(
     base: str,
     head: str,
@@ -525,6 +543,10 @@ def main(argv: list[str] | None = None) -> int:
         help='Exempt sha file (default: repo-relative tools/ci_commit_exempt.txt; '
         'absolute paths are a plain working-tree load, for local use only)',
     )
+    check_parser.add_argument(
+        '--refuse-autoos', action='store_true',
+        help='Fail commits whose Writer names an AutoOS run id (D-2749); without it they are only flagged',
+    )
 
     try:
         args = parser.parse_args(argv)
@@ -542,12 +564,18 @@ def main(argv: list[str] | None = None) -> int:
         violations = check(args.base, args.head, exempt=exempt, cwd=None,
                            open_heads=args.open_heads)
         hand_edits = hand_edit_commits(args.base, args.head, cwd=None)
+        autoos = autoos_spawn_commits(args.base, args.head, cwd=None)
     except (ExemptError, GateError) as exc:
         sys.stderr.write(f'ci-commit-gate: {exc}\n')
         return 2
 
     for sha, reason in hand_edits:
         sys.stderr.write(f'hand-edit {sha}: {reason}\n')
+    for sha, writer in autoos:
+        if args.refuse_autoos:
+            violations.append(f'{sha}: {AUTOOS_SPAWN}')
+        else:
+            sys.stderr.write(f'autoos-spawn {sha}: {writer} ({AUTOOS_SPAWN})\n')
     for violation in violations:
         print(violation)
     return 1 if violations else 0

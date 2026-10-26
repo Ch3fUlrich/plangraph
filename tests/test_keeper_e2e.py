@@ -139,7 +139,7 @@ def run_cli(argv):
 
 
 def mcp_lines(e2e, requests):
-    """Drive ``python -m plangraph.keeper.mcp`` over pipes; return stdout."""
+    """Drive ``python3 -m plangraph.keeper.mcp`` over pipes; return stdout."""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(SRC)
     env["PG_URL"] = e2e.base
@@ -302,7 +302,9 @@ def test_mcp_stdio_against_live_api(tmp_path):
              "params": {"name": "ready", "arguments": {"n": 50}}},
         ])
         listing, ready = [json.loads(line) for line in out.splitlines() if line]
-        assert len(listing["result"]["tools"]) == 36
+        # main's 36 tools (fleet_msg_send/fleet_msg_read included) plus #203's
+        # log_item/rule_set.
+        assert len(listing["result"]["tools"]) == 38
         assert ready["result"]["isError"] is False
         assert KEY in ready["result"]["content"][0]["text"]
         assert e2e.tokens["router"] not in out

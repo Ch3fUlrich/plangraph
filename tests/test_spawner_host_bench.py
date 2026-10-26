@@ -99,10 +99,10 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     bare = route_json(tmp_path, capsys)
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
+    # deepseek retired from seats (D-2744 service gate)
     assert [leg["id"] for leg in bare["legs"]] == [
-        "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
-        "mimo-v2.6-flash"]
+        "qodercli-qwen3.8-flash", "opencode-glm-5.3-flash-free", "cx-gpt-6-luna",
+        "agy-gemini-3.8-flash", "mimo-v2.6-flash"]
 
 
 def test_unmapped_leg_no_p(tmp_path, capsys):

@@ -372,7 +372,7 @@ class SpawnerRunner:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
-        if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
+        if role in ("implement", "fix") and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
@@ -575,8 +575,8 @@ class SpawnerRunner:
             if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
                 job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
-            import shutil
-            resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            from plangraph.routing_support.clients import client_binary
+            resolved_exe = client_binary(cmd[0], child_env) or cmd[0]
             resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
             if launch_refusal:
                 job.status = 'failed'
@@ -588,7 +588,9 @@ class SpawnerRunner:
             if cmd[0] in STDIN_PROMPT_HARNESSES:
                 self._stdin_payloads[job_id] = prompt.encode("utf-8")
             self._adapter_tokens[job_id] = object()
-            if role in ("implement", "fix"):
+            # #203 added the design role and main has orchestrate; every code-moving
+            # role gets the guard, only review (read-only) does not.
+            if role != "review":
                 guard = self._init_git_config_guard(work_dir)
                 if guard is not None:
                     self._git_guards[job_id] = guard
@@ -1156,8 +1158,10 @@ def spawn_service(*args, **kwargs):
 
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
+                # D-2744: retired-family skips do not hide that every live leg is limited
+                live_skips = [s for s in plan.skipped if s['reason'] != 'retired_family']
                 exhausted = not plan.legs and (not plan.error or
-                    bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
+                    bool(live_skips) and all(s['reason'] == 'limited' for s in live_skips))
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,

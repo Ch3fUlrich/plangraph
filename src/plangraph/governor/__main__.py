@@ -1,4 +1,4 @@
-"""Run the governor CLI as ``python -m plangraph.governor``."""
+"""Run the governor CLI as ``python3 -m plangraph.governor``."""
 from __future__ import annotations
 
 import sys

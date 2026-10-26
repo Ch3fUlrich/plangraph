@@ -1,4 +1,4 @@
-"""``python -m plangraph.projector``: project Temporal histories into the keeper.
+"""``python3 -m plangraph.projector``: project Temporal histories into the keeper.
 
 The keeper is opened in-process from the same ``keeper.json`` the keeper CLI and daemon read
 (backend sqlite/postgres by config or ``PG_KEEPER_BACKEND``) and written as the ``system``
@@ -36,7 +36,7 @@ class UsageError(Exception):
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m plangraph.projector",
+        prog="python3 -m plangraph.projector",
         description="Project Temporal workflow histories into the keeper.")
     parser.add_argument("--config", default=None,
                         help="keeper config path (default: env PG_CONFIG)")

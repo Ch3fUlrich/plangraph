@@ -108,11 +108,14 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         runner.process_factory = factory
         service = spawn_service(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
-        models = [a['leg']['model'] for a in record['attempts']]
+        models = [a['leg']['model'] if isinstance(a['leg'], dict) else a['leg'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
         assert len(models) == 8, record
         assert len(runner.jobs) == 3
-        assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
+        # D-2744: the two deepseek legs are dropped before launch (retired family)
+        assert [a['skip_reason'] for a in record['attempts'][3:5]] == ['retired family (D-2744): ' +
+            m + ' has no working account' for m in ('opencode/deepseek-v4.1-flash-free', 'omniroute/deepseek-direct-flash')]
+        assert record['attempts'][5]['skip_reason'] == 'earlier_leg_succeeded'
         assert 'gemini' in models[0] and 'mimo' in models[1] and 'openrouter' in models[2]
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
@@ -122,7 +125,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert record['exit_code'] == 4
         assert record['evidence']
         assert len(record['attempts']) == 8
-        assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
+        assert all(a['status'] == 'skipped' and (a['skip_reason'] == 'limited' or 'D-2744' in a['skip_reason'])
                    for a in record['attempts'])
         assert len(runner.jobs) == count
     asyncio.run(run())
@@ -239,7 +242,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)
-        assert all(a['skip_reason'] == 'earlier_leg_succeeded'
+        assert all(a['skip_reason'] == 'earlier_leg_succeeded' or 'D-2744' in a['skip_reason']
                    for a in record['attempts'][len(launched):])
         first_model = list(runner.jobs.values())[0].model_or_combo
         first_key = first_model if '/' in first_model else 'agy/' + first_model

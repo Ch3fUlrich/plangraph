@@ -27,7 +27,7 @@ neither the route nor the id ever depends on Jev: the decision is the rules' alo
 ``summarize`` reports the legacy rows and ``summarize_jev`` the Jev agreement via
 :mod:`plangraph.keeper.jev_report`, whose keeper-side equivalent is
 ``GET /v1/jev_report``.  ``main`` renders both from a log:
-``python -m plangraph.planner.shadow report [--log PATH] [--json]``.
+``python3 -m plangraph.planner.shadow report [--log PATH] [--json]``.
 
 Failures are ignored by design: an answerer exception becomes ``shadow_error``, a log
 write failure (``OSError``) is swallowed, and nothing about the returned route changes.
@@ -327,7 +327,7 @@ def _summary_line(summary: Mapping) -> str:
 
 
 def main(argv=None) -> int:
-    """``python -m plangraph.planner.shadow report [--log PATH] [--json]``.
+    """``python3 -m plangraph.planner.shadow report [--log PATH] [--json]``.
 
     Reads the audit log (``--log`` or ``PLANGRAPH_PLANNER_SHADOW_LOG``) and prints the
     legacy :func:`summarize` line plus the Jev agreement table from :func:`summarize_jev`
@@ -336,7 +336,7 @@ def main(argv=None) -> int:
     and returns 2; an unknown subcommand is an argparse error.  The keeper-side report
     is ``GET /v1/jev_report``.
     """
-    parser = argparse.ArgumentParser(prog="python -m plangraph.planner.shadow",
+    parser = argparse.ArgumentParser(prog="python3 -m plangraph.planner.shadow",
                                      description="Read the planner shadow audit log.")
     sub = parser.add_subparsers(dest="command", required=True)
     report = sub.add_parser("report", help="summarise the shadow log")

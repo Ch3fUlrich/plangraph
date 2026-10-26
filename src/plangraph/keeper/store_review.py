@@ -136,6 +136,10 @@ class ReviewMixin:
             # so it is ignored rather than counted.
             if int(payload.get("epoch", -1)) != epoch:
                 continue
+            if payload.get("via") == "log_item":
+                # PG-EFFICIENCY-GATES: an L1 fix-log hand-back is not a reviewer's
+                # change request; it never sends the next one to the open pool.
+                continue
             if row["type"] == "review_verdict":
                 if payload.get("ok", True):
                     streak = 0

@@ -62,7 +62,7 @@ def test_real_launch_plan_skips_unserved(monkeypatch):
 
 def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
-    leg = next(l for l in DEFAULT_LEGS if l.harness == 'opencode')
+    leg = next(l for l in DEFAULT_LEGS if l.harness == 'opencode' and l.family != 'deepseek')  # D-2744
     binary = tmp_path / 'opencode'
     # W33B host admission probes are not child attempts: serve the requested id.
     binary.write_text('#!/bin/sh\nif [ "$1" = models ]; then echo "' + leg.model + '"; exit 0; fi\necho launched >> "' + str(tmp_path / 'launches') + '"\necho "Model unavailable: fixture" >&2\nexit 1\n')

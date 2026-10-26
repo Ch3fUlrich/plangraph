@@ -128,7 +128,7 @@ Writes go through the keeper `Store` (`record_attempt`, `set_state`) with a `sys
 * `source.py`: `HistorySource` protocol (`list_workflows(query)`, `fetch_history(workflow_id, run_id)`), a temporalio-backed
   `TemporalSource` (lazy import; address/namespace from env `TEMPORAL_ADDRESS` default 127.0.0.1:7233, `TEMPORAL_NAMESPACE`),
   and `FileSource` reading history JSON files (tests, offline rebuild).
-* `cli.py` / `__main__.py`: `python -m plangraph.projector run-once|run|rebuild|reconcile` with keeper config like the keeper CLI.
+* `cli.py` / `__main__.py`: `python3 -m plangraph.projector run-once|run|rebuild|reconcile` with keeper config like the keeper CLI.
 * `reconcile.py`: open workflows (visibility `ExecutionStatus="Running"`) vs keeper states. Alarm kinds: `unmapped_workflow`,
   `missing_item`, `state_drift` (projected expected state != items.state), `orphan_running` (item running/waiting/needs_input,
   no open workflow, grace 15 min), `watermark_stale` (global watermark older than 30 min while workflows are open). Alarms
@@ -155,7 +155,7 @@ or PATH; skipped when missing) and runs real workflows. Migration test: upgrade 
   loudly (an integrity error or a `conflict` refusal) rather than corrupt rows; it is not a supported mode.
 * Nightly reconcile runs as the systemd user timer `plangraph-projector-reconcile.timer` (03:30 local, up to 10 min random
   delay, Persistent=true) which starts the oneshot `plangraph-projector-reconcile.service`; that runs
-  `python -m plangraph.projector --config <keeper.json> reconcile`. Units and install/enable steps: `deploy/systemd/`
+  `python3 -m plangraph.projector --config <keeper.json> reconcile`. Units and install/enable steps: `deploy/systemd/`
   (README.md there). No agent cron. The command exits 0 even when it raised alarms (a mismatch is an open row of
   `projector_alarms`, `cleared_at IS NULL`, that the next pass clears when the condition is gone; read it with
   `plangraph.projector.reconcile.open_alarms`); it exits 1 only on a runtime failure and 2 on bad config, which fails the

@@ -113,7 +113,7 @@ def test_dispatch_paths(tmp_path, hardened):
             assert child['continuation_reason'] == 'continuation_limit'
         original = [c for c in runner.calls if 'finding' in c['prompt']]
         assert len(original) == 2
-        assert all(c['prompt'].count('. [ ] finding') == 10 for c in original)
+        assert all(c['prompt'].count('- [ ] ') == 10 and c['prompt'].count('    finding ') == 10 for c in original)
         for call in runner.calls:
             if 'finding' not in call['prompt']:
                 assert 'finish one' in call['prompt']

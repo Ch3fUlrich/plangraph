@@ -455,7 +455,8 @@ def _probe_served_models(config, *, env=None):
     env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
-        executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
+        from .clients import client_binary
+        executable = client_binary('opencode', env) or 'opencode'
         result = subprocess.run([executable, 'models'], env=env, capture_output=True,
                                 text=True, timeout=10)
         if result.returncode == 0:
@@ -529,7 +530,8 @@ def admitted_by_render(model):
 def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli'):
-        return None if shutil.which(harness) else 'harness_missing: ' + harness
+        from .clients import client_binary
+        return None if client_binary(harness, env) else 'harness_missing: ' + harness
     if harness != 'opencode':
         return None
     model = row.get('model') or row.get('id') or row.get('model_id')

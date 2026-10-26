@@ -112,6 +112,41 @@ class KeeperSink:
             response.read()
 
 
+def keeper_item_reader(url=None, token_file=None):
+    """D-2739 gates: ``key -> keeper show row``, or None when no keeper is configured.
+
+    A configured keeper that cannot answer refuses the spawn (fail closed); a key
+    the keeper does not hold reads as None (gates skipped, noted on the record).
+    The token is read per call and never logged.
+    """
+    url = os.environ.get('PG_URL', '') if url is None else url
+    token_file = os.environ.get('PG_TOKEN_FILE', '') if token_file is None else token_file
+    if not url or not token_file:
+        return None
+
+    def read(key):
+        from plangraph.routing_errors import SpawnRefused
+        import urllib.parse
+        try:
+            token = Path(token_file).read_text(encoding='utf-8').strip()
+            request = urllib.request.Request(
+                url.rstrip('/') + '/v1/show?' + urllib.parse.urlencode({'key': key, 'fmt': 'json'}),
+                headers={'Authorization': 'Bearer ' + token})
+            opener = urllib.request.build_opener(_NoRedirectHandler())
+            with opener.open(request, timeout=10) as response:
+                row = json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise SpawnRefused(f'efficiency gates: keeper show {key} failed (HTTP {exc.code})') from None
+        except Exception as exc:  # noqa: BLE001 - any failure fails the gate closed
+            raise SpawnRefused(f'efficiency gates: keeper show {key} failed ({type(exc).__name__})') from None
+        if not isinstance(row, dict):
+            raise SpawnRefused(f'efficiency gates: keeper show {key} returned no item')
+        return row if row.get('key') else None
+    return read
+
+
 def completion_event(record, cwd):
     from .runner import redact
     try:

@@ -254,6 +254,20 @@ def test_low_severity_verdict_table(text, want_verdict, is_low_only):
         assert "low_only" not in ev
 
 
+def test_seat_contract_accept_and_request_changes():
+    """D-3070: ACCEPT/REQUEST_CHANGES are the seat contract verdict words.
+
+    PG-EFFICIENCY-GATES row 0.2c still holds: a HIGH/MED finding in the
+    body beats whatever the VERDICT line says.
+    """
+    assert v.judge("VERDICT: ACCEPT", "stop").verdict == "pass"
+    assert v.judge("VERDICT: ACCEPT\nHIGH a.py:f — claim — evidence",
+                   "stop").verdict == "fix"
+    assert v.judge("VERDICT: REQUEST_CHANGES", "stop").verdict == "fix"
+    assert v.judge("VERDICT: pass", "stop").verdict == "pass"
+    assert v.judge("VERDICT: approve", "stop").verdict == "pass"
+
+
 def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
     assert v.parse_test_gaming(
         'TEST-GAMING: no - searched the "batch in" stamp: 0 hits\nVERDICT: pass'

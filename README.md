@@ -22,7 +22,7 @@ Q&A page connects each decision/question to task, phase and project and lets you
 
 | path | what |
 |---|---|
-| `src/plangraph/render.py` | snapshot JSON → one self-contained HTML page (`python -m plangraph.render`) |
+| `src/plangraph/render.py` | snapshot JSON → one self-contained HTML page (`python3 -m plangraph.render`) |
 | `src/plangraph/web/` | the page's own CSS/JS (graph, table, sidebar, filters) |
 | `src/plangraph/views*.py` | pure views over a snapshot: ready, blocked, critical path, slack, brief |
 | `src/plangraph/keeper/` | the plan-keeper service (SQLite, auth, evidence verifiers; POSIX only — uses `fcntl`) |
@@ -41,17 +41,17 @@ from a CDN when rendered with `--cdn` (offline mode is not yet available for the
 git clone https://github.com/<owner>/plangraph.git
 cd plangraph
 pip install pytest
-PYTHONPATH=src python -m plangraph.render --snapshot examples/snapshot.json --out plan.html --cdn
+PYTHONPATH=src python3 -m plangraph.render --snapshot examples/snapshot.json --out plan.html --cdn
 ```
 
-Open `plan.html` in a browser (or serve it: `python -m http.server --directory .`).
+Open `plan.html` in a browser (or serve it: `python3 -m http.server --directory .`).
 
 Run the tests (the keeper tests need Linux/macOS or WSL):
 
 ```bash
-PYTHONPATH=src python -m pytest tests -q
+PYTHONPATH=src python3 -m pytest tests -q
 # UI/render only, works on Windows too:
-PYTHONPATH=src python -m pytest tests/test_ui*.py tests/test_render*.py tests/test_views.py -q
+PYTHONPATH=src python3 -m pytest tests/test_ui*.py tests/test_render*.py tests/test_views.py -q
 ```
 
 Keeper, batches, agent spawner and the public/private repo split are described in `docs/KEEPER.md`,

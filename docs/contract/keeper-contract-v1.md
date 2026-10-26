@@ -83,7 +83,10 @@ Malformed client input must never produce `500`.
   CLI (`pg admin init --router NAME`, `pg admin add-principal NAME --role R
   [--projects a,b] [--family F]`, `pg admin revoke NAME`). A name may not
   start with `run:`; a duplicate name is refused.
-* `GET /v1/whoami` returns `{name, role, projects, family}` of the token.
+* `GET /v1/whoami` returns `{name, role, projects, family, features}` of the
+  token. `features` is the pinned capability list the server advertises, an
+  array over `apply_ops.dry_run` and `apply_ops.strict_body` (the JSON schema
+  registers exactly those strings, so adding a feature is a contract change).
 * Every verb re-checks the principal's stored row, so a revoked or re-scoped
   principal stops acting immediately.
 

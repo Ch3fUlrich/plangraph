@@ -13,6 +13,15 @@ def test_implement_prompt_starts_with_header():
     assert _prompt('implement') == IMPLEMENT_HEADER + '\n\ndo the brief'
 
 
+def test_fix_prompt_starts_with_header():
+    assert _prompt('fix') == IMPLEMENT_HEADER + '\n\ndo the brief'
+
+
+def test_design_and_orchestrate_have_no_header():
+    for role in ('design', 'orchestrate'):
+        assert IMPLEMENT_HEADER not in _prompt(role)
+
+
 def test_review_prompt_has_no_header():
     assert IMPLEMENT_HEADER not in _prompt('review')
 

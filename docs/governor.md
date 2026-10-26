@@ -74,7 +74,7 @@ Prices in USD per million tokens `(input, output, cache_write)`, matched on the 
 for a model id containing `opus-5-5` or `sonnet-5-5`, at `0.1 x` otherwise.
 
 ```
-python -m plangraph.governor metrics daily --date 2026-10-15 \
+python3 -m plangraph.governor metrics daily --date 2026-10-15 \
     --projects-dir "$PLANGRAPH_CLAUDE_PROJECTS_DIR" --host "$PLANGRAPH_HOST" \
     --session-classes /etc/plangraph/session_classes.json --dry-run
 ```
@@ -82,7 +82,7 @@ python -m plangraph.governor metrics daily --date 2026-10-15 \
 ## Daily job
 
 ```
-python -m plangraph.governor metrics daily --date 2026-10-15 \
+python3 -m plangraph.governor metrics daily --date 2026-10-15 \
     --projects-dir "$PLANGRAPH_CLAUDE_PROJECTS_DIR" --repo . --weekly-cap "$PLANGRAPH_WEEKLY_CAP_WEIGHTED"
 ```
 
@@ -128,11 +128,11 @@ start picks the first usable non-Claude provider from `fallbacks` (not rate limi
 `guard_start` in `planner/start.py` derives the fallback providers from the routing legs (`Leg.family`, `claude_family` False)
 and returns the matching `Leg`. An explicit `override` reason flips a remaining deny to allow and is logged once via `on_override`.
 
-`python -m plangraph.governor check planner agent --fallback qwen,muse` prints the decision as JSON (exit 0 allowed, 1 denied).
+`python3 -m plangraph.governor check planner agent --fallback qwen,muse` prints the decision as JSON (exit 0 allowed, 1 denied).
 
 ## Follow-ups (not in this change)
 
-- **Spawner wiring (AutoOS):** call `python -m plangraph.governor check <kind> <initiator> ...` (or `planner.start.guard_start`)
+- **Spawner wiring (AutoOS):** call `python3 -m plangraph.governor check <kind> <initiator> ...` (or `planner.start.guard_start`)
   before starting a planner/expert; honour `fallback` by routing to that leg. AutoOS is not edited here.
 - **RT-P1-WORKER interface:** the Rust worker picks a leg; before a leg it should `GET /v1/metrics?metric=provider_used.<p>` and
   `rate_limited.<p>` (or call `check worker_leg agent --provider <p>`) and skip a denied provider. Left undocumented-in-code until that item.

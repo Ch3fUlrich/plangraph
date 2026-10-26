@@ -257,3 +257,26 @@ def test_preview_with_per_op_exits_2(world, srv, token_file, tmp_path):
     rc, out, errtxt = run(b, srv.base_url, token_file, extra=["--dry-run", "--preview", "--per-op"])
     assert rc == 2
     assert "error: --preview needs the atomic mode (drop --per-op)" in out + errtxt
+
+
+def test_preview_refused_on_keeper_without_dry_run_feature(world, srv, token_file, tmp_path, monkeypatch):
+    # D-1498/D-2760: an older keeper ignores dry_run and would apply for real.
+    from plangraph.keeper import store_read
+    monkeypatch.setattr(store_read, "KEEPER_FEATURES", ())
+    world.store.create_items(world.p("router"), [defn("P1"), defn("GOAL", ["P1"], kind="goal")])
+    before = world.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    batch = write_batch(tmp_path, ops=[{"op": "edit", "key": "demo:P1", "fields": {"title": "X"}}],
+                        name="old_keeper")
+    rc, out, errtxt = run(batch, srv.base_url, token_file, extra=["--dry-run", "--preview"])
+    assert rc == 2 and "apply_ops.dry_run" in out + errtxt
+    assert world.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
+
+
+def test_dry_run_reply_without_marker_is_an_error():
+    class Session:
+        def post(self, verb, body):
+            return json.dumps({"applied": 1, "results": [{}]}).encode()
+    ops = [{"op": "edit", "key": "demo:P1", "fields": {"title": "X"}}]
+    code, lines = atomic.send(Session(), ops, 1, "src", "d", (Exception,), lambda op: op["key"],
+                              dry_run=True)
+    assert code == 1 and "APPLIED" in lines[0]
