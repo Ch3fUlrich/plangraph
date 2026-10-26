@@ -290,15 +290,15 @@ def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door):
 
 
 # ------------------------------------------------- the fence never forgets
-def test_retired_fence_remembers_every_run_after_twenty_clears(w):
+def check_retired_fence_remembers_every_run(w):
     """RT-P1 sq12 fix 1: the retired-run fence has no bound (V1-1/V5-1).
 
     ``_exec_clear`` used to keep only ``retired[-16:]``, so after 17 clears a
     run retired earliest was accepted again and could reacquire the card as a
     first writer.  20 clear cycles later the FIRST retired run must still be
     refused -- through ``_exec_check`` and end to end through a worker park.
-    Portable: runs on the default backend (``World`` follows
-    ``PG_KEEPER_BACKEND``), so the same test covers SQLite and Postgres.
+    Backend-agnostic body: ``tests/test_keeper_pg_exec_fence.py`` runs the same
+    checks against Postgres (the sq10/sq11 ``check_*`` pattern).
     """
     key, = seed(w, [("A", [])])
     w.store.claim(w.p("workerA"), key)
@@ -313,3 +313,10 @@ def test_retired_fence_remembers_every_run_after_twenty_clears(w):
                 1, w.p("workerA"))
     refused("exec_stale", w.store.worker_park, w.p("workerA"),
             park(key, workflow_id="wf", run_id="run-0", attempt=2))
+
+
+def test_retired_fence_remembers_every_run_after_twenty_clears(w):
+    # Portable: runs on the default backend (``World`` follows
+    # ``PG_KEEPER_BACKEND``); the PG variant lives in
+    # ``tests/test_keeper_pg_exec_fence.py`` and calls the same helper.
+    check_retired_fence_remembers_every_run(w)
