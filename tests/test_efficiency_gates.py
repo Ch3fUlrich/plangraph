@@ -320,6 +320,11 @@ def _slice_rows(text):
     return rows[2:]
 
 
+def _rows_by_slice(rows):
+    """Table rows keyed by their own slice cell, not by their position."""
+    return {row.split("|")[1].strip(): row for row in rows}
+
+
 def test_numstat_counting_and_slices():
     text = "10\t5\tsrc/a.py\n-\t-\timg.png\n300\t0\tuv.lock\n2\t2\tsrc/{old => new}/b.py\n"
     assert lane.count_numstat(text) == (20, 3, ["src/a.py", "img.png", "src/new/b.py"])
@@ -348,15 +353,26 @@ def test_numstat_counting_and_slices():
     assert len(slices) == len(rows), (
         f"{len(rows)} rows in the ## Slices table, but design_slices parsed"
         f" {sorted(slices)}")
-    for n, row in zip(sorted(slices), rows):
-        # the budget is the max_lines column of that row, verbatim -- a column
+    by_cell = _rows_by_slice(rows)
+    assert len(by_cell) == len(rows), "a slice number repeats in the table"
+    for n in sorted(slices):
+        # rows pair with the parse by their own slice cell, never by position;
+        # the budget is that row's max_lines column, verbatim -- a column
         # mis-parse cannot pass as some other positive int
+        row = by_cell[str(n)]
         assert str(slices[n]) == row.split("|")[3].strip(), row
     # the detector itself detects a drop: a trailing row the parse cannot match
     # (a budget typo) is one row the parse does not cover
     mini = ("## Slices\n\n| slice | scope | max_lines |\n|---|---|---|\n"
             "| 1 | a | 10 |\n| 2 | b | 12k |\n")
     assert len(_slice_rows(mini)) == 2 and len(lane.design_slices(mini)) == 1
+    # a slice appended out of order still pairs by its own cell (qwen-S6); the
+    # in-order table above is the positive control
+    shuffled = ("## Slices\n\n| slice | scope | max_lines |\n|---|---|---|\n"
+                "| 2 | b | 12 |\n| 1 | a | 10 |\n")
+    pairs = _rows_by_slice(_slice_rows(shuffled))
+    for n, budget in lane.design_slices(shuffled).items():
+        assert str(budget) == pairs[str(n)].split("|")[3].strip()
     assert lane.parse_slice_trailer("docs/design/PG-EFFICIENCY-GATES.md#1") == (
         "docs/design/PG-EFFICIENCY-GATES.md", 1)
 
