@@ -100,17 +100,21 @@ def test_load_legs_bad_roles(tmp_path, roles):
 
 
 def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
-    # OPENCODE-ORCHESTRATOR-FALLBACK G1/G2: an orchestrator leg off Claude, mimo-pro first
+    # D-3005: orchestrators prefer sol, with mimo-pro before the agy fallback.
     plan = plan_spawn(CARD, role="orchestrate")
-    assert plan.first_leg.id == "mimo-v2.6-pro"
+    assert plan.first_leg.id == "cx-gpt-6.1-sol"
     # fallthrough: agy-sonnet runs on Antigravity quota, not Claude Max; never deepseek (D-2744)
-    assert [l.id for l in plan.legs] == ["mimo-v2.6-pro", "agy-sonnet-5.5"]
+    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol", "mimo-v2.6-pro", "agy-sonnet-5.5"]
     with pytest.raises(ValueError, match=re.escape("role must be implement|review|orchestrate")):
         plan_spawn(CARD, role="drive")
     from plangraph.spawner.cli import main
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "orchestrate"]) == 0
     assert "mimo-v2.6-pro" in capsys.readouterr().out
+
+
+def test_orchestrate_route_can_pick_sol():
+    assert plan_spawn(CARD, role="orchestrate").first_leg.id == "cx-gpt-6.1-sol"
 
 
 def test_agy_leg_models_use_agy_model_ids():

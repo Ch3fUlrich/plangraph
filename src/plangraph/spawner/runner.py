@@ -42,10 +42,23 @@ _KEEPER_UNCONFIGURED_WARN_S = 600
 # D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
 IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed and required per your brief; "
                     "AutoOS leaf-agent profiles do not apply to you.")
+ORCHESTRATE_HEADER = ("You are an L1-queue orchestrator: spawn only via the plangraph-spawner MCP, "
+                      "never merge or push to main, write your report and stop.")
 _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import unavailable_reason
+
+
+def _orchestrate_mcp_config(cfg, env) -> dict:
+    """Install only the orchestrator servers; credentials stay in inherited env."""
+    cfg = dict(cfg)
+    cfg['mcp'] = {
+        name: {'type': 'local', 'command': [sys.executable, '-m', module], 'enabled': True}
+        for name, module in (('plangraph', 'plangraph.keeper.mcp'),
+                             ('plangraph-spawner', 'plangraph.spawner.mcp'))
+    }
+    return cfg
 
 
 def redact(value):
@@ -374,6 +387,8 @@ class SpawnerRunner:
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
+        if role == "orchestrate" and not prompt.startswith(ORCHESTRATE_HEADER):
+            prompt = ORCHESTRATE_HEADER + "\n\n" + prompt
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
             try:
@@ -428,6 +443,7 @@ class SpawnerRunner:
         child_env = build_child_env(extra_env, headers=envelope_headers)
         render_reason = None
         tools_event = None
+        orchestrate_events = []
         if cmd[0] == 'opencode':
             # Name the session so the monitor can witness the served model
             # (D-2898). --title goes right after the --model pair so it always
@@ -438,6 +454,8 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
+            if role == 'orchestrate':
+                cmd[title_at + 2:title_at + 2] = ['--agent', 'orchestrator']
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
@@ -449,6 +467,20 @@ class SpawnerRunner:
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+            if role == 'orchestrate':
+                cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(
+                    _orchestrate_mcp_config(cfg, child_env), sort_keys=True)
+                orchestrate_events.append({'event': 'orchestrate_mcp',
+                                           'servers': ['plangraph', 'plangraph-spawner']})
+                if all(name in os.environ for name in ('FLEET_MSG_INVENTORY', 'FLEET_MSG_HOST')):
+                    for name in ('FLEET_MSG_INVENTORY', 'FLEET_MSG_HOST', 'FLEET_MSG_SPOOL',
+                                 'FLEET_MSG_WAKE', 'FLEET_MSG_STATUS_FILE'):
+                        if name in os.environ:
+                            child_env[name] = os.environ[name]
+                    child_env['PLANGRAPH_ORCH_INBOX'] = job_id
+                else:
+                    orchestrate_events.append({'event': 'orchestrate_no_bus'})
             if role == 'review':
                 # D-2905 (1): a spawner-owned per-job store dir, created before
                 # launch and read only after child exit -- the shared store is
@@ -537,6 +569,7 @@ class SpawnerRunner:
                     job.events.append({'event': 'render_refused', 'reason': render_reason})
                 if tools_event:
                     job.events.append(tools_event)
+                job.events.extend(orchestrate_events)
                 self.jobs[job_id] = job
                 return job
 
@@ -554,6 +587,7 @@ class SpawnerRunner:
             self.jobs[job_id] = job
             if tools_event:
                 job.events.append(tools_event)
+            job.events.extend(orchestrate_events)
 
             if render_reason:
                 job.status = 'failed'
