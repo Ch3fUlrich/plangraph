@@ -379,3 +379,16 @@ def test_new_states_do_not_break_validation_or_cancel(w):
     w.store.cancel(router, a, "parked card dropped")
     assert w.store._item(a)["state"] == "cancelled"
     assert keeper_events.verify_integrity(w.conn) == []
+
+
+def test_requeue_private_refuses_a_non_router_on_its_own(w):
+    # 203-r4b S4: a caller that reaches ``_requeue`` without the ``_run`` gate
+    (key,) = seed(w, [("RQ", [])])
+    w.store.set_state(w.p("router"), key, "parked")
+    for who in ("l1main", "workerA", "reader"):
+        with pytest.raises(Refused) as err:
+            w.store._requeue(w.p(who), key, "", w.clock())
+        assert err.value.code == "forbidden"
+    assert w.store._item(key)["state"] == "parked"
+    # positive control: the router revives the parked card
+    assert w.store._requeue(w.p("router"), key, "", w.clock())["state"] == "open"

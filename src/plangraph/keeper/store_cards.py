@@ -543,6 +543,7 @@ class CardsMixin:
                                                    now))
 
     def _requeue(self, principal, key, reason, now):
+        self._require_role(principal, "router")
         def guard(item):
             if item["state"] != "parked":
                 raise Refused("bad_state", "requeue requires a parked card")
