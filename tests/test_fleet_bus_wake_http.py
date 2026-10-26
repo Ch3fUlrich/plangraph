@@ -2,7 +2,7 @@
 
 No socket is ever opened in these tests: both seams take an injected transport
 and assert the exact wire shape.  A synthetic message is part of the
-conversation, not a user prompt, so the wake never hits `/prompt`.  The two
+conversation, not a user prompt, so the wake never hits `/prompt`.  The
 redirect tests at the end are the exception: redirect policy lives inside the
 transport, so they run loopback servers (G3-7).
 """
@@ -33,6 +33,9 @@ OC_BASE = "http://oc.example.test:4096"
 KEEPER_BASE = "http://keeper.example.test:8765"
 ROUTER = SessionTarget("ses_r1", OC_BASE)
 CLAUDE = SessionTarget("ses_c1", "http://cc.example.test:4097", kind="claude")
+
+#: The exact bytes a wake must carry over the wire (asserted on every hop).
+WAKE_BODY = json.dumps({"text": DEFAULT_TEXT, "resume": True}).encode("utf-8")
 
 
 def recorder(status=200, raw=b"{}"):
@@ -172,10 +175,10 @@ def _url(server, path):
     return f"http://127.0.0.1:{server.server_address[1]}{path}"
 
 
-def _server(hits, redirect_to=None):
-    """Start a loopback server that records ``(path, Authorization)`` per request.
+def _server(hits, redirect_to=None, redirect_code=302):
+    """Start a loopback server that records ``(method, path, Authorization, body)``.
 
-    ``redirect_to`` answers each request with a 302 to it: a path is resolved
+    ``redirect_to`` answers each request with a ``redirect_code`` to it: a path is resolved
     against this server's own origin (same-origin hop), a full URL is used as
     given (cross-origin hop).  A same-origin hop redirects exactly once -- the
     target path itself lands with a 204 -- so a redirect can never loop.
@@ -184,11 +187,14 @@ def _server(hits, redirect_to=None):
 
     class Handler(BaseHTTPRequestHandler):
         def _answer(self):
-            hits.append((self.path, self.headers.get("Authorization")))
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            hits.append((self.command, self.path,
+                         self.headers.get("Authorization"), body))
             if redirect_to and self.path != target_path:
                 location = (redirect_to if "://" in redirect_to
                             else f"http://{self.headers['Host']}{redirect_to}")
-                self.send_response(302)
+                self.send_response(redirect_code)
                 self.send_header("Location", location)
                 self.end_headers()
             else:
@@ -212,16 +218,16 @@ def _close(*servers):
 
 
 def test_a_same_origin_redirect_is_followed_with_the_bearer_token_intact():
-    """A wake behind a same-origin redirect still lands, token and all."""
+    """A wake behind a same-origin 307 redirect still lands as a POST, token and all."""
     hits = []
-    edge = _server(hits, redirect_to="/synthetic/final")
+    edge = _server(hits, redirect_to="/synthetic/final", redirect_code=307)
     try:
         sink = SyntheticSink(authorization="Bearer tok")
         sink.wake(SessionTarget("ses_x", _url(edge, "")), DEFAULT_TEXT)
     finally:
         _close(edge)
-    assert hits == [("/api/session/ses_x/synthetic", "Bearer tok"),
-                    ("/synthetic/final", "Bearer tok")]
+    assert hits == [("POST", "/api/session/ses_x/synthetic", "Bearer tok", WAKE_BODY),
+                    ("POST", "/synthetic/final", "Bearer tok", WAKE_BODY)]
 
 
 def test_a_cross_origin_redirect_is_refused_and_never_forwards_authorization():
@@ -240,5 +246,103 @@ def test_a_cross_origin_redirect_is_refused_and_never_forwards_authorization():
             sink.wake(SessionTarget("ses_x", _url(edge, "")), DEFAULT_TEXT)
     finally:
         _close(edge, other)
-    assert edge_hits == [("/api/session/ses_x/synthetic", "Bearer tok")]  # earned it
-    assert other_hits == []                                               # foreign: nothing
+    assert edge_hits == [("POST", "/api/session/ses_x/synthetic", "Bearer tok", WAKE_BODY)]  # earned it
+    assert other_hits == []                                                               # foreign: nothing
+
+
+@pytest.mark.parametrize("code", [301, 302, 303])
+def test_a_302_on_a_wake_is_busy_never_a_bodyless_get(code):
+    """I5: a wake POST is never downgraded.
+
+    urllib re-issues a redirected 301/302/303 POST as a body-less GET (the
+    payload vanishes); busy instead, and the final path saw zero requests.
+    """
+    hits = []
+    edge = _server(hits, redirect_to="/synthetic/final", redirect_code=code)
+    try:
+        sink = SyntheticSink(authorization="Bearer tok")
+        with pytest.raises(WakeBusy):
+            sink.wake(SessionTarget("ses_x", _url(edge, "")), DEFAULT_TEXT)
+    finally:
+        _close(edge)
+    assert hits == [("POST", "/api/session/ses_x/synthetic", "Bearer tok", WAKE_BODY)]
+    assert not any(hit[0] == "GET" for hit in hits)   # final server: 0 GETs
+
+
+@pytest.mark.parametrize("code", [307, 308])
+def test_a_307_or_308_is_followed_as_post_with_body_and_bearer(code):
+    """I5: 307/308 preserve the method, so the hop is followed as a POST."""
+    hits = []
+    edge = _server(hits, redirect_to="/synthetic/final", redirect_code=code)
+    try:
+        sink = SyntheticSink(authorization="Bearer tok")
+        sink.wake(SessionTarget("ses_x", _url(edge, "")), DEFAULT_TEXT)
+    finally:
+        _close(edge)
+    assert hits == [("POST", "/api/session/ses_x/synthetic", "Bearer tok", WAKE_BODY),
+                    ("POST", "/synthetic/final", "Bearer tok", WAKE_BODY)]
+
+
+def test_a_permanent_cross_origin_redirect_ends_refused(caplog):
+    """I6: two refusals stay busy; the third gives up as WakeRefused, logged once."""
+    edge_hits, other_hits = [], []
+    other = _server(other_hits)
+    edge = _server(edge_hits, redirect_to=_url(other, "/steal"))
+    sink = SyntheticSink(authorization="Bearer tok")       # cross_origin_max=3
+    target = SessionTarget("ses_x", _url(edge, ""))
+    try:
+        with pytest.raises(WakeBusy):
+            sink.wake(target, DEFAULT_TEXT)
+        with pytest.raises(WakeBusy):
+            sink.wake(target, DEFAULT_TEXT)
+        with pytest.raises(WakeRefused) as refused:
+            sink.wake(target, DEFAULT_TEXT)
+        with pytest.raises(WakeRefused):
+            sink.wake(target, DEFAULT_TEXT)                # no second log line
+    finally:
+        _close(edge, other)
+    assert "cross-origin redirect" in str(refused.value)
+    assert other_hits == []                                # foreign: never called
+    assert sum("cross-origin" in rec.getMessage() for rec in caplog.records) == 1
+
+
+def test_a_regular_outcome_resets_the_cross_origin_refusal_count():
+    """I6: only *consecutive* refusals count; any other outcome resets them."""
+    other, plain = _server([]), _server([])
+    edge = _server([], redirect_to=_url(other, "/steal"))
+    sink = SyntheticSink(authorization="Bearer tok")
+    target = SessionTarget("ses_x", _url(edge, ""))
+    try:
+        for _ in range(2):
+            with pytest.raises(WakeBusy):
+                sink.wake(target, DEFAULT_TEXT)
+        sink.wake(SessionTarget("ses_x", _url(plain, "")), DEFAULT_TEXT)  # resets
+        for _ in range(2):
+            with pytest.raises(WakeBusy):   # restarted: never reaches refused
+                sink.wake(target, DEFAULT_TEXT)
+    finally:
+        _close(edge, other, plain)
+
+
+def test_a_malformed_redirect_port_is_busy_not_valueerror():
+    """I7: a bad ``Location`` port can never escape as ValueError."""
+    hits = []
+    edge = _server(hits, redirect_to="http://h:99999/steal")
+    try:
+        sink = SyntheticSink(authorization="Bearer tok")
+        with pytest.raises(WakeBusy):
+            sink.wake(SessionTarget("ses_x", _url(edge, "")), DEFAULT_TEXT)
+    finally:
+        _close(edge)
+    assert hits == [("POST", "/api/session/ses_x/synthetic", "Bearer tok", WAKE_BODY)]
+
+
+def test_a_malformed_redirect_port_fails_the_poll_cleanly():
+    """I7: the same bad port fails the keeper poll as PollFailed, never ValueError."""
+    edge = _server([], redirect_to="http://h:99999/steal")
+    try:
+        poll = KeeperMessagesPoll(_url(edge, ""), "tok")
+        with pytest.raises(PollFailed):
+            poll(0, 30000)
+    finally:
+        _close(edge)
