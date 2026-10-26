@@ -9,17 +9,22 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import hashlib
 import json
-import os
-import re
-import time
-import uuid
 import logging
 import math
+import os
+import re
+import subprocess
+import time
+import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.clients import (
+    STDIN_PROMPT_HARNESSES,
     build_child_env,
     build_command,
     build_routing_envelope_headers,
@@ -50,6 +55,43 @@ def redact(value):
         value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
         return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
     return value
+
+
+def _is_nt() -> bool:
+    return os.name == "nt"
+
+
+def _resolve_launch(
+    exe: str,
+    argv: Sequence[str] = (),
+    *,
+    is_nt: bool | None = None,
+) -> tuple[str, str | None]:
+    """Resolve executable path and enforce Windows launch constraints (I11, I12)."""
+    nt = _is_nt() if is_nt is None else is_nt
+    if not nt:
+        return exe, None
+
+    exe_path = Path(exe)
+    ext = exe_path.suffix.lower()
+    is_batch = ext in (".cmd", ".bat")
+
+    if is_batch and exe_path.stem.lower() == "opencode":
+        sibling = exe_path.parent / "node_modules" / "@opencode" / "cli" / "bin" / "opencode.exe"
+        if sibling.is_file():
+            exe = str(sibling)
+            exe_path = sibling
+            ext = exe_path.suffix.lower()
+            is_batch = False
+
+    is_opencode = exe_path.stem.lower() == "opencode"
+    if not is_opencode:
+        limit = 8000 if is_batch else 32000
+        cmdline = subprocess.list2cmdline([exe, *argv])
+        if len(cmdline) > limit:
+            return exe, f"command_line_too_long: {len(cmdline)} chars"
+
+    return exe, None
 
 
 @dataclass
@@ -136,6 +178,9 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
+        self._reaped_jobs = set()
+        self._git_guards = {}
+        self._stdin_payloads = {}
 
     def served_witness(self, job_id, model, *, adapter_token):
         """Record transport telemetry authenticated by an in-process adapter.
@@ -294,6 +339,11 @@ class SpawnerRunner:
                     else:
                         from plangraph.routing_errors import SpawnRefused
                         raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
+                stdin_note = (
+                    f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
+                    if cmd[0] in STDIN_PROMPT_HARNESSES
+                    else ""
+                )
                 job = JobInfo(
                     job_id=job_id,
                     status="dry_run",
@@ -304,7 +354,7 @@ class SpawnerRunner:
                     command=cmd,
                     end_time=time.time(),
                     exit_code=0,
-                    stdout=f"[dry-run] Planned command: {' '.join(cmd)}",
+                    stdout=f"[dry-run] Planned command: {' '.join(cmd)}{stdin_note}",
                     served_model=served_model,
                     served_family=served_family,
                     dry_run=True,
@@ -350,7 +400,21 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
+            if launch_refusal:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = launch_refusal
+                job.end_time = time.time()
+                return job
+
+            if cmd[0] in STDIN_PROMPT_HARNESSES:
+                self._stdin_payloads[job_id] = prompt.encode("utf-8")
             self._adapter_tokens[job_id] = object()
+            if role in ("implement", "fix"):
+                guard = self._init_git_config_guard(work_dir)
+                if guard is not None:
+                    self._git_guards[job_id] = guard
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -359,7 +423,11 @@ class SpawnerRunner:
                     env=child_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=(
+                        asyncio.subprocess.PIPE
+                        if cmd[0] in STDIN_PROMPT_HARNESSES
+                        else asyncio.subprocess.DEVNULL
+                    ),
                     **({"start_new_session": True} if os.name != "nt" else {}),
                 )
             except Exception as exc:
@@ -371,6 +439,25 @@ class SpawnerRunner:
                 raise
             self._processes[job_id] = proc
             self._nonces[job_id] = nonce
+
+            # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
+            # find an exited root pid, so an orphan (`opencode serve`) would outlive
+            # the run (SPAWN-ORPHAN-REAP). Failure never fails the run: taskkill runs.
+            # Descendants started before assign() escape the job (no CREATE_SUSPENDED
+            # under asyncio); taskkill /T in _reap_process still covers them.
+            if _is_nt():
+                self._win_jobs = getattr(self, '_win_jobs', {})
+                try:
+                    self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
+                    handle = self.win_job_api.create_job()
+                    try:
+                        self.win_job_api.assign(handle, proc.pid)
+                    except Exception:
+                        self.win_job_api.close(handle)
+                        raise
+                    self._win_jobs[job_id] = handle
+                except Exception:
+                    job.events.append({'event': 'win_job_unavailable'})
 
             # Start background monitor
             task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
@@ -387,6 +474,48 @@ class SpawnerRunner:
             # A running monitor owns the environment until output is scrubbed.
             if job_id not in self._tasks:
                 self._child_envs.pop(job_id, None)
+                self._git_guards.pop(job_id, None)
+                self._stdin_payloads.pop(job_id, None)
+
+    async def _reap_process(self, job_id: str, proc: Any) -> None:
+        reaped = getattr(self, '_reaped_jobs', None)
+        if reaped is None:
+            self._reaped_jobs = set()
+            reaped = self._reaped_jobs
+        if job_id in reaped:
+            return
+        reaped.add(job_id)
+        # F3: kill the run's Job Object first, then pop it — taskkill /T cannot
+        # find a root pid that has already exited (SPAWN-ORPHAN-REAP).
+        win_job = getattr(self, '_win_jobs', {}).pop(job_id, None)
+        if win_job is not None:
+            api = getattr(self, 'win_job_api', None)
+            try:
+                api.terminate(win_job)
+            except Exception as exc:
+                job = self.jobs.get(job_id)
+                if job is not None:
+                    job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
+            finally:
+                try:
+                    api.close(win_job)
+                except Exception:
+                    pass  # handle already invalid; the terminate result is recorded
+        pid = getattr(proc, 'pid', None)
+        if pid is None:
+            return
+        try:
+            res = self.tree_killer(pid)
+            if asyncio.iscoroutine(res):
+                await res
+        except ProcessLookupError:
+            pass  # the run's process group is already gone
+        except Exception as exc:
+            # F2: never swallow a mis-kill or platform failure silently; type
+            # name only, no message text or pid list. Never raise out of here.
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
 
     async def _monitor_process(
         self,
@@ -396,20 +525,30 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
+            payload = self._stdin_payloads.get(job_id)
+
+            async def _comm(input_data):
+                if input_data is not None:
+                    try:
+                        return await proc.communicate(input=input_data)
+                    except TypeError:
+                        pass
+                return await proc.communicate()
+
             timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
             if timeout:
                 try:
                     seconds = float(timeout)
                     if not math.isfinite(seconds) or seconds <= 0:
                         raise ValueError('invalid run timeout')
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), seconds)
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(_comm(payload), seconds)
                 except (asyncio.TimeoutError, ValueError):
-                    await self.tree_killer(proc.pid)
+                    await self._reap_process(job_id, proc)
                     stdout_bytes, stderr_bytes = await proc.communicate()
                     self.jobs[job_id].events.append({'event': 'run_timeout'})
                     self.jobs[job_id].exit_code = 124
             else:
-                stdout_bytes, stderr_bytes = await proc.communicate()
+                stdout_bytes, stderr_bytes = await _comm(payload)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].exit_code == 124 else proc.returncode
@@ -450,7 +589,8 @@ class SpawnerRunner:
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
             if job_id in self.jobs:
-                self.jobs[job_id].status = "cancelled"
+                if self.jobs[job_id].status != "failed":
+                    self.jobs[job_id].status = "cancelled"
                 self.jobs[job_id].end_time = time.time()
                 self.jobs[job_id].exit_code = 1
         except Exception as exc:
@@ -461,10 +601,69 @@ class SpawnerRunner:
             job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            try:
+                await self._reap_process(job_id, proc)
+            except Exception:
+                pass
+            self._check_git_config_guard(job_id)
+            self._git_guards.pop(job_id, None)
+            self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+            getattr(self, '_reaped_jobs', set()).discard(job_id)
+
+    @staticmethod
+    def _init_git_config_guard(work_dir: str | Path | None) -> tuple[Path, bytes, str] | None:
+        if not work_dir:
+            return None
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(work_dir), "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode != 0:
+                return None
+            raw_common = proc.stdout.strip()
+            if not raw_common:
+                return None
+            common_dir = (Path(work_dir) / raw_common).resolve()
+            config_path = common_dir / "config"
+            if not config_path.is_file():
+                return None
+            orig_bytes = config_path.read_bytes()
+            orig_hash = hashlib.sha256(orig_bytes).hexdigest()
+            return (config_path, orig_bytes, orig_hash)
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def _check_git_config_guard(self, job_id: str) -> None:
+        guard = self._git_guards.get(job_id)
+        if not guard:
+            return
+        config_path, orig_bytes, orig_hash = guard
+        try:
+            curr_bytes = config_path.read_bytes() if config_path.is_file() else None
+        except OSError:
+            curr_bytes = None
+        curr_hash = hashlib.sha256(curr_bytes).hexdigest() if curr_bytes is not None else None
+        if curr_hash != orig_hash:
+            try:
+                if orig_bytes is not None:
+                    config_path.write_bytes(orig_bytes)
+                else:
+                    config_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if job_id in self.jobs:
+                job = self.jobs[job_id]
+                job.events.append({"event": "git_config_mutated"})
+                job.status = "failed"
+                if not job.exit_code or job.exit_code == 0:
+                    job.exit_code = 1
 
     async def status(self, job_id: str | None = None) -> Any:
         """Query status of a specific job or all jobs."""
@@ -478,7 +677,11 @@ class SpawnerRunner:
         return [job for job in self.jobs.values()]
 
     async def steer(self, job_id: str, message: str) -> dict[str, Any]:
-        """Send steer instruction to an active job."""
+        """Send steer instruction to an active job.
+
+        Note: for opencode, stdin is closed after the prompt is sent, so steer
+        will report ``{'ok': False, 'steered': False, 'error': 'stdin closing'}``.
+        """
         if not isinstance(job_id, str):
             from plangraph.routing_errors import ParameterRefused
             raise ParameterRefused('job_id must be a string')
@@ -517,10 +720,7 @@ class SpawnerRunner:
 
         proc = self._processes.get(job_id)
         if proc:
-            try:
-                await self.tree_killer(proc.pid)
-            except ProcessLookupError:
-                pass
+            await self._reap_process(job_id, proc)
 
         task = self._tasks.get(job_id)
         if task and not task.done():
@@ -529,7 +729,8 @@ class SpawnerRunner:
         job.status = "cancelled"
         self._nonces.pop(job_id, None)
         job.end_time = time.time()
-        return {"job_id": job_id, "status": "cancelled"}
+        self._check_git_config_guard(job_id)
+        return {"job_id": job_id, "status": job.status}
 
 
 async def kill_process_tree(pid, *, platform=None, command_factory=None):
@@ -542,6 +743,63 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None):
     else:
         import signal
         os.killpg(pid, signal.SIGKILL)
+
+
+class _JobBasicLimitInformation(ctypes.Structure):
+    _fields_ = [(n, t) for n, t in (
+        ('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+        ('LimitFlags', ctypes.c_uint32), ('MinimumWorkingSetSize', ctypes.c_size_t),
+        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', ctypes.c_uint32),
+        ('Affinity', ctypes.c_size_t), ('PriorityClass', ctypes.c_uint32),
+        ('SchedulingClass', ctypes.c_uint32))]
+
+
+class _JobExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [('BasicLimitInformation', _JobBasicLimitInformation), ('IoInfo', ctypes.c_uint64 * 6),
+                ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+
+class WinJobApi:
+    """Kill-on-close Windows Job Object scope per run (SPAWN-ORPHAN-REAP F3).
+
+    Created lazily on nt only; tests inject a fake into ``SpawnerRunner.win_job_api``
+    so no ctypes loader runs off Windows. KILL_ON_JOB_CLOSE kills every descendant
+    when the handle closes — what taskkill /T cannot do once the root pid exited."""
+
+    def __init__(self):
+        k32 = self._k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateJobObjectW.restype = k32.OpenProcess.restype = ctypes.c_void_p
+
+    def create_job(self):
+        k32, v = self._k32, ctypes.c_void_p
+        handle = k32.CreateJobObjectW(None, None)
+        if not handle:
+            raise OSError(ctypes.get_last_error(), 'CreateJobObjectW')
+        info = _JobExtendedLimitInformation()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(v(handle), 9, ctypes.byref(info), ctypes.sizeof(info)):
+            k32.CloseHandle(v(handle))
+            raise OSError(ctypes.get_last_error(), 'SetInformationJobObject')
+        return handle
+
+    def assign(self, handle, pid):
+        k32, v = self._k32, ctypes.c_void_p
+        proc = k32.OpenProcess(0x101, False, pid)  # PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        if not proc:
+            raise OSError(ctypes.get_last_error(), 'OpenProcess')
+        try:
+            if not k32.AssignProcessToJobObject(v(handle), v(proc)):
+                raise OSError(ctypes.get_last_error(), 'AssignProcessToJobObject')
+        finally:
+            k32.CloseHandle(v(proc))
+
+    def terminate(self, handle):
+        if not self._k32.TerminateJobObject(ctypes.c_void_p(handle), 1):
+            raise OSError('TerminateJobObject failed')
+
+    def close(self, handle):
+        self._k32.CloseHandle(ctypes.c_void_p(handle))
 
 
 def spawn_service(*args, **kwargs):
@@ -650,6 +908,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
+            from .private_io import SAVE_READ_ATTEMPTS
             # Let the base service handle audited overrides, which never fall through.
             if model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -686,7 +945,7 @@ def spawn_service(*args, **kwargs):
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
-                return self.result(run_id)
+                return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
             async def execute():
                 tried = set()
@@ -778,6 +1037,6 @@ def spawn_service(*args, **kwargs):
                     await asyncio.wait_for(asyncio.shield(task), wait_seconds)
                 except asyncio.TimeoutError:
                     pass
-            return self.result(run_id)
+            return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
     return DispatchService(*args, **kwargs)

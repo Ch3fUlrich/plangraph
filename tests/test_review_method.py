@@ -443,7 +443,7 @@ def test_finding_7_runner_spawn_keyword_and_single_guard(tmp_path, monkeypatch):
     dummy_plan = type('Plan', (), {'legs': (), 'error': 'no leg', 'skipped': (), 'to_dict': lambda self: {'skipped': []}})()
     service._route = lambda *a, **k: dummy_plan
     service._save = lambda *a: None
-    service.result = lambda run_id: {'status': 'refused'}
+    service.result = lambda run_id, **kw: {'status': 'refused'}
     asyncio.run(service._spawn(card={'key': 'demo:C', 'estimate_tokens': 100},
                                role='review', review_scope='batch'))
     assert len(guard_calls) == 1

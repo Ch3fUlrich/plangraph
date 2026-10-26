@@ -103,7 +103,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def _escape(self, exc):
         """Last resort when something escaped ``_handle``: one fail line; one 500 if nothing was sent."""
         self._fail_line(exc)                    # V4: the failed request gets its line even after ``_sent``
-        if not getattr(self, "_sent", False):
+        if not (getattr(self, "_sent", False) or getattr(self, "_headers_buffer", None)):
             with suppress(Exception):
                 self._json(500, {"error": "internal", "msg": "internal server error"})
 
@@ -180,7 +180,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 self._fail_line(exc)
                 msg = ("keeper database lost at commit; outcome unknown"
                        if exc.phase == "commit" else "keeper database unavailable")
-                self._json(503, {"error": "unavailable", "msg": msg})
+                try:
+                    self._json(503, {"error": "unavailable", "msg": msg})
+                finally:               # F2: a dead client must not skip the fatal
+                    server.fail("postgres connection lost")
             except Exception as exc:  # noqa: BLE001 - never leak internals
                 self._fail_line(exc)
                 self._json(500, {"error": "internal",
@@ -481,6 +484,9 @@ class Reaper(threading.Thread):
                     outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
                     if self.server.anchorer is not None:      # M2B-ANCHOR: done transitions + hourly
                         self.server.anchorer.tick(self.server.store.conn)
+            except ConnectionLost:
+                self.server.fail("postgres connection lost")
+                continue
             except Exception:  # noqa: BLE001 - the reaper never dies loudly
                 continue
 
@@ -503,6 +509,9 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
+        self.fatal_reason = None
+        self._fatal_lock = threading.Lock()
+        self.on_fatal = None
         self.snapshot_writer = None
         debounce = float(getattr(config, "snapshot_debounce_s", 0) or 0)
         if debounce > 0:         # KEEPER-SNAPSHOT-PG: 0 = rewrite synchronously after each write
@@ -549,6 +558,18 @@ class KeeperHTTPServer(ThreadingHTTPServer):
                           type(exc).__name__, exc)
                 self.bus_registry = None
         super().__init__(address, KeeperHandler)
+
+    def fail(self, reason: str) -> None:
+        """Record fatal failure once; calls on_fatal hook (I2, S2)."""
+        with self._fatal_lock:           # first writer wins (F1): check-and-set is atomic
+            if self.fatal_reason is not None:
+                return
+            self.fatal_reason = reason
+        with suppress(Exception):
+            print(f"keeper: fatal: {reason}", file=sys.stderr)
+        if self.on_fatal is not None:
+            with suppress(Exception):
+                self.on_fatal()
 
     def _restore_bus_hosts(self, registry):
         """Load ``bus_hosts`` into the registry before the first probe and seed it.

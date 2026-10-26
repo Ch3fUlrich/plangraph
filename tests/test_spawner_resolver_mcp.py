@@ -199,7 +199,7 @@ def test_clients_acp_first_command_building():
         assert cmd[1] == "run"
         assert "--model" in cmd
         assert model in cmd
-        assert prompt in cmd
+        assert prompt not in cmd
 
 
 def test_clients_offline_emergency_fallback():
