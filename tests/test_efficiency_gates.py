@@ -979,3 +979,40 @@ def test_accs_pruned_when_record_ends(tmp_path):
     serv._save(serv.result("run-p1"))  # a later re-save shares the pruning and never shrinks the log
     assert log.read_text() == big
     assert not any(k[0] == "run-p1" for k in serv._accs)
+
+
+# ------------------------------------------------------------ round 3: a post-prune terminal re-save counts the resident job once
+def test_terminal_re_save_keeps_the_resident_jobs_text_once(tmp_path):
+    # qwen-E1 (I17): DispatchService._save saves a terminal record twice (runner.py:567, :574)
+    # and the end-of-run _accs prune makes the second save cold, where the attempt rows already
+    # hold the resident job's full text (stdout_tail=job.stdout). Counting those tails in done
+    # AND the live job's text in cur wrote the last attempt twice: the doubled log never trips
+    # the on-disk-wins test against its own doubled size, and any run above ~1 MB crossed the
+    # 2 MB cut -> output_cut, which refuses the run as a result (I13). The attempt for the
+    # current job counts once, as cur. The same shape occurs on SpawnService.cancel after
+    # execute's finally already saved (a cold re-save of a loaded record) — covered below.
+    from types import SimpleNamespace
+    from plangraph.spawner.runner import spawn_service
+    dsp = spawn_service(state=tmp_path)
+    text = "P" * 1100000  # > 1 MB: doubled it crosses the 2 MB cut and would set output_cut
+    dsp.runner.jobs["j1"] = SimpleNamespace(stdout=text, stderr="e")
+    rec = dict(run_id="run-e1", status="completed", exit_code=0, job_id="j1", started=1.0, ended=2.0,
+               attempts=[dict(leg={"id": "l1"}, status="completed", job_id="j1",
+                              stdout_tail=text, stderr_tail="e")])
+    dsp._save(rec)  # terminal: DispatchService._save itself saves twice, the second one cold
+    log = tmp_path / "runs" / "run-e1" / "stdout.log"
+    assert log.read_text() == text  # exactly once, never text + text
+    res = json.loads((tmp_path / "runs" / "run-e1" / "result.json").read_text())
+    assert rec["output_cut"] is False and res["output_cut"] is False
+    dsp._save(dsp.result("run-e1"))  # every later terminal save (cancel/watchdog shape) is cold too
+    assert log.read_text() == text
+    assert json.loads((tmp_path / "runs" / "run-e1" / "result.json").read_text())["output_cut"] is False
+    # positive control: the multi-attempt cold rebuild still keeps every attempt's text once
+    run2 = tmp_path / "runs" / "run-e2"; run2.mkdir(parents=True)
+    (run2 / "record.json").write_text(json.dumps({"run_id": "run-e2", "status": "completed", "exit_code": 0,
+        "ended": 1.0, "job_id": "j2",
+        "attempts": [{"leg": {"id": "l1"}, "status": "completed", "job_id": "j1", "stdout_tail": "ONE", "stderr_tail": ""},
+                     {"leg": {"id": "l2"}, "status": "completed", "job_id": "j2", "stdout_tail": "TWO", "stderr_tail": ""}]}))
+    dsp.runner.jobs["j2"] = SimpleNamespace(stdout="TWO", stderr="")
+    dsp._save(dsp.result("run-e2"))
+    assert (run2 / "stdout.log").read_text() == "ONETWO"  # done + cur, each job once

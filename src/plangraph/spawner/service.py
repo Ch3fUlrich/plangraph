@@ -97,17 +97,26 @@ class SpawnService:
         for s in ('stdout', 'stderr'):
             done, cur, n_att = accs.get((record['run_id'], s), (None, '', 0))
             if done is None:
-                # Cold _save (a fresh service over an old run): rebuild the accumulation. Each attempt
-                # tail holds its job's full text; the record's display tail is only the last 4 KB of the
-                # whole accumulation, so it is used only where no attempt tail and no live job carries
-                # the text (qwen-D1, haiku-D7: I17, a later _save never shrinks or doubles the log).
+                # Cold _save (a fresh service over an old run, or any save after the end-of-run
+                # prune): rebuild the accumulation. Each attempt tail holds its job's full text
+                # (kept whole so this rebuild is exact; the 4 KB display tail is the record's own
+                # stdout_tail/stderr_tail), and the attempt for the current job counts ONCE, as
+                # cur: its text is also the resident job's, so joining every tail AND the live
+                # text doubled the last attempt on every post-prune terminal re-save (qwen-E1;
+                # qwen-D1, haiku-D7: I17, a later _save never shrinks or doubles the log).
                 done = record.get(s); n_att = len(attempts) if done is not None else 0
                 if done is None:
-                    tails = [a.get(f'{s}_tail') or '' for a in attempts]
-                    done = ''.join(tails)
-                    tail = record.get(f'{s}_tail', '') or ''
                     cur = getattr(job, s, None) or ''
-                    if not any(tails) and tail and tail not in cur: cur = tail + cur
+                    parts, tails = [], []
+                    for a in attempts:
+                        piece = a.get(f'{s}_tail') or ''
+                        if not piece: continue
+                        tails.append(piece)
+                        if job_id and a.get('job_id') == job_id: cur = piece if len(piece) >= len(cur) else cur
+                        else: parts.append(piece)
+                    done = ''.join(parts)
+                    tail = record.get(f'{s}_tail', '') or ''
+                    if not tails and tail and tail not in cur: cur = tail + cur
                     try: on_disk = (run_dir / f'{s}.log').read_text(encoding='utf-8', errors='replace')
                     except OSError: on_disk = ''
                     if len(on_disk) > len(done) + len(cur): done, cur = '', on_disk  # the warm run's log wins
@@ -390,7 +399,7 @@ class SpawnService:
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
-                        skip_reason=reason, provider_response=stop,
+                        skip_reason=reason, provider_response=stop, job_id=job.job_id,
                         stdout_tail=job.stdout, stderr_tail=job.stderr))
                     if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                         record['chosen_leg'] = asdict(chosen)
