@@ -1,4 +1,10 @@
+import asyncio
 import json
+import os
+import signal
+import time
+
+import pytest
 
 from plangraph.spawner.cli import _drain_chunks
 from plangraph.spawner.env_redact import redact_env_values
@@ -253,3 +259,318 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
     assert (tmp_path / 'runs' / 'run-t4' / 'keeper.delivered').read_text() == 'delivered\n'
     assert len(delivered) == 4
 
+
+@pytest.mark.parametrize('exit_code', [0, 1])
+def test_tree_killer_invoked_on_exit(exit_code):
+    import asyncio
+    from plangraph.spawner.runner import SpawnerRunner
+
+    killed_pids = []
+
+    class FakeProcess:
+        pid = 9876
+        returncode = exit_code
+
+        async def communicate(self):
+            return b'stdout', b'stderr'
+
+    async def fake_factory(*args, **kwargs):
+        return FakeProcess()
+
+    async def fake_tree_killer(pid):
+        killed_pids.append(pid)
+
+    async def run():
+        runner = SpawnerRunner(process_factory=fake_factory, tree_killer=fake_tree_killer)
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.exit_code == exit_code
+        assert killed_pids == [9876]
+
+    asyncio.run(run())
+
+
+def test_tree_killer_invoked_once_on_timeout_no_double_kill(monkeypatch):
+    import asyncio
+    from plangraph.spawner.runner import SpawnerRunner
+
+    monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '0.05')
+    killed_pids = []
+
+    class HangingProcess:
+        pid = 9876
+        returncode = 124
+
+        def __init__(self):
+            self._unblock = asyncio.Event()
+
+        async def communicate(self):
+            await self._unblock.wait()
+            return b'stdout', b'stderr'
+
+    proc = HangingProcess()
+
+    async def fake_factory(*args, **kwargs):
+        return proc
+
+    async def fake_tree_killer(pid):
+        killed_pids.append(pid)
+        proc._unblock.set()
+
+    async def run():
+        runner = SpawnerRunner(process_factory=fake_factory, tree_killer=fake_tree_killer)
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.exit_code == 124
+        assert killed_pids == [9876]
+
+    asyncio.run(run())
+
+
+def test_tree_killer_process_lookup_error_tolerated():
+    import asyncio
+    from plangraph.spawner.runner import SpawnerRunner
+
+    killed_pids = []
+
+    class FakeProcess:
+        pid = 9876
+        returncode = 0
+
+        async def communicate(self):
+            return b'stdout', b'stderr'
+
+    async def fake_factory(*args, **kwargs):
+        return FakeProcess()
+
+    async def fake_tree_killer(pid):
+        killed_pids.append(pid)
+        raise ProcessLookupError("process lookup error")
+
+    async def run():
+        runner = SpawnerRunner(process_factory=fake_factory, tree_killer=fake_tree_killer)
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.status == 'completed'
+        assert job.exit_code == 0
+        assert killed_pids == [9876]
+
+    asyncio.run(run())
+
+
+def test_tree_killer_permission_error_tolerated():
+    import asyncio
+    from plangraph.spawner.runner import SpawnerRunner
+
+    killed_pids = []
+
+    class FakeProcess:
+        pid = 9876
+        returncode = 0
+
+        async def communicate(self):
+            return b'stdout', b'stderr'
+
+    async def fake_factory(*args, **kwargs):
+        return FakeProcess()
+
+    async def fake_tree_killer(pid):
+        killed_pids.append(pid)
+        raise PermissionError("operation not permitted")
+
+    async def run():
+        runner = SpawnerRunner(process_factory=fake_factory, tree_killer=fake_tree_killer)
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.status == 'completed'
+        assert job.exit_code == 0
+        assert killed_pids == [9876]
+
+    asyncio.run(run())
+
+
+def test_reap_failure_recorded_not_swallowed():
+    """PermissionError from the tree killer gives exactly one reap_failed event.
+
+    The bare except in _reap_process silently swallowed mis-kills and
+    Windows/unrelated failures (F2): keep ProcessLookupError silent (the group
+    is already gone) but surface anything else as a type-name-only event.
+    """
+    from plangraph.spawner.runner import SpawnerRunner
+
+    class FakeProcess:
+        pid = 9876
+        returncode = 0
+
+        async def communicate(self):
+            return b'stdout', b'stderr'
+
+    async def fake_factory(*args, **kwargs):
+        return FakeProcess()
+
+    def fake_tree_killer(pid):
+        raise PermissionError('operation not permitted')
+
+    async def run():
+        runner = SpawnerRunner(process_factory=fake_factory, tree_killer=fake_tree_killer)
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.status == 'completed'
+        assert [e for e in job.events if e.get('event') == 'reap_failed'] == [
+            {'event': 'reap_failed', 'error': 'PermissionError'}]
+
+    asyncio.run(run())
+
+
+def _pid_gone(pid):
+    """True once pid is dead or a zombie awaiting a non-reaping init."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        state = open(f'/proc/{pid}/stat').read().rsplit(') ', 1)[1][0]
+    except OSError:
+        return False
+    return state == 'Z'
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX process groups')
+def test_run_exit_reaps_surviving_grandchild(tmp_path):
+    """A child that outlives its run must not survive the run's scope (SPAWN-ORPHAN-REAP).
+
+    The incident (`opencode.exe serve` outliving its run by 3 h) is a surviving
+    grandchild holding ports: prove by real pids, with the default tree killer,
+    that the reaper reaches it — the stubbed tree_killer tests cannot.
+    """
+    import sys
+    from plangraph.spawner.runner import SpawnerRunner
+
+    pid_file = tmp_path / 'grandchild.pid'
+    script = tmp_path / 'run_that_orphans.py'
+    script.write_text(
+        "import subprocess, sys\n"
+        # stdio to DEVNULL: the run's pipes must close at exit so the job completes
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],\n"
+        "    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n")
+
+    async def script_factory(*args, **kwargs):
+        return await asyncio.create_subprocess_exec(sys.executable, str(script), **kwargs)
+
+    async def run():
+        runner = SpawnerRunner(process_factory=script_factory)  # default tree killer
+        job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await runner._tasks[job.job_id]
+        assert job.exit_code == 0
+        grandchild = int(pid_file.read_text())
+        try:
+            deadline = time.time() + 5
+            while not _pid_gone(grandchild):
+                assert time.time() < deadline, f'grandchild {grandchild} survived the run'
+                time.sleep(0.05)
+        finally:
+            if not _pid_gone(grandchild):  # never leak the sleeper on failure
+                os.kill(grandchild, signal.SIGKILL)
+
+    asyncio.run(run())
+
+
+class FakeWinJob:
+    """Fake win_job_api recording calls; can fail assignment (F3 hermetic tests)."""
+
+    def __init__(self, fail_assign=False):
+        self.calls, self.fail_assign = [], fail_assign
+
+    def __getattr__(self, name):
+        def call(*args):
+            self.calls.append((name, args[-1] if args else None))
+            if name == 'assign' and self.fail_assign:
+                raise RuntimeError('assign refused')
+            return 'job-handle' if name == 'create_job' else None
+        return call
+
+
+class FakeChild:
+    def __init__(self, pid=4242, hang=False):
+        self.pid, self.returncode = pid, 0
+        self._unblock = asyncio.Event() if hang else None
+
+    async def communicate(self, input=None):
+        if self._unblock is not None:
+            await self._unblock.wait()
+        return b'stdout', b'stderr'
+
+
+def _run_nt(monkeypatch, api, proc, timeout=None):
+    """One job through the real spawn/monitor path on simulated nt (hook, never os.name)."""
+    from plangraph.spawner import runner as runner_mod
+    from plangraph.spawner.runner import SpawnerRunner
+    monkeypatch.setattr(runner_mod, '_is_nt', lambda: True)
+    if timeout:
+        monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', timeout)
+    killed = []
+
+    async def main():
+        async def factory(*a, **kw):
+            return proc
+
+        async def tree_killer(pid):  # the taskkill fallback path
+            killed.append(pid)
+            if proc._unblock is not None:
+                proc._unblock.set()
+
+        r = SpawnerRunner(process_factory=factory, tree_killer=tree_killer)
+        r.win_job_api = api
+        job = await r.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
+        await r._tasks[job.job_id]
+        return r, job, killed
+
+    return asyncio.run(main())
+
+
+@pytest.mark.parametrize('timeout,hang', [(None, False), ('0.05', True)])
+def test_win_job_assigned_on_launch_and_terminated_once_at_reap(monkeypatch, timeout, hang):
+    """assign(child pid) once at launch; terminate+close exactly once at reap on
+    every exit path (normal, timeout); the job is popped (F3)."""
+    api = FakeWinJob()
+    runner, job, killed = _run_nt(monkeypatch, api, FakeChild(hang=hang), timeout=timeout)
+    assert job.exit_code == (124 if hang else 0)
+    assert api.calls == [('create_job', None), ('assign', 4242),
+                         ('terminate', 'job-handle'), ('close', 'job-handle')]
+    assert killed == [4242] and runner._win_jobs == {}  # taskkill fallback; job popped
+
+
+def test_win_job_assign_failure_falls_back_to_taskkill(monkeypatch):
+    api = FakeWinJob(fail_assign=True)
+    runner, job, killed = _run_nt(monkeypatch, api, FakeChild())
+    assert job.status == 'completed'
+    assert {'event': 'win_job_unavailable'} in job.events
+    assert [c[0] for c in api.calls] == ['create_job', 'assign', 'close']  # handle released
+    assert killed == [4242] and runner._win_jobs == {}
+
+
+
+
+def test_win_job_close_runs_when_terminate_raises(monkeypatch):
+    class TerminateFails(FakeWinJob):
+        def terminate(self, handle):
+            self.calls.append(('terminate', handle))
+            raise OSError('TerminateJobObject failed')
+    api = TerminateFails()
+    runner, job, killed = _run_nt(monkeypatch, api, FakeChild())
+    assert ('close', 'job-handle') in api.calls  # handle never leaks
+    assert {'event': 'reap_failed', 'error': 'OSError'} in job.events
+    assert killed == [4242] and runner._win_jobs == {}
+
+
+def test_win_job_api_constructor_failure_falls_back(monkeypatch):
+    from plangraph.spawner import runner as runner_mod
+
+    def no_kernel32():
+        raise OSError('kernel32 unavailable')
+    monkeypatch.setattr(runner_mod, 'WinJobApi', no_kernel32)
+    runner, job, killed = _run_nt(monkeypatch, None, FakeChild())
+    assert job.status == 'completed'
+    assert {'event': 'win_job_unavailable'} in job.events
+    assert killed == [4242] and runner._win_jobs == {}
