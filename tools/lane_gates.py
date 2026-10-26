@@ -108,7 +108,10 @@ def seats(paths):
                 try: meta = json.loads(res.read_text("utf-8"))
                 except Exception: meta = None
                 outputs[stem] = (raw, meta if isinstance(meta, dict) else None)
-            else: outputs[stem] = raw
+            else:
+                # I16: a seat file whose run has no result.json fails closed exactly like the
+                # corrupt one above — never the raw reply as a verdict (qwen-E2, haiku-E1).
+                outputs[stem] = (raw, None)
         except OSError as exc:
             print(f"lane-gates: seats: cannot read {path}: {type(exc).__name__}", file=sys.stderr)
             return 2

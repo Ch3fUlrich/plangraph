@@ -183,7 +183,7 @@ def test_judge_and_seat_verdict_override_pass_with_high(tmp_path):
 def test_fix_brief_carries_every_finding_and_rules(tmp_path):
     seat = tmp_path / "ds.out"
     seat.write_text("F7 [HIGH] keeper fails open\n  detail line\n\nVERDICT: FAIL\n")
-    found = F.findings_from_files([seat])
+    found = F.findings_from_files([seat], card={"seat_classes": {"ds": {"status": "completed"}}})  # qwen-E2/haiku-E1: the file form needs seat_classes or a sibling result.json
     assert [f["id"] for f in found] == ["F7"]
     brief = F.build_fix_brief(found, "| I1 | x |", note="L1: also see X")
     assert "F7" in brief and "detail line" in brief and "| I1 | x |" in brief
@@ -397,6 +397,7 @@ def test_first_review_needs_two_seats_with_text(outputs, expect):
 
 
 def test_lane_gates_seats_cli(tmp_path):
+    (tmp_path / "result.json").write_text(json.dumps({"status": "completed"}))  # qwen-E2/haiku-E1: the file form is verified by a sibling result.json
     (tmp_path / "mimo.out").write_text(PASS_SEAT)
     (tmp_path / "qwen.out").write_text("")
     tool = [sys.executable, str(ROOT / "tools/lane_gates.py"), "seats",
@@ -853,6 +854,26 @@ def test_run_dir_without_result_json_refuses_the_seat(tmp_path):
         (s / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
     assert seats([str(s1), str(s2)]) == 0
     assert len(F.findings_from_files([s1])) == 1
+
+
+# ------------------------------------------------------------ round 3: the file form fails closed too
+def test_seat_file_without_result_json_fails_closed(tmp_path):
+    # qwen-E2 / haiku-E1 (I16): the missing-result.json fail-closed fix covered only run dirs
+    # (p.is_dir()); the file form the design documents (seats <files>, admission's seat_outputs)
+    # fell to meta = None and was counted from the raw reply. A seat file whose run has no
+    # result.json and no seat_classes entry is refused exactly like a corrupt result.json.
+    from tools.lane_gates import seats
+    pass_text = "F1 [LOW] nit\nVERDICT: PASS\n"
+    a, b = tmp_path / "a.out", tmp_path / "b.out"
+    a.write_text(pass_text); b.write_text(pass_text)
+    assert F.findings_from_files([a]) == []  # refused, never counted from the raw reply
+    assert seats([str(a), str(b)]) == 3  # no verdict, re-run — the haiku-D1 symptom dies here too
+    (tmp_path / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
+    assert len(F.findings_from_files([a])) == 1 and seats([str(a), str(b)]) == 0  # positive control: a valid result.json accepts the same file
+    (tmp_path / "result.json").unlink()
+    assert len(F.findings_from_files([a], card={"seat_classes": {"a": {"status": "completed"}}})) == 1  # the design's file-form source accepts it
+    (tmp_path / "result.json").write_text("{not json")
+    assert F.findings_from_files([a]) == [] and seats([str(a), str(b)]) == 3  # corrupt refuses the same way, as before
 
 
 # ------------------------------------------------------------ round 2a: a cold _save rebuilds the accumulation

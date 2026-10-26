@@ -222,8 +222,11 @@ def findings_from_files(paths, card=None, seat_classes=None):
             raise OSError(f"missing result.json for run dir {p}")  # I16: fail closed like the missing stdout.log (haiku-D2, qwen-D3)
         try: meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
         except (OSError, ValueError): meta = None
-        if not isinstance(meta, dict) and (meta is not None or res.is_file()):
-            continue  # I16: unreadable or non-dict result.json refuses the seat
+        if not isinstance(meta, dict):
+            # I16: fail closed. An unreadable or non-dict result.json refuses the seat, and so
+            # does a seat file whose run has no result.json and no seat_classes entry (qwen-E2,
+            # haiku-E1: the file form fell to meta=None and was counted from the raw reply).
+            continue
         if meta and (meta.get("liveness") or meta.get("exit_class") == "cancelled" or meta.get("output_cut") or meta.get("status") not in (None, "completed")):
             continue
         text, _ = seat_text(fp.read_text("utf-8", "replace")); out.extend(parse_findings(text, stem))
