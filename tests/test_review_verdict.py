@@ -194,3 +194,71 @@ def test_halt_and_fix_map_to_false():
     assert to_bool(v.parse_verdict("VERDICT: pass")) is True
     assert sv.parse_verdict("VERDICT: halt")[0] is False
     assert sv.parse_verdict("VERDICT: fix")[0] is False
+
+
+LOW_SEVERITY_TABLE = [
+    ("VERDICT: fix - LOW: stale test name", "pass", True),
+    ("VERDICT: fix - LOW: x; LOW: y", "pass", True),
+    ("VERDICT: fix - Low: a; nit: b", "pass", True),
+    ("VERDICT: fix - MED: a. LOW: b", "fix", False),
+    ("VERDICT: fix - High: a; Medium: b; Low: c", "fix", False),
+    ("VERDICT: fix - LOW: no test for the MED path", "pass", True),
+    ("VERDICT: fix", "fix", False),
+    ("VERDICT: fix - add a test", "fix", False),
+    ("VERDICT: halt - LOW: x", "halt", False),
+    ("VERDICT: reject - LOW: x", "fix", False),
+    ("VERDICT: pass", "pass", False),
+    ("VERDICT: fix - LOW: x\nVERDICT: fix - MED: y", "fix", False),
+    ("VERDICT: pass | fix - LOW", None, False),
+    # markdown-bold/emphasised/code severity labels (F1)
+    ("VERDICT: fix - LOW: a; **MED**: b", "fix", False),
+    ("VERDICT: fix - **LOW**: a", "pass", True),
+    ("VERDICT: fix - `HIGH`: a; LOW: b", "fix", False),
+    ("VERDICT: fix - _Medium_ (b); low: a", "fix", False),
+    ("VERDICT: fix - **low** (a)", "pass", True),
+    # dash-separated blocking labels fail closed (L1-1)
+    ("VERDICT: fix - LOW: x; Medium - y", "fix", False),
+    ("VERDICT: fix - LOW: x; HIGH - y", "fix", False),
+    ("VERDICT: fix - LOW: x; **MED** — y", "fix", False),
+    ("VERDICT: fix - LOW: medication typo", "pass", True),
+    (
+        "VERDICT: fix - LOW: CHANGELOG.md D-2773 entry still says \"admitted in batch by design\", "
+        "contradicting the updated docs/REVIEW-METHOD.md (\"admitted in any mode\"). "
+        "Non-blocking for the fix itself. Test run output was not provided, so the pass claim rests on reading the code.",
+        "pass",
+        True,
+    ),
+    (
+        "VERDICT: fix - low: stale test name `test_s1_lost_is_sticky_until_boundary` contradicts "
+        "the new \"permanent\" semantics (V3); low: a partial `send_response` failure can leave "
+        "a status line in `_headers_buffer`, so the guard could send a second one, and the test stub "
+        "does not exercise this (V2); not verified: the escape-guard body, `keeper_util.seed`, "
+        "and the 503 branch for lost-before-COMMIT are outside the material.",
+        "pass",
+        True,
+    ),
+    ("VERDICT: fix - LOW only: substring name match at tools/affected_tests.py:149 can suppress the full-suite fallback; missing tests for browser-only empty selection", "pass", True),
+    ("VERDICT: fix - **LOW only**: a", "pass", True),
+    ("VERDICT: fix - LOW only: a; MED: b", "fix", False),
+]
+
+
+@pytest.mark.parametrize("text,want_verdict,is_low_only", LOW_SEVERITY_TABLE)
+def test_low_severity_verdict_table(text, want_verdict, is_low_only):
+    assert v.parse_verdict(text) == want_verdict
+    assert sv.parse_verdict(text)[0] is to_bool(want_verdict)
+    ev = v.judge(text, "stop").to_evidence()
+    if is_low_only:
+        assert ev.get("low_only") is True
+    else:
+        assert "low_only" not in ev
+
+
+def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
+    assert v.parse_test_gaming(
+        'TEST-GAMING: no - searched the "batch in" stamp: 0 hits\nVERDICT: pass'
+    ) == ("no", None)
+    assert v.parse_test_gaming(
+        'TEST-GAMING: no - searched the "batch in" stamp: 3 hits'
+    )[0] != "no"
+

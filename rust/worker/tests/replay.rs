@@ -91,6 +91,92 @@ fn expand_data_json(value: &mut serde_json::Value) {
     }
 }
 
+/// Standard-alphabet base64 decode (the inverse of `base64_std`): a patch
+/// marker's payload is stored either decoded (`data_json`) or base64 (`data`).
+fn base64_decode(s: &str) -> Vec<u8> {
+    fn sextet(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((c - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for c in s.bytes() {
+        if c == b'=' {
+            break;
+        }
+        let Some(v) = sextet(c) else { continue };
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// The raw fixture JSON for `name`, before `history` re-expands `data_json`.
+fn fixture_json(name: &str) -> serde_json::Value {
+    let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {path}: {e}"))
+}
+
+/// The `core_patch` patch-marker ids recorded in a fixture's history (I2 / D7).
+/// A marker rides in `MarkerRecordedEventAttributes` with `marker_name:
+/// "core_patch"` and its id in `patch-data`; the payload may be `data_json`
+/// (decoded) or base64 `data`, so both are decoded here.
+fn fixture_patch_markers(name: &str) -> std::collections::BTreeSet<String> {
+    let doc = fixture_json(name);
+    let mut ids = std::collections::BTreeSet::new();
+    for event in doc["events"].as_array().expect("events array") {
+        let Some(marker) = event["attributes"].get("MarkerRecordedEventAttributes") else {
+            continue;
+        };
+        if marker["marker_name"].as_str() != Some("core_patch") {
+            continue;
+        }
+        for payload in marker["details"]["patch-data"]["payloads"]
+            .as_array()
+            .expect("patch-data payloads")
+        {
+            let value: serde_json::Value = match payload.get("data_json") {
+                Some(decoded) => decoded.clone(),
+                None => {
+                    let raw = base64_decode(payload["data"].as_str().expect("payload data"));
+                    serde_json::from_slice(&raw).expect("decode patch payload")
+                }
+            };
+            if let Some(id) = value["id"].as_str() {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// The activity type names a fixture scheduled, in order.
+fn fixture_activities(name: &str) -> Vec<String> {
+    let doc = fixture_json(name);
+    doc["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter_map(|e| {
+            e["attributes"]["ActivityTaskScheduledEventAttributes"]["activity_type"]["name"]
+                .as_str()
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
 fn data_json_expands_to_base64() {
     let mut value = serde_json::json!({"data_json": {"a": 1}});
@@ -133,6 +219,64 @@ async fn replays_check_fails() {
         .replay_workflow(history("check_fails"))
         .await
         .expect("check_fails history replays");
+}
+
+/// I2 / D7 (a): a pre-OBSERVE parking history -- a card that parked before the
+/// `park-observe-v1` marker existed -- must replay unchanged: `observe_card`
+/// returns `None` (no observe scheduled, no marker command issued), so the run
+/// reproduces exactly. The fixture is asserted marker-free (neither the observe
+/// nor the re-observe marker) and to contain the park activity.
+/// `check_fails` is that history: it parks and carries no core_patch marker,
+/// and every park runs through `observe_card`, so no new recording is needed.
+#[tokio::test]
+async fn replays_pre_observe_cap_park() {
+    let markers = fixture_patch_markers("check_fails");
+    assert!(
+        !markers.contains("park-observe-v1"),
+        "pre-OBSERVE fixture must not carry park-observe-v1: {markers:?}"
+    );
+    assert!(
+        !markers.contains("park-reobserve-v1"),
+        "pre-OBSERVE fixture must not carry park-reobserve-v1: {markers:?}"
+    );
+    assert!(
+        fixture_activities("check_fails")
+            .iter()
+            .any(|a| a == "CardActivities::park"),
+        "fixture must contain the park activity"
+    );
+    replayer()
+        .replay_workflow(history("check_fails"))
+        .await
+        .expect("pre-observe parking history replays clean");
+}
+
+/// I2 / D7 (b): a post-OBSERVE, pre-REOBSERVE parking history -- observe ran and
+/// recorded `park-observe-v1`, but the park 409 re-observe loop (gated behind
+/// `park-reobserve-v1`) did not -- must replay unchanged: the observe replays,
+/// the park lands once, and no re-observe is scheduled. The fixture is asserted
+/// to carry `park-observe-v1`, to lack `park-reobserve-v1`, and to park.
+#[tokio::test]
+async fn replays_pre_reobserve_cap_park() {
+    let markers = fixture_patch_markers("pre_reobserve_cap_park");
+    assert!(
+        markers.contains("park-observe-v1"),
+        "post-OBSERVE fixture must carry park-observe-v1: {markers:?}"
+    );
+    assert!(
+        !markers.contains("park-reobserve-v1"),
+        "pre-REOBSERVE fixture must not carry park-reobserve-v1: {markers:?}"
+    );
+    assert!(
+        fixture_activities("pre_reobserve_cap_park")
+            .iter()
+            .any(|a| a == "CardActivities::park"),
+        "fixture must contain the park activity"
+    );
+    replayer()
+        .replay_workflow(history("pre_reobserve_cap_park"))
+        .await
+        .expect("pre-reobserve parking history replays clean");
 }
 
 /// The gate-block run (a first attempt blocked on the card's check, main left

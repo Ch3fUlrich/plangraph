@@ -37,6 +37,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "attempts", "park", "complete", "alarms", "locks",
                "jev_shadow", "jev_outcome", "log_item", "rule_set"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
+READ_VERBS.add("messages")
+WRITE_VERBS.add("post_message")
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
                 "audit-meta"}
@@ -92,7 +94,13 @@ def run_gate(principal, name):
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
           "same_family": 409, "unavailable": 503, "exec_stale": 409,
-          "bad_transition": 409, "exec_stale_state": 409}
+          "bad_transition": 409, "exec_stale_state": 409,
+          # R2a': bus codes registered statically (never at runtime);
+          # msg_rate_limited is the bus's rate-limit code, distinct from
+          # oversight's 403 "forbidden" (R3 keeps no rate_limited enum).
+          "bad_signature": 401, "unknown_kid": 401, "skew": 401,
+          "replayed_nonce": 401, "replay_window_full": 503,
+          "too_large": 413, "msg_rate_limited": 429}
 
 
 #: RT-P1-KEEPER: the Rust worker's verbs (rust/worker/src/keeper.rs).

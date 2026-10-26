@@ -104,13 +104,28 @@ OPEN_HEAD_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 OPEN_PR_SKIP_NOTICE = 'ci-commit-gate: open PR merge check skipped (no --open-heads)\n'
 
 MISSING_WRITER = 'missing Writer trailer'
-CLAUDE_WRITER = 'claude writer'
+CLAUDE_WRITER = 'claude writer not in form claude-<model> <run|session|uuid id> [(note)]'
+#: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
+#: trailing parenthetical note; ``)`` is forbidden inside the note (no nested
+#: parens), as are a newline and a second Writer marker (case-insensitive,
+#: optional spaces before ':'). Case rule: ``claude-<model>`` and the run-hex
+#: id are lowercase only, a uuid may be any case. <id> is shape only (never
+#: looked up): a spawner run id, a Claude Code session id, or a uuid (D-2955, D-2967).
+CLAUDE_WRITER_RE = re.compile(
+    r'^claude-[a-z0-9.-]+ '
+    r'(?:run-[0-9a-f]{32}'
+    r'|session_[A-Za-z0-9]+'
+    r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+    r'(?: \((?:(?!(?i:Writer\s*:))[^)\n])+\))?\Z'
+)
 TEST_REMOVAL_VIOLATION = 'test removal without Test-Removal trailer'
 MALFORMED_WRITER = 'malformed Writer trailer'
 MALFORMED_HAND_EDIT = 'malformed Hand-Edit trailer'
 GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
 #: A Hand-Edit commit may change at most this many lines (added + deleted).
-HAND_EDIT_MAX_LINES = 10
+#: Interim safety ceiling (operator 2026-10-25); the decision moves to spawner
+#: route (ORCH-EFFICIENCY-ENFORCE).
+HAND_EDIT_MAX_LINES = 50
 #: An AutoOS spawner run id (``YYYYMMDD-HHMMSS-<name>-<hex>``); the plangraph
 #: spawner writes ``run-<32 hex>``.  D-2749: no agent spawns through AutoOS.
 AUTOOS_RUN_RE = re.compile(r'(?:^|[\s-])\d{8}-\d{6}-[\w.-]*-[0-9a-f]{6}\b')
@@ -406,8 +421,11 @@ def check(
         )
         if malformed_writer:
             violations.append(f'{sha}: {MALFORMED_WRITER}')
+        # A claude-marked value is refused only when it does not name its
+        # run/session id in the accepted shape (shape only, never looked up).
         if any(
             marker in value.lower()
+            and CLAUDE_WRITER_RE.fullmatch(value) is None
             for value in all_writer_values
             for marker in CLAUDE_MARKERS
         ):

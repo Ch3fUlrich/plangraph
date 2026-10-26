@@ -118,7 +118,7 @@ def test_absent_overlay_normal_unreadable_overlay_unknown(tmp_path, monkeypatch,
 
 
 def test_legacy_unknown_fallback_but_explicit_unknown_rejected():
-    assert build_standalone_fallback_command('omniroute', 'p', 'x/y') == ['opencode', 'run', '--standalone', '--model', 'x/y', 'p']
+    assert build_standalone_fallback_command('omniroute', 'p', 'x/y') == ['opencode', 'run', '--standalone', '--model', 'x/y']
     assert build_command('p', 'omniroute/x', gateway_online=False)[0] == 'opencode'
     with pytest.raises(ValueError):
         build_command('p', 'x/y', client='omniroute')

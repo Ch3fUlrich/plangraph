@@ -9,6 +9,11 @@ import pytest
 from plangraph.spawner.runner import JobInfo, SpawnerRunner, spawn_service
 
 
+
+@pytest.fixture(autouse=True)
+def _gateway_url(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
+
 @pytest.mark.parametrize('store_kind', ['leg', 'catalog-default'])
 @pytest.mark.parametrize('existing', [False, True])
 def test_sqlite_private_sidecars(tmp_path, monkeypatch, store_kind, existing):

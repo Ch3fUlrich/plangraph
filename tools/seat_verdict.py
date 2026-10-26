@@ -46,6 +46,14 @@ FAMILIES = (
 KNOWN_FAMILIES = frozenset(family for _, family in FAMILIES)
 PASS_WORDS = frozenset({"pass", "approve"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+_LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
+# [*_`]* before/after the word: markdown-bold labels like **MED**: or
+# _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
+# A blocking word before a dash ("HIGH - y") counts too: the relaxation fails closed.
+_BLOCKING_LABEL = re.compile(
+    r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*(?:[:(]|[-–—]\s)", re.I)
+_LOW_LABEL = re.compile(
+    r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 # first word, ended by end/space/punctuation and NOT followed by "|" or "/"
 # (that would be an echoed "pass | fix | halt" template, not a decision)
@@ -68,15 +76,22 @@ def parse_verdict(text):
     Only that line decides.  A template echo such as ``VERDICT: pass | fix`` or
     an unknown first word yields no verdict; earlier lines are never consulted.
     """
-    lines = text.splitlines()
+    lines = (text or "").splitlines()
     for idx in range(len(lines) - 1, -1, -1):
         match = _VERDICT_LINE.match(lines[idx])
         if not match:
             continue
-        word = _FIRST_WORD.match(match.group(1).strip())
-        word = word.group(1).lower() if word else ""
+        stripped = match.group(1).strip()
+        word_m = _FIRST_WORD.match(stripped)
+        word = word_m.group(1).lower() if word_m else ""
         if word in PASS_WORDS:
             return True, idx
+        # halt/reject are excluded from _LOW_ONLY_WORDS on purpose: they fall through to FIX_WORDS -> False, like verdict.py's halt check
+        if word in _LOW_ONLY_WORDS:
+            remainder = stripped[word_m.end():]
+            if _LOW_LABEL.search(remainder) and not _BLOCKING_LABEL.search(remainder):
+                return True, idx
+            return False, idx
         if word in FIX_WORDS:
             return False, idx
         return None, idx
@@ -105,10 +120,13 @@ def verdict_payload(key, ok, reason):
     return {"key": str(key), "ok": ok, "reason": str(reason)}
 
 
-def build_reason(evidence, ok, text, idx, covers=None):
+def build_reason(evidence, ok, text, idx, covers=None, witness=None):
     head = (f"seat {evidence.get('served_model') or evidence.get('requested_model')}"
             f" PASS corr {evidence.get('correlation_id')}"
             f" prompt {str(evidence.get('prompt_sha256') or '')[:12]}")
+    if witness:
+        # D-2905 (2): keep the request-side witness kind auditable in the keeper record.
+        head += f" witness=request-side-opencode-store {witness}"
     reason = head if ok else f"{head}\n{findings(text, idx)}".rstrip()
     if covers is not None:
         reason = f"{reason}\ncovers: {', '.join(covers)}"
@@ -181,7 +199,22 @@ def main(argv=None):
         print(f"seat_verdict: refused, unknown writer families "
               f"{unknown_writers!r}", file=sys.stderr)
         return EXIT_REFUSED
-    model = evidence.get("served_model") or evidence.get("requested_model")
+    served = evidence.get("served_model")
+    model = served or evidence.get("requested_model")
+    # D-2905 (2), interim: an opencode free seat leg with every tool denied is
+    # witnessed only request-side (the opencode session store).  When the
+    # spawner recorded that kind and nothing response-side, count the family by
+    # the request-side model; a response-side source (gateway logs) replaces
+    # this when it exists.  Anything else keeps today's behaviour.
+    witness_model = None
+    if (not served or served == "unwitnessed") and \
+            evidence.get("witness_kind") == "request-side-opencode-store":
+        candidate = evidence.get("request_side_model")
+        if (isinstance(candidate, str) and candidate.startswith("opencode/")
+                and candidate.endswith("-free")):
+            witness_model = candidate
+    if witness_model is not None:
+        model = witness_model
     family = model_family(model)
     if family is None:
         print(f"seat_verdict: refused, family {family!r} of model {model!r} "
@@ -214,7 +247,8 @@ def main(argv=None):
         return EXIT_PASS_REFUSED
     covers = sorted({writer for writer in writer_families if writer != family})
     payload = verdict_payload(args.key, ok,
-                              build_reason(evidence, ok, text, idx, covers))
+                              build_reason(evidence, ok, text, idx, covers,
+                                           witness=witness_model))
     if args.dry_run:
         print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
                           "headers": {"Authorization": "Bearer <redacted>"},

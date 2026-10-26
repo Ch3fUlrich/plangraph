@@ -24,6 +24,9 @@ GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 #: Environment variable naming the provider-level gateway base URL override.
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
+#: Harnesses whose prompts are delivered via stdin instead of argv (I9).
+STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode",)
+
 
 def gateway_url(env: Mapping[str, str] | None = None,
                 config: Mapping[str, Any] | None = None) -> str | None:
@@ -292,7 +295,6 @@ def build_opencode_command(
         cmd.extend(["--port", str(serve_port)])
     if extra_flags:
         cmd.extend(extra_flags)
-    cmd.append(prompt)
     return cmd
 
 
@@ -344,7 +346,6 @@ def build_standalone_fallback_command(
     cmd = ["opencode", "run", "--standalone"]
     if model:
         cmd.extend(["--model", model])
-    cmd.append(prompt)
     return cmd
 
 

@@ -271,12 +271,43 @@ def test_valid_writer_passes(repo: Path):
         "SONNET run-2",
         "Haiku run-3",
         "fable run-4",
+        # Near-miss negatives of the accepted form: each must fail, so that
+        # loosening CLAUDE_WRITER_RE to a bare ^claude- prefix is caught here.
+        "claude-opus-5-5 (D-2739 operator override)",  # no id
+        "claude-opus-5-5 run-" + "ab" * 15 + "c",  # 31 hex
+        "claude-opus-5-5 run-" + "ab" * 16 + " (Writer: mimo-v2.6-pro run-1)",
+        "claude-opus-5-5 run-" + "ab" * 16 + " (writer: x)",
+        "claude-opus-5-5 run-" + "ab" * 16 + " (Writer : x)",
+        "claude-opus-5-5 run-" + "ab" * 16 + " (writer : x)",
+        # Note shape and id-shape near-misses (D-2967): the note is a single
+        # parenthesised span of non-')' text and the case rule is strict.
+        "claude-opus-5-5 run-" + "ab" * 16 + " (a) x",  # text after the note
+        "claude-opus-5-5 run-" + "ab" * 16 + " (a (b))",  # nested parens
+        "claude-opus-5-5 run-" + "ab" * 16 + " ()",  # empty note
+        "claude-opus-5-5 run-" + "ab" * 16 + "a",  # 33 hex
+        "Claude-opus-5-5 run-" + "ab" * 16,  # model not lowercase
+        "claude-opus-5-5 run-" + "AB" * 16,  # run hex not lowercase
+        "claude-opus-5-5\trun-" + "ab" * 16,  # tab instead of the space
     ],
 )
 def test_claude_family_writers_fail(repo: Path, writer: str):
     base = _head(repo)
     sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer not in form claude-<model> <run|session|uuid id> [(note)]"]
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "claude-sonnet-5-5 run-" + "ab" * 16,
+        "claude-opus-5-5 session_" + "Ab1" * 8,
+        "claude-haiku-4-5 123e4567-e89b-12d3-a456-426614174000 (D-2739 operator override: Opus writes, no L2)",
+    ],
+)
+def test_claude_writer_with_run_or_session_id_passes(repo: Path, writer: str):
+    base = _head(repo)
+    sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
+    assert check(base, sha, cwd=repo) == []
 
 
 def test_unrelated_writer_model_passes(repo: Path):
@@ -294,7 +325,18 @@ def test_claude_writer_followed_by_clean_writer_still_fails(repo: Path):
         "Writer: mimo-v2.6-flash run-1\n"
     )
     sha = _commit(repo, message)
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer not in form claude-<model> <run|session|uuid id> [(note)]"]
+
+
+def test_claude_writer_re_rejects_newline_inside_note() -> None:
+    value = "claude-opus-5-5 run-" + "ab" * 16 + " (a\nb)"
+    assert ci_commit_gate.CLAUDE_WRITER_RE.fullmatch(value) is None
+
+
+def test_commit_without_any_writer_trailer_still_fails(repo: Path):
+    base = _head(repo)
+    sha = _commit(repo, "feat: served model\n")
+    assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
 
 
 def test_two_clean_writer_lines_pass(repo: Path):
@@ -977,22 +1019,22 @@ def test_hand_edit_auth_path_rename_refused(repo):
     assert f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py' in violations
 
 
-def test_hand_edit_ten_changed_lines_passes(repo):
+def test_hand_edit_fifty_changed_lines_passes(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 10})
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 50})
     assert check(base, sha, cwd=repo) == []
 
 
-def test_hand_edit_eleven_changed_lines_refused(repo):
+def test_hand_edit_fifty_one_changed_lines_refused(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 11})
-    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 10 changed lines']
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 51})
+    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 50 changed lines']
 
 
 def test_hand_edit_deleted_lines_count(repo):
-    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 20})
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 60})
     sha = _commit(repo, 'docs: rewrite\n\nHand-Edit: rewrite\n', {'docs/y.md': 'new\n'})
-    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 10 changed lines']
+    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 50 changed lines']
 
 
 def test_root_level_roles_file_hand_edit_refused(repo):

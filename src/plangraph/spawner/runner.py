@@ -9,17 +9,24 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import hashlib
 import json
-import os
-import re
-import time
-import uuid
 import logging
 import math
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.clients import (
+    STDIN_PROMPT_HARNESSES,
     build_child_env,
     build_command,
     build_routing_envelope_headers,
@@ -52,6 +59,43 @@ def redact(value):
     return value
 
 
+def _is_nt() -> bool:
+    return os.name == "nt"
+
+
+def _resolve_launch(
+    exe: str,
+    argv: Sequence[str] = (),
+    *,
+    is_nt: bool | None = None,
+) -> tuple[str, str | None]:
+    """Resolve executable path and enforce Windows launch constraints (I11, I12)."""
+    nt = _is_nt() if is_nt is None else is_nt
+    if not nt:
+        return exe, None
+
+    exe_path = Path(exe)
+    ext = exe_path.suffix.lower()
+    is_batch = ext in (".cmd", ".bat")
+
+    if is_batch and exe_path.stem.lower() == "opencode":
+        sibling = exe_path.parent / "node_modules" / "@opencode" / "cli" / "bin" / "opencode.exe"
+        if sibling.is_file():
+            exe = str(sibling)
+            exe_path = sibling
+            ext = exe_path.suffix.lower()
+            is_batch = False
+
+    is_opencode = exe_path.stem.lower() == "opencode"
+    if not is_opencode:
+        limit = 8000 if is_batch else 32000
+        cmdline = subprocess.list2cmdline([exe, *argv])
+        if len(cmdline) > limit:
+            return exe, f"command_line_too_long: {len(cmdline)} chars"
+
+    return exe, None
+
+
 @dataclass
 class JobInfo:
     """Execution state of a spawned agent task."""
@@ -70,6 +114,8 @@ class JobInfo:
     served_model: str | None = 'unwitnessed'
     served_family: str | None = 'unwitnessed'
     served_witness_reason: str = 'harness supplied no authenticated served-model telemetry'
+    request_side_model: str | None = None
+    witness_kind: str | None = None
     dry_run: bool = False
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
@@ -118,6 +164,117 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
     return served_model, served_family
 
 
+def _opencode_served_model(db_path, title) -> str | None:
+    """Served model witnessed in opencode's session store for one titled session (D-2898).
+
+    Only a unanimous assistant model id counts; anything else stays unwitnessed.
+    """
+    try:
+        from urllib.parse import quote
+        # 2s timeout: a locked/busy store must never block the monitor
+        # (D-2921 F2); it just stays unwitnessed.
+        conn = sqlite3.connect('file:' + quote(str(db_path)) + '?mode=ro', uri=True, timeout=2.0)
+        try:
+            rows = conn.execute('SELECT id FROM session_v2 WHERE title = ?', (title,)).fetchall()
+            models = set()
+            for (data,) in conn.execute(
+                    "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant'",
+                    (rows[0][0],) if len(rows) == 1 else (None,)):
+                model = json.loads(data)['model']
+                models.add(model['providerID'] + '/' + model['id'])
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+        return None
+    return next(iter(models)) if len(models) == 1 else None
+
+
+#: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
+#: the engine's internal Permission.Ruleset actions): a review child must have
+#: all of them denied (D-2905 (1)).
+_DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'grep',
+                 'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
+                 'webfetch', 'websearch')
+
+
+def _opencode_managed_dir(env: Mapping) -> Path:
+    """opencode's system (managed) config dir as the child will resolve it.
+
+    Fixed on Linux/macOS; on win32 opencode reads ProgramData from its own
+    env, so the CHILD env is read here (the same value the child sees).
+    """
+    if sys.platform == 'darwin':
+        return Path('/Library/Application Support/opencode')
+    if sys.platform == 'win32':
+        return Path(env.get('ProgramData') or 'C:\\ProgramData', 'opencode')
+    return Path('/etc/opencode')
+
+#: The only OPENCODE_* env names a review child may carry. Anything else a
+#: caller sets (e.g. OPENCODE_CLI_CONFIG_CONTENT, OPENCODE_TEST_HOME) is
+#: dropped before launch so no caller-set override can re-enable a tool or add
+#: a config layer (REVIEW-WITNESS-OPENCODE R1).
+_REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
+                              'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
+                              'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
+                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
+
+
+def _opencode_tools_denied(config_json, env) -> bool:
+    """True only when the child's final config AND env prove every tool denied.
+
+    Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
+    to 'deny'; the managed config dir (_opencode_managed_dir, resolved from
+    the child env) holds no opencode.json/opencode.jsonc; 'mcp' is {} and
+    'plugin' is [] in config_json; HOME,
+    XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
+    the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
+    inside that dir whose content parses to {};
+    OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE and
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS are each '1'; and no OPENCODE_* env
+    name outside _REVIEW_OPENCODE_ENV_ALLOW is present. This proves only the
+    env/config shape: the runtime behaviour of opencode is not proven by this
+    function (an L1 runtime probe covers that).
+    """
+    try:
+        cfg = json.loads(config_json or '{}')
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    permission = cfg.get('permission')
+    if not isinstance(permission, dict) or not all(
+            permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
+        return False
+    if cfg.get('mcp') != {} or cfg.get('plugin') != []:
+        return False
+    if not isinstance(env, Mapping):
+        return False
+    managed = _opencode_managed_dir(env)
+    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
+        return False
+    for name in env:
+        if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:
+            return False
+    if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') != '1'):
+        return False
+    try:
+        job_dir = Path(env.get('XDG_DATA_HOME') or '')
+        if not job_dir.name:
+            return False
+        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
+            path = Path(env.get(key) or '')
+            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
+                return False
+        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
+        return (bool(cfg_path.name) and cfg_path.is_file()
+                and cfg_path.resolve().is_relative_to(job_dir.resolve())
+                and json.loads(cfg_path.read_text()) == {})
+    except (OSError, ValueError):
+        return False
+
+
 class NonceCapacity(RuntimeError):
     """All nonce slots belong to live runs."""
 
@@ -136,6 +293,10 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
+        self._ocdata_dirs = {}
+        self._reaped_jobs = set()
+        self._git_guards = {}
+        self._stdin_payloads = {}
 
     def served_witness(self, job_id, model, *, adapter_token):
         """Record transport telemetry authenticated by an in-process adapter.
@@ -260,18 +421,75 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        render_reason = None
+        tools_event = None
         if cmd[0] == 'opencode':
+            # Name the session so the monitor can witness the served model
+            # (D-2898). --title goes right after the --model pair so it always
+            # precedes any positional/prompt argument ('opencode run' takes
+            # [<message...>]); the prompt itself rides on stdin.
+            try:
+                title_at = cmd.index('--model') + 2
+            except ValueError:
+                title_at = len(cmd)  # no positional exists on that path
+            cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
-            # Overlay only copies an env name through when the parent already
-            # holds it; hand the child the host keys from the AutoOS keys file
-            # so mimo and opencode/*-free runs can authenticate (D-2759).
-            from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
-            add_host_keys(child_env, model_or_combo,
-                needs_gateway=GATEWAY_KEY_ENV in child_env.get('OPENCODE_CONFIG_CONTENT', ''))
+            from plangraph.routing_support.opencode_render import render_gateway_providers
+            render_reason = render_gateway_providers(child_env, model_or_combo)
+            if render_reason is None:
+                # Overlay only copies an env name through when the parent already
+                # holds it; hand the child the host keys from the AutoOS keys file
+                # so mimo and opencode/*-free runs can authenticate (D-2759).
+                from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
+                add_host_keys(child_env, model_or_combo,
+                    needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+            if role == 'review':
+                # D-2905 (1): a spawner-owned per-job store dir, created before
+                # launch and read only after child exit -- the shared store is
+                # child-writable and proves nothing about the served model.
+                import tempfile
+                oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')  # mode 0700
+                self._ocdata_dirs[job_id] = oc_dir
+                child_env['XDG_DATA_HOME'] = oc_dir
+                # D-2921 F1: close every other config layer -- no repo, user,
+                # Claude Code, MCP or plugin tool may re-enable anything.
+                child_env['OPENCODE_DISABLE_PROJECT_CONFIG'] = '1'
+                child_env['OPENCODE_DISABLE_CLAUDE_CODE'] = '1'
+                child_env['OPENCODE_CONFIG_DIR'] = oc_dir
+                empty_cfg = Path(oc_dir) / 'pg-empty.json'
+                empty_cfg.write_text('{}')
+                child_env['OPENCODE_CONFIG'] = str(empty_cfg)
+                # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
+                # config layer at all -- HOME and XDG_CONFIG_HOME live in the
+                # per-job dir and every caller-set OPENCODE_* override outside
+                # _REVIEW_OPENCODE_ENV_ALLOW is dropped.
+                child_env['HOME'] = oc_dir
+                xdg_config = os.path.join(oc_dir, 'config')
+                os.mkdir(xdg_config, 0o700)
+                child_env['XDG_CONFIG_HOME'] = xdg_config
+                child_env['OPENCODE_DISABLE_CLAUDE_CODE_SKILLS'] = '1'
+                for name in [n for n in child_env
+                             if str(n).startswith('OPENCODE_') and n not in _REVIEW_OPENCODE_ENV_ALLOW]:
+                    del child_env[name]
+                # D-2905 (1): deny every tool for the review seat, then record
+                # the spawner's own check of the FINAL env value.
+                try:
+                    cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                    if not isinstance(cfg, dict):
+                        raise ValueError('not an object')
+                    cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
+                    cfg['mcp'] = {}   # D-2921 F1: drop every MCP server
+                    cfg['plugin'] = []  # D-2921 F1: drop every plugin
+                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                except (ValueError, TypeError):
+                    pass  # unparseable config cannot be proven denied below
+                tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
+                    child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
-        self._child_envs[job_id] = child_env
+        if render_reason is None:
+            self._child_envs[job_id] = child_env
 
         try:
             if dry_run:
@@ -289,6 +507,11 @@ class SpawnerRunner:
                     else:
                         from plangraph.routing_errors import SpawnRefused
                         raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
+                stdin_note = (
+                    f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
+                    if cmd[0] in STDIN_PROMPT_HARNESSES
+                    else ""
+                )
                 job = JobInfo(
                     job_id=job_id,
                     status="dry_run",
@@ -299,12 +522,16 @@ class SpawnerRunner:
                     command=cmd,
                     end_time=time.time(),
                     exit_code=0,
-                    stdout=f"[dry-run] Planned command: {' '.join(cmd)}",
+                    stdout=f"[dry-run] Planned command: {' '.join(cmd)}{stdin_note}",
                     served_model=served_model,
                     served_family=served_family,
                     dry_run=True,
                     cwd=work_dir,
                 )
+                if render_reason:
+                    job.events.append({'event': 'render_refused', 'reason': render_reason})
+                if tools_event:
+                    job.events.append(tools_event)
                 self.jobs[job_id] = job
                 return job
 
@@ -320,6 +547,16 @@ class SpawnerRunner:
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
+            if tools_event:
+                job.events.append(tools_event)
+
+            if render_reason:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = render_reason
+                job.end_time = time.time()
+                job.events.append({'event': 'render_refused', 'reason': render_reason})
+                return job
 
             from .resolver import host_skip_reason_async
             unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
@@ -329,10 +566,27 @@ class SpawnerRunner:
                 job.stderr = unavailable
                 job.end_time = time.time()
                 return job
+            from .resolver import admitted_by_render
+            if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
+                job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             from plangraph.routing_support.clients import client_binary
             resolved_exe = client_binary(cmd[0], child_env) or cmd[0]
+            resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
+            if launch_refusal:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = launch_refusal
+                job.end_time = time.time()
+                return job
+
+            if cmd[0] in STDIN_PROMPT_HARNESSES:
+                self._stdin_payloads[job_id] = prompt.encode("utf-8")
             self._adapter_tokens[job_id] = object()
+            if role in ("implement", "fix"):
+                guard = self._init_git_config_guard(work_dir)
+                if guard is not None:
+                    self._git_guards[job_id] = guard
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -341,7 +595,11 @@ class SpawnerRunner:
                     env=child_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=(
+                        asyncio.subprocess.PIPE
+                        if cmd[0] in STDIN_PROMPT_HARNESSES
+                        else asyncio.subprocess.DEVNULL
+                    ),
                     **({"start_new_session": True} if os.name != "nt" else {}),
                 )
             except Exception as exc:
@@ -353,6 +611,25 @@ class SpawnerRunner:
                 raise
             self._processes[job_id] = proc
             self._nonces[job_id] = nonce
+
+            # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
+            # find an exited root pid, so an orphan (`opencode serve`) would outlive
+            # the run (SPAWN-ORPHAN-REAP). Failure never fails the run: taskkill runs.
+            # Descendants started before assign() escape the job (no CREATE_SUSPENDED
+            # under asyncio); taskkill /T in _reap_process still covers them.
+            if _is_nt():
+                self._win_jobs = getattr(self, '_win_jobs', {})
+                try:
+                    self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
+                    handle = self.win_job_api.create_job()
+                    try:
+                        self.win_job_api.assign(handle, proc.pid)
+                    except Exception:
+                        self.win_job_api.close(handle)
+                        raise
+                    self._win_jobs[job_id] = handle
+                except Exception:
+                    job.events.append({'event': 'win_job_unavailable'})
 
             # Start background monitor
             task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
@@ -369,6 +646,62 @@ class SpawnerRunner:
             # A running monitor owns the environment until output is scrubbed.
             if job_id not in self._tasks:
                 self._child_envs.pop(job_id, None)
+                self._git_guards.pop(job_id, None)
+                self._stdin_payloads.pop(job_id, None)
+                oc_dir = self._ocdata_dirs.pop(job_id, None)
+                if oc_dir is not None:
+                    import shutil
+                    shutil.rmtree(oc_dir, ignore_errors=True)
+            else:
+                # D-2921 F3: a monitor cancelled before its first step never
+                # runs its own finally; sweep its store dir once it settles
+                # (no-op when the monitor already cleaned up).
+                def _sweep(_task, _self=self, _jid=job_id):
+                    _oc = _self._ocdata_dirs.pop(_jid, None)
+                    if _oc is not None:
+                        import shutil
+                        shutil.rmtree(_oc, ignore_errors=True)
+                self._tasks[job_id].add_done_callback(_sweep)
+
+    async def _reap_process(self, job_id: str, proc: Any) -> None:
+        reaped = getattr(self, '_reaped_jobs', None)
+        if reaped is None:
+            self._reaped_jobs = set()
+            reaped = self._reaped_jobs
+        if job_id in reaped:
+            return
+        reaped.add(job_id)
+        # F3: kill the run's Job Object first, then pop it — taskkill /T cannot
+        # find a root pid that has already exited (SPAWN-ORPHAN-REAP).
+        win_job = getattr(self, '_win_jobs', {}).pop(job_id, None)
+        if win_job is not None:
+            api = getattr(self, 'win_job_api', None)
+            try:
+                api.terminate(win_job)
+            except Exception as exc:
+                job = self.jobs.get(job_id)
+                if job is not None:
+                    job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
+            finally:
+                try:
+                    api.close(win_job)
+                except Exception:
+                    pass  # handle already invalid; the terminate result is recorded
+        pid = getattr(proc, 'pid', None)
+        if pid is None:
+            return
+        try:
+            res = self.tree_killer(pid)
+            if asyncio.iscoroutine(res):
+                await res
+        except ProcessLookupError:
+            pass  # the run's process group is already gone
+        except Exception as exc:
+            # F2: never swallow a mis-kill or platform failure silently; type
+            # name only, no message text or pid list. Never raise out of here.
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
 
     async def _monitor_process(
         self,
@@ -378,20 +711,30 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
+            payload = self._stdin_payloads.get(job_id)
+
+            async def _comm(input_data):
+                if input_data is not None:
+                    try:
+                        return await proc.communicate(input=input_data)
+                    except TypeError:
+                        pass
+                return await proc.communicate()
+
             timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
             if timeout:
                 try:
                     seconds = float(timeout)
                     if not math.isfinite(seconds) or seconds <= 0:
                         raise ValueError('invalid run timeout')
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), seconds)
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(_comm(payload), seconds)
                 except (asyncio.TimeoutError, ValueError):
-                    await self.tree_killer(proc.pid)
+                    await self._reap_process(job_id, proc)
                     stdout_bytes, stderr_bytes = await proc.communicate()
                     self.jobs[job_id].events.append({'event': 'run_timeout'})
                     self.jobs[job_id].exit_code = 124
             else:
-                stdout_bytes, stderr_bytes = await proc.communicate()
+                stdout_bytes, stderr_bytes = await _comm(payload)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].exit_code == 124 else proc.returncode
@@ -426,13 +769,36 @@ class SpawnerRunner:
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
 
+            # D-2905 (2): the session store is request-side metadata written by
+            # a child that could forge it -- record kind
+            # 'request-side-opencode-store', never 'served'. Only a review
+            # leg's spawner-owned store is read (D-2905 (1)), only when the
+            # spawner found every tool denied, and only on exit 0.
+            if (job.command and job.command[0] == 'opencode' and job.role == 'review'
+                    and exit_code == 0):
+                oc_dir = self._ocdata_dirs.get(job_id)
+                denied = _opencode_tools_denied(
+                    env.get('OPENCODE_CONFIG_CONTENT') or '', env)
+                # R2: the store read may block up to its 2s sqlite timeout on a
+                # locked db; a thread keeps the monitor loop responsive.
+                m = (await asyncio.to_thread(_opencode_served_model,
+                                             Path(oc_dir) / 'opencode' / 'opencode.db',
+                                             f'plangraph-{job_id}')
+                     if oc_dir and denied else None)
+                if m is not None and m == requested_model:
+                    job.request_side_model = m
+                    job.witness_kind = 'request-side-opencode-store'
+                elif oc_dir and denied:
+                    job.events.append({'event': 'opencode_witness_unavailable'})
+
             # Free text is child-controlled, including plausible provider headers.
             # Absence of an authenticated adapter witness must remain explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
             if job_id in self.jobs:
-                self.jobs[job_id].status = "cancelled"
+                if self.jobs[job_id].status != "failed":
+                    self.jobs[job_id].status = "cancelled"
                 self.jobs[job_id].end_time = time.time()
                 self.jobs[job_id].exit_code = 1
         except Exception as exc:
@@ -443,10 +809,73 @@ class SpawnerRunner:
             job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            try:
+                await self._reap_process(job_id, proc)
+            except Exception:
+                pass
+            self._check_git_config_guard(job_id)
+            self._git_guards.pop(job_id, None)
+            self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+            oc_dir = self._ocdata_dirs.pop(job_id, None)
+            if oc_dir is not None:
+                import shutil
+                shutil.rmtree(oc_dir, ignore_errors=True)
+            getattr(self, '_reaped_jobs', set()).discard(job_id)
+
+    @staticmethod
+    def _init_git_config_guard(work_dir: str | Path | None) -> tuple[Path, bytes, str] | None:
+        if not work_dir:
+            return None
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(work_dir), "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode != 0:
+                return None
+            raw_common = proc.stdout.strip()
+            if not raw_common:
+                return None
+            common_dir = (Path(work_dir) / raw_common).resolve()
+            config_path = common_dir / "config"
+            if not config_path.is_file():
+                return None
+            orig_bytes = config_path.read_bytes()
+            orig_hash = hashlib.sha256(orig_bytes).hexdigest()
+            return (config_path, orig_bytes, orig_hash)
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def _check_git_config_guard(self, job_id: str) -> None:
+        guard = self._git_guards.get(job_id)
+        if not guard:
+            return
+        config_path, orig_bytes, orig_hash = guard
+        try:
+            curr_bytes = config_path.read_bytes() if config_path.is_file() else None
+        except OSError:
+            curr_bytes = None
+        curr_hash = hashlib.sha256(curr_bytes).hexdigest() if curr_bytes is not None else None
+        if curr_hash != orig_hash:
+            try:
+                if orig_bytes is not None:
+                    config_path.write_bytes(orig_bytes)
+                else:
+                    config_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if job_id in self.jobs:
+                job = self.jobs[job_id]
+                job.events.append({"event": "git_config_mutated"})
+                job.status = "failed"
+                if not job.exit_code or job.exit_code == 0:
+                    job.exit_code = 1
 
     async def status(self, job_id: str | None = None) -> Any:
         """Query status of a specific job or all jobs."""
@@ -460,7 +889,11 @@ class SpawnerRunner:
         return [job for job in self.jobs.values()]
 
     async def steer(self, job_id: str, message: str) -> dict[str, Any]:
-        """Send steer instruction to an active job."""
+        """Send steer instruction to an active job.
+
+        Note: for opencode, stdin is closed after the prompt is sent, so steer
+        will report ``{'ok': False, 'steered': False, 'error': 'stdin closing'}``.
+        """
         if not isinstance(job_id, str):
             from plangraph.routing_errors import ParameterRefused
             raise ParameterRefused('job_id must be a string')
@@ -499,10 +932,7 @@ class SpawnerRunner:
 
         proc = self._processes.get(job_id)
         if proc:
-            try:
-                await self.tree_killer(proc.pid)
-            except ProcessLookupError:
-                pass
+            await self._reap_process(job_id, proc)
 
         task = self._tasks.get(job_id)
         if task and not task.done():
@@ -511,7 +941,8 @@ class SpawnerRunner:
         job.status = "cancelled"
         self._nonces.pop(job_id, None)
         job.end_time = time.time()
-        return {"job_id": job_id, "status": "cancelled"}
+        self._check_git_config_guard(job_id)
+        return {"job_id": job_id, "status": job.status}
 
 
 async def kill_process_tree(pid, *, platform=None, command_factory=None):
@@ -524,6 +955,63 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None):
     else:
         import signal
         os.killpg(pid, signal.SIGKILL)
+
+
+class _JobBasicLimitInformation(ctypes.Structure):
+    _fields_ = [(n, t) for n, t in (
+        ('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+        ('LimitFlags', ctypes.c_uint32), ('MinimumWorkingSetSize', ctypes.c_size_t),
+        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', ctypes.c_uint32),
+        ('Affinity', ctypes.c_size_t), ('PriorityClass', ctypes.c_uint32),
+        ('SchedulingClass', ctypes.c_uint32))]
+
+
+class _JobExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [('BasicLimitInformation', _JobBasicLimitInformation), ('IoInfo', ctypes.c_uint64 * 6),
+                ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+
+class WinJobApi:
+    """Kill-on-close Windows Job Object scope per run (SPAWN-ORPHAN-REAP F3).
+
+    Created lazily on nt only; tests inject a fake into ``SpawnerRunner.win_job_api``
+    so no ctypes loader runs off Windows. KILL_ON_JOB_CLOSE kills every descendant
+    when the handle closes — what taskkill /T cannot do once the root pid exited."""
+
+    def __init__(self):
+        k32 = self._k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateJobObjectW.restype = k32.OpenProcess.restype = ctypes.c_void_p
+
+    def create_job(self):
+        k32, v = self._k32, ctypes.c_void_p
+        handle = k32.CreateJobObjectW(None, None)
+        if not handle:
+            raise OSError(ctypes.get_last_error(), 'CreateJobObjectW')
+        info = _JobExtendedLimitInformation()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(v(handle), 9, ctypes.byref(info), ctypes.sizeof(info)):
+            k32.CloseHandle(v(handle))
+            raise OSError(ctypes.get_last_error(), 'SetInformationJobObject')
+        return handle
+
+    def assign(self, handle, pid):
+        k32, v = self._k32, ctypes.c_void_p
+        proc = k32.OpenProcess(0x101, False, pid)  # PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        if not proc:
+            raise OSError(ctypes.get_last_error(), 'OpenProcess')
+        try:
+            if not k32.AssignProcessToJobObject(v(handle), v(proc)):
+                raise OSError(ctypes.get_last_error(), 'AssignProcessToJobObject')
+        finally:
+            k32.CloseHandle(v(proc))
+
+    def terminate(self, handle):
+        if not self._k32.TerminateJobObject(ctypes.c_void_p(handle), 1):
+            raise OSError('TerminateJobObject failed')
+
+    def close(self, handle):
+        self._k32.CloseHandle(ctypes.c_void_p(handle))
 
 
 def spawn_service(*args, **kwargs):
@@ -632,6 +1120,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
+            from .private_io import SAVE_READ_ATTEMPTS
             # Let the base service handle audited overrides, which never fall through.
             if model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -650,7 +1139,8 @@ def spawn_service(*args, **kwargs):
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
-                served_family=None, writer_family=None, status='running', started=time.time(),
+                served_family=None, request_side_model=None, witness_kind=None,
+                writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
@@ -670,7 +1160,7 @@ def spawn_service(*args, **kwargs):
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
-                return self.result(run_id)
+                return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
             async def execute():
                 tried = set()
@@ -704,12 +1194,14 @@ def spawn_service(*args, **kwargs):
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                             served_model=job.served_model, served_family=job.served_family,
                             served_witness_reason=job.served_witness_reason,
+                            request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
+                            request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,
@@ -762,6 +1254,6 @@ def spawn_service(*args, **kwargs):
                     await asyncio.wait_for(asyncio.shield(task), wait_seconds)
                 except asyncio.TimeoutError:
                     pass
-            return self.result(run_id)
+            return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
     return DispatchService(*args, **kwargs)

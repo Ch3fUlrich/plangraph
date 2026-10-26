@@ -41,9 +41,11 @@ def history(exit_class):
     ]}
 
 
-#: The worker's live set (RT-P1-EXEC-OWNERSHIP).  ``waiting`` belongs to it:
-#: the projector writes ``waiting`` after usage_limit/outage and on a timer, so
-#: the cap-park must still land there.
+#: The worker's live set (RT-P1-EXEC-OWNERSHIP): what a run that observed
+#: nothing may still write.  ``waiting`` belongs to it (the projector writes
+#: ``waiting`` after usage_limit/outage and on a timer), but under
+#: EXEC-OBSERVED-STATE the live set is a fallback, not an observation: a park
+#: carries the state the run read, so the cap-park still lands on ``waiting``.
 LIVE_SET = ["open", "ready", "running", "needs_input", "waiting"]
 
 
@@ -86,7 +88,11 @@ def test_needs_input_timer_preserves_projected_state_and_worker_cas(w, verb):
         "needs_input" if verb == "ask_question" else "parked", "card:" + key, "run", 1)
 
 
-@pytest.mark.parametrize("expected", ["running", ["open", "ready", "running", "needs_input"]])
+#: The live set is the worker's "I observed nothing" fallback, so a park
+#: carrying it is NOT an observation: EXEC-OBSERVED-STATE refuses it on a
+#: waiting/needs_input state a projector event wrote while this run was away.
+@pytest.mark.parametrize("expected", ["running", ["open", "ready", "running", "needs_input"],
+                                      LIVE_SET])
 def test_projector_waiting_refuses_delayed_same_run_park(w, expected):
     key, = seed(w, [("A", [])])
     projector = Projector(w.store, w.p("system"), now=w.clock)
@@ -113,14 +119,16 @@ def test_projector_waiting_refuses_delayed_same_run_park(w, expected):
     assert exc.value.code == "exec_stale"
     assert snapshot(w, key) == before
 
-    # Same run, but an expectation that excludes the observed waiting state --
-    # including the live set as it stood before waiting joined it -- is still
-    # refused, and changes nothing.
+    # Same run, same attempt, but an expectation that is not this run's
+    # observation of the projected waiting state -- the pre-waiting live set,
+    # an older state, or the full live set, which only says "I observed
+    # nothing" -- is refused, and changes nothing.
     with pytest.raises(Refused) as exc:
         worker_call(w, key, "park", expected)
     assert exc.value.code == "exec_stale_state"
     assert snapshot(w, key) == before
 
-    # The live set carries waiting now, so the delayed cap-park lands.
-    worker_call(w, key, "park", LIVE_SET)
+    # The run that OBSERVED waiting (its own read after the projector write)
+    # parks there: the cap-park after usage_limit/outage still lands.
+    worker_call(w, key, "park", "waiting")
     assert snapshot(w, key)[:4] == ("parked", "card:" + key, "run", 1)

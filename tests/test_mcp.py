@@ -141,7 +141,7 @@ def test_tools_list_count_and_budget(api):
                api.client)
     (reply,) = replies(text)
     tools = reply["result"]["tools"]
-    assert len(tools) == 36  # +log_item, +rule_set (PG-EFFICIENCY-GATES), +set_kind (PG-SET-KIND), +withdraw_review (D-867), +mint_run_token (M2B), +create, +edit (PG-MCP-WRITE), +record_run, +answer/needs_you/answers (MODEL-KINDS), +audit_meta (PG-AUDIT-META), +reopen (PG-ROUTER-REOPEN)
+    assert len(tools) == 38  # Both branches add two tools: log_item/rule_set and fleet_msg_send/fleet_msg_read.
     assert {tool["name"] for tool in tools} == {tool["name"] for tool in TOOLS}
     assert len(text.encode("utf-8")) < 9000  # the ~2,500-token budget
 

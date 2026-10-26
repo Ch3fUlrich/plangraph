@@ -26,7 +26,9 @@ thread calls ``Store.reap`` every 60 s.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 import tempfile
 import threading
 import urllib.parse
@@ -41,7 +43,7 @@ from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing
 from .snapshot_writer import SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
 from .auth import Principal, RunPrincipal
-from .errors import Refused
+from .errors import ConnectionLost, Refused
 
 __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
            "make_server", "write_snapshot"]
@@ -51,6 +53,26 @@ from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
 from .api_routes import (READ_CALLS, ROLE_CHECKED_VERBS, ROUTER_VERBS,
                          TEXT_DEFAULT as _TEXT_DEFAULT)
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
+_READ_VERBS.add("hosts")
+
+log = logging.getLogger("plangraph.keeper")
+
+
+def _probe_endpoint(endpoint):
+    try:
+        import urllib.request
+        req = urllib.request.Request(endpoint.rstrip("/") + "/v1/health")
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _host_row(host):
+    """The stored columns of one Host record; key material never leaves the object."""
+    return {"host": host.host, "node_id": host.node_id, "key_id": host.key_id,
+            "endpoint": host.endpoint, "health": host.health,
+            "last_seen": host.last_seen}
 
 
 # --------------------------------------------------------------------------- #
@@ -65,10 +87,26 @@ class KeeperHandler(BaseHTTPRequestHandler):
         """Never log a request line: it can carry a query and must stay quiet."""
     # ---------------------------------------------------------------- verbs
     def do_GET(self):  # noqa: N802 - stdlib signature
-        self._handle("GET")
+        self._request("GET")
 
     def do_POST(self):  # noqa: N802 - stdlib signature
-        self._handle("POST")
+        self._request("POST")
+
+    def _request(self, method):
+        """Start of every request: at most one fail line and one status line (I1, V4)."""
+        self._logged = False                    # the one-line rule is per request
+        self._sent = False                      # and so is "answered" (keep-alive)
+        try:
+            self._handle(method)
+        except Exception as exc:  # noqa: BLE001 - I1: a request never dies silently
+            self._escape(exc)
+
+    def _escape(self, exc):
+        """Last resort when something escaped ``_handle``: one fail line; one 500 if nothing was sent."""
+        self._fail_line(exc)                    # V4: the failed request gets its line even after ``_sent``
+        if not (getattr(self, "_sent", False) or getattr(self, "_headers_buffer", None)):
+            with suppress(Exception):
+                self._json(500, {"error": "internal", "msg": "internal server error"})
 
     def _handle(self, method):
         parsed = urllib.parse.urlsplit(self.path)
@@ -85,7 +123,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed.query)
 
         if name == "health":
-            self._json(200, {"status": "ok"})
+            conn = getattr(self.server.store, "conn", None)
+            if getattr(conn, "lost", False) or getattr(self.server, "fatal_reason", None):
+                self._json(503, {"status": "unavailable"})   # I11: flag only, no IO, no lock
+            else:
+                self._json(200, {"status": "ok"})
             return
 
         allowed = _READ_VERBS if method == "GET" else _WRITE_VERBS
@@ -109,14 +151,14 @@ class KeeperHandler(BaseHTTPRequestHandler):
         server = self.server
         with server.lock:
             try:
-                principal = auth.authenticate(server.store.conn, self._token())
-            except Refused as exc:
-                audit = getattr(server.store, "audit_auth_failure", None)
-                with suppress(Exception):  # absent or broken: still a 401
-                    audit and audit(exc.msg or exc.code)
-                self._json(401, {"error": exc.code, "msg": exc.msg})
-                return
-            try:
+                try:
+                    principal = auth.authenticate(server.store.conn, self._token())
+                except Refused as exc:
+                    audit = getattr(server.store, "audit_auth_failure", None)
+                    with suppress(Exception):  # absent or broken: still a 401
+                        audit and audit(exc.msg or exc.code)
+                    self._json(401, {"error": exc.code, "msg": exc.msg})
+                    return
                 try:
                     api_routes.run_gate(principal, name)
                 except Refused as gate:
@@ -144,11 +186,28 @@ class KeeperHandler(BaseHTTPRequestHandler):
             except Refused as exc:
                 self._json(_STATUS.get(exc.code, 400),
                            {"error": exc.code, "msg": exc.msg})
-            except Exception:  # noqa: BLE001 - never leak internals
+            except ConnectionLost as exc:  # I1/I4: fail loud, never a silent close
+                self._fail_line(exc)
+                msg = ("keeper database lost at commit; outcome unknown"
+                       if exc.phase == "commit" else "keeper database unavailable")
+                try:
+                    self._json(503, {"error": "unavailable", "msg": msg})
+                finally:               # F2: a dead client must not skip the fatal
+                    server.fail("postgres connection lost")
+            except Exception as exc:  # noqa: BLE001 - never leak internals
+                self._fail_line(exc)
                 self._json(500, {"error": "internal",
                                  "msg": "internal server error"})
 
     # ------------------------------------------------------------- plumbing
+    def _fail_line(self, exc):
+        """One stderr line per failed request: the type only (I10), never ``str(exc)``."""
+        if getattr(self, "_logged", False):
+            return                          # the request path already logged this request (V4)
+        self._logged = True
+        with suppress(Exception):           # stderr trouble must not mask the response (V4)
+            print(f"keeper: request failed: {type(exc).__name__}", file=sys.stderr)
+
     def _token(self):
         header = self.headers.get("Authorization", "")
         if header.startswith("Bearer "):
@@ -205,6 +264,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def _empty(self, status):
         """No body, no Content-Length/Content-Type (HTTP 204 must not carry one)."""
         self.send_response(status)
+        self._sent = True                     # only a written status line counts (I1)
         self.end_headers()
 
     def _inbox(self):
@@ -216,6 +276,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if status == 413:
             self.close_connection = True
         self.send_response(status)
+        self._sent = True                     # only a written status line counts (I1)
         self.send_header("Content-Type", ctype)
         for name, value in headers:
             self.send_header(name, value)
@@ -232,6 +293,33 @@ class KeeperHandler(BaseHTTPRequestHandler):
         return values[0] if values else default
 
     def _read(self, name, extra, query, principal):
+        if name == "hosts":
+            registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
+            hosts_data = []
+            if registry is not None:
+                # BUS-REGISTRY-PERSIST: the table is the served source (it
+                # survives a restart) and the current inventory decides who is
+                # served -- a row whose host is no longer provisioned is never
+                # served.  Startup restore forces the persisted health to
+                # 'offline', so a pre-restart 'healthy' is never shown.
+                persisted = {row["host"]: row
+                             for row in self.server.store.list_bus_hosts()}
+                for h in registry.hosts.values():
+                    row = persisted.get(h.host) or {}
+                    hosts_data.append({
+                        "host": h.host,
+                        "endpoint": row.get("endpoint", h.endpoint),
+                        "key_id": h.key_id,
+                        "health": row.get("health", h.health),
+                        "last_seen": row.get("last_seen", h.last_seen),
+                        # True only when a durable row backs this entry; the
+                        # startup seed makes that every inventory host.
+                        "persisted": bool(row),
+                    })
+            return {"hosts": hosts_data}, False
+        if name == "messages":
+            from .messages_poll import read_messages
+            return read_messages(self.server, principal, query), False
         store = self.server.store
         fmt_name = self._one(query, "fmt")
         as_text = fmt_name == "text" or (
@@ -297,6 +385,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
         raise Refused("not_found", f"no read verb {name!r}")
     # --------------------------------------------------------------- writes
     def _write(self, name, body, principal, extra=""):
+        if name == "post_message":
+            if not isinstance(body, dict):
+                raise Refused("validation", "body must be a JSON object")
+            if "principal" in body or "registry" in body:
+                raise Refused("validation", "body contains reserved keys")
+            registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
+            return {"row": self.server.store.post_message(principal, registry=registry, fields=body)}
         store = self.server.store
         if not isinstance(body, dict):
             if name in ("create_items", "import_items") and isinstance(body, list):
@@ -420,6 +515,9 @@ class Reaper(threading.Thread):
                     outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
                     if self.server.anchorer is not None:      # M2B-ANCHOR: done transitions + hourly
                         self.server.anchorer.tick(self.server.store.conn)
+            except ConnectionLost:
+                self.server.fail("postgres connection lost")
+                continue
             except Exception:  # noqa: BLE001 - the reaper never dies loudly
                 continue
 
@@ -442,13 +540,100 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
+        self.fatal_reason = None
+        self._fatal_lock = threading.Lock()
+        self.on_fatal = None
         self.snapshot_writer = None
         debounce = float(getattr(config, "snapshot_debounce_s", 0) or 0)
         if debounce > 0:         # KEEPER-SNAPSHOT-PG: 0 = rewrite synchronously after each write
             self.snapshot_writer = SnapshotWriter(
                 self, debounce, getattr(config, "snapshot_max_delay_s", 2.0))
             self.snapshot_writer.start()
+        self.bus_registry = None
+        self.bus_stop = None
+        self.bus_thread = None
+        inv_file = os.environ.get("PLANGRAPH_BUS_INVENTORY")
+        if inv_file and os.path.isfile(inv_file):
+            try:
+                from ..fleet_bus import discovery
+                inv_data = json.loads(Path(inv_file).read_text("utf-8"))
+                hosts = inv_data.get("hosts") or []
+                records = [
+                    discovery.Host(
+                        host=entry["host"],
+                        node_id=entry["node_id"],
+                        key_id=entry["key_id"],
+                        key_file=Path(entry["key_file"])
+                    )
+                    for entry in hosts
+                ]
+                agents = inv_data.get("agents") or {}
+                port = inv_data.get("port", 8765)
+                registry = discovery.Registry(
+                    records, agents=agents, port=port,
+                    on_refresh=self._persist_bus_hosts)
+                # BUS-REGISTRY-PERSIST: the persisted rows load into the hosts
+                # before the first probe, and every refresh upserts them again.
+                self._restore_bus_hosts(registry)
+                self.bus_registry = registry
+                self.bus_stop = threading.Event()
+                self.bus_thread = threading.Thread(
+                    target=registry.run,
+                    args=(self.bus_stop, _probe_endpoint),
+                    daemon=True,
+                    name="bus-registry",
+                )
+                self.bus_thread.start()
+            except Exception as exc:  # noqa: BLE001 - a broken bus never breaks the keeper
+                log.error("bus registry setup failed: %s: %s",
+                          type(exc).__name__, exc)
+                self.bus_registry = None
         super().__init__(address, KeeperHandler)
+
+    def fail(self, reason: str) -> None:
+        """Record fatal failure once; calls on_fatal hook (I2, S2)."""
+        with self._fatal_lock:           # first writer wins (F1): check-and-set is atomic
+            if self.fatal_reason is not None:
+                return
+            self.fatal_reason = reason
+        with suppress(Exception):
+            print(f"keeper: fatal: {reason}", file=sys.stderr)
+        if self.on_fatal is not None:
+            with suppress(Exception):
+                self.on_fatal()
+
+    def _restore_bus_hosts(self, registry):
+        """Load ``bus_hosts`` into the registry before the first probe and seed it.
+
+        ``Registry.restore`` keeps the persisted ``endpoint``/``last_seen`` and
+        forces ``health`` to ``offline``; the re-seeded row makes
+        ``GET /v1/hosts`` read exactly what the registry holds at any moment.
+        """
+        try:
+            registry.restore(self.store.list_bus_hosts())
+            with self.lock:
+                self.store.upsert_bus_hosts(
+                    [_host_row(host) for host in registry.hosts.values()])
+        except ConnectionLost:
+            # L1: session loss at the very first bus write must reach fail()
+            # (same reason as _persist_bus_hosts below) -- the __init__ setup
+            # guard would swallow it silently and leave a keeper serving with
+            # a disabled bus. Re-raise so that guard tears down the half-built
+            # registry instead of starting its thread on a dead session.
+            self.fail("postgres session lost (bus registry)")
+            raise
+
+    def _persist_bus_hosts(self, hosts):
+        """The registry loop's ``on_refresh`` hook: durable rows, never keys."""
+        rows = [_host_row(host) for host in hosts]
+        try:
+            with self.lock:   # one connection behind one lock (see the class docstring)
+                self.store.upsert_bus_hosts(rows)
+        except ConnectionLost:
+            # F2: the reaper's fail() equivalent (see Reaper.run) -- without it
+            # discovery's log swallows the loss and the daemon never exits 75.
+            self.fail("postgres session lost (bus registry)")
+            return          # never re-raise: discovery must stay non-fatal here
 
     def start_reaper(self):
         if self.reaper is None:
@@ -467,6 +652,8 @@ class KeeperHTTPServer(ThreadingHTTPServer):
             self.snapshot_writer.flush()
 
     def server_close(self):
+        if getattr(self, "bus_stop", None) is not None:
+            self.bus_stop.set()
         self.stop_reaper()
         writer, self.snapshot_writer = self.snapshot_writer, None
         if writer is not None:

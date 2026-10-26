@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import seat_verdict as sv  # noqa: E402
+from test_review_verdict import LOW_SEVERITY_TABLE  # noqa: E402
 
 TOKEN = "dummy"
 
@@ -34,6 +36,12 @@ TOKEN = "dummy"
     ("", None),
 ])
 def test_parse(text, want):
+    assert sv.parse_verdict(text)[0] is want
+
+
+@pytest.mark.parametrize("text,want_verdict,_", LOW_SEVERITY_TABLE)
+def test_low_severity_verdict_table(text, want_verdict, _):
+    want = True if want_verdict == "pass" else (False if want_verdict in ("fix", "halt") else None)
     assert sv.parse_verdict(text)[0] is want
 
 
@@ -326,3 +334,79 @@ def test_send(tmp_path, capsys, monkeypatch, review, literal):
     assert literal in raw and json.loads(raw)["key"] == "demo:A"
     cap = capsys.readouterr()
     assert TOKEN not in cap.out + cap.err and "http=200" in cap.out
+
+
+# D-2905 (2): request-side opencode store witness, interim until a
+# response-side source (gateway logs) exists.
+def test_request_side_opencode_store_witness_family_counts(tmp_path, capsys):
+    assert run(tmp_path, "w1", "VERDICT: pass", served_model="unwitnessed",
+               witness_kind="request-side-opencode-store",
+               request_side_model="opencode/glm-5.3-flash-free",
+               extra=("--dry-run",)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["family"] == "zhipu"
+    reason = payload["body"]["reason"]
+    assert "witness=request-side-opencode-store" in reason
+    assert "opencode/glm-5.3-flash-free" in reason
+
+
+def test_request_side_witness_refused_without_kind(tmp_path, capsys):
+    assert run(tmp_path, "w2", "VERDICT: pass", served_model="unwitnessed",
+               request_side_model="opencode/glm-5.3-flash-free") == 2
+    err = capsys.readouterr().err
+    assert "family None of model 'unwitnessed' is unknown" in err
+
+
+@pytest.mark.parametrize("model", ["mimo/mimo-v2.6-pro", "opencode/glm-5.3"])
+def test_request_side_witness_refused_non_opencode_free_model(tmp_path, capsys, model):
+    assert run(tmp_path, "w3", "VERDICT: pass", served_model="unwitnessed",
+               witness_kind="request-side-opencode-store",
+               request_side_model=model) == 2
+    err = capsys.readouterr().err
+    assert "family None of model 'unwitnessed' is unknown" in err
+
+
+@pytest.mark.parametrize("kind", ["served", "response-side-gateway", "", None, "Request-Side-Opencode-Store"])
+def test_request_side_witness_refused_other_witness_kind(tmp_path, capsys, kind):
+    assert run(tmp_path, "w4", "VERDICT: pass", served_model="unwitnessed",
+               witness_kind=kind,
+               request_side_model="opencode/glm-5.3-flash-free") == 2
+    err = capsys.readouterr().err
+    assert "family None of model 'unwitnessed' is unknown" in err
+
+
+def test_served_model_witnessed_ignores_request_side(tmp_path, capsys):
+    assert run(tmp_path, "w5", "VERDICT: pass", served_model="glm-5.3-flash-free",
+               witness_kind="request-side-opencode-store",
+               request_side_model="mimo/mimo-v2.6-pro",
+               extra=("--dry-run",)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["family"] == "zhipu"
+    assert "witness=" not in payload["body"]["reason"]
+    assert "mimo/mimo-v2.6-pro" not in payload["body"]["reason"]
+
+
+def test_build_reason_marks_request_side_witness():
+    ev = {"served_model": "unwitnessed", "correlation_id": "c",
+          "prompt_sha256": "0123456789abcdef"}
+    marked = sv.build_reason(ev, True, "VERDICT: PASS", 0,
+                             witness="opencode/glm-5.3-flash-free")
+    assert "witness=request-side-opencode-store" in marked
+    assert "opencode/glm-5.3-flash-free" in marked
+    assert sv.build_reason(ev, True, "VERDICT: PASS", 0) == \
+        "seat unwitnessed PASS corr c prompt 0123456789ab"
+
+
+# D-2921 F4: the served check must take precedence even over an ADMISSIBLE
+# request-side model (w5 cannot discriminate: its model is not admissible at
+# all, so the outcome is identical without the served check).
+def test_served_model_witness_precedes_admissible_request_side(tmp_path, capsys):
+    assert run(tmp_path, "w6", "VERDICT: pass", served_model="gpt-oss-120b",
+               witness_kind="request-side-opencode-store",
+               request_side_model="opencode/glm-5.3-flash-free",
+               extra=("--dry-run",)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["family"] == "openai"
+    reason = payload["body"]["reason"]
+    assert "witness=" not in reason
+    assert "glm-5.3-flash-free" not in reason
