@@ -63,11 +63,12 @@ def test_atomic_write_winerror_5_exhausted(tmp_path, monkeypatch):
 
 
 def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
-    """Worst-case retry sleeps stay inside the 3.0 s I13 budget, exact call count.
+    """Worst-case retry sleeps stay inside the I13 budget (SYNC_SAVE_BUDGET_S),
+    exact call count.
 
     Covers the write alone and a save operation whose record read shares the
     synchronous stretch with the write (SpawnService.cancel): two read sleeps
-    plus 23 write sleeps must still sum to at most 3.0 s.
+    plus 23 write sleeps must still sum to at most SYNC_SAVE_BUDGET_S.
     """
     target = tmp_path / "record.json"
     calls = []
@@ -87,7 +88,7 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
 
     assert len(calls) == 24
     assert len(slept) == 23
-    assert sum(slept) <= 3.0
+    assert round(sum(slept), 6) <= private_io.SYNC_SAVE_BUDGET_S
     assert list(tmp_path.glob(".record.json-*")) == []
 
     # Combined save-path budget: one record read plus one record write in the
@@ -121,7 +122,7 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
     assert len(reads) == 3
     assert len(calls) == 24
     assert len(slept) == 25
-    assert sum(slept) <= 3.0
+    assert round(sum(slept), 6) <= private_io.SYNC_SAVE_BUDGET_S
 
 
 def test_save_path_two_reads_write_sleep_budget(tmp_path, monkeypatch):
@@ -133,7 +134,7 @@ def test_save_path_two_reads_write_sleep_budget(tmp_path, monkeypatch):
     await between the reads and the later save. Two read_text_retry calls at
     SAVE_READ_ATTEMPTS that exhaust on winerror 5, then atomic_write_private
     exhausting on winerror 5: 2 x 2 read sleeps plus 23 write sleeps must
-    still sum to at most 3.0 s.
+    still sum to at most SYNC_SAVE_BUDGET_S.
     """
     source = tmp_path / "runs" / "run-reviewsrc" / "record.json"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +174,7 @@ def test_save_path_two_reads_write_sleep_budget(tmp_path, monkeypatch):
     assert len(reads) == 6
     assert len(writes) == 24
     assert len(slept) == 27
-    assert sum(slept) <= 3.0
+    assert round(sum(slept), 6) <= private_io.SYNC_SAVE_BUDGET_S
     assert list(tmp_path.glob("runs/*/.record.json-*")) == []
 
 
@@ -219,7 +220,7 @@ def test_save_path_read_attempts_lowered(tmp_path, monkeypatch):
 
     assert len(reads) == 3
     assert writes == []
-    assert sum(slept) <= 3.0
+    assert round(sum(slept), 6) <= private_io.SYNC_SAVE_BUDGET_S
 
 
 def test_atomic_write_permission_error_no_winerror(tmp_path, monkeypatch):

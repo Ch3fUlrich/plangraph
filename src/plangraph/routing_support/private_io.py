@@ -4,13 +4,18 @@ from pathlib import Path
 import tempfile
 import time
 
+#: Total retry sleeps one synchronous save path may spend (I13/V6): its record
+#: reads plus the record write, no await between them. Named once here; the
+#: budget tests compare their recorded sleeps against it.
+SYNC_SAVE_BUDGET_S = 3.0
+
 #: os.replace retries sleep min(0.01 * (attempt + 1), 0.2), so the attempt cap
 #: is chosen from the sleep budget, not the other way round: 24 attempts sleep
 #: 2.7 s worst case. The longest synchronous save stretch reads the record
 #: twice before writing (the family lookup and the excluded-family check in a
 #: review spawn), and each read gets SAVE_READ_ATTEMPTS attempts at 0.05 s
 #: sleeps (0.2 s worst case together), so two reads plus the write sum to
-#: 2.9 s, inside the 3.0 s total I13/V6 allows a save operation to block.
+#: 2.9 s, inside SYNC_SAVE_BUDGET_S.
 ATOMIC_WRITE_ATTEMPTS = 24
 SAVE_READ_ATTEMPTS = 3
 
