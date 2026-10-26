@@ -363,6 +363,28 @@ def _merge_resolution(
     return _commit(repo, message, files=files)
 
 
+def test_mode_only_merge_resolution_refused(repo: Path):
+    path = "tools/ci_commit_gate.py"
+    _commit(repo, "seed", {path: "content\n"})
+    _branch(repo, "mode-side", "side", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    base = _commit(repo, "main", {"main.txt": "main\n"})
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", "mode-side")
+    (repo / path).chmod(0o755)
+    sha = _commit(repo, "mode resolution")
+    assert ci_commit_gate._merge_diff(sha, ci_commit_gate._parent_shas(sha, cwd=repo), cwd=repo) == ([path], 0)
+    assert any(ci_commit_gate.GATE_EDIT_VIOLATION in v for v in check(base, sha, cwd=repo))
+
+
+def test_untagged_resolution_does_not_charge_none_history(repo: Path):
+    _branch(repo, "history-side", "side", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "main", {"main.txt": "main\n"})
+    base = _merge_resolution(repo, "history-side", "untagged resolution", {"resolved.txt": "x\n" * 51})
+    sha = _he(repo, 1, item=None)
+    assert not any("without Route-Decision" in v for v in check(base, sha, cwd=repo))
+
+
 def test_merge_commit_measured_by_combined_diff(repo: Path):
     '''A merge counts only its combined diff: a clean merge is 0 lines, no paths.'''
     base = _head(repo)
@@ -1262,7 +1284,6 @@ def test_hand_edit_401_changed_lines_refused_with_exact_reasons(repo):
     assert check(base, sha, cwd=repo) == [
         f'{sha}: hand-edit exceeds 400 changed lines',
         f'{sha}: hand-edit without Plan-Item',
-        f'{sha}: hand-edit over 50 lines for (none) without Route-Decision',
         f'{sha}: hand-edit total over ceiling for (none)',
     ]
 
@@ -1275,7 +1296,6 @@ def test_hand_edit_deleted_lines_count(repo):
     assert check(base, sha, cwd=repo) == [
         f'{sha}: hand-edit exceeds 400 changed lines',
         f'{sha}: hand-edit without Plan-Item',
-        f'{sha}: hand-edit over 50 lines for (none) without Route-Decision',
         f'{sha}: hand-edit total over ceiling for (none)',
     ]
 
@@ -1392,12 +1412,12 @@ def test_e1_hand_edits_secret_paths_refused(repo: Path):
 
 
 def test_e1_token_named_paths_secret_again(repo: Path):
-    # haiku-G2 / mimopro-G2: `*token*` stays in the privacy secret matcher,
-    # which the gate copies unchanged (E1 shared-lists row, seats G2).
+    """Token-named documentation is not a secret-shaped path."""
+    # E1 uses the narrower shared door/secret rules, not privacy glob matching.
     base = _head(repo)
     s1 = _he(repo, 1, path="docs/tokens.md")
     assert check(base, s1, cwd=repo) == []
-    # positive control: the true near-miss docs/keys.md still passes
+    # Key-named documentation is likewise allowed by the path rules.
     s2 = _he(repo, 1, path="docs/keys.md")
     assert check(s1, s2, cwd=repo) == []
 
@@ -1672,7 +1692,7 @@ def test_e1_check_vectors(repo: Path):
     s_w = _commit(repo, "feat: w\n\nWriter: mimo-v2.6-flash r1\nPlan-Item: demo:ITEM\n", {"src/x.py": "l\n" * 300})
     s_h = _he(repo, 200, item="demo:ITEM", rd=True)
     assert check(s_bad, s_h, cwd=repo) == []
-    s_body = _commit(repo, f"docs: 60 lines\n\nBody text.\nRoute-Decision: route-{'a'*32}\n\nHand-Edit: e\n", {"docs/b.md": "l\n" * 60})
+    s_body = _commit(repo, f"docs: 60 lines\n\nBody text.\nRoute-Decision: route-{'a'*32}\n\nHand-Edit: e\nPlan-Item: demo:BODY\n", {"docs/b.md": "l\n" * 60})
     assert any("without Route-Decision" in x for x in check(s_h, s_body, cwd=repo))
     assert all(ci_commit_gate.canon_path(p) is None for p in ("/etc/passwd", "../outside.py", "foo/../../bar.py"))
     assert ci_commit_gate.canon_path("./a/b/c.py") == "a/b/c.py" and ci_commit_gate.canon_path("a\\b\\c.py") == "a/b/c.py"
@@ -1797,7 +1817,7 @@ def test_e1_route_decision_body_text_and_duplicate(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        f"feat: big\n\nRoute-Decision: route-{'a' * 32}\nNote: this reads like body text\n\nHand-Edit: e\n",
+        f"feat: big\n\nRoute-Decision: route-{'a' * 32}\nNote: this reads like body text\n\nHand-Edit: e\nPlan-Item: demo:BODY\n",
         {"docs/b.md": "l\n" * 60},
     )
     v = check(base, sha, cwd=repo)

@@ -12,9 +12,9 @@ from pathlib import Path
 import yaml
 
 try:  # Module import in tests; direct script execution in CI.
-    from tools.ci_commit_gate import _trailer_block_lines, _touched_paths
+    from tools.ci_commit_gate import trailer_block_lines, touched_paths
 except ModuleNotFoundError:
-    from ci_commit_gate import _trailer_block_lines, _touched_paths
+    from ci_commit_gate import trailer_block_lines, touched_paths
 
 
 class GateError(Exception):
@@ -75,7 +75,7 @@ _GATE_EDIT = re.compile(r'Gate-Edit: D-\d+')
 
 def _trailer_block(message: str) -> list[str]:
     '''Read only the final trailer block, using the commit gate parser.'''
-    return _trailer_block_lines(message)
+    return trailer_block_lines(message)
 
 def _commit_shas(base: str, head: str, cwd: str | Path | None) -> list[str]:
     text = _git_out(['log', '--format=%H', f'{base}..{head}'], cwd)
@@ -87,7 +87,7 @@ def _commit_message(sha: str, cwd: str | Path | None) -> str:
 
 
 def _commit_paths(sha: str, cwd: str | Path | None) -> list[str]:
-    return _touched_paths(sha, cwd=cwd)
+    return touched_paths(sha, cwd=cwd)
 
 
 def has_gate_edit(base: str, head: str, cwd: str | Path | None = None) -> bool:

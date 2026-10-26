@@ -12,7 +12,7 @@ A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a
 
 ## Known limits of the commit gate
 
-- Gate-Edit ids are checked for shape (D-<digits>) only, not against the decision log. A `Test-Removal:` trailer is read only from the final trailer block and must name every test the commit removes or renames: `Test-Removal: D-<n> <test id>[, <test id>...]`; a bare `D-<n>` is refused.
+- Gate-Edit ids are checked for shape (D-<digits>) only, not against the decision log. A `Test-Removal:` trailer is read only from the final trailer block and must name every test the commit removes or renames: `Test-Removal: D-<n> <test id>[, <test id>...]`; a bare `D-<n>` is refused. The key must be exactly `Test-Removal:` (case-sensitive); lowercase variants are refused.
 - The first push of a new ref (all-zero before sha) is not gated, a pull request into main still is.
 - Merge resolutions with a non-empty combined diff are checked as hand edits; clean untagged merges are ignored. Parent commits are checked separately.
 - The Claude marker list matches the Writer value by substring and relies on the writer naming itself.

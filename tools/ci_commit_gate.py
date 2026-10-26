@@ -390,7 +390,7 @@ def _cc_header_path(rest: str) -> str:
 def _merge_diff(
     sha: str, parents: list[str], cwd: str | Path | None = None
 ) -> tuple[list[str], int | None]:
-    '''Combined diff of a merge: (paths of its hunks, added + deleted lines).
+    '''Combined diff of a merge: (resolution paths, added + deleted lines).
 
     Only conflict-resolution content counts (``git diff-tree --cc -p`` shows
     nothing for a clean merge), so a clean merge measures 0 lines and no paths
@@ -407,7 +407,7 @@ def _merge_diff(
 
     def flush() -> None:
         nonlocal current, in_hunk
-        if current is not None and in_hunk:
+        if current is not None:
             paths.append(current)
         current = None
         in_hunk = False
@@ -437,7 +437,7 @@ def _merge_diff(
 
 
 def _touched_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
-    '''Paths of sha; for a merge, only the paths of its combined-diff hunks.'''
+    '''Paths of sha; for a merge, only its combined-diff resolution paths.'''
     parents = _parent_shas(sha, cwd=cwd)
     if len(parents) > 1:
         return _merge_diff(sha, parents, cwd=cwd)[0]
@@ -614,6 +614,8 @@ def autoos_spawn_commits(
     return commits
 
 
+trailer_block_lines = _trailer_block_lines
+touched_paths = _touched_paths
 def check(
     base: str,
     head: str,
@@ -647,7 +649,9 @@ def check(
             if len(_parent_shas(h_sha, cwd=cwd)) <= 1 or _changed_lines(h_sha, cwd=cwd) == 0:
                 continue
         h_items = _trailer_values(h_block, PLAN_ITEM_RE)
-        h_item = h_items[0] if h_items else '(none)'
+        if not h_items:
+            continue  # Missing Plan-Item is refused separately, not a shared bucket.
+        h_item = h_items[0]
         # Bucket keys compare case-folded so spelling variants share one
         # running sum (E1a, seat G4); messages keep the commit's own spelling.
         h_key = h_item.casefold()
@@ -694,11 +698,11 @@ def check(
 
         if len(_parent_shas(sha, cwd=cwd)) > 1:
             changed = _changed_lines(sha, cwd=cwd)
-            if not has_hand_edit and not block_writer_values and changed == 0:
+            if not has_hand_edit and not block_writer_values and changed == 0 and not _touched_paths(sha, cwd=cwd):
                 # Clean git-authored merges have no resolution content.
                 continue
             # Resolution content is a hand edit even without its trailer.
-            has_hand_edit = has_hand_edit or changed is None or changed > 0
+            has_hand_edit = has_hand_edit or changed is None or changed > 0 or bool(_touched_paths(sha, cwd=cwd))
 
         malformed_writer = any(
             MALFORMED_WRITER_RE.match(line) is not None
