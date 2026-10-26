@@ -1,13 +1,14 @@
-# build-L1 card · gen-39 · 2026-10-26 ~07:30Z · NO cron · hb J0/hb.sh · handoff status/handoff-build-L1.md
-J0=/home/s/.claude/jobs/0bbdff0b/tmp (scripts, hb) · J=/home/s/.claude/jobs/038a08a5/tmp (gen-39 seats/logs; copies ~/.local/share/plangraph/build-L1-seats/gen39)
-Rules: D-2957 brief + memory. plangraph spawner only. No deepseek. glm LAST. Seat family != every writer family. coding.vm gate <4 runs + Mem>=2000.
-agy gemini quota out (~111h from 10-26 06:5xZ). Seats: qwen qodercli, Haiku (no Claude writer), glm free (last).
+# build-L1 card · gen-39 · 2026-10-26 ~10:00Z · NO cron · hb J0/hb.sh · handoff status/handoff-build-L1.md
+J0=/home/s/.claude/jobs/0bbdff0b/tmp · J=/home/s/.claude/jobs/038a08a5/tmp · copies ~/.local/share/plangraph/build-L1-seats/gen39
+Rules: D-2983 (Claude quota ~5%): no Claude writers, Haiku seat last only; writers sol > mimo-pro; seats luna > qwen > glm/nemotron. plangraph spawner only. No deepseek. coding.vm gate <4 runs + Mem>=2000.
 | item | state / next |
 |---|---|
-| #229 RT-P1-BUS phase | #232 R2c CI dispatch green 40282489755; qwen seat fix MED+2 LOW -> R2d mimo-pro fixer run-17179301 (brief J/brief-r2d.md) -> delta qwen seat -> merge #232 into phase -> fresh ci-gate #229 -> GO-REQ judge |
-| #225 REVIEW-WITNESS-OPENCODE | 4594abd4 (main merged dbf21ea5 + darwin test Hand-Edit). r6 seats: qwen pass, glm LOW (fixed). CI running -> GO-REQ -> merge -> evidence |
-| MODEL-ROUTE-SPAWN | #231 MERGED 356c78ca. coding.vm prod catalog DB seeded (24 bench rows, p_source=benchmark). Asked workst: ff + seed + 1 spawn w/ host. Evidence: 3 spawns/2 hosts + 1 witnessed 2-family review after #225; (b) skill 3a1a110b merge status asked |
-| SQ12 (workst) | waiting lane/exec-own-sq12b PR -> my qwen seats |
-| enf-claude-writer seat | DONE qwen pass, sent workst |
-| D-2918(B) script move | not started |
-| G3 / G4 | later |
+| #229 bus phase | MERGED 643a29ef (D-2982); 3 items in_review, no close (D-2994) |
+| #238 D-2966 header | MERGED 34d56f0f |
+| luna leg | writer mimo-pro running, lane/luna-leg; path question (omniroute vs cxa) -> routing; Gate-Edit D-2984; catalog seed both hosts |
+| semsync Server seat | qwen r2 running -> server-L1-main + cc workst |
+| KEEPER-FLOOR-LEGACY-CLAIM | filed p3 (D-2994) |
+| MODEL-ROUTE-SPAWN | 2 hosts done; need 3rd spawn (luna writer) + 2-family witnessed review |
+| SQ12 | wait workst sq12b |
+| D-2918(B) | not started |
+| archive D-2984 | DONE 44/57/10/6 |

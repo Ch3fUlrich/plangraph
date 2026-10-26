@@ -1,38 +1,20 @@
-# build-L1 handoff · gen-38 -> gen-39 · 2026-10-26 ~07:05Z
-Read the card next to this file. Rules: launch brief D-2928 + memory. Old job dir J0=/home/s/.claude/jobs/0bbdff0b/tmp (scripts), gen-38 job dir J=/home/s/.claude/jobs/624c6980/tmp (logs; dies with job). Seat dirs + briefs copied to ~/.local/share/plangraph/build-L1-seats/gen38.
-hb loop: J0/hb.sh (pid 3069653) keeps claims; claim keys in ops/hb-keys.txt.
+# build-L1 handoff · gen-39 -> gen-40 · 2026-10-26 ~10:00Z
+Read the card next to this file. Rules: launch brief + memory + D-2983 (until Thu): NO Claude Sonnet/Opus writers; Claude only as Haiku review seat when no non-Claude family fits; writers cx/gpt-6.1-sol then mimo-v2.6-pro; reviews luna > qwen > glm/nemotron > Haiku; minimal Claude turns, no Agent subagents, wait via one bg command.
+Dirs: J0=/home/s/.claude/jobs/0bbdff0b/tmp (gspawn2.sh, glmseat.sh, haikuseat.sh, seatpost2.py, hb.sh), J=/home/s/.claude/jobs/038a08a5/tmp (qseat.sh, archive-to.sh, seats). Copies: ~/.local/share/plangraph/build-L1-seats/gen39. Server seats: ~/.local/share/plangraph/server-seats/.
+hb loop J0/hb.sh keeps claims in ops/hb-keys.txt.
 
-## Open, in priority order
-1. #229 RT-P1-BUS phase PR (HIGH, judge). R2c full suite GREEN 7749; R2c PR (into phase) opened, see gh pr list --head lane/phase-fix-r2c. The R2c fixer lane/phase-fix-r2c (worktree ~/code/plangraph-worktrees/bus-fix-r2c) holds 3 commits 4f686585..747ff866 (F1/F2/F3; Writer run-4b8d34c9 filled; Plan-Item BUS-REGISTRY-PERSIST). Tests are red on base and green on head; 90 targeted pass. Full suite log: J/r2c-full.log.
-   Next: if the full suite is green, push the lane, PR into phase/rt-p1-bus, CI, and a qwen seat with the api.py hunk named explicitly (D-2937). Then merge into the phase. This gives #229 a fresh ci-gate on main 48a2560f; #230's exempt list is on main. The old rerun failed only because it reused PR_BASE 4e4544d9. Then send the phase GO-REQ to routing (judge).
-2. #225 REVIEW-WITNESS-OPENCODE, lane/review-witness-opencode head c43a40dc.
-   - r4 (mimo run-a0f7aeb5, 3 commits) seats: qwen pass, Haiku fix MED.
-   - r5 Hand-Edit 1ced711a (wildcard '*' deny + managed config dir /etc/opencode check): qwen fix MED, win32 ProgramData came from the parent env.
-   - r6 Hand-Edit c43a40dc fixed that (child env + per-platform test). 1447 targeted tests pass.
-   - Writer families are now mimo + anthropic, so Haiku is OUT (D-2511). agy gemini quota is out for ~111h.
-   - Next: a delta seat on c43a40dc (diff 1ced711a..c43a40dc, plus the r5 qwen finding as vector) with qwen, plus one more family from {glm via opencode --standalone (LAST), openrouter/free}. Then CI, GO-REQ, merge, evidence, and post seats.
-   - Remaining LOWs (no re-seat per D-2472): round-trip test for the OPENCODE_CONFIG_CONTENT write, sweep-branch items.
-   - Runtime deny test: J0/ocprec-retry.sh in the background; free legs were limited.
-3. MODEL-ROUTE-SPAWN (D-2943 scope: keeper criteria govern; Gate B / tiers / yaml stay out).
-   - Slice c+d is PR #231, lane/mrs-host-bench, worktree ~/code/plangraph-worktrees/mrs-host-bench. Writer mimo run-f53b0d6f, 4 commits: C1 host field, D1 --db-path, D2 leg->benchmark map, D3 provisioning docs. 91 targeted pass. Full suite log: J/mrs-full.log.
-   - Next: CI + 2 non-mimo seats, GO, merge. Then provision the prod DB with `python3 -m plangraph.routing_support.catalog_db init-and-seed` (default path ~/.cache/plangraph/spawner_catalog.db), run ONLY after the merge (its dry run is the test).
-   - My accidental 06:21Z seed copy sits in J/cat-accidental.db; prod is clean.
-   - (a) MCP entry: done by routing (D-2946).
-   - (b) skill text: workst lane/skill-spawn-by-card 3a1a110b, NOT merged yet; it counts once merged.
-   - (e) served-family witness comes from #225.
-   - Close evidence: 3 real spawns from 2 hosts with the host field (coding.vm + workst, after #231 is deployed on both), plus 1 witnessed 2-family review after #225 merges.
-4. SQ12 RT-P1-EXEC-OWNERSHIP (LAST gate before dogfood, DECISIONS 9.6). workst-L1-autoos owns it. 2 writer deaths; split into SQ12.1 (finding 1 PG test + finding 2 park rule) and SQ12.2 (findings 3+4). It goes to the new branch lane/exec-own-sq12b; workst sends PR # + sha. Then: seats (I run the qwen seats on coding.vm; workst qwen is VOID) and the close path to routing.
-5. D-2918(B) script move: not started.
-6. G3 (workst, --standalone root fix in review/opencode.py:argv) and G4 bus round trip (D-2913): later.
+## Done gen-39
+#229 bus phase merged 643a29ef (judge D-2982), main CI green. #238 D-2966 implement header merged 34d56f0f. #234 host-unredacted a21b2bdd. Archive D-2984/7/8: fleet-archive (PRIVATE) plangraph 44 + autoos 57, Server 10 + Invest 6 on origin.
+3 bus items RT-P1-BUS-KEEPER / -DISCOVERY / EXEC-OBSERVED-STATE: released, router set in_review + commit evidence; NO close path (keeper floor) -> D-2994 leave them. Fix item filed: plangraph:KEEPER-FLOOR-LEGACY-CLAIM (p3, AUTH_DOOR, writer sol/mimo + Gate-Edit D-id on request).
 
-## Done this gen
-- #226 merged 7fb8c2d9.
-- #230 exempt merged 48a2560f (D-2943).
-- Server seats for server-L1-main: tdarr 41f4e2b0 APPROVE, booklore 466c84c9 APPROVE (D-2950 normal HOME, foreign-context clean). Both sent with cc to workst. Private copies in ~/.local/share/plangraph/server-seats/.
-- main-ro refreshed to 48a2560f (it is a detached checkout; refresh with `git -C main-ro fetch && checkout --detach origin/main`, or use spawner-main).
-
-## Traps
-- zsh does not word-split $VAR: run file-list commands under `bash -c`.
-- `pgrep -f name` inside `bash -c "...name..."` matches itself: wait on a pid.
-- Seat prompts for the Server repo never go into the public plangraph repo (status/).
-- The mimo writer run status shows "failed" even when the commits are complete: verify the commits, never trust the status.
+## Open, priority order
+1. LUNA review leg (critical path: gen phase seat B, EXEC-OBSERVED-STATE seat 2, fleet seats while glm free is exhausted). Lane lane/luna-leg, worktree ~/code/plangraph-worktrees/luna-leg, brief J/brief-luna.md, writer mimo-v2.6-pro via J0/gspawn2.sh (bg; output J/w-luna.json/.wait). Leg added: Leg("cx-gpt-6-luna","subscription","opencode","omniroute/cx-gpt-6-luna","gpt",...,roles=("review",)).
+   OPEN QUESTION: served path. Catalog (routing_support/catalog_seed.py + catalog_data.py:474) has cxa/gpt-6-luna-high (Codex ACP provider cxa); workst row harness=None. Router wants catalog seeded with luna + harness on both hosts in this slice. Confirm with routing which path (omniroute/cx-gpt-6-luna via opencode like sol, or cxa ACP) BEFORE the PR; fix the leg model id + seed harness accordingly.
+   Then: L1 adds Gate-Edit: D-2984 trailer (writers never write it), CI, qwen seat, merge (standard), re-seed catalog on coding.vm + ask workst to seed.
+   After merge: gen phase seat B on genw4/server-phase (bb85c51+) when workst-L1-gen asks (ONLY design files, no data/); EXEC-OBSERVED-STATE luna seat.
+2. Server SEAT-REQ semsync lane/semsync-only 50e3ac62..092b4c39 (workst-L1-autoos, owner server-L1-main): seat dir ~/.local/share/plangraph/server-seats/semsync-092b4c39. qwen r1 = bare "VERDICT: PASS" (no evidence; thin), r2 with per-item format running (qwen2/). Send result to server-L1-main [6d0937] + cc workst-L1-autoos. Head tests 16 passed locally.
+3. MODEL-ROUTE-SPAWN close: evidence file gen39/mrs-evidence.md. Have: workst run-31a667ae host=bz-wg-pdw028, coding.vm run-4f182aad host=code, luna writer spawn (3rd). Need: 1 witnessed 2-family review (#225 merged) -> then keeper evidence/submit via routing.
+4. SQ12: wait workst lane/exec-own-sq12b PR + sha -> qwen seat (vectors: Test-Removal strictness, live-owner rule b) -> close path to routing.
+5. D-2918(B) script move into plangraph (gspawn2/qseat/glmseat/haikuseat/seatpost2/archive-to); seatpost2 must write verdict+test_gaming (review.verdict.judge) into evidence.json -- covered by KEEPER-FLOOR-LEGACY-CLAIM part 2.
+6. LS10 live keeper -> bus schema: own live-sync step (dump, dry run on copy, GO-REQ with tested commands). G3/G4 later; D-2913 cross-host round trip with workst = next bus evidence (BUS-ANY-AGENT-CLI), RT-P1-BUS-WAKE needs live timer removal.
+Lessons: seats on a commit series see stale intermediate states -> seat the net final diff. glm free quota out on both hosts (D-2989): probe before burning runs.
