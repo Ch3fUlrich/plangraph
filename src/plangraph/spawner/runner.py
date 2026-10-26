@@ -112,6 +112,8 @@ class JobInfo:
     served_model: str | None = 'unwitnessed'
     served_family: str | None = 'unwitnessed'
     served_witness_reason: str = 'harness supplied no authenticated served-model telemetry'
+    request_side_model: str | None = None
+    witness_kind: str | None = None
     dry_run: bool = False
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
@@ -600,12 +602,13 @@ class SpawnerRunner:
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
 
-            # Witness an opencode leg only from opencode's session store, only
-            # for the requested model id (D-2898). D-2905 (1): only a review
-            # leg reads the store, and only from its spawner-owned per-job dir.
+            # D-2905 (2): the session store is request-side metadata written by
+            # a child that could forge it -- record kind
+            # 'request-side-opencode-store', never 'served'. Only a review
+            # leg's spawner-owned store is read (D-2905 (1)), only when the
+            # spawner found every tool denied, and only on exit 0.
             if (job.command and job.command[0] == 'opencode' and job.role == 'review'
-                    and exit_code == 0
-                    and (not job.served_model or job.served_model == 'unwitnessed')):
+                    and exit_code == 0):
                 oc_dir = self._ocdata_dirs.get(job_id)
                 denied = _opencode_tools_denied(
                     self._child_envs.get(job_id, {}).get('OPENCODE_CONFIG_CONTENT') or '')
@@ -613,12 +616,9 @@ class SpawnerRunner:
                                             f'plangraph-{job_id}')
                      if oc_dir and denied else None)
                 if m is not None and m == requested_model:
-                    try:
-                        self.served_witness(job_id, m, adapter_token=self._adapter_tokens.get(job_id))
-                        job.served_witness_reason = 'opencode session store'
-                    except ValueError:
-                        job.events.append({'event': 'opencode_witness_unavailable'})
-                elif m is not None:
+                    job.request_side_model = m
+                    job.witness_kind = 'request-side-opencode-store'
+                elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
 
             # Free text is child-controlled, including plausible provider headers.
@@ -910,7 +910,8 @@ def spawn_service(*args, **kwargs):
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
-                served_family=None, writer_family=None, status='running', started=time.time(),
+                served_family=None, request_side_model=None, witness_kind=None,
+                writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
@@ -962,12 +963,14 @@ def spawn_service(*args, **kwargs):
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                             served_model=job.served_model, served_family=job.served_family,
                             served_witness_reason=job.served_witness_reason,
+                            request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
+                            request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,

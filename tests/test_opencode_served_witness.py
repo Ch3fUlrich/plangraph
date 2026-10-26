@@ -64,9 +64,12 @@ def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=
 def test_one_assistant_model_equal_to_requested_is_witnessed(tmp_path, monkeypatch):
     job, _ = _run_leg(tmp_path, monkeypatch,
                       lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
-    assert job.served_model == 'opencode/glm-5.3-flash-free'
-    assert job.served_family == 'glm'
-    assert job.served_witness_reason == 'opencode session store'
+    # D-2905 (2): the store is request-side -- never 'served' evidence.
+    assert job.request_side_model == 'opencode/glm-5.3-flash-free'
+    assert job.witness_kind == 'request-side-opencode-store'
+    assert job.served_model == 'unwitnessed'
+    assert job.served_family == 'unwitnessed'
+    assert job.served_witness_reason != 'opencode session store'
     assert {'event': 'opencode_tools_denied'} in job.events
 
 
@@ -74,6 +77,8 @@ def test_different_served_model_stays_unwitnessed_with_event(tmp_path, monkeypat
     job, _ = _run_leg(tmp_path, monkeypatch,
                       lambda t, home: _store(home, [('s1', t)], [('s1', 'deepseek-v4.1-flash-free')]))
     assert job.served_model == 'unwitnessed'
+    assert job.request_side_model is None
+    assert job.witness_kind is None
     assert {'event': 'opencode_witness_unavailable'} in job.events
 
 
@@ -138,7 +143,35 @@ def test_tools_not_denied_yields_no_request_side_model_and_event(tmp_path, monke
                       extra_env={'OPENCODE_CONFIG_CONTENT': 'not json'})
     assert job.served_model == 'unwitnessed'
     assert {'event': 'opencode_tools_not_denied'} in job.events
+    assert job.request_side_model is None
     assert calls == []   # the store is never read when tools are not denied
+
+
+def test_nonzero_exit_leaves_no_request_side_model(tmp_path, monkeypatch):
+    job, _ = _run_leg(tmp_path, monkeypatch,
+                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                      exit_code=3)
+    assert job.request_side_model is None
+    assert job.witness_kind is None
+    assert job.served_model == 'unwitnessed'
+
+
+def test_malformed_or_keyless_store_rows_yield_none(tmp_path):
+    db = tmp_path / 'opencode' / 'opencode.db'
+
+    def seed_raw(row):
+        db.parent.mkdir(parents=True, exist_ok=True)
+        db.unlink(missing_ok=True)
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE session_v2 (id TEXT, title TEXT)')
+            conn.execute('CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, data TEXT)')
+            conn.execute("INSERT INTO session_v2 VALUES ('s1', 't')")
+            conn.execute("INSERT INTO session_message VALUES ('m1', 's1', 'assistant', ?)", (row,))
+
+    seed_raw('not json')
+    assert _opencode_served_model(db, 't') is None
+    seed_raw(json.dumps({'no_model': 1}))
+    assert _opencode_served_model(db, 't') is None
 
 
 def test_session_store_db_opened_read_only(tmp_path, monkeypatch):
