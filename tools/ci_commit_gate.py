@@ -313,18 +313,82 @@ def _has_test_removal_trailer(lines: list[str]) -> bool:
     return any(TEST_REMOVAL_RE.match(line) is not None for line in lines)
 
 
+def _parent_shas(sha: str, cwd: str | Path | None = None) -> list[str]:
+    out = _git_text(['rev-list', '--parents', '-n', '1', sha], cwd=cwd)
+    return out.split()[1:]
+
+
+def _parent_sha(sha: str, cwd: str | Path | None = None) -> str | None:
+    parents = _parent_shas(sha, cwd=cwd)
+    return parents[0] if parents else None
+
+
+def _cc_header_path(rest: str) -> str:
+    '''Path from the tail of a `diff --cc <path>` header (git-quoted or plain).'''
+    if len(rest) > 1 and rest.startswith('"') and rest.endswith('"'):
+        return rest[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+    return rest
+
+
+def _merge_diff(
+    sha: str, parents: list[str], cwd: str | Path | None = None
+) -> tuple[list[str], int | None]:
+    '''Combined diff of a merge: (paths of its hunks, added + deleted lines).
+
+    Only conflict-resolution content counts (``git diff-tree --cc -p`` shows
+    nothing for a clean merge), so a clean merge measures 0 lines and no paths
+    (E1a design row).  ``--name-only``/``--numstat`` would fall back to the
+    first-parent diff and report the merged branch work instead.  A binary
+    resolution yields ``None``, which callers refuse.
+    '''
+    out = _git_text(['diff-tree', '--no-commit-id', '--cc', '-p', sha], cwd=cwd)
+    paths: list[str] = []
+    total = 0
+    binary = False
+    current: str | None = None
+    in_hunk = False
+
+    def flush() -> None:
+        nonlocal current, in_hunk
+        if current is not None and in_hunk:
+            paths.append(current)
+        current = None
+        in_hunk = False
+
+    for line in out.splitlines():
+        if line.startswith('diff --cc ') or line.startswith('diff --combined '):
+            flush()
+            current = _cc_header_path(line.split(' ', 2)[2])
+            continue
+        if current is None:
+            continue
+        if line.startswith('Binary files ') or line.startswith('GIT binary patch'):
+            binary = True
+            continue
+        if line.startswith('@@'):
+            in_hunk = True
+            continue
+        if not in_hunk:
+            continue
+        # Combined-diff lines carry one marker column per parent: '+' lines are
+        # the resolution's additions, '-' lines its deletions.
+        markers = line[:len(parents)]
+        if '+' in markers or '-' in markers:
+            total += 1
+    flush()
+    return paths, (None if binary else total)
+
+
 def _touched_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
+    '''Paths of sha; for a merge, only the paths of its combined-diff hunks.'''
+    parents = _parent_shas(sha, cwd=cwd)
+    if len(parents) > 1:
+        return _merge_diff(sha, parents, cwd=cwd)[0]
     out = _git_text(
         ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', sha],
         cwd=cwd,
     )
     return [path for path in out.split('\0') if path]
-
-
-def _parent_sha(sha: str, cwd: str | Path | None = None) -> str | None:
-    out = _git_text(['rev-list', '--parents', '-n', '1', sha], cwd=cwd)
-    parts = out.split()
-    return parts[1] if len(parts) > 1 else None
 
 
 def _show_file(rev: str | None, path: str, cwd: str | Path | None = None) -> str | None:
@@ -430,7 +494,14 @@ def _resolve_exempt(
 
 
 def _changed_lines(sha: str, cwd: str | Path | None = None) -> int | None:
-    '''Added plus deleted lines of sha; None when a binary file is touched.'''
+    '''Added plus deleted lines of sha; None when a binary file is touched.
+
+    A merge is measured by its combined diff: only its conflict-resolution
+    lines count, and a clean merge counts 0 (E1a design row).
+    '''
+    parents = _parent_shas(sha, cwd=cwd)
+    if len(parents) > 1:
+        return _merge_diff(sha, parents, cwd=cwd)[1]
     out = _git_text(['diff-tree', '--no-commit-id', '--numstat', '-r', '--root', sha], cwd=cwd)
     total = 0
     for line in out.splitlines():
