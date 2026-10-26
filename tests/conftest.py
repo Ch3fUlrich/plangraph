@@ -30,7 +30,7 @@ def _use_tmpfs_tempdir() -> None:
         # The controller's TMPDIR is inherited. Give non-pytest daemon helpers
         # their own worker root too (tmp_path is already isolated by xdist).
         parent = os.environ.get("TMPDIR")
-        path = tempfile.mkdtemp(prefix=f"pg-{worker}-", dir=parent)
+        path = tempfile.mkdtemp(prefix=f"pgtest-{worker}-", dir=parent)
         atexit.register(shutil.rmtree, path, ignore_errors=True)
         os.environ["TMPDIR"] = path
         tempfile.tempdir = path
