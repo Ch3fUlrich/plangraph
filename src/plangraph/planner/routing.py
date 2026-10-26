@@ -307,13 +307,17 @@ class SpawnPlan:
         return result
 
 
-def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
-                legs=DEFAULT_LEGS, benchmark=None, strict=False) -> SpawnPlan:
+def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, probe=None,
+                now=None, legs=DEFAULT_LEGS, benchmark=None, strict=False) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
     The implement role ignores benchmark permutation (operator order D-2683).
     ``exclude_families`` excludes the specified family names from candidate legs.
     Readers may be a LegStateStore or a callable with the leg_status contract.
+    ``probe`` turns on the live availability gate (E3b item 4): an injected
+    zero-argument listing probe (tests pass a fake, the spawner the
+    ``opencode models`` runner).  ``None`` keeps the gate off so planning stays
+    hermetic.
     Account/combo scope comes from the card and is never a wildcard.
     """
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -402,6 +406,12 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
 
     states = {l.id: _leg_status(l) for l in candidates}
     limited = {key for key, state in states.items() if state["state"] == "limited"}
+    probe_reasons = {}
+    if role == "review" and probe is not None:
+        # E3b item 4: the live gate runs only with an injected probe, so unit
+        # tests stay hermetic and the caller decides when to probe live.
+        from plangraph.routing_support.probe import available as probe_available
+        _ok_ids, probe_reasons = probe_available(candidates, probe, now)
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
@@ -409,7 +419,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
         reason = None
-        if leg.id in limited:
+        if leg.id in probe_reasons:
+            reason = "probe: " + probe_reasons[leg.id]
+        elif leg.id in limited:
             reason = "limited"
         elif role == "review" and _family_of(leg) == "deepseek":
             reason = "deepseek_seat"
@@ -433,7 +445,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
     try:
-        route = route_card(card, legs=candidates, unavailable=limited,
+        route = route_card(card, legs=candidates, unavailable=limited | set(probe_reasons),
                            exclude_families=excluded, role=role)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),

@@ -4,12 +4,14 @@ Part 1 tests. The pick/probe/verify rows land with their scope items; this
 file grows with them. Everything is hermetic: fake probe, fake leg_state.
 """
 import dataclasses
+from datetime import datetime, timedelta
 
 import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS, SEAT_ORDER
 from plangraph.planner.routing import plan_spawn, validate_model
 from plangraph.review.family import FamilyError, check_cross_family, model_family
+from plangraph.routing_support.probe import available
 
 # The six console-openrouter / opencode free review legs of the slice, with
 # the exact model ids the host listing showed (design E3b "catalog legs").
@@ -195,3 +197,88 @@ def test_check_cross_family_agrees_with_plan_spawn():
         plan = plan_spawn(_card(), role="review", writer_families=(family,),
                           leg_reader=_leg_state(), legs=DEFAULT_LEGS)
         assert leg_id not in _seat_ids(plan), leg_id
+
+
+# --- E3b item 4: live probe (D-2913) ---
+
+NEMOTRON_MODEL = "console-openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+
+
+def _fake_probe(listing):
+    """Return (probe, calls): serves `listing` and counts its invocations."""
+    calls = []
+
+    def probe():
+        calls.append(1)
+        return listing
+
+    return probe, calls
+
+
+def _listing(exclude=()):
+    excluded = set(exclude)
+    return "\n".join(leg.model for leg in DEFAULT_LEGS if leg.model not in excluded)
+
+
+def test_probe_skips_an_unlisted_model_id(monkeypatch, tmp_path):
+    # the host's PATH never decides: the binary check is faked hermetically
+    monkeypatch.setattr("plangraph.routing_support.probe.which",
+                        lambda name: "/fake/bin/" + name)
+    # positive control: every model id listed -> the picks are unchanged
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path / "listed"))
+    probe, calls = _fake_probe(_listing())
+    plan = plan_spawn(_card("high"), role="review", writer_families=("xiaomi", "anthropic"),
+                      leg_reader=_leg_state(), legs=DEFAULT_LEGS, probe=probe)
+    assert _seat_ids(plan) == ["qodercli-qwen3.8-flash", "or-nemotron-3-ultra-free"]
+    assert not [s for s in plan.skipped if s["reason"].startswith("probe: ")]
+    assert len(calls) == 1
+    # negative control: the nemotron model id is not listed -> the leg leaves
+    # with the probe reason and the next family in seat order takes the seat
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path / "unlisted"))
+    probe, calls = _fake_probe(_listing(exclude=(NEMOTRON_MODEL,)))
+    plan = plan_spawn(_card("high"), role="review", writer_families=("xiaomi", "anthropic"),
+                      leg_reader=_leg_state(), legs=DEFAULT_LEGS, probe=probe)
+    assert _seat_ids(plan) == ["qodercli-qwen3.8-flash", "or-gemma-4-31b-free"]
+    assert any(s["leg"] == "or-nemotron-3-ultra-free"
+               and s["reason"] == "probe: model not listed: " + NEMOTRON_MODEL
+               for s in plan.skipped)
+
+
+def test_probe_cache_is_used_on_the_second_call(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
+    legs = [leg for leg in DEFAULT_LEGS
+            if leg.id in ("or-nemotron-3-ultra-free", "or-gemma-4-31b-free")]
+    probe, calls = _fake_probe(NEMOTRON_MODEL)
+    now = datetime(2026, 10, 26, 12, 0)
+    ok_ids, reasons = available(legs, probe, now)
+    assert ok_ids == ["or-nemotron-3-ultra-free"]
+    assert set(reasons) == {"or-gemma-4-31b-free"}
+    # second call inside the 10 min window reuses the cached listing
+    ok_ids2, reasons2 = available(legs, probe, now + timedelta(minutes=5))
+    assert (ok_ids2, reasons2) == (ok_ids, reasons)
+    assert len(calls) == 1
+    # negative control: past the window the probe runs again
+    available(legs, probe, now + timedelta(minutes=11))
+    assert len(calls) == 2
+
+
+def test_probe_binary_check_for_qodercli_and_agy(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
+    by_id = {leg.id: leg for leg in DEFAULT_LEGS}
+    legs = [by_id["qodercli-qwen3.8-flash"], by_id["agy-sonnet-5.5"],
+            by_id["or-nemotron-3-ultra-free"]]
+    probe, _calls = _fake_probe(_listing())
+    now = datetime(2026, 10, 26, 12, 0)
+    # positive control: both binaries on PATH -> only the listing decides
+    monkeypatch.setattr("plangraph.routing_support.probe.which",
+                        lambda name: "/fake/bin/" + name)
+    ok_ids, reasons = available(legs, probe, now)
+    assert ok_ids == ["qodercli-qwen3.8-flash", "agy-sonnet-5.5",
+                      "or-nemotron-3-ultra-free"]
+    assert reasons == {}
+    # negative control: the binary is missing -> the harness leg is unavailable
+    monkeypatch.setattr("plangraph.routing_support.probe.which", lambda name: None)
+    ok_ids, reasons = available(legs, probe, now)
+    assert ok_ids == ["or-nemotron-3-ultra-free"]
+    assert reasons == {"qodercli-qwen3.8-flash": "qodercli not on PATH",
+                       "agy-sonnet-5.5": "agy not on PATH"}
