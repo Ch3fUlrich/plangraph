@@ -285,6 +285,7 @@ def test_claude_family_writers_fail(repo: Path, writer: str):
         "claude-opus-5-5 session_0119mTiP8y4maDh8C4dV6abu",
         "claude-sonnet-5-5 run-" + "ab" * 16,
         "claude-haiku-4-5 123e4567-e89b-12d3-a456-426614174000 (D-2931)",
+        "claude-opus-5-5 run-" + "ab" * 16 + " (D-2739 operator override: Opus writes, no L2)",
     ],
 )
 def test_claude_writer_with_run_or_session_id_passes(repo: Path, writer: str):
@@ -328,10 +329,28 @@ def test_claude_writer_re_rejects_trailing_newline() -> None:
     assert ci_commit_gate.CLAUDE_WRITER_RE.fullmatch(value) is None
 
 
+def test_claude_writer_re_rejects_newline_inside_note() -> None:
+    r"""A note may not span lines: the note class excludes ``\n``, so
+    ``"(a\nb)"`` is refused rather than eaten by a class that allows newlines."""
+    value = "claude-opus-5-5 run-" + "ab" * 16 + " (a\nb)"
+    assert ci_commit_gate.CLAUDE_WRITER_RE.match(value) is None
+    assert ci_commit_gate.CLAUDE_WRITER_RE.fullmatch(value) is None
+
+
 def test_claude_writer_note_may_not_embed_a_writer_value(repo: Path) -> None:
-    """The trailing note is free text except ':': it may not carry a second Writer."""
+    """The trailing note is free text, but it may not carry a second Writer."""
     base = _head(repo)
     writer = "claude-opus-5-5 run-" + "ab" * 16 + " (Writer: mimo-v2.6-pro run-1)"
+    sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: claude writer without run or session id"
+    ]
+
+
+def test_claude_writer_note_may_not_embed_a_lowercase_writer_value(repo: Path) -> None:
+    """The second-Writer ban is case-insensitive: ``(writer: x)`` is refused."""
+    base = _head(repo)
+    writer = "claude-opus-5-5 run-" + "ab" * 16 + " (writer: x)"
     sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
     assert check(base, sha, cwd=repo) == [
         f"{sha}: claude writer without run or session id"
