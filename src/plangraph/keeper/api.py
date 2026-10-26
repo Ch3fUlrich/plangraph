@@ -159,8 +159,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 self._fail_line(exc)
                 msg = ("keeper database lost at commit; outcome unknown"
                        if exc.phase == "commit" else "keeper database unavailable")
-                self._json(503, {"error": "unavailable", "msg": msg})
-                server.fail("postgres connection lost")
+                try:
+                    self._json(503, {"error": "unavailable", "msg": msg})
+                finally:               # F2: a dead client must not skip the fatal
+                    server.fail("postgres connection lost")
             except Exception as exc:  # noqa: BLE001 - never leak internals
                 self._fail_line(exc)
                 self._json(500, {"error": "internal",
