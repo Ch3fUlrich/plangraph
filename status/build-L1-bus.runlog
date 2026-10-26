@@ -1,2 +1,5 @@
 2026-10-25T18:27:53Z CANCEL run-c3b5a52267324118913f9625577cc04a (mimo-pro R2a') D-2835 stall rule: started 18:05:49Z, 0 worktree writes in 22 min, last opencode activity 18:22:28Z (SDK API research only)
 2026-10-25T19:05:10Z CANCEL run-8cba759ae0c240ddb6fa3cc685c1f6ea (mimo-pro R2a' run 2) D-2835 stall: no worktree write 15 min
+2026-10-26T01:41:30Z CANCEL run-764b4e201dab48b7be62b6761b5f25a1 (mimo-pro fix r4) D-2865: no first write in 20 min
+2026-10-26T01:42:35Z CANCEL run-764b4e20 (mimo-pro fix r4) D-2865 no first write 20 min; cause: brief gave wrong keeper error shape, writer surveyed wire format. Retry 2/2 anchored.
+2026-10-26T02:37:53Z r4 try2 run-937de96f completed no commit; L1 checks green; committed bf7c3bfb; CI triggered; handoff gen-4->gen-5

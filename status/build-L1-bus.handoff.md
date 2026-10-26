@@ -1,30 +1,25 @@
-# build-L1-bus HANDOFF · gen-3 -> gen-4 · 2026-10-25T23:5xZ (routing RECYCLE, compaction-restart rule)
-Read first: status/build-L1-bus.card.md (rules + D-ids + item table, authoritative); l2-cards/phase-fix-r2/{replan-r3.md (design D1-D7, invariants I1-I6'), replan-v2-slices.md (S1-S6 table)}.
-Parent routing (socket 487663, sends D-ids). Peer build-L1 (main lanes, #164 schema fence, spawner gaps: stdout-tail-only result, argv-only prompt -> sent [d0f038]).
+# build-L1-bus HANDOFF · gen-4 -> gen-5 · 2026-10-26T02:4xZ (routing RECYCLE 02:17Z, compacted 1x)
+Read first: status/build-L1-bus.card.md (rules + D-ids + item table, authoritative); l2-cards/phase-fix-r2/{replan-r3.md (design D1-D7, I1-I6'), fix-r4.md (r4 fix brief, done)}.
+Parent routing (socket 487663, sends D-ids). Operator away till ~05:30Z: decisions -> routing.
 
-## Mechanics (changed since gen-2)
-- Heartbeat: detached setsid loop already running (pid 3562149/3788468; every 30 min x20 over ops/hb-keys.txt; log /home/s/.claude/jobs/1c96c00f/tmp/hb.log). Leases 12h to 2026-10-26T07:16Z -> renew before then (release + `claim --lease 12h`; first beat must print ok). Do NOT start ops/hb.sh loops (D-2844).
-- Tools (durable copy, private): /home/s/.local/share/plangraph/build-L1-bus-tools/ = gate.sh (D-2823 admission, exit 0 = admit), mkslice.sh, run-slice.sh (gate queue -> spawn mimo-pro -> 45-min no-change watchdog, D-2845), chain.sh FROM (serial slices + checks: commit or L1 auto-commit of a green diff, fence rust/worker, <=170 lines, scrub, cited-test grep, Writer trailer, push+ls-remote+CI), mkr3.sh (seat prompt builder <128 KiB). J defaults to that dir; the old job dir may vanish.
-- Spawner: from lane worktree, `PYTHONPATH=~/code/plangraph-worktrees/main-ro/src python3 -m plangraph.spawner.cli spawn|wait|status|result|cancel`. Seats: `--role review --leg qodercli-qwen3.8-flash --no-fallthrough`, writer families gemini,mimo,openai excluded.
-- Tests: rust/worker with `PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 PG_TEMPORAL_ADDR=http://127.0.0.1:17233` (temporal dev server up). CI `gh workflow run tests.yml --ref lane/phase-fix-r2a`.
+## Mechanics
+- hb: detached setsid loop (pid 3562149; ops/hb-keys.txt; every 30 min). Leases to 2026-10-26T07:16Z -> renew before (release + `claim --lease 12h`). No ops/hb.sh loops (D-2844), no cron.
+- Tools /home/s/.local/share/plangraph/build-L1-bus-tools/: gate.sh (host gate, exit 0 admit; cap 4 runs, MemAvail >= 2000 MB, my budget 2), run-slice.sh, run-fix.sh S (brief l2-cards/phase-fix-r2/fix-$S.md; 45-min stall + 20-min first-write cancel, D-2865), mkr4.sh CTX (r4 seat prompt), r4wait.sh (glm admit + wait both seats), chain.log.
+- Spawner from lane worktree: `PYTHONPATH=~/code/plangraph-worktrees/main-ro/src python3 -m plangraph.spawner.cli spawn|wait|status|result|cancel`; --leg needs --override-reason (>=10 chars); risk_tag public-contract (not "keeper"). Seat legs qodercli-qwen3.8-flash, opencode-glm-5.3-flash-free; writer families excluded: mimo,gemini,openai. Seat prompt < 128 KiB; answers <= 3500 chars (4 KB stdout tail).
+- mimo-pro writer runs end "completed" WITHOUT committing (S5, S6, r4): L1 verifies diff vs brief + checks, commits with `Writer: mimo/mimo-v2.6-pro plangraph-spawner <run id>`.
+- Tests: rust/worker `PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 PG_TEMPORAL_ADDR=http://127.0.0.1:17233 cargo test` (temporal `temporal server start-dev --headless --port 17233` via setsid if down). pytest -n 4. Scrub = CI form over tracked files only (worktree has target/): `git ls-files -z | tar ...` to a tmp dir, then `scrub_check.py <dir> --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml`.
+- CI `gh workflow run tests.yml --ref lane/phase-fix-r2a`; verify push via git ls-remote. gh API rate limit hit once: few calls.
+- Keeper refusal body is FLAT `{"error": code, "msg"}` (api.py); fleet bus uses nested.
 
-## R2a' state (lane/phase-fix-r2a in ~/code/plangraph-worktrees/bus-fix-r2a, base 59c1287e = R2a agy)
-| Slice | Commit | Notes |
-|---|---|---|
-| S1 D1a | 1d49fc99 | CI green |
-| S2 D5 | d0590479 | writer diff, L1-committed; CI green |
-| S3 D1b | b4f4110e | CI green |
-| S4 D2-D4 | 4f5cf12f + a6d67585 Hand-Edit 3 lines | writer truncated, 230 lines; CI green |
-| S5 D6+I3c | 35882dbf | run-92cf5c3a truncated; L1 checks green, committed unchanged (191 lines); CI triggered 23:31Z, check |
-| S6 D7 fixtures | RUNNING run-19a5682293d74d069faaa5d874b64896 (mimo-pro) | started by gen-3 chain.sh 6 (bg job in gen-3 session; may die at stop). Fixture (b) = build-L1-bus-seats/r2a-prime-run2-partial/observe_park.json |
-If the gen-3 chain died: `cli status run-19a5...`; still live -> `J=<tools dir> run-slice.sh S6 run-19a5...` re-watches it, then finish with `chain.sh 6`-style checks by hand; done -> verify commit/diff as chain.sh does. Stall twice -> stop + tell routing (D-2843); D-2853 allows a direct edit for a stalling slice (cap 50 lines, no writer live in the tree).
+## R2a' lane/phase-fix-r2a (~/code/plangraph-worktrees/bus-fix-r2a), base 59c1287e
+S1-S6 green; 89da4c78 main merge (D-2876 Gate-Edit; SQLite SCHEMA_VERSION 16 = oversight 14 + bus 15/16; PG Migration 8 oversight, 9 bus); 91e47fec scrub allowances (23 per-value entries for the S6 fixture); 27948c8f D-2878 static bus STATUS + msg_rate_limited 429 (CI green 40252435122); bf7c3bfb r4 fixes (writer run-937de96f): park 409 -> KeeperError::Conflict(code), typed stale only for exec_stale_state; connect-deadline test; ERROR_STATUS parity test; PG order test renamed _bus_9; CHANGELOG phrase. L1 checks green (cargo 364, pytest 7686, scrub 0). CI triggered 02:4xZ on bf7c3bfb -> check it.
+r4 seat evidence: build-L1-bus-seats/phase-r4-R2a-27948c8f/ (qwen = fix; glm failed free limit).
 
 ## Next
-1. S6 green -> all slice CI green -> merge main into lane ONCE (renumber schema if #164 landed: SQLite v14 + PG Migration 8).
-2. grep every cited test name (fn name) on the lane head.
-3. r4 = 1 qwen seat over 59c1287e..head (mkr3.sh pattern, prompt <128 KiB, seat writes full review to a file; evidence dir build-L1-bus-seats/phase-r4-...). Include for the seat: S4 eprintln! logging in workflow code (LOW), S4 230 / S5 191 lines over 150 target. Not clean -> report to routing (D-2831).
-4. Clean -> `gh pr create --base phase/rt-p1-bus` + `gh pr merge --merge --match-head-commit <sha>`.
-5. R2b (wake + docs, I5-I9; scope replan-r3.md "R2b") on mimo-pro, 1 run, gated; 1 qwen seat; merge.
-6. Merge main into phase once -> phase PR -> `GO-REQ phase/rt-p1-bus <head> <seat paths + sha256>` to routing. bus-discovery-adopt HOLD (D-2730).
-7. After merge: verdicts + evidence on items (card table).
-QUIET: no cron, one exiting bg wait, card <= 40 lines, messages only BLOCKED/DONE/GO/incident/launch.
+1. CI green on bf7c3bfb -> delta re-review: qwen + glm-5.3-flash-free (D-2876: no Haiku, no paid; glm limit -> wait reset). Prompt = r4 findings + triage (rejected items with evidence, no rulings D-302) + git diff 27948c8f..bf7c3bfb + touched functions; evidence dir build-L1-bus-seats/phase-r4b-R2a-bf7c3bfb/.
+2. Clean -> `gh pr create --base phase/rt-p1-bus` + `gh pr merge --merge --match-head-commit <sha>`. Not clean -> fix brief per D-2888 (<=~4 findings or one function scope, "edit only <file>:<fn>" line, prior findings, replies <1500 tokens), mimo-pro.
+3. R2b (wake + docs, I5-I9; replan-r3.md "R2b") mimo-pro, gated, 1 qwen seat, merge.
+4. Merge main into phase once -> phase PR -> `GO-REQ phase/rt-p1-bus <head> <seat paths + sha256>` to routing. bus-discovery-adopt HOLD (D-2730).
+5. After merge: verdicts + evidence on items (card table).
+Stall rule D-2843: a slice stalling twice -> stop + report routing. D-2853 hand-edit cap 50, never AUTH_DOOR_PATHS.
+QUIET: no cron, one exiting bg wait, card <= 40 lines, messages only BLOCKED/DONE/GO/incident/handoff.
