@@ -1,4 +1,4 @@
-# build-L1 card · gen-36 -> 37 handoff · 2026-10-26 03:5xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
+# build-L1 card · gen-37 (D-2903) · 2026-10-26 05:1xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
 D-2739 (operator): one task loops (no follow-up items), design first for HIGH/>400 lines, slices <=400, 2 text seats, MED in body=changes, fixer>=writer never flash, round>3 -> Opus replan, merge main once before final review.
 D-2749: AutoOS spawner retired; all runs via plangraph spawner; missing feature -> BLOCKED to routing, no fallback.
 D-2744: no deepseek leg (writer or seat, incl opencode free deepseek); mimo-pro, mimo-flash seats only.
@@ -15,8 +15,8 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); S2 #220 MERGED f50982d6 (GO D-2889, code only); finish220.sh -> evidence. S3 next (design WRITER BRIEF S3, mimo-pro/agy; D-2888 limits). Live redeploy = own GO + OS-KEEPER-LS9-MIGRATE; 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78. glm re-run (D-2898) run-555b136f pass, TEST-GAMING ok, served_model still unwitnessed on main -> NOT posted, stays in_review; defects (a)(b) in REVIEW-VERDICT-PARSE fix log (notes) |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
-| spawn-iso #200 / #201 | #200 DONE 2348abf2. #201 MERGED 2fe388af; finish201.sh -> evidence/submit/post (check $J/finish201.log) |
-| PG-TEST-SHM-LEAK (std, claimed) | PR #222 head e0748276 (agy run-ed01799d, L1 re-run 8 passed, gate 0); qwen seat shm running -> merge -> evidence |
+| spawn-iso #200 / #201 | both DONE (#201: r1 fix-seat post had reset it to claimed; gen-37 resubmitted + posted delta qwen pass -> done) |
+| PG-TEST-SHM-LEAK | DONE: #222 MERGED a26573c3 (main CI 40267831508), evidence ok, qwen pass posted |
 | SPAWN-OPENROUTER-FREE-ENDPOINTS (std, prio 5) | defined D-2805; after shm-leak; account/privacy change = operator OS line |
 | SQ12 (workst-L1-autoos) | slices SQ12-a/-b; workst writes held until SPAWN-WIN-PARITY lands |
 | efficiency slice 4 | sent host-wide admission gap (D-2785) + qwen/haiku review legs (D-2789). D-2799 4c argv OK sent gen-33 w/ 5 conditions (accepted); slice 4 on hold for routing (design r4 FIX) |
@@ -25,5 +25,11 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 Seats: seatpost.py/qwenprompt.py/haikuseat.sh interim OK (D-2789): count toward cap, never edit review.txt/prompt.txt, keep seat dirs; post via post.sh (verdict.judge -> tools/seat_verdict.py reviewer-<family> token).
 Briefs: append status/writer-brief-tail.md (D-2885 no writer Test-Removal/Gate-Edit). Merges: pass commit_message="Plan-Item: <KEY>".
 Traps: zsh -> bash -c; mergepath needs claim; never dump environ; Hand-Edit <=50 lines (D-2853); gate check needs --base/--head; define new lane = JSON to router (D-2230).
-| REVIEW-VERDICT-PARSE loop (D-2898/D-2900, PRIO 1) | (b) opencode served_model witness via opencode.db session title + (a) TEST-GAMING regex; wt ~/code/plangraph-worktrees/opencode-witness lane/opencode-served-witness; mimo-pro ocw1 ($J/brief-ocw.md) running -> re-run tests -> PR -> seats (not xiaomi/anthropic) -> re-run RMS glm post |
+| REVIEW-VERDICT-PARSE (PRIO 1, D-2905 A+B) | (a) #224 MERGED 00d6f9ef, evidence ok -> item went DONE early; asked routing reopen/new key for #223. #223 head 7c744e1c (r2 accepted, 230 tests, RUNID filled); Haiku+qwen full-diff seats running ($J/seat-ocw2-*, log ocw2seats.log); then judge GO-REQ |
 | ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 MERGED 43aebc1d (GO D-2861), evidence ok (main CI 40235422603); efficiency told, E1a rebased 94e5f316. D-2879 gate/git trailer mismatch -> E1a buildl1-T1 (efficiency owns). Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm after reset). #214 MERGED 7bbd11a6 |
+| SPAWN-ISOLATION-INPLACE fix log (D-2905) | config guard reverts whole shared .git/config -> restore only run-changed keys; item DONE/locked, needs router reopen; after #223 |
+| LS9 keeper migrate (D-2907, TOP) | 1b failed (pg_dump 16 vs server 17.11) -> D-2918: scripts on postgres:17-alpine + --dry-run, both dry runs rc 0 sent verbatim 05:0xZ; 0-byte dump removed. Wait "1b ok" -> step 2 freeze -> "frozen" -> wait "3 done" -> step 4/5 |
+| bus lane (D-2911, from build-L1-bus) | handoff build-L1-bus/status/build-L1-bus.handoff.md; R2b-1 5020d9ed lane/phase-fix-r2b CI 40270138022; R2b-2 not started (run-fix.sh r2b2); then 1 qwen seat -> PR to phase -> merge main once -> phase GO-REQ (HIGH). Claims BUS-KEEPER/EXEC-OBSERVED-STATE/BUS-DISCOVERY in my hb keys |
+
+| OPENCODE-ORCHESTRATOR-FALLBACK (claimed) | wt oc-orch-g12: G1/G2 6e4dde81 + agy leg id fix 275e8717 (workst bug), Hand-Edit; full suite queued after seats ($J/g12full.log) -> PR + seats; G3/G4 via workst writers |
+| D-2918 B/C | C: spawnfix.sh -> $J/retired-autoos. B: move ls9/gspawn2/postm/seat/chain/stallwatch scripts into repo (tools/ or ops/) w/ tests + --dry-run, small PRs, after LS9 |

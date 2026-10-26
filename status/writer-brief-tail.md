@@ -9,3 +9,4 @@ Keep every test name the design names. Never rename a test.
 Gates: python3 tools/ci_commit_gate.py check --base origin/main --head HEAD rc 0; python3 tools/mimo_path_sweep.py . rc 0.
 Report: commits, per-step file:function, tests with counts, gate rcs, vector self-check. Then stop.
 mimo-pro fix briefs (D-2888): <= ~4 findings or one function scope; one "Edit only <file>:<function>[, ...]" line; include the prior run's findings; "Keep your final reply under 1500 tokens."
+Never pkill/killall/kill -f (pattern kills); kill only PIDs you started yourself (D-2908).
