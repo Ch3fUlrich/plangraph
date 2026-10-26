@@ -25,5 +25,5 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 Seats: seatpost.py/qwenprompt.py/haikuseat.sh interim OK (D-2789): count toward cap, never edit review.txt/prompt.txt, keep seat dirs; post via post.sh (verdict.judge -> tools/seat_verdict.py reviewer-<family> token).
 Briefs: append status/writer-brief-tail.md (D-2885 no writer Test-Removal/Gate-Edit). Merges: pass commit_message="Plan-Item: <KEY>".
 Traps: zsh -> bash -c; mergepath needs claim; never dump environ; Hand-Edit <=50 lines (D-2853); gate check needs --base/--head; define new lane = JSON to router (D-2230).
-| REVIEW-VERDICT-PARSE (std, claimed) | DONE (#212 merged e49b5df8; #211 closed) |
+| REVIEW-VERDICT-PARSE loop (D-2898/D-2900, PRIO 1) | (b) opencode served_model witness via opencode.db session title + (a) TEST-GAMING regex; wt ~/code/plangraph-worktrees/opencode-witness lane/opencode-served-witness; mimo-pro ocw1 ($J/brief-ocw.md) running -> re-run tests -> PR -> seats (not xiaomi/anthropic) -> re-run RMS glm post |
 | ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 MERGED 43aebc1d (GO D-2861), evidence ok (main CI 40235422603); efficiency told, E1a rebased 94e5f316. D-2879 gate/git trailer mismatch -> E1a buildl1-T1 (efficiency owns). Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm after reset). #214 MERGED 7bbd11a6 |
