@@ -499,7 +499,7 @@ SEED_MODELS: list[dict[str, Any]] = [
         "parameter_effort": None,
         "max_safe_effort": None,
         "effort_warning": None,
-        "context_tokens": 900000,
+        "context_tokens": 475000,
         "max_output_tokens": 128000,
         "price_cliff_tokens": None,
         "quota_pool_id": "cxa-sub",

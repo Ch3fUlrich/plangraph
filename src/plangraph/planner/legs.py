@@ -82,7 +82,7 @@ from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",)),
+        "gpt", ("128k", "256k", "1m"), 475000, False, roles=("review",)),
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
@@ -97,7 +97,7 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
+        "gpt", ("128k", "256k", "1m"), 475000, False, roles=("implement",)),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement", "orchestrate")),
     _legacy["agy-sonnet-5.5"],
