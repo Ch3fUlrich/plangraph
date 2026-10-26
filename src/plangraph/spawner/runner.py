@@ -16,10 +16,13 @@ import time
 import uuid
 import logging
 import math
+import subprocess
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.clients import (
+    STDIN_PROMPT_HARNESSES,
     build_child_env,
     build_command,
     build_routing_envelope_headers,
@@ -50,6 +53,43 @@ def redact(value):
         value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
         return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
     return value
+
+
+def _is_nt() -> bool:
+    return os.name == "nt"
+
+
+def _resolve_launch(
+    exe: str,
+    argv: Sequence[str] = (),
+    *,
+    is_nt: bool | None = None,
+) -> tuple[str, str | None]:
+    """Resolve executable path and enforce Windows launch constraints (I11, I12)."""
+    nt = _is_nt() if is_nt is None else is_nt
+    if not nt:
+        return exe, None
+
+    exe_path = Path(exe)
+    ext = exe_path.suffix.lower()
+    is_batch = ext in (".cmd", ".bat")
+
+    if is_batch and exe_path.stem.lower() == "opencode":
+        sibling = exe_path.parent / "node_modules" / "@opencode" / "cli" / "bin" / "opencode.exe"
+        if sibling.is_file():
+            exe = str(sibling)
+            exe_path = sibling
+            ext = exe_path.suffix.lower()
+            is_batch = False
+
+    is_opencode = exe_path.stem.lower() == "opencode"
+    if not is_opencode:
+        limit = 8000 if is_batch else 32000
+        cmdline = subprocess.list2cmdline([exe, *argv])
+        if len(cmdline) > limit:
+            return exe, f"command_line_too_long: {len(cmdline)} chars"
+
+    return exe, None
 
 
 @dataclass
@@ -136,6 +176,7 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
+        self._stdin_payloads = {}
 
     def served_witness(self, job_id, model, *, adapter_token):
         """Record transport telemetry authenticated by an in-process adapter.
@@ -294,6 +335,11 @@ class SpawnerRunner:
                     else:
                         from plangraph.routing_errors import SpawnRefused
                         raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
+                stdin_note = (
+                    f" [stdin: {len(prompt.encode('utf-8'))} bytes]"
+                    if cmd[0] in STDIN_PROMPT_HARNESSES
+                    else ""
+                )
                 job = JobInfo(
                     job_id=job_id,
                     status="dry_run",
@@ -304,7 +350,7 @@ class SpawnerRunner:
                     command=cmd,
                     end_time=time.time(),
                     exit_code=0,
-                    stdout=f"[dry-run] Planned command: {' '.join(cmd)}",
+                    stdout=f"[dry-run] Planned command: {' '.join(cmd)}{stdin_note}",
                     served_model=served_model,
                     served_family=served_family,
                     dry_run=True,
@@ -350,6 +396,16 @@ class SpawnerRunner:
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            resolved_exe, launch_refusal = _resolve_launch(resolved_exe, cmd[1:], is_nt=_is_nt())
+            if launch_refusal:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = launch_refusal
+                job.end_time = time.time()
+                return job
+
+            if cmd[0] in STDIN_PROMPT_HARNESSES:
+                self._stdin_payloads[job_id] = prompt.encode("utf-8")
             self._adapter_tokens[job_id] = object()
             try:
                 proc = await self.process_factory(
@@ -359,7 +415,11 @@ class SpawnerRunner:
                     env=child_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=(
+                        asyncio.subprocess.PIPE
+                        if cmd[0] in STDIN_PROMPT_HARNESSES
+                        else asyncio.subprocess.DEVNULL
+                    ),
                     **({"start_new_session": True} if os.name != "nt" else {}),
                 )
             except Exception as exc:
@@ -387,6 +447,7 @@ class SpawnerRunner:
             # A running monitor owns the environment until output is scrubbed.
             if job_id not in self._tasks:
                 self._child_envs.pop(job_id, None)
+                self._stdin_payloads.pop(job_id, None)
 
     async def _monitor_process(
         self,
@@ -396,20 +457,30 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
+            payload = self._stdin_payloads.get(job_id)
+
+            async def _comm(input_data):
+                if input_data is not None:
+                    try:
+                        return await proc.communicate(input=input_data)
+                    except TypeError:
+                        pass
+                return await proc.communicate()
+
             timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
             if timeout:
                 try:
                     seconds = float(timeout)
                     if not math.isfinite(seconds) or seconds <= 0:
                         raise ValueError('invalid run timeout')
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), seconds)
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(_comm(payload), seconds)
                 except (asyncio.TimeoutError, ValueError):
                     await self.tree_killer(proc.pid)
                     stdout_bytes, stderr_bytes = await proc.communicate()
                     self.jobs[job_id].events.append({'event': 'run_timeout'})
                     self.jobs[job_id].exit_code = 124
             else:
-                stdout_bytes, stderr_bytes = await proc.communicate()
+                stdout_bytes, stderr_bytes = await _comm(payload)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].exit_code == 124 else proc.returncode
@@ -461,6 +532,7 @@ class SpawnerRunner:
             job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
@@ -478,7 +550,11 @@ class SpawnerRunner:
         return [job for job in self.jobs.values()]
 
     async def steer(self, job_id: str, message: str) -> dict[str, Any]:
-        """Send steer instruction to an active job."""
+        """Send steer instruction to an active job.
+
+        Note: for opencode, stdin is closed after the prompt is sent, so steer
+        will report ``{'ok': False, 'steered': False, 'error': 'stdin closing'}``.
+        """
         if not isinstance(job_id, str):
             from plangraph.routing_errors import ParameterRefused
             raise ParameterRefused('job_id must be a string')
