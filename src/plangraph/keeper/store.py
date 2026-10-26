@@ -284,6 +284,15 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         self._audit(principal, action, key, True, "", "", now)
         return result
 
+    def audit_run_gate_refusal(self, principal, action, key, exc, now=None):
+        """Audit the run-token verb-class refusal raised by ``api_routes.run_gate``.
+
+        ``run_gate`` answers before any verb runs, so the refusal is recorded
+        here with the same row shape ``_run`` writes for any other refusal.
+        """
+        with self._write():
+            self._audit(principal, action, key, False, exc.code, exc.msg, now)
+
     # ---------------------------------------------------- authorisation
     @staticmethod
     def _require_role(principal, *roles):

@@ -116,7 +116,16 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 self._json(401, {"error": exc.code, "msg": exc.msg})
                 return
             try:
-                api_routes.run_gate(principal, name)
+                try:
+                    api_routes.run_gate(principal, name)
+                except Refused as gate:
+                    # a refusal outside the verb seam is still audited
+                    server.store.audit_run_gate_refusal(
+                        principal, name,
+                        (body or {}).get("key") if isinstance(body, dict)
+                        and isinstance(body.get("key"), str)
+                        else self._one(query, "key"), gate)
+                    raise
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
                 else:
