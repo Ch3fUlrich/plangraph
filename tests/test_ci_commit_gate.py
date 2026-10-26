@@ -1215,6 +1215,19 @@ def test_e1_token_named_paths_secret_again(repo: Path):
     assert check(s1, s2, cwd=repo) == []
 
 
+def test_e1_door_match_case_folded(repo: Path):
+    # haiku-G7 / mimopro-G5: door matching is case-folded like the secret
+    # check, so TOOLS/seat_verdict.py cannot alias the real door file on a
+    # case-insensitive checkout.
+    base = _head(repo)
+    s1 = _he(repo, 30, item="demo:DOOR", path="TOOLS/seat_verdict.py")
+    assert check(base, s1, cwd=repo) == [
+        f"{s1}: hand-edit touches auth/door surface: TOOLS/seat_verdict.py"]
+    # positive control: the same shape of path with no door name passes
+    s2 = _he(repo, 30, item="demo:CTRL", path="TOOLS/notes.py")
+    assert check(s1, s2, cwd=repo) == []
+
+
 def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     base = _head(repo)
     f = repo / "src\\plangraph\\keeper\\x.py"
