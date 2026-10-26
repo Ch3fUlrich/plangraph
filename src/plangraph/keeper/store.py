@@ -59,13 +59,14 @@ REVIEW_OVERDUE_S = 4 * 3600
 LEASE_WARN_S = 15 * 60
 
 #: PG-EFFICIENCY-GATES fix round 2 (qwen-R1/R2): the roles each routed verb
-#: admits, keyed by the ``_run`` action.  This table is the single role
-#: authority -- ``Store._run`` consults it right after principal resolution and
-#: refuses (audited, 403) BEFORE any body work, so a wrong-role request is
-#: always refused inside the seam ("every refusal is audited") and a route
-#: handler never carries a role list that could drift from the store's.
-#: Keyed by action so the verb's own ``_run`` call -- route handler or direct
-#: caller alike -- is gated identically.
+#: admits, keyed by the ``_run`` action.  ``Store._run`` consults this table
+#: right after principal resolution and refuses (audited, 403) BEFORE any body
+#: work, so a wrong-role request is always refused inside the seam ("every
+#: refusal is audited") and a route handler never carries a role list of its
+#: own.  This is the seam's FIRST check, not the only one: each verb's private
+#: method (or planner function) keeps its own role check for callers that reach
+#: it without the gate -- ``apply_ops`` batch dispatch and direct callers.  The
+#: two lists must agree; tests/test_keeper_role_gate_parity.py pins every pair.
 ROLE_GATE = {
     "close_on_decision": ("router",),
     "set_legacy_state": ("router",),
