@@ -21,6 +21,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import verdict
+
+from . import verdict
+
 __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT",
@@ -222,13 +226,24 @@ def run(prompt: str, *, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEO
 
 
 def write_seat_dir(out_dir: Path, result: QoderResult,
-                   extra: dict | None = None) -> None:
-    """Write ``review.txt`` + ``evidence.json`` (no raw stdout kept)."""
+                   extra: dict | None = None,
+                   material: str = "") -> None:
+    """Write ``review.txt`` + ``evidence.json`` (no raw stdout kept).
+
+    The parsed verdict fields always come from ``verdict.judge`` over the
+    reply and ``material`` (the diff/context the seat saw), so a caller that
+    passes no ``extra`` still leaves a seat dir tools/seat_verdict.py can
+    gate on.  ``extra`` is applied last but never overwrites judge fields.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "review.txt").write_text(result.text or "", encoding="utf-8")
     evidence = result.to_evidence()
+    judged = verdict.judge(result.text or "",
+                           evidence.get("finish_reason"),
+                           material).to_evidence()
+    evidence.update(judged)
     if extra:
-        evidence.update(extra)
+        evidence.update({k: v for k, v in extra.items() if k not in judged})
     (out / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n",
                                        encoding="utf-8")
