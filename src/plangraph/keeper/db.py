@@ -200,6 +200,8 @@ def _upgrade(conn):
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
     conn.executescript(JEV_DDL)
+    from .messages_schema import SQLITE
+    conn.executescript(SQLITE)
     # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)
     # for the TABLES, and a REPAIR for the guard triggers: ``CREATE TRIGGER IF
     # NOT EXISTS`` would keep a weakened or outdated body. Drop + create run in

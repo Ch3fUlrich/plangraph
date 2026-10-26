@@ -269,6 +269,10 @@ def test_triggers_refuse_tampering(tmp_path):
         w.conn.execute("UPDATE events SET payload='{}' WHERE seq=1")
     with pytest.raises(db_errors.DENIED + db_errors.INTEGRITY):
         w.conn.execute("DELETE FROM audit_log")
+    with pytest.raises(db_errors.DENIED + db_errors.INTEGRITY):
+        w.conn.execute("UPDATE messages SET body='{}' WHERE seq=1")
+    with pytest.raises(db_errors.DENIED + db_errors.INTEGRITY):
+        w.conn.execute("DELETE FROM messages")
     with pytest.raises(db_errors.DENIED):
         w.conn.execute("DROP TRIGGER trg_events_append_only_update ON events")
     with pytest.raises(db_errors.DENIED):

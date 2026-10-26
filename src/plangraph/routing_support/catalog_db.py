@@ -25,11 +25,16 @@ from .catalog_seed import (
     TIER_RUNG,
 )
 
-DEFAULT_DB_PATH: Path = (
-    Path(os.environ.get("PLANGRAPH_CATALOG_DB", "~/.cache/plangraph/spawner_catalog.db"))
-    .expanduser()
-    .resolve()
-)
+def default_db_path() -> Path:
+    """Catalog DB path, resolved at call time so PLANGRAPH_CATALOG_DB wins (D3)."""
+    return (
+        Path(os.environ.get("PLANGRAPH_CATALOG_DB", "~/.cache/plangraph/spawner_catalog.db"))
+        .expanduser()
+        .resolve()
+    )
+
+
+DEFAULT_DB_PATH: Path = default_db_path()
 
 SCHEMA_PATH: Path = Path(__file__).parent / "catalog_schema.sql"
 
@@ -426,16 +431,24 @@ class CatalogDB:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for spawner catalog database management."""
+    default_db = str(default_db_path())
+    # D1: a subparser default would clobber a global --db-path parsed before
+    # the subcommand, so subcommands accept --db-path with SUPPRESS (no default)
+    # and only the top-level parser owns the default value.
     db_parent = argparse.ArgumentParser(add_help=False)
     db_parent.add_argument(
         "--db-path",
-        default=str(DEFAULT_DB_PATH),
-        help=f"Path to SQLite catalog DB (default: {DEFAULT_DB_PATH})",
+        default=argparse.SUPPRESS,
+        help=f"Path to SQLite catalog DB (default: {default_db})",
     )
 
     parser = argparse.ArgumentParser(
         description="Plangraph Spawner Catalog DB",
-        parents=[db_parent],
+    )
+    parser.add_argument(
+        "--db-path",
+        default=default_db,
+        help=f"Path to SQLite catalog DB (default: {default_db})",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)

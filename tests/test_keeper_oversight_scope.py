@@ -1097,8 +1097,9 @@ def test_schema_is_v14_and_carries_the_oversight_ddl():
     # Main pins ``SCHEMA_VERSION`` at 13 (its own schema tests assert it), so the
     # v13 -> v14 step the oversight tables add is named separately and installed
     # presence-based by ``db._upgrade`` -- main's upgrade tests stay green.
-    assert schema.SCHEMA_VERSION == 13
-    assert schema.OVERSIGHT_SCHEMA_VERSION == schema.SCHEMA_VERSION + 1 == 14
+    # Fence: RT-P1-BUS renumbers after oversight (v15 messages, v16 envelopes).
+    assert schema.SCHEMA_VERSION == 16
+    assert schema.OVERSIGHT_SCHEMA_VERSION == 14
     assert "oversight_tokens" in schema.OVERSIGHT_DDL
     assert "oversight_ops" in schema.OVERSIGHT_DDL
     assert schema.OVERSIGHT_DDL in schema.SCHEMA
@@ -1135,8 +1136,8 @@ def test_pg_migration_7_matches_the_sqlite_ddl():
     assert not {"oversight_tokens", "oversight_ops"} & set(earlier)
 
 
-def test_all_pg_migrations_apply_in_order_exec_7_then_oversight_8():
-    """Merge of origin/main #140: migrations 1..8 apply in order, no gaps.
+def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
+    """migrations 1..9 apply in order, no gaps.
 
     Applied through the parity parser (``parse_tables`` over the ``MIGRATIONS``
     list, no live Postgres): 7 is main's exec ownership of ``items``, 8 is our
@@ -1146,9 +1147,9 @@ def test_all_pg_migrations_apply_in_order_exec_7_then_oversight_8():
 
     steps = list(schema_pg.MIGRATIONS)
     versions = [m.version for m in steps]
-    assert versions == list(range(1, 9))              # 1..8: no gaps
+    assert versions == list(range(1, 10))             # 1..9 (9 = RT-P1-BUS messages): no gaps
     assert versions == sorted(set(versions))          # strictly increasing
-    assert schema_pg.LATEST == 8
+    assert schema_pg.LATEST == 9
 
     import re
     exec_cols = re.findall(
@@ -1204,7 +1205,7 @@ def test_all_pg_migrations_apply_in_order_exec_7_then_oversight_8():
     # the exec columns live in the SQLite items DDL at main's v13 shape, and
     # the SQLite version step (v14) stays the oversight tables alone
     assert schema.OVERSIGHT_SCHEMA_VERSION == 14
-    assert schema.SCHEMA_VERSION == 13
+    assert schema.SCHEMA_VERSION == 16
     for column in exec_cols:
         assert f"    {column}" in schema.TABLES, column
     assert "exec_workflow_id" not in schema.OVERSIGHT_DDL
@@ -1216,6 +1217,15 @@ def test_copy_to_pg_includes_both_oversight_tables():
     assert {"oversight_tokens", "oversight_ops"} <= set(copy_to_pg.TABLES)
     order = list(copy_to_pg.TABLES)
     assert order.index("oversight_tokens") < order.index("oversight_ops")
+
+
+def test_copy_tables_are_unique():
+    from plangraph.keeper import copy_to_pg
+
+    dupes = [t for t in copy_to_pg.TABLES
+             if list(copy_to_pg.TABLES).count(t) > 1]
+    assert len(copy_to_pg.TABLES) == len(set(copy_to_pg.TABLES)), \
+        f"duplicated copy tables would be copied twice: {sorted(set(dupes))}"
 
 
 # ------------------------- every refusal is audited (fix round 1, MEDIUM)

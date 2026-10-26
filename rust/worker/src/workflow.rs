@@ -13,7 +13,9 @@ use crate::activities::{
     JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick, park_json_with_attempt,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
-use crate::keeper::{Alarm, AttemptReport, Claim, WORKER_LIVE_STATES};
+use crate::keeper::{
+    Alarm, AttemptReport, Claim, STALE_STATE_FAILURE, WORKER_LIVE_STATES, expected_state_for,
+};
 use crate::question::{self, OnTimer, Question};
 use pg_worker_core::budget::{self, Action, Attempt, ContextClass, Leg};
 use pg_worker_core::config::{Config, Tier};
@@ -24,10 +26,11 @@ use pg_worker_core::worktree::AttemptId;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use temporalio_common::RetryPolicy;
+use temporalio_common::protos::temporal::api::failure::v1::{Failure, failure::FailureInfo};
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{
-    ActivityOptions, SyncWorkflowContext, TimeoutType, WorkflowCancellationToken, WorkflowContext,
-    WorkflowResult, WorkflowTermination,
+    ActivityOptions, ApplicationFailure, SyncWorkflowContext, TimeoutType,
+    WorkflowCancellationToken, WorkflowContext, WorkflowResult, WorkflowTermination,
 };
 
 /// Alarm reason when the total waited time reaches `Config::wait_cap`.
@@ -56,6 +59,24 @@ const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 /// a card started after the change runs it. The id is pinned by a test: renaming
 /// it would strand every card whose history already carries the old marker.
 const GATE_PATCH: &str = "gate-before-merge-v1";
+
+/// `ctx.patched` marker for the `observe` activity that captures the state a
+/// park presents (EXEC-OBSERVED-STATE, G3-1). Scheduling it is a new command,
+/// so a history recorded before the marker replays without it and parks on the
+/// live-set fallback, exactly as those runs did.
+const OBSERVE_PATCH: &str = "park-observe-v1";
+
+/// `ctx.patched` marker for the park 409 (`exec_stale_state`) re-observe loop
+/// (D4). The loop issues `observe`/`park` commands a history recorded before
+/// the marker has no room for, so an old in-flight card keeps parking once and
+/// returning the refusal, exactly as it did. The id is pinned by a test:
+/// renaming it would strand every card whose history already carries the old
+/// marker.
+const PARK_REOBSERVE_PATCH: &str = "park-reobserve-v1";
+
+/// How many times a park refused as stale is re-observed and retried before the
+/// workflow fails with the last cause (D3).
+const PARK_REOBSERVES: u32 = 2;
 
 /// Workflow wire input. Kept here so gate metadata does not change the legacy
 /// activity input contract; missing fields preserve recorded start payloads.
@@ -406,9 +427,11 @@ impl Card {
                         QUESTION_ROUNDS_REASON,
                         q.normalized().text.clone(),
                         n,
-                        // Question parks take the live set: waiting is live (a
-                        // timer or an exhausted attempt may have written it),
-                        // claimed is not.
+                        // Question parks hand over the live set as the
+                        // fallback (EXEC-OBSERVED-STATE): the activity sends
+                        // the state it observed instead, and waiting is live
+                        // there because a timer or an exhausted attempt may
+                        // have written it; claimed is not in the set.
                         WORKER_LIVE_STATES,
                     )
                     .await?
@@ -474,7 +497,7 @@ impl Card {
                                     MERGE_LOCK_PARK_REASON,
                                 );
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Park only live worker states; waiting is live
+                                // Park only live worker states as the fallback; waiting is live
                                 // and claimed is not.
                                 park_and_alarm(
                                     ctx,
@@ -603,7 +626,7 @@ impl Card {
                         &check_tail,
                     );
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                    // Park only live worker states; waiting is live and claimed
+                    // Park only live worker states as the fallback; waiting is live and claimed
                     // is not.
                     park_and_alarm(
                         ctx,
@@ -645,7 +668,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Park only live worker states; waiting is live
+                                // Park only live worker states as the fallback; waiting is live
                                 // and claimed is not.
                                 park_and_alarm(
                                     ctx,
@@ -667,7 +690,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Park only live worker states; waiting is live
+                                // Park only live worker states as the fallback; waiting is live
                                 // and claimed is not.
                                 park_and_alarm(
                                     ctx,
@@ -726,7 +749,7 @@ impl Card {
                     Action::Quarantine => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Park only live worker states; waiting is live and
+                        // Park only live worker states as the fallback; waiting is live and
                         // claimed is not.
                         park_and_alarm(
                             ctx,
@@ -741,7 +764,7 @@ impl Card {
                     Action::ToPlanner => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Park only live worker states; waiting is live and
+                        // Park only live worker states as the fallback; waiting is live and
                         // claimed is not.
                         park_and_alarm(
                             ctx,
@@ -755,7 +778,7 @@ impl Card {
                     }
                     Action::Park { packet } => {
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Park only live worker states; waiting is live and
+                        // Park only live worker states as the fallback; waiting is live and
                         // claimed is not.
                         park_and_alarm(
                             ctx,
@@ -901,8 +924,11 @@ async fn question_step(
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
-                // Questions carry the live set: a question asked after a timer
-                // may find the card in waiting, and claimed must not pass.
+                // Questions carry the live set as an any-of CAS: an ask never
+                // moves the card, so it keeps the set the ADR documents (G3-3)
+                // and is not narrowed to a single observed state. A question
+                // asked after a timer may find the card in waiting, and claimed
+                // must not pass.
                 expected_state: Some(WORKER_LIVE_STATES.iter().map(|s| (*s).to_owned()).collect()),
                 card: card.clone(),
                 question: q.clone(),
@@ -924,7 +950,7 @@ async fn question_step(
                 QUESTION_ASK_FAILED_REASON,
                 q.text.clone(),
                 n,
-                // Failed asks park only on the live set; waiting is live,
+                // Failed asks park on the live-set fallback; waiting is live,
                 // claimed is not.
                 WORKER_LIVE_STATES,
             )
@@ -941,8 +967,8 @@ async fn question_step(
             QUESTION_REFUSED_REASON,
             q.text.clone(),
             n,
-            // Refused asks park only on the live set; waiting is live, claimed
-            // is not.
+            // Refused asks park on the live-set fallback; waiting is live,
+            // claimed is not.
             WORKER_LIVE_STATES,
         )
         .await;
@@ -1014,8 +1040,10 @@ async fn question_step(
                     question::timeout_park_tail(&q.text),
                     n,
                     // Question timeouts park right after the deadline timer,
-                    // which may have left the card waiting: the live set
-                    // accepts waiting and still excludes claimed.
+                    // which may have left the card waiting: the fallback
+                    // accepts waiting and still excludes claimed, and the
+                    // activity sends the observed waiting state instead when
+                    // it read one.
                     WORKER_LIVE_STATES,
                 )
                 .await
@@ -1041,9 +1069,12 @@ async fn park_question(
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
-    // Question parks preserve newer actor states by accepting only the live
-    // set, waiting included; the run/attempt fence and the keeper's idempotent
-    // duplicate-park success keep a stale retry from double-parking.
+    // Question parks preserve newer actor states by handing over only the
+    // live-set fallback (waiting included, claimed not); the workflow's
+    // `observe` activity captures the state at decision time and that is what
+    // the activity sends (G3-1), with the run/attempt fence plus the keeper's
+    // idempotent duplicate-park success keeping a stale retry from
+    // double-parking.
     park_and_alarm_in_state(
         ctx,
         cfg,
@@ -1383,6 +1414,60 @@ fn janitor_options(cfg: &Config) -> ActivityOptions {
     opts
 }
 
+/// The observation the `park` that follows gets (EXEC-OBSERVED-STATE, G3-1):
+/// `None` when the history predates the marker (an in-flight run replays the
+/// way it always did) or when the observe retries ran out (D1b: the cause is
+/// logged) -- the caller then parks on its live-set fallback. A cancelled read
+/// ends the workflow the way every other activity call here does.
+async fn observe_card(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    card: &str,
+) -> WorkflowResult<Option<String>> {
+    if !ctx.patched(OBSERVE_PATCH) {
+        return Ok(None);
+    }
+    match ctx
+        .execute_activity(
+            CardActivities::observe,
+            card.to_string(),
+            activity_options(cfg),
+        )
+        .await
+    {
+        Ok(observed) => Ok(observed),
+        Err(e) if e.as_cancelled().is_some() => Err(e.into()),
+        // D1b: the activity's own retries are exhausted. Degrade to the
+        // live-set fallback as before -- but the cause stays visible.
+        Err(e) => {
+            eprintln!("observe retries exhausted, parking on fallback: {e}");
+            Ok(None)
+        }
+    }
+}
+
+/// D2: the typed park refusal node in a failure's cause chain, if any. The
+/// chain is walked, not just the top node: an activity failure wraps the
+/// application failure the `park` activity returned as its cause.
+fn stale_state_refusal(failure: Option<&Failure>) -> Option<&Failure> {
+    let mut f = failure;
+    while let Some(node) = f {
+        if let Some(FailureInfo::ApplicationFailureInfo(info)) = &node.failure_info
+            && info.r#type == STALE_STATE_FAILURE
+        {
+            return Some(node);
+        }
+        f = node.cause.as_deref();
+    }
+    None
+}
+
+/// D2: did the `park` activity fail with the typed state-CAS refusal (409,
+/// `exec_stale_state`) -- the one failure a fresh observation can repair?
+fn is_stale_state_refusal(failure: Option<&Failure>) -> bool {
+    stale_state_refusal(failure).is_some()
+}
+
 /// Record a park packet and raise the alarm that goes with it.
 ///
 /// `attempt` is the card attempt number (`n`, 1-based) the park happened on:
@@ -1395,10 +1480,14 @@ async fn park_and_alarm(
     reason: String,
     attempt: u32,
 ) -> WorkflowResult<()> {
-    // Generic parks CAS on the one live set (waiting included: the projector
-    // writes it on usage_limit/outage attempts and TIMER_STARTED). Excluding a
-    // stale retry is the run/attempt fence's and the keeper's idempotent
-    // duplicate-park success's job, never this list's; claimed stays out.
+    // Generic parks hand the activity the live set as the FALLBACK
+    // (EXEC-OBSERVED-STATE): `park_and_alarm_in_state` swaps in the state the
+    // workflow's `observe` activity captured when it decided to park.
+    // `waiting` is in the fallback
+    // because the projector writes it on usage_limit/outage attempts and on
+    // TIMER_STARTED. Excluding a stale retry is the run/attempt fence's and
+    // the keeper's idempotent duplicate-park success's job, never this list's;
+    // claimed stays out.
     park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, Some(WORKER_LIVE_STATES)).await
 }
 
@@ -1410,16 +1499,60 @@ async fn park_and_alarm_in_state(
     attempt: u32,
     expected_state: Option<&[&str]>,
 ) -> WorkflowResult<()> {
-    ctx.execute_activity(
-        CardActivities::park,
-        park_json_with_attempt(
-            packet,
-            Some(attempt),
-            expected_state.map(|states| states.iter().map(|state| (*state).to_owned()).collect()),
-        ),
-        activity_options(cfg),
-    )
-    .await?;
+    // EXEC-OBSERVED-STATE (G3-1): the observation is captured HERE, when the
+    // workflow decides to park, and travels in the activity input. The `park`
+    // activity never re-reads the keeper, so a Temporal retry of a delayed park
+    // presents this same state and is refused when the card moved on, instead
+    // of reading whatever the projector wrote meanwhile. Because the read moved
+    // out of the park call, the park itself lands while `GET /v1/show` is down
+    // (G3-2); when the observation could not be made, `expected_state_for`
+    // keeps the live-set fallback the workflow hands over.
+    //
+    // D2/D4: a park the keeper refused 409 is the state-CAS miss
+    // (exec_stale_state) -- the card moved on since the observation -- and the
+    // one failure a fresh observation can repair, so re-observe and park once
+    // more, at most PARK_REOBSERVES times (D3: the refused cause is logged on
+    // every re-observe, and the failure that ends the loop carries the last
+    // one). Every other error returns at once; without the marker a run parks
+    // once and returns the refusal, exactly as before this loop existed.
+    let mut reobserves = 0;
+    loop {
+        let observed = observe_card(ctx, cfg, &packet.card).await?;
+        let states = expected_state_for(
+            observed,
+            expected_state.map(|states| states.iter().map(|s| (*s).to_owned()).collect()),
+        );
+        match ctx
+            .execute_activity(
+                CardActivities::park,
+                park_json_with_attempt(packet, Some(attempt), states),
+                activity_options(cfg),
+            )
+            .await
+        {
+            Ok(()) => break,
+            Err(e) if e.as_cancelled().is_some() => return Err(e.into()),
+            Err(e) if ctx.patched(PARK_REOBSERVE_PATCH) && is_stale_state_refusal(e.failure()) => {
+                let cause = stale_state_refusal(e.failure())
+                    .map(|f| f.message.as_str())
+                    .unwrap_or("unknown cause");
+                if reobserves == PARK_REOBSERVES {
+                    // D3: the loop is spent: the last cause plus the count.
+                    return Err(ApplicationFailure::builder(anyhow::anyhow!(
+                        "park refused by keeper as stale after {reobserves} re-observes: {cause}"
+                    ))
+                    .non_retryable(true)
+                    .build()
+                    .into());
+                }
+                reobserves += 1;
+                eprintln!(
+                    "park refused as stale ({STALE_STATE_FAILURE}), re-observe {reobserves}/{PARK_REOBSERVES}: {cause}"
+                );
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
     raise_alarm(
         ctx,
         cfg,
@@ -1532,6 +1665,7 @@ mod tests {
     use super::*;
     use crate::activities::GateCheckResult;
     use tempfile::TempDir;
+    use temporalio_common::protos::temporal::api::failure::v1::ApplicationFailureInfo;
 
     fn leg(id: &str, tier: Tier) -> LegSpec {
         LegSpec {
@@ -2026,6 +2160,51 @@ mod tests {
         // Renaming the marker would strand every card whose history already
         // carries it, so the id is pinned.
         assert_eq!(GATE_PATCH, "gate-before-merge-v1");
+    }
+
+    #[test]
+    fn park_reobserve_patch_id_is_stable() {
+        // Renaming the marker would strand every card whose history already
+        // carries it, so the id is pinned.
+        assert_eq!(PARK_REOBSERVE_PATCH, "park-reobserve-v1");
+    }
+
+    /// D2: the typed park refusal is recognised anywhere along a failure's
+    /// cause chain -- an activity failure wraps the application failure the
+    /// `park` activity returned as its cause -- and nothing else matches.
+    #[test]
+    fn stale_state_refusal_is_found_along_the_cause_chain() {
+        let typed = Failure {
+            message: "keeper returned unexpected status 409".into(),
+            failure_info: Some(FailureInfo::ApplicationFailureInfo(
+                ApplicationFailureInfo {
+                    r#type: STALE_STATE_FAILURE.into(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(is_stale_state_refusal(Some(&typed)));
+        // The shape the workflow actually sees: "Activity task failed" with the
+        // typed refusal as its cause.
+        let wrapped = Failure {
+            message: "Activity task failed".into(),
+            cause: Some(Box::new(typed)),
+            ..Default::default()
+        };
+        assert!(is_stale_state_refusal(Some(&wrapped)));
+        // An untyped application failure, a failure with no info and no
+        // failure at all are not stale refusals.
+        let other = Failure {
+            message: "keeper refused".into(),
+            failure_info: Some(FailureInfo::ApplicationFailureInfo(
+                ApplicationFailureInfo::default(),
+            )),
+            ..Default::default()
+        };
+        assert!(!is_stale_state_refusal(Some(&other)));
+        assert!(!is_stale_state_refusal(Some(&Failure::default())));
+        assert!(!is_stale_state_refusal(None));
     }
 
     #[test]

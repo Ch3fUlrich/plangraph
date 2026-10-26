@@ -271,12 +271,43 @@ def test_valid_writer_passes(repo: Path):
         "SONNET run-2",
         "Haiku run-3",
         "fable run-4",
+        # Near-miss negatives of the accepted form: each must fail, so that
+        # loosening CLAUDE_WRITER_RE to a bare ^claude- prefix is caught here.
+        "claude-opus-5-5 (D-2739 operator override)",  # no id
+        "claude-opus-5-5 run-" + "ab" * 15 + "c",  # 31 hex
+        "claude-opus-5-5 run-" + "ab" * 16 + " (Writer: mimo-v2.6-pro run-1)",
+        "claude-opus-5-5 run-" + "ab" * 16 + " (writer: x)",
+        "claude-opus-5-5 run-" + "ab" * 16 + " (Writer : x)",
+        "claude-opus-5-5 run-" + "ab" * 16 + " (writer : x)",
+        # Note shape and id-shape near-misses (D-2967): the note is a single
+        # parenthesised span of non-')' text and the case rule is strict.
+        "claude-opus-5-5 run-" + "ab" * 16 + " (a) x",  # text after the note
+        "claude-opus-5-5 run-" + "ab" * 16 + " (a (b))",  # nested parens
+        "claude-opus-5-5 run-" + "ab" * 16 + " ()",  # empty note
+        "claude-opus-5-5 run-" + "ab" * 16 + "a",  # 33 hex
+        "Claude-opus-5-5 run-" + "ab" * 16,  # model not lowercase
+        "claude-opus-5-5 run-" + "AB" * 16,  # run hex not lowercase
+        "claude-opus-5-5\trun-" + "ab" * 16,  # tab instead of the space
     ],
 )
 def test_claude_family_writers_fail(repo: Path, writer: str):
     base = _head(repo)
     sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer not in form claude-<model> <run|session|uuid id> [(note)]"]
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "claude-sonnet-5-5 run-" + "ab" * 16,
+        "claude-opus-5-5 session_" + "Ab1" * 8,
+        "claude-haiku-4-5 123e4567-e89b-12d3-a456-426614174000 (D-2739 operator override: Opus writes, no L2)",
+    ],
+)
+def test_claude_writer_with_run_or_session_id_passes(repo: Path, writer: str):
+    base = _head(repo)
+    sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
+    assert check(base, sha, cwd=repo) == []
 
 
 def test_unrelated_writer_model_passes(repo: Path):
@@ -294,7 +325,18 @@ def test_claude_writer_followed_by_clean_writer_still_fails(repo: Path):
         "Writer: mimo-v2.6-flash run-1\n"
     )
     sha = _commit(repo, message)
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer not in form claude-<model> <run|session|uuid id> [(note)]"]
+
+
+def test_claude_writer_re_rejects_newline_inside_note() -> None:
+    value = "claude-opus-5-5 run-" + "ab" * 16 + " (a\nb)"
+    assert ci_commit_gate.CLAUDE_WRITER_RE.fullmatch(value) is None
+
+
+def test_commit_without_any_writer_trailer_still_fails(repo: Path):
+    base = _head(repo)
+    sha = _commit(repo, "feat: served model\n")
+    assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
 
 
 def test_two_clean_writer_lines_pass(repo: Path):

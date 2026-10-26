@@ -39,7 +39,7 @@ _FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I
 
 _STANDING_ANSWER_RE = re.compile(
     r"^TEST-GAMING: (?:"
-    r'(?P<no>no - searched [^"]+: 0 hits)'
+    r'(?P<no>no - searched .+: 0 hits)'
     r'|(?P<yes>yes - "(?P<quote>.+)")'
     r"|(?P<unsure>unsure - .+)"
     r")$")

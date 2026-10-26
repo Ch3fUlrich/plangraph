@@ -16,6 +16,7 @@ import sys
 import tempfile
 import pytest
 from pathlib import Path
+from pgtest_shm import _sweep_dead_pgtest_dirs
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
@@ -45,7 +46,8 @@ def _use_tmpfs_tempdir() -> None:
         st = os.statvfs(shm)
         if st.f_bavail * st.f_frsize < 256 * 1024 * 1024:
             return
-        path = tempfile.mkdtemp(prefix="pgtest-", dir=shm)
+        _sweep_dead_pgtest_dirs(shm)
+        path = tempfile.mkdtemp(prefix=f"pg{os.getpid()}-", dir=shm)
     except OSError:
         return
     atexit.register(shutil.rmtree, path, ignore_errors=True)
@@ -85,6 +87,13 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
         if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I) or name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
                                     'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':
             monkeypatch.delenv(name)
+    # An inherited OPENCODE_CONFIG_CONTENT is a gateway endpoint source (its
+    # providers.mimo/omniroute settings.baseURL defeats the I6 fail-closed
+    # path); tests opt into config with monkeypatch.setenv, never inherit it.
+    monkeypatch.delenv('OPENCODE_CONFIG_CONTENT', raising=False)
+    # Admission renders gateway providers like launch (I6): a dead-port URL keeps
+    # gateway legs admissible; no-URL tests delenv it themselves.
+    monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')
     from plangraph.spawner import resolver
     probe = resolver.served_models
     probe.cache_clear()

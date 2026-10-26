@@ -199,7 +199,7 @@ def test_clients_acp_first_command_building():
         assert cmd[1] == "run"
         assert "--model" in cmd
         assert model in cmd
-        assert prompt in cmd
+        assert prompt not in cmd
 
 
 def test_clients_offline_emergency_fallback():
@@ -461,7 +461,7 @@ def test_resolver_gemini_argon_smart_model_and_cost_adaptation():
 def test_resolver_codex_luna_only():
     """Verify Codex ACP allows luna-high while rejecting astra-max and sol-* from SQLite CatalogDB."""
     all_rows = get_catalog_models()
-    assert len(all_rows) == 24, "get_catalog_models() must query the full 24-row SQLite CatalogDB"
+    assert len(all_rows) == 25, "get_catalog_models() must query the full 25-row SQLite CatalogDB"
     models = {m["id"]: m for m in all_rows}
 
     assert is_model_available(models["cxa/gpt-6-luna-high"]) is True

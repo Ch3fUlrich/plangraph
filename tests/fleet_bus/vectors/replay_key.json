@@ -1,5 +1,5 @@
 [
   {"name":"global-retry-body","fn":"replay_window","error":{"code":"replay_window_full","status":503,"retry_after_s":70,"body":{"error":{"code":"replay_window_full","message":"Request rejected","retry_after_s":70}}}},
   {"name":"purge-by-message-ts","fn":"replay_window","inputs":{"now":1700000071},"expect":{"fresh":1700000071}},
-  {"name":"rate-retry-body","fn":"validate_post","inputs":{"rate_full":true},"error":{"code":"rate_limited","status":429,"body":{"error":{"code":"rate_limited","message":"Request rejected","retry_after_s":60}}}}
+  {"name":"rate-retry-body","fn":"validate_post","inputs":{"rate_full":true},"error":{"code":"msg_rate_limited","status":429,"body":{"error":{"code":"msg_rate_limited","message":"Request rejected","retry_after_s":60}}}}
 ]

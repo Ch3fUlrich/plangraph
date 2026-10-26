@@ -114,7 +114,7 @@ def test_envelope_nonce(tmp_path, nonce_kind):
         async def factory(*args, **kwargs):
             return Process()
         runner.process_factory = factory
-        job = await runner.spawn('test', wait_seconds=3)
+        job = await runner.spawn('test', extra_env={'PLANGRAPH_GATEWAY_URL': 'http://127.0.0.1:20128/v1'}, wait_seconds=3)
         assert len(calls) == (1 if nonce_kind == 'valid' else 0)
-        assert job.events == ([] if nonce_kind == 'valid' else [{'event': 'forged_envelope'}])
+        assert [e for e in job.events if e['event'] != 'admitted_by_render'] == ([] if nonce_kind == 'valid' else [{'event': 'forged_envelope'}])
     asyncio.run(run())

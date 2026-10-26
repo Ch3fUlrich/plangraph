@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 
 import pytest
 
@@ -48,7 +49,8 @@ def test_seats_and_impossible_fence():
     assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
     assert all(l.family != "claude" for l in p.legs)
     assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
-    p = plan_spawn(CARD, role="review", writer_families=("qwen", "deepseek", "glm", "gemini", "mimo"))
+    p = plan_spawn(CARD, role="review",
+                   writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"))
     assert not p.review_seats and p.error
 
 
@@ -59,7 +61,8 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "mimo-v2.6-flash", "mimo-v2.6-pro", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
+        "mimo-v2.6-flash"]
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
     assert load_legs(path) == DEFAULT_LEGS
@@ -94,3 +97,24 @@ def test_load_legs_bad_roles(tmp_path, roles):
     path.write_text(json.dumps({"legs": [raw]}))
     with pytest.raises(ValueError, match="roles"):
         load_legs(path)
+
+
+def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
+    # OPENCODE-ORCHESTRATOR-FALLBACK G1/G2: an orchestrator leg off Claude, mimo-pro first
+    plan = plan_spawn(CARD, role="orchestrate")
+    assert plan.first_leg.id == "mimo-v2.6-pro"
+    # fallthrough: agy-sonnet runs on Antigravity quota, not Claude Max; never deepseek (D-2744)
+    assert [l.id for l in plan.legs] == ["mimo-v2.6-pro", "agy-sonnet-5.5"]
+    with pytest.raises(ValueError, match=re.escape("role must be implement|review|orchestrate")):
+        plan_spawn(CARD, role="drive")
+    from plangraph.spawner.cli import main
+    assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
+                 "--role", "orchestrate"]) == 0
+    assert "mimo-v2.6-pro" in capsys.readouterr().out
+
+
+def test_agy_leg_models_use_agy_model_ids():
+    # `agy models` ids: agy refuses the bare "sonnet-5.5" (workst run-1897ba45, 2026-10-26)
+    agy = {l.id: l.model for l in DEFAULT_LEGS if l.harness == "agy"}
+    assert agy == {"agy-gemini-3.8-flash": "gemini-3.8-flash",
+                   "agy-sonnet-5.5": "claude-sonnet-5-5-medium"}

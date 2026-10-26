@@ -28,7 +28,7 @@ from typing import Any, Mapping, Sequence
 
 from plangraph.routing_support.leg_state import leg_status
 from plangraph.routing_support.catalog_seed import TIER_RUNG
-from plangraph.mimo_policy import mimo_path_allowed
+from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
 from plangraph.routing_support.clients import build_routing_envelope_headers
 from plangraph.routing_support.risk import (
     RISK_BETA_EXCESS,
@@ -484,7 +484,13 @@ async def served_models_async(config, *, env=None, clock=time.monotonic):
 
 async def host_skip_reason_async(row, *, env=None):
     child = host_probe_env(env)
-    models = await served_models_async(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child) if row.get('harness') == 'opencode' else None
+    models = None
+    if row.get('harness') == 'opencode':
+        # List the rendered config, like host_skip_reason and the launch (D-2868).
+        from .opencode_render import render_gateway_providers
+        probe_env, model = dict(child), row.get('model') or row.get('id') or row.get('model_id') or ''
+        if '/' not in model or not render_gateway_providers(probe_env, model):
+            models = await served_models_async(probe_env.get('OPENCODE_CONFIG_CONTENT', '{}'), env=probe_env)
     return host_skip_reason(row, env=child, probe=lambda env: models)
 
 
@@ -516,6 +522,11 @@ async def plan_for_launch_async(plan, *, dry_run=False, probe=None, env=None):
     return await asyncio.to_thread(plan_for_launch, plan, dry_run=dry_run, probe=probe, env=env)
 
 
+def admitted_by_render(model):
+    """A spawner-rendered mimo provider model, admitted without the keyless listing (gateway 401; D-2868/D-2869)."""
+    return str(model or '').split('#', 1)[0] in ACCEPTED_MIMO_IDS
+
+
 def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli'):
@@ -530,11 +541,18 @@ def host_skip_reason(row, *, probe=None, env=None):
     from .opencode_overlay import OVERLAY_UNKNOWN
     if child.get(OVERLAY_UNKNOWN):
         return None
+    # Probe the config the launch will use: S1 renders the gateway providers per run.
+    from .opencode_render import render_gateway_providers
+    render_reason = render_gateway_providers(child, model)
+    if render_reason:
+        return render_reason
     try:
         cfg = json.loads(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
         provider, name = model.split('/', 1)
         entry = cfg.get('providers', {}).get(provider, {}).get('models', {}).get(name, {})
         if isinstance(entry, dict) and (entry.get('combo') or entry.get('alias')):
+            return None
+        if admitted_by_render(model):
             return None
     except (ValueError, AttributeError, TypeError):
         pass
@@ -712,7 +730,7 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
     # Explicit harness registration, not an inference from gateway transport.
-    if d.get('id') == 'mimo/mimo-v2.6-pro':
+    if d.get('id') in ('mimo/mimo-v2.6-pro', 'omniroute/cx-gpt-6-luna'):
         d.setdefault('harness', 'opencode')
     return d
 

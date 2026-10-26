@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import select
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
@@ -371,6 +372,19 @@ class PgKeeperLock:
 
     def __init__(self, raw):
         self._raw = raw
+
+    def alive(self) -> bool:
+        """True while the session is alive (zero IO: select() on fileno; I6)."""
+        raw = self._raw
+        if raw is None or getattr(raw, "closed", False) or getattr(raw, "broken", False):
+            return False
+        try:
+            fn = raw.fileno()
+            if fn < 0:
+                return False
+            return not bool(select.select([fn], [], [], 0)[0])
+        except (ValueError, OSError):
+            return False
 
     def release(self):
         if self._raw is not None:

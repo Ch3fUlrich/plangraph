@@ -74,13 +74,9 @@ TOOLS = (
     _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
           ("key", "decision_id")),
-    _tool("log_item", "Router/L1 (D-2739 one task loops): append a fix/design/replan entry to an item's log; "
-          "a fix on an in_review item hands it back to its claimant. entry: {kind, note, findings[], seat_runs[], "
-          "ref, author_model, reviewed_by, invariants, slices[{n,scope,max_lines}]}.",
+    _tool("log_item", "Router/L1 D-2739 entry:{kind,note,findings,seat_runs,ref,author_model,reviewed_by,invariants,slices:{n,scope,max_lines}}",
           {"key": {"type": "string"}, "entry": {"type": "object"}}, ("key", "entry")),
-    _tool("rule_set", "Router (D-2746): write standing rules as decisions:<ID> items (in_force=done, retired="
-          "cancelled) with depends_on edges between rules. rules: [{id, title, description, source, note, "
-          "depends_on[], state}]; DECISIONS.md is rendered from them (tools/decisions_view.py).",
+    _tool("rule_set", "Router D-2746 decisions:ID rules:{id,title,description,source,note,depends_on,state}",
           {"rules": {"type": "array", "items": {"type": "object"}}}, ("rules",)),
     _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"},
@@ -137,6 +133,11 @@ TOOLS = (
     _tool("record_run", "Spawner: record which models ran on a claimed item.",
           {"key": {"type": "string"}, "run": {"type": "object"}},
           ("key", "run")),
+    _tool("fleet_msg_send", "Bus: signed write {to, text}; queued in the spool if the peer is down.",
+          {"to": {"type": "string"}, "text": {"type": "string"}},
+          ("to", "text")),
+    _tool("fleet_msg_read", "Bus: message rows for this host; since is a sequence or a timestamp.",
+          {"since": {"type": "string"}}),
 )
 
 #: name -> (HTTP method, /v1/<verb>).  All other args pass through.
@@ -167,6 +168,9 @@ _ROUTES = {
     "rule_set": ("POST", "rule_set"),
     "mint_run_token": ("POST", "mint_run_token"),
 }
+
+#: Tools served by the fleet-bus client itself (signed write, cursor read).
+_BUS_TOOLS = ("fleet_msg_send", "fleet_msg_read")
 
 
 class _Transport(Exception):
@@ -250,6 +254,19 @@ def _tool_error(mid, message):
 def _call_tool(mid, params, client):
     name = params.get("name") if isinstance(params, dict) else None
     args = params.get("arguments") if isinstance(params, dict) else None
+    if name in _BUS_TOOLS:
+        # The bus client signs and queues locally; no keeper HTTP round trip.
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return _error(mid, -32602, "arguments must be an object")
+        from ..fleet_bus import client as bus_client
+        try:
+            text, is_error = bus_client.call_tool(name, args), False
+        except (bus_client.Refused, bus_client.TransportError) as exc:
+            text, is_error = str(exc), True
+        return _result(mid, {"content": [{"type": "text", "text": text}],
+                             "isError": is_error})
     if name not in _ROUTES:
         return _error(mid, -32602, f"unknown tool: {name}")
     if args is None:

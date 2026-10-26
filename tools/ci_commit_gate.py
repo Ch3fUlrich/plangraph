@@ -129,7 +129,20 @@ OPEN_HEAD_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 OPEN_PR_SKIP_NOTICE = 'ci-commit-gate: open PR merge check skipped (no --open-heads)\n'
 
 MISSING_WRITER = 'missing Writer trailer'
-CLAUDE_WRITER = 'claude writer'
+CLAUDE_WRITER = 'claude writer not in form claude-<model> <run|session|uuid id> [(note)]'
+#: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
+#: trailing parenthetical note; ``)`` is forbidden inside the note (no nested
+#: parens), as are a newline and a second Writer marker (case-insensitive,
+#: optional spaces before ':'). Case rule: ``claude-<model>`` and the run-hex
+#: id are lowercase only, a uuid may be any case. <id> is shape only (never
+#: looked up): a spawner run id, a Claude Code session id, or a uuid (D-2955, D-2967).
+CLAUDE_WRITER_RE = re.compile(
+    r'^claude-[a-z0-9.-]+ '
+    r'(?:run-[0-9a-f]{32}'
+    r'|session_[A-Za-z0-9]+'
+    r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+    r'(?: \((?:(?!(?i:Writer\s*:))[^)\n])+\))?\Z'
+)
 TEST_REMOVAL_VIOLATION = 'test removal without Test-Removal trailer'
 TEST_REMOVAL_NAMING_VIOLATION = 'test removal not named in Test-Removal'
 MALFORMED_WRITER = 'malformed Writer trailer'
@@ -711,8 +724,11 @@ def check(
         )
         if malformed_writer:
             violations.append(f'{sha}: {MALFORMED_WRITER}')
+        # A claude-marked value is refused only when it does not name its
+        # run/session id in the accepted shape (shape only, never looked up).
         if any(
             marker in value.lower()
+            and CLAUDE_WRITER_RE.fullmatch(value) is None
             for value in all_writer_values
             for marker in CLAUDE_MARKERS
         ):

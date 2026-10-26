@@ -120,10 +120,13 @@ def verdict_payload(key, ok, reason):
     return {"key": str(key), "ok": ok, "reason": str(reason)}
 
 
-def build_reason(evidence, ok, text, idx, covers=None):
+def build_reason(evidence, ok, text, idx, covers=None, witness=None):
     head = (f"seat {evidence.get('served_model') or evidence.get('requested_model')}"
             f" PASS corr {evidence.get('correlation_id')}"
             f" prompt {str(evidence.get('prompt_sha256') or '')[:12]}")
+    if witness:
+        # D-2905 (2): keep the request-side witness kind auditable in the keeper record.
+        head += f" witness=request-side-opencode-store {witness}"
     reason = head if ok else f"{head}\n{findings(text, idx)}".rstrip()
     if covers is not None:
         reason = f"{reason}\ncovers: {', '.join(covers)}"
@@ -196,7 +199,22 @@ def main(argv=None):
         print(f"seat_verdict: refused, unknown writer families "
               f"{unknown_writers!r}", file=sys.stderr)
         return EXIT_REFUSED
-    model = evidence.get("served_model") or evidence.get("requested_model")
+    served = evidence.get("served_model")
+    model = served or evidence.get("requested_model")
+    # D-2905 (2), interim: an opencode free seat leg with every tool denied is
+    # witnessed only request-side (the opencode session store).  When the
+    # spawner recorded that kind and nothing response-side, count the family by
+    # the request-side model; a response-side source (gateway logs) replaces
+    # this when it exists.  Anything else keeps today's behaviour.
+    witness_model = None
+    if (not served or served == "unwitnessed") and \
+            evidence.get("witness_kind") == "request-side-opencode-store":
+        candidate = evidence.get("request_side_model")
+        if (isinstance(candidate, str) and candidate.startswith("opencode/")
+                and candidate.endswith("-free")):
+            witness_model = candidate
+    if witness_model is not None:
+        model = witness_model
     family = model_family(model)
     if family is None:
         print(f"seat_verdict: refused, family {family!r} of model {model!r} "
@@ -229,7 +247,8 @@ def main(argv=None):
         return EXIT_PASS_REFUSED
     covers = sorted({writer for writer in writer_families if writer != family})
     payload = verdict_payload(args.key, ok,
-                              build_reason(evidence, ok, text, idx, covers))
+                              build_reason(evidence, ok, text, idx, covers,
+                                           witness=witness_model))
     if args.dry_run:
         print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
                           "headers": {"Authorization": "Bearer <redacted>"},
