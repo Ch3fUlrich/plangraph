@@ -114,7 +114,6 @@ def main(argv=None):
         p.add_argument('--role', choices=('implement', 'review', 'design'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
-        p.add_argument('--json', action='store_true')
         if verb == 'spawn':
             p.add_argument('prompt')
             p.add_argument('--review-scope', choices=['per-fixer', 'batch'])
@@ -332,6 +331,12 @@ raise SystemExit(code)
                 for s in ('stdout', 'stderr'):
                     for k in (f'{s}_path', f'{s}_log'):
                         result.setdefault(k, str(run_dir / f'{s}.log'))
+            else:
+                # haiku-F5: every current record carries the path fields (service._save), so
+                # the plain form would print them; plain output strips all four keys. Copy,
+                # never mutate: result may be the record other callers still read.
+                result = {k: v for k, v in result.items()
+                          if k not in ('stdout_path', 'stderr_path', 'stdout_log', 'stderr_log')}
         else:
             result = service.result(args.run_id)
         if isinstance(result, dict):

@@ -78,7 +78,7 @@ def test_cli_removed_model_refused(tmp_path, capsys, model, leg, flag):
     from plangraph.spawner.cli import main
     assert main(['--state', str(tmp_path), 'spawn', 'task', '--card',
                  '{"estimate_tokens": 1000}', flag, model if flag == '--model' else leg,
-                 '--override-reason', 'operator regression check', '--dry-run', '--json']) == 2
+                 '--override-reason', 'operator regression check', '--dry-run']) == 2
     assert 'unknown model: ' + model in capsys.readouterr().err
 
 

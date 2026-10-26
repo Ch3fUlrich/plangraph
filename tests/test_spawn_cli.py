@@ -198,7 +198,7 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
 
 
 def test_route_and_refusal(tmp_path, capsys):
-    assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
+    assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement']) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan['first_leg']['model'] == 'gemini-3.8-flash'
     assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}

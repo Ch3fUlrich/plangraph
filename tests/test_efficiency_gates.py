@@ -879,19 +879,84 @@ def test_seat_file_without_result_json_fails_closed(tmp_path):
     # qwen-E2 / haiku-E1 (I16): the missing-result.json fail-closed fix covered only run dirs
     # (p.is_dir()); the file form the design documents (seats <files>, admission's seat_outputs)
     # fell to meta = None and was counted from the raw reply. A seat file whose run has no
-    # result.json and no seat_classes entry is refused exactly like a corrupt result.json.
+    # result.json and no seat_classes entry now raises like the dir form (haiku-F1) and
+    # seats reports exit 2 for either call form (haiku-F7); a corrupt result.json still
+    # refuses the seat without raising.
     from tools.lane_gates import seats
     pass_text = "F1 [LOW] nit\nVERDICT: PASS\n"
     a, b = tmp_path / "a.out", tmp_path / "b.out"
     a.write_text(pass_text); b.write_text(pass_text)
-    assert F.findings_from_files([a]) == []  # refused, never counted from the raw reply
-    assert seats([str(a), str(b)]) == 3  # no verdict, re-run — the haiku-D1 symptom dies here too
+    with pytest.raises(OSError, match="missing result.json"):  # haiku-F1: loud like the dir form, never a silent []
+        F.findings_from_files([a])
+    assert seats([str(a), str(b)]) == 2  # haiku-F7: one missing-result condition, one exit code
     (tmp_path / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
     assert len(F.findings_from_files([a])) == 1 and seats([str(a), str(b)]) == 0  # positive control: a valid result.json accepts the same file
     (tmp_path / "result.json").unlink()
     assert len(F.findings_from_files([a], card={"seat_classes": {"a": {"status": "completed"}}})) == 1  # the design's file-form source accepts it
     (tmp_path / "result.json").write_text("{not json")
     assert F.findings_from_files([a]) == [] and seats([str(a), str(b)]) == 3  # corrupt refuses the same way, as before
+
+
+# ------------------------------------------------------------ round 4 F6: only status "completed" counts as a completed run
+def test_f6_result_json_status_must_be_completed(tmp_path):
+    # haiku-F6 (I16): a result.json dict without status ({}) or with status null was
+    # accepted as completed — its seat's verdict counted and its findings parsed — while
+    # the design row refuses a run whose "status is not completed" and gives seat_classes
+    # "the same four fields as result.json" (D120). Fail closed in every call form.
+    from tools.lane_gates import seats
+    pass_text = "F1 [LOW] nit\nVERDICT: PASS\n"
+    a, b = tmp_path / "a.out", tmp_path / "b.out"
+    a.write_text(pass_text); b.write_text(pass_text)
+    for bad in ({}, {"status": None}, {"status": "failed"}, {"status": "succeeded"}):
+        (tmp_path / "result.json").write_text(json.dumps(bad))
+        assert F.findings_from_files([a]) == [], bad  # refused like a corrupt result.json, never parsed
+        assert F.first_review({"a": (PASS_SEAT, bad), "b": PASS_SEAT})[0] is None, bad  # the (raw, result) call form refuses too
+        assert seats([str(a), str(b)]) == 3, bad  # no round verdict, re-run — never a PASS
+    assert F.failure_reason(pass_text, status="succeeded") == "seat run succeeded"  # any value but "completed" refuses
+    (tmp_path / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))  # positive controls
+    assert len(F.findings_from_files([a])) == 1 and seats([str(a), str(b)]) == 0
+    assert F.first_review({"a": (PASS_SEAT, {"status": "completed"}), "b": PASS_SEAT})[0] == "pass"
+    (tmp_path / "result.json").unlink()
+    assert F.findings_from_files([a], card={"seat_classes": {"a": {"status": None}}}) == []  # D120: the same four fields, the same rule
+    assert F.findings_from_files([a], card={"seat_classes": {"a": {}}}) == []
+    assert len(F.findings_from_files([a], card={"seat_classes": {"a": {"status": "completed"}}})) == 1
+
+
+# ------------------------------------------------------------ round 4 F1/F7: the file form raises like the dir form, one exit code
+def test_f1_seat_file_without_result_json_raises_like_the_dir_form(tmp_path):
+    # haiku-F1 (I4): a seat file with no sibling result.json and no seat_classes entry was
+    # skipped silently ([]), so its findings never reached the fix brief while the dir form
+    # raised OSError loudly. Both call forms fail closed the same loud way.
+    pass_text = "F1 [LOW] nit\nVERDICT: PASS\n"
+    a = tmp_path / "a.out"; a.write_text(pass_text)
+    with pytest.raises(OSError, match="missing result.json"):
+        F.findings_from_files([a])  # loud, like the dir form — never a silent []
+    s1 = tmp_path / "run-1"; s1.mkdir(); (s1 / "stdout.log").write_text(pass_text)
+    with pytest.raises(OSError, match="missing result.json"):  # positive control: the dir form raises the same way
+        F.findings_from_files([s1])
+    (tmp_path / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
+    assert len(F.findings_from_files([a])) == 1  # positive control: a sibling result.json accepts the same file
+    (tmp_path / "result.json").unlink()
+    assert len(F.findings_from_files([a], card={"seat_classes": {"a": {"status": "completed"}}})) == 1  # positive control: a seat_classes entry accepts it
+
+
+def test_f7_seats_reports_one_exit_code_for_both_missing_result_forms(tmp_path):
+    # haiku-F7 (I16): a run dir with no result.json exited 2 while a seat file with no
+    # sibling result.json exited 3 — two codes for one missing-result condition. Both
+    # call forms report 2 (the refused read), never 3 and never a first-review verdict.
+    from tools.lane_gates import seats
+    pass_text = "F1 [LOW] nit\nVERDICT: PASS\n"
+    s1, s2 = tmp_path / "run-1", tmp_path / "run-2"
+    for s in (s1, s2):
+        s.mkdir(); (s / "stdout.log").write_text(pass_text)
+    assert seats([str(s1), str(s2)]) == 2  # dir form
+    a, b = tmp_path / "a.out", tmp_path / "b.out"
+    a.write_text(pass_text); b.write_text(pass_text)
+    assert seats([str(a), str(b)]) == 2  # file form: the same missing-result condition, the same code
+    (tmp_path / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))  # positive control
+    for s in (s1, s2):
+        (s / "result.json").write_text(json.dumps({"status": "completed", "exit_class": "ok"}))
+    assert seats([str(a), str(b)]) == 0 and seats([str(s1), str(s2)]) == 0
 
 
 # ------------------------------------------------------------ round 2a: a cold _save rebuilds the accumulation
@@ -1057,6 +1122,88 @@ def test_terminal_re_save_keeps_the_resident_jobs_text_once(tmp_path):
     assert (run2 / "stdout.log").read_text() == "ONETWO"  # done + cur, each job once
 
 
+# ------------------------------------------------------------ round 4 F2: the production attempt-row writers carry job_id
+def _f2_drive(svc, monkeypatch):
+    """One spawn through *svc*'s production attempt writer, driven with a fake harness job."""
+    from dataclasses import dataclass, asdict
+    from types import SimpleNamespace
+    import asyncio as aio
+    import plangraph.gates.privacy as privacy
+    import plangraph.settings as settings
+    monkeypatch.setattr(privacy, 'admit_run_tree', lambda *a, **k: None)
+    monkeypatch.setattr(settings, 'admit_review_scope', lambda *a, **k: None)
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
+
+    @dataclass
+    class FakeLeg:
+        id: str = 'l1'; model: str = 'm'; harness: str = 'h'; family: str = 'fam'
+    class FakePlan:
+        legs = [FakeLeg()]; skipped = []; error = None; first_leg = legs[0]
+        def to_dict(self): return {'skipped': [], 'legs': [asdict(self.legs[0])]}
+
+    text = "T" * 5000
+    async def fake_spawn(**kw):
+        job = SimpleNamespace(job_id='j1', status='completed', exit_code=0,
+            stdout=text, stderr='e', liveness=None, exit_class=None, cwd=None,
+            served_model=None, served_family=None, served_witness_reason=None, events=[])
+        svc.runner.jobs['j1'] = job
+        return job
+    svc.runner.spawn = fake_spawn
+    svc._route = lambda *a, **k: FakePlan()
+    return text, aio.run(svc._spawn(card={'title': 't'}, prompt='p', role='implement', wait_seconds=None))
+
+
+def _f2_job_id_contract(svc, tmp_path, monkeypatch):
+    """The F2 contract on a driven run: the row carries job_id and the log keeps the text once."""
+    text, rec = _f2_drive(svc, monkeypatch)
+    assert [r.get('job_id') for r in rec['attempts']] == ['j1']  # the production row carries job_id
+    log = tmp_path / 'runs' / rec['run_id'] / 'stdout.log'
+    assert log.read_text() == text  # the terminal re-save kept the resident job's text exactly once
+    svc._save(svc.result(rec['run_id']))  # every later cold re-save keys its dedupe on that job_id
+    assert log.read_text() == text
+    return text, rec
+
+
+def test_f2_service_spawn_attempt_row_carries_job_id(tmp_path, monkeypatch):
+    # haiku-F2 (I17): service.py:_spawn.execute's attempt row is what the cold-rebuild
+    # dedupe (_save) keys on and no test drove the production writer, so dropping job_id
+    # from the row kept every suite green while the resident job's text doubled on each
+    # post-prune re-save. The sensitivity control below shows exactly that doubling.
+    from types import SimpleNamespace
+    from plangraph.spawner.service import SpawnService
+    svc = SpawnService(state=tmp_path)
+    text, rec = _f2_job_id_contract(svc, tmp_path, monkeypatch)
+    # sensitivity control: the same record with job_id off the row doubles the text on a
+    # cold re-save — so removing job_id from the writer fails this test twice.
+    rec2 = svc.result(rec['run_id'])
+    for r in rec2['attempts']:
+        r.pop('job_id', None)
+    (tmp_path / 'runs' / rec['run_id'] / 'record.json').write_text(json.dumps(rec2))
+    cold = SpawnService(state=tmp_path)
+    cold.runner.jobs['j1'] = SimpleNamespace(stdout=text, stderr='')
+    cold._save(cold.result(rec['run_id']))
+    log = tmp_path / 'runs' / rec['run_id'] / 'stdout.log'
+    assert log.read_text() == text + text  # doubled: no row names the job the dedupe counts once
+
+
+def test_f2_dispatch_spawn_attempt_row_carries_job_id(tmp_path, monkeypatch):
+    # haiku-F2 (I17): the same contract on runner.py:spawn_service's own attempt writer
+    # (the DispatchService execute loop) — the other production row the dedupe keys on.
+    from types import SimpleNamespace
+    from plangraph.spawner.runner import spawn_service
+    dsp = spawn_service(state=tmp_path)
+    text, rec = _f2_job_id_contract(dsp, tmp_path, monkeypatch)
+    rec2 = dsp.result(rec['run_id'])
+    for r in rec2['attempts']:
+        r.pop('job_id', None)
+    (tmp_path / 'runs' / rec['run_id'] / 'record.json').write_text(json.dumps(rec2))
+    cold = spawn_service(state=tmp_path)
+    cold.runner.jobs['j1'] = SimpleNamespace(stdout=text, stderr='')
+    cold._save(cold.result(rec['run_id']))
+    log = tmp_path / 'runs' / rec['run_id'] / 'stdout.log'
+    assert log.read_text() == text + text  # doubled without the row's job_id, kept once with it
+
+
 # ------------------------------------------------------------ round 3: continuation_reason is a defined, enforced vocabulary
 def test_continuation_reason_vocabulary_is_defined_and_enforced():
     # haiku-E3: the refused branch's round-2 values ('liveness', 'cancelled', 'output_cut')
@@ -1091,3 +1238,87 @@ def test_spawn_limits_field_order_matches_the_design():
         "stall_cpu_pct", "ignore", "floor_mb", "max_runs", "require_principal", "truncation", "provider_protocol")
     kw = SpawnLimits(wall_cap_min=90, max_cap_min=180, ignore={"opencode": ["x"]})
     assert kw.ignore == {"opencode": ["x"]} and kw.floor_mb == 2000 and kw.require_principal is False
+
+
+# ------------------------------------------------------------ round 4: every continuation_reason write goes through the setter
+def _f4_scan(src_root):
+    # Direct continuation_reason writes outside set_continuation_reason (haiku-F4): both the
+    # record['continuation_reason'] = ... form and the continuation_reason= kwarg/attr form
+    # bypass the closed vocabulary the setter enforces. Returns [(file, lineno, line)].
+    import ast
+    import re
+    pattern = re.compile(r"\[['\"]continuation_reason['\"]\s*\]\s*=(?!=)|(?<![\w])continuation_reason\s*=(?!=)")
+    hits = []
+    for path in sorted(Path(src_root).rglob('*.py')):
+        text = path.read_text(encoding='utf-8')
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        inside_setter = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == 'set_continuation_reason':
+                inside_setter.update(range(node.lineno, node.end_lineno + 1))
+        for n, line in enumerate(text.splitlines(), 1):
+            if n not in inside_setter and pattern.search(line):
+                hits.append((str(path), n, line.strip()))
+    return hits
+
+
+def test_f4_continuation_reason_is_written_only_by_the_setter(tmp_path):
+    # haiku-F4: the round-3 vocabulary test drives set_continuation_reason only, so a direct
+    # record['continuation_reason'] = ... or continuation_reason= ... anywhere in src bypasses
+    # the closed vocabulary and the suite stays green. Scan every src write site and prove the
+    # scan has teeth: a planted bypass outside the setter IS flagged while the setter's own
+    # store is not (that is the positive control).
+    fake = tmp_path / "fake_src" / "plangraph" / "spawner"
+    fake.mkdir(parents=True)
+    (fake / "service.py").write_text(
+        "def set_continuation_reason(record, reason):\n"
+        "    record['continuation_reason'] = reason\n"
+        "def bad(record):\n"
+        "    record['continuation_reason'] = 'clean_report'\n"
+        "    return dict(record, continuation_reason='spawn_failed')\n", encoding='utf-8')
+    assert [(Path(f).name, n) for f, n, _ in _f4_scan(tmp_path / "fake_src")] == \
+        [("service.py", 4), ("service.py", 5)]
+    assert _f4_scan(ROOT / "src") == []  # the fix: every real write goes through the setter
+
+
+# ------------------------------------------------------------ round 4: plain wait hides the paths; route/spawn take no dead --json flag
+def test_f5_plain_wait_strips_the_paths_from_a_current_record(tmp_path):
+    # haiku-F5: the round-3 plain-wait test used a pre-slice record that never carried the
+    # path fields, but service._save writes stdout_path/stderr_path on EVERY current record,
+    # so plain `wait` prints them. Plain output strips all four path keys; --json keeps them
+    # (positive control: the same record, same run, flag on).
+    import contextlib, io, time
+    from plangraph.spawner.service import SpawnService
+    from plangraph.spawner.cli import main
+    serv = SpawnService(state=tmp_path)
+    serv._save(dict(run_id="run-w5", status="completed", exit_code=0, stdout="out", stderr="e", ended=time.time()))
+    rec = json.loads((tmp_path / "runs" / "run-w5" / "record.json").read_text())
+    assert {"stdout_path", "stderr_path", "stdout_log", "stderr_log"} <= set(rec)  # a current record HAS them
+    cap = io.StringIO()
+    with contextlib.redirect_stdout(cap):
+        assert main(["--state", str(tmp_path), "wait", "run-w5"]) == 0
+    out = json.loads(cap.getvalue())
+    assert not {"stdout_path", "stderr_path", "stdout_log", "stderr_log"} & set(out)  # plain form strips all four
+    cap = io.StringIO()
+    with contextlib.redirect_stdout(cap):
+        assert main(["--state", str(tmp_path), "wait", "run-w5", "--json"]) == 0
+    out = json.loads(cap.getvalue())
+    assert out["stdout_path"] == out["stdout_log"] == str(tmp_path / "runs" / "run-w5" / "stdout.log")
+
+
+def test_f5_route_and_spawn_have_no_json_flag(capsys):
+    # haiku-F5: route/spawn accepted --json (cli.py) while nothing read it — the output was
+    # always JSON. The flag is removed; --help no longer lists it on route (checked below) and
+    # passing it is refused. Positive control: wait still takes --json, because that one IS read.
+    from plangraph.spawner.cli import main
+    with pytest.raises(SystemExit):
+        main(['route', '--card', '{"estimate_tokens":1}', '--json'])
+    with pytest.raises(SystemExit):
+        main(['route', '--help'])
+    assert '--json' not in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        main(['wait', '--help'])
+    assert '--json' in capsys.readouterr().out

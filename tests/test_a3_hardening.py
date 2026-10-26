@@ -98,7 +98,7 @@ def test_json_skip_diagnostics_keep_stdout_pure(monkeypatch, capsys):
     result = {'status': 'completed', 'exit_code': 0, 'attempts': [
         {'leg': 'mimo-v2.6-flash', 'status': 'skipped', 'skip_reason': 'not_served_on_host'}]}
     monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(route=lambda *a, **kw: SimpleNamespace(to_dict=lambda: result)))
-    assert cli.main(['route', '--card', '{"estimate_tokens":100}', '--json']) == 0
+    assert cli.main(['route', '--card', '{"estimate_tokens":100}']) == 0
     output = capsys.readouterr()
     assert json.loads(output.out) == result
     assert 'mimo-v2.6-flash' in output.err

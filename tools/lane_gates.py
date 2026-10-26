@@ -100,18 +100,14 @@ def seats(paths):
             p = Path(path)
             fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
             raw = fp.read_text("utf-8", "replace")
-            if p.is_dir() and not res.is_file():
-                # I16: fail closed on a missing result.json exactly like the missing
-                # stdout.log above (haiku-D1, qwen-D3); _save writes stdout.log first.
-                raise OSError(f"missing result.json for run dir {p}")
-            if res.is_file():
-                try: meta = json.loads(res.read_text("utf-8"))
-                except Exception: meta = None
-                outputs[stem] = (raw, meta if isinstance(meta, dict) else None)
-            else:
-                # I16: a seat file whose run has no result.json fails closed exactly like the
-                # corrupt one above — never the raw reply as a verdict (qwen-E2, haiku-E1).
-                outputs[stem] = (raw, None)
+            if not res.is_file():
+                # I16: fail closed on a missing result.json in both call forms (haiku-D1,
+                # qwen-D3, haiku-F7: one missing-result condition, one exit code); _save
+                # writes stdout.log first, so a run without a result.json is reachable.
+                raise OSError(f"missing result.json for {'run dir ' if p.is_dir() else ''}{p}")
+            try: meta = json.loads(res.read_text("utf-8"))
+            except Exception: meta = None
+            outputs[stem] = (raw, meta if isinstance(meta, dict) else None)
         except OSError as exc:
             print(f"lane-gates: seats: cannot read {path}: {type(exc).__name__}", file=sys.stderr)
             return 2

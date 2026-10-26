@@ -7,7 +7,7 @@ Install the package on each host, then use `python3 -m plangraph.spawner.cli`
 or Temporal service is required for this slice.
 
 ```bash
-python3 -m plangraph.spawner.cli route --card @card.json --role implement --json
+python3 -m plangraph.spawner.cli route --card @card.json --role implement
 python3 -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
 python3 -m plangraph.spawner.cli spawn --card @card.json --role review --review-of run-ID "Review"
 python3 -m plangraph.spawner.cli ps

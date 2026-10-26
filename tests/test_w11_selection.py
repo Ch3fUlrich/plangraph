@@ -53,7 +53,7 @@ def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):
         conn.executemany('INSERT INTO catalog_benchmarks VALUES (?, ?, ?, ?)',
                          [(model, r['aa_intelligence'], 0, 0) for model, r in rows().items()])
     monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(path))
-    assert main(['--state', str(tmp_path), 'route', '--card', json.dumps(CARD), '--json']) == 0
+    assert main(['--state', str(tmp_path), 'route', '--card', json.dumps(CARD)]) == 0
     cli = json.loads(capsys.readouterr().out)
     mcp = asyncio.run(MCPSpawnerServer(state=tmp_path).call_tool('plangraph_agent_route', {'card': CARD}))
     for result in (cli, mcp):

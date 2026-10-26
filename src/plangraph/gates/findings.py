@@ -143,7 +143,9 @@ def failure_reason(text, status=None, is_error=False, exit_class=None, liveness=
     if liveness: return f"run liveness {liveness}"
     if exit_class == "cancelled": return "run cancelled"
     if output_cut: return "output cut"
-    if status is not None and status not in ("completed", "succeeded", "ok", "stop", "end_turn"):
+    if status is not None and status != "completed":
+        # haiku-F6 (I16): only "completed" is a completed run — "any value other than
+        # completed is refused" (the design's REFUSED rule names failure_reason here).
         return f"seat run {status}"
     if is_error:
         return "seat harness reported is_error"
@@ -201,6 +203,10 @@ def first_review(outputs, need=FIRST_REVIEW_SEATS):
     for seat, item in outputs.items():
         if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], dict):
             r = item[1]; outcome, reason, _ = seat_outcome(item[0], status=r.get("status"), seat=seat, exit_class=r.get("exit_class"), liveness=r.get("liveness"), output_cut=bool(r.get("output_cut", False)))
+            if outcome is not None and r.get("status") is None:
+                # haiku-F6 (I16): a result.json without a status (or status null) is not
+                # "completed" — refused, never counted from the raw reply as a verdict.
+                outcome, reason = None, "result.json without status"
         elif isinstance(item, tuple):
             outcome, reason = None, "unreadable result.json"
         else:
@@ -220,14 +226,21 @@ def findings_from_files(paths, card=None, seat_classes=None):
         fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
         if p.is_dir() and not res.is_file():
             raise OSError(f"missing result.json for run dir {p}")  # I16: fail closed like the missing stdout.log (haiku-D2, qwen-D3)
+        if not res.is_file() and stem not in classes:
+            # haiku-F1 (I4): the file form fails closed loudly exactly like the dir form —
+            # a silent [] skips the seat and its findings never reach the fix brief.
+            raise OSError(f"missing result.json for {p}")
         try: meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
         except (OSError, ValueError): meta = None
         if not isinstance(meta, dict):
-            # I16: fail closed. An unreadable or non-dict result.json refuses the seat, and so
-            # does a seat file whose run has no result.json and no seat_classes entry (qwen-E2,
-            # haiku-E1: the file form fell to meta=None and was counted from the raw reply).
+            # I16: fail closed. An unreadable or non-dict result.json refuses the seat
+            # (qwen-E2, haiku-E1: the file form once fell to meta=None and was counted
+            # from the raw reply; a missing result.json now raises above instead).
             continue
-        if meta and (meta.get("liveness") or meta.get("exit_class") == "cancelled" or meta.get("output_cut") or meta.get("status") not in (None, "completed")):
+        if meta.get("status") != "completed" or meta.get("liveness") or meta.get("exit_class") == "cancelled" or meta.get("output_cut"):
+            # haiku-F6 (I16): only status "completed" counts as a completed run (design row:
+            # a run is refused when status is not completed; seat_classes is "the same four
+            # fields as result.json", D120) — a dict without status or status null refuses.
             continue
         text, _ = seat_text(fp.read_text("utf-8", "replace")); out.extend(parse_findings(text, stem))
     return out
