@@ -193,18 +193,42 @@ _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'gre
                  'webfetch', 'websearch')
 
 
-def _opencode_tools_denied(config_json) -> bool:
-    """True only when the FINAL child config denies every tool (D-2905 (1)).
+def _opencode_tools_denied(config_json, env=None) -> bool:
+    """True only when the child's FINAL config AND env prove every tool denied.
 
-    Re-parses the env value the child actually receives: a deny block that a
-    later merge clobbered is not evidence.
+    Checked, all required: 'permission' maps every _DENIED_TOOLS key to
+    'deny', 'mcp' is {} and 'plugin' is [] in config_json (no MCP or plugin
+    tools); and env carries OPENCODE_DISABLE_PROJECT_CONFIG == '1',
+    OPENCODE_DISABLE_CLAUDE_CODE == '1', OPENCODE_CONFIG_DIR ==
+    XDG_DATA_HOME and an OPENCODE_CONFIG naming an existing file under
+    XDG_DATA_HOME (no repo, user, Claude Code or global config layer).
+    With no env the isolation cannot be proven, so this is False (D-2921 F1).
     """
     try:
-        permission = json.loads(config_json or '{}').get('permission')
-    except (ValueError, TypeError, AttributeError):
+        cfg = json.loads(config_json or '{}')
+    except (ValueError, TypeError):
         return False
-    return isinstance(permission, dict) and all(
-        permission.get(tool) == 'deny' for tool in _DENIED_TOOLS)
+    if not isinstance(cfg, dict):
+        return False
+    permission = cfg.get('permission')
+    if not isinstance(permission, dict) or not all(
+            permission.get(tool) == 'deny' for tool in _DENIED_TOOLS):
+        return False
+    if cfg.get('mcp') != {} or cfg.get('plugin') != []:
+        return False
+    if not isinstance(env, Mapping):
+        return False
+    data_home = env.get('XDG_DATA_HOME')
+    if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
+            or not data_home or env.get('OPENCODE_CONFIG_DIR') != data_home):
+        return False
+    try:
+        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
+        return bool(cfg_path.name) and cfg_path.is_file() and \
+            cfg_path.resolve().is_relative_to(Path(data_home).resolve())
+    except (OSError, ValueError):
+        return False
 
 
 class NonceCapacity(RuntimeError):
@@ -383,6 +407,14 @@ class SpawnerRunner:
                 oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')  # mode 0700
                 self._ocdata_dirs[job_id] = oc_dir
                 child_env['XDG_DATA_HOME'] = oc_dir
+                # D-2921 F1: close every other config layer -- no repo, user,
+                # Claude Code, MCP or plugin tool may re-enable anything.
+                child_env['OPENCODE_DISABLE_PROJECT_CONFIG'] = '1'
+                child_env['OPENCODE_DISABLE_CLAUDE_CODE'] = '1'
+                child_env['OPENCODE_CONFIG_DIR'] = oc_dir
+                empty_cfg = Path(oc_dir) / 'pg-empty.json'
+                empty_cfg.write_text('{}')
+                child_env['OPENCODE_CONFIG'] = str(empty_cfg)
                 # D-2905 (1): deny every tool for the review seat, then record
                 # the spawner's own check of the FINAL env value.
                 try:
@@ -390,11 +422,13 @@ class SpawnerRunner:
                     if not isinstance(cfg, dict):
                         raise ValueError('not an object')
                     cfg['permission'] = {tool: 'deny' for tool in _DENIED_TOOLS}
+                    cfg['mcp'] = {}   # D-2921 F1: drop every MCP server
+                    cfg['plugin'] = []  # D-2921 F1: drop every plugin
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
-                    child_env.get('OPENCODE_CONFIG_CONTENT') or '') else 'opencode_tools_not_denied'}
+                    child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -618,7 +652,7 @@ class SpawnerRunner:
                     and exit_code == 0):
                 oc_dir = self._ocdata_dirs.get(job_id)
                 denied = _opencode_tools_denied(
-                    self._child_envs.get(job_id, {}).get('OPENCODE_CONFIG_CONTENT') or '')
+                    env.get('OPENCODE_CONFIG_CONTENT') or '', env)
                 m = (_opencode_served_model(Path(oc_dir) / 'opencode' / 'opencode.db',
                                             f'plangraph-{job_id}')
                      if oc_dir and denied else None)

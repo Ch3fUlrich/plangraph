@@ -123,15 +123,18 @@ def test_non_review_leg_reads_no_store_and_keeps_caller_xdg(tmp_path, monkeypatc
     assert job.served_model == 'unwitnessed'
 
 
-def test_opencode_tools_denied_requires_every_tool_deny():
+def test_opencode_tools_denied_requires_every_tool_deny(tmp_path):
     from plangraph.spawner.runner import _DENIED_TOOLS, _opencode_tools_denied
-    assert _opencode_tools_denied(json.dumps({'permission': {t: 'deny' for t in _DENIED_TOOLS}}))
+    # D-2921 F1: the proof now spans config AND env, so every case carries both
+    # and still isolates the tool-deny condition.
+    env = _deny_env(tmp_path)
+    assert _opencode_tools_denied(json.dumps(_FULL_CFG), env)
     lax = {t: 'deny' for t in _DENIED_TOOLS}
     lax['edit'] = 'allow'
-    assert not _opencode_tools_denied(json.dumps({'permission': lax}))
-    assert not _opencode_tools_denied(json.dumps({'permission': {'edit': 'deny'}}))
-    assert not _opencode_tools_denied('not json')
-    assert not _opencode_tools_denied('')
+    assert not _opencode_tools_denied(json.dumps({'permission': lax, 'mcp': {}, 'plugin': []}), env)
+    assert not _opencode_tools_denied(json.dumps({'permission': {'edit': 'deny'}, 'mcp': {}, 'plugin': []}), env)
+    assert not _opencode_tools_denied('not json', env)
+    assert not _opencode_tools_denied('', env)
 
 
 def test_tools_not_denied_yields_no_request_side_model_and_event(tmp_path, monkeypatch):
@@ -236,3 +239,64 @@ def test_title_flag_before_any_prompt_positional(tmp_path, monkeypatch):
 def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
     assert parse_test_gaming('TEST-GAMING: no - searched the "batch in" stamp: 0 hits\nVERDICT: pass') == ('no', None)
     assert parse_test_gaming('TEST-GAMING: no - searched the "batch in" stamp: 3 hits')[0] != 'no'
+
+
+# D-2921 F1: the deny block must hold against every other config layer.
+from plangraph.spawner import opencode_overlay  # noqa: E402
+from plangraph.spawner.runner import _DENIED_TOOLS  # noqa: E402
+
+_FULL_CFG = {'permission': {t: 'deny' for t in _DENIED_TOOLS}, 'mcp': {}, 'plugin': []}
+
+
+def _deny_env(home):
+    """The isolation env the review block hands the child (D-2921 F1)."""
+    (home / 'pg-empty.json').write_text('{}')
+    return {'XDG_DATA_HOME': str(home), 'OPENCODE_CONFIG_DIR': str(home),
+            'OPENCODE_CONFIG': str(home / 'pg-empty.json'),
+            'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUDE_CODE': '1'}
+
+
+def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None):
+    """A review leg whose review-block writes to `freeze` env keys are dropped
+    and whose config stays `bad_cfg`: one hardening condition removed in turn."""
+    extra = {}
+    if bad_cfg is not None:
+        extra['OPENCODE_CONFIG_CONTENT'] = bad_cfg
+        freeze = set(freeze) | {'OPENCODE_CONFIG_CONTENT'}
+    real = opencode_overlay.overlay_env
+
+    def overlay(base):
+        class Frozen(dict):
+            def __setitem__(self, key, value):
+                if key not in freeze:
+                    super().__setitem__(key, value)
+        return Frozen(real(base))
+
+    monkeypatch.setattr(opencode_overlay, 'overlay_env', overlay)
+    return _run_leg(tmp_path, monkeypatch, seed, extra_env=extra)
+
+
+@pytest.mark.parametrize('freeze,bad_cfg', [
+    ((), json.dumps({**_FULL_CFG, 'mcp': {'evil': {}}})),
+    ((), json.dumps({**_FULL_CFG, 'plugin': ['evil']})),
+    (('OPENCODE_DISABLE_PROJECT_CONFIG',), None),
+    (('OPENCODE_DISABLE_CLAUDE_CODE',), None),
+    (('OPENCODE_CONFIG_DIR',), None),
+    (('OPENCODE_CONFIG',), None),
+], ids=['mcp', 'plugin', 'disable_project_config', 'disable_claude_code',
+        'config_dir', 'config_file'])
+def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path, monkeypatch, freeze, bad_cfg):
+    job, _ = _freeze_leg(tmp_path, monkeypatch,
+                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                         freeze=freeze, bad_cfg=bad_cfg)
+    assert {'event': 'opencode_tools_not_denied'} in job.events
+    assert job.request_side_model is None
+    assert job.witness_kind is None
+
+
+def test_deny_block_all_conditions_present_denies_and_witnesses(tmp_path, monkeypatch):
+    job, _ = _freeze_leg(tmp_path, monkeypatch,
+                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]))
+    assert {'event': 'opencode_tools_denied'} in job.events
+    assert job.request_side_model == REQUESTED
+    assert job.witness_kind == 'request-side-opencode-store'
