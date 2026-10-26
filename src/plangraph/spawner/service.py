@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import time
 import uuid
 
@@ -39,6 +40,9 @@ class SpawnService:
         from .private_io import atomic_write_private
         from .runner import redact
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
+        # Host identity of the writing machine (C1): only PLANGRAPH_HOST may
+        # override it; setdefault keeps a re-saved record's original host.
+        record.setdefault('host', os.environ.get('PLANGRAPH_HOST') or socket.gethostname())
         record.setdefault('served_model', 'unwitnessed')
         record.setdefault('served_family', 'unwitnessed')
         for target in [record, *record.get('attempts', [])]:
