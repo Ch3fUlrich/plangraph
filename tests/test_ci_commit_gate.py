@@ -1645,3 +1645,99 @@ def test_e1_route_decision_body_text_and_duplicate(repo: Path):
     one = _he(repo, 10, item="fresh:ITEM2", rd=True)
     assert check(dup, one, cwd=repo) == []
 
+
+# ---------------------------------------------------------------------------
+# delta4-M16: the bypass shapes the E1 test list omitted
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("updated", [False, True], ids=["pr2-unupdated", "pr2-updated"])
+@pytest.mark.xfail(
+    strict=True,
+    reason="delta4-M16/M10 attribution gap (round B): the design's E1 "
+    "route-decision row makes the merger re-run right before merging the "
+    "second parallel PR fail on the item's 50-line sum, but the walk only "
+    "sees the second PR's own history (un-updated) or attributes the "
+    "crossing to the first PR's commit, which is outside the checked range.",
+)
+def test_m16_parallel_prs_one_item_second_merge_fails_at_merger_rerun(
+    repo: Path, updated: bool
+):
+    # Two parallel open PRs of one item, 40 lines each: the second PR to
+    # merge must fail at the merger's re-run (BASE = current main, HEAD =
+    # the PR head right before merging), exactly as the merged case does in
+    # test_m16_second_parallel_pr_merged_into_main_is_refused.
+    base = _head(repo)
+    pr1 = _he(repo, 40, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "pr2", base)
+    pr2 = _he(repo, 40, item="demo:ITEM")
+    if updated:
+        _git(repo, "merge", "-q", "--no-ff", "-m", "update branch", pr1)
+    assert check(pr1, _head(repo), cwd=repo) == [
+        f"{pr2}: hand-edit over 50 lines for demo:ITEM without Route-Decision"
+    ]
+
+
+def test_m16_second_parallel_pr_merged_into_main_is_refused(repo: Path):
+    # delta4-M16: the same two-PR shape is caught once the second PR's merge
+    # brings both commits into one checked history.
+    base = _head(repo)
+    pr1 = _he(repo, 40, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "pr2", base)
+    pr2 = _he(repo, 40, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "main2", pr1)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge pr2", pr2)
+    assert check(pr1, _head(repo), cwd=repo) == [
+        f"{pr2}: hand-edit over 50 lines for demo:ITEM without Route-Decision"
+    ]
+    # positive control: the same shape with two different items passes
+    _git(repo, "reset", "-q", "--hard", base)
+    q1 = _he(repo, 40, item="demo:ITEM_A")
+    _git(repo, "checkout", "-q", "-B", "pr2b", base)
+    q2 = _he(repo, 40, item="demo:ITEM_B")
+    _git(repo, "checkout", "-q", "-B", "main3", q1)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge pr2b", q2)
+    assert check(q1, _head(repo), cwd=repo) == []
+
+
+def test_m16_squash_commit_carries_squashed_bodies_for_one_item(repo: Path):
+    # delta4-M16: squash-merged history for one item.  A squash commit carries
+    # the squashed bodies (design E1 route-decision row), so the squashed
+    # lines count against the item's 50-line Route-Decision threshold.
+    base = _head(repo)
+    _git(repo, "checkout", "-q", "-B", "pr1", base)
+    _he(repo, 30, item="demo:ITEM")
+    _he(repo, 30, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "main4", base)
+    _git(repo, "merge", "-q", "--squash", "pr1")
+    sq = _commit(repo, "docs: ab (#1)\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n")
+    assert check(base, sq, cwd=repo) == [
+        f"{sq}: hand-edit over 50 lines for demo:ITEM without Route-Decision"
+    ]
+    # positive control: the same squash carrying a Route-Decision passes
+    _git(repo, "reset", "-q", "--hard", base)
+    _git(repo, "merge", "-q", "--squash", "pr1")
+    sq_rd = _commit(
+        repo,
+        "docs: ab (#2)\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n"
+        f"{VALID_ROUTE_DECISION}\n",
+    )
+    assert check(base, sq_rd, cwd=repo) == []
+
+
+def test_m16_one_route_id_cited_by_several_commits_passes_gate_form_check(
+    repo: Path,
+):
+    # delta4-M16 / M13 (one decision, one commit): the gate checks the
+    # Route-Decision form only — the record check lives in E1b
+    # (lane_gates.py hand-edits reads the keeper's route log; CI cannot reach
+    # it), so one well-formed route id cited by several commits passes here
+    # and is refused there.  This test pins the division of labour.
+    base = _head(repo)
+    c1 = _he(repo, 60, item="demo:ITEM", rd=True)
+    c2 = _he(repo, 60, item="demo:ITEM", rd=True)  # cites the very same id
+    assert check(base, c2, cwd=repo) == []
+    # positive control: the same single citation on one commit passes too
+    _git(repo, "reset", "-q", "--hard", base)
+    one = _he(repo, 60, item="demo:ITEM", rd=True)
+    assert check(base, one, cwd=repo) == []
+
