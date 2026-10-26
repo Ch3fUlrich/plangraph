@@ -6,16 +6,18 @@ import json
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, load_legs, with_measured
+from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, WRITER_ORDER, load_legs, with_measured
 from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
-                                       route_card)
+                                       plan_spawn, route_card)
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free", "opencode-zen-free", "or-north-mini-code-free",
     "or-laguna-s-2.1-free", "or-nemotron-3-super-free", "ovh-gpt-oss-120b",
-    "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "agy-sonnet-5.5", "deepseek",
+    "openrouter-free",
+    "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro",
+    "agy-sonnet-5.5", "deepseek",
 ]
 
 
@@ -140,7 +142,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "or-nemotron-3-super-free",
                       "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash",
-                      "agy-sonnet-5.5", "deepseek"]
+                      "mimo-v2.6-pro", "agy-sonnet-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
 
 
@@ -154,7 +156,7 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 6 legs: trains_on_data" in r.reasons
+        assert "excluded 7 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -305,3 +307,156 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
         next_after_failure(route, [], "ok", 1)
     with pytest.raises(ValueError):
         next_after_failure(route, [], "weird", 1)
+
+
+def test_writer_order_d2683_implement_first_seven():
+    # (a) implement plan for a public standard card (estimate_tokens 20000, no exclusions)
+    # lists exactly agy-gemini-3.8-flash, mimo-v2.6-pro, openrouter-free,
+    # opencode-deepseek-v4.1-flash-free, opencode-glm-5.3-flash-free, mimo-v2.6-flash,
+    # cx-gpt-6.1-sol as the first 7 leg ids in that order
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="implement")
+    expected = [
+        "agy-gemini-3.8-flash",
+        "mimo-v2.6-pro",
+        "openrouter-free",
+        "opencode-deepseek-v4.1-flash-free",
+        "opencode-glm-5.3-flash-free",
+        "mimo-v2.6-flash",
+        "cx-gpt-6.1-sol",
+    ]
+    assert [leg.id for leg in plan.legs[:7]] == expected
+
+
+def test_writer_order_d2683_unavailable_skipped():
+    # (b) a leg marked unavailable is skipped and the next in WRITER_ORDER leads
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    def mock_reader(model, **kwargs):
+        if model == "gemini-3.8-flash":
+            return {"state": "limited", "evidence": {"status": 429}}
+        return {"state": "available", "evidence": None}
+    plan = plan_spawn(c, role="implement", leg_reader=mock_reader)
+    assert plan.first_leg.id == "mimo-v2.6-pro"
+
+
+def test_writer_order_d2683_review_order_unchanged():
+    # (c) review plan order is unchanged (qodercli-qwen3.8-flash first)
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="review")
+    assert plan.first_leg.id == "qodercli-qwen3.8-flash"
+
+
+def test_writer_order_d2683_writer_family_exclusion():
+    # (d) writer-family exclusion still applies for review; exclude_families applies for implement
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
+    assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
+    assert plan_imp.first_leg.id == "mimo-v2.6-pro"
+    # F2: writer_families does not exclude implement legs
+    plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
+    assert plan_wf.first_leg.id == "agy-gemini-3.8-flash"
+
+
+def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
+    # F1 new test: implement plan_spawn with benchmark rows that score cx-gpt-6.1-sol
+    # highest still returns legs in WRITER_ORDER (first leg agy-gemini-3.8-flash),
+    # and a limited leg is still skipped.
+    rows = {
+        "omniroute/cx-gpt-6.1-sol": {"model_id": "omniroute/cx-gpt-6.1-sol", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+        "gemini-3.8-flash": {"model_id": "gemini-3.8-flash", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+        "mimo/mimo-v2.6-pro": {"model_id": "mimo/mimo-v2.6-pro", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+    }
+    def reader(model, **kwargs):
+        if model == "mimo/mimo-v2.6-pro":
+            return {"state": "limited", "evidence": {"status": 429}}
+        return {"state": "available", "evidence": None}
+
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader)
+    assert plan.first_leg.id == "agy-gemini-3.8-flash"
+    assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
+    assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
+    from plangraph.planner.legs import WRITER_ORDER
+    expected_writers = [w for w in WRITER_ORDER if w != "mimo-v2.6-pro"]
+    assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
+
+
+def test_no_implement_plan_leg_has_claude_family():
+    # F5: no implement-plan leg has claude_family True
+    for estimate in (1000, 20000, 100000):
+        plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
+        assert plan.legs
+        assert not any(leg.claude_family for leg in plan.legs)
+        assert all(leg.claude_family is False for leg in plan.legs)
+
+
+def test_alternate_limit_lookup_restricted_to_agy_harness():
+    from plangraph.planner.routing import next_leg_after_provider_stop, SpawnPlan
+    from plangraph.planner.legs import DEFAULT_LEGS
+
+    # 1. plan_spawn:
+    # A qodercli leg (model Qwen3.8-Flash, harness qodercli) is NOT marked limited
+    # when "agy/Qwen3.8-Flash" is limited.
+    def qoder_mock_reader(model, **kwargs):
+        if model == "agy/Qwen3.8-Flash":
+            return {"state": "limited", "evidence": {"status": 429}}
+        return {"state": "available", "evidence": None}
+
+    c_rev = {"estimate_tokens": 20000, "risk_tags": []}
+    plan_rev = plan_spawn(c_rev, role="review", leg_reader=qoder_mock_reader)
+    assert plan_rev.first_leg.id == "qodercli-qwen3.8-flash"
+    assert not any(s["leg"] == "qodercli-qwen3.8-flash" for s in plan_rev.skipped)
+
+    # agy-gemini-3.8-flash (model gemini-3.8-flash, harness agy) IS skipped
+    # when "agy/gemini-3.8-flash" is limited.
+    def agy_mock_reader(model, **kwargs):
+        if model == "agy/gemini-3.8-flash":
+            return {"state": "limited", "evidence": {"status": 429}}
+        return {"state": "available", "evidence": None}
+
+    c_imp = {"estimate_tokens": 20000, "risk_tags": []}
+    plan_imp = plan_spawn(c_imp, role="implement", leg_reader=agy_mock_reader)
+    assert plan_imp.first_leg.id != "agy-gemini-3.8-flash"
+    assert plan_imp.first_leg.id == "mimo-v2.6-pro"
+    assert any(s["leg"] == "agy-gemini-3.8-flash" and s["reason"] == "limited" for s in plan_imp.skipped)
+
+    # 2. next_leg_after_provider_stop:
+    class MockState:
+        def __init__(self, limited_model):
+            self.limited_model = limited_model
+
+        def record_provider_response(self, *args, **kwargs):
+            pass
+
+        def leg_status(self, model, **kwargs):
+            if model == self.limited_model:
+                return {"state": "limited", "evidence": {"status": 429}}
+            return {"state": "available", "evidence": None}
+
+    legs_by_id = {l.id: l for l in DEFAULT_LEGS}
+    qoder_leg = legs_by_id["qodercli-qwen3.8-flash"]
+    agy_gemini = legs_by_id["agy-gemini-3.8-flash"]
+    deepseek_free = legs_by_id["opencode-deepseek-v4.1-flash-free"]
+    mimo_pro = legs_by_id["mimo-v2.6-pro"]
+
+    # qodercli leg is not marked limited when "agy/Qwen3.8-Flash" is limited
+    plan_for_qoder = SpawnPlan(legs=(deepseek_free, qoder_leg), skipped=(), p_source="test", review_seats=(), reasons=())
+    nxt_qoder = next_leg_after_provider_stop(
+        plan_for_qoder, deepseek_free.id, 429, "rate limit", {}, "test",
+        store=MockState("agy/Qwen3.8-Flash")
+    )
+    assert nxt_qoder is not None
+    assert nxt_qoder.id == "qodercli-qwen3.8-flash"
+
+    # agy-gemini-3.8-flash is skipped when "agy/gemini-3.8-flash" is limited
+    plan_for_agy = SpawnPlan(legs=(deepseek_free, agy_gemini, mimo_pro), skipped=(), p_source="test", review_seats=(), reasons=())
+    nxt_agy = next_leg_after_provider_stop(
+        plan_for_agy, deepseek_free.id, 429, "rate limit", {}, "test",
+        store=MockState("agy/gemini-3.8-flash")
+    )
+    assert nxt_agy is not None
+    assert nxt_agy.id == "mimo-v2.6-pro"
+
+
+

@@ -12,6 +12,7 @@ import time
 import uuid
 
 from .runner import SpawnerRunner
+from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 
 
 class SpawnService:
@@ -27,9 +28,10 @@ class SpawnService:
             raise ValueError('unknown run id')
         return self.state / 'runs' / run_id / 'record.json'
 
-    def result(self, run_id):
+    def result(self, run_id, **read_retry):
+        """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(self._path(run_id).read_text(encoding='utf-8'))
+            return json.loads(read_text_retry(self._path(run_id), **read_retry))
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
@@ -111,7 +113,7 @@ class SpawnService:
         from plangraph.planner.routing import plan_spawn, SpawnRefused
         families = list(writer_families)
         if review_of:
-            record = self.result(review_of)
+            record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
             family = record.get('writer_family')
             if not family:
                 raise SpawnRefused('writer family unavailable')
@@ -127,7 +129,9 @@ class SpawnService:
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold
-                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card))
+                # No keeper item is held here: the trusted layers are global
+                # and the card's project/phase layers may only tighten (R3).
+                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card=card))
                 if len(groups) > 1:
                     async def dispatch(group):
                         child = dict(card, findings=list(group))
@@ -233,7 +237,7 @@ class SpawnService:
                 chosen = Leg('override', row['tier'], harness, target,
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,))
-            if review_of and chosen.family == self.result(review_of).get('writer_family'):
+            if review_of and chosen.family == self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family'):
                 raise SpawnRefused('excluded writer family')
             if role == 'review' and chosen.family in writer_families:
                 raise SpawnRefused('excluded writer family')
@@ -314,10 +318,10 @@ class SpawnService:
                 await asyncio.wait_for(asyncio.shield(task), wait_seconds)
             except asyncio.TimeoutError:
                 pass
-        return self.result(record['run_id'])
+        return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
 
     async def cancel(self, run_id):
-        record = self.result(run_id)
+        record = self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
         if record.get('job_id') in self.runner.jobs:
             await self.runner.cancel(record['job_id'])
         elif record['status'] == 'running' and record.get('pid'):

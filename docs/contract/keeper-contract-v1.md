@@ -76,7 +76,8 @@ Malformed client input must never produce `500`.
   Family text must match `[A-Za-z0-9._-]+`.
 * Roles: `router` (administrator of the plan, every project), `l1` (manages
   its own projects), `worker` (does scoped work), `reviewer` (reviews),
-  `spawner` (records runs), `reader` (read only), `system` (the reaper).
+  `spawner` (records runs), `reader` (read only), `system` (the reaper), and
+  the short-lived `oversight` principal (below).
 * Tokens are random, shown once at creation, and only their SHA-256 is stored.
   Principals are created and revoked **outside HTTP**, with the local admin
   CLI (`pg admin init --router NAME`, `pg admin add-principal NAME --role R
@@ -91,7 +92,8 @@ Malformed client input must never produce `500`.
 | verb | who may call it |
 | --- | --- |
 | `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default, no cross-project `under`) |
-| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
+| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
+| `apply_ops` | router; `oversight` (only the narrow op grant below) |
 | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
 | `claim` | l1 or worker scoped to the item's project |
 | `delegate`, `heartbeat`, `submit`, `add_evidence` | the claimant, or the delegate (`delegate` itself: claimant only) |
@@ -119,6 +121,48 @@ lease (writer, capped at 2 h per mint and 24 h in total, extended by heartbeat)
 or after the 4 h review window, and is revoked when the item moves on: a new
 claim, release, expiry, cancel, close, review result, or (writer) submit.
 At most 16 live tokens per item. A use after revocation is `401` or `403`.
+
+### Oversight tokens
+
+An `oversight` principal is a scoped, short-lived identity (token prefix
+`pgo1_`) that is **never** an HTTP mutation door of its own: it is minted only
+by `pg admin mint-oversight-token NAME --go D-NNN [--reason TEXT] --token-out
+FILE` on the keeper host. Minting requires `PG_OVERSIGHT_LIVE=1` and a
+`decisions` row `D-NNN` with `kind='operator'` whose `waives` list carries
+`oversight-live`; either half missing is `403` and no token is written. The
+plaintext appears once (written 0600 to `--token-out`, never printed, logged or
+stored), expires after 3600 s with no extension, and minting again rotates the
+generation and revokes every live token of the principal. `pg admin revoke NAME`
+kills the identity at once.
+
+The token authenticates as role `oversight` with the principal's `projects`
+copied verbatim (`[]` means nothing); an **expired** token is refused at
+`authenticate` as well as at every use. It may call every read verb and exactly
+one write verb, `apply_ops`; every other write is
+`403 {"error":"forbidden","msg":"…oversight:verb_denied…"}`. Inside `apply_ops`
+(`batch_ref` is required) the grant is: create a `lane`/`question` with an
+explicit `review_tier` (`standard`, or `none` only for `question`), non-empty
+`done_criteria` and the closed field allowlist — the tier is **raise-only**: a
+tier below the project's default is `403
+{"error":"forbidden","msg":"…oversight:tier_below_default…"}` and is never
+silently stored as the default, while a tier at or above the default is stored
+exactly as asked; edit `note`/`description` and
+add `depends_on` edges on an OPEN, non-high, non-gate/goal/decision/operator_task
+item; set `priority` on such an item; add an existing non-cancelled dependency
+(a DONE one is fine) to such an item. Dependency removal, tier changes,
+`done_criteria` edits,
+`under`, high/decision/operator_task targets, unknown or malformed ops/fields
+(malformed shapes are a refusal, never a server error) and cycles are
+refused. The public `error` stays a contract code; the specific refusal is the
+`oversight:<reason>` prefix in `msg`. Every op writes one append-only
+`oversight_ops` row (applied inside the batch transaction, denied after its
+rollback — a denied `dry_run` records its denial too) and a denial raises one
+open `projector_alarms` row **per principal**
+(`kind='oversight_denied'`, `workflow_id='oversight-guard'`; the finding id
+rides in the detail, it is not the dedupe key). Derived hourly caps
+(120 applied, 10 denied) are consulted by every writer before it inserts and
+are alarm-only when crossed: the response is `403
+oversight:rate_limited` and no automatic revoke happens.
 
 ## 3. Item model
 
@@ -264,6 +308,7 @@ done) `review_passed`; `cancel` `cancelled`; `waive_second_family`
 `item_reopened`; `set_kind` `kind_set`; `rehome` `item_created` (new, `rehomed_from`) + one
 `item_defined` per re-pointed dependent + `cancelled` (old);
 `record_run` `run_recorded`; `mint_run_token` `token_minted` (never the token);
+`oversight_token_minted` (never the token: sha256/generation/expiry/GO only);
 `apply_ops` the events of each op, in order, in one transaction. Refused
 requests, reads and duplicates append nothing.
 

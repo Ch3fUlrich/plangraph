@@ -31,15 +31,16 @@ python -m plangraph.settings show --project demo --phase demo:PHASE
 ```
 
 The output is JSON. Phase plans publish top-level `review_method` and `review_scope`
-(`"batch"` in batch mode, or `"per-fixer"` in per-item mode). Review cards carry
+(`"per-fixer"` only when both the global and the phase/project layers are per-item, as spawn admits, else `"batch"`; D-2817). Review cards carry
 `review_scope` only when `role == "review"`. The orchestrator passes the plan's
 `review_scope` as `--review-scope` / `review_scope` on `role=review` spawns.
 Spawn CLI `--review-scope` (on `spawn` only) and MCP `review_scope` accept these same scope values.
 A review spawn requesting `per-fixer` under batch policy raises `SpawnRefused`
 with reason/code `review_method_batch_per_fixer`, including audited overrides.
-Per-item policy allows that scope. Include the card's `key` (project prefix) and
-`phase` to resolve overrides at admission. A "per-fixer seat" is a review spawn with
-`review_scope=per-fixer`.
+Per-item policy allows that scope. A "per-fixer seat" is a review spawn with
+`review_scope=per-fixer`. Finding 3 (by design): a review spawn with
+no explicit scope is admitted in any mode -- only an explicit per-fixer
+scope (argument or stamped `card["review_scope"]`) is refused.
 
 ## Enforcement boundaries
 
@@ -48,15 +49,33 @@ per-field provenance. It never exposes an absolute settings path.
 Policies are deliberately read per call: edits take effect without restart.
 The guard reading the policy file twice (potential TOCTOU) and per-call re-read are intended:
 policy changes take effect dynamically without daemon restarts.
-Cross-project card key spoofing is not guarded at admission: card is trusted caller input,
-with the same trust boundary as role.
+Policy layers are never loosened by the card (R2): the card's `project`/`phase`/
+`key` are caller-chosen, so spoofing them cannot reach a per-item override (R3).
+Per-item layers come from a trusted keeper `item` (the keeper item's `key`
+plus optional `phase`/`track`, supplied by keeper/planner code that read it from
+the store) passed as `item=` to `enforce_review_scope`, `admit_review_scope`,
+`fixer_threshold` and `admit_fixer_threshold`; those layers may loosen or
+tighten. `item=` is for keeper/planner callers that hold a store item; no
+production caller passes one yet, so production spawns use the global layers
+plus the card-tighten layers.
 
-Admission callers must set `PLANGRAPH_REPO_ROOT` or pass `root` (or include
-`card["repo_root"]` when present); phase plans do not publish `repo_root`.
-`enforce_review_scope` accepts `card["repo_root"]` when present.
-Explicit roots (phase planner `repo_root`, admission card `repo_root`) take
-precedence over `PLANGRAPH_REPO_ROOT`. Otherwise the nearest `.git` ancestor of
-cwd is used; without `.git`, cwd itself is the documented fallback.
+Card layers only tighten (R3, D-2784). Spawner callers hold no keeper item, so
+they also evaluate the layers the card's `project`/`phase` select, but those
+layers can never loosen the trusted result: a per-fixer review scope is refused
+when the trusted layers (global, plus `item` layers if given) OR the
+card-selected layers resolve to `batch`, and the fixer threshold is
+`min(trusted, card-selected)`. Spoofing card fields therefore cannot admit a
+per-fixer seat or raise the threshold, while a phase/project policy that
+tightens to `batch` or lowers the threshold is honoured on every spawn path
+(every caller that passes the card: spawner CLI, runner and `SpawnService`
+admission; `plan_spawn` and `SpawnService` fixer splitting for the threshold).
+If the card-selected layers
+cannot be resolved, per-fixer is refused and the threshold is the trusted one.
+
+The settings root is never taken from the card (R1): `card["repo_root"]` is
+ignored everywhere. Root resolution is an explicit `root=` argument passed by
+server-side code (phase plans take it from `PG_PHASE_REPO_ROOT`), else
+`PLANGRAPH_REPO_ROOT`, else the nearest `.git` ancestor of cwd, else cwd.
 
 Only per-fixer refusal and fixer threshold are enforced.
 `seats`, `max_rounds`, `distinct_families`, `family_source`, and ONE-review count are ADVISORY

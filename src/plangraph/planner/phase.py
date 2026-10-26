@@ -95,12 +95,14 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
     from plangraph.settings import review_method, SettingsError, project_of
     try:
         method = review_method(project_of(key), key, root=repo_root)
+        trusted = review_method(None, None, root=repo_root)  # what spawn admits (D-2817)
     except SettingsError as exc:
         detail = str(exc)
         msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid:'
         raise Refused("validation", msg) from None
     project = project_of(key)
-    review_scope_value = "batch" if method.mode == "batch" else "per-fixer"
+    # Card layers only tighten at spawn (R3), so per-fixer needs the global layers too.
+    review_scope_value = "batch" if "batch" in (method.mode, trusted.mode) else "per-fixer"
     if now is None:
         now = datetime.now(timezone.utc)
     source = source or policy.StaticSource()
