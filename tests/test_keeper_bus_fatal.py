@@ -1,0 +1,308 @@
+"""R2c/R2d: keeper fatal paths vs the bus registry (BUS-REGISTRY-PERSIST).
+
+I10: fail() before on_fatal is wired still exits daemon.run 75 within 3 s.
+I11: ConnectionLost in the bus persistence hook is fatal, other errors are not.
+I12: _cleanup stops and joins the bus registry before server.shutdown().
+J1/M1: fatal_reason set during make_server exits 75 before any request.
+J2/L1: ConnectionLost in the first _restore_bus_hosts upsert exits 75.
+J3: the clean exit (return 0, no os._exit) is asserted explicitly and a
+    cleaner timeout is a different observable (os._exit(0) -> SystemExit).
+J4: tests bind port 0 and read the bound port from the server, never a
+    bind-then-close free-port reservation (TOCTOU)."""
+import json
+import os
+import signal
+import threading
+import time
+from contextlib import suppress
+
+import pytest
+from door_util import Doors
+from keeper_util import World
+from plangraph.fleet_bus import discovery
+from plangraph.keeper import api, config, daemon, db as kdb
+from plangraph.keeper.store import Store
+from plangraph.keeper.errors import ConnectionLost
+
+
+class _FakeLock:            # the template's always-alive keeper lock
+    def alive(self):
+        return True
+
+    def release(self):
+        pass
+
+
+def _world(tmp_path, name):
+    sub = tmp_path / name
+    sub.mkdir(exist_ok=True)
+    path = sub / "keeper.json"
+    path.write_text(json.dumps({
+        "db": str(sub / "keeper.db"),
+        "snapshot": str(sub / "plan.snapshot.json"),
+        "bind": "127.0.0.1:0"}), encoding="utf-8")   # J4: port 0; the bound
+    path.chmod(0o600)                               # port comes from the server
+    return World(sub), config.load_config(path)
+
+
+def _run_with_backstop(cfg, ready, seconds):
+    """daemon.run with a SIGTERM backstop; returns (rc, seconds spent inside)."""
+    timer = threading.Timer(seconds, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    timer.start()
+    try:
+        t0 = time.monotonic()
+        rc = daemon.run(cfg, ready=ready)
+        return rc, time.monotonic() - t0
+    finally:
+        timer.cancel()
+
+
+# ------------------------------------------------------------------ I10 / F1
+def test_fatal_before_on_fatal_wiring_exits_75(tmp_path, monkeypatch):
+    """I10: a fail() recorded while on_fatal is unwired still exits 75 in 3 s."""
+    w_ctl, cfg_ctl = _world(tmp_path, "ctl")
+    w_fat, cfg_fat = _world(tmp_path, "fatal")
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *a, **kw: _FakeLock())
+    conn = {"now": w_ctl.conn}
+    monkeypatch.setattr(kdb, "open_db", lambda *a, **kw: conn["now"])
+    seen = []
+    # positive control: same setup without the fault -> exit 0, no fatal
+    rc, _ = _run_with_backstop(cfg_ctl, seen.append, 1.2)
+    assert rc == 0
+    assert seen[-1].fatal_reason is None
+    # the fault: fail() lands while on_fatal is unwired (pre-run() or raised hook)
+    conn["now"] = w_fat.conn
+    def pre_wiring_fail(server):
+        seen.append(server)
+        server.on_fatal = None     # unwired: fail() can only record, never stop.set
+        server.fail("fatal before on_fatal wiring")
+
+    rc, duration = _run_with_backstop(cfg_fat, pre_wiring_fail, 3.5)
+    assert rc == 75
+    assert duration < 3.0          # ... and the watchdog notices within a tick
+    assert seen[-1].fatal_reason == "fatal before on_fatal wiring"
+    for world in (w_ctl, w_fat):
+        with suppress(Exception):  # run() already closed the shared connection
+            world.close()
+
+
+# ------------------------------------------------------------------ J1 / M1
+def test_fatal_during_make_server_never_serves(tmp_path, monkeypatch):
+    """J1/M1: a fatal_reason recorded during make_server exits 75 without
+    ever accepting a request -- not on the watchdog's first tick."""
+    w, cfg = _world(tmp_path, "m1")
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *a, **kw: _FakeLock())
+    monkeypatch.setattr(kdb, "open_db", lambda *a, **kw: w.conn)
+    made, served, seen = [], [], []
+    real_make = api.make_server
+
+    def failing_make(*args, **kw):
+        server = real_make(*args, **kw)
+        made.append(server)
+        real_serve = server.serve_forever
+
+        def recording_serve(*serve_args, **serve_kw):
+            served.append(1)
+            return real_serve(*serve_args, **serve_kw)
+
+        server.serve_forever = recording_serve
+        server.fail("fatal during make_server")   # the fault: lands pre-serving
+        server.fail("second reason")              # double fail(): first reason wins
+        return server
+
+    monkeypatch.setattr(api, "make_server", failing_make)
+    rc, _ = _run_with_backstop(cfg, seen.append, 3.5)
+    assert rc == 75
+    assert served == []                 # never accepted a request
+    assert seen == []                   # never announced ready: never serving
+    assert made[0].fatal_reason == "fatal during make_server"  # idempotent
+    assert made[0].server_address[1] > 0   # J4: bound port read from the server
+    with suppress(Exception):
+        w.close()
+
+
+# ------------------------------------------------------------------ I11 / F2
+class _StubStore:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def upsert_bus_hosts(self, rows):
+        raise self.exc
+
+
+def test_bus_persist_connection_lost_is_fatal(tmp_path):
+    """I11: ConnectionLost in _persist_bus_hosts is fatal, a ValueError is not."""
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    host = discovery.Host("h1", "n1", "k1", tmp_path / "h1.key")
+    try:
+        # positive control: the healthy path persists and never goes fatal
+        assert doors.server._persist_bus_hosts([host]) is None
+        assert doors.server.store.list_bus_hosts()[0]["host"] == "h1"
+        assert doors.server.fatal_reason is None
+        # every other exception keeps today's path (discovery logs it, not fatal)
+        doors.server.store = _StubStore(ValueError("bad rows"))
+        with pytest.raises(ValueError):
+            doors.server._persist_bus_hosts([host])
+        assert doors.server.fatal_reason is None
+        # the fault: a lost session fails loud instead of being swallowed
+        doors.server.store = _StubStore(ConnectionLost("statement"))
+        assert doors.server._persist_bus_hosts([host]) is None  # never re-raises
+        assert doors.server.fatal_reason == "postgres session lost (bus registry)"
+    finally:
+        doors.close()
+        w.close()
+
+
+# ------------------------------------------------------------------ J2 / L1
+def test_restore_connection_lost_is_fatal(tmp_path, monkeypatch):
+    """J2/L1: ConnectionLost in the first _restore_bus_hosts upsert fails loud
+    and exits 75; any other exception keeps today's non-fatal path."""
+    inv = tmp_path / "bus_inventory.json"
+    inv.write_text(json.dumps({"hosts": [{"host": "h1", "node_id": "n1",
+                                          "key_id": "k1",
+                                          "key_file": str(tmp_path / "h1.key")}],
+                               "agents": {}, "port": 8765}), encoding="utf-8")
+    monkeypatch.setenv("PLANGRAPH_BUS_INVENTORY", str(inv))
+    w_lost, cfg_lost = _world(tmp_path, "lost")
+    w_oth, cfg_oth = _world(tmp_path, "other")
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *a, **kw: _FakeLock())
+    conn = {"now": w_lost.conn}
+    monkeypatch.setattr(kdb, "open_db", lambda *a, **kw: conn["now"])
+    fault = {"exc": ConnectionLost("statement")}
+
+    def failing_upsert(self, rows):
+        raise fault["exc"]
+
+    monkeypatch.setattr(Store, "upsert_bus_hosts", failing_upsert)
+    made, served, seen = [], [], []
+    real_make = api.make_server
+
+    def spy_make(*args, **kw):
+        server = real_make(*args, **kw)
+        made.append(server)
+        real_serve = server.serve_forever
+
+        def recording_serve(*serve_args, **serve_kw):
+            served.append(1)
+            return real_serve(*serve_args, **serve_kw)
+
+        server.serve_forever = recording_serve
+        return server
+
+    monkeypatch.setattr(api, "make_server", spy_make)
+    # the fault: a lost session at the very first bus write exits 75 loudly
+    rc, _ = _run_with_backstop(cfg_lost, seen.append, 3.5)
+    assert rc == 75
+    assert served == []                  # never accepted a request
+    assert made[0].fatal_reason == "postgres session lost (bus registry)"
+    # positive control: every other exception keeps today's non-fatal path
+    fault["exc"] = ValueError("bad rows")
+    conn["now"] = w_oth.conn
+    served.clear()
+    rc, _ = _run_with_backstop(cfg_oth, seen.append, 1.2)
+    assert rc == 0
+    assert made[1].fatal_reason is None  # non-fatal: keeper keeps serving
+    assert served == [1]
+    for world in (w_lost, w_oth):
+        with suppress(Exception):  # run() already closed the shared connection
+            world.close()
+
+
+# ------------------------------------------------------------------ I12 / F3
+class _JoinSpy:             # records join() calls; the real thread still runs
+    def __init__(self, real):
+        self._real = real
+        self.joins = []
+
+    def join(self, timeout=None):
+        self.joins.append(timeout)
+        return self._real.join(timeout)
+
+
+def test_cleanup_stops_bus_registry_first(tmp_path, monkeypatch):
+    """I12/J3: _cleanup sets bus_stop and joins bus_thread before server.shutdown();
+    the clean exit is asserted explicitly and a cleaner timeout differs from it."""
+    inv = tmp_path / "bus_inventory.json"
+    inv.write_text(json.dumps({"hosts": [{"host": "h1", "node_id": "n1",
+                                          "key_id": "k1",
+                                          "key_file": str(tmp_path / "h1.key")}],
+                               "agents": {}, "port": 8765}), encoding="utf-8")
+    monkeypatch.setenv("PLANGRAPH_BUS_INVENTORY", str(inv))
+    exits = []
+
+    def _record_exit(code):      # J3: never kill the worker, but record the
+        exits.append(code)       # code and stop run() like the real _exit
+        raise SystemExit(code)
+
+    monkeypatch.setattr(os, "_exit", _record_exit)
+    w, cfg = _world(tmp_path, "bus")                     # worlds before the
+    w2, cfg2 = _world(tmp_path, "nobus")                 # open_db stub below
+    w3, cfg3 = _world(tmp_path, "hang")
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *a, **kw: _FakeLock())
+    conn = {"now": w.conn}
+    monkeypatch.setattr(kdb, "open_db", lambda *a, **kw: conn["now"])
+    order, threads, spies = [], [], []
+
+    def spy(server):
+        assert server.bus_thread is not None      # the real registry started
+        assert server.server_address[1] > 0       # J4: bound port from the server
+        threads.append(server.bus_thread)
+        spies.append(_JoinSpy(server.bus_thread))
+        server.bus_thread = spies[-1]
+        real_shutdown = server.shutdown
+
+        def recording_shutdown():
+            order.append(server.bus_stop.is_set())
+            real_shutdown()
+
+        server.shutdown = recording_shutdown
+
+    rc, _ = _run_with_backstop(cfg, spy, 2.5)
+    assert rc == 0                                # positive outcome: clean exit
+    assert exits == []                # J3: clean path returns 0, no os._exit
+    assert spies[0].joins == [2]                  # F3: bounded join, before shutdown
+    assert order == [True]                        # F3: bus_stop already set there
+    threads[0].join(timeout=5)
+    assert not threads[0].is_alive()              # the registry loop really stopped
+    with suppress(Exception):
+        w.close()
+    # positive control: same setup without the registry -> exit 0, no fatal
+    monkeypatch.delenv("PLANGRAPH_BUS_INVENTORY", raising=False)
+    conn["now"] = w2.conn
+    seen = []
+    rc, _ = _run_with_backstop(cfg2, seen.append, 1.2)
+    assert rc == 0
+    assert exits == []                # J3: still the clean path, no os._exit
+    assert seen[-1].fatal_reason is None
+    assert seen[-1].bus_thread is None            # nothing to stop or join
+    with suppress(Exception):
+        w2.close()
+    # J3: a cleaner timeout is a different observable -- os._exit(0) on a
+    # normal shutdown, never a fatal code.
+    release = threading.Event()
+    conn["now"] = w3.conn
+    monkeypatch.setattr(daemon, "SHUTDOWN_TIMEOUT", 0.2)
+    seen3 = []
+
+    def hang_spy(server):
+        real_shutdown = server.shutdown
+
+        def hanging_shutdown():
+            release.wait()               # the cleaner cannot finish...
+            real_shutdown()
+
+        server.shutdown = hanging_shutdown
+        seen3.append(server)
+
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            _run_with_backstop(cfg3, hang_spy, 1.2)
+        assert excinfo.value.code == 0   # normal shutdown: never reported fatal
+        assert exits == [0]              # os._exit(0): distinct from return 0
+        assert seen3[-1].fatal_reason is None
+    finally:
+        release.set()                    # ...until the test lets it finish
+        time.sleep(0.2)
+        with suppress(Exception):
+            w3.close()
