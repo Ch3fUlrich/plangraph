@@ -84,6 +84,17 @@ CLAUDE_MARKERS: tuple[str, ...] = (
     'fable',
 )
 
+#: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
+#: trailing parenthetical note; <id> must name the run that produced the commit:
+#: a spawner run id, a Claude Code session id, or a uuid (D-2955).
+CLAUDE_WRITER_RE = re.compile(
+    r'^claude-[a-z0-9.-]+ '
+    r'(?:run-[0-9a-f]{32}'
+    r'|session_[A-Za-z0-9]+'
+    r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+    r'(?: \(.+\))?$'
+)
+
 #: Test file paths: under a tests/test directory, ``test_*`` files,
 #: ``*_test.*`` files, or ``*.test.*``/``*.spec.*`` files, any extension.
 TEST_PATH_RE = re.compile(
@@ -133,7 +144,7 @@ OPEN_HEAD_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 OPEN_PR_SKIP_NOTICE = 'ci-commit-gate: open PR merge check skipped (no --open-heads)\n'
 
 MISSING_WRITER = 'missing Writer trailer'
-CLAUDE_WRITER = 'claude writer'
+CLAUDE_WRITER = 'claude writer without run or session id'
 TEST_REMOVAL_VIOLATION = 'test removal without Test-Removal trailer'
 TEST_REMOVAL_NAMING_VIOLATION = 'test removal not named in Test-Removal'
 MALFORMED_WRITER = 'malformed Writer trailer'
@@ -702,8 +713,11 @@ def check(
         )
         if malformed_writer:
             violations.append(f'{sha}: {MALFORMED_WRITER}')
+        # A Claude marker is refused unless the value names its run/session id
+        # in the accepted form (D-2955); anything else still cannot write.
         if any(
             marker in value.lower()
+            and CLAUDE_WRITER_RE.match(value) is None
             for value in all_writer_values
             for marker in CLAUDE_MARKERS
         ):
