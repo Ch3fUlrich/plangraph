@@ -159,24 +159,61 @@ def _all_pg_ddl():
     return "\n".join(m.sql for m in schema_pg.MIGRATIONS)
 
 
+# sq12 finding 4: the ONLY order-insensitive columns.  PG migration 7 appends
+# them with ALTER TABLE, while fresh SQLite declares them inside the items DDL
+# before updated_at, so their position is not comparable across the two.  Every
+# other column is compared position for position -- a set-based check passes a
+# reorder, which is exactly the bug this replaces.
+ORDER_INSENSITIVE = ("exec_workflow_id", "exec_run_id", "exec_attempt",
+                     "exec_principal", "exec_retired_runs")
+
+
+def assert_same_columns(name, cols, pg_cols):
+    """Column parity for one table: order for order, nullability per column.
+
+    Only the named ``ORDER_INSENSITIVE`` columns may sit anywhere in the list.
+    """
+    order = [c for c, _ in cols if c not in ORDER_INSENSITIVE]
+    pg_order = [c for c, _ in pg_cols if c not in ORDER_INSENSITIVE]
+    assert order == pg_order, f"{name}: column order diverges"
+    assert ({c for c, _ in cols if c in ORDER_INSENSITIVE}
+            == {c for c, _ in pg_cols if c in ORDER_INSENSITIVE}), \
+        f"{name}: order-insensitive columns diverge"
+    assert dict(cols) == dict(pg_cols), f"{name}: nullability diverges"
+
+
 def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
     tables, indexes, triggers = _sqlite_tables()
     ddl = _all_pg_ddl()
     pg_tables = schema_pg.parse_tables(ddl)
     for name, cols in tables.items():
         assert name in pg_tables, name
-        if name == "items":
-            # Upgraded Postgres appends columns; fresh SQLite lists them in CREATE order.
-            assert {c for c, _ in cols} == {c for c, _ in pg_tables[name]}, name
-            assert dict(cols) == dict(pg_tables[name]), name
-        else:
-            assert [c for c, _ in cols] == [c for c, _ in pg_tables[name]], name
-            assert [bool(nn) for _, nn in cols] == [bool(nn) for _, nn in pg_tables[name]], name
+        assert_same_columns(name, cols, pg_tables[name])
     assert set(pg_tables) == set(tables)
     for name in indexes:
         assert re.search(rf"\b{name}\b", ddl), f"missing index {name}"
     for name in triggers:
         assert re.search(rf"CREATE TRIGGER {name}\b", ddl), f"missing trigger {name}"
+
+
+def test_parity_check_rejects_a_column_reorder():
+    """sq12 finding 4: a set-based column check passes a reorder; this must not."""
+    tables, _, _ = _sqlite_tables()
+    cols = tables["items"]
+    swapped = [cols[1], cols[0]] + cols[2:]
+    with pytest.raises(AssertionError):
+        assert_same_columns("items", swapped, cols)
+
+
+def test_parity_check_lets_the_named_order_insensitive_columns_float():
+    """The exec_* columns are appended by PG migration 7 (ALTER TABLE ADD
+    COLUMN) but declared inside SQLite's items DDL, so only those named columns
+    may change position -- and nothing else."""
+    tables, _, _ = _sqlite_tables()
+    cols = tables["items"]
+    floated = ([c for c in cols if c[0] not in ORDER_INSENSITIVE]
+               + [c for c in cols if c[0] in ORDER_INSENSITIVE])
+    assert_same_columns("items", floated, cols)
 
 
 def test_migrations_are_versioned_contiguously():
