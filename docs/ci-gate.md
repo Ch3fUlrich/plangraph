@@ -10,7 +10,7 @@ Branch protection on `main` requires only the `ci-gate` check — no review requ
 
 A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a non-Claude `Writer:` trailer and, when tests are removed or renamed, a `Test-Removal:` trailer naming every removed test (`Test-Removal: D-<n> <test id>[, <test id>...]`). Exempt shas are listed in `tools/ci_commit_exempt.txt`.
 
-A Claude Writer passes only in the form `claude-<model> <id>` (optional trailing note in parentheses, no `:` inside), where `<id>` is a spawner run id (`run-<32 hex>`), a Claude Code session id (`session_<id>`), or a uuid; the id is checked for shape only, never looked up. Any other Writer value carrying a Claude marker is refused as `claude writer without run or session id`.
+A Claude Writer passes only in the form `claude-<model> <id>` (optional trailing note in parentheses, free text but no second `Writer:` marker and no newline), where `<id>` is a spawner run id (`run-<32 hex>`), a Claude Code session id (`session_<id>`), or a uuid; the id is checked for shape only, never looked up. Any other Writer value carrying a Claude marker is refused as `claude writer without run or session id`.
 
 ## Known limits of the commit gate
 

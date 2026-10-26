@@ -85,8 +85,8 @@ CLAUDE_MARKERS: tuple[str, ...] = (
 )
 
 #: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
-#: trailing parenthetical note; the note may not contain ':' so it cannot carry
-#: a second Writer value. <id> must be shaped like the run that produced the
+#: trailing parenthetical note; the note may not contain a second Writer
+#: marker (case-insensitive) or a newline. <id> must be shaped like the run that produced the
 #: commit — a spawner run id, a Claude Code session id, or a uuid (D-2955) —
 #: but the check is shape only: the id is never looked up, so an invented
 #: run-<32 hex> of the right shape passes (known limit, docs/ci-gate.md).
@@ -95,7 +95,7 @@ CLAUDE_WRITER_RE = re.compile(
     r'(?:run-[0-9a-f]{32}'
     r'|session_[A-Za-z0-9]+'
     r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
-    r'(?: \([^:]+\))?\Z'
+    r'(?: \((?:(?!(?i:Writer:))[^)\n])+\))?\Z'
 )
 
 #: Test file paths: under a tests/test directory, ``test_*`` files,
