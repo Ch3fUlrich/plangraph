@@ -15,7 +15,8 @@ import pytest
 from door_util import Doors
 from keeper_util import World
 from plangraph.fleet_bus import discovery
-from plangraph.keeper import config, daemon, db as kdb
+from plangraph.keeper import api, config, daemon, db as kdb
+from plangraph.keeper.store import Store
 from plangraph.keeper.errors import ConnectionLost
 
 
@@ -81,6 +82,41 @@ def test_fatal_before_on_fatal_wiring_exits_75(tmp_path, monkeypatch):
     for world in (w_ctl, w_fat):
         with suppress(Exception):  # run() already closed the shared connection
             world.close()
+
+
+# ------------------------------------------------------------------ J1 / M1
+def test_fatal_during_make_server_never_serves(tmp_path, monkeypatch):
+    """J1/M1: a fatal_reason recorded during make_server exits 75 without
+    ever accepting a request -- not on the watchdog's first tick."""
+    w, cfg = _world(tmp_path, "m1")
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *a, **kw: _FakeLock())
+    monkeypatch.setattr(kdb, "open_db", lambda *a, **kw: w.conn)
+    made, served, seen = [], [], []
+    real_make = api.make_server
+
+    def failing_make(*args, **kw):
+        server = real_make(*args, **kw)
+        made.append(server)
+        real_serve = server.serve_forever
+
+        def recording_serve(*serve_args, **serve_kw):
+            served.append(1)
+            return real_serve(*serve_args, **serve_kw)
+
+        server.serve_forever = recording_serve
+        server.fail("fatal during make_server")   # the fault: lands pre-serving
+        server.fail("second reason")              # double fail(): first reason wins
+        return server
+
+    monkeypatch.setattr(api, "make_server", failing_make)
+    rc, _ = _run_with_backstop(cfg, seen.append, 3.5)
+    assert rc == 75
+    assert served == []                 # never accepted a request
+    assert seen == []                   # never announced ready: never serving
+    assert made[0].fatal_reason == "fatal during make_server"  # idempotent
+    assert made[0].server_address[1] > 0   # J4: bound port read from the server
+    with suppress(Exception):
+        w.close()
 
 
 # ------------------------------------------------------------------ I11 / F2
