@@ -654,7 +654,7 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
     {
         "model_id": "opencode-go/kimi-k3",
         "master_rank": None,
-        "aa_intelligence": 44.0,
+        "aa_intelligence": 44.0,  # metrics = k3.1-pro placeholders (NOT NULL cols, unmeasured); kimi is never routed
         "coding_index": None,
         "agentic_index": None,
         "terminal_bench": None,
