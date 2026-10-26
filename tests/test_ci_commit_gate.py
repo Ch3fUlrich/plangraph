@@ -1203,6 +1203,18 @@ def test_e1_hand_edits_secret_paths_refused(repo: Path):
     assert check(s1, s2, cwd=repo) == [f"{s2}: hand-edit touches secret-shaped path: config/.env"]
 
 
+def test_e1_token_named_paths_secret_again(repo: Path):
+    # haiku-G2 / mimopro-G2: `*token*` stays in the privacy secret matcher,
+    # which the gate copies unchanged (E1 shared-lists row, seats G2).
+    base = _head(repo)
+    s1 = _he(repo, 1, path="docs/tokens.md")
+    assert check(base, s1, cwd=repo) == [
+        f"{s1}: hand-edit touches secret-shaped path: docs/tokens.md"]
+    # positive control: the true near-miss docs/keys.md still passes
+    s2 = _he(repo, 1, path="docs/keys.md")
+    assert check(s1, s2, cwd=repo) == []
+
+
 def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     base = _head(repo)
     f = repo / "src\\plangraph\\keeper\\x.py"
