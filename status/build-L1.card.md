@@ -1,4 +1,4 @@
-# build-L1 card · gen-36 · 2026-10-26 01:4xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
+# build-L1 card · gen-36 · 2026-10-26 02:3xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
 D-2739 (operator): one task loops (no follow-up items), design first for HIGH/>400 lines, slices <=400, 2 text seats, MED in body=changes, fixer>=writer never flash, round>3 -> Opus replan, merge main once before final review.
 D-2749: AutoOS spawner retired; all runs via plangraph spawner; missing feature -> BLOCKED to routing, no fallback.
 D-2744: no deepseek leg (writer or seat, incl opencode free deepseek); mimo-pro, mimo-flash seats only.
@@ -12,10 +12,10 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | item | state / next |
 |---|---|
 | SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216/#217/#218 MERGED (main 2bdde74a, evidence ok). S3 #213 head 338b4f6a (r2 mimo-pro + L1 1-line stub Hand-Edit); CI 40251267395 green; delta Haiku fix refuted ($J/seat-s3d2-haiku/refutation-L1.txt); MERGED d66bf9e5 (D-2879, CI 40251787608, evidence ok); told workst (mimo-leg test, release 4 Server lanes + AO seat) + server-L1-main [c46235]. S2 #219 MERGED 7b388a51 (GO D-2885); finish219.sh -> evidence. S2 LOWs (I12 fallthrough test, _comm TypeError fallback, payload cleanup on factory exc) -> fix log. workst GREEN mimo-leg run-f5ad2f0f |
-| KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); PR #220 head 6bd71ccf (agy run-33febbea + L1 Hand-Edit 89c7e92e name restore; main merged; 178 passed); seats: both fix (MED fail() race VALID; HIGH health/fatal_reason REFUTED api.py:105, test gap). fix r1 mimo-pro queued 01:5xZ ($J/brief-pgr-s2-fix1.md, pgrs2f1.log) -> qwen delta seat -> GO-REQ; 2 seats + judge GO; live redeploy = own GO |
+| KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); S2 #220 MERGED f50982d6 (GO D-2889, code only); finish220.sh -> evidence. S3 next (design WRITER BRIEF S3, mimo-pro/agy; D-2888 limits). Live redeploy = own GO + OS-KEEPER-LS9-MIGRATE; 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78 (D-2824). in_review until #211 merges -> post seat-rms-f2b-haiku unchanged |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
-| spawn-iso (#200/#201, held from dead L2) | stalled run-feb506c2 cancelled. Re-spawn after pgr-fix2 (order S1 > pgr > iso > shm-leak) |
+| spawn-iso #200 ISOLATION-INPLACE / #201 ORPHAN-REAP (claimed epoch 1, in hb-keys) | main merged (L1 runner.py conflict: keep both) #200 abb80f32, #201 5685bfd7; 427/556 passed; qwen seats running (1 non-Claude seat each) -> GO-REQ (std, self-approve? check D-1442) |
 | PG-TEST-SHM-LEAK (std, prio 1) | defined D-2800; non-Claude writer, ~30 lines: pid-named /dev/shm dir + dead-pid sweep in tests/conftest.py |
 | SPAWN-OPENROUTER-FREE-ENDPOINTS (std, prio 5) | defined D-2805; after shm-leak; account/privacy change = operator OS line |
 | SQ12 (workst-L1-autoos) | slices SQ12-a/-b; workst writes held until SPAWN-WIN-PARITY lands |
