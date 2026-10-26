@@ -67,6 +67,7 @@ def test_one_assistant_model_equal_to_requested_is_witnessed(tmp_path, monkeypat
     assert job.served_model == 'opencode/glm-5.3-flash-free'
     assert job.served_family == 'glm'
     assert job.served_witness_reason == 'opencode session store'
+    assert {'event': 'opencode_tools_denied'} in job.events
 
 
 def test_different_served_model_stays_unwitnessed_with_event(tmp_path, monkeypatch):
@@ -115,6 +116,29 @@ def test_non_review_leg_reads_no_store_and_keeps_caller_xdg(tmp_path, monkeypatc
     assert Path(ctx['env']['XDG_DATA_HOME']) == tmp_path
     assert calls == []
     assert job.served_model == 'unwitnessed'
+
+
+def test_opencode_tools_denied_requires_every_tool_deny():
+    from plangraph.spawner.runner import _DENIED_TOOLS, _opencode_tools_denied
+    assert _opencode_tools_denied(json.dumps({'permission': {t: 'deny' for t in _DENIED_TOOLS}}))
+    lax = {t: 'deny' for t in _DENIED_TOOLS}
+    lax['edit'] = 'allow'
+    assert not _opencode_tools_denied(json.dumps({'permission': lax}))
+    assert not _opencode_tools_denied(json.dumps({'permission': {'edit': 'deny'}}))
+    assert not _opencode_tools_denied('not json')
+    assert not _opencode_tools_denied('')
+
+
+def test_tools_not_denied_yields_no_request_side_model_and_event(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr('plangraph.spawner.runner._opencode_served_model',
+                        lambda *a, **k: calls.append(a) or None)
+    job, _ = _run_leg(tmp_path, monkeypatch,
+                      lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                      extra_env={'OPENCODE_CONFIG_CONTENT': 'not json'})
+    assert job.served_model == 'unwitnessed'
+    assert {'event': 'opencode_tools_not_denied'} in job.events
+    assert calls == []   # the store is never read when tools are not denied
 
 
 def test_session_store_db_opened_read_only(tmp_path, monkeypatch):
