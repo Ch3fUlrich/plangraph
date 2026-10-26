@@ -276,7 +276,50 @@ def test_valid_writer_passes(repo: Path):
 def test_claude_family_writers_fail(repo: Path, writer: str):
     base = _head(repo)
     sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer without run or session id"]
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "claude-opus-5-5 session_0119mTiP8y4maDh8C4dV6abu",
+        "claude-sonnet-5-5 run-" + "ab" * 16,
+        "claude-haiku-4-5 123e4567-e89b-12d3-a456-426614174000 (D-2931)",
+    ],
+)
+def test_claude_writer_with_run_or_session_id_passes(repo: Path, writer: str):
+    """D-2955: Claude may write when the Writer names its run/session id."""
+    base = _head(repo)
+    sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
+    assert check(base, sha, cwd=repo) == []
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "claude-opus-5-5 (D-2739 operator override)",
+        "sonnet-5.5",
+        "Claude Opus",
+    ],
+)
+def test_claude_writer_without_run_or_session_id_fails(repo: Path, writer: str):
+    base = _head(repo)
+    sha = _commit(repo, f"feat: served model\n\nWriter: {writer}\n")
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: claude writer without run or session id"
+    ]
+
+
+def test_commit_without_any_writer_trailer_still_fails(repo: Path):
+    base = _head(repo)
+    sha = _commit(repo, "feat: served model\n")
+    assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
+
+
+def test_mimo_pro_writer_with_run_id_still_passes(repo: Path):
+    base = _head(repo)
+    sha = _commit(repo, "feat: served model\n\nWriter: mimo-v2.6-pro run-" + "cd" * 16 + "\n")
+    assert check(base, sha, cwd=repo) == []
 
 
 def test_unrelated_writer_model_passes(repo: Path):
@@ -294,7 +337,7 @@ def test_claude_writer_followed_by_clean_writer_still_fails(repo: Path):
         "Writer: mimo-v2.6-flash run-1\n"
     )
     sha = _commit(repo, message)
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer without run or session id"]
 
 
 def test_two_clean_writer_lines_pass(repo: Path):
