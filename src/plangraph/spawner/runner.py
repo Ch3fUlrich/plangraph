@@ -194,17 +194,29 @@ _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'gre
                  'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
                  'webfetch', 'websearch')
 
+#: The only OPENCODE_* env names a review child may carry. Anything else a
+#: caller sets (e.g. OPENCODE_CLI_CONFIG_CONTENT, OPENCODE_TEST_HOME) is
+#: dropped before launch so no caller-set override can re-enable a tool or add
+#: a config layer (REVIEW-WITNESS-OPENCODE R1).
+_REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
+                              'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
+                              'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
+                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
 
-def _opencode_tools_denied(config_json, env=None) -> bool:
-    """True only when the child's FINAL config AND env prove every tool denied.
+
+def _opencode_tools_denied(config_json, env) -> bool:
+    """True only when the child's final config AND env prove every tool denied.
 
     Checked, all required: 'permission' maps every _DENIED_TOOLS key to
-    'deny', 'mcp' is {} and 'plugin' is [] in config_json (no MCP or plugin
-    tools); and env carries OPENCODE_DISABLE_PROJECT_CONFIG == '1',
-    OPENCODE_DISABLE_CLAUDE_CODE == '1', OPENCODE_CONFIG_DIR ==
-    XDG_DATA_HOME and an OPENCODE_CONFIG naming an existing file under
-    XDG_DATA_HOME (no repo, user, Claude Code or global config layer).
-    With no env the isolation cannot be proven, so this is False (D-2921 F1).
+    'deny'; 'mcp' is {} and 'plugin' is [] in config_json; HOME,
+    XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
+    the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
+    inside that dir whose content parses to {};
+    OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE and
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS are each '1'; and no OPENCODE_* env
+    name outside _REVIEW_OPENCODE_ENV_ALLOW is present. This proves only the
+    env/config shape: the runtime behaviour of opencode is not proven by this
+    function (an L1 runtime probe covers that).
     """
     try:
         cfg = json.loads(config_json or '{}')
@@ -220,15 +232,25 @@ def _opencode_tools_denied(config_json, env=None) -> bool:
         return False
     if not isinstance(env, Mapping):
         return False
-    data_home = env.get('XDG_DATA_HOME')
+    for name in env:
+        if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:
+            return False
     if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
             or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
-            or not data_home or env.get('OPENCODE_CONFIG_DIR') != data_home):
+            or env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') != '1'):
         return False
     try:
+        job_dir = Path(env.get('XDG_DATA_HOME') or '')
+        if not job_dir.name:
+            return False
+        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
+            path = Path(env.get(key) or '')
+            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
+                return False
         cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
-        return bool(cfg_path.name) and cfg_path.is_file() and \
-            cfg_path.resolve().is_relative_to(Path(data_home).resolve())
+        return (bool(cfg_path.name) and cfg_path.is_file()
+                and cfg_path.resolve().is_relative_to(job_dir.resolve())
+                and json.loads(cfg_path.read_text()) == {})
     except (OSError, ValueError):
         return False
 
@@ -417,6 +439,18 @@ class SpawnerRunner:
                 empty_cfg = Path(oc_dir) / 'pg-empty.json'
                 empty_cfg.write_text('{}')
                 child_env['OPENCODE_CONFIG'] = str(empty_cfg)
+                # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
+                # config layer at all -- HOME and XDG_CONFIG_HOME live in the
+                # per-job dir and every caller-set OPENCODE_* override outside
+                # _REVIEW_OPENCODE_ENV_ALLOW is dropped.
+                child_env['HOME'] = oc_dir
+                xdg_config = os.path.join(oc_dir, 'config')
+                os.mkdir(xdg_config, 0o700)
+                child_env['XDG_CONFIG_HOME'] = xdg_config
+                child_env['OPENCODE_DISABLE_CLAUDE_CODE_SKILLS'] = '1'
+                for name in [n for n in child_env
+                             if str(n).startswith('OPENCODE_') and n not in _REVIEW_OPENCODE_ENV_ALLOW]:
+                    del child_env[name]
                 # D-2905 (1): deny every tool for the review seat, then record
                 # the spawner's own check of the FINAL env value.
                 try:

@@ -249,17 +249,20 @@ _FULL_CFG = {'permission': {t: 'deny' for t in _DENIED_TOOLS}, 'mcp': {}, 'plugi
 
 
 def _deny_env(home):
-    """The isolation env the review block hands the child (D-2921 F1)."""
+    """The isolation env the review block hands the child (R1)."""
     (home / 'pg-empty.json').write_text('{}')
-    return {'XDG_DATA_HOME': str(home), 'OPENCODE_CONFIG_DIR': str(home),
+    return {'HOME': str(home), 'XDG_CONFIG_HOME': str(home / 'config'),
+            'XDG_DATA_HOME': str(home), 'OPENCODE_CONFIG_DIR': str(home),
             'OPENCODE_CONFIG': str(home / 'pg-empty.json'),
-            'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUDE_CODE': '1'}
+            'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUDE_CODE': '1',
+            'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS': '1'}
 
 
-def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None):
+def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None, extra=None):
     """A review leg whose review-block writes to `freeze` env keys are dropped
-    and whose config stays `bad_cfg`: one hardening condition removed in turn."""
-    extra = {}
+    and whose config stays `bad_cfg`: one hardening condition removed in turn.
+    `extra` values are names under tmp_path (a relative path anchors there)."""
+    extra = dict(extra or {})
     if bad_cfg is not None:
         extra['OPENCODE_CONFIG_CONTENT'] = bad_cfg
         freeze = set(freeze) | {'OPENCODE_CONFIG_CONTENT'}
@@ -270,25 +273,41 @@ def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None):
             def __setitem__(self, key, value):
                 if key not in freeze:
                     super().__setitem__(key, value)
+
+            def __delitem__(self, key):  # the OPENCODE_* drop is blocked too
+                if key not in freeze:
+                    super().__delitem__(key)
         return Frozen(real(base))
 
     monkeypatch.setattr(opencode_overlay, 'overlay_env', overlay)
     return _run_leg(tmp_path, monkeypatch, seed, extra_env=extra)
 
 
-@pytest.mark.parametrize('freeze,bad_cfg', [
-    ((), json.dumps({**_FULL_CFG, 'mcp': {'evil': {}}})),
-    ((), json.dumps({**_FULL_CFG, 'plugin': ['evil']})),
-    (('OPENCODE_DISABLE_PROJECT_CONFIG',), None),
-    (('OPENCODE_DISABLE_CLAUDE_CODE',), None),
-    (('OPENCODE_CONFIG_DIR',), None),
-    (('OPENCODE_CONFIG',), None),
-], ids=['mcp', 'plugin', 'disable_project_config', 'disable_claude_code',
-        'config_dir', 'config_file'])
-def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path, monkeypatch, freeze, bad_cfg):
+@pytest.mark.parametrize('freeze,bad_cfg,extra', [
+    ((), json.dumps({**_FULL_CFG, 'mcp': {'evil': {}}}), {}),
+    ((), json.dumps({**_FULL_CFG, 'plugin': ['evil']}), {}),
+    (('OPENCODE_DISABLE_PROJECT_CONFIG',), None, {}),
+    (('OPENCODE_DISABLE_CLAUDE_CODE',), None, {}),
+    (('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',), None, {}),
+    (('OPENCODE_CONFIG_DIR',), None, {}),
+    (('OPENCODE_CONFIG',), None, {}),
+    (('HOME',), None, {'HOME': 'elsewhere-home'}),
+    (('XDG_CONFIG_HOME',), None, {'XDG_CONFIG_HOME': 'elsewhere-config'}),
+    (('OPENCODE_CLI_CONFIG_CONTENT',), None, {'OPENCODE_CLI_CONFIG_CONTENT': '{"x": 1}'}),
+    (('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG'), None,
+     {'HOME': 'jobhome', 'XDG_CONFIG_HOME': 'config', 'OPENCODE_CONFIG_DIR': 'jobhome',
+      'OPENCODE_CONFIG': 'pg-bad.json'}),
+    (('OPENCODE_CONFIG',), None, {'OPENCODE_CONFIG': 'outside.json'}),
+], ids=['mcp', 'plugin', 'disable_project_config', 'disable_claude_code', 'disable_claude_code_skills',
+        'config_dir', 'config_file', 'home_outside', 'xdg_config_home_outside', 'stray_opencode_env',
+        'config_content_not_empty', 'config_outside_dir'])
+def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path, monkeypatch, freeze, bad_cfg, extra):
+    (tmp_path / 'pg-bad.json').write_text('{"x": 1}')  # inside job dir, content not {}
+    (tmp_path / 'outside.json').write_text('{}')       # content ok, outside job dir
+    extra = {k: str(tmp_path / v) for k, v in (extra or {}).items()}
     job, _ = _freeze_leg(tmp_path, monkeypatch,
                          lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
-                         freeze=freeze, bad_cfg=bad_cfg)
+                         freeze=freeze, bad_cfg=bad_cfg, extra=extra)
     assert {'event': 'opencode_tools_not_denied'} in job.events
     assert job.request_side_model is None
     assert job.witness_kind is None
@@ -399,3 +418,15 @@ def test_cancelled_monitor_task_removes_ocdata_dir(tmp_path, monkeypatch):
     oc_dir = asyncio.run(run())
     assert not Path(oc_dir).exists()
     assert runner._ocdata_dirs == {}
+
+
+def test_review_child_env_drops_stray_opencode_names_and_rehomes_home(tmp_path, monkeypatch):
+    """R1: a caller-set OPENCODE_* override never reaches the review child and
+    HOME lands in the per-job dir."""
+    job, ctx = _run_leg(tmp_path, monkeypatch,
+                        lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.3-flash-free')]),
+                        extra_env={'OPENCODE_CLI_CONFIG_CONTENT': '{"x": 1}',
+                                   'HOME': str(tmp_path / 'elsewhere')})
+    env = ctx['env']
+    assert 'OPENCODE_CLI_CONFIG_CONTENT' not in env
+    assert Path(env['HOME']).resolve().is_relative_to(Path(env['XDG_DATA_HOME']).resolve())
