@@ -11,8 +11,8 @@ from plangraph.spawner.clients import build_child_env, build_command
 
 
 def test_root_definition_beats_generated_defaults(monkeypatch):
-    monkeypatch.setattr(o, 'load_root_providers', lambda: {'omniroute': {
-        'env': ['OMNI_REAL_KEY'], 'package': 'real-pkg', 'name': 'real', 'models': {'alias': {}}}})
+    monkeypatch.setattr(o, '_load_root_providers', lambda: ({'omniroute': {
+        'env': ['OMNI_REAL_KEY'], 'package': 'real-pkg', 'name': 'real', 'models': {'alias': {}}}}, None))
     child = build_child_env(headers={'X-OmniRoute-Run-Nonce': 'n1'})
     generated = json.loads(child['OPENCODE_CONFIG_CONTENT'])
     generated['providers']['omniroute'].update(package='generated', name='generated',
@@ -31,7 +31,8 @@ def test_unknown_and_declared_alias_admitted(model):
     assert r.host_skip_reason({'model': model, 'harness': 'opencode'}, env=env, probe=lambda e: {'x/y'}) is None
 
 
-def test_listing_case_variant_and_absence():
+def test_listing_case_variant_and_absence(monkeypatch):
+    monkeypatch.setattr(o, '_load_root_providers', lambda: ({}, None))
     probe = lambda e: {'omniroute/cx-gpt-6.1-sol#high'}
     assert r.host_skip_reason({'model': 'OMNIROUTE/CX-GPT-6.1-SOL', 'harness': 'opencode'}, probe=probe) is None
     assert r.host_skip_reason({'model': 'other/absent', 'harness': 'opencode'}, probe=probe) == 'not_served_on_host: other/absent'

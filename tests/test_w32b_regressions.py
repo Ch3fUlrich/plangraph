@@ -21,9 +21,9 @@ def test_comment_quotes_never_change_string_state(text):
 
 
 def test_root_identity_models_and_env_merge(monkeypatch):
-    monkeypatch.setattr(o, 'load_root_providers', lambda: {'p': {
+    monkeypatch.setattr(o, '_load_root_providers', lambda: ({'p': {
         'package': 'root', 'name': 'root', 'env': ['ROOT', 'BOTH'],
-        'models': {'same': {'root': True}}}})
+        'models': {'same': {'root': True}}}}, None))
     caller = {'package': 'caller', 'name': 'caller', 'env': ['BOTH', 'CALLER'],
               'models': {'same': {'caller': True}, 'combo': {'combo': True}}}
     env = o.overlay_env({'OPENCODE_CONFIG_CONTENT': json.dumps({'providers': {'p': caller}})})
@@ -40,7 +40,7 @@ def test_provider_model_ids_case_insensitive_and_variants_symmetric(requested, l
 
 
 def test_bare_agent_does_not_exempt_other_provider(monkeypatch):
-    monkeypatch.setattr(o, 'load_root_providers', lambda: None)
+    monkeypatch.setattr(o, '_load_root_providers', lambda: (None, None))
     env = {'OPENCODE_CONFIG_CONTENT': '{"agents":{"cx-x":{}}}'}
     assert r.host_skip_reason({'harness': 'opencode', 'model': 'other/cx-x'}, env=env, probe=lambda e: set()) == 'not_served_on_host: other/cx-x'
     assert r.host_skip_reason({'harness': 'opencode', 'model': 'cx-x'}, env=env, probe=lambda e: set()) is None

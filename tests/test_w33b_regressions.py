@@ -77,7 +77,7 @@ def test_variant_admission(requested, listed, admitted):
 
 def test_root_generic_precedence_and_gateway_exception(monkeypatch):
     root = {'options': {'baseURL': 'https://real', 'other': 'root'}, 'settings': {'baseURL': 'https://real'}, 'headers': {'keep': 'root', 'run': 'old'}, 'custom': 'root'}
-    monkeypatch.setattr(o, 'load_root_providers', lambda: {'omniroute': json.loads(json.dumps(root))})
+    monkeypatch.setattr(o, '_load_root_providers', lambda: ({'omniroute': json.loads(json.dumps(root))}, None))
     generated = {'options': {'baseURL': 'http://localhost:20128/v1', 'other': 'generated'}, 'settings': {'baseURL': 'http://localhost:20128/v1'}, 'headers': {'run': 'new'}, 'custom': 'generated'}
     env = {'OPENCODE_CONFIG_CONTENT': json.dumps({'providers': {'omniroute': generated}})}
     def entry(e):
@@ -92,7 +92,7 @@ def test_root_generic_precedence_and_gateway_exception(monkeypatch):
 
 
 def test_invalid_caller_overlay_warns_unknown(monkeypatch, caplog):
-    monkeypatch.setattr(o, 'load_root_providers', lambda: {})
+    monkeypatch.setattr(o, '_load_root_providers', lambda: ({}, None))
     monkeypatch.setattr(o, '_content_warned', False, raising=False)
     for _ in range(2):
         assert o.overlay_env({'OPENCODE_CONFIG_CONTENT': '{private-invalid'})[o.OVERLAY_UNKNOWN]

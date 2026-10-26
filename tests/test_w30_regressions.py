@@ -48,7 +48,10 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_real_launch_plan_skips_unserved():
+def test_real_launch_plan_skips_unserved(monkeypatch):
+    # Pin a present (empty) root config so the reason does not depend on the host's AUTOOS_ROOT.
+    from plangraph.routing_support import opencode_overlay
+    monkeypatch.setattr(opencode_overlay, '_load_root_providers', lambda: ({}, None))
     first = replace(DEFAULT_LEGS[0], harness='opencode', model='test/absent')
     second = replace(first, id='second', model='test/present')
     plan = SpawnPlan((first, second), (), 'test', (), ())
