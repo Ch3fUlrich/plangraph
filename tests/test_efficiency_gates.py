@@ -772,6 +772,24 @@ def test_wait_json_returns_the_paths(tmp_path):
         out = json.loads(cap.getvalue()); assert out["stdout_path"] == out["stdout_log"] == str(run_dir / "stdout.log"); assert out["stderr_path"] == out["stderr_log"] == str(run_dir / "stderr.log")
 
 
+def test_wait_plain_form_hides_the_paths(tmp_path):
+    # haiku-E2 / qwen-E3: test_wait_json_returns_the_paths only proved the paths come back
+    # with --json; deleting `if args.json:` (cli.py) and filling the paths in for every wait
+    # kept it green. The plain form must NOT get the paths; the flag turns them on (control).
+    import contextlib, io
+    from plangraph.spawner.cli import main
+    old = tmp_path / "runs" / "run-w3"; old.mkdir(parents=True)  # pre-slice record: no path fields
+    (old / "record.json").write_text(json.dumps({"run_id": "run-w3", "status": "completed", "exit_code": 0, "ended": 1.0}))
+    cap = io.StringIO()
+    with contextlib.redirect_stdout(cap): assert main(["--state", str(tmp_path), "wait", "run-w3"]) == 0
+    out = json.loads(cap.getvalue())
+    assert "stdout_path" not in out and "stderr_path" not in out and "stdout_log" not in out
+    cap = io.StringIO()  # positive control: the same record WITH --json gets them
+    with contextlib.redirect_stdout(cap): assert main(["--state", str(tmp_path), "wait", "run-w3", "--json"]) == 0
+    out = json.loads(cap.getvalue())
+    assert out["stdout_path"] == out["stdout_log"] == str(old / "stdout.log")
+
+
 def test_cancel_with_class_racing_minus_9():
     # haiku-C5: the monitor must actually run before the assertions read the job — the synchronous tree_killer never suspends, so task.cancel() landed on a monitor that had taken no step yet and every assertion held from cancel() alone. A killer that yields once hands the monitor its step; `ran` proves it took it. haiku-D4/qwen-D4: `ran` and the proc live per case, so the first case's step can never vouch for the second's, and the exit_code the monitor wrote (proc.returncode, never cancel()'s) shows its classification ran rather than holding from cancel() alone.
     from plangraph.spawner.runner import SpawnerRunner
