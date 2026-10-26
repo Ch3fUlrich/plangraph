@@ -91,7 +91,7 @@ def test_role_config(seat, monkeypatch, role):
     assert overlay['instructions'] == [path]
     if role == 'orchestrate':
         assert set(overlay['mcp']) == {'plangraph', 'plangraph-spawner'}
-    assert {'event': 'role_instructions', 'role': role} in job.events
+    assert seen['env']['XDG_CONFIG_HOME'] == str(seen['directory'])
     assert not seen['directory'].exists()
 
 

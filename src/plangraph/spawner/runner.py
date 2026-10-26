@@ -564,7 +564,6 @@ class SpawnerRunner:
                     cfg['instructions'] = [str(role_file)]
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                     child_env['XDG_CONFIG_HOME'] = str(cfg_dir)
-                    orchestrate_events.append({'event': 'role_instructions', 'role': role})
                 except BaseException:
                     import shutil
                     shutil.rmtree(self._occfg_dirs.pop(job_id), ignore_errors=True)
