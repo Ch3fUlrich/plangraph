@@ -302,7 +302,9 @@ def test_mcp_stdio_against_live_api(tmp_path):
              "params": {"name": "ready", "arguments": {"n": 50}}},
         ])
         listing, ready = [json.loads(line) for line in out.splitlines() if line]
-        assert len(listing["result"]["tools"]) == 36
+        # 36 tools on either branch plus both branch additions: #203's log_item/rule_set
+        # and main's fleet_msg_send/fleet_msg_read.
+        assert len(listing["result"]["tools"]) == 38
         assert ready["result"]["isError"] is False
         assert KEY in ready["result"]["content"][0]["text"]
         assert e2e.tokens["router"] not in out

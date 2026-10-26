@@ -192,3 +192,44 @@ def test_mutated_config_on_cancelled_job(tmp_path):
         assert config_file.read_bytes() == orig_bytes
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("role,guarded", [
+    ("design", True), ("orchestrate", True), ("review", False),
+])
+def test_guard_installed_for_all_writer_roles_but_review(tmp_path, role, guarded):
+    """#203 x main: design/orchestrate spawns carry the git-config guard; review (read-only) does not."""
+    repo, wt = _setup_repo_and_worktree(tmp_path)
+    config_file = repo / ".git" / "config"
+    orig_bytes = config_file.read_bytes()
+
+    async def run():
+        async def factory(*args, **kwargs):
+            # Mutate core.autocrlf in worktree, which alters the shared <common-git-dir>/config
+            subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=kwargs["cwd"], check=True, capture_output=True)
+            return FakeProcess(returncode=0)
+
+        runner = SpawnerRunner(process_factory=factory)
+        job = await runner.spawn(
+            prompt="write code",
+            model_or_combo="mimo/mimo-v2.6-flash",
+            role=role,
+            cwd=str(wt),
+            wait_seconds=0.5,
+        )
+        if job.job_id in runner._tasks:
+            await runner._tasks[job.job_id]
+
+        if guarded:
+            assert job.status == "failed"
+            assert job.exit_code != 0
+            assert any(e.get("event") == "git_config_mutated" for e in job.events)
+            assert config_file.read_bytes() == orig_bytes
+        else:
+            # no guard snapshot exists for review, so the mutation goes undetected
+            assert job.status == "completed"
+            assert job.exit_code == 0
+            assert not any(e.get("event") == "git_config_mutated" for e in job.events)
+            assert config_file.read_bytes() != orig_bytes
+
+    asyncio.run(run())

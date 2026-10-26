@@ -74,13 +74,11 @@ TOOLS = (
     _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
           ("key", "decision_id")),
-    _tool("log_item", "Router/L1 (D-2739 one task loops): append a fix/design/replan entry to an item's log; "
-          "a fix on an in_review item hands it back to its claimant. entry: {kind, note, findings[], seat_runs[], "
-          "ref, author_model, reviewed_by, invariants, slices[{n,scope,max_lines}]}.",
+    _tool("log_item", "Router/L1 D-2739 entry:{kind,note,findings,seat_runs,ref,author_model,reviewed_by,"
+          "invariants,slices:{n,scope,max_lines}}; fix on in_review returns to claimant.",
           {"key": {"type": "string"}, "entry": {"type": "object"}}, ("key", "entry")),
-    _tool("rule_set", "Router (D-2746): write standing rules as decisions:<ID> items (in_force=done, retired="
-          "cancelled) with depends_on edges between rules. rules: [{id, title, description, source, note, "
-          "depends_on[], state}]; DECISIONS.md is rendered from them (tools/decisions_view.py).",
+    _tool("rule_set", "Router D-2746 decisions:ID rules:{id,title,description,source,note,depends_on,state}; "
+          "state:in_force|retired.",
           {"rules": {"type": "array", "items": {"type": "object"}}}, ("rules",)),
     _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"},

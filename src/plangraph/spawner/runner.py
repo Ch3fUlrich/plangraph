@@ -588,7 +588,9 @@ class SpawnerRunner:
             if cmd[0] in STDIN_PROMPT_HARNESSES:
                 self._stdin_payloads[job_id] = prompt.encode("utf-8")
             self._adapter_tokens[job_id] = object()
-            if role in ("implement", "fix"):
+            # #203 added the design role and main has orchestrate; every code-moving
+            # role gets the guard, only review (read-only) does not.
+            if role != "review":
                 guard = self._init_git_config_guard(work_dir)
                 if guard is not None:
                     self._git_guards[job_id] = guard
