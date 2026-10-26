@@ -170,7 +170,8 @@ fn fixture_activities(name: &str) -> Vec<String> {
         .expect("events array")
         .iter()
         .filter_map(|e| {
-            e["attributes"]["ActivityTaskScheduledEventAttributes"]["activity_type"]["name"].as_str()
+            e["attributes"]["ActivityTaskScheduledEventAttributes"]["activity_type"]["name"]
+                .as_str()
         })
         .map(str::to_string)
         .collect()
@@ -225,9 +226,11 @@ async fn replays_check_fails() {
 /// returns `None` (no observe scheduled, no marker command issued), so the run
 /// reproduces exactly. The fixture is asserted marker-free (neither the observe
 /// nor the re-observe marker) and to contain the park activity.
+/// `check_fails` is that history: it parks and carries no core_patch marker,
+/// and every park runs through `observe_card`, so no new recording is needed.
 #[tokio::test]
 async fn replays_pre_observe_cap_park() {
-    let markers = fixture_patch_markers("pre_observe_cap_park");
+    let markers = fixture_patch_markers("check_fails");
     assert!(
         !markers.contains("park-observe-v1"),
         "pre-OBSERVE fixture must not carry park-observe-v1: {markers:?}"
@@ -237,13 +240,13 @@ async fn replays_pre_observe_cap_park() {
         "pre-OBSERVE fixture must not carry park-reobserve-v1: {markers:?}"
     );
     assert!(
-        fixture_activities("pre_observe_cap_park")
+        fixture_activities("check_fails")
             .iter()
             .any(|a| a == "CardActivities::park"),
         "fixture must contain the park activity"
     );
     replayer()
-        .replay_workflow(history("pre_observe_cap_park"))
+        .replay_workflow(history("check_fails"))
         .await
         .expect("pre-observe parking history replays clean");
 }
