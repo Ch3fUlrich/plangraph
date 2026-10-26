@@ -143,15 +143,18 @@ class RuleMixin:
                 self._append(principal, r["key"], "rule_set",
                              {"state": r["state"], "description": r["description"],
                               "depends_on": r["depends_on"]}, now)
-                # Same transaction as the state UPDATE (module contract above):
-                # the write hands the rule back to the rules channel -- the run
-                # claims no review of it -- so the exec owner is freed here and
-                # its run joins the retired-run fence (RT-P1-EXEC-OWNERSHIP).
-                # BEFORE the state write, unlike the other clear doors: a
-                # retire lands the row in ``cancelled``, which the lock
-                # triggers freeze against any later row write, so the clear
-                # must not be that write.
-                self._exec_clear(self.conn, r["key"], principal, now)
+                # No exec clear here (qwen-R3): a rule row has no exec
+                # lifecycle to hand back.  Rules have "no lifecycle
+                # (claim/review) applies" (module docstring above; design table
+                # PG-EFFICIENCY-GATES, "in force / retired" row) -- a rule row
+                # is done/cancelled from its creating transaction, so it is
+                # never claimable and ``_exec_check`` can never record an exec
+                # owner on it (it records only for the holder of a claimed
+                # card).  With no owner ever to clear, a clear would only fence
+                # a run this item type has no notion of; the guard covers the
+                # write through the explicit STATE_WRITER_EXCEPTIONS entry
+                # (tests/test_keeper_exec_clear_guard.py) instead.  Design I8
+                # needs nothing more: latest ``rule_set`` wins on replay.
                 self.conn.execute(
                     "UPDATE items SET state=?, title=?, description=?, source=?, note=?,"
                     " lease_until=NULL, updated_at=? WHERE key=?",

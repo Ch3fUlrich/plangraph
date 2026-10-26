@@ -57,25 +57,48 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
         w.close()
 
 
-def test_rule_set_frees_the_exec_owner_in_the_same_transaction(tmp_path):
-    """``rule_set`` hands the rule back to the rules channel: same transaction.
+def test_rule_set_frees_no_exec_owner_and_fences_no_run(tmp_path):
+    """A rule row has no exec owner to clear: ``rule_set`` does no exec business.
 
-    The ``store_rules`` module contract says the write "clears the review claim
-    ... and the run's exec owner at the same instant"; the state UPDATE must
-    therefore carry the clear with it (RT-P1-EXEC-OWNERSHIP).
+    The store_rules module docstring and the design table (PG-EFFICIENCY-GATES,
+    "in force / retired" row) agree that rules have "no lifecycle (claim/review)
+    applies": a rule row is done/cancelled from its creating transaction, so it
+    is never claimable and the engine can never record an exec owner on it
+    (``_exec_check`` records one only for the holder of a claimed card).  RT-P1-
+    EXEC-OWNERSHIP therefore does not reach rules -- the state write is covered
+    by the explicit ``STATE_WRITER_EXCEPTIONS`` entry below, not by a clear that
+    would retire and fence a run this item type has no notion of.
     """
     w = World(tmp_path)
     try:
         key = "decisions:RULE-1-1"
         w.store.rule_set(w.p("router"), [{"id": "RULE-1-1", "description": "r"}])
+        # No claim applies: even a worker scoped to the rules project finds the
+        # rule row done/cancelled, never open (module docstring: rules "never
+        # show in ready / blocked / stall / operator-wait views").
+        from plangraph.keeper import auth
+        who = auth.authenticate(w.conn, auth.add_principal(
+            w.conn, "workerD", "worker", ["decisions"], family="teamB"))
+        refused("bad_state", w.store.claim, who, key)
+        # ... and no exec owner can ever be recorded on a rule row: the engine
+        # records one only for the holder of a claimed card.
+        with w.store._write():
+            refused("forbidden", w.store._exec_check, w.conn, key, *RUN1,
+                    principal=w.p("workerA"))
+        # The owner planted here is one the engine can never create (above);
+        # planting it only makes "rule_set does no exec business" observable:
+        # no clear (an owner left in place) and no retired-run fence.
         worker = w.p("workerA")
         with w.store._write():
             w.store._exec_record(w.conn, key, *RUN1, principal=worker)
         assert owner(w, key) == RUN1
         w.store.rule_set(w.p("router"), [{"id": "RULE-1-1", "description": "r2"}])
-        assert owner(w, key) == (None, None, None)
-        # every clear door keeps the retired-run fence
-        assert (RUN1[0], RUN1[1], RUN1[2]) in retired_runs(w, key)
+        assert owner(w, key) == RUN1
+        assert (RUN1[0], RUN1[1], RUN1[2]) not in retired_runs(w, key)
+        rows = w.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE key=? AND type='exec_owner_changed'",
+            (key,)).fetchone()[0]
+        assert rows == 1                      # only the plant above, no clear
     finally:
         w.close()
 
@@ -94,6 +117,7 @@ STATE_WRITER_EXCEPTIONS = {
     ("store_answer.py", "_answer"): "Answer closes a question as done.",
     ("store_close.py", "_close_on_decision"): "Decision closure writes terminal done.",
     ("store_rehome.py", "_rehome"): "Rehome cancels the old card; the new card has no owner.",
+    ("store_rules.py", "_rule_set"): "A rule row has no lifecycle (claim/review) -- see the store_rules docstring and the design's in-force/retired row -- so it can never hold an exec owner; there is none to clear.",
 }
 
 
