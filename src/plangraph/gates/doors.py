@@ -73,7 +73,7 @@ FIXTURE_ROWS: tuple[tuple[str, str | None, str], ...] = (
     ("a/../../x.py", "malformed", "writer"), ("a/b/../x.py", "malformed", "writer"),
     ("/var/log/x.txt", "malformed", "writer"),
     ("../", "malformed", "writer"),
-    ("docs/tokens.md", "secret", "writer"), ("docs/oauth.md", None, "direct_edit"),
+    ("docs/tokens.md", None, "direct_edit"), ("src/plangraph/x/token_store.py", "secret", "writer"), ("docs/oauth.md", None, "direct_edit"),
     ("tools/token_count.py", "secret", "writer"), ("docs/keys.md", None, "direct_edit"),
     ("src/plangraph/spawner/cli.py", None, "direct_edit"), ("README.md", None, "direct_edit"),
     ("tests/test_cli.py", None, "direct_edit"), ("src/envelope.py", None, "direct_edit"),

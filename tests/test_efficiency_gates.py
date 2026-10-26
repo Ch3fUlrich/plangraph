@@ -449,8 +449,8 @@ SENSITIVE = {"estimate_tokens": 20000, "privacy": "sensitive", "key": "demo:X", 
     ("keys/server.pem", True), ("x/id_rsa", True), ("db.kdbx", True), ("ci/service-account-ci.json", True),
     ("secrets/x.txt", True), ("a/credentials.json", True), ("api_keys.yml", True), ("app.p8", True),
     ("store.jks", True), ("C:\\fleet\\vault\\x.json", True), ("tools/my_apikey.txt", True),
-    ("github_token.txt", True), ("auth_token.json", True), ("docs/tokens.md", True),
-    ("tools/token_count.py", True),
+    ("github_token.txt", True), ("auth_token.json", True), ("docs/tokens.md", False),
+    ("tools/token_count.py", True), ("src/plangraph/x/token_store.py", True),
     ("src/a.py", False), ("docs/keys.md", False), ("environment.py", False), ("pemberton.txt", False),
     ("src/envelope.py", False), ("keyboard.py", False),
 ])
@@ -458,6 +458,14 @@ def test_secret_path_matcher(path, secret):
     # D-2760 F1: one matcher, wider set, near-misses stay clean.
     from plangraph.gates.privacy import secret_path
     assert secret_path(path) is secret
+
+
+@pytest.mark.parametrize("path", ["src/plangraph/x/token_store.py", "tools/token_count.py"])
+def test_sensitive_card_refuses_token_code(path):
+    from plangraph.gates.privacy import admit_card
+    from plangraph.routing_errors import SpawnRefused
+    with pytest.raises(SpawnRefused, match="secret path"):
+        admit_card(dict(SENSITIVE, paths=[path]))
 
 
 @pytest.mark.parametrize("role", ["implement", "review"])

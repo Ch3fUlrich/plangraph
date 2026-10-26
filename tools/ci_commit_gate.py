@@ -1,8 +1,8 @@
 '''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
 Trailer checks use ``git log base..head``. Merge commits are checked like any
-other commit when they carry a Writer or Hand-Edit trailer and are measured by
-their combined diff; a git-authored merge without those trailers is ignored.
+other commit when they carry attribution or a non-empty combined diff.
+Resolution content is a hand edit; clean untagged merges are ignored.
 Merge parents are checked separately when open PR heads are supplied. Exempt commits skip only trailer rules;
 an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
@@ -53,26 +53,22 @@ TEST_ID = r"[\w][\w.:/\[\]' -]*"
 
 #: A test-removal trailer must name what it removes (buildl1-T2): the
 #: ``D-<n>`` record id followed by every removed or renamed test id,
-#: comma-separated.  Case-insensitive on the key.
+#: comma-separated. Keys are strict-cased.
 TEST_REMOVAL_RE = re.compile(
     r'^Test-Removal:\s*D-\d+\s+(?P<tests>'
     + TEST_ID
     + r'(?:\s*,\s*'
     + TEST_ID
     + r')*)\s*$',
-    re.IGNORECASE,
 )
 
 #: A bare ``Test-Removal: D-<n>`` with no test named -- kept so the gate can
 #: tell "no acknowledgement at all" from "acknowledged but named nothing"
 #: and say which it is (buildl1-T2).
-BARE_TEST_REMOVAL_RE = re.compile(r'^Test-Removal:\s*D-\d+\s*$', re.IGNORECASE)
+BARE_TEST_REMOVAL_RE = re.compile(r'^Test-Removal:\s*D-\d+\s*$')
 
 #: A gate-edit commit must carry exactly ``Gate-Edit: D-<digits>``.
 GATE_EDIT_RE = re.compile(r'^Gate-Edit: D-\d+$')
-
-#: A non-blank line that can appear in the trailer block.
-TRAILER_LINE_RE = re.compile(r'^[A-Za-z][A-Za-z0-9-]*: \S')
 
 #: Case-insensitive markers in the Writer value that identify a Claude writer.
 CLAUDE_MARKERS: tuple[str, ...] = (
@@ -257,6 +253,9 @@ def canon_path(path: str | Path) -> str | None:
 def _secret_path(path: str | Path) -> bool:
     '''True when path (any separator) names a secret-shaped file or sits in a secret dir.'''
     parts = [p for p in PurePosixPath(str(path).replace('\\', '/').lower()).parts if p not in ('/', '.')]
+    # Match the shared privacy carve-out (D-2965), including standalone CI.
+    if parts == ["docs", "tokens.md"]:
+        return False
     if not parts:
         return False
     if any(p.rstrip('/') in SECRET_DIRS for p in parts):
@@ -632,6 +631,9 @@ def check(
     if open_heads is not None:
         violations.extend(_open_pr_merges(base, head, open_heads, cwd=cwd))
 
+    range_commits = list(_iter_commits(base, head, cwd=cwd))
+    range_shas = {sha for sha, _ in range_commits}
+    outside_exceeded: set[str] = set()
     history = _history_commits(head, cwd=cwd)
     history_running_sums: dict[str, int] = {}
     exceeded_50: dict[str, bool] = {}
@@ -642,7 +644,8 @@ def check(
             continue
         h_block = _trailer_block_lines(h_message, cwd=cwd)
         if not _trailer_values(h_block, HAND_EDIT_RE):
-            continue
+            if len(_parent_shas(h_sha, cwd=cwd)) <= 1 or _changed_lines(h_sha, cwd=cwd) == 0:
+                continue
         h_items = _trailer_values(h_block, PLAN_ITEM_RE)
         h_item = h_items[0] if h_items else '(none)'
         # Bucket keys compare case-folded so spelling variants share one
@@ -652,6 +655,8 @@ def check(
         history_running_sums[h_key] = history_running_sums.get(h_key, 0) + h_changed
         if history_running_sums[h_key] > ROUTE_DECISION_LINES:
             exceeded_50[h_key] = True
+            if h_sha not in range_shas:
+                outside_exceeded.add(h_key)
 
         rd_trailers = [
             line for line in h_block
@@ -673,7 +678,7 @@ def check(
     range_bucket_entries: dict[str, list[tuple[str, int]]] = {}
     range_bucket_names: dict[str, str] = {}
 
-    for sha, message in _iter_commits(base, head, cwd=cwd):
+    for sha, message in range_commits:
         if sha.lower() in exempt_set:
             continue
 
@@ -684,16 +689,16 @@ def check(
         block_hand_edit_values = _trailer_values(block_lines, HAND_EDIT_RE)
         has_hand_edit = bool(block_hand_edit_values)
 
-        if (
-            not has_hand_edit
-            and not block_writer_values
-            and len(_parent_shas(sha, cwd=cwd)) > 1
-        ):
-            # A git-authored merge (git merge, GitHub's "Merge pull request")
-            # carries no Writer/Hand-Edit trailer: there is nothing hand-written
-            # to attribute or cap, so it is ignored. A merge that carries one is
-            # checked like any other commit, measured by its combined diff (E1a).
-            continue
+        if _stray_trailer_lines(message):
+            violations.append(f'{sha}: trailer outside final block')
+
+        if len(_parent_shas(sha, cwd=cwd)) > 1:
+            changed = _changed_lines(sha, cwd=cwd)
+            if not has_hand_edit and not block_writer_values and changed == 0:
+                # Clean git-authored merges have no resolution content.
+                continue
+            # Resolution content is a hand edit even without its trailer.
+            has_hand_edit = has_hand_edit or changed is None or changed > 0
 
         malformed_writer = any(
             MALFORMED_WRITER_RE.match(line) is not None
@@ -718,8 +723,12 @@ def check(
         ):
             violations.append(f'{sha}: {MALFORMED_HAND_EDIT}')
 
-        if _stray_trailer_lines(message):
-            violations.append(f'{sha}: trailer outside final block')
+        if any(
+            TEST_REMOVAL_ANY_RE.match(line)
+            and not line.startswith("Test-Removal:")
+            for line in block_lines
+        ):
+            violations.append(f'{sha}: malformed Test-Removal trailer')
 
         touched = _touched_paths(sha, cwd=cwd)
         if has_hand_edit:
@@ -740,7 +749,8 @@ def check(
             if len(items) != 1:
                 # Exactly one Plan-Item, else the commit joins no per-item sum
                 # and evades the Route-Decision rule (E1a, delta4 seat M10).
-                violations.append(f'{sha}: {MISSING_PLAN_ITEM}')
+                reason = MISSING_PLAN_ITEM if not items else 'hand-edit with more than one Plan-Item'
+                violations.append(f'{sha}: {reason}')
             item = items[0] if items else '(none)'
             key = item.casefold()
             lines_count = _counted(changed)
@@ -750,6 +760,11 @@ def check(
 
             if sha in rd_violations:
                 violations.append(f'{sha}: {rd_violations[sha]}')
+            elif key in outside_exceeded and not _has_trailer(block_lines, ROUTE_DECISION_RE):
+                # Another topo branch may own the crossing outside this range.
+                violations.append(
+                    f'{sha}: hand-edit over {ROUTE_DECISION_LINES} lines for {item} without Route-Decision'
+                )
 
         if (
             any(

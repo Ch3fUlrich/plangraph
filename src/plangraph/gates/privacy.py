@@ -58,6 +58,9 @@ def is_sensitive(card):
 def secret_path(path):
     """True when *path* (any separator) names a secret-shaped file or sits in a secret dir."""
     parts = [p for p in PurePosixPath(str(path).replace("\\", "/").lower()).parts if p not in ("/", ".")]
+    # D-2965: this documentation page is not token-handling code.
+    if parts == ["docs", "tokens.md"]:
+        return False
     if not parts:
         return False
     if any(p.rstrip("/") in SECRET_DIRS for p in parts):
