@@ -216,6 +216,23 @@ def test_title_flag_on_opencode_leg_and_not_on_plain_leg(tmp_path):
     assert '--title' not in plain_job.command
 
 
+def test_title_flag_before_any_prompt_positional(tmp_path, monkeypatch):
+    async def probe(*args, **kwargs):
+        return None
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
+    monkeypatch.setattr('plangraph.spawner.runner.build_command',
+                        lambda **kw: ['opencode', 'run', '--standalone', '--model', REQUESTED, 'the prompt'])
+
+    async def run():
+        runner = SpawnerRunner(default_cwd=str(tmp_path))
+        return await runner.spawn('the prompt', model_or_combo=REQUESTED, role='review',
+                                  client='opencode', cwd=str(tmp_path), dry_run=True)
+    job = asyncio.run(run())
+    cmd = job.command
+    assert cmd.index('--title') < cmd.index('the prompt')
+    assert cmd[cmd.index('--title') + 1] == 'plangraph-' + job.job_id
+
+
 def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
     assert parse_test_gaming('TEST-GAMING: no - searched the "batch in" stamp: 0 hits\nVERDICT: pass') == ('no', None)
     assert parse_test_gaming('TEST-GAMING: no - searched the "batch in" stamp: 3 hits')[0] != 'no'
