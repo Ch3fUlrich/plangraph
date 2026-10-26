@@ -16,7 +16,7 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78. glm re-run (D-2898) run-555b136f pass, TEST-GAMING ok, served_model still unwitnessed on main -> NOT posted, stays in_review; defects (a)(b) in REVIEW-VERDICT-PARSE fix log (notes) |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
 | spawn-iso #200 / #201 (claimed) | #200 DONE 2348abf2. #201 qwen delta PASS; main merged in (fe54f9cb, 202 passed, gate 0) -> finish201.sh running |
-| PG-TEST-SHM-LEAK (std, prio 1, claimed) | wt ~/code/plangraph-worktrees/pg-test-shm-leak lane/pg-test-shm-leak; agy writer shm1 ($J/brief-shm.md) running -> L1 re-run tests -> PR -> 1 non-Claude seat (not google) -> merge |
+| PG-TEST-SHM-LEAK (std, claimed) | PR #222 head e0748276 (agy run-ed01799d, L1 re-run 8 passed, gate 0); qwen seat shm running -> merge -> evidence |
 | SPAWN-OPENROUTER-FREE-ENDPOINTS (std, prio 5) | defined D-2805; after shm-leak; account/privacy change = operator OS line |
 | SQ12 (workst-L1-autoos) | slices SQ12-a/-b; workst writes held until SPAWN-WIN-PARITY lands |
 | efficiency slice 4 | sent host-wide admission gap (D-2785) + qwen/haiku review legs (D-2789). D-2799 4c argv OK sent gen-33 w/ 5 conditions (accepted); slice 4 on hold for routing (design r4 FIX) |
