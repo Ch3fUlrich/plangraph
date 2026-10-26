@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import seat_verdict as sv  # noqa: E402
+from test_review_verdict import LOW_SEVERITY_TABLE  # noqa: E402
 
 TOKEN = "dummy"
 
@@ -34,6 +36,12 @@ TOKEN = "dummy"
     ("", None),
 ])
 def test_parse(text, want):
+    assert sv.parse_verdict(text)[0] is want
+
+
+@pytest.mark.parametrize("text,want_verdict,_", LOW_SEVERITY_TABLE)
+def test_low_severity_verdict_table(text, want_verdict, _):
+    want = True if want_verdict == "pass" else (False if want_verdict in ("fix", "halt") else None)
     assert sv.parse_verdict(text)[0] is want
 
 

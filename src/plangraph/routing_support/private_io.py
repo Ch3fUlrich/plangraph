@@ -4,6 +4,21 @@ from pathlib import Path
 import tempfile
 import time
 
+#: Total retry sleeps one synchronous save path may spend (I13/V6): its record
+#: reads plus the record write, no await between them. Named once here; the
+#: budget tests compare their recorded sleeps against it.
+SYNC_SAVE_BUDGET_S = 3.0
+
+#: os.replace retries sleep min(0.01 * (attempt + 1), 0.2), so the attempt cap
+#: is chosen from the sleep budget, not the other way round: 24 attempts sleep
+#: 2.7 s worst case. The longest synchronous save stretch reads the record
+#: twice before writing (the family lookup and the excluded-family check in a
+#: review spawn), and each read gets SAVE_READ_ATTEMPTS attempts at 0.05 s
+#: sleeps (0.2 s worst case together), so two reads plus the write sum to
+#: 2.9 s, inside SYNC_SAVE_BUDGET_S.
+ATOMIC_WRITE_ATTEMPTS = 24
+SAVE_READ_ATTEMPTS = 3
+
 
 def atomic_write_private(path, text):
     path = Path(path)
@@ -14,16 +29,30 @@ def atomic_write_private(path, text):
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        for attempt in range(20):
+        for attempt in range(ATOMIC_WRITE_ATTEMPTS):
             try:
                 os.replace(name, path)
                 break
             except PermissionError as exc:
-                if getattr(exc, 'winerror', None) not in (32, 33) or attempt == 19:
+                # winerror 5 is retried because MoveFileEx returns ACCESS_DENIED
+                # while a reader holds the target open; a real ACL error still
+                # raises after the bound.
+                if getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == ATOMIC_WRITE_ATTEMPTS - 1:
                     raise
-                time.sleep(.01 * (attempt + 1))
+                time.sleep(min(0.01 * (attempt + 1), 0.2))
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+def read_text_retry(path, *, attempts=20, encoding='utf-8'):
+    path = Path(path)
+    for attempt in range(attempts):
+        try:
+            return path.read_text(encoding=encoding)
+        except PermissionError as exc:
+            if getattr(exc, 'winerror', None) not in (5, 32) or attempt == attempts - 1:
+                raise
+            time.sleep(0.05)
 
 
 def append_private(path, text):
@@ -31,7 +60,10 @@ def append_private(path, text):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     with os.fdopen(fd, 'a', encoding='utf-8') as stream:
-        os.fchmod(stream.fileno(), 0o600)
+        if hasattr(os, 'fchmod'):
+            os.fchmod(stream.fileno(), 0o600)
+        else:
+            os.chmod(path, 0o600)
         stream.write(text)
         stream.flush()
         os.fsync(stream.fileno())
