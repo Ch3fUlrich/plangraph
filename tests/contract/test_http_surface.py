@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+import contract_schema as cs
 from contract_harness import PRINCIPALS
 from contract_schema import assert_valid
 from contract_world import err, make_plan, need, ok, uid
@@ -39,6 +40,8 @@ def test_whoami_reports_the_token_principal(kp, name):
     assert body["projects"] == projects
     # families are case-folded by the keeper
     assert body["family"] == (family.lower() if family else None)
+    # qwen-R6: what the wire advertises is exactly what the contract registers
+    assert set(body["features"]) == set(cs.DEFS["WhoAmI"]["properties"]["features"]["items"]["enum"])
 
 
 def test_forged_actor_and_role_in_body_are_ignored(kp):

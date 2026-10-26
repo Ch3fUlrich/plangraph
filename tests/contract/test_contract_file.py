@@ -69,6 +69,8 @@ def test_every_declared_route_rejects_the_wrong_method(kp):
 
 GOOD = {
     "Error": {"error": "forbidden", "msg": "x"},
+    "WhoAmI": {"name": "router", "role": "router", "projects": ["demo"], "family": None,
+               "features": ["apply_ops.dry_run", "apply_ops.strict_body"]},
     "Claim": {"key": "demo:A", "epoch": 1, "lease_until": "2030-01-01T00:00:00Z"},
     "Blocked": {"demo:A": ["demo:B"]},
     "Waves": [["demo:A"], ["demo:B"]],
@@ -76,6 +78,16 @@ GOOD = {
 }
 BAD = {
     "Error": [{"error": "nope", "msg": "x"}, {"error": "forbidden"}, "text", None],
+    # qwen-R6: ``features`` is pinned on the wire, so the contract must register
+    # it -- a response missing it, shaped wrongly, naming an unknown feature, or
+    # carrying an unregistered field is off-contract.
+    "WhoAmI": [{"name": "router", "role": "router", "projects": [], "family": None},
+               {"name": "router", "role": "router", "projects": [], "family": None,
+                "features": "apply_ops.dry_run"},
+               {"name": "router", "role": "router", "projects": [], "family": None,
+                "features": ["apply_ops.dry_run", "nope"]},
+               {"name": "router", "role": "router", "projects": [], "family": None,
+                "features": [], "extra": 1}],
     "Claim": [{"key": "demo:A", "epoch": "1", "lease_until": "t"}, {"key": "k"}, {"key": "k", "epoch": True,
                                                                             "lease_until": "t"}],
     "Blocked": [{"demo:A": "demo:B"}, [1]],
