@@ -334,6 +334,48 @@ def test_merge_commit_without_trailer_is_ignored(repo: Path):
     assert check(base, merge_sha, cwd=repo) == []
 
 
+def _branch(repo: Path, name: str, commit_message: str, files: dict[str, str]) -> str:
+    _git(repo, "checkout", "-q", "-b", name)
+    return _commit(repo, commit_message, files=files)
+
+
+def _merge_resolution(
+    repo: Path, branch: str, message: str, files: dict[str, str]
+) -> str:
+    '''Merge branch into the current head and commit the resolution.'''
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", branch)
+    return _commit(repo, message, files=files)
+
+
+def test_merge_commit_measured_by_combined_diff(repo: Path):
+    '''A merge counts only its combined diff: a clean merge is 0 lines, no paths.'''
+    base = _head(repo)
+    _branch(repo, "side", "feat: side\n\nWriter: mimo-v2.6-flash run-side\n", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "feat: main\n\nWriter: mimo-v2.6-flash run-main\n", files={"main.txt": "main\n"})
+    merge_sha = _merge_resolution(
+        repo, "side", "Merge side\n\nWriter: mimo-v2.6-flash run-merge\n", {}
+    )
+
+    assert ci_commit_gate._changed_lines(merge_sha, cwd=repo) == 0
+    assert ci_commit_gate._touched_paths(merge_sha, cwd=repo) == []
+    assert check(base, merge_sha, cwd=repo) == []
+
+    # Positive control: resolution content of the same merge shape is measured.
+    _git(repo, "checkout", "-q", "-b", "side2", base)
+    _commit(repo, "feat: side2\n\nWriter: mimo-v2.6-flash run-side2\n", files={"f2.txt": "x\n"})
+    _git(repo, "checkout", "-q", "-")
+    resolved = _merge_resolution(
+        repo,
+        "side2",
+        "Merge side2\n\nWriter: mimo-v2.6-flash run-merge2\n",
+        {"resolved.txt": "one\ntwo\n"},
+    )
+
+    assert ci_commit_gate._changed_lines(resolved, cwd=repo) == 2
+    assert ci_commit_gate._touched_paths(resolved, cwd=repo) == ["resolved.txt"]
+
+
 def test_exempt_sha_skips_all_rules(repo: Path, tmp_path: Path):
     base = _head(repo)
     sha = _commit(repo, "feat: no trailer at all")
