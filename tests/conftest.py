@@ -99,9 +99,18 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     monkeypatch.setenv(_clients.CLIENT_BINS_ENV, os.devnull)
     monkeypatch.setattr(_clients, 'CLIENT_BIN_DIRS', ())
     original_which = shutil.which
-    monkeypatch.setattr(shutil, 'which', lambda command, *a, **kw:
-                        (original_which(command, *a, **kw) or command)
-                        if command in ('agy', 'qodercli') else original_which(command, *a, **kw))
+
+    def present_which(command, *a, **kw):
+        # agy/qodercli are always "present" in tests so the host PATH never
+        # decides a seat; everything else comes from the real PATH.
+        found = original_which(command, *a, **kw)
+        return (found or command) if command in ('agy', 'qodercli') else found
+
+    monkeypatch.setattr(shutil, 'which', present_which)
+    # probe.py binds `which` at import time (`from shutil import which`), so
+    # patching shutil.which alone never reaches the E3b-1.4 always-on
+    # availability probe and its agy/qodercli legs would hang on the host PATH.
+    monkeypatch.setattr(live_probe, 'which', present_which)
     yield
     probe.cache_clear()
 
