@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import re
+import sqlite3
 import subprocess
 import time
 import uuid
@@ -157,6 +158,28 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
         served_family = detect_model_family(served_model)
 
     return served_model, served_family
+
+
+def _opencode_served_model(db_path, title) -> str | None:
+    """Served model witnessed in opencode's session store for one titled session (D-2898).
+
+    Only a unanimous assistant model id counts; anything else stays unwitnessed.
+    """
+    try:
+        conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+        try:
+            rows = conn.execute('SELECT id FROM session_v2 WHERE title = ?', (title,)).fetchall()
+            models = set()
+            for (data,) in conn.execute(
+                    "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant'",
+                    (rows[0][0],) if len(rows) == 1 else (None,)):
+                model = json.loads(data)['model']
+                models.add(model['providerID'] + '/' + model['id'])
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+        return None
+    return next(iter(models)) if len(models) == 1 else None
 
 
 class NonceCapacity(RuntimeError):
@@ -305,6 +328,8 @@ class SpawnerRunner:
         child_env = build_child_env(extra_env, headers=envelope_headers)
         render_reason = None
         if cmd[0] == 'opencode':
+            # Name the session so the monitor can witness the served model (D-2898).
+            cmd.extend(['--title', f'plangraph-{job_id}'])
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
@@ -521,6 +546,23 @@ class SpawnerRunner:
             job.exit_code = exit_code
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
+
+            # Witness an opencode leg only from opencode's session store, only
+            # for the requested model id (D-2898).
+            if (job.command and job.command[0] == 'opencode' and exit_code == 0
+                    and (not job.served_model or job.served_model == 'unwitnessed')):
+                child_env = self._child_envs.get(job_id, os.environ)
+                db_path = (Path(child_env.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share')
+                           / 'opencode' / 'opencode.db')
+                m = _opencode_served_model(db_path, f'plangraph-{job_id}')
+                if m is not None and m == requested_model:
+                    try:
+                        self.served_witness(job_id, m, adapter_token=self._adapter_tokens.get(job_id))
+                        job.served_witness_reason = 'opencode session store'
+                    except ValueError:
+                        job.events.append({'event': 'opencode_witness_unavailable'})
+                elif m is not None:
+                    job.events.append({'event': 'opencode_witness_unavailable'})
 
             # Free text is child-controlled, including plausible provider headers.
             # Absence of an authenticated adapter witness must remain explicit.
