@@ -395,3 +395,18 @@ def test_build_reason_marks_request_side_witness():
     assert "opencode/glm-5.3-flash-free" in marked
     assert sv.build_reason(ev, True, "VERDICT: PASS", 0) == \
         "seat unwitnessed PASS corr c prompt 0123456789ab"
+
+
+# D-2921 F4: the served check must take precedence even over an ADMISSIBLE
+# request-side model (w5 cannot discriminate: its model is not admissible at
+# all, so the outcome is identical without the served check).
+def test_served_model_witness_precedes_admissible_request_side(tmp_path, capsys):
+    assert run(tmp_path, "w6", "VERDICT: pass", served_model="gpt-oss-120b",
+               witness_kind="request-side-opencode-store",
+               request_side_model="opencode/glm-5.3-flash-free",
+               extra=("--dry-run",)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["family"] == "openai"
+    reason = payload["body"]["reason"]
+    assert "witness=" not in reason
+    assert "glm-5.3-flash-free" not in reason
