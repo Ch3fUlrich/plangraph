@@ -13,7 +13,7 @@
         "not_found": 404,
         "too_large": 413,
         "cursor_gone": 410,
-        "rate_limited": 429,
+        "msg_rate_limited": 429,
         "replay_window_full": 503
       }
     }
@@ -131,15 +131,15 @@
     }
   },
   {
-    "name": "rate_limited",
+    "name": "msg_rate_limited",
     "fn": "error_body",
     "inputs": {
-      "code": "rate_limited",
+      "code": "msg_rate_limited",
       "message": "Request rejected"
     },
     "expect": {
       "error": {
-        "code": "rate_limited",
+        "code": "msg_rate_limited",
         "message": "Request rejected"
       }
     }

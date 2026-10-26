@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from plangraph.fleet_bus.contract import BusError, canonical_post, sign, new_state
 from plangraph.fleet_bus.discovery import Host, Registry
-from plangraph.keeper import auth, db as kdb, schema
+from plangraph.keeper import api_routes, auth, db as kdb, schema
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.store import Store
 from keeper_util import Clock, World
@@ -428,6 +428,38 @@ def test_g1_5_body_max_overflow_returns_413(srv):
     out = srv.call("post_message", {"from": "router", "to": "keeper", "body": big_body})
     assert out["status"] == "error"
     assert out["code"] == 413
+
+
+# --------------------------------------------- bus statuses are static (R2a')
+
+BUS_CODES = {
+    "bad_signature": 401,
+    "unknown_kid": 401,
+    "skew": 401,
+    "replayed_nonce": 401,
+    "replay_window_full": 503,
+    "too_large": 413,
+    "msg_rate_limited": 429,
+}
+
+
+def test_bus_statuses_are_static():
+    """The seven bus codes are registered in api_routes.STATUS at import time (no runtime writes)."""
+    for code, http_status in BUS_CODES.items():
+        assert api_routes.STATUS[code] == http_status
+
+
+def test_oversight_r3_holds_after_a_bus_post_message_in_the_same_process(srv, host_registry):
+    """R2a': a bus post_message must not mutate api_routes.STATUS (oversight R3 keeps 403 forbidden, no rate_limited)."""
+    srv.server.bus_registry = host_registry
+    before = dict(api_routes.STATUS)
+    fields = {"from": "host-a", "to": "keeper", "body": {"text": "static-status"}, "ts": NOW * 1000}
+    env = make_signed_envelope("host-a", b"k" * 32, fields, nonce="static-nonce-1", msg_id="mid-static-1")
+    out = srv.call("post_message", dict(fields, envelope=env))
+    assert out["status"] == "ok"
+    assert "rate_limited" not in api_routes.STATUS
+    assert api_routes.STATUS["msg_rate_limited"] == 429
+    assert dict(api_routes.STATUS) == before
 
 
 

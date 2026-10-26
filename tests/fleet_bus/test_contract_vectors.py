@@ -75,7 +75,7 @@ def test_vector(case):
                 seen, msg_ids = state.seen.copy(), state.msg_ids.copy()
                 with pytest.raises(c.BusError) as rejected:
                     c.validate_post(lambda kid: SECRET, body, sig, inputs.get("now", NOW), state)
-                assert (rejected.value.code, rejected.value.status) == ("rate_limited", 429)
+                assert (rejected.value.code, rejected.value.status) == ("msg_rate_limited", 429)
                 assert state.seen == seen
                 assert state.msg_ids == msg_ids
                 return c.validate_post(lambda kid: SECRET, body, sig,
@@ -135,7 +135,7 @@ def test_vector(case):
         assert isinstance(caught.value.message, str)
         assert SECRET.decode() not in caught.value.message
         assert "0" * 64 not in caught.value.message
-        if caught.value.code == "rate_limited":
+        if caught.value.code == "msg_rate_limited":
             assert caught.value.retry_after_s >= 1
         if "retry_after_s" in case["error"]:
             assert caught.value.retry_after_s == case["error"]["retry_after_s"]

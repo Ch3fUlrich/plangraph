@@ -68,7 +68,7 @@ DEFAULT_TIMEOUT = 10.0
 #: The unauthenticated health probe gets two seconds; peers probe in parallel.
 PROBE_TIMEOUT_S = 2.0
 #: Rejections a retry can heal (fresh nonce/timestamp); everything else is final.
-RETRYABLE_CODES = frozenset({"skew", "rate_limited", "replay_window_full"})
+RETRYABLE_CODES = frozenset({"skew", "msg_rate_limited", "replay_window_full"})
 #: The msg_id doubles as a spool file name, so only uuid4 hex may pass.
 MSG_ID_RE = re.compile(r"[0-9a-f]{32}")
 

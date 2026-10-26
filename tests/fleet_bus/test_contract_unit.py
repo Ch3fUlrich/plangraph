@@ -62,7 +62,7 @@ def test_rate_is_per_sender_and_rolls_at_sixty_seconds(c):
         send(c, state, post(nonce=str(n), msg_id=str(n)))
     with pytest.raises(c.BusError) as err:
         send(c, state, post(nonce="over", msg_id="over"), now=NOW + 59)
-    assert err.value.code == "rate_limited"
+    assert err.value.code == "msg_rate_limited"
     assert err.value.status == 429
     assert err.value.retry_after_s >= 1
     send(c, state, post(**{"from": "other", "nonce": "other"}))
@@ -78,7 +78,7 @@ def test_rate_rejected_flood_preserves_replay_state(c):
     for n in range(c.NONCE_CAP + 1):
         with pytest.raises(c.BusError) as err:
             send(c, state, post(nonce=f"rejected-{n}", msg_id=f"rejected-{n}"))
-        assert (err.value.code, err.value.status) == ("rate_limited", 429)
+        assert (err.value.code, err.value.status) == ("msg_rate_limited", 429)
     # Replay must win over rate limiting even after more than a window of rejects.
     with pytest.raises(c.BusError) as err:
         send(c, state, post(nonce="accepted-0", msg_id="accepted-0"))
@@ -95,7 +95,7 @@ def test_exact_retry_at_inclusive_skew_and_rate_boundary(c):
     envelope = post(nonce="retry", msg_id="retry")
     with pytest.raises(c.BusError) as err:
         send(c, state, envelope)
-    assert err.value.code == "rate_limited"
+    assert err.value.code == "msg_rate_limited"
     assert "retry" not in state.seen
     assert ("sender", "retry") not in state.msg_ids
     ack = send(c, state, envelope, now=NOW + 60)

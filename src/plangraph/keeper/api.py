@@ -373,13 +373,6 @@ class KeeperHandler(BaseHTTPRequestHandler):
     # --------------------------------------------------------------- writes
     def _write(self, name, body, principal, extra=""):
         if name == "post_message":
-            _STATUS.setdefault("bad_signature", 401)
-            _STATUS.setdefault("unknown_kid", 401)
-            _STATUS.setdefault("skew", 401)
-            _STATUS.setdefault("replayed_nonce", 401)
-            _STATUS.setdefault("replay_window_full", 503)
-            _STATUS.setdefault("rate_limited", 429)
-            _STATUS.setdefault("too_large", 413)
             if not isinstance(body, dict):
                 raise Refused("validation", "body must be a JSON object")
             if "principal" in body or "registry" in body:
