@@ -1429,6 +1429,15 @@ def test_e1_check_vectors(repo: Path):
     assert proc.returncode == 0 and "usage:" in proc.stdout
 
 
+def _e1_route_policy(gate_verdict: str | None) -> str:
+    """The design's stated route policy, one place (E1 shared-lists row):
+    E3's guard step must give `route_verdict` = `writer` exactly when
+    `gate_verdict` is not None.  Until E3 lands, no code under test produces
+    a route verdict, so this policy applied to fixture rows is fixture data
+    pinned for E3, not route coverage (haiku-G5 / mimopro-G9)."""
+    return "writer" if gate_verdict is not None else "direct_edit"
+
+
 def test_e1_drift_and_shared_fixture():
     from plangraph.gates import doors, privacy
     assert ci_commit_gate.AUTH_DOOR_PATHS == doors.AUTH_DOOR_PATHS
@@ -1437,12 +1446,32 @@ def test_e1_drift_and_shared_fixture():
     assert ci_commit_gate.SECRET_NAME_PATTERNS == doors.SECRET_NAME_PATTERNS == privacy.SECRET_NAME_PATTERNS
     assert ci_commit_gate.SECRET_DIRS == doors.SECRET_DIRS == privacy.SECRET_DIRS
     assert len(doors.FIXTURE_ROWS) >= 40
-    for path, exp_gate, exp_route in doors.FIXTURE_ROWS:
+    for path, exp_gate, _exp_route in doors.FIXTURE_ROWS:
         g = ci_commit_gate.gate_path_verdict(path)
         d = doors.blocked_path(path)
         assert g == exp_gate and d == exp_gate, f"mismatch on {path}"
-        r = "writer" if exp_gate is not None else "direct_edit"
-        assert r == exp_route, f"route mismatch on {path}"
+
+
+def test_e1_fixture_route_column_is_e3_policy_pin_not_route_coverage():
+    # haiku-G5 / mimopro-G9: the route column is fixture data for E3's guard
+    # step (no code under test produces a route verdict yet), so this test
+    # proves only what it can: each row's expected route follows the design's
+    # stated policy (_e1_route_policy) applied to the verdicts the real code
+    # computes — not a value derived from the fixture's own gate column.
+    from plangraph.gates import doors
+    # positive controls: both policy directions stated outright
+    assert _e1_route_policy("door") == "writer"
+    assert _e1_route_policy(None) == "direct_edit"
+    saw_writer = saw_direct_edit = False
+    for path, exp_gate, exp_route in doors.FIXTURE_ROWS:
+        g = ci_commit_gate.gate_path_verdict(path)  # real code, not exp_gate
+        d = doors.blocked_path(path)                # the second real copy
+        assert g == exp_gate and d == exp_gate, f"mismatch on {path}"
+        assert _e1_route_policy(g) == exp_route, f"route mismatch on {path}"
+        saw_writer = saw_writer or exp_route == "writer"
+        saw_direct_edit = saw_direct_edit or exp_route == "direct_edit"
+    # the fixture exercises both directions of the policy
+    assert saw_writer and saw_direct_edit
 
 
 def test_e1_trailers_final_paragraph_only(repo: Path):
