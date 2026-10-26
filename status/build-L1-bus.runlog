@@ -3,3 +3,4 @@
 2026-10-26T01:41:30Z CANCEL run-764b4e201dab48b7be62b6761b5f25a1 (mimo-pro fix r4) D-2865: no first write in 20 min
 2026-10-26T01:42:35Z CANCEL run-764b4e20 (mimo-pro fix r4) D-2865 no first write 20 min; cause: brief gave wrong keeper error shape, writer surveyed wire format. Retry 2/2 anchored.
 2026-10-26T02:37:53Z r4 try2 run-937de96f completed no commit; L1 checks green; committed bf7c3bfb; CI triggered; handoff gen-4->gen-5
+2026-10-26T03:19:19Z r4b: qwen pass bf7c3bfb; glm free-limit; LOW fix 26ea12d5 hand + 5af5663a mimo-pro run-8cffa580
