@@ -310,6 +310,14 @@ def test_claude_writer_without_run_or_session_id_fails(repo: Path, writer: str):
     ]
 
 
+def test_claude_writer_re_rejects_trailing_newline() -> None:
+    r"""A value ending in "\n" is not a valid Claude Writer: ``$`` alone would
+    match before the trailing newline, so the pattern must end in ``\Z``."""
+    value = "claude-opus-5-5 run-" + "ab" * 16 + "\n"
+    assert ci_commit_gate.CLAUDE_WRITER_RE.match(value) is None
+    assert ci_commit_gate.CLAUDE_WRITER_RE.fullmatch(value) is None
+
+
 def test_commit_without_any_writer_trailer_still_fails(repo: Path):
     base = _head(repo)
     sha = _commit(repo, "feat: served model\n")
