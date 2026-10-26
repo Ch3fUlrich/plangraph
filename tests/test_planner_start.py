@@ -36,16 +36,16 @@ def test_burn_over_falls_back_to_first_family():
     gate = guard_start("planner", "agent", NOW, source=_burn_source())
     assert isinstance(gate, StartGate)
     assert gate.allowed
-    assert gate.fallback == "qwen"
+    assert gate.fallback == "gpt"  # cx-gpt-6-luna heads DEFAULT_LEGS (D-2983)
     assert gate.leg is DEFAULT_LEGS[0]
 
 
 def test_exhausted_first_family_moves_to_next():
     source = policy.StaticSource(
         burn_by_day={DAY: 2.0},
-        used={("qwen", DAY): 10},
+        used={("gpt", DAY): 10},  # exhaust the first family (D-2983: luna/gpt)
     )
-    gate = guard_start("planner", "agent", NOW, source=source, quotas={"qwen": 10})
+    gate = guard_start("planner", "agent", NOW, source=source, quotas={"gpt": 10})
     assert gate.allowed
     expected = next(leg for leg in DEFAULT_LEGS if not leg.claude_family and leg.family != DEFAULT_LEGS[0].family)
     assert gate.fallback == expected.family
@@ -70,8 +70,8 @@ def test_claude_rate_limited_falls_back():
         "planner", "agent", NOW, source=source, provider="claude"
     )
     assert gate.allowed
-    assert gate.fallback == "qwen"
-    assert gate.leg.family == "qwen"
+    assert gate.fallback == "gpt"  # first non-Claude family is luna/gpt (D-2983)
+    assert gate.leg.family == "gpt"
 
 
 def test_operator_initiated_allowed_no_fallback():

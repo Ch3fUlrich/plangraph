@@ -110,10 +110,11 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 8, record
+        assert len(models) == 6, record
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert 'gemini' in models[0] and 'mimo' in models[1] and 'openrouter' in models[2]
+        assert ('cx-gpt-6.1-sol' in models[0] and 'mimo-v2.6-pro' in models[1]
+                and 'gemini-3.8-flash' in models[2])
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
@@ -121,7 +122,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record['attempts']) == 8
+        assert len(record['attempts']) == 6
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -202,7 +203,7 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
 def test_route_and_refusal(tmp_path, capsys):
     assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan['first_leg']['model'] == 'gemini-3.8-flash'
+    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'
     assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
@@ -235,7 +236,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record['attempts']) == 8
+        assert len(record['attempts']) == 6
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)
