@@ -40,6 +40,7 @@ from plangraph.card_paths import normalise_path, path_problem
 
 from .credential_guard import guard
 from .errors import Refused
+from .events import STATE_EVENT_TYPES
 from .schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 
 __all__ = ["CardsMixin", "SETTABLE_STATES", "TRANSITIONS", "NO_DEFAULT_TAGS"]
@@ -689,6 +690,42 @@ class CardsMixin:
             self._append(principal, item_id, "exec_owner_changed",
                          {"action": "advance", "workflow_id": wf, "run_id": run,
                           "attempt": attempt}, now if now is not None else self.clock())
+
+    def _exec_state_after_owner(self, conn, item_id):
+        """True when the card's state was written after its exec owner was recorded.
+
+        RT-P1 sq12 fix 2 (V3-A): the narrowest ordering signal the schema gives
+        is ``events.seq`` -- the append-only log's monotonic sequence, assigned
+        by ``append_event`` itself so both backends number identically and a
+        rollback never leaves a gap.  ``owner_seq`` is the newest
+        ``exec_owner_changed`` ``record``/``advance`` (a record or an attempt
+        advance is when the current attempt began); ``state_seq`` is the newest
+        event whose replay writes ``state`` (``events.STATE_EVENT_TYPES``).  A
+        state write newer than the owner record means someone moved the card
+        since the attempt began -- in practice the projector/planner write
+        path, whose state a delayed worker retry must not roll back.
+
+        A record/advance event is the only observable moment the current
+        attempt began, so without one this is False: production always records
+        through ``_exec_check``/``_exec_record``, while a directly seeded owner
+        (test setup) has no event at all -- with no observable attempt start the
+        narrowest signal says nothing and the park lands as today.
+        """
+        owner_seq = state_seq = None
+        for event in conn.execute(
+                "SELECT seq, type, payload FROM events WHERE key=?"
+                " ORDER BY seq DESC", (item_id,)):
+            kind = event["type"]
+            if state_seq is None and kind in STATE_EVENT_TYPES:
+                state_seq = event["seq"]
+            if owner_seq is None and kind == "exec_owner_changed":
+                payload = json.loads(event["payload"] or "{}")
+                if payload.get("action") in ("record", "advance"):
+                    owner_seq = event["seq"]
+            if owner_seq is not None and state_seq is not None:
+                break
+        return (owner_seq is not None and state_seq is not None
+                and state_seq > owner_seq)
 
     def _apply_state(self, principal, key, state, why, now, scope,
                      guard=None, release_claim=False, run=None, new_run=False,

@@ -307,6 +307,23 @@ class WorkerMixin:
             # 2. A duplicate park is a success no-op, ahead of expected_state.
             if self._exec_duplicate(item, body, "parked"):
                 return
+            # 2b. RT-P1 sq12 fix 2 (V3-A): a park without ``expected_state``
+            #     never rolls back a state written after the current exec
+            #     owner was recorded (``_exec_state_after_owner``: its
+            #     ``exec_owner_changed`` record/advance event -- a seeded owner
+            #     has none and lands as today) -- the delayed retry of a
+            #     finished attempt must not overwrite the projector's newer
+            #     state.  Refused ``exec_stale`` and audited like any other
+            #     refusal (``_run``); with ``expected_state`` the worker has
+            #     seen the state and that CAS is its protection.
+            if (body.get("expected_state") is None
+                    and item["exec_run_id"] is not None
+                    and self._exec_state_after_owner(self.conn, item["key"])):
+                raise Refused(
+                    "exec_stale",
+                    f"{item['key']}: {item['state']!r} was written after the"
+                    " recorded exec owner; a park without expected_state"
+                    " cannot overwrite it")
             # 3. Observed-state CAS, then the claim binding, then ownership.
             self._exec_expect_state(item, body.get("expected_state"), principal)
             self._park_guard(principal, item, epoch, now)

@@ -22,9 +22,21 @@ from .item_fields import SMALL_FIELDS
 from .schema import EVENT_TYPES
 
 __all__ = ["canonical", "event_hash", "append_event", "read_events", "fold",
-           "verify_chain", "verify_integrity", "FIELDS"]
+           "verify_chain", "verify_integrity", "FIELDS", "STATE_EVENT_TYPES"]
 
 FIELDS = ("ts", "actor", "role", "model", "key", "type", "payload")
+
+#: Event kinds whose replay writes ``item["state"]`` -- the state branches of
+#: :func:`fold` (the source of truth for replay; this set mirrors them for
+#: callers that must ask "was the state written?" without replaying the log).
+#: ``exec_owner_changed`` is deliberately absent: ownership has its own audit
+#: events and is not a state write.
+STATE_EVENT_TYPES = frozenset({
+    "item_created", "claimed", "released", "lease_expired", "submitted",
+    "changes_requested", "review_withdrawn", "item_reopened", "review_passed",
+    "closed_on_decision", "answered", "legacy_state_set", "cancelled",
+    "state_set",
+})
 
 
 def canonical(obj) -> str:
