@@ -5,3 +5,4 @@
 - 18:3xZ D-2835: ORCH-EFFICIENCY-ENFORCE created (prio 0). Order: #210 > #211 writer > OEE slices > PGR S2. find is bfs: use -mmin, not -newermt relative. Stall signal = opencode.log activity for the worktree, not only file writes (run-1f0520e2 was reading 16 min).
 - 19:3xZ keeper evidence needs FULL 40-hex sha (short sha -> unverified; finish212 fixed). PGR has 2 unverified entries (short + a mistyped sha by me) before the verified one.
 - 2026-10-25 D-2851: S3 Test-Removal OK (test_platform_hook_is_nt); design doc is outside git (briefs/lanes-d2657), so L1 edited §3 line 92 itself, not the fixer commit. #214 merged 7bbd11a6 (GO D-2848).
+- 01:4xZ lesson (for routing LESSONS with next GO-REQ): agy S2 writer renamed a design-named test (same body) and self-issued 'Test-Removal: D-2826' using the design D-id; gate accepts any D-\d+. Brief rule: a writer never writes Test-Removal; the L1 gets a router D-id. Evidence: PR #220, Hand-Edit 89c7e92e.
