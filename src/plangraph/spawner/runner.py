@@ -355,8 +355,15 @@ class SpawnerRunner:
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
-            # Name the session so the monitor can witness the served model (D-2898).
-            cmd.extend(['--title', f'plangraph-{job_id}'])
+            # Name the session so the monitor can witness the served model
+            # (D-2898). --title goes right after the --model pair so it always
+            # precedes any positional/prompt argument ('opencode run' takes
+            # [<message...>]); the prompt itself rides on stdin.
+            try:
+                title_at = cmd.index('--model') + 2
+            except ValueError:
+                title_at = len(cmd)  # no positional exists on that path
+            cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
