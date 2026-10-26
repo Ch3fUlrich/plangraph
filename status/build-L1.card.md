@@ -11,7 +11,7 @@ Spawn (D-2749/D-2795): jobs/0bbdff0b/tmp/gspawn2.sh <wt> <brief> <tag> <reason> 
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | item | state / next |
 |---|---|
-| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216/#217/#218 MERGED (main 2bdde74a, evidence ok). S3 #213 head 338b4f6a (r2 mimo-pro + L1 1-line stub Hand-Edit); CI 40251267395 green; delta Haiku fix refuted ($J/seat-s3d2-haiku/refutation-L1.txt); GO-REQ sent 01:1xZ. After merge: tell workst (mimo-leg test, release 4 Server lanes + AO seat) + server-L1-main [c46235]. S2 b9e7094d: 2 test_w29 fails -> fix, PR, seats |
+| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216/#217/#218 MERGED (main 2bdde74a, evidence ok). S3 #213 head 338b4f6a (r2 mimo-pro + L1 1-line stub Hand-Edit); CI 40251267395 green; delta Haiku fix refuted ($J/seat-s3d2-haiku/refutation-L1.txt); MERGED d66bf9e5 (D-2879, CI 40251787608, evidence ok); told workst (mimo-leg test, release 4 Server lanes + AO seat) + server-L1-main [c46235]. S2 b9e7094d: 2 test_w29 fails -> fix, PR, seats |
 | KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); queue when budget frees; 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78 (D-2824). in_review until #211 merges -> post seat-rms-f2b-haiku unchanged |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |

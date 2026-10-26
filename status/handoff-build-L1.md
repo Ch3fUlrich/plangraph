@@ -36,3 +36,7 @@ S2 > #211/#212 REVIEW-VERDICT-PARSE (#212 is no longer an open PR: verify merged
 - Haiku seats emit "TEST-GAMING: no - reviewed/scanned ..." without "searched"; verdict.judge then treats it as missing (reported; fix belongs in the seat header).
 - Every Claude Hand-Edit makes anthropic a writer family of the item, and Haiku seats are then refused (same_family). SPAWN-WIN-PARITY already has #218/#213 Hand-Edits.
 - A shared session name (server-L1-main, build-L1-efficiency) needs a ref on SendMessage.
+
+## Post-handoff (01:3xZ)
+- #213 MERGED d66bf9e5c70e24ec22bdffae44f00074eb24dca9 (GO D-2879), main CI 40251787608 green, evidence ok. workst-L1-autoos + server-L1-main [c46235] notified. S2 is next.
+- Judge note D-2879: 338b4f6a shows no `Hand-Edit:` in `git show --format=%(trailers)`. Cause: my message put Plan-Item/Hand-Edit in a paragraph before a blank line, so git trailers see only Co-Authored-By/Claude-Session. ci_commit_gate still printed "hand-edit 338b4f6a ..." (it parses the body, not git trailers). Check the gate's parser vs git trailers; if body-parsing is unintended, log it in the ORCH-EFFICIENCY-ENFORCE fix log (E1a). Future Hand-Edits: one trailer block, no blank line before Co-Authored-By.
