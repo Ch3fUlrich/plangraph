@@ -1292,6 +1292,51 @@ def test_e1_range_ceiling_names_tipping_commit(repo: Path):
     assert check(base, d3, cwd=repo) == []
 
 
+def _commit_at(repo: Path, message: str, files: dict[str, str], when: str) -> str:
+    for name, content in files.items():
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    env = _git_env()
+    env["GIT_AUTHOR_DATE"] = when
+    env["GIT_COMMITTER_DATE"] = when
+    subprocess.run(["git", "add", "-A"], cwd=repo, env=env,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", message],
+                   cwd=repo, env=env, check=True, capture_output=True)
+    return _head(repo)
+
+
+def test_e1_history_walk_is_topological(repo: Path):
+    # haiku-G10: the whole-history walk must be topological, not date-ordered:
+    # with a skewed clock a date walk feeds the parent to the running sum
+    # before its child and flags the wrong commit.
+    base = _head(repo)
+    main_branch = _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+
+    def build(rd: bool) -> str:
+        _git(repo, "reset", "-q", "--hard", base)
+        _commit_at(repo, "docs: p\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n",
+                   {"docs/p.md": "x\n" * 40}, "2020-01-03T00:00:00 +0000")
+        _git(repo, "checkout", "-q", "-B", "side")
+        c2 = _commit_at(
+            repo,
+            "docs: c2\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n"
+            + (f"{VALID_ROUTE_DECISION}\n" if rd else ""),
+            {"docs/c2.md": "x\n" * 20}, "2020-01-01T00:00:00 +0000")
+        _git(repo, "checkout", "-q", main_branch)
+        _commit_at(repo, OK_MSG, {"docs/c1.md": "x\n"}, "2020-01-02T00:00:00 +0000")
+        _git(repo, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+        return c2
+
+    c2 = build(rd=False)
+    assert check(base, _head(repo), cwd=repo) == [
+        f"{c2}: hand-edit over 50 lines for demo:ITEM without Route-Decision"]
+    # positive control: the same skewed history with the Route-Decision passes
+    build(rd=True)
+    assert check(base, _head(repo), cwd=repo) == []
+
+
 def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     base = _head(repo)
     f = repo / "src\\plangraph\\keeper\\x.py"

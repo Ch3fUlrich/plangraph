@@ -201,8 +201,12 @@ def _iter_commits(base: str, head: str, cwd: str | Path | None = None) -> list[t
 
 
 def _history_commits(head: str, cwd: str | Path | None = None) -> list[tuple[str, str]]:
-    '''Return (sha, message) reachable from head, oldest first.'''
-    out = _git_text(['log', '--reverse', '-z', '--format=%H%n%B', head], cwd=cwd)
+    '''Return (sha, message) reachable from head, oldest first in topological order.
+
+    --topo-order matters: a plain --reverse is date-ordered, and with a skewed
+    clock a parent can feed the running sums before its child (E1a seat G10).
+    '''
+    out = _git_text(['log', '--topo-order', '--reverse', '-z', '--format=%H%n%B', head], cwd=cwd)
     commits: list[tuple[str, str]] = []
     for record in out.split('\0'):
         if not record.strip():
