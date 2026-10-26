@@ -47,6 +47,7 @@ expiry kills its process tree and records rc 124 with FAILED completion.
 The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
+Writing run roles (implement/fix) guard shared .git/config against in-place mutations (e.g. core.autocrlf), restoring original bytes and failing the run if changed.
 `--model`/`--leg` require `--override-reason` of at least ten characters,
 audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides.

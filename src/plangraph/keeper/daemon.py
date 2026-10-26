@@ -8,15 +8,19 @@ down cleanly and release the lock.
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import threading
+from contextlib import suppress
 
 from . import anchor, api, config as config_mod, db as kdb, outage
 from .errors import KeeperLocked
 from .store import Store
 
-__all__ = ["main", "run"]
+__all__ = ["main", "run", "SHUTDOWN_TIMEOUT"]
+
+SHUTDOWN_TIMEOUT = 5.0
 
 
 def _install_signals(stop: threading.Event) -> None:
@@ -72,6 +76,7 @@ def run(cfg, *, host=None, port=None, ready=None):
         except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
             print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
         stop = threading.Event()
+        server.on_fatal = stop.set
         _install_signals(stop)
         thread = threading.Thread(target=server.serve_forever, daemon=True,
                                   name="keeper-http")
@@ -86,19 +91,37 @@ def run(cfg, *, host=None, port=None, ready=None):
         if ready is not None:
             ready(server)
         try:
-            stop.wait()
+            while not stop.wait(1.0):
+                alive = getattr(lock, "alive", None)
+                if alive and not alive():
+                    server.fail("postgres keeper lock session lost")
+                    break
         finally:
-            stop.set()
-            if prune_thread is not None:
-                prune_thread.join(timeout=5)
-            server.shutdown()
-            server.stop_reaper()
-            server.server_close()
-            thread.join(timeout=5)
-        return 0
+            def _cleanup():
+                stop.set()
+                if prune_thread is not None:
+                    prune_thread.join(timeout=5)
+                server.shutdown()
+                server.stop_reaper()
+                server.server_close()
+                thread.join(timeout=5)
+
+            cleaner = threading.Thread(
+                target=_cleanup, daemon=True, name="keeper-shutdown")
+            cleaner.start()
+            cleaner.join(timeout=SHUTDOWN_TIMEOUT)
+            if getattr(server, "fatal_reason", None):
+                if cleaner.is_alive():
+                    os._exit(75)
+                return 75
+            if cleaner.is_alive():
+                os._exit(0)
+            return 0
     finally:
-        conn.close()
-        lock.release()
+        with suppress(Exception):
+            conn.close()
+        with suppress(Exception):
+            lock.release()
 
 
 def main(argv=None) -> int:

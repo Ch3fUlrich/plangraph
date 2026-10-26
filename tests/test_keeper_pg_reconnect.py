@@ -8,19 +8,52 @@ server (``PG_DSN``, provided by the CI pytest-postgres job) and import psycopg
 only inside the test body.  Kills always target one backend by pid: CI runs
 this suite with ``-n auto``.
 """
+import errno
 import http.client
+import json
 import os
+import signal
+import socket
+import subprocess
+import sys
+import threading
 import time
+import uuid
+from pathlib import Path
 
 import pytest
 
 from door_util import Doors
 from keeper_util import World, seed
-from plangraph.keeper import api, db_pg
+from plangraph.keeper import api, config, daemon, db as kdb, db_pg
 from plangraph.keeper.errors import ConnectionLost
 
 DSN = os.environ.get("PG_DSN")
 needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (CI pytest-postgres provides one)")
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def wait_health(port, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+            conn.request("GET", "/v1/health")
+            resp = conn.getresponse()
+            if resp.status == 200:
+                conn.close()
+                return
+            conn.close()
+        except Exception:
+            time.sleep(0.05)
+    raise AssertionError("daemon did not become healthy")
 
 
 # ----------------------------------------------------------- fake driver raw
@@ -266,9 +299,11 @@ def test_s1_one_line_no_dsn(tmp_path, capsys):
         w.close()
     assert status == 503
     err = capsys.readouterr().err
-    lines = [ln for ln in err.splitlines() if ln.startswith("keeper:")]
-    assert lines == ["keeper: request failed: ConnectionLost"]   # I10: one fixed line
-    assert "postgres" not in err and "host=" not in err          # never driver text
+    req_lines = [ln for ln in err.splitlines() if ln.startswith("keeper: request failed:")]
+    assert req_lines == ["keeper: request failed: ConnectionLost"]   # I10: one fixed line per request
+    fatal_lines = [ln for ln in err.splitlines() if ln.startswith("keeper: fatal:")]
+    assert fatal_lines == ["keeper: fatal: postgres connection lost"] # S2 fatal line
+    assert "host=" not in err                                        # never driver text
 
 
 def test_s1_escape_after_status_is_one_line_no_second_status(tmp_path, monkeypatch, capsys):
@@ -318,8 +353,10 @@ def test_s1_escape_after_log_is_one_line_total(tmp_path, monkeypatch, capsys):
         w.close()
     assert status == 500                            # the last-resort answer still goes out
     err = capsys.readouterr().err
-    assert [ln for ln in err.splitlines() if ln.startswith("keeper:")] \
+    assert [ln for ln in err.splitlines() if ln.startswith("keeper: request failed:")] \
         == ["keeper: request failed: ConnectionLost"]   # the escape never logs a 2nd line
+    assert [ln for ln in err.splitlines() if ln.startswith("keeper: fatal:")] \
+        == ["keeper: fatal: postgres connection lost"]  # S2 F2: still fatal, once
 
 
 def test_s1_health_503_when_lost(tmp_path):
@@ -422,6 +459,28 @@ def test_s1_sent_set_only_after_status_line():
     assert getattr(h, "_sent", False) is False
 
 
+def test_s1_mid_send_response_failure_no_second_status():
+    """A failure mid send_response leaves _headers_buffer with one status line; _escape must not buffer a 500."""
+    h = api.KeeperHandler.__new__(api.KeeperHandler)
+    h.protocol_version = "HTTP/1.1"
+    h.responses = api.KeeperHandler.responses
+    h.request_version = "HTTP/1.1"
+
+    def mid_boom(self, code, message=None):
+        self.send_response_only(code, message)
+        raise OSError("failed mid send_response")
+
+    h.send_response = lambda code, message=None: mid_boom(h, code, message)
+
+    def handle(method):
+        h._send(200, b"{}", "application/json")
+
+    h._handle = handle
+    h._request("GET")
+    assert len(h._headers_buffer) == 1
+    assert b"200" in h._headers_buffer[0]
+
+
 def test_s1_commit_break_is_503_outcome_unknown(tmp_path):
     """Fake raw broken only at COMMIT: the write answers 503 outcome unknown."""
     w = World(tmp_path)
@@ -516,3 +575,256 @@ def test_s1_mid_txn_kill_commits_nothing(tmp_path):
     finally:
         admin.close()
         w.close()
+
+
+# ------------------------------------------------------------- S2 fatal exit
+def test_s2_lock_alive_reflects_session_state():
+    """PgKeeperLock.alive returns False on None/closed/broken raw or readable descriptor."""
+    lock = db_pg.PgKeeperLock(None)
+    assert not lock.alive()
+
+    raw = FakeRaw()
+    lock = db_pg.PgKeeperLock(raw)
+    raw.broken = True
+    assert not lock.alive()
+    raw.broken = False
+    raw.closed = True
+    assert not lock.alive()
+
+    s1, s2 = socket.socketpair()
+    try:
+        raw_sock = FakeRaw()
+        raw_sock.fileno = s1.fileno
+        sock_lock = db_pg.PgKeeperLock(raw_sock)
+        assert sock_lock.alive()
+
+        s2.close()
+        assert not sock_lock.alive()
+    finally:
+        s1.close()
+
+
+def test_s2_fatal_from_handler_sets_stop(tmp_path):
+    w = World(tmp_path)
+    w.store.conn = ConnProxy(w.store.conn, fail=ConnectionLost("statement"))
+    doors = Doors(w, tmp_path)
+    stopped = threading.Event()
+    doors.server.on_fatal = stopped.set
+    try:
+        status, body = doors.http("reader", "GET", "/v1/whoami")
+    finally:
+        doors.close()
+        w.close()
+    assert status == 503
+    assert body == {"error": "unavailable", "msg": "keeper database unavailable"}
+    assert getattr(doors.server, "fatal_reason", None) == "postgres connection lost"
+    assert stopped.is_set()
+
+
+def test_s2_health_503_when_fatal_conn_healthy(tmp_path):
+    """I11: fatal_reason alone flips /v1/health to 503 even on a healthy conn (F3)."""
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    try:
+        assert doors.http("reader", "GET", "/v1/health") == (200, {"status": "ok"})
+        doors.server.fail("postgres keeper lock session lost")
+        status, body = doors.http("reader", "GET", "/v1/health")
+    finally:
+        doors.close()
+        w.close()
+    assert (status, body) == (503, {"status": "unavailable"})
+
+
+def test_s2_fail_concurrent_once(tmp_path, capsys):
+    """F1: concurrent fail() callers print one fatal line and call on_fatal once."""
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    fired = []
+    doors.server.on_fatal = lambda: fired.append(True)
+    n = 8
+    barrier = threading.Barrier(n)
+
+    def hit():
+        barrier.wait()
+        doors.server.fail("postgres keeper lock session lost")
+
+    threads = [threading.Thread(target=hit) for _ in range(n)]
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)         # widen the check-then-set race window
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+    finally:
+        sys.setswitchinterval(old_interval)
+        doors.close()
+        w.close()
+    assert all(not t.is_alive() for t in threads)
+    err = capsys.readouterr().err
+    fatal = [ln for ln in err.splitlines() if ln.startswith("keeper: fatal:")]
+    assert fatal == ["keeper: fatal: postgres keeper lock session lost"]
+    assert len(fired) == 1
+
+
+def test_s2_fail_after_503_write_raises(tmp_path, monkeypatch):
+    """F2: a dead client must not skip the fatal; fail() runs after the 503 write."""
+    w = World(tmp_path)
+    w.store.conn = ConnProxy(w.store.conn, fail=ConnectionLost("statement"))
+    doors = Doors(w, tmp_path)
+    real_json = api.KeeperHandler._json
+
+    def write_boom(self, status, payload):
+        if status == 503:
+            raise BrokenPipeError("client gone")    # the 503 write itself fails
+        return real_json(self, status, payload)
+
+    try:
+        monkeypatch.setattr(api.KeeperHandler, "_json", write_boom)
+        doors.http("reader", "GET", "/v1/whoami")
+    finally:
+        doors.close()
+        w.close()
+    assert doors.server.fatal_reason == "postgres connection lost"
+
+
+def test_s2_dead_lock_session_exits_75(tmp_path, monkeypatch):
+    w = World(tmp_path)
+    port = free_port()
+    cfg_path = tmp_path / "keeper.json"
+    cfg_path.write_text(json.dumps({
+        "db": str(tmp_path / "keeper.db"),
+        "snapshot": str(tmp_path / "plan.snapshot.json"),
+        "bind": f"127.0.0.1:{port}",
+    }), encoding="utf-8")
+    cfg_path.chmod(0o600)
+    cfg = config.load_config(cfg_path)
+
+    class FakeLock:
+        def __init__(self):
+            self.checks = 0
+
+        def alive(self):
+            self.checks += 1
+            return self.checks <= 1  # turns False after first tick
+
+        def release(self):
+            pass
+
+    fake_lock = FakeLock()
+    monkeypatch.setattr(kdb, "lock_keeper", lambda *args, **kwargs: fake_lock)
+    monkeypatch.setattr(kdb, "open_db", lambda *args, **kwargs: w.conn)
+
+    timer = threading.Timer(3.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    timer.start()
+    try:
+        t0 = time.monotonic()
+        rc = daemon.run(cfg)
+        duration = time.monotonic() - t0
+    finally:
+        timer.cancel()
+
+    assert rc == 75
+    assert duration < 5.0
+
+
+def test_s2_shutdown_bounded(tmp_path, monkeypatch):
+    w = World(tmp_path)
+    port = free_port()
+    cfg_path = tmp_path / "keeper.json"
+    cfg_path.write_text(json.dumps({
+        "db": str(tmp_path / "keeper.db"),
+        "snapshot": str(tmp_path / "plan.snapshot.json"),
+        "bind": f"127.0.0.1:{port}",
+    }), encoding="utf-8")
+    cfg_path.chmod(0o600)
+    cfg = config.load_config(cfg_path)
+
+    unblock = threading.Event()
+    real_close = api.KeeperHTTPServer.server_close
+
+    def blocking_close(self):
+        unblock.wait(timeout=2.0)
+        real_close(self)
+
+    monkeypatch.setattr(api.KeeperHTTPServer, "server_close", blocking_close)
+    monkeypatch.setattr(kdb, "open_db", lambda *args, **kwargs: w.conn)
+    monkeypatch.setattr(daemon, "SHUTDOWN_TIMEOUT", 0.2, raising=False)
+
+    exited = []
+    monkeypatch.setattr(os, "_exit", exited.append)
+
+    def trigger_fatal(srv):
+        srv.fail("fatal before shutdown")
+
+    timer = threading.Timer(3.5, lambda: (unblock.set(), os.kill(os.getpid(), signal.SIGTERM)))
+    timer.start()
+    try:
+        rc = daemon.run(cfg, ready=trigger_fatal)
+    finally:
+        unblock.set()
+        timer.cancel()
+
+    assert 75 in exited or rc == 75
+
+
+@needs_pg
+def test_s2_daemon_exits_75_within_10s(tmp_path):
+    psycopg = pytest.importorskip("psycopg")
+    app_name = f"pg_app_{uuid.uuid4().hex[:12]}"
+    w = World(tmp_path, backend="postgres", dsn=DSN)
+    schema = w.conn.schema
+    tok = w.tok("reader")
+    w.close()
+
+    port = free_port()
+    cfg_path = tmp_path / "keeper.json"
+    cfg_path.write_text(json.dumps({
+        "db": str(tmp_path / "keeper.db"),
+        "backend": "postgres",
+        "dsn": DSN,
+        "pg_schema": schema,
+        "snapshot": str(tmp_path / "plan.snapshot.json"),
+        "bind": f"127.0.0.1:{port}",
+    }), encoding="utf-8")
+    cfg_path.chmod(0o600)
+
+    env = dict(os.environ)
+    env["PGAPPNAME"] = app_name
+    env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+
+    try:
+        wait_health(port)
+        admin = _admin(psycopg)
+        try:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = %s",
+                (app_name,))
+        finally:
+            admin.close()
+
+        got = None
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/v1/whoami", headers={"Authorization": f"Bearer {tok}"})
+            resp = conn.getresponse()
+            got = resp.status
+            conn.close()
+        except (ConnectionRefusedError, BrokenPipeError):
+            got = "refused"
+        except OSError as exc:
+            if exc.errno == errno.ECONNREFUSED:
+                got = "refused"
+            else:
+                raise
+        assert got in (503, "refused")
+
+        assert proc.wait(timeout=10) == 75
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+
