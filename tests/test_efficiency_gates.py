@@ -703,10 +703,21 @@ def test_run_result_refusals_and_findings(tmp_path):
         assert F.findings_from_files([standalone], card={"seat_classes": {"other": {"status": "completed", **bad}}}) == []
     assert len(F.findings_from_files([standalone], card={"seat_classes": {"other": {"status": "completed"}}})) == 1
     from plangraph.spawner.service import SpawnService
-    serv = SpawnService(state=tmp_path); called = []; serv._spawn = lambda **kw: called.append(kw)
+    from types import SimpleNamespace
+    from plangraph.routing_support.fixer import render_fixer_brief
+    serv = SpawnService(state=tmp_path); called = []
+    async def fake_spawn(**kw):  # haiku-C6/qwen-C6: _continue_writer calls runner.spawn, not self._spawn
+        called.append(kw); return SimpleNamespace(job_id="j1", status="completed", exit_code=0, stdout="")
+    serv.runner.spawn = fake_spawn
     for bad in _BAD_META:
         asyncio.run(serv._continue_writer(dict(run_id="r", role="implement", exit_code=0, cwd=str(tmp_path), **bad), "Remaining gaps: x"))
-    assert called == []
+    assert called == []  # a refused record must never reach the spawn call site
+    good = dict(run_id="run-r2", role="implement", exit_code=0, cwd=str(tmp_path), status="completed",
+                chosen_leg={"model": "m", "harness": "h"})
+    asyncio.run(serv._continue_writer(good, "Remaining gaps: x"))
+    assert [kw["model_or_combo"] for kw in called] == ["m"]  # positive control: a good record DOES spawn the continuation
+    assert called[0]["prompt"] == render_fixer_brief([{"text": "x"}])  # with the fixer brief built from the gaps
+    assert good["continuation_reason"] == "remaining_gaps" and good["continuation_run_id"]
     from tools.lane_gates import seats
     s1, s2 = tmp_path / "s1", tmp_path / "s2"; s1.mkdir(); s2.mkdir()
     for s in (s1, s2):
