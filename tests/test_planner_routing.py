@@ -13,7 +13,11 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-    "opencode-glm-5.3-flash-free", "opencode-zen-free", "or-north-mini-code-free",
+    "opencode-glm-5.3-flash-free",
+    "opencode-mimo-v2.6-flash-free", "or-nemotron-3-ultra-free",
+    "or-gemma-4-31b-free", "or-inkling-free", "or-qwen3.8-27b-free",
+    "or-north-mini-free",
+    "opencode-zen-free", "or-north-mini-code-free",
     "or-laguna-s-2.1-free", "or-nemotron-3-super-free", "ovh-gpt-oss-120b",
     "openrouter-free",
     "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro",

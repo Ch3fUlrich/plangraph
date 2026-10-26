@@ -44,12 +44,19 @@ def test_override(tmp_path):
 
 
 def test_seats_and_impossible_fence():
+    # E3b (D-2913): seats come from the code-owned SEAT_ORDER over the
+    # keeper's family table. The hermetic default state has only the
+    # grandfathered legs verified (qodercli, agy-sonnet-5.5, glm) and no
+    # live probe; CARD has no risk tags, so one seat (standard risk).
+    from plangraph.review.family import model_family
     p = plan_spawn(CARD, role="review", writer_families=("gpt",))
-    assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
-    assert all(l.family != "claude" for l in p.legs)
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
-    p = plan_spawn(CARD, role="review", writer_families=("qwen", "deepseek", "glm", "gemini", "mimo"))
-    assert not p.review_seats and p.error
+    assert [l.family for l in p.review_seats] == ["qwen"]
+    assert all(model_family(l.model) != "openai" for l in p.legs)
+    assert plan_spawn(CARD, role="review",
+                      writer_families=("qwen",)).first_leg.id == "agy-sonnet-5.5"
+    p = plan_spawn(CARD, role="review",
+                   writer_families=("qwen", "deepseek", "glm", "gemini", "mimo", "claude"))
+    assert not p.review_seats and p.error == "two distinct review families unavailable"
 
 
 def test_operator_order_and_roles_roundtrip(tmp_path):
@@ -58,8 +65,11 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash", "mimo-v2.6-pro", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
-        "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+        "qodercli-qwen3.8-flash", "opencode-glm-5.3-flash-free",
+        "opencode-mimo-v2.6-flash-free", "or-nemotron-3-ultra-free",
+        "or-gemma-4-31b-free", "or-inkling-free", "or-qwen3.8-27b-free",
+        "or-north-mini-free", "agy-gemini-3.8-flash", "mimo-v2.6-flash",
+        "agy-sonnet-5.5"]
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
     assert load_legs(path) == DEFAULT_LEGS

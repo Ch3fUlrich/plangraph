@@ -10,7 +10,8 @@ from pathlib import Path
 import re
 
 
-ACCEPTED = {"mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro"}
+ACCEPTED = {"mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro",
+            "opencode/mimo-v2.6-flash-free"}
 MODEL = re.compile(r"[\w.-]+/mimo[\w.-]*|(?<![\w/.-])mimo-v2\.6-[a-z]+")
 SKIP = {".git", "node_modules", ".venv", "__pycache__"}
 SUFFIXES = {".json", ".jsonc", ".md", ".yaml", ".yml", ".toml", ".txt", ".prompt", ".config"}

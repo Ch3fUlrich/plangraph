@@ -10,9 +10,10 @@ import pytest
 from plangraph.spawner.mimo_policy import MimoPathError, check_mimo_path
 
 
-GOOD = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
+GOOD = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro",
+        "opencode/mimo-v2.6-flash-free")
 BAD = ("omniroute/mimo-v2.6-flash", "mimo-v2.6-flash",
-       "opencode/mimo-v2.6-flash-free", "mimo-v2.6-pro", "other/mimo-new")
+       "mimo-v2.6-pro", "other/mimo-new")
 
 
 @pytest.mark.parametrize("model", GOOD + ("other/model", "l2-worker"))

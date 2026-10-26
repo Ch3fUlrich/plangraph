@@ -1,10 +1,12 @@
-"""Pure, shared Mimo provider-path policy (D-2459/D-2460)."""
+"""Pure, shared Mimo provider-path policy (D-2459/D-2460/D-2913)."""
 
 import re
 
 from plangraph.routing_errors import SpawnRefused
 
-ACCEPTED_MIMO_IDS = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
+#: D-2913 adds the opencode free-tier path: it is an E3b review seat.
+ACCEPTED_MIMO_IDS = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro",
+                     "opencode/mimo-v2.6-flash-free")
 
 
 class MimoPathError(SpawnRefused):

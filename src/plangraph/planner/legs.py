@@ -84,12 +84,32 @@ from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
+    # D-2744: no deepseek seat, so this leg is a writer only.
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
-        roles=("review", "implement")),
+        roles=("implement",)),
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
         roles=("review", "implement")),
+    # E3b (D-2913) free review seats; exact ids from the host model listing.
+    Leg("opencode-mimo-v2.6-flash-free", "free", "opencode",
+        "opencode/mimo-v2.6-flash-free", "mimo", ("128k",), 100000, True,
+        roles=("review",)),
+    Leg("or-nemotron-3-ultra-free", "free", "opencode",
+        "console-openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia",
+        ("128k",), 100000, True, roles=("review",)),
+    Leg("or-gemma-4-31b-free", "free", "opencode",
+        "console-openrouter/google/gemma-4-31b-it:free", "gemma",
+        ("128k",), 100000, True, roles=("review",)),
+    Leg("or-inkling-free", "free", "opencode",
+        "console-openrouter/thinkingmachines/inkling:free", "inkling",
+        ("128k",), 100000, True, roles=("review",)),
+    Leg("or-qwen3.8-27b-free", "free", "opencode",
+        "console-openrouter/qwen/qwen3.8-27b:free", "qwen",
+        ("128k",), 100000, True, roles=("review",)),
+    Leg("or-north-mini-free", "free", "opencode",
+        "console-openrouter/cohere/north-mini-code:free", "north",
+        ("128k",), 100000, True, roles=("review",)),
     _legacy["opencode-zen-free"],
     _legacy["or-north-mini-code-free"],
     _legacy["or-laguna-s-2.1-free"],
@@ -103,7 +123,7 @@ DEFAULT_LEGS = (
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement", "design")),
-    _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "design")),
+    _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "design", "review")),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
 
@@ -126,6 +146,21 @@ DESIGN_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",
     "agy-sonnet-5.5",
     "agy-gemini-3.8-flash",
+)
+
+# E3b (D-2913): the code-owned review seat order. glm is weak, so it goes
+# last; the spawner walks this and never picks it before the families ahead
+# of it. No deepseek seat (D-2744) and no unlisted leg is ever a seat.
+SEAT_ORDER: tuple[str, ...] = (
+    "qodercli-qwen3.8-flash",
+    "opencode-mimo-v2.6-flash-free",
+    "or-nemotron-3-ultra-free",
+    "or-gemma-4-31b-free",
+    "or-inkling-free",
+    "or-qwen3.8-27b-free",
+    "or-north-mini-free",
+    "agy-sonnet-5.5",
+    "opencode-glm-5.3-flash-free",
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
