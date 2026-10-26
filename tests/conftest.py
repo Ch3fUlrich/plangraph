@@ -16,6 +16,7 @@ import sys
 import tempfile
 import pytest
 from pathlib import Path
+from pgtest_shm import _sweep_dead_pgtest_dirs
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
@@ -45,7 +46,8 @@ def _use_tmpfs_tempdir() -> None:
         st = os.statvfs(shm)
         if st.f_bavail * st.f_frsize < 256 * 1024 * 1024:
             return
-        path = tempfile.mkdtemp(prefix="pgtest-", dir=shm)
+        _sweep_dead_pgtest_dirs(shm)
+        path = tempfile.mkdtemp(prefix=f"pg{os.getpid()}-", dir=shm)
     except OSError:
         return
     atexit.register(shutil.rmtree, path, ignore_errors=True)
