@@ -1,4 +1,4 @@
-# build-L1 card · gen-36 · 2026-10-26 02:3xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
+# build-L1 card · gen-36 · 2026-10-26 04:0xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
 D-2739 (operator): one task loops (no follow-up items), design first for HIGH/>400 lines, slices <=400, 2 text seats, MED in body=changes, fixer>=writer never flash, round>3 -> Opus replan, merge main once before final review.
 D-2749: AutoOS spawner retired; all runs via plangraph spawner; missing feature -> BLOCKED to routing, no fallback.
 D-2744: no deepseek leg (writer or seat, incl opencode free deepseek); mimo-pro, mimo-flash seats only.
@@ -13,9 +13,9 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 |---|---|
 | SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216/#217/#218 MERGED (main 2bdde74a, evidence ok). S3 #213 head 338b4f6a (r2 mimo-pro + L1 1-line stub Hand-Edit); CI 40251267395 green; delta Haiku fix refuted ($J/seat-s3d2-haiku/refutation-L1.txt); MERGED d66bf9e5 (D-2879, CI 40251787608, evidence ok); told workst (mimo-leg test, release 4 Server lanes + AO seat) + server-L1-main [c46235]. S2 #219 MERGED 7b388a51 (GO D-2885); finish219.sh -> evidence. S2 LOWs (I12 fallthrough test, _comm TypeError fallback, payload cleanup on factory exc) -> fix log. workst GREEN mimo-leg run-f5ad2f0f |
 | KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); S2 #220 MERGED f50982d6 (GO D-2889, code only); finish220.sh -> evidence. S3 next (design WRITER BRIEF S3, mimo-pro/agy; D-2888 limits). Live redeploy = own GO + OS-KEEPER-LS9-MIGRATE; 2 seats + judge GO; live redeploy = own GO |
-| REVIEW-METHOD-SETTING #209 | MERGED da92ca78 (D-2824). in_review until #211 merges -> post seat-rms-f2b-haiku unchanged |
+| REVIEW-METHOD-SETTING #209 | MERGED da92ca78. glm delta run-aceba369 VERDICT pass but unpostable (served_model unwitnessed; TEST-GAMING line has quotes -> missing). BLOCKED sent routing 04:0xZ, waiting D-id |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
-| spawn-iso #200 ISOLATION-INPLACE / #201 ORPHAN-REAP (claimed, hb-keys) | #200 head abb80f32 qwen PASS -> finish200.sh (CI->merge->evidence->submit->post). #201 head 5685bfd7 qwen fix (High no real-process test; Med bare except) + L1 F3 Windows taskkill misses orphans after parent exit -> mimo-pro fix r1 ($J/brief-reap-fix1.md, wt .sessions/reap-probe) -> qwen delta -> merge |
+| spawn-iso #200 ISOLATION-INPLACE / #201 ORPHAN-REAP (claimed, hb-keys) | #200 DONE (2348abf2, evidence+submit+qwen post, state done). #201 r1 mimo-pro ff61696a; Haiku delta (H ctor outside try, M close skipped, L pid-None order, L TerminateJobObject rc, L test leak) -> L1 Hand-Edits dc6c2305+05394438 (197 passed, gate 0); taskkill kept after job (hang test needs it). qwen delta seat-reapd2 running -> finish201.sh (CI head->merge->evidence->post 2 qwen) |
 | PG-TEST-SHM-LEAK (std, prio 1) | defined D-2800; non-Claude writer, ~30 lines: pid-named /dev/shm dir + dead-pid sweep in tests/conftest.py |
 | SPAWN-OPENROUTER-FREE-ENDPOINTS (std, prio 5) | defined D-2805; after shm-leak; account/privacy change = operator OS line |
 | SQ12 (workst-L1-autoos) | slices SQ12-a/-b; workst writes held until SPAWN-WIN-PARITY lands |
