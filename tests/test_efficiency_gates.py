@@ -768,6 +768,26 @@ def test_output_on_disk_under_and_over_2mb(tmp_path):
     assert (tmp_path / "dsp" / "runs" / "run-d" / "stdout.log").read_text() == "ATTEMPT-ONEATTEMPT-TWO"  # qwen-C5: DispatchService._save must not clobber the tail from the live job
 
 
+def test_wait_json_returns_the_paths(tmp_path):
+    # haiku-C9/qwen-C8: the design's output-on-disk row says "`wait --json` returns the
+    # paths"; cli.py accepted --json on wait and never read it. A record stored without
+    # the path fields (every record written before this slice) returned none at all.
+    import contextlib, io, time
+    from plangraph.spawner.service import SpawnService
+    from plangraph.spawner.cli import main
+    serv = SpawnService(state=tmp_path)
+    serv._save(dict(run_id="run-w1", status="completed", exit_code=0, stdout="out", stderr="e", ended=time.time()))
+    old = tmp_path / "runs" / "run-w2"; old.mkdir(parents=True)  # pre-slice record: no path fields
+    (old / "record.json").write_text(json.dumps({"run_id": "run-w2", "status": "completed", "exit_code": 0, "ended": 1.0}))
+    for run_id, run_dir in (("run-w1", tmp_path / "runs" / "run-w1"), ("run-w2", old)):
+        cap = io.StringIO()
+        with contextlib.redirect_stdout(cap):
+            assert main(["--state", str(tmp_path), "wait", run_id, "--json"]) == 0
+        out = json.loads(cap.getvalue())
+        assert out["stdout_path"] == out["stdout_log"] == str(run_dir / "stdout.log")
+        assert out["stderr_path"] == out["stderr_log"] == str(run_dir / "stderr.log")
+
+
 def test_cancel_with_class_racing_minus_9():
     # haiku-C5: the monitor must actually run before the assertions read the job. The
     # synchronous tree_killer never suspends, so task.cancel() landed on a monitor that

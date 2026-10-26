@@ -325,6 +325,13 @@ raise SystemExit(code)
             result = asyncio.run(service.cancel(args.run_id))
         elif args.verb == 'wait':
             result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
+            if args.json:
+                # PG-EFFICIENCY-GATES output on disk: "wait --json returns the paths".
+                # Records stored before the path fields existed get them from the run dir.
+                run_dir = service.state / 'runs' / args.run_id
+                for s in ('stdout', 'stderr'):
+                    for k in (f'{s}_path', f'{s}_log'):
+                        result.setdefault(k, str(run_dir / f'{s}.log'))
         else:
             result = service.result(args.run_id)
         if isinstance(result, dict):
