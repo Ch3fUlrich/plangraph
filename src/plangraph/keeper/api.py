@@ -302,7 +302,16 @@ class KeeperHandler(BaseHTTPRequestHandler):
             if name in ("create_items", "import_items") and isinstance(body, list):
                 body = {"items": body}
             else:
-                raise Refused("validation", "body must be a JSON object")
+                # 203-r5 T3: a non-dict body is refused at the role-first seam
+                # like any other malformed body, never before it (qwen-S3
+                # class): a wrong-role caller gets the audited 403, an
+                # admitted role the -- now audited -- 400.  Inline verbs pass
+                # their INLINE_ROLES entry (the same list the _inline_call
+                # seam uses); routed verbs pass None, deferring to ROLE_GATE
+                # inside _run (roles live only in the store, qwen-R2).
+                store.refuse_malformed_body(
+                    principal, name, None, api_routes.INLINE_ROLES.get(name),
+                    Refused("validation", "body must be a JSON object"))
         if name in api_routes.WORKER_VERBS:   # RT-P1-KEEPER: the store resolves the card
             return api_routes.worker_write(store, principal, name, extra, body)
         if name in api_routes.JEV_VERBS:      # RT-P1-JEV-SHADOW: the store resolves card

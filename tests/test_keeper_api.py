@@ -112,6 +112,51 @@ def test_the_token_principal_is_used_not_the_body(srv, w):
     assert jbody(raw)["error"] == "forbidden"
 
 
+def test_non_object_body_is_refused_role_first_and_audited(srv, w):
+    """203-r5 T3 (qwen-S3 class): a non-object body is refused at the
+    role-first seam, never before it.  The same request (POST ``[1, 2]``)
+    classifies by role: a wrong-role caller gets the audited 403, a caller
+    the verb admits gets the -- now audited -- 400 validation.  Both seam
+    paths are covered: an inline verb (roles from ``INLINE_ROLES``) and a
+    routed verb (``roles=None`` defers to ``ROLE_GATE`` inside ``_run``).
+
+    Positive control: the two halves share one request shape and each pins
+    the other's opposite -- a role-only seam would give workerA 403 on
+    ``claim``; a validation-only seam would give reader 400 on ``claim``.
+    """
+    def tail():
+        row = w.conn.execute(
+            "SELECT action, ok, code FROM audit_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return tuple(row) if row is not None else None
+
+    # inline verb: claim admits l1/worker, so reader is the wrong role
+    status, _, raw = call(srv, "/v1/claim", method="POST", body=[1, 2],
+                          token=w.tok("reader"))
+    assert status == 403, raw
+    assert jbody(raw)["error"] == "forbidden"
+    assert tail() == ("claim", 0, "forbidden")
+    status, _, raw = call(srv, "/v1/claim", method="POST", body=[1, 2],
+                          token=w.tok("workerA"))
+    assert status == 400, raw
+    assert jbody(raw)["error"] == "validation"
+    assert jbody(raw)["msg"] == "body must be a JSON object"
+    assert tail() == ("claim", 0, "validation")
+
+    # routed verb: ROLE_GATE admits router/oversight only, roles=None defers
+    status, _, raw = call(srv, "/v1/apply_ops", method="POST", body=[1, 2],
+                          token=w.tok("workerA"))
+    assert status == 403, raw
+    assert jbody(raw)["error"] == "forbidden"
+    assert tail() == ("apply_ops", 0, "forbidden")
+    status, _, raw = call(srv, "/v1/apply_ops", method="POST", body=[1, 2],
+                          token=w.tok("router"))
+    assert status == 400, raw
+    assert jbody(raw)["error"] == "validation"
+    assert jbody(raw)["msg"] == "body must be a JSON object"
+    assert tail() == ("apply_ops", 0, "validation")
+
+
 def test_oversize_body_is_413(srv, w):
     big = b"x" * (api.MAX_BODY + 1)
     status, _, raw = call(srv, "/v1/claim", method="POST", body=big,

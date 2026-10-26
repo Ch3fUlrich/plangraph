@@ -299,9 +299,14 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
 
         A principal outside *roles* gets the audited ``forbidden``; one inside
         them gets *invalid* (the validation refusal), audited as well.
+        ``roles=None`` defers to the seam's own gate (``ROLE_GATE`` inside
+        ``_run``) -- used where the roles live only in the store, so no third
+        role table is invented at the API (qwen-R2); the refusal is still
+        audited and still role-first where a gate exists.
         """
         def verb(now):
-            self._require_role(principal, *roles)
+            if roles is not None:
+                self._require_role(principal, *roles)
             raise invalid
         return self._run(principal, action, key, verb)
 
