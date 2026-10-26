@@ -290,7 +290,7 @@ def test_claude_writer_followed_by_clean_writer_still_fails(repo: Path):
     base = _head(repo)
     message = (
         "feat: two writers\n\n"
-        "Writer: claude run-old\n\n"
+        "Writer: claude run-old\n"
         "Writer: mimo-v2.6-flash run-1\n"
     )
     sha = _commit(repo, message)
@@ -301,7 +301,7 @@ def test_two_clean_writer_lines_pass(repo: Path):
     base = _head(repo)
     message = (
         "feat: two writers\n\n"
-        "Writer: mimo-v2.6-flash run-1\n\n"
+        "Writer: mimo-v2.6-flash run-1\n"
         "Writer: mimo-v2.6-flash run-2\n"
     )
     sha = _commit(repo, message)
@@ -356,7 +356,7 @@ def test_exempt_list_read_from_base_not_from_pr_edit(repo: Path):
     # The PR adds the violating sha to the working-tree exempt file...
     head = _commit(
         repo,
-        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
+        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"# frozen: no shas yet\n{sha}\n"},
     )
     assert sha in load_exempt(repo / EXEMPT_REL), "working tree really does exempt it"
@@ -372,7 +372,7 @@ def test_exempt_bootstrap_uses_working_tree_when_absent_in_base(repo: Path):
     sha = _commit(repo, "feat: no trailer at all")
     head = _commit(
         repo,
-        "chore: introduce exempt file\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
+        "chore: introduce exempt file\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"{sha}\n"},
     )
     assert check(base, head, exempt=EXEMPT_REL, cwd=repo) == [
@@ -406,7 +406,7 @@ def test_deleted_test_file_with_trailer_passes(repo: Path):
     )
     sha = _commit(
         repo,
-        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
         "Test-Removal: D-2047\n",
         remove=("tests/test_x.py",),
     )
@@ -423,7 +423,7 @@ def test_lowercase_test_removal_trailer_passes(repo: Path):
     )
     sha = _commit(
         repo,
-        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
         "test-removal: D-1\n",
         remove=("tests/test_x.py",),
     )
@@ -439,7 +439,7 @@ def test_test_removal_trailer_with_trailing_junk_does_not_satisfy(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
         "Test-Removal: D-12x\n",
         remove=("tests/test_x.py",),
     )
@@ -528,7 +528,7 @@ def test_removed_async_test_function_with_trailer_passes(repo: Path):
     )
     sha = _commit(
         repo,
-        "refactor: drop the test body\n\nWriter: mimo-v2.6-flash run-2\n\n"
+        "refactor: drop the test body\n\nWriter: mimo-v2.6-flash run-2\n"
         "Test-Removal: D-94\n",
         files={"tests/test_y.py": "async def helper():\n    pass\n"},
     )
@@ -539,7 +539,7 @@ def test_test_removal_trailer_without_removed_test_is_not_a_violation(repo: Path
     base = _head(repo)
     sha = _commit(
         repo,
-        "feat: no test touched\n\nWriter: mimo-v2.6-flash run-1\n\n"
+        "feat: no test touched\n\nWriter: mimo-v2.6-flash run-1\n"
         "Test-Removal: D-2047\n",
     )
     assert check(base, sha, cwd=repo) == []
@@ -549,7 +549,7 @@ def test_co_authored_by_claude_passes(repo: Path):
     base = _head(repo)
     message = (
         "feat: fine\n\n"
-        "Writer: mimo-v2.6-flash run-1\n\n"
+        "Writer: mimo-v2.6-flash run-1\n"
         "Co-Authored-By: Claude Assistant\n"
     )
     sha = _commit(repo, message)
@@ -610,7 +610,7 @@ def test_cli_default_exempt_resolves_from_base_not_from_pr_edit(repo: Path, monk
     sha = _commit(repo, "feat: no trailer at all")
     head = _commit(
         repo,
-        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
+        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"# frozen: no shas yet\n{sha}\n"},
     )
     assert sha in load_exempt(repo / EXEMPT_REL), "working tree really does exempt it"
@@ -787,7 +787,7 @@ def test_js_test_removal_needs_trailer(repo: Path):
     )
     sha = _commit(
         repo,
-        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\n\nTest-Removal: D-1\n',
+        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\nTest-Removal: D-1\n',
         remove=('tests/foo.test.js',),
     )
     assert check(base, sha, cwd=repo) == []
@@ -875,7 +875,7 @@ def test_gate_edit_required_for_workflow_and_exempt(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n',
+        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n',
         files={'.github/workflows/x.yml': 'name: y\n'},
     )
     assert check(base, sha, cwd=repo) == []
@@ -883,7 +883,7 @@ def test_gate_edit_required_for_workflow_and_exempt(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-x\n',
+        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-x\n',
         files={'.github/workflows/x.yml': 'name: z\n'},
     )
     assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
@@ -1161,4 +1161,95 @@ def test_e1_drift_and_shared_fixture():
         assert g == exp_gate and d == exp_gate, f"mismatch on {path}"
         r = "writer" if exp_gate is not None else "direct_edit"
         assert r == exp_route, f"route mismatch on {path}"
+
+
+def test_e1_trailers_final_paragraph_only(repo: Path):
+    # buildl1-T1 (D-2879): trailers are read exactly as git reads them — the
+    # final paragraph only (338b4f6a body shape: a Plan-Item/Hand-Edit
+    # paragraph, blank line, a Co-Authored-By/Claude-Session paragraph).
+    base = _head(repo)
+    body = "docs: fix typo\n\nPlan-Item: demo:ITEM\nHand-Edit: edit\n\nCo-Authored-By: x\nClaude-Session: y\n"
+    sha = _commit(repo, body, {"docs/t.md": "l\n"})
+    assert f"{sha}: trailer outside final block" in check(base, sha, cwd=repo)
+    # the gate's block equals git's own parse of the same message
+    seen = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],
+        input=body, cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    assert ci_commit_gate._trailer_block_lines(body, cwd=repo) == seen
+    # positive control: the same trailers in one final paragraph are seen and pass
+    ok = _commit(
+        repo,
+        "docs: fix typo\n\nCo-Authored-By: x\nClaude-Session: y\nPlan-Item: demo:ITEM\nHand-Edit: edit\n",
+        {"docs/t2.md": "l\n"},
+    )
+    assert check(sha, ok, cwd=repo) == []
+
+
+def test_e1_strict_trailer_in_prose_paragraph_refused(repo: Path):
+    # haiku-G1 (D-2879): a strict Hand-Edit beside prose is invisible to git's
+    # trailer parse; the gate must refuse instead of skipping every check.
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "docs: sneak\n\nHand-Edit: edit\nprose line here\n\nWriter: mimo-v2.6-flash run-1\n",
+        {"tools/seat_verdict.py": "x\n"},
+    )
+    assert check(base, sha, cwd=repo) == [f"{sha}: trailer outside final block"]
+    # positive control: the same Hand-Edit in the final trailer block gets the door refusal
+    ok = _commit(
+        repo,
+        "docs: sneak\n\nprose line here\n\nHand-Edit: edit\nWriter: mimo-v2.6-flash run-1\n",
+        {"tools/seat_verdict.py": "y\n"},
+    )
+    assert check(sha, ok, cwd=repo) == [
+        f"{ok}: hand-edit touches auth/door surface: tools/seat_verdict.py"
+    ]
+
+
+def test_e1_out_of_block_hand_edit_with_empty_plan_item_refused(repo: Path):
+    # mimopro-G1 (D-2879): an empty Plan-Item value hides a strict Hand-Edit
+    # from the block walk, so the E1a caps were fail-open on this path.
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "feat: big\n\nPlan-Item: \nHand-Edit: sneak\n\nWriter: mimo-v2.6-flash r1\n",
+        {"tools/seat_verdict.py": "x\n" * 100},
+    )
+    v = check(base, sha, cwd=repo)
+    assert v == [f"{sha}: trailer outside final block"]
+    # positive control: the same Hand-Edit in a well-formed final block is refused on the door
+    ok = _commit(
+        repo,
+        "feat: big\n\nWriter: mimo-v2.6-flash r1\nPlan-Item: demo:ITEM\nHand-Edit: sneak\n",
+        {"src/plangraph/keeper/mcp.py": "z\n"},
+    )
+    assert check(sha, ok, cwd=repo) == [
+        f"{ok}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py"
+    ]
+
+
+def test_e1_route_decision_body_text_and_duplicate(repo: Path):
+    # mimopro-G6 (D-2879): a strict Route-Decision written as body text is not
+    # the required trailer, and a duplicate pair is refused with a true reason.
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        f"feat: big\n\nRoute-Decision: route-{'a' * 32}\nNote: this reads like body text\n\nHand-Edit: e\n",
+        {"docs/b.md": "l\n" * 60},
+    )
+    v = check(base, sha, cwd=repo)
+    assert f"{sha}: trailer outside final block" in v
+    assert any("without Route-Decision" in x for x in v)
+    # positive control: 60 lines with a real Route-Decision trailer passes
+    ok = _he(repo, 60, rd=True)
+    assert check(sha, ok, cwd=repo) == []
+    # two Route-Decision trailers under the 50 sum are refused, reason named truthfully
+    dup = _he(repo, 10, item="fresh:ITEM", extra=f"{VALID_ROUTE_DECISION}\n{VALID_ROUTE_DECISION}\n")
+    assert check(ok, dup, cwd=repo) == [
+        f"{dup}: hand-edit carries multiple Route-Decision trailers for fresh:ITEM"
+    ]
+    # positive control: one well-formed trailer under the sum passes
+    one = _he(repo, 10, item="fresh:ITEM2", rd=True)
+    assert check(dup, one, cwd=repo) == []
 
