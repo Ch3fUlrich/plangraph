@@ -75,9 +75,15 @@ def _card(risk=None):
     return card
 
 
-def _leg_state(available=None, limited=()):
-    """Fake leg_state reader; with `available`, everything else is limited."""
+def _leg_state(available=None, limited=(), verified=None):
+    """Fake leg_state reader; with `available`, everything else is limited.
+
+    ``verified=None`` means every leg is verified ("every leg verified and
+    available"); otherwise ``verified`` is the set of verified leg ids
+    (E3b item 5: verified before counted).
+    """
     available = None if available is None else set(available)
+    verified = None if verified is None else frozenset(verified)
 
     def reader(model, now=None, account=None, combo=None):
         if available is not None and model not in available:
@@ -86,6 +92,7 @@ def _leg_state(available=None, limited=()):
             state = "limited" if model in limited else "ok"
         return {"state": state, "evidence": "fake"}
 
+    reader.verified = lambda leg, now=None: True if verified is None else leg in verified
     return reader
 
 
@@ -153,6 +160,13 @@ def test_glm_is_picked_only_when_every_earlier_family_is_blocked():
                       leg_reader=_leg_state(limited=("sonnet-5.5", "agy/sonnet-5.5")),
                       legs=DEFAULT_LEGS)
     assert _seat_ids(plan) == ["or-north-mini-free"]
+    # negative control: an unverified earlier family is skipped like a blocked
+    # one - cohere's leg is available but unverified, so glm takes the seat
+    plan = plan_spawn(_card(), role="review", writer_families=writers[:-1],
+                      leg_reader=_leg_state(limited=("sonnet-5.5", "agy/sonnet-5.5"),
+                                            verified=("opencode-glm-5.3-flash-free",)),
+                      legs=DEFAULT_LEGS)
+    assert _seat_ids(plan) == ["opencode-glm-5.3-flash-free"]
 
 
 def test_deepseek_is_refused_even_when_a_config_lists_it():
@@ -325,3 +339,43 @@ def test_grandfathered_legs_verified_in_code_and_revocable(tmp_path):
     # negative control: a failed verify revokes the grandfathered state again
     store.record_verify("agy-sonnet-5.5", False, "run-3", now)
     assert store.verified("agy-sonnet-5.5", now) is False
+
+
+def test_unverified_legs_are_skipped_as_seats():
+    # the hermetic default state has only the grandfathered legs verified
+    plan = plan_spawn(_card("high"), role="review",
+                      writer_families=("xiaomi", "anthropic", "glm"),
+                      leg_reader=_leg_state(verified=("qodercli-qwen3.8-flash",
+                                                      "agy-sonnet-5.5",
+                                                      "opencode-glm-5.3-flash-free")),
+                      legs=DEFAULT_LEGS)
+    assert _seat_ids(plan) == ["qodercli-qwen3.8-flash"]
+    assert plan.error == "two distinct review families unavailable"
+    assert any(s["leg"] == "or-nemotron-3-ultra-free" and s["reason"] == "unverified"
+               for s in plan.skipped)
+    # positive control: every leg verified and available -> qwen + nemotron-ultra
+    plan = plan_spawn(_card("high"), role="review", writer_families=("xiaomi", "anthropic"),
+                      leg_reader=_leg_state(), legs=DEFAULT_LEGS)
+    assert _seat_ids(plan) == ["qodercli-qwen3.8-flash", "or-nemotron-3-ultra-free"]
+
+
+def test_a_passing_verify_counts_and_an_old_one_does_not(tmp_path):
+    store = LegStateStore(tmp_path / "state.sqlite")
+    now = 1_000_000.0
+    writers = ("xiaomi", "anthropic", "glm")
+
+    def pick():
+        return _seat_ids(plan_spawn(_card("high"), role="review",
+                                    writer_families=writers, leg_reader=store,
+                                    legs=DEFAULT_LEGS, now=now))
+    # unverified legs are skipped as seats
+    assert pick() == ["qodercli-qwen3.8-flash"]
+    # negative control: a 7-day-old verify does not count
+    store.record_verify("or-gemma-4-31b-free", True, "run-1", now - 7 * 86400)
+    assert pick() == ["qodercli-qwen3.8-flash"]
+    # positive control: a passing verify counts, in seat order
+    store.record_verify("or-gemma-4-31b-free", True, "run-2", now - 60)
+    assert pick() == ["qodercli-qwen3.8-flash", "or-gemma-4-31b-free"]
+    # negative control: a failed verify revokes the seat again
+    store.record_verify("or-gemma-4-31b-free", False, "run-3", now - 30)
+    assert pick() == ["qodercli-qwen3.8-flash"]

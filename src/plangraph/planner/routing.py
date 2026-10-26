@@ -297,6 +297,10 @@ class SpawnPlan:
 
     @property
     def first_leg(self) -> Leg | None:
+        # E3b (D-2913): a review plan runs its seats, so the first seat leads
+        # the plan and glm can never lead while a family ahead of it seats.
+        if self.review_seats:
+            return self.review_seats[0]
         return self.legs[0] if self.legs else None
 
     def to_dict(self):
@@ -358,7 +362,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
             ):
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
-    from plangraph.routing_support.leg_state import leg_status
+    from plangraph.routing_support.leg_state import GRANDFATHERED_VERIFIED, leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS
     legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
@@ -477,12 +481,24 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         # spelling), deepseek (D-2744) and seated families never seat again.
         families = {_family_name(f) for f in excluded} | {"deepseek"} | writer_set
         by_id = {leg.id: leg for leg in ordered}
+        verify = getattr(leg_reader, "verified", None)
+
+        def _verified(leg_id):
+            # Verified before counted (E3b item 5): without a verify-capable
+            # reader the code-owned grandfathered legs are the default state.
+            return (verify(leg_id, now) if verify is not None
+                    else leg_id in GRANDFATHERED_VERIFIED)
+
         for seat_id in SEAT_ORDER:
             leg = by_id.get(seat_id)
             if leg is None:
                 continue
             fam = _family_of(leg)
             if fam in families:
+                continue
+            if not _verified(seat_id):
+                skipped.append({"leg": seat_id, "reason": "unverified",
+                                "evidence": None})
                 continue
             seats.append(leg)
             families.add(fam)
