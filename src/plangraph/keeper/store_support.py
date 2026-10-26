@@ -147,17 +147,33 @@ class SupportMixin:
         release or claim by another principal), its recorded ``base`` commit
         is returned as ``(base, True)``, or ``(None, True)`` if unrecorded
         or invalid (failing closed).
+
+        D-3066: a router ``floor_waived`` event is also a floor event — the
+        newest of released | foreign claimed | floor_waived decides.  A waiver
+        with a ``sha_floor`` becomes the floor (``(sha_floor, True)``: the
+        descend check runs against it); one without lifts the requirement
+        (``(None, False)``).  Any later release or foreign claim supersedes
+        the waiver automatically by being newer.
         """
         claimant = item.get("claimed_by") or ""
         row = self.conn.execute(
-            "SELECT payload FROM events WHERE key=? AND ("
-            "type='released' OR (type='claimed' AND COALESCE(actor, '') != ?))"
+            "SELECT type, payload FROM events WHERE key=? AND ("
+            "type='released' OR type='floor_waived' OR "
+            "(type='claimed' AND COALESCE(actor, '') != ?))"
             " ORDER BY seq DESC LIMIT 1",
             (item["key"], claimant),
         ).fetchone()
         if row is None:
             return (None, False)
         payload = _json_dict(row["payload"])
+        if row["type"] == "floor_waived":
+            sha_floor = payload.get("sha_floor") if isinstance(payload, dict) else None
+            if sha_floor is None:
+                return (None, False)
+            if isinstance(sha_floor, str) and valid_commit_ref(sha_floor) \
+                    and sha_floor == sha_floor.lower():
+                return (sha_floor, True)
+            return (None, True)   # tampered waiver payload: fail closed
         base = payload.get("base") if isinstance(payload, dict) else None
         if isinstance(base, str) and valid_commit_ref(base) and base == base.lower():
             return (base, True)
