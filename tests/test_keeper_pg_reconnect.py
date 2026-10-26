@@ -619,6 +619,20 @@ def test_s2_fatal_from_handler_sets_stop(tmp_path):
     assert stopped.is_set()
 
 
+def test_s2_health_503_when_fatal_conn_healthy(tmp_path):
+    """I11: fatal_reason alone flips /v1/health to 503 even on a healthy conn (F3)."""
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    try:
+        assert doors.http("reader", "GET", "/v1/health") == (200, {"status": "ok"})
+        doors.server.fail("postgres keeper lock session lost")
+        status, body = doors.http("reader", "GET", "/v1/health")
+    finally:
+        doors.close()
+        w.close()
+    assert (status, body) == (503, {"status": "unavailable"})
+
+
 def test_s2_dead_lock_session_exits_75(tmp_path, monkeypatch):
     w = World(tmp_path)
     port = free_port()
