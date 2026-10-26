@@ -122,3 +122,11 @@ ef1c3d9b90cc0fef0bb6475337effed71ae0397a
 5fc37edcfbee56ff33ecb7ea1a309a55fe9c2537
 # D-2739 operator override, lane/eff-203-fix
 6100115cabb8b797e791ed9503fa16f704515214
+# #229 phase pre-gate history (D-2938): Test-Removal: rename, D-2938 (test_all_pg_migrations_apply_in_order_exec_7_then_oversight_8 -> ..._exec_7_oversight_8_bus_9)
+bf7c3bfb22a5062a3ba78e98d1b6c84ea2d03d36
+# #229 phase pre-gate history (D-2938): Test-Removal: rename, D-2938 (test_schema_version_is_thirteen -> test_schema_version_is_fourteen, schema v14)
+d9b46912d0a504a43808c02340fbdafbffab9df9
+# #229 phase pre-gate history (D-2938): 138-line per-value scrub allowances, every allow_value pins a value_sha256
+91e47fec42044aafcbf5d984e4485ee8dc79602d
+# #229 phase pre-gate history (D-2938): operator's own 1-line test commit
+b0648e545bde543746853650d30c10c211c7de19
