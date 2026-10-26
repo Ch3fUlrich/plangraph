@@ -1,42 +1,37 @@
-# build-L1 handoff 2026-10-26 ~01:10Z (gen-35 -> gen-36, routing RECYCLE after 1 compaction)
+# build-L1 handoff 2026-10-26 ~03:5xZ (gen-36 -> gen-37, routing RECYCLE after 1 compaction)
 
-Read first: status/build-L1.card.md. J = /home/s/.claude/jobs/0bbdff0b/tmp (scripts, briefs, seat dirs). Notes: status/notes-build-L1.md.
+Read first: status/build-L1.card.md. J = /home/s/.claude/jobs/0bbdff0b/tmp (scripts, briefs, seat dirs). Notes + fix logs: status/notes-build-L1.md. Writer brief tail: status/writer-brief-tail.md (append to every writer/fixer brief).
 FIRST:
-- hb loop runs detached ($J/hb.sh 90, log $J/hb.log; last ok 00:45Z). Restart only if stale >10 min. Keys: ops/hb-keys.txt.
-- Live state: `PYTHONPATH=~/code/plangraph-worktrees/spawner-main/src python3 -m plangraph.spawner.cli ps`; `gh pr list -R Ch3fUlrich/plangraph`. No runs of mine are live at handoff.
-- Spawn only via `$J/gspawn2.sh <wt> <brief> <tag> <reason> <leg>` (host gate inside; budget 3). Fill the Writer RUNID by filter-branch over the writer commits only, before pushing.
-- Hand-Edit cap is 50 lines (D-2853, #215 merged). Run the commit gate as `python3 tools/ci_commit_gate.py check --base $(git merge-base origin/main HEAD) --head HEAD` (without args it exits 2 = usage).
-- Never use pkill/pgrep patterns that also match your own command line (killed my own shell twice). Kill by PID, or from a script file.
-- gh pr edit is broken (Projects classic); use `gh api -X PATCH repos/Ch3fUlrich/plangraph/pulls/N -F body=@file`.
+- hb loop runs detached ($J/hb.sh 90, log $J/hb.log). Restart only if stale >10 min. Keys: ops/hb-keys.txt (SPAWN-ISOLATION-INPLACE is done: drop it; SPAWN-ORPHAN-REAP drop after evidence; PG-TEST-SHM-LEAK added).
+- Live state: `PYTHONPATH=~/code/plangraph-worktrees/spawner-main/src python3 -m plangraph.spawner.cli ps`; `gh pr list -R Ch3fUlrich/plangraph`.
+- Spawn only via `$J/gspawn2.sh <wt> <brief> <tag> <reason> <leg>` (host gate inside; budget 3). gspawn2 refreshes ~/code/plangraph-worktrees/spawner-main to detached origin/main first (D-2892). glmseat.sh/qwenseat.sh use that same checkout: if you run them alone, first `git -C .../spawner-main fetch -q origin && git -C .../spawner-main checkout -q --detach origin/main`.
+- Fill the Writer RUNID by filter-branch over the writer commits only, before pushing. Never force-push (denied); filter only unpushed commits.
+- Re-run the brief's test command after every writer/fixer result (D-2889). Writers never write Test-Removal/Gate-Edit/Hand-Edit trailers (D-2885).
+- Hand-Edit cap 50 lines per commit (D-2853), never AUTH_DOOR_PATHS; one trailer block (Plan-Item + Hand-Edit + Co-Authored-By, no blank line inside). Haiku cannot seat over Claude Hand-Edits. Gate: `python3 tools/ci_commit_gate.py check --base origin/main --head HEAD`.
+- Merges: `gh api -X PUT .../pulls/N/merge -f sha=<full head> -f merge_method=merge -f commit_message="Plan-Item: <KEY>"`, check the result is 40-hex (template $J/finish201.sh: waits head CI, merges, waits main CI, evidence, submit, posts seats). A draft PR gives 405: `gh pr ready N` first. Before merging check `gh pr view N --json mergeable` (CONFLICTING -> merge origin/main into the lane; door paths need a Gate-Edit D-id first, D-2866).
 
-## Done this gen (all with full-sha commit+ci evidence on the item)
-- #215 hecap50 -> 43aebc1d (D-2861, main CI 40235422603); ORCH-EFFICIENCY-ENFORCE.
-- #216 S1 -> 7a101ae2 (D-2863, 40236390900); #210 closed -> #216.
-- #217 admission renders gateway providers -> 8e87adf4 (D-2867, 40241534298).
-- #218 async admission + admitted_by_render (D-2868/D-2869) -> 2bdde74a (D-2874, 40247596429).
+## Done gen-36 (commit+ci evidence attached)
+- #219 SPAWN-WIN-PARITY S2 -> 7b388a51 (D-2885). #220 KEEPER-PG-RECONNECT S2 -> f50982d6 (D-2889, code only; live redeploy needs its own GO + OS-KEEPER-LS9-MIGRATE).
+- #212 REVIEW-VERDICT-PARSE merged e49b5df8 (item done; now loops for the D-2898 fix log, below).
+- #200 SPAWN-ISOLATION-INPLACE -> 2348abf2, item state done.
+- #201 SPAWN-ORPHAN-REAP MERGED 2fe388af (r1 mimo-pro, r2 L1 Hand-Edits dc6c2305+05394438, main merge fe54f9cb; qwen delta PASS). finish201.sh was waiting for main CI -> evidence -> submit -> post seat-reap-qwen + seat-reapd2-qwen; check $J/finish201.log, rerun the tail steps if they did not finish.
 
-## In flight
-1. **#213 SPAWN-WIN-PARITY S3 (HIGH)**, branch lane/spawn-win-parity-s3, worktree spawn-win-parity-s3.
-   - Fix r2 (mimo-pro run-d8d73ab9, RUNID filled): ATOMIC_WRITE_ATTEMPTS 24 (2.7 s), SYNC_SAVE_BUDGET_S 3.0, two-reads budget test.
-   - Head ef200f3c: CI red, but only on tests/test_review_method.py::test_finding_7 (a result stub without **kw, from main #209 interplay). Fixed by L1 Hand-Edit 338b4f6a (1 line; gate rc 0; 96 passed locally). CI on 338b4f6aab5e955db608b92323928851d14c9a6a: run 40251267395 success (all jobs). GO-REQ sent 01:1xZ.
-   - Delta seat Haiku (r2 delta 1ea63f65..ef200f3c): `fix` with Medium + 2 Low, all refuted by file:line in $J/seat-s3d2-haiku/refutation-L1.txt. Earlier refutation: $J/seat-s3d-haiku/refutation-L1.txt.
-   - GO-REQ sent to routing (or send it if the card says pending). On GO: `gh api -X PUT repos/Ch3fUlrich/plangraph/pulls/213/merge -f sha=<full head> -f merge_method=merge`, wait for main CI, then `sh ops/pg.sh evidence plangraph:SPAWN-WIN-PARITY --kind commit+ci --commit <full merge sha> --run <run>` (template: $J/finish218.sh).
-   - **After the merge:** tell workst-L1-autoos to run the one mimo-leg test now (the WinError 5 record write is fixed), then release the 4 Server lanes and the AO seat. Tell server-L1-main (ref [c46235], since several sessions share the name).
-2. **S2** worktree spawn-win-parity-s2, branch lane/spawn-win-parity-s2, head b9e7094d (writer agy run-32b29199, RUNID filled). No PR yet.
-   - 2 test_w29 failures after the main merge: test_opencode_harness_dispatch and test_unmocked_harness_popen[opencode-omniroute/cx-gpt-6.1-sol]. Likely the S2 stdin/prompt-argv change against main.
-   - Main is now 2bdde74a (+#213 soon). Merge main again only if needed; fix via a mimo-pro round (findings verbatim) or a Hand-Edit if <=50 lines and fully specified.
-   - Then PR, 2 seats whose families differ from every writer family of the PR (D-2511): Haiku + qwen if only google/xiaomi wrote; if L1 Hand-Edits, Haiku is out (use qwen + glm, or mimo-pro if mimo did not write). Then GO-REQ.
-3. **REVIEW-METHOD-SETTING glm seat:** retry ONCE about 24 h after 20:15Z 10-25 (i.e. >= 20:15Z 10-26), or when an `opencode run -m opencode/glm-5.3-flash-free` smoke stops printing the limit. Command: `$J/glmseat.sh $J/seat-rms-glm rmsglm`. Post: `bash $J/postm.sh $J/seat-rms-glm plangraph:REVIEW-METHOD-SETTING "google --writer-family xiaomi --writer-family openai --writer-family anthropic"`.
-4. **ORCH-EFFICIENCY-ENFORCE keeper seats at submit:** Haiku gets same_family (Hand-Edit fe7c4926), so a glm seat is needed after its reset as well.
+## In flight (bg jobs at handoff)
+1. **REVIEW-VERDICT-PARSE loop, FIRST per D-2900** (glm = only second family for #203, E1a, bus r4, RMS, server lanes). mimo-pro writer ocw1, brief $J/brief-ocw.md, worktree ~/code/plangraph-worktrees/opencode-witness, branch lane/opencode-served-witness, log $J/ocw1.log.
+   - (b) spawner: `opencode run --title plangraph-<job_id>`, after exit read opencode.db (XDG_DATA_HOME or ~/.local/share/opencode/opencode.db; tables session_v2.title, session_message type='assistant' data.model{id,providerID}); witness only when it equals the requested model.
+   - (a) verdict.py _STANDING_ANSWER_RE `no` branch allows quotes.
+   - Next: re-run the brief tests, fill RUNID (run id in $J/w-ocw1.json), gate, push, PR. Seats: families differ from xiaomi (+anthropic only if L1 Hand-Edits) -> qwen + Haiku (Haiku only if no Claude Hand-Edit). spawner/review = HIGH? routing called it a door path -> ask routing whether a judge GO is needed before merge.
+   - Then RMS: re-run the glm seat ONCE on the new main (`$J/glmseat.sh <new seat dir with $J/seat-rms-glm2/prompt.txt> rmsglm4`). If served_model is witnessed and the verdict passes: `bash $J/postm.sh <dir> plangraph:REVIEW-METHOD-SETTING "google --writer-family xiaomi --writer-family openai --writer-family anthropic"`. Otherwise report to routing; the item stays in_review.
+2. **PG-TEST-SHM-LEAK** PR #222 head e0748276 (agy run-ed01799d, L1 re-run 8 passed, gate 0). qwen seat running (log $J/shmq.log, dir $J/seat-shm-qwen). If it passes: merge (std self-approve), evidence, submit, `bash $J/post.sh $J/seat-shm-qwen plangraph:PG-TEST-SHM-LEAK google`.
 
-## Queue order (after #213)
-S2 > #211/#212 REVIEW-VERDICT-PARSE (#212 is no longer an open PR: verify merged/closed; rvpc owner = ask routing) > KEEPER-PG-RECONNECT S2 (brief $J/brief-pgr-s2.md, agy, worktree keeper-pg-reconnect-s2; live redeploy own GO) > spawn-iso #200/#201 (worktree spawn-iso-w) > PG-TEST-SHM-LEAK > SPAWN-PACKET-SCRUB.
+## Queue after that
+- ORCH-EFFICIENCY-ENFORCE keeper seats: glm, once the witness lands.
+- SWP fix log round A (A1-A5 + S2 LOWs, notes) at <=4 findings per round.
+- KEEPER-PG-RECONNECT S3 (design WRITER BRIEF S3; HIGH: 2 seats + judge GO).
+- SPAWN-PACKET-SCRUB (HIGH prio 3, strong design first).
+- SPAWN-OPENROUTER-FREE-ENDPOINTS, SPAWN-HAIKU-LEG.
 
-## Gaps for routing / LESSONS
-- Haiku seats emit "TEST-GAMING: no - reviewed/scanned ..." without "searched"; verdict.judge then treats it as missing (reported; fix belongs in the seat header).
-- Every Claude Hand-Edit makes anthropic a writer family of the item, and Haiku seats are then refused (same_family). SPAWN-WIN-PARITY already has #218/#213 Hand-Edits.
-- A shared session name (server-L1-main, build-L1-efficiency) needs a ref on SendMessage.
-
-## Post-handoff (01:3xZ)
-- #213 MERGED d66bf9e5c70e24ec22bdffae44f00074eb24dca9 (GO D-2879), main CI 40251787608 green, evidence ok. workst-L1-autoos + server-L1-main [c46235] notified. S2 is next.
-- Judge note D-2879: 338b4f6a shows no `Hand-Edit:` in `git show --format=%(trailers)`. Cause: my message put Plan-Item/Hand-Edit in a paragraph before a blank line, so git trailers see only Co-Authored-By/Claude-Session. ci_commit_gate still printed "hand-edit 338b4f6a ..." (it parses the body, not git trailers). Check the gate's parser vs git trailers; if body-parsing is unintended, log it in the ORCH-EFFICIENCY-ENFORCE fix log (E1a). Future Hand-Edits: one trailer block, no blank line before Co-Authored-By.
+## Lessons this gen
+- An unwitnessed served_model blocks any opencode-leg seat post; qoder seats "witness" = the requested model on its fixed path.
+- A seat's TEST-GAMING line with double quotes parsed as missing (fixed by (a)); interim prompt hint "The TEST-GAMING line contains no double quotes." works.
+- Merge PRs promptly: #201 went CONFLICTING after #200 landed (runner.py imports, __init__, monitor finally).

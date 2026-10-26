@@ -1,4 +1,4 @@
-# build-L1 card · gen-36 · 2026-10-26 04:0xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
+# build-L1 card · gen-36 -> 37 handoff · 2026-10-26 03:5xZ · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh 90 · handoff status/handoff-build-L1.md
 D-2739 (operator): one task loops (no follow-up items), design first for HIGH/>400 lines, slices <=400, 2 text seats, MED in body=changes, fixer>=writer never flash, round>3 -> Opus replan, merge main once before final review.
 D-2749: AutoOS spawner retired; all runs via plangraph spawner; missing feature -> BLOCKED to routing, no fallback.
 D-2744: no deepseek leg (writer or seat, incl opencode free deepseek); mimo-pro, mimo-flash seats only.
@@ -15,7 +15,7 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); S2 #220 MERGED f50982d6 (GO D-2889, code only); finish220.sh -> evidence. S3 next (design WRITER BRIEF S3, mimo-pro/agy; D-2888 limits). Live redeploy = own GO + OS-KEEPER-LS9-MIGRATE; 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78. glm re-run (D-2898) run-555b136f pass, TEST-GAMING ok, served_model still unwitnessed on main -> NOT posted, stays in_review; defects (a)(b) in REVIEW-VERDICT-PARSE fix log (notes) |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
-| spawn-iso #200 / #201 (claimed) | #200 DONE 2348abf2. #201 qwen delta PASS; main merged in (fe54f9cb, 202 passed, gate 0) -> finish201.sh running |
+| spawn-iso #200 / #201 | #200 DONE 2348abf2. #201 MERGED 2fe388af; finish201.sh -> evidence/submit/post (check $J/finish201.log) |
 | PG-TEST-SHM-LEAK (std, claimed) | PR #222 head e0748276 (agy run-ed01799d, L1 re-run 8 passed, gate 0); qwen seat shm running -> merge -> evidence |
 | SPAWN-OPENROUTER-FREE-ENDPOINTS (std, prio 5) | defined D-2805; after shm-leak; account/privacy change = operator OS line |
 | SQ12 (workst-L1-autoos) | slices SQ12-a/-b; workst writes held until SPAWN-WIN-PARITY lands |
