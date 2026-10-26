@@ -128,3 +128,23 @@ def test_implement_order_unchanged_by_benchmark(tmp_path):
     bare = plan_spawn(CARD, role="implement").to_dict()
     assert with_bench["p_source"] == "operator-order" == bare["p_source"]
     assert [leg["id"] for leg in with_bench["legs"]] == [leg["id"] for leg in bare["legs"]]
+
+
+def test_seed_idempotent(tmp_path):
+    """I5/D3: bare init-and-seed provisions the default DB; re-run = same rows."""
+    default = tmp_path / "spawner_catalog.db"
+    assert catalog_db.main(["init-and-seed"]) == 0
+    assert default.is_file()
+
+    def counts():
+        with catalog_db.CatalogDB(default) as db:
+            tables = ("catalog_quota_pools", "catalog_providers", "catalog_clients",
+                      "catalog_models", "catalog_benchmarks", "catalog_routes",
+                      "catalog_route_legs")
+            return {t: db.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                    for t in tables}
+
+    first = counts()
+    assert all(first.values())
+    assert catalog_db.main(["init-and-seed"]) == 0
+    assert counts() == first
