@@ -1244,6 +1244,36 @@ def test_e1_canon_rejects_resolvable_dotdot(repo: Path):
     assert ci_commit_gate.gate_path_verdict("a/b/x.py") is None
 
 
+def _he_binary(repo: Path, item: str = "demo:ITEM") -> str:
+    target = repo / "docs" / "blob.bin"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"\x00\x01\x02\x03 binary\n" * 8)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m",
+         f"docs: binary edit\n\nHand-Edit: edit\nPlan-Item: {item}\n"
+         f"{VALID_ROUTE_DECISION}\n")
+    return _head(repo)
+
+
+def test_e1_binary_hand_edit_never_counts_zero(repo: Path):
+    # haiku-G8 / mimopro-G7: a binary Hand-Edit is refused per commit and
+    # counts as its full per-commit allowance in the history sum and the
+    # range bucket, never 0, so later commits cannot slip under the
+    # 50-line / Route-Decision threshold behind it.
+    base = _head(repo)
+    b1 = _he_binary(repo)
+    c2 = _he(repo, 30, item="demo:ITEM")
+    v = check(base, c2, cwd=repo)
+    assert f"{b1}: hand-edit exceeds 400 changed lines" in v
+    assert f"{c2}: hand-edit over 50 lines for demo:ITEM without Route-Decision" in v
+    # positive control: a small text Hand-Edit before the 30-line one keeps
+    # the running sum under 50 and passes
+    _git(repo, "reset", "--hard", base)
+    s1 = _he(repo, 5, item="demo:ITEM", rd=True)
+    s2 = _he(repo, 30, item="demo:ITEM")
+    assert check(base, s2, cwd=repo) == []
+
+
 def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
     base = _head(repo)
     f = repo / "src\\plangraph\\keeper\\x.py"

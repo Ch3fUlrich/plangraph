@@ -523,6 +523,17 @@ def _changed_lines(sha: str, cwd: str | Path | None = None) -> int | None:
     return total
 
 
+def _counted(changed: int | None) -> int:
+    '''Lines a Hand-Edit commit contributes to the running sums and range bucket.
+
+    A binary file has no line count; it counts as its full per-commit
+    allowance (HAND_EDIT_MAX_LINES), never 0, so a binary Hand-Edit cannot
+    hide later commits of the same item under the 50/400 thresholds
+    (E1a seats G7/G8).
+    '''
+    return HAND_EDIT_MAX_LINES if changed is None else changed
+
+
 def hand_edit_commits(
     base: str, head: str, cwd: str | Path | None = None
 ) -> list[tuple[str, str]]:
@@ -581,7 +592,7 @@ def check(
         # Bucket keys compare case-folded so spelling variants share one
         # running sum (E1a, seat G4); messages keep the commit's own spelling.
         h_key = h_item.casefold()
-        h_changed = _changed_lines(h_sha, cwd=cwd) or 0
+        h_changed = _counted(_changed_lines(h_sha, cwd=cwd))
         history_running_sums[h_key] = history_running_sums.get(h_key, 0) + h_changed
         if history_running_sums[h_key] > ROUTE_DECISION_LINES:
             exceeded_50[h_key] = True
@@ -676,7 +687,7 @@ def check(
                 violations.append(f'{sha}: {MISSING_PLAN_ITEM}')
             item = items[0] if items else '(none)'
             key = item.casefold()
-            lines_count = changed or 0
+            lines_count = _counted(changed)
             range_bucket_lines[key] = range_bucket_lines.get(key, 0) + lines_count
             range_bucket_shas.setdefault(key, []).append(sha)
             range_bucket_names.setdefault(key, item)
