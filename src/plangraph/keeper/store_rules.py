@@ -113,6 +113,10 @@ class RuleMixin:
                 if row is not None and row["state"] == "cancelled":
                     # cancelled keys are locked (schema triggers): retiring is final.
                     raise Refused("locked", f"{r['key']} is retired; add the rule under a new id")
+                if row is not None and row["state"] in ("claimed", "in_review"):
+                    # a decisions card a worker holds is not a rule row: rewriting it
+                    # to done would leave its exec owner in place, un-fenced
+                    raise Refused("conflict", f"{r['key']} is {row['state']}, not a rule row")
                 existing[r["key"]] = row is not None
             known = {row["key"] for row in self.conn.execute(
                 "SELECT key FROM items WHERE project = ?", (RULE_PROJECT,))} | set(keys)

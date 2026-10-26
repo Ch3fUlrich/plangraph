@@ -690,3 +690,28 @@ def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
     env[clients.CLIENT_BINS_ENV] = str(tmp_path / "bins.json")
     assert clients.client_binary("opencode", env) == str(exe)
 
+
+
+def _decision_card(w, ident, state):
+    """A ``decisions:`` card of kind decision, put straight into *state*."""
+    w.store.create_items(w.p("router"), [
+        defn(ident, project="decisions", kind="decision"),
+        defn("GOAL", [ident], project="decisions", kind="goal")])
+    key = f"decisions:{ident}"
+    w.conn.execute("UPDATE items SET state=?, claimed_by='workerA' WHERE key=?",
+                   (state, key))
+    return key
+
+
+@pytest.mark.parametrize("state, accepted", [
+    ("claimed", False), ("in_review", False), ("open", True), ("done", True)])
+def test_rule_set_refuses_a_held_decisions_card(w, state, accepted):
+    key = _decision_card(w, "RULE-9-1", state)
+    rule = [{"id": "RULE-9-1", "description": "x"}]
+    if accepted:       # positive control: an open or done row is still a rule row
+        assert w.store.rule_set(w.p("router"), rule) == {"created": [], "updated": [key]}
+        return
+    with pytest.raises(Refused) as err:
+        w.store.rule_set(w.p("router"), rule)
+    assert err.value.code == "conflict"
+    assert w.store._item(key)["state"] == state       # untouched, exec owner not orphaned
