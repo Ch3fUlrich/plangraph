@@ -86,8 +86,10 @@ CLAUDE_MARKERS: tuple[str, ...] = (
 
 #: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
 #: trailing parenthetical note; the note may not contain ':' so it cannot carry
-#: a second Writer value. <id> must name the run that produced the commit:
-#: a spawner run id, a Claude Code session id, or a uuid (D-2955).
+#: a second Writer value. <id> must be shaped like the run that produced the
+#: commit — a spawner run id, a Claude Code session id, or a uuid (D-2955) —
+#: but the check is shape only: the id is never looked up, so an invented
+#: run-<32 hex> of the right shape passes (known limit, docs/ci-gate.md).
 CLAUDE_WRITER_RE = re.compile(
     r'^claude-[a-z0-9.-]+ '
     r'(?:run-[0-9a-f]{32}'
@@ -715,7 +717,8 @@ def check(
         if malformed_writer:
             violations.append(f'{sha}: {MALFORMED_WRITER}')
         # A Claude marker is refused unless the value names its run/session id
-        # in the accepted form (D-2955); anything else still cannot write.
+        # in the accepted shape (shape only, never looked up; D-2955); anything
+        # else still cannot write.
         if any(
             marker in value.lower()
             and CLAUDE_WRITER_RE.fullmatch(value) is None
