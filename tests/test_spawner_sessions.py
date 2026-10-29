@@ -1140,3 +1140,58 @@ def test_short_id_matches_row_id_or_session_id_prefix(site):
     run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[row])
     res = go(site, make(site, run))
     assert res["session_id"] == row["sessionId"]  # sessionId prefix matches the short id
+
+
+def test_unexpected_exception_is_audited_and_refused(site, monkeypatch):
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "sk-test-xyz")
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("backend exploded holding sk-test-xyz")
+
+    monkeypatch.setattr(s, "_check_cwd", boom)
+    with pytest.raises(ParameterRefused) as exc:
+        go(site, s)
+    msg = str(exc.value)
+    assert "RuntimeError" in msg and "backend exploded" in msg
+    assert "sk-test-xyz" not in msg  # scrubbed before it reaches the caller
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "launch" and line["ok"] is False
+    assert line["reason"] == msg  # type + scrubbed message, same text as the refusal
+    assert "sk-test-xyz" not in json.dumps(line)
+
+
+def test_audit_write_failure_after_success_warns(site, monkeypatch):
+    import plangraph.spawner.sessions as mod
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+
+    def dead(*_a, **_kw):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(mod, "append_private", dead)
+    res = go(site, s)
+    assert res["ok"] is True and res["session_id"] == UUID1  # the launch succeeded
+    assert "audit" in res.get("warning", "")  # the caller is warned, not failed
+
+
+def test_scrub_touches_only_free_text_fields(site, monkeypatch):
+    from plangraph.spawner.sessions import _scrub
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "sk-test-xyz")
+    out = _scrub({
+        "name": "sk-test-xyz", "cwd": "/srv/u/sk-test-xyz", "session_id": "sk-test-xyz",
+        "prompt_file": "/tmp/sk-test-xyz.txt", "handoff": "/tmp/sk-test-xyz.md",
+        "mcp": "/tmp/sk-test-xyz.json",
+        "reason": "r sk-test-xyz", "error": "e sk-test-xyz", "warning": "w sk-test-xyz",
+        "card": "c sk-test-xyz", "message": "m sk-test-xyz", "argv": ["claude", "sk-test-xyz"],
+        "children": [{"warning": "nested sk-test-xyz"}],
+    })
+    for key, val in [("name", "sk-test-xyz"), ("cwd", "/srv/u/sk-test-xyz"),
+                     ("session_id", "sk-test-xyz"), ("prompt_file", "/tmp/sk-test-xyz.txt"),
+                     ("handoff", "/tmp/sk-test-xyz.md"), ("mcp", "/tmp/sk-test-xyz.json")]:
+        assert out[key] == val  # structured fields are never redacted
+    for key in ("reason", "error", "warning", "card", "message"):
+        assert "sk-test-xyz" not in out[key] and "[autoos:redacted]" in out[key]
+    assert "sk-test-xyz" not in json.dumps(out["argv"])
+    assert "sk-test-xyz" not in out["children"][0]["warning"]  # nested free text too

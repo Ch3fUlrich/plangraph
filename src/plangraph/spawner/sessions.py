@@ -41,14 +41,43 @@ SHORT_RE = re.compile(r"backgrounded\s*\W*([0-9a-fA-F]{8})\b")
 USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 
 
-def _scrub(value):
-    """Deep scrub through the env redactor. Records, audit lines, returned
-    results and error text all pass through here (R-6)."""
+_SCRUB_KEYS = frozenset({"reason", "error", "warning", "card", "message", "argv"})
+
+
+def _scrub_free(value):
+    """Redact at every depth: this subtree is free text."""
     from plangraph.spawner.env_redact import redact_env_values
     if isinstance(value, str):
         return redact_env_values(value, os.environ)
     if isinstance(value, dict):
-        return {_scrub(k): _scrub(v) for k, v in value.items()}
+        return {k: _scrub_free(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_free(v) for v in value]
+    return value
+
+
+def _scrub_keep(value):
+    """Structured context: scalars pass through untouched, containers are
+    recursed so nested free-text fields are still found."""
+    if isinstance(value, dict):
+        return {k: (_scrub_free(v) if k in _SCRUB_KEYS else _scrub_keep(v))
+                for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_keep(v) for v in value]
+    return value
+
+
+def _scrub(value):
+    """Deep scrub through the env redactor - free-text fields only (R-23).
+    reason, error, warning, card and message texts and argv lists are
+    redacted; structured fields - name, cwd, session_id and every path in a
+    record - pass through untouched, since redacting those would corrupt ids
+    and paths callers must act on. A bare string is free text by definition."""
+    from plangraph.spawner.env_redact import redact_env_values
+    if isinstance(value, str):
+        return redact_env_values(value, os.environ)
+    if isinstance(value, dict):
+        return _scrub_keep(value)
     if isinstance(value, (list, tuple)):
         return [_scrub(v) for v in value]
     return value
@@ -259,7 +288,7 @@ class Sessions:
         return os.environ.get("PLANGRAPH_PRINCIPAL") or getpass.getuser()
 
     def _audit(self, action, name, ok, reason, session_id, argv):
-        entry = {"ts": self._now(), "action": action, "name": _scrub(str(name))[:80],
+        entry = {"ts": self._now(), "action": action, "name": str(name)[:80],
                  "session_id": session_id, "ok": bool(ok),
                  "reason": _scrub(reason) if reason else None, "caller": self._caller()}
         if argv is not None:
@@ -288,10 +317,24 @@ class Sessions:
         except (OSError, subprocess.SubprocessError) as exc:
             self._audit(action, name, False, f"{type(exc).__name__}: {exc}", None, self._audit_argv)
             return _scrub({"ok": False, "name": name, "session_id": None})
+        except Exception as exc:
+            # Any other unexpected exception is an internal fault: it is
+            # audited with its type and scrubbed message and surfaced as a
+            # refusal carrying that same text, never as a raw traceback (R-22).
+            text = f"{type(exc).__name__}: {_scrub(str(exc))}"
+            if not dry:
+                self._audit(action, name, False, text, None, self._audit_argv)
+            raise ParameterRefused(text) from None
         if dry:
             return _scrub(result)
         argv = result.pop("_audit_argv", None)
-        self._audit(action, name, True, None, result.get("session_id"), argv)
+        try:
+            self._audit(action, name, True, None, result.get("session_id"), argv)
+        except (OSError, ValueError) as exc:
+            # The action itself succeeded - a failing audit write must never
+            # turn success into failure; the caller is warned instead (R-22).
+            note = f"audit write failed: {type(exc).__name__}: {_scrub(str(exc))}"
+            result["warning"] = f"{result['warning']}; {note}" if result.get("warning") else note
         return _scrub(result)
 
     # ---- storage -------------------------------------------------------
