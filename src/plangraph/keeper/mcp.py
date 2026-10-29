@@ -5,7 +5,7 @@ and no keeper import beyond this module's own HTTP client: every tool call is on
 request to the keeper API (base URL ``PG_URL``) carrying the bearer token read
 from the file named by ``PG_TOKEN_FILE``.  Token values are never logged or
 returned.  Protocol version is ``2025-06-18`` and is echoed back when the client
-asks for a different one.  Entry point: ``python -m plangraph.keeper.mcp``:
+asks for a different one.  Entry point: ``python3 -m plangraph.keeper.mcp``:
 ``main()`` switches stdin/stdout to UTF-8 first, since Windows stdio defaults
 to cp1252 and a non-ASCII item title would otherwise kill the server.
 
@@ -74,6 +74,10 @@ TOOLS = (
     _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
           ("key", "decision_id")),
+    _tool("log_item", "Router/L1 D-2739 entry:{kind,note,findings,seat_runs,ref,author_model,reviewed_by,invariants,slices:{n,scope,max_lines}}; fix on in_review returns to claimant.",
+          {"key": {"type": "string"}, "entry": {"type": "object"}}, ("key", "entry")),
+    _tool("rule_set", "Router D-2746 decisions:ID rules:{id,title,description,source,note,depends_on,state}; state:in_force|retired.",
+          {"rules": {"type": "array", "items": {"type": "object"}}}, ("rules",)),
     _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"},
            "reason": {"type": "string"}}, ("key", "decision_id", "reason")),
@@ -160,6 +164,8 @@ _ROUTES = {
     "digest": ("GET", "digest"), "whoami": ("GET", "whoami"),
     "create": ("POST", "create_items"), "edit": ("POST", "edit_definition"),
     "record_run": ("POST", "record_run"),
+    "log_item": ("POST", "log_item"),
+    "rule_set": ("POST", "rule_set"),
     "mint_run_token": ("POST", "mint_run_token"),
 }
 

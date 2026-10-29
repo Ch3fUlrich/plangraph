@@ -11,8 +11,10 @@ Preserves Windows SystemRoot/COMSPEC/PATHEXT/TEMP environment variables (D-2090 
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -388,3 +390,43 @@ def build_command(
         prompt=prompt,
         model=model_or_combo,
     )
+
+
+#: Per-host client binaries (D-2755): ``{"opencode": "/abs/path", ...}``.
+CLIENT_BINS_ENV = "PLANGRAPH_CLIENT_BINS"
+CLIENT_BINS_FILE = "~/.config/plangraph/clients.json"
+#: Install dirs searched when neither the host file nor PATH names the client
+#: (a service or spawned child often runs without the login shell's PATH).
+CLIENT_BIN_DIRS = ("~/.local/bin", "~/.nvm/versions/node/*/bin", "~/.bun/bin",
+                   "~/.npm-global/bin", "/usr/local/bin")
+
+
+def _host_bins(env):
+    path = os.path.expanduser((env or os.environ).get(CLIENT_BINS_ENV) or CLIENT_BINS_FILE)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def client_binary(name, env=None):
+    """Absolute path of client *name*, or None.
+
+    Order: the host file (``$PLANGRAPH_CLIENT_BINS`` or ``~/.config/plangraph/clients.json``),
+    then ``PATH`` of *env*, then :data:`CLIENT_BIN_DIRS` (newest node first).
+    """
+    env = env if env is not None else os.environ
+    configured = _host_bins(env).get(name)
+    if isinstance(configured, str) and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured
+    found = shutil.which(name, path=env.get("PATH"))
+    if found:
+        return found
+    for pattern in CLIENT_BIN_DIRS:
+        for directory in sorted(glob.glob(os.path.expanduser(pattern)), reverse=True):
+            candidate = os.path.join(directory, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None

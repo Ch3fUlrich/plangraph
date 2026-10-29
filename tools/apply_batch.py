@@ -456,6 +456,11 @@ def main(argv=None, out=None, err=None):
                  f"{who_name!r} ({who_role}) (refusing before any call)",
                  refusal=True)
             return _done(1)
+        if opts.preview and "apply_ops.dry_run" not in (who.get("features") or ()):
+            # D-1498/D-2760: an older keeper ignores dry_run and applies for real.
+            line("error: keeper does not advertise apply_ops.dry_run (older keeper); "
+                 "--preview refused before any call", refusal=True)
+            return _done(2)
     except ApiError as exc:
         if opts.allow_no_whoami:
             msg = f" ({exc.msg})" if exc.msg else ""

@@ -61,7 +61,7 @@ decision and `loop_many_exits` when it has more than one — cancelled decisions
 
 ## Page (`src/plangraph/render.py`)
 `render(snapshot: dict, vendor_dir: Path) -> str` returns ONE self-contained HTML string (snapshot JSON + `vendor/*.js`
-inlined; no network). CLI: `python -m plangraph.render --snapshot S.json --out plan.html`. Behaviour: left-to-right layered graph
+inlined; no network). CLI: `python3 -m plangraph.render --snapshot S.json --out plan.html`. Behaviour: left-to-right layered graph
 (dagre) with a virtual START node feeding items without deps and the goal at the right; colour by computed display state
 (open, ready, blocked, claimed, in_review, done, cancelled); click → details panel (all fields + evidence + corrected-by);
 project filter chips (multi-select) and track filter; DONE nodes collapsed per track by default (toggle); critical path

@@ -86,6 +86,12 @@ def test_real_exit_http_marker_retry(tmp_path, monkeypatch, script, rc):
             self.end_headers()
             self.wfile.write(b'{}')
 
+        def do_GET(self):
+            # PG-EFFICIENCY-GATES spawn admission reads the item; unknown key = gates skipped
+            assert self.path.startswith('/v1/show?key=')
+            self.send_response(404)
+            self.end_headers()
+
         def log_message(self, *args):
             pass
 

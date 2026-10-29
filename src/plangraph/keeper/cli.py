@@ -1,6 +1,6 @@
 """``pg`` — the keeper command line client.
 
-``python -m plangraph.keeper.cli <verb> [args]`` talks to the API named by
+``python3 -m plangraph.keeper.cli <verb> [args]`` talks to the API named by
 ``PG_URL`` with the token from ``PG_TOKEN_FILE``.  ``pg admin …`` runs locally
 on the keeper host.  Exit codes: 0 ok, 2 refused, 3 unreachable.
 """
@@ -41,6 +41,8 @@ HANDLERS = {
     "waive": cli_verbs.cmd_waive,
     "withdraw": cli_verbs.cmd_withdraw,
     "reopen": cli_verbs.cmd_reopen,
+    "log": cli_verbs.cmd_log,
+    "rules": cli_verbs.cmd_rules,
     "set-kind": cli_verbs.cmd_set_kind,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
@@ -152,6 +154,13 @@ def _add_writes(sub):
     withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review")
     withdraw.add_argument("key")
     withdraw.add_argument("decision_id", metavar="D-NNN")
+
+    log = _p(sub, "log", help="router/L1: append a fix/design/replan entry to an item (D-2739 one task loops)")
+    log.add_argument("key")
+    log.add_argument("--file", required=True, help="JSON entry {kind, note, findings, ...}")
+
+    rules = _p(sub, "rules", help="router: write standing rules as decisions:<ID> items (D-2746)")
+    rules.add_argument("--file", required=True, help="JSON {rules: [{id, title, description, ...}]}")
 
     reopen = _p(sub, "reopen", help="router: take an in_review item back to its claimant at a fresh epoch")
     reopen.add_argument("key")

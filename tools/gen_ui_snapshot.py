@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Generate tests/fixtures/ui_snapshot.json (the fixed browser-test snapshot).
 
 Deterministic (no randomness, no clock) fixed snapshot for the browser-test
@@ -8,7 +8,7 @@ phase with >50 tasks, cross-project depends_on, open + answered questions,
 a non-empty decisions list (forces the "new UI" CDN path in plangraph.render),
 activity events, and one item whose ``loop`` is an object.
 
-Usage: ``python tools/gen_ui_snapshot.py [--out tests/fixtures/ui_snapshot.json]``
+Usage: ``python3 tools/gen_ui_snapshot.py [--out tests/fixtures/ui_snapshot.json]``
 """
 from __future__ import annotations
 

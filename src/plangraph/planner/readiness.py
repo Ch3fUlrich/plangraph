@@ -210,7 +210,7 @@ def _executable_found(word: str, repo_root: Path) -> bool:
 
 
 def _pytest_args(words: list[str]) -> list[str] | None:
-    """Arguments after ``pytest`` / ``python -m pytest``; None if not a pytest call."""
+    """Arguments after ``pytest`` / ``python3 -m pytest``; None if not a pytest call."""
     base = words[0].rsplit("/", 1)[-1]
     if base in ("pytest", "py.test"):
         return words[1:]

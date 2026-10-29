@@ -99,6 +99,32 @@ def test_process_unchanged_config_ok(tmp_path):
     asyncio.run(run())
 
 
+def test_design_orchestrate_get_guard_but_review_does_not(tmp_path, monkeypatch):
+    async def run(role):
+        guarded = []
+
+        async def factory(*args, **kwargs):
+            return FakeProcess(returncode=0)
+
+        runner = SpawnerRunner(process_factory=factory)
+        monkeypatch.setattr(runner, "_init_git_config_guard", lambda cwd: guarded.append(cwd))
+        job = await runner.spawn(
+            prompt="check role guard",
+            model_or_combo="mimo/mimo-v2.6-flash",
+            role=role,
+            cwd=str(tmp_path),
+            wait_seconds=0.5,
+        )
+        if job.job_id in runner._tasks:
+            await runner._tasks[job.job_id]
+
+        assert job.status == "completed"
+        assert len(guarded) == (0 if role == "review" else 1)
+
+    for role in ("design", "orchestrate", "review"):
+        asyncio.run(run(role))
+
+
 def test_non_git_cwd_ok(tmp_path):
     non_git = tmp_path / "non_git_dir"
     non_git.mkdir()

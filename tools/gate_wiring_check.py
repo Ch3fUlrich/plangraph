@@ -11,6 +11,11 @@ from pathlib import Path
 
 import yaml
 
+try:  # Module import in tests; direct script execution in CI.
+    from tools.ci_commit_gate import trailer_block_lines, touched_paths
+except ModuleNotFoundError:
+    from ci_commit_gate import trailer_block_lines, touched_paths
+
 
 class GateError(Exception):
     '''An error that should terminate main with a specific code.'''
@@ -66,36 +71,14 @@ def _git_out(args: list[str], cwd: str | Path | None) -> str:
     return result.stdout
 
 
-_TRAILER_LINE = re.compile(r'[A-Za-z][A-Za-z0-9-]*: \S')
 _GATE_EDIT = re.compile(r'Gate-Edit: D-\d+')
 
-
 def _trailer_block(message: str) -> list[str]:
-    '''Return the trailing paragraphs whose every line is a trailer line.'''
-    lines = message.splitlines()
-    while lines and not lines[-1].strip():
-        lines.pop()
-    paragraphs: list[list[str]] = []
-    current: list[str] = []
-    for line in lines:
-        if not line.strip():
-            if current:
-                paragraphs.append(current)
-                current = []
-        else:
-            current.append(line)
-    if current:
-        paragraphs.append(current)
-    block: list[str] = []
-    for paragraph in reversed(paragraphs):
-        if not all(_TRAILER_LINE.match(line) for line in paragraph):
-            break
-        block = paragraph + block
-    return block
-
+    '''Read only the final trailer block, using the commit gate parser.'''
+    return trailer_block_lines(message)
 
 def _commit_shas(base: str, head: str, cwd: str | Path | None) -> list[str]:
-    text = _git_out(['log', '--no-merges', '--format=%H', f'{base}..{head}'], cwd)
+    text = _git_out(['log', '--format=%H', f'{base}..{head}'], cwd)
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
@@ -104,8 +87,7 @@ def _commit_message(sha: str, cwd: str | Path | None) -> str:
 
 
 def _commit_paths(sha: str, cwd: str | Path | None) -> list[str]:
-    text = _git_out(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', sha], cwd)
-    return [path for path in text.split('\x00') if path]
+    return touched_paths(sha, cwd=cwd)
 
 
 def has_gate_edit(base: str, head: str, cwd: str | Path | None = None) -> bool:

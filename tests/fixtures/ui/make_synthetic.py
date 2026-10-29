@@ -1,6 +1,6 @@
 """Deterministic SYNTHETIC snapshot for UI work (no real plan data).
 
-Usage: python tests/fixtures/ui/make_synthetic.py > tests/fixtures/ui/synthetic_snapshot.json
+Usage: python3 tests/fixtures/ui/make_synthetic.py > tests/fixtures/ui/synthetic_snapshot.json
 Adds PROPOSED extension fields the real snapshot does not yet carry: top-level
 `questions` / `decisions`, item `loop` ({max, exit_decision}) and `phase` mirrors `track`.
 """

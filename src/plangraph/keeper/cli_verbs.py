@@ -376,6 +376,21 @@ def cmd_withdraw(args, session):
                  lambda r: f"{r.get('key')} withdrawn from review -> {r.get('state')}")
 
 
+def cmd_rules(args, session):
+    """PG-EFFICIENCY-GATES slice 2: write standing rules ({"rules": [...]} JSON file)."""
+    rules = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    return write(session, "rule_set", {"rules": rules.get("rules") if isinstance(rules, dict) else rules},
+                 lambda r: f"rules: {len(r.get('created') or [])} created, {len(r.get('updated') or [])} updated")
+
+
+def cmd_log(args, session):
+    """PG-EFFICIENCY-GATES: append a fix/design/replan entry (JSON file) to an item."""
+    entry = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    return write(session, "log_item", {"key": args.key, "entry": entry},
+                 lambda r: (f"{r.get('key')} {r.get('kind')} logged -> {r.get('state')};"
+                            f" rounds {r.get('rounds')} (since replan {r.get('since_replan')})"))
+
+
 def cmd_reopen(args, session):
     return write(session, "reopen",
                  {"key": args.key, "decision_id": args.decision_id,

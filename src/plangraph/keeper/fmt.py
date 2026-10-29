@@ -72,6 +72,16 @@ def show_text(info: dict) -> str:
         lines.append(f"models writer={info.get('writer_model') or '-'} seats={seats}")
     if info.get("description"):
         lines.append(f"desc {info['description']}")
+    gates = info.get("gates")
+    if gates:  # PG-EFFICIENCY-GATES: the fix log follows the description
+        lines.append(f"rounds {gates.get('rounds')} | since replan {gates.get('since_replan')}"
+                     f" | replans {gates.get('replans')}"
+                     f" | design {(gates.get('design') or {}).get('ref') or '-'}")
+        for n, entry in enumerate(gates.get("fix_log") or [], 1):
+            what = entry.get("note") or entry.get("ref") or ""
+            ids = ",".join(entry.get("findings") or [])
+            lines.append(f"log {n} {entry.get('kind')} {entry.get('ts') or ''}"
+                         f"{' [' + ids + ']' if ids else ''} {what}".rstrip())
     if info.get("done_criteria"):
         lines.append(f"done {info['done_criteria']}")
     reviews = ", ".join(f"{r.get('reviewer')}({r.get('family') or '-'})"

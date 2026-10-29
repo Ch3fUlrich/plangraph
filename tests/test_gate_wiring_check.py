@@ -217,9 +217,22 @@ def test_gate_edit_with_co_author_paragraph_counts(repo: Path, monkeypatch: pyte
     changed = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate || true')
     head = _commit(repo, 'x\n\nGate-Edit: D-2209\n\nCo-Authored-By: A B <a@example.invalid>\n', {WORKFLOW_PATH: changed})
     monkeypatch.chdir(repo)
-    assert main(['--base', base, '--head', head]) == 0
+    assert main(['--base', base, '--head', head]) == 1
     captured = capsys.readouterr()
-    assert 'WITH Gate-Edit' in captured.out
+    assert 'WITHOUT Gate-Edit' in captured.err
+
+
+def test_merge_resolution_workflow_requires_gate_edit(repo: Path) -> None:
+    from tools.gate_wiring_check import commits_missing_gate_edit
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    subprocess.run(['git', 'checkout', '-q', '-b', 'side'], cwd=repo, check=True)
+    _commit(repo, 'side', {'side.txt': 'side\n'})
+    subprocess.run(['git', 'checkout', '-q', '-'], cwd=repo, check=True)
+    _commit(repo, 'main', {'main.txt': 'main\n'})
+    subprocess.run(['git', 'merge', '-q', '--no-ff', '--no-commit', 'side'], cwd=repo, check=True)
+    changed = WORKFLOW.replace('python3 tools/ci_select.py gate', 'false')
+    head = _commit(repo, 'merge resolution', {WORKFLOW_PATH: changed})
+    assert commits_missing_gate_edit(base, head, WORKFLOW_PATH, cwd=repo) == [head]
 
 
 def test_control_char_in_message_does_not_hide_commit(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

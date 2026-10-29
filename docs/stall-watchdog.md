@@ -25,7 +25,7 @@ persisted timestamp. `PLANGRAPH_WATCHDOG_REALERT_SECONDS` (default 1800) control
 re-alerting while a condition remains stalled. Invalid session identifiers are
 skipped and reported in status rather than aborting other run checks.
 
-`python -m plangraph.spawner.stall_watchdog status` emits the persisted `! stall` lines
+`python3 -m plangraph.spawner.stall_watchdog status` emits the persisted `! stall` lines
 for routerctl status to include. Routerctl lives outside this repository; its
 host integration must invoke this command or read `watchdog/status.txt`.
 

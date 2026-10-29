@@ -321,7 +321,7 @@ def test_claude_writer_followed_by_clean_writer_still_fails(repo: Path):
     base = _head(repo)
     message = (
         "feat: two writers\n\n"
-        "Writer: claude run-old\n\n"
+        "Writer: claude run-old\n"
         "Writer: mimo-v2.6-flash run-1\n"
     )
     sha = _commit(repo, message)
@@ -343,7 +343,7 @@ def test_two_clean_writer_lines_pass(repo: Path):
     base = _head(repo)
     message = (
         "feat: two writers\n\n"
-        "Writer: mimo-v2.6-flash run-1\n\n"
+        "Writer: mimo-v2.6-flash run-1\n"
         "Writer: mimo-v2.6-flash run-2\n"
     )
     sha = _commit(repo, message)
@@ -376,6 +376,144 @@ def test_merge_commit_without_trailer_is_ignored(repo: Path):
     assert check(base, merge_sha, cwd=repo) == []
 
 
+@pytest.mark.parametrize("stray", [False, True])
+def test_untagged_merge_resolution_checked(repo: Path, stray: bool):
+    base = _head(repo)
+    _branch(repo, "resolution-side", "side\n\nWriter: model run\n", {"side.txt": "x\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "main\n\nWriter: model run\n", files={"main.txt": "x\n"})
+    message = "Merge side"
+    if stray:
+        message += "\n\nHand-Edit: resolution\n\nCo-Authored-By: A <a@example.invalid>\n"
+    sha = _merge_resolution(repo, "resolution-side", message, {"tools/ci_commit_gate.py": "resolution\n"})
+    reasons = check(base, sha, cwd=repo)
+    assert f"{sha}: hand-edit touches auth/door surface: tools/ci_commit_gate.py" in reasons
+    if stray:
+        assert f"{sha}: trailer outside final block" in reasons
+
+
+def _branch(repo: Path, name: str, commit_message: str, files: dict[str, str]) -> str:
+    _git(repo, "checkout", "-q", "-b", name)
+    return _commit(repo, commit_message, files=files)
+
+
+def _merge_resolution(
+    repo: Path, branch: str, message: str, files: dict[str, str]
+) -> str:
+    '''Merge branch into the current head and commit the resolution.'''
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", branch)
+    return _commit(repo, message, files=files)
+
+
+def test_mode_only_merge_resolution_refused(repo: Path):
+    path = "tools/ci_commit_gate.py"
+    _commit(repo, "seed", {path: "content\n"})
+    _branch(repo, "mode-side", "side", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    base = _commit(repo, "main", {"main.txt": "main\n"})
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", "mode-side")
+    (repo / path).chmod(0o755)
+    sha = _commit(repo, "mode resolution")
+    assert ci_commit_gate._merge_diff(sha, ci_commit_gate._parent_shas(sha, cwd=repo), cwd=repo) == ([path], 0)
+    assert any(ci_commit_gate.GATE_EDIT_VIOLATION in v for v in check(base, sha, cwd=repo))
+
+
+def test_untagged_resolution_does_not_charge_none_history(repo: Path):
+    _branch(repo, "history-side", "side", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "main", {"main.txt": "main\n"})
+    base = _merge_resolution(repo, "history-side", "untagged resolution", {"resolved.txt": "x\n" * 51})
+    sha = _he(repo, 1, item=None)
+    assert not any("without Route-Decision" in v for v in check(base, sha, cwd=repo))
+
+
+def test_merge_commit_measured_by_combined_diff(repo: Path):
+    '''A merge counts only its combined diff: a clean merge is 0 lines, no paths.'''
+    base = _head(repo)
+    _branch(repo, "side", "feat: side\n\nWriter: mimo-v2.6-flash run-side\n", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "feat: main\n\nWriter: mimo-v2.6-flash run-main\n", files={"main.txt": "main\n"})
+    merge_sha = _merge_resolution(
+        repo, "side", "Merge side\n\nWriter: mimo-v2.6-flash run-merge\n", {}
+    )
+
+    assert ci_commit_gate._changed_lines(merge_sha, cwd=repo) == 0
+    assert ci_commit_gate._touched_paths(merge_sha, cwd=repo) == []
+    assert check(base, merge_sha, cwd=repo) == []
+
+    # Positive control: resolution content of the same merge shape is measured.
+    _git(repo, "checkout", "-q", "-b", "side2", base)
+    _commit(repo, "feat: side2\n\nWriter: mimo-v2.6-flash run-side2\n", files={"f2.txt": "x\n"})
+    _git(repo, "checkout", "-q", "-")
+    resolved = _merge_resolution(
+        repo,
+        "side2",
+        "Merge side2\n\nWriter: mimo-v2.6-flash run-merge2\n",
+        {"resolved.txt": "one\ntwo\n"},
+    )
+
+    assert ci_commit_gate._changed_lines(resolved, cwd=repo) == 2
+    assert ci_commit_gate._touched_paths(resolved, cwd=repo) == ["resolved.txt"]
+
+
+def test_merge_resolution_hand_edit_over_50_needs_route_decision(repo: Path):
+    '''A merge whose resolution carries 60 Hand-Edit lines is capped like any commit.'''
+    base = _head(repo)
+    _branch(repo, "side", "feat: side\n\nWriter: mimo-v2.6-flash run-side\n", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "feat: main\n\nWriter: mimo-v2.6-flash run-main\n", files={"main.txt": "main\n"})
+    resolution = "".join(f"line {n}\n" for n in range(60))
+    item = "plangraph:TEST-E1A"
+    merge_sha = _merge_resolution(
+        repo,
+        "side",
+        "merge: resolve\n\n"
+        f"Plan-Item: {item}\n"
+        "Hand-Edit: merge conflict resolution\n"
+        "Route-Decision: route-" + "ab" * 16 + "\n",
+        {"resolved.txt": resolution},
+    )
+    assert ci_commit_gate._changed_lines(merge_sha, cwd=repo) == 60
+    # Positive control: the very same merge passes with a well-formed Route-Decision.
+    assert check(base, merge_sha, cwd=repo) == []
+
+    _git(repo, "commit", "-q", "--amend", "-m", "merge: resolve\n\n"
+        f"Plan-Item: {item}\n"
+        "Hand-Edit: merge conflict resolution\n")
+    merge_sha = _head(repo)
+    assert check(base, merge_sha, cwd=repo) == [
+        f"{merge_sha}: hand-edit over 50 lines for {item} without Route-Decision"
+    ]
+
+
+def test_merge_resolution_touching_door_path_refused(repo: Path):
+    '''A merge whose resolution touches a door path is refused like any Hand-Edit.'''
+    base = _head(repo)
+    _branch(repo, "side", "feat: side\n\nWriter: mimo-v2.6-flash run-side\n", {"side.txt": "side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, "feat: main\n\nWriter: mimo-v2.6-flash run-main\n", files={"main.txt": "main\n"})
+    message = (
+        "merge: resolve\n\n"
+        "Plan-Item: plangraph:TEST-E1A-DOOR\n"
+        "Hand-Edit: merge conflict resolution\n"
+    )
+    merge_sha = _merge_resolution(
+        repo, "side", message, {"tools/seat_verdict.py": "x = 1\n"}
+    )
+    assert "tools/seat_verdict.py" in ci_commit_gate._touched_paths(merge_sha, cwd=repo)
+    assert check(base, merge_sha, cwd=repo) == [
+        f"{merge_sha}: hand-edit touches auth/door surface: tools/seat_verdict.py"
+    ]
+
+    # Positive control: the same merge resolution touching a plain path passes.
+    (repo / "tools" / "seat_verdict.py").unlink()
+    (repo / "notes.txt").write_text("note\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "--amend", "-m", message)
+    merge_sha = _head(repo)
+    assert check(base, merge_sha, cwd=repo) == []
+
+
 def test_exempt_sha_skips_all_rules(repo: Path, tmp_path: Path):
     base = _head(repo)
     sha = _commit(repo, "feat: no trailer at all")
@@ -398,7 +536,7 @@ def test_exempt_list_read_from_base_not_from_pr_edit(repo: Path):
     # The PR adds the violating sha to the working-tree exempt file...
     head = _commit(
         repo,
-        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
+        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"# frozen: no shas yet\n{sha}\n"},
     )
     assert sha in load_exempt(repo / EXEMPT_REL), "working tree really does exempt it"
@@ -414,7 +552,7 @@ def test_exempt_bootstrap_uses_working_tree_when_absent_in_base(repo: Path):
     sha = _commit(repo, "feat: no trailer at all")
     head = _commit(
         repo,
-        "chore: introduce exempt file\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
+        "chore: introduce exempt file\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"{sha}\n"},
     )
     assert check(base, head, exempt=EXEMPT_REL, cwd=repo) == [
@@ -440,36 +578,39 @@ def test_deleted_test_file_without_trailer_fails(repo: Path):
 
 
 def test_deleted_test_file_with_trailer_passes(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
-        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
-        "Test-Removal: D-2047\n",
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
+        "Test-Removal: D-2047 test_alpha\n",
         remove=("tests/test_x.py",),
     )
     assert check(base, sha, cwd=repo) == []
 
 
 def test_lowercase_test_removal_trailer_passes(repo: Path):
-    """The trailer key is case-insensitive, like ``writer:``."""
-    base = _head(repo)
+    """Lowercase keys cannot acknowledge removal."""
     _commit(
         repo,
         "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
-        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
-        "test-removal: D-1\n",
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
+        "test-removal: D-1 test_alpha\n",
         remove=("tests/test_x.py",),
     )
-    assert check(base, sha, cwd=repo) == []
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: malformed Test-Removal trailer",
+        f"{sha}: test removal without Test-Removal trailer",
+    ]
 
 
 def test_test_removal_trailer_with_trailing_junk_does_not_satisfy(repo: Path):
@@ -481,7 +622,7 @@ def test_test_removal_trailer_with_trailing_junk_does_not_satisfy(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
         "Test-Removal: D-12x\n",
         remove=("tests/test_x.py",),
     )
@@ -562,16 +703,16 @@ def test_removed_test_function_without_trailer_fails(repo: Path):
 
 
 def test_removed_async_test_function_with_trailer_passes(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_y.py": "async def test_beta():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
-        "refactor: drop the test body\n\nWriter: mimo-v2.6-flash run-2\n\n"
-        "Test-Removal: D-94\n",
+        "refactor: drop the test body\n\nWriter: mimo-v2.6-flash run-2\n"
+        "Test-Removal: D-94 test_beta\n",
         files={"tests/test_y.py": "async def helper():\n    pass\n"},
     )
     assert check(base, sha, cwd=repo) == []
@@ -581,8 +722,160 @@ def test_test_removal_trailer_without_removed_test_is_not_a_violation(repo: Path
     base = _head(repo)
     sha = _commit(
         repo,
-        "feat: no test touched\n\nWriter: mimo-v2.6-flash run-1\n\n"
+        "feat: no test touched\n\nWriter: mimo-v2.6-flash run-1\n"
         "Test-Removal: D-2047\n",
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_bare_d_id_test_removal_trailer_names_nothing_and_is_refused(repo: Path):
+    """buildl1-T2: `Test-Removal: D-<n>` alone names nothing and is refused."""
+    _commit(
+        repo,
+        "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n"
+        "Test-Removal: D-2047\n",
+        remove=("tests/test_x.py",),
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Positive control: the same removal naming what it removes passes.
+    _commit(
+        repo,
+        "test: re-add coverage\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_alpha\n",
+        remove=("tests/test_x.py",),
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_removed_test_missing_from_named_test_removal_list_is_refused(repo: Path):
+    """buildl1-T2: every removed test must be named, not merely some."""
+    _commit(
+        repo,
+        "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={
+            "tests/test_x.py": "def test_alpha():\n    pass\n\ndef test_gamma():\n    pass\n"
+        },
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "refactor: drop one test\n\nWriter: mimo-v2.6-flash run-2\n"
+        "Test-Removal: D-2047 test_gamma\n",
+        files={"tests/test_x.py": "def test_gamma():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Positive control: the same removal naming the removed test passes.
+    _commit(
+        repo,
+        "test: re-seed\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={
+            "tests/test_x.py": "def test_alpha():\n    pass\n\ndef test_gamma():\n    pass\n"
+        },
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "refactor: drop one test again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_alpha\n",
+        files={"tests/test_x.py": "def test_gamma():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_renamed_test_must_be_named_by_its_removed_name(repo: Path):
+    """buildl1-T2: a rename removes a name; the trailer names what it removes."""
+    _commit(
+        repo,
+        "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={"tests/test_z.py": "def test_old():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: rename test\n\nWriter: mimo-v2.6-flash run-2\nTest-Removal: D-2047\n",
+        files={"tests/test_z.py": "def test_new():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Naming the new name instead still leaves the removal unnamed.
+    _commit(
+        repo,
+        "test: re-seed\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={"tests/test_z.py": "def test_old():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: rename test again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_new\n",
+        files={"tests/test_z.py": "def test_other():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: test removal not named in Test-Removal"
+    ]
+    # Positive control: the trailer naming the removed (old) name passes.
+    _commit(
+        repo,
+        "test: re-seed again\n\nWriter: mimo-v2.6-flash run-5\n",
+        files={"tests/test_z.py": "def test_old():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: rename test once more\n\nWriter: mimo-v2.6-flash run-6\n"
+        "Test-Removal: D-2047 test_old\n",
+        files={"tests/test_z.py": "def test_new():\n    pass\n"},
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_test_removal_trailer_outside_final_block_does_not_satisfy(repo: Path):
+    """buildl1-T2: the trailer is read only from the final trailer block."""
+    _commit(
+        repo,
+        "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage\n\nTest-Removal: D-2047 test_alpha\n\n"
+        "Writer: mimo-v2.6-flash run-2\n",
+        remove=("tests/test_x.py",),
+    )
+    assert check(base, sha, cwd=repo) == [
+        f"{sha}: trailer outside final block",
+        f"{sha}: test removal without Test-Removal trailer",
+    ]
+    # Positive control: the same trailer inside the final block passes.
+    _commit(
+        repo,
+        "test: re-seed\n\nWriter: mimo-v2.6-flash run-3\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "chore: drop coverage again\n\nWriter: mimo-v2.6-flash run-4\n"
+        "Test-Removal: D-2047 test_alpha\n",
+        remove=("tests/test_x.py",),
     )
     assert check(base, sha, cwd=repo) == []
 
@@ -591,7 +884,7 @@ def test_co_authored_by_claude_passes(repo: Path):
     base = _head(repo)
     message = (
         "feat: fine\n\n"
-        "Writer: mimo-v2.6-flash run-1\n\n"
+        "Writer: mimo-v2.6-flash run-1\n"
         "Co-Authored-By: Claude Assistant\n"
     )
     sha = _commit(repo, message)
@@ -652,7 +945,7 @@ def test_cli_default_exempt_resolves_from_base_not_from_pr_edit(repo: Path, monk
     sha = _commit(repo, "feat: no trailer at all")
     head = _commit(
         repo,
-        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
+        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"# frozen: no shas yet\n{sha}\n"},
     )
     assert sha in load_exempt(repo / EXEMPT_REL), "working tree really does exempt it"
@@ -777,7 +1070,7 @@ def test_hand_edit_without_writer_passes(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'fix: tweak\n\nHand-Edit: typo in docs\n',
+        'fix: tweak\n\nHand-Edit: typo in docs\nPlan-Item: demo:ITEM\n',
         files={'docs/x.md': 'x'},
     )
     assert check(base, sha, cwd=repo) == []
@@ -787,7 +1080,7 @@ def test_hand_edit_on_auth_surface_refused(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'fix: tweak\n\nHand-Edit: typo in docs\n',
+        'fix: tweak\n\nHand-Edit: typo in docs\nPlan-Item: demo:ITEM\n',
         files={'src/plangraph/keeper/mcp.py': 'x'},
     )
     assert check(base, sha, cwd=repo) == [
@@ -829,7 +1122,7 @@ def test_js_test_removal_needs_trailer(repo: Path):
     )
     sha = _commit(
         repo,
-        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\n\nTest-Removal: D-1\n',
+        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\nTest-Removal: D-1 does x\n',
         remove=('tests/foo.test.js',),
     )
     assert check(base, sha, cwd=repo) == []
@@ -917,7 +1210,7 @@ def test_gate_edit_required_for_workflow_and_exempt(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n',
+        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-2209\n',
         files={'.github/workflows/x.yml': 'name: y\n'},
     )
     assert check(base, sha, cwd=repo) == []
@@ -925,7 +1218,7 @@ def test_gate_edit_required_for_workflow_and_exempt(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-x\n',
+        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\nGate-Edit: D-x\n',
         files={'.github/workflows/x.yml': 'name: z\n'},
     )
     assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
@@ -948,7 +1241,7 @@ def test_hand_edit_does_not_satisfy_gate_edit(repo: Path):
     base = _head(repo)
     sha = _commit(
         repo,
-        'fix: tweak\n\nHand-Edit: typo\n',
+        'fix: tweak\n\nHand-Edit: typo\nPlan-Item: demo:ITEM\n',
         files={'.github/workflows/x.yml': 'name: x\n'},
     )
     assert check(base, sha, cwd=repo) == [
@@ -1014,32 +1307,44 @@ def test_hand_edit_auth_path_rename_refused(repo):
     base = _head(repo)
     (repo / 'docs').mkdir()
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
-    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
+    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\nPlan-Item: demo:ITEM\n')
     violations = check(base, sha, cwd=repo)
     assert f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py' in violations
 
 
 def test_hand_edit_fifty_changed_lines_passes(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 50})
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\nPlan-Item: demo:ITEM\n', {'docs/x.md': 'l\n' * 50})
     assert check(base, sha, cwd=repo) == []
 
 
-def test_hand_edit_fifty_one_changed_lines_refused(repo):
+def test_hand_edit_401_changed_lines_refused_with_exact_reasons(repo):
+    # haiku-G12: the cap is 400 (D-2853), so the refused shape is 401 lines and
+    # the name says so; every reason is asserted exactly, not with any().
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 51})
-    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 50 changed lines']
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 401})
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: hand-edit exceeds 400 changed lines',
+        f'{sha}: hand-edit without Plan-Item',
+        f'{sha}: hand-edit total over ceiling for (none)',
+    ]
 
 
 def test_hand_edit_deleted_lines_count(repo):
-    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 60})
+    # haiku-G12: deleted lines count toward the ceiling; the full violation
+    # list is asserted exactly (G12: any() hid a grown list).
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 500})
     sha = _commit(repo, 'docs: rewrite\n\nHand-Edit: rewrite\n', {'docs/y.md': 'new\n'})
-    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 50 changed lines']
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: hand-edit exceeds 400 changed lines',
+        f'{sha}: hand-edit without Plan-Item',
+        f'{sha}: hand-edit total over ceiling for (none)',
+    ]
 
 
 def test_root_level_roles_file_hand_edit_refused(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'roles: add\n\nHand-Edit: add\n', {'roles.py': 'x\n'})
+    sha = _commit(repo, 'roles: add\n\nHand-Edit: add\nPlan-Item: demo:ITEM\n', {'roles.py': 'x\n'})
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: roles.py']
 
 
@@ -1053,5 +1358,610 @@ def test_hand_edit_auth_path_rename_exact(repo: Path) -> None:
     base = _head(repo)
     (repo / 'docs').mkdir()
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
-    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
+    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\nPlan-Item: demo:ITEM\n')
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py']
+    # positive control (haiku-G6): the same rename between non-door paths passes
+    ok_base = _commit(repo, 'base2\n\nWriter: mimo-v2.6-flash run-2\n', files={'docs/a.py': 'x\n'})
+    (repo / 'docs2').mkdir()
+    _git(repo, 'mv', 'docs/a.py', 'docs2/a.py')
+    ok = _commit(repo, 'fix: move safe\n\nHand-Edit: move\nPlan-Item: demo:ITEM\n')
+    assert check(ok_base, ok, cwd=repo) == []
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_autoos_run_id_flagged_or_refused(repo: Path, monkeypatch, capsys, refuse):
+    # D-2749: AutoOS run ids are flagged; --refuse-autoos fails them; plangraph run ids pass.
+    base = _head(repo)
+    autoos = _commit(repo, "feat: a\n\nWriter: gemini-3.8-flash 20261025-092523-stall-quiet-fix1-bcc9ea")
+    head = _commit(repo, "feat: b\n\nWriter: mimo/mimo-v2.6-pro run-" + "0123456789abcdef" * 2)
+    assert ci_commit_gate.autoos_spawn_commits(base, head, cwd=repo) == [
+        (autoos, "gemini-3.8-flash 20261025-092523-stall-quiet-fix1-bcc9ea")]
+    monkeypatch.chdir(repo)
+    argv = ["check", "--base", base, "--head", head, "--exempt", str(repo / "none.txt")]
+    (repo / "none.txt").write_text("", encoding="utf-8")
+    code = main(argv + (["--refuse-autoos"] if refuse else []))
+    out = capsys.readouterr()
+    if refuse:
+        assert code == 1 and f"{autoos}: autoos spawner run id" in out.out
+    else:
+        assert code == 0 and f"autoos-spawn {autoos}:" in out.err
+
+
+# ---------------------------------------------------------------------------
+# E1a gate tests (D-2835, D-2853, crit 2, invariant IE1)
+# ---------------------------------------------------------------------------
+VALID_ROUTE_DECISION = "Route-Decision: route-" + "a" * 32
+_he_counter = 0
+
+
+def _he(repo: Path, n: int, item: str | None = "demo:ITEM", rd: bool = False,
+        path: str | None = None, extra: str = "") -> str:
+    global _he_counter
+    _he_counter += 1
+    tr = "\nHand-Edit: edit\n"
+    if item:
+        tr += f"Plan-Item: {item}\n"
+    if rd:
+        tr += f"{VALID_ROUTE_DECISION}\n"
+    tr += extra
+    p = path or f"docs/f{n}_{_he_counter}.md"
+    return _commit(repo, f"docs: edit\n{tr}", {p: "x\n" * n})
+
+
+def test_e1_hand_edits_400_lines_pass_401_refused_door_refused(repo: Path):
+    base = _head(repo)
+    s400 = _he(repo, 400, rd=True)
+    assert check(base, s400, cwd=repo) == []
+    s401 = _he(repo, 401, rd=True)
+    assert any("hand-edit exceeds 400 changed lines" in v for v in check(s400, s401, cwd=repo))
+    sdoor = _he(repo, 30, path="tools/seat_verdict.py")
+    assert any("hand-edit touches auth/door surface: tools/seat_verdict.py" in v for v in check(s401, sdoor, cwd=repo))
+
+
+def test_e1_route_decision_threshold_50_51_lines(repo: Path):
+    base = _head(repo)
+    s50 = _he(repo, 50)
+    assert check(base, s50, cwd=repo) == []
+    s51_no = _he(repo, 51)
+    assert any("without Route-Decision" in v for v in check(s50, s51_no, cwd=repo))
+    s51_bad = _he(repo, 51, extra="Route-Decision: route-short\n")
+    assert any("without Route-Decision" in v for v in check(s51_no, s51_bad, cwd=repo))
+    s51_two = _he(repo, 51, extra=f"{VALID_ROUTE_DECISION}\n{VALID_ROUTE_DECISION}\n")
+    assert any("without Route-Decision" in v for v in check(s51_bad, s51_two, cwd=repo))
+    s51_ok = _he(repo, 51, rd=True)
+    assert check(s51_two, s51_ok, cwd=repo) == []
+
+
+def test_e1_history_running_sum_route_decision(repo: Path):
+    base = _head(repo)
+    c1 = _he(repo, 40, item="demo:ITEM")
+    assert check(base, c1, cwd=repo) == []
+    c2_no = _he(repo, 20, item="demo:ITEM")
+    assert check(c1, c2_no, cwd=repo) == [f"{c2_no}: hand-edit over 50 lines for demo:ITEM without Route-Decision"]
+    _git(repo, "reset", "--hard", c1)
+    c2_ok = _he(repo, 20, item="demo:ITEM", rd=True)
+    assert check(c1, c2_ok, cwd=repo) == []
+    c3_no = _he(repo, 5, item="demo:ITEM")
+    assert check(c2_ok, c3_no, cwd=repo) == [f"{c3_no}: hand-edit over 50 lines for demo:ITEM without Route-Decision"]
+
+
+def test_e1_hand_edits_secret_paths_refused(repo: Path):
+    base = _head(repo)
+    s1 = _he(repo, 1, path="vault/x.json")
+    assert check(base, s1, cwd=repo) == [f"{s1}: hand-edit touches secret-shaped path: vault/x.json"]
+    s2 = _he(repo, 1, path="config/.env")
+    assert check(s1, s2, cwd=repo) == [f"{s2}: hand-edit touches secret-shaped path: config/.env"]
+
+
+def test_e1_token_named_paths_secret_again(repo: Path):
+    """Token-named documentation is not a secret-shaped path."""
+    # E1 uses the narrower shared door/secret rules, not privacy glob matching.
+    base = _head(repo)
+    s1 = _he(repo, 1, path="docs/tokens.md")
+    assert check(base, s1, cwd=repo) == []
+    # Key-named documentation is likewise allowed by the path rules.
+    s2 = _he(repo, 1, path="docs/keys.md")
+    assert check(s1, s2, cwd=repo) == []
+
+
+def test_e1_door_match_case_folded(repo: Path):
+    # haiku-G7 / mimopro-G5: door matching is case-folded like the secret
+    # check, so TOOLS/seat_verdict.py cannot alias the real door file on a
+    # case-insensitive checkout.
+    base = _head(repo)
+    s1 = _he(repo, 30, item="demo:DOOR", path="TOOLS/seat_verdict.py")
+    assert check(base, s1, cwd=repo) == [
+        f"{s1}: hand-edit touches auth/door surface: TOOLS/seat_verdict.py"]
+    # positive control: the same shape of path with no door name passes
+    s2 = _he(repo, 30, item="demo:CTRL", path="TOOLS/notes.py")
+    assert check(s1, s2, cwd=repo) == []
+
+
+def test_e1_canon_rejects_resolvable_dotdot(repo: Path):
+    # mimopro-G10: the shared-lists row makes any '..' segment malformed
+    # before normalising, not only the escaping form.
+    from plangraph.gates import doors
+    base = _head(repo)
+    s_ok = _he(repo, 1, path="a/b/x.py")
+    assert check(base, s_ok, cwd=repo) == []
+    assert ci_commit_gate.canon_path("a/b/../x.py") is None
+    assert ci_commit_gate.gate_path_verdict("a/b/../x.py") == "malformed"
+    assert doors.canon_path("a/b/../x.py") is None
+    assert doors.blocked_path("a/b/../x.py") == "malformed"
+    # positive control: the same path without the '..' canonicalises and passes
+    assert ci_commit_gate.canon_path("a/b/x.py") == "a/b/x.py"
+    assert ci_commit_gate.gate_path_verdict("a/b/x.py") is None
+
+
+def _he_binary(repo: Path, item: str = "demo:ITEM") -> str:
+    target = repo / "docs" / "blob.bin"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"\x00\x01\x02\x03 binary\n" * 8)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m",
+         f"docs: binary edit\n\nHand-Edit: edit\nPlan-Item: {item}\n"
+         f"{VALID_ROUTE_DECISION}\n")
+    return _head(repo)
+
+
+def test_e1_binary_hand_edit_never_counts_zero(repo: Path):
+    # haiku-G8 / mimopro-G7: a binary Hand-Edit is refused per commit and
+    # counts as its full per-commit allowance in the history sum and the
+    # range bucket, never 0, so later commits cannot slip under the
+    # 50-line / Route-Decision threshold behind it.
+    base = _head(repo)
+    b1 = _he_binary(repo)
+    c2 = _he(repo, 30, item="demo:ITEM")
+    v = check(base, c2, cwd=repo)
+    assert f"{b1}: hand-edit exceeds 400 changed lines" in v
+    assert f"{c2}: hand-edit over 50 lines for demo:ITEM without Route-Decision" in v
+    # positive control: a small text Hand-Edit before the 30-line one keeps
+    # the running sum under 50 and passes
+    _git(repo, "reset", "--hard", base)
+    s1 = _he(repo, 5, item="demo:ITEM", rd=True)
+    s2 = _he(repo, 30, item="demo:ITEM")
+    assert check(base, s2, cwd=repo) == []
+
+
+def test_e1_range_ceiling_names_tipping_commit(repo: Path):
+    # haiku-G9 / mimopro-G4: the refusal names the commit whose running sum
+    # crossed the ceiling, not the newest commit of the bucket.
+    base = _head(repo)
+    c1 = _he(repo, 300, item="demo:ITEM", rd=True)
+    c2 = _he(repo, 200, item="demo:ITEM", rd=True)
+    c3 = _he(repo, 50, item="demo:ITEM", rd=True)
+    assert check(base, c3, cwd=repo) == [
+        f"{c2}: hand-edit total over ceiling for demo:ITEM"]
+    # positive control: the same shape of three commits staying at the
+    # 400-line ceiling pass
+    _git(repo, "reset", "--hard", base)
+    _he(repo, 200, item="demo:ITEM", rd=True)
+    _he(repo, 150, item="demo:ITEM", rd=True)
+    d3 = _he(repo, 50, item="demo:ITEM", rd=True)
+    assert check(base, d3, cwd=repo) == []
+
+
+def _commit_at(repo: Path, message: str, files: dict[str, str], when: str) -> str:
+    for name, content in files.items():
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    env = _git_env()
+    env["GIT_AUTHOR_DATE"] = when
+    env["GIT_COMMITTER_DATE"] = when
+    subprocess.run(["git", "add", "-A"], cwd=repo, env=env,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", message],
+                   cwd=repo, env=env, check=True, capture_output=True)
+    return _head(repo)
+
+
+def test_e1_history_walk_is_topological(repo: Path):
+    # haiku-G10: the whole-history walk must be topological, not date-ordered:
+    # with a skewed clock a date walk feeds the parent to the running sum
+    # before its child and flags the wrong commit.
+    base = _head(repo)
+    main_branch = _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+
+    def build(rd: bool) -> str:
+        _git(repo, "reset", "-q", "--hard", base)
+        _commit_at(repo, "docs: p\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n",
+                   {"docs/p.md": "x\n" * 40}, "2020-01-03T00:00:00 +0000")
+        _git(repo, "checkout", "-q", "-B", "side")
+        c2 = _commit_at(
+            repo,
+            "docs: c2\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n"
+            + (f"{VALID_ROUTE_DECISION}\n" if rd else ""),
+            {"docs/c2.md": "x\n" * 20}, "2020-01-01T00:00:00 +0000")
+        _git(repo, "checkout", "-q", main_branch)
+        _commit_at(repo, OK_MSG, {"docs/c1.md": "x\n"}, "2020-01-02T00:00:00 +0000")
+        _git(repo, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+        return c2
+
+    c2 = build(rd=False)
+    assert check(base, _head(repo), cwd=repo) == [
+        f"{c2}: hand-edit over 50 lines for demo:ITEM without Route-Decision"]
+    # positive control: the same skewed history with the Route-Decision passes
+    build(rd=True)
+    assert check(base, _head(repo), cwd=repo) == []
+
+
+def _mktree_paths(repo: Path, paths: dict[str, str], parent: str) -> str:
+    """Tree sha for a mapping of literal paths to file contents, on parent's tree.
+
+    Path segments become tree entry names verbatim, so '.', '..' and
+    backslash names are stored exactly as git's plumbing accepts them
+    (haiku-G6: real git, not a monkeypatched _touched_paths).  The parent's
+    files are kept and crafted paths override them leaf by leaf, so the
+    commit's diff shows only the crafted paths.
+    """
+    def blob(content: str) -> str:
+        proc = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=repo,
+                              env=_git_env(), input=content, capture_output=True,
+                              text=True, check=True)
+        return proc.stdout.strip()
+
+    def mktree(lines: list[str]) -> str:
+        proc = subprocess.run(["git", "mktree"], cwd=repo, env=_git_env(),
+                              input="\n".join(lines) + "\n", capture_output=True,
+                              text=True, check=True)
+        return proc.stdout.strip()
+
+    def flush(node: dict) -> str:
+        lines = []
+        for name, value in node.items():
+            if isinstance(value, dict):
+                lines.append(f"040000 tree {flush(value)}\t{name}")
+            else:
+                lines.append(f"100644 blob {value}\t{name}")
+        return mktree(lines)
+
+    tree: dict = {}
+
+    def graft(mapping: dict, path: str, sha: str) -> None:
+        node = mapping
+        parts = path.split("/")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = sha
+
+    for line in _git(repo, "ls-tree", "-r", parent).splitlines():
+        meta, leaf_path = line.split("\t", 1)
+        graft(tree, leaf_path, meta.split()[2])
+    for path, content in paths.items():
+        graft(tree, path, blob(content))
+    return flush(tree)
+
+
+def _commit_mktree(repo: Path, message: str, paths: dict[str, str], parent: str) -> str:
+    """Commit with a crafted tree (see _mktree_paths); worktree untouched."""
+    tree = _mktree_paths(repo, paths, parent)
+    proc = subprocess.run(["git", "commit-tree", tree, "-p", parent, "-m", message],
+                          cwd=repo, env=_git_env(), capture_output=True,
+                          text=True, check=True)
+    return proc.stdout.strip()
+
+
+def test_e1_canonical_and_malformed_paths_through_real_git(repo: Path):
+    # haiku-G6: the canon path forms must meet a real git diff.  git's
+    # plumbing stores tree entries named '.' and '..' and diff-tree reports
+    # their paths verbatim ('./src/...', '../x.py'); the old test
+    # monkeypatched _touched_paths, so no canon form ever went through git.
+    base = _head(repo)
+    f = repo / "src\\plangraph\\keeper\\x.py"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "docs: backslash door\n\nHand-Edit: backslash\nPlan-Item: demo:ITEM\n")
+    s_bs = _head(repo)
+    assert check(base, s_bs, cwd=repo) == [f"{s_bs}: hand-edit touches auth/door surface: src\\plangraph\\keeper\\x.py"]
+    s_dot = _commit_mktree(
+        repo, "docs: dot door\n\nHand-Edit: dot\nPlan-Item: demo:ITEM\n",
+        {"./src/plangraph/keeper/x.py": "x\n"}, s_bs)
+    assert check(s_bs, s_dot, cwd=repo) == [f"{s_dot}: hand-edit touches auth/door surface: ./src/plangraph/keeper/x.py"]
+    s_dotdot = _commit_mktree(
+        repo, "docs: dotdot escape\n\nHand-Edit: dd\nPlan-Item: demo:ITEM\n",
+        {"../x.py": "x\n"}, s_dot)
+    assert check(s_dot, s_dotdot, cwd=repo) == [f"{s_dotdot}: hand-edit touches malformed path: ../x.py"]
+    # positive controls: the same crafted shapes without the fault pass
+    s_bs_ok = _commit_mktree(
+        repo, "docs: backslash safe\n\nHand-Edit: bs-ok\nPlan-Item: demo:ITEM\n",
+        {"src\\docs\\x.py": "x\n"}, s_dotdot)
+    assert check(s_dotdot, s_bs_ok, cwd=repo) == []
+    s_dot_ok = _commit_mktree(
+        repo, "docs: dot safe\n\nHand-Edit: dot-ok\nPlan-Item: demo:ITEM\n",
+        {"./docs/x.md": "x\n"}, s_bs_ok)
+    assert check(s_bs_ok, s_dot_ok, cwd=repo) == []
+    s_plain_ok = _commit_mktree(
+        repo, "docs: plain safe\n\nHand-Edit: plain-ok\nPlan-Item: demo:ITEM\n",
+        {"docs/y.md": "x\n"}, s_dot_ok)
+    assert check(s_dot_ok, s_plain_ok, cwd=repo) == []
+
+
+def test_e1_range_ceiling_bucket_sum(repo: Path):
+    base = _head(repo)
+    c1 = _he(repo, 210, item="demo:ITEM", rd=True)
+    c2 = _he(repo, 210, item="demo:ITEM", rd=True)
+    assert check(base, c2, cwd=repo) == [f"{c2}: hand-edit total over ceiling for demo:ITEM"]
+    _git(repo, "reset", "--hard", base)
+    c1_two = _he(repo, 210, item="demo:ITEM_A", rd=True)
+    c2_two = _he(repo, 210, item="demo:ITEM_B", rd=True)
+    assert check(base, c2_two, cwd=repo) == []
+
+
+def test_e1_hand_edit_without_plan_item_refused(repo: Path):
+    # delta4-M10: a Hand-Edit with no Plan-Item joins no per-item sum and
+    # would evade the Route-Decision rule, so it is refused outright.
+    base = _head(repo)
+    bad = _he(repo, 5, item=None)
+    assert check(base, bad, cwd=repo) == [f"{bad}: hand-edit without Plan-Item"]
+    # positive control: the same edit with exactly one Plan-Item passes
+    ok = _he(repo, 5, item="demo:ITEM")
+    assert check(bad, ok, cwd=repo) == []
+    # exactly one: a second Plan-Item trailer is refused too
+    two = _he(repo, 5, item="demo:ITEM", extra="Plan-Item: demo:OTHER\n")
+    assert check(ok, two, cwd=repo) == [f"{two}: hand-edit with more than one Plan-Item"]
+
+
+def test_e1_plan_item_keys_case_folded(repo: Path):
+    # haiku-G4: bucket keys compare case-folded, so `demo:ITEM` and
+    # `demo:item` share one bucket and one running sum instead of each
+    # hiding under the 50-line trigger.
+    base = _head(repo)
+    c1 = _he(repo, 30, item="demo:ITEM")
+    assert check(base, c1, cwd=repo) == []
+    c2 = _he(repo, 30, item="demo:item")
+    assert check(base, c2, cwd=repo) == [
+        f"{c2}: hand-edit over 50 lines for demo:item without Route-Decision"]
+    # positive control: the same pair passes with a Route-Decision on the second
+    _git(repo, "reset", "--hard", base)
+    _he(repo, 30, item="demo:ITEM")
+    r2 = _he(repo, 30, item="demo:item", rd=True)
+    assert check(base, r2, cwd=repo) == []
+    # the range ceiling bucket is shared too: 210 + 210 exceeds 400 once
+    _git(repo, "reset", "--hard", base)
+    _he(repo, 210, item="demo:ITEM", rd=True)
+    b2 = _he(repo, 210, item="demo:item", rd=True)
+    assert check(base, b2, cwd=repo) == [
+        f"{b2}: hand-edit total over ceiling for demo:item"]
+
+
+def test_e1_check_vectors(repo: Path):
+    base = _head(repo)
+    s_bad = _commit(repo, "docs: typo\n\nhand-edit: oops\n", {"docs/oops.md": "l\n"})
+    v = check(base, s_bad, cwd=repo)
+    assert f"{s_bad}: malformed Hand-Edit trailer" in v and f"{s_bad}: missing Writer trailer" in v
+    s_w = _commit(repo, "feat: w\n\nWriter: mimo-v2.6-flash r1\nPlan-Item: demo:ITEM\n", {"src/x.py": "l\n" * 300})
+    s_h = _he(repo, 200, item="demo:ITEM", rd=True)
+    assert check(s_bad, s_h, cwd=repo) == []
+    s_body = _commit(repo, f"docs: 60 lines\n\nBody text.\nRoute-Decision: route-{'a'*32}\n\nHand-Edit: e\nPlan-Item: demo:BODY\n", {"docs/b.md": "l\n" * 60})
+    assert any("without Route-Decision" in x for x in check(s_h, s_body, cwd=repo))
+    assert all(ci_commit_gate.canon_path(p) is None for p in ("/etc/passwd", "../outside.py", "foo/../../bar.py"))
+    assert ci_commit_gate.canon_path("./a/b/c.py") == "a/b/c.py" and ci_commit_gate.canon_path("a\\b\\c.py") == "a/b/c.py"
+    proc = subprocess.run([sys.executable, str(MODULE_PATH), "--help"], capture_output=True, text=True)
+    assert proc.returncode == 0 and "usage:" in proc.stdout
+
+
+def _e1_route_policy(gate_verdict: str | None) -> str:
+    """The design's stated route policy, one place (E1 shared-lists row):
+    E3's guard step must give `route_verdict` = `writer` exactly when
+    `gate_verdict` is not None.  Until E3 lands, no code under test produces
+    a route verdict, so this policy applied to fixture rows is fixture data
+    pinned for E3, not route coverage (haiku-G5 / mimopro-G9)."""
+    return "writer" if gate_verdict is not None else "direct_edit"
+
+
+def test_e1_drift_and_shared_fixture():
+    from plangraph.gates import doors, privacy
+    assert ci_commit_gate.AUTH_DOOR_PATHS == doors.AUTH_DOOR_PATHS
+    assert ci_commit_gate.HAND_EDIT_MAX_LINES == doors.HAND_EDIT_MAX_LINES == 400
+    assert ci_commit_gate.ROUTE_DECISION_LINES == doors.ROUTE_DECISION_LINES == 50
+    assert ci_commit_gate.SECRET_NAME_PATTERNS == doors.SECRET_NAME_PATTERNS == privacy.SECRET_NAME_PATTERNS
+    assert ci_commit_gate.SECRET_DIRS == doors.SECRET_DIRS == privacy.SECRET_DIRS
+    assert len(doors.FIXTURE_ROWS) >= 40
+    for path, exp_gate, _exp_route in doors.FIXTURE_ROWS:
+        g = ci_commit_gate.gate_path_verdict(path)
+        d = doors.blocked_path(path)
+        assert g == exp_gate and d == exp_gate, f"mismatch on {path}"
+
+
+def test_e1_fixture_route_column_is_e3_policy_pin_not_route_coverage():
+    # haiku-G5 / mimopro-G9: the route column is fixture data for E3's guard
+    # step (no code under test produces a route verdict yet), so this test
+    # proves only what it can: each row's expected route follows the design's
+    # stated policy (_e1_route_policy) applied to the verdicts the real code
+    # computes — not a value derived from the fixture's own gate column.
+    from plangraph.gates import doors
+    # positive controls: both policy directions stated outright
+    assert _e1_route_policy("door") == "writer"
+    assert _e1_route_policy(None) == "direct_edit"
+    saw_writer = saw_direct_edit = False
+    for path, exp_gate, exp_route in doors.FIXTURE_ROWS:
+        g = ci_commit_gate.gate_path_verdict(path)  # real code, not exp_gate
+        d = doors.blocked_path(path)                # the second real copy
+        assert g == exp_gate and d == exp_gate, f"mismatch on {path}"
+        assert _e1_route_policy(g) == exp_route, f"route mismatch on {path}"
+        saw_writer = saw_writer or exp_route == "writer"
+        saw_direct_edit = saw_direct_edit or exp_route == "direct_edit"
+    # the fixture exercises both directions of the policy
+    assert saw_writer and saw_direct_edit
+
+
+def test_e1_trailers_final_paragraph_only(repo: Path):
+    # buildl1-T1 (D-2879): trailers are read exactly as git reads them — the
+    # final paragraph only (338b4f6a body shape: a Plan-Item/Hand-Edit
+    # paragraph, blank line, a Co-Authored-By/Claude-Session paragraph).
+    base = _head(repo)
+    body = "docs: fix typo\n\nPlan-Item: demo:ITEM\nHand-Edit: edit\n\nCo-Authored-By: x\nClaude-Session: y\n"
+    sha = _commit(repo, body, {"docs/t.md": "l\n"})
+    assert f"{sha}: trailer outside final block" in check(base, sha, cwd=repo)
+    # the gate's block equals git's own parse of the same message
+    seen = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],
+        input=body, cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    assert ci_commit_gate._trailer_block_lines(body, cwd=repo) == seen
+    # positive control: the same trailers in one final paragraph are seen and pass
+    ok = _commit(
+        repo,
+        "docs: fix typo\n\nCo-Authored-By: x\nClaude-Session: y\nPlan-Item: demo:ITEM\nHand-Edit: edit\n",
+        {"docs/t2.md": "l\n"},
+    )
+    assert check(sha, ok, cwd=repo) == []
+
+
+def test_e1_strict_trailer_in_prose_paragraph_refused(repo: Path):
+    # haiku-G1 (D-2879): a strict Hand-Edit beside prose is invisible to git's
+    # trailer parse; the gate must refuse instead of skipping every check.
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "docs: sneak\n\nHand-Edit: edit\nprose line here\n\nWriter: mimo-v2.6-flash run-1\n",
+        {"tools/seat_verdict.py": "x\n"},
+    )
+    assert check(base, sha, cwd=repo) == [f"{sha}: trailer outside final block"]
+    # positive control: the same Hand-Edit in the final trailer block gets the door refusal
+    ok = _commit(
+        repo,
+        "docs: sneak\n\nprose line here\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\nWriter: mimo-v2.6-flash run-1\n",
+        {"tools/seat_verdict.py": "y\n"},
+    )
+    assert check(sha, ok, cwd=repo) == [
+        f"{ok}: hand-edit touches auth/door surface: tools/seat_verdict.py"
+    ]
+
+
+def test_e1_out_of_block_hand_edit_with_empty_plan_item_refused(repo: Path):
+    # mimopro-G1 (D-2879): an empty Plan-Item value hides a strict Hand-Edit
+    # from the block walk, so the E1a caps were fail-open on this path.
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        "feat: big\n\nPlan-Item: \nHand-Edit: sneak\n\nWriter: mimo-v2.6-flash r1\n",
+        {"tools/seat_verdict.py": "x\n" * 100},
+    )
+    v = check(base, sha, cwd=repo)
+    assert v == [f"{sha}: trailer outside final block"]
+    # positive control: the same Hand-Edit in a well-formed final block is refused on the door
+    ok = _commit(
+        repo,
+        "feat: big\n\nWriter: mimo-v2.6-flash r1\nPlan-Item: demo:ITEM\nHand-Edit: sneak\n",
+        {"src/plangraph/keeper/mcp.py": "z\n"},
+    )
+    assert check(sha, ok, cwd=repo) == [
+        f"{ok}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py"
+    ]
+
+
+def test_e1_route_decision_body_text_and_duplicate(repo: Path):
+    # mimopro-G6 (D-2879): a strict Route-Decision written as body text is not
+    # the required trailer, and a duplicate pair is refused with a true reason.
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        f"feat: big\n\nRoute-Decision: route-{'a' * 32}\nNote: this reads like body text\n\nHand-Edit: e\nPlan-Item: demo:BODY\n",
+        {"docs/b.md": "l\n" * 60},
+    )
+    v = check(base, sha, cwd=repo)
+    assert f"{sha}: trailer outside final block" in v
+    assert any("without Route-Decision" in x for x in v)
+    # positive control: 60 lines with a real Route-Decision trailer passes
+    ok = _he(repo, 60, rd=True)
+    assert check(sha, ok, cwd=repo) == []
+    # two Route-Decision trailers under the 50 sum are refused, reason named truthfully
+    dup = _he(repo, 10, item="fresh:ITEM", extra=f"{VALID_ROUTE_DECISION}\n{VALID_ROUTE_DECISION}\n")
+    assert check(ok, dup, cwd=repo) == [
+        f"{dup}: hand-edit carries multiple Route-Decision trailers for fresh:ITEM"
+    ]
+    # positive control: one well-formed trailer under the sum passes
+    one = _he(repo, 10, item="fresh:ITEM2", rd=True)
+    assert check(dup, one, cwd=repo) == []
+
+
+# ---------------------------------------------------------------------------
+# delta4-M16: the bypass shapes the E1 test list omitted
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("updated", [pytest.param(False, marks=pytest.mark.xfail(strict=True, reason="unupdated PR needs open-heads")), True], ids=["pr2-unupdated", "pr2-updated"])
+def test_m16_parallel_prs_one_item_second_merge_fails_at_merger_rerun(
+    repo: Path, updated: bool
+):
+    # Two parallel open PRs of one item, 40 lines each: the second PR to
+    # merge must fail at the merger's re-run (BASE = current main, HEAD =
+    # the PR head right before merging), exactly as the merged case does in
+    # test_m16_second_parallel_pr_merged_into_main_is_refused.
+    base = _head(repo)
+    pr1 = _he(repo, 40, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "pr2", base)
+    pr2 = _he(repo, 40, item="demo:ITEM")
+    if updated:
+        _git(repo, "merge", "-q", "--no-ff", "-m", "update branch", pr1)
+    assert check(pr1, _head(repo), cwd=repo) == [
+        f"{pr2}: hand-edit over 50 lines for demo:ITEM without Route-Decision"
+    ]
+
+
+def test_m16_second_parallel_pr_merged_into_main_is_refused(repo: Path):
+    # delta4-M16: the same two-PR shape is caught once the second PR's merge
+    # brings both commits into one checked history.
+    base = _head(repo)
+    pr1 = _he(repo, 40, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "pr2", base)
+    pr2 = _he(repo, 40, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "main2", pr1)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge pr2", pr2)
+    assert check(pr1, _head(repo), cwd=repo) == [
+        f"{pr2}: hand-edit over 50 lines for demo:ITEM without Route-Decision"
+    ]
+    # positive control: the same shape with two different items passes
+    _git(repo, "reset", "-q", "--hard", base)
+    q1 = _he(repo, 40, item="demo:ITEM_A")
+    _git(repo, "checkout", "-q", "-B", "pr2b", base)
+    q2 = _he(repo, 40, item="demo:ITEM_B")
+    _git(repo, "checkout", "-q", "-B", "main3", q1)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge pr2b", q2)
+    assert check(q1, _head(repo), cwd=repo) == []
+
+
+def test_m16_squash_commit_carries_squashed_bodies_for_one_item(repo: Path):
+    # delta4-M16: squash-merged history for one item.  A squash commit carries
+    # the squashed bodies (design E1 route-decision row), so the squashed
+    # lines count against the item's 50-line Route-Decision threshold.
+    base = _head(repo)
+    _git(repo, "checkout", "-q", "-B", "pr1", base)
+    _he(repo, 30, item="demo:ITEM")
+    _he(repo, 30, item="demo:ITEM")
+    _git(repo, "checkout", "-q", "-B", "main4", base)
+    _git(repo, "merge", "-q", "--squash", "pr1")
+    sq = _commit(repo, "docs: ab (#1)\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n")
+    assert check(base, sq, cwd=repo) == [
+        f"{sq}: hand-edit over 50 lines for demo:ITEM without Route-Decision"
+    ]
+    # positive control: the same squash carrying a Route-Decision passes
+    _git(repo, "reset", "-q", "--hard", base)
+    _git(repo, "merge", "-q", "--squash", "pr1")
+    sq_rd = _commit(
+        repo,
+        "docs: ab (#2)\n\nHand-Edit: edit\nPlan-Item: demo:ITEM\n"
+        f"{VALID_ROUTE_DECISION}\n",
+    )
+    assert check(base, sq_rd, cwd=repo) == []
+
+
+def test_m16_one_route_id_cited_by_several_commits_passes_gate_form_check(
+    repo: Path,
+):
+    # delta4-M16 / M13 (one decision, one commit): the gate checks the
+    # Route-Decision form only — the record check lives in E1b
+    # (lane_gates.py hand-edits reads the keeper's route log; CI cannot reach
+    # it), so one well-formed route id cited by several commits passes here
+    # and is refused there.  This test pins the division of labour.
+    base = _head(repo)
+    c1 = _he(repo, 60, item="demo:ITEM", rd=True)
+    c2 = _he(repo, 60, item="demo:ITEM", rd=True)  # cites the very same id
+    assert check(base, c2, cwd=repo) == []
+    # positive control: the same single citation on one commit passes too
+    _git(repo, "reset", "-q", "--hard", base)
+    one = _he(repo, 60, item="demo:ITEM", rd=True)
+    assert check(base, one, cwd=repo) == []
+

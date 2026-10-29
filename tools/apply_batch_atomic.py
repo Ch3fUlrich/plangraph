@@ -106,5 +106,8 @@ def send(session, ops, start, source, digest, errors, op_key,
     if got != sent:
         return 1, [f"error: unreadable or short keeper reply (applied {got!r} "
                    f"of {sent}); batch state unknown, check the keeper"]
+    if dry_run and reply.get("dry_run") is not True:
+        return 1, ["error: dry run requested but the keeper reply has no dry_run "
+                   "marker: the batch may have been APPLIED, check the keeper"]
     lines = dropped_deps(reply, ops, start, op_key) + warnings(reply)
     return 0, lines

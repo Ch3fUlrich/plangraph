@@ -47,6 +47,18 @@ rule = "token-shape"
 value_sha256 = "48f27ef8fc9d274fbeee761e0171b64e32551784d0b4543998a94085fa0f07e6"
 why = "synthetic HMAC test vector"
 
+[[scrub.allow_value]]
+path = "tests/test_ci_commit_gate.py"
+rule = "credential-shape"
+value_sha256 = "af896a5f354b5297fb7dde9efe8f2b1de11e2fc5315fe28ce1d7468c1953b7ab"
+why = "synthetic path-escape vector for canon_path (system path literal, no credential)"
+
+[[scrub.allow_value]]
+path = "tests/test_efficiency_gates.py"
+rule = "credential-shape"
+value_sha256 = "bde609ced7207b5cff984b69fa166c22847d50b845f059eb3f5a905e18aeed05"
+why = "synthetic secret-name path fixture for the door/secret matcher"
+
 # Vendored third-party code: minified JS trips entropy/IP/e-mail heuristics.
 [[scrub.allow]]
 path = "vendor/**"

@@ -35,7 +35,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                # worker_claim is POST transport: it returns a Claim to a worker
                "worker_claim",
                "attempts", "park", "complete", "alarms", "locks",
-               "jev_shadow", "jev_outcome"}
+               "jev_shadow", "jev_outcome", "log_item", "rule_set"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 READ_VERBS.add("messages")
 WRITE_VERBS.add("post_message")
@@ -161,7 +161,17 @@ def _set_kind(store, principal, body, need):
     return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
 
 
+#: D-1498/D-2760: an unknown body key is refused, never ignored (an old keeper
+#: that ignored ``dry_run`` applied a "dry run" batch for real).
+APPLY_OPS_FIELDS = frozenset({"ops", "batch_ref", "base_seq", "dry_run"})
+
+
 def _apply_ops(store, principal, body, need):
+    # Authorization precedes strict-body validation, as for other router writes.
+    store._require_role(principal, "router")
+    extra = set(body) - APPLY_OPS_FIELDS
+    if extra:
+        raise Refused("validation", f"unexpected fields {sorted(extra)}")
     return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
                            base_seq=body.get("base_seq"),
                            dry_run=body.get("dry_run"))
@@ -274,4 +284,10 @@ ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,
                       "phase_finish": _phase_finish,
-                      "worker_claim": _worker_claim}
+                      "worker_claim": _worker_claim,
+                      # PG-EFFICIENCY-GATES: router or the project L1 (store checks)
+                      "log_item": lambda store, principal, body, need: store.log_item(
+                          principal, need(body, "key"), body.get("entry")),
+                      # PG-EFFICIENCY-GATES slice 2 (D-2746): router only (store checks)
+                      "rule_set": lambda store, principal, body, need: store.rule_set(
+                          principal, need(body, "rules"))}

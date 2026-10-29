@@ -27,7 +27,7 @@ max_rounds = 2
 Inspect the effective value and its most specific contributing source:
 
 ```sh
-python -m plangraph.settings show --project demo --phase demo:PHASE
+python3 -m plangraph.settings show --project demo --phase demo:PHASE
 ```
 
 The output is JSON. Phase plans publish top-level `review_method` and `review_scope`

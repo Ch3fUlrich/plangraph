@@ -307,10 +307,10 @@ def test_smoke_checks_use_injected_dry_run(tmp_path):
 
 
 def test_smoke_checks_default_dry_run(tmp_path):
-    v = check_card(good_card(smoke_checks=["python -m pytest tests/missing.py"]),
+    v = check_card(good_card(smoke_checks=["python3 -m pytest tests/missing.py"]),
                    repo_root=tmp_path)
     assert v.findings == (Finding("smoke_not_runnable",
-        "python -m pytest tests/missing.py: missing test path: tests/missing.py"),)
+        "python3 -m pytest tests/missing.py: missing test path: tests/missing.py"),)
 
 
 @pytest.mark.parametrize("entry", ["", "  ", None, 3, "f(x) -> str", "a", ":run",
@@ -328,7 +328,7 @@ def test_exports_are_signatures_not_paths(tmp_path):
 
 
 @pytest.mark.parametrize("cmd,want", [
-    ("FOO=1 python -m pytest -q tests/a.py::test_x -k 'a.py' tests/b.py",
+    ("FOO=1 python3 -m pytest -q tests/a.py::test_x -k 'a.py' tests/b.py",
      ["tests/a.py", "tests/b.py"]),
     ("true && bin/pytest -c config.py -o cache_dir=x -m slow -p plugin tests; "
      "py.test ./tests/a.py tests/a.py", ["tests", "tests/a.py"]),

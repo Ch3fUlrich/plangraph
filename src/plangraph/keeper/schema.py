@@ -62,6 +62,7 @@ EVENT_TYPES = (
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
     "kind_set", "state_set", "exec_owner_changed", "oversight_token_minted",
+    "item_logged", "rule_set",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as

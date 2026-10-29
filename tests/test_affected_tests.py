@@ -408,7 +408,7 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
     pytest_cmd = next(s["run"] for s in pytest_steps if s.get("name", "").startswith("pytest"))
     assert 'pull_request' in pytest_cmd
     assert 'tools/affected_tests.py --base "$BASE_SHA" --run -n auto' in pytest_cmd
-    assert 'python -m pytest -q -n auto' in pytest_cmd
+    assert 'python3 -m pytest -q -n auto' in pytest_cmd
 
     # pytest-postgres job restricts affected tests via --within
     pg_steps = workflow["jobs"]["pytest-postgres"]["steps"]
@@ -420,7 +420,7 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
     assert 'tools/affected_tests.py --base "$BASE_SHA"' in pg_cmd
     # on push to main, full PG set is unchanged
     assert 'tests/test_projector_ddl.py $FILES' in pg_cmd
-    assert 'python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py' in pg_cmd
+    assert 'python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py' in pg_cmd
 
     # PyYAML's YAML 1.1 loader treats the GitHub key `on` as boolean True.
     assert workflow.get("on", workflow.get(True))["schedule"]

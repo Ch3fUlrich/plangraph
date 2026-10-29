@@ -4,7 +4,7 @@ description: Dispatch per-host agents using plangraph cards.
 ---
 
 Spawn by card via plangraph-spawn (`python3 tools/plangraph-spawn.py ... spawn --card ...`), never hand-pick a model.
-Use `python -m plangraph.spawner.cli route --card @card.json --role implement`.
+Use `python3 -m plangraph.spawner.cli route --card @card.json --role implement`.
 Then use `spawn --card @card.json --role implement "task prompt"`.
 Use the returned `plangraph-spawn wait RUN_ID --timeout SECONDS` to await completion.
 Never use `pgrep -f` wait loops: they can match the waiting process itself.

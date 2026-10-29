@@ -23,6 +23,8 @@ class SpawnService:
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
         self.leg_reader = leg_reader
         self.tasks = {}
+        from .notify import keeper_item_reader
+        self.item_reader = keeper_item_reader()
 
     def _path(self, run_id):
         if not isinstance(run_id, str) or not run_id.startswith('run-') or not run_id[4:].isalnum():
@@ -125,7 +127,46 @@ class SpawnService:
             if not family:
                 raise SpawnRefused('writer family unavailable')
             families.append(family)
-        return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
+        return self._gate_plan(plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader,
+                                          benchmark=benchmark, strict=require_bench), card, role)
+
+    def _gate_item(self, card, role):
+        """Keeper ``show`` row of the card's item for the D-2739 gates, or None."""
+        from plangraph.gates.admission import WRITER_ROLES
+        key = (card or {}).get('key') or os.environ.get('PLANGRAPH_SPAWN_ITEM')
+        reader = getattr(self, 'item_reader', None)
+        if role not in WRITER_ROLES or not key or reader is None:
+            return None
+        return reader(key)
+
+    def _gate_plan(self, plan, card, role):
+        """D-2744: drop retired-family legs (any role); D-2739 §0.2a/d: drop flash /
+        weaker-than-writer legs from a fix run."""
+        from dataclasses import replace as _replace
+        from plangraph.gates.admission import filter_fixer_legs
+        from plangraph.gates.models import retired
+        from plangraph.gates.privacy import is_sensitive, sensitive_leg_ok
+        from plangraph.routing_errors import SpawnRefused
+        if is_sensitive(card) and plan.legs and not all(sensitive_leg_ok(leg) for leg in plan.legs):
+            # an override leg skips route_card's marker; refuse it here (D-2683).
+            raise SpawnRefused('privacy=sensitive: leg is not a marked model (D-2683): '
+                               + ', '.join(leg.id for leg in plan.legs if not sensitive_leg_ok(leg)))
+        gone = [leg for leg in plan.legs if retired(leg.model, getattr(leg, 'family', None))]
+        live = [leg for leg in plan.legs if leg not in gone]
+        kept, dropped = filter_fixer_legs(live, card or {}, role)
+        if not dropped and not gone:
+            return plan
+        skipped = tuple(plan.skipped) + tuple(
+            {'leg': leg.id, 'reason': 'retired_family',
+             'skip_reason': f'retired family (D-2744): {leg.model} has no working account'}
+            for leg in gone) + tuple(
+            {'leg': leg.id, 'reason': 'fixer_floor',
+             'skip_reason': f'fixer floor (D-2739 §0.2d): {leg.model} is flash or weaker than the writer'}
+            for leg in dropped)
+        error = plan.error or (None if kept else
+                               'retired family (D-2744): no usable leg' if gone and not dropped else
+                               'fixer floor (D-2739 §0.2d): no leg at or above the writer tier')
+        return _replace(plan, legs=tuple(kept), skipped=skipped, error=error)
 
     async def spawn(self, *args, **kwargs):
         try:
@@ -133,21 +174,31 @@ class SpawnService:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
-            if card and card.get('findings') and options.get('role', 'implement') == 'implement':
-                from .fixer import split_findings, render_fixer_brief
+            role = options.get('role', 'implement')
+            from plangraph.gates.admission import admit, card_findings, is_fix
+            item = self._gate_item(card, role)
+            if card and role == 'implement' and is_fix(card, role):
+                # D-2739 §0.2d: the fix brief is built by code from every finding
+                # (seat output files included); the caller's prompt is appended.
+                from .fixer import split_findings
                 from plangraph.settings import admit_fixer_threshold
-                # No keeper item is held here: the trusted layers are global
+                note = options.get('prompt') or ''
+                # No keeper item is held for the threshold: the trusted layers are global
                 # and the card's project/phase layers may only tighten (R3).
-                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card=card))
-                if len(groups) > 1:
-                    async def dispatch(group):
-                        child = dict(card, findings=list(group))
-                        child_options = dict(options, card=child, prompt=render_fixer_brief(group))
-                        return await self._spawn(**child_options)
-                    return {'writers': await asyncio.gather(*(dispatch(g) for g in groups))}
-                options['prompt'] = render_fixer_brief(groups[0])
+                groups = split_findings(card_findings(card), limit=admit_fixer_threshold(card=card))
+                briefs = []
+                for group in groups:
+                    child = dict(card, findings=list(group), seat_outputs=None)
+                    briefs.append((child, admit(child, role, note, item)[0]))
+                if len(briefs) > 1:
+                    async def dispatch(child, brief):
+                        return await self._spawn(**dict(options, card=child, prompt=brief))
+                    return {'writers': await asyncio.gather(*(dispatch(c, b) for c, b in briefs))}
+                options['card'], options['prompt'] = briefs[0]
                 return await self._spawn(**options)
-            return await self._spawn(*args, **kwargs)
+            if card:
+                options['prompt'] = admit(card, role, options.get('prompt') or '', item)[0]
+            return await self._spawn(**options)
         except Exception as exc:
             self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'))
             raise
@@ -171,7 +222,10 @@ class SpawnService:
         self._save(child)
         try:
             chosen = child['chosen_leg']
-            job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
+            # Same writer run, same round: only the prompt gates apply (base-pin §0.2f).
+            from plangraph.gates.admission import admit
+            brief = admit({}, 'implement', render_fixer_brief([{'text': g} for g in gaps]))[0]
+            job = await self.runner.spawn(prompt=brief,
                 model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'])
             child['job_id'] = job.job_id
             self._save(child)
@@ -248,13 +302,15 @@ class SpawnService:
                 raise SpawnRefused('excluded writer family')
             if role == 'review' and chosen.family in writer_families:
                 raise SpawnRefused('excluded writer family')
-            plan = SpawnPlan((chosen,), (), 'override', (), ())
+            plan = self._gate_plan(SpawnPlan((chosen,), (), 'override', (), ()), card, role)
         else:
             # The spawn wrapper owns refusal persistence; route() owns it only
             # for standalone route requests, otherwise one error is saved twice.
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
+        from plangraph.gates.privacy import admit_run_tree
+        admit_run_tree(card, getattr(self.runner, 'default_cwd', os.getcwd()))
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run else None, served_model=None,

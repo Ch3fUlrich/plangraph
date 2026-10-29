@@ -66,6 +66,8 @@ def argv(prompt: str, model: str = DEFAULT_MODEL, server_url: str | None = None,
     cmd = [binary, "run", "-m", model]
     if server_url:
         cmd += ["--attach", server_url]
+    else:  # D-2749: never attach to the background service (no mimo baseURL there)
+        cmd.insert(2, "--standalone")
     return cmd + ["--", prompt]  # the prompt is never parsed as a flag
 
 

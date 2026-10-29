@@ -1,6 +1,6 @@
 """PG-WIN-MCP (D-884): the MCP client imports without ``fcntl`` (Windows).
 
-``plangraph.keeper`` loads its store core lazily, so ``python -m
+``plangraph.keeper`` loads its store core lazily, so ``python3 -m
 plangraph.keeper.mcp`` pulls in only the stdlib HTTP client.  Each check runs
 in a fresh interpreter with ``fcntl`` blocked, except the name-resolution check,
 which unblocks it to load the whole surface (POSIX hosts only); no network, no
@@ -45,7 +45,7 @@ def test_mcp_imports_without_fcntl():
 
 
 def test_mcp_module_entry_starts_without_fcntl():
-    # ``python -m plangraph.keeper.mcp`` with an empty stdin exits cleanly.
+    # ``python3 -m plangraph.keeper.mcp`` with an empty stdin exits cleanly.
     proc = _run_path(
         "import runpy\n"
         "sys.argv = ['plangraph.keeper.mcp']\n"
