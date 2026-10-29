@@ -252,12 +252,10 @@ class Sessions:
 
     @staticmethod
     def _caller():
-        frame = sys._getframe(1)
-        for _ in range(8):
-            if frame is None or Path(frame.f_code.co_filename).name != "sessions.py":
-                break
-            frame = frame.f_back
-        return f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno}" if frame else "unknown"
+        """Audit caller: the operating principal ($PLANGRAPH_PRINCIPAL) or the
+        OS user - never a source location (R-15)."""
+        import getpass
+        return os.environ.get("PLANGRAPH_PRINCIPAL") or getpass.getuser()
 
     def _audit(self, action, name, ok, reason, session_id, argv):
         entry = {"ts": self._now(), "action": action, "name": _scrub(str(name))[:80],
@@ -270,21 +268,24 @@ class Sessions:
     def _action(self, action, name, fn, *, dry=False):
         """Run one action; every outcome - success, refusal, timeout, OSError,
         subprocess failure - leaves exactly one scrubbed audit JSON line (no
-        line at all on a dry run, which stays side-effect free, D-2918)."""
+        line at all on a dry run, which stays side-effect free, D-2918).
+        `self._audit_argv` is the prompt-redacted argv once one is built, so
+        failure audit lines carry it too (R-16)."""
+        self._audit_argv = None
         try:
             result = fn()
         except ParameterRefused as exc:
             if not dry:
-                self._audit(action, name, False, str(exc), None, None)
+                self._audit(action, name, False, str(exc), None, self._audit_argv)
             raise
         except subprocess.TimeoutExpired as exc:
-            self._audit(action, name, False, f"timeout after {exc.timeout}s", None, None)
+            self._audit(action, name, False, f"timeout after {exc.timeout}s", None, self._audit_argv)
             raise subprocess.TimeoutExpired(_scrub(exc.cmd), exc.timeout) from None
         except _ActionFailed as exc:
-            self._audit(action, name, False, str(exc), None, None)
+            self._audit(action, name, False, str(exc), None, self._audit_argv)
             return _scrub({"ok": False, "name": name, "session_id": None})
         except (OSError, subprocess.SubprocessError) as exc:
-            self._audit(action, name, False, f"{type(exc).__name__}: {exc}", None, None)
+            self._audit(action, name, False, f"{type(exc).__name__}: {exc}", None, self._audit_argv)
             return _scrub({"ok": False, "name": name, "session_id": None})
         if dry:
             return _scrub(result)
@@ -456,6 +457,7 @@ class Sessions:
         style = self._style_text(cfg)
         bg_argv, wt_argv, env, launcher = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
+        self._audit_argv = self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)
         if dry_run:
             # D-2918: a refusing dry run is still dry; a passing one writes
             # nothing either - planned argv, cwd and env keys only.
@@ -572,6 +574,7 @@ class Sessions:
         style = self._style_text(cfg)
         bg_argv, wt_argv, env, launcher = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
+        self._audit_argv = self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)
         old_sid = rec.get("session_id")
         if old_sid and rec.get("stopped_ts") is None:
             self._stop_record(rec)  # raises "stop failed" -> nothing is launched

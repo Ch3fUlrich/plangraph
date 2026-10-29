@@ -760,7 +760,8 @@ stdout, else short id, else the newest `background` row by name + startedAt near
 post-stop launch failure keeps the record and marker for a retry.
 
 `plangraph_session_list` reports `context_tokens` (latest assistant usage sum - input + cache read +
-cache creation - from the transcript under `~/.claude/projects/`) and `context_pct` against `ctx_cap_tokens`.
+cache creation - from the transcript under `~/.claude/projects/`) and `context_pct`, a fraction in
+0..1 of the configured `ctx_cap_tokens`.
 
 On Windows the launcher must be the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
 refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`, or with

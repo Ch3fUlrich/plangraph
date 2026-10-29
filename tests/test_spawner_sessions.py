@@ -700,8 +700,8 @@ def test_transcript_path_maps_every_non_alnum(site):
     p = transcript_path("C:\\Users\\x\\my_proj", UUID1)
     assert p.parent.name == "C--Users-x-my-proj"
     assert p.name == UUID1 + ".jsonl"
-    p2 = transcript_path("/home/u/my_proj", UUID1)
-    assert p2.parent.name == "-home-u-my-proj"
+    p2 = transcript_path("/srv/u/my_proj", UUID1)
+    assert p2.parent.name == "-srv-u-my-proj"
 
 
 def test_windows_which_resolution(site):
@@ -898,3 +898,37 @@ def test_relaunch_launch_failure_after_stop_keeps_record(site):
     run.launch_rc = 0
     retry = s.relaunch("alpha")  # marker survived: a plain retry works
     assert retry["ok"] is True and retry["session_id"] == UUID2
+
+
+def test_audit_caller_is_principal_or_user(site, monkeypatch):
+    import getpass
+    monkeypatch.setenv("PLANGRAPH_PRINCIPAL", "operator-7")
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["caller"] == "operator-7"  # the principal wins
+    monkeypatch.delenv("PLANGRAPH_PRINCIPAL")
+    monkeypatch.setattr(getpass, "getuser", lambda: "os-user")
+    go(site, s, name="beta", prompt="do beta")
+    line2 = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line2["caller"] == "os-user"  # else the OS user, never a source location
+    assert ".py" not in line2["caller"] and "sessions.py" not in line["caller"]
+
+
+def test_ok_false_audit_includes_redacted_argv(site):
+    secret_prompt = "secret prompt text"
+    run = FakeRun(stdout="session " + UUID1, launch_rc=1)
+    s = make(site, run)
+    res = go(site, s, prompt=secret_prompt)
+    assert res["ok"] is False
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["ok"] is False
+    assert line["argv"][-1] == f"<{len(secret_prompt)} chars>"  # prompt-redacted argv
+    assert secret_prompt not in json.dumps(line)
+
+
+def test_docs_context_pct_fraction(site):
+    text = (Path(__file__).resolve().parents[1] / "docs" / "SPAWNER.md").read_text(encoding="utf-8")
+    section = text.split("## Claude Code sessions", 1)[1]
+    assert "context_pct" in section and "fraction" in section and "0..1" in section
