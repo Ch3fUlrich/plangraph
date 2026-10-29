@@ -101,10 +101,13 @@ def test_delegate_cannot_override_verified_writer(w):
     # The proof ALONE decides: a contradicting changed_paths is not consulted.
     (True, ["src/example.py"], None),
     # ...and it vetoes an all-CHANGELOG changed_paths just the same.
-    (False, ["CHANGELOG.md"], "same_family"),
+    # D-3084: a mixed-writer item admits the writer's own seat at the family
+    # gate (it covers the other writer's part); the per-part coverage gate is
+    # what refuses it, naming the uncovered writer family.
+    (False, ["CHANGELOG.md"], "coverage"),
     # An adapter without the proof counts the hand, whatever changed_paths says.
-    (None, ["CHANGELOG.md"], "same_family"),
-    (None, None, "same_family"),
+    (None, ["CHANGELOG.md"], "coverage"),
+    (None, None, "coverage"),
     # A proof that cannot be read still fails closed.
     ("error", ["CHANGELOG.md"], "writer_unknown"),
 ])
@@ -178,16 +181,16 @@ def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
 
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
     round_no = w.store._item(refused)["round"]
-    with pytest.raises(Refused) as exc:
-        w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    # rXiaomi is one of the commit writers: D-2458 refuses the ACCEPT seat at
-    # the family gate, before the closing coverage gate ever runs.
-    assert exc.value.code == "same_family"
-    assert "xiaomi" in exc.value.msg
+    second = w.store.verdict(w.p("rXiaomi"), refused, True, "two")
+    # rXiaomi is one of the commit writers but not the only one: D-3084 lets
+    # the seat through the family gate (it covers the deepseek part) and the
+    # round stays open on the uncovered xiaomi part instead of refusing.
+    assert second["state"] == "in_review"
+    assert second["missing"] == ["xiaomi"]
     item = w.store._item(refused)
     assert item["state"] == "in_review"
     assert item["round"] == round_no
-    assert len(verdict_events(w, refused)) == 1
+    assert len(verdict_events(w, refused)) == 2
 
 
 # --------------------------------------------------------------------------
@@ -209,19 +212,19 @@ def test_two_claude_seats_are_one_family(w):
     assert exc.value.code in ("same_family", "coverage")
     assert w.store._item(plain)["state"] == "in_review"
 
-    # The waiver opens that gate; coverage still sees a single family.
+    # The waiver opens that gate; the second seat lands, but coverage still
+    # sees a single family -- two Claude seats cover no xiaomi part.
     w.store.ctx = make_ctx(
         git=git_with(trailers),
         decisions=FakeDecisions(waiving={(DECISION, waived)}))
     w.store.waive_second_family(w.p("router"), waived, DECISION)
     assert w.store._item(waived)["review_waiver"] == DECISION
     assert w.store.verdict(w.p("rAnthropic1"), waived, True, "one")["state"] == "in_review"
-    with pytest.raises(Refused) as exc:
-        w.store.verdict(w.p("rAnthropic2"), waived, True, "two")
-    assert exc.value.code == "coverage"
-    assert "xiaomi" in exc.value.msg
+    second = w.store.verdict(w.p("rAnthropic2"), waived, True, "two")
+    assert second["state"] == "in_review"
+    assert second["missing"] == ["xiaomi"]
     assert w.store._item(waived)["state"] == "in_review"
-    assert len(verdict_events(w, waived)) == 1
+    assert len(verdict_events(w, waived)) == 2
 
 
 # --------------------------------------------------------------------------
@@ -239,13 +242,16 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     w.store.waive_second_family(w.p("router"), key, DECISION)
 
     assert w.store.verdict(w.p("rAnthropic1"), key, True, "one")["state"] == "in_review"
-    for reviewer in ("rAnthropic2", "rAnthropic2"):
-        with pytest.raises(Refused) as exc:
-            w.store.verdict(w.p(reviewer), key, True, "claude only")
-        assert exc.value.code == "coverage"
-        assert "xiaomi" in exc.value.msg
+    # The second Claude seat lands but the single family covers no xiaomi
+    # part, so the item cannot close on Claude seats alone.
+    second = w.store.verdict(w.p("rAnthropic2"), key, True, "claude only")
+    assert second["state"] == "in_review"
+    assert second["missing"] == ["xiaomi"]
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rAnthropic2"), key, True, "claude only")
+    assert exc.value.code == "same_principal"
     assert w.store._item(key)["state"] == "in_review"
-    assert len(verdict_events(w, key)) == 1
+    assert len(verdict_events(w, key)) == 2
 
 
 # --------------------------------------------------------------------------
@@ -269,9 +275,10 @@ def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed)
         return
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p(seat), key, True, "not covered")
-    # The seat shares a family with a commit writer, so D-2458 refuses the
-    # ACCEPT seat at the family gate; the closing gate below is never reached.
-    assert exc.value.code == "same_family"
+    # D-3084: a mixed-writer item admits the writer's own seat at the family
+    # gate (it covers the other writer's part); the standard coverage gate
+    # refuses it because that single family covers no writer family at all.
+    assert exc.value.code == "coverage"
     assert blamed in exc.value.msg
     assert w.store._item(key)["state"] == "in_review"
     assert verdict_events(w, key) == []
@@ -458,14 +465,14 @@ def test_merge_evidence_takes_the_writers_from_the_branch_commits(w):
     assert w.store.verdict(w.p("rAnthropic1"), covered, True, "two")["state"] == "done"
 
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
-    with pytest.raises(Refused) as exc:
-        w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    # The branch commits resolved rXiaomi's own family: D-2458 refuses the
-    # ACCEPT seat at the family gate.
-    assert exc.value.code == "same_family"
-    assert "xiaomi" in exc.value.msg
+    second = w.store.verdict(w.p("rXiaomi"), refused, True, "two")
+    # The branch commits resolved rXiaomi's family as ONE of two writers:
+    # D-3084 admits the seat (it covers the deepseek part) and keeps the
+    # round open on the uncovered xiaomi part.
+    assert second["state"] == "in_review"
+    assert second["missing"] == ["xiaomi"]
     assert w.store._item(refused)["state"] == "in_review"
-    assert len(verdict_events(w, refused)) == 1
+    assert len(verdict_events(w, refused)) == 2
 
 
 @pytest.mark.parametrize("branch_trailers", [
@@ -528,10 +535,10 @@ def test_phase_merge_uses_the_flattened_leaf_trailers(w):
     assert w.store.verdict(w.p("rAnthropic1"), covered, True, "two")["state"] == "done"
 
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
-    with pytest.raises(Refused) as exc:
-        w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    # The leaf writers resolved rXiaomi's family: D-2458 refuses the ACCEPT.
-    assert exc.value.code == "same_family"
-    assert "xiaomi" in exc.value.msg
+    second = w.store.verdict(w.p("rXiaomi"), refused, True, "two")
+    # The leaf writers resolved rXiaomi's family as ONE of two writers:
+    # D-3084 admits the seat and keeps the round open on the uncovered part.
+    assert second["state"] == "in_review"
+    assert second["missing"] == ["xiaomi"]
     assert w.store._item(refused)["state"] == "in_review"
-    assert len(verdict_events(w, refused)) == 1
+    assert len(verdict_events(w, refused)) == 2

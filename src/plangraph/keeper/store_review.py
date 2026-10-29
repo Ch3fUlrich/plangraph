@@ -9,11 +9,17 @@ defaults) fixes at definition time.
   non-blank family differs from the writer's (``_reviewer_family_ok`` fails
   closed on a blank family, for either side) records ``review_verdict`` and
   writes ``review_passed`` (``done``, locked) immediately.
-* ``high`` — D-219 unchanged: a passing ``verdict(ok=True)`` records a
-  ``review_verdict`` event and leaves the item in review; only the second
-  passing verdict from a *different principal* of a *different family*
-  re-verifies the evidence with the existing logic and emits ``review_passed``
-  (``done``).  A third verdict is refused (``conflict``).
+* ``high`` — D-3084 supersedes D-219's fixed second-verdict close: a passing
+  ``verdict(ok=True)`` records a ``review_verdict`` event and leaves the item
+  in review; from the second verdict on the round accumulates ACCEPT seats and
+  closes (``review_passed``, ``done``) on the verdict that completes the
+  per-part seat coverage (``coverage.uncovered`` with ``need=2`` and
+  ``sensitive=True``).  A verdict that leaves coverage incomplete lands as
+  another seat and its result carries the missing writer families; a
+  third-or-later verdict is accepted only while the seats so far still miss a
+  writer family and is refused (``conflict``) once they already cover.  Seat
+  families never count twice: unless the waiver is active the reviewer must
+  differ from every prior seat's family (``same_family``).
 
 A ``verdict(ok=False)`` from either seat returns the item to ``claimed`` exactly
 as before and, because the next ``submit`` advances the submission ``round``,
@@ -22,9 +28,13 @@ when it is consecutive *within the current epoch*: change requests from earlier
 claims are ignored and a passing verdict resets the count.
 
 The writer-family gate (``_reviewer_family_ok``) covers BOTH seats of BOTH
-tiers: a reviewer whose family is among the item's authoritative writers may
-file a change request (``ok=False``) but may never record an ACCEPT seat
-(D-2458), so no ``verdict(ok=True)`` can be recorded by a writer's own family.
+tiers and, per D-3084, follows the per-part rule: seats cover parts, not
+items, so an ACCEPT seat (``ok=True``) is refused ``same_family`` only when
+the reviewer's family is the item's SOLE writer family — the seat would cover
+no part — while a family that writes one part but not another may take an
+ACCEPT seat whose worth the per-part coverage gate decides.  Either way a
+reviewer from a writer's own family may file a change request (``ok=False``),
+and an unknown family on either side still fails closed.
 
 The waiver path (D-217) lives in ``store_waiver``: once the router records a
 verified decision, ``_waiver_active`` is true and the second passing verdict on
@@ -235,45 +245,75 @@ class ReviewMixin:
                              self._verdict_payload(principal, fresh), now)
                 return self._pass(principal, key, reason, fresh, now,
                                   reviews_passed=1)
-            if len(prior) >= 2:
-                raise Refused("conflict",
-                              f"{key} already has two verdicts this round")
+            # D-3084: seats cover PARTS.  A later seat may share a family with
+            # an earlier one only under the waiver; without it the reviewer's
+            # family must differ from EVERY prior seat's family, and a prior
+            # seat with no family fails closed.
             if prior and not self._waiver_active(fresh):
-                first_family = auth.norm_family(prior[0].get("family"))
-                if first_family is None:
-                    raise Refused("family_unknown",
-                                  "first reviewer family unknown")
-                if auth.norm_family(principal.family) == first_family:
-                    raise Refused("same_family",
-                                  "second reviewer shares a family")
-            if len(prior) + 1 >= 2:
-                # Only the verdict that would close a high item is checked;
-                # a refusal appends nothing and leaves the round intact.
-                self._check_coverage(principal, fresh, prior, need=2,
-                                     sensitive=True, now=now)
+                reviewer_family = auth.norm_family(principal.family)
+                for v in prior:
+                    seat_family = auth.norm_family(v.get("family"))
+                    if seat_family is None:
+                        raise Refused("family_unknown",
+                                      "prior reviewer family unknown")
+                    if reviewer_family == seat_family:
+                        raise Refused("same_family",
+                                      "reviewer shares a family with a prior seat")
+            passed = len(prior) + 1
+            if passed == 1:
+                self._append(principal, key, "review_verdict",
+                             self._verdict_payload(principal, fresh), now)
+                return {"key": key, "state": "in_review",
+                        "reviews_passed": passed}
+            # From the second verdict on, a high round accumulates seats until
+            # the per-part coverage (need=2, sensitive) holds.  A third-or-later
+            # verdict is taken only while the seats so far still miss a writer
+            # family; one arriving once they already cover is not needed and is
+            # refused instead of appended.  A refusal appends nothing and
+            # leaves the round intact.
+            if len(prior) >= 2 and not self._missing_families(
+                    None, fresh, prior, need=2, sensitive=True, now=now):
+                raise Refused("conflict",
+                              f"{key} seats already cover every writer")
             self._append(principal, key, "review_verdict",
                          self._verdict_payload(principal, fresh), now)
-            passed = len(prior) + 1
-            if passed >= 2:
+            missing = self._missing_families(principal, fresh, prior,
+                                             need=2, sensitive=True, now=now)
+            if not missing:
                 return self._pass(principal, key, reason, fresh, now,
                                   reviews_passed=passed)
-        return {"key": key, "state": "in_review", "reviews_passed": passed}
+            return {"key": key, "state": "in_review", "reviews_passed": passed,
+                    "missing": missing}
 
-    def _check_coverage(self, principal, item, prior, *, need, sensitive, now):
-        """Refuse a closing verdict whose writer families are not covered.
+    def _missing_families(self, principal, item, prior, *, need, sensitive,
+                          now):
+        """Writer families the round's seats do not cover yet (D-3084).
 
-        Runs inside the verdict write lock, after every existing gate, on the
-        verdict that would close the item only.  ``writer_families`` may raise
-        ``writer_unknown`` (fail closed); ``Refused('coverage', ...)`` names
-        the uncovered families and, because nothing has been appended yet,
-        leaves the item's state, round and verdict history untouched.
+        The single source of the seat-coverage math: ``coverage.uncovered``
+        over the round's resolved seat families -- every ``prior`` verdict's
+        family plus *principal*'s, or just ``prior`` when *principal* is
+        ``None`` ("the seats so far").  Empty means the seats cover the item
+        per part.  ``writer_families`` may raise ``writer_unknown``
+        (fail closed).
         """
         from .coverage import uncovered, writer_families
 
         writers = writer_families(self, item, self._ctx(item, now))
         seats = [v.get("family") for v in prior]
-        seats.append(auth.norm_family(principal.family))
-        missing = uncovered(writers, seats, need=need, sensitive=sensitive)
+        if principal is not None:
+            seats.append(auth.norm_family(principal.family))
+        return uncovered(writers, seats, need=need, sensitive=sensitive)
+
+    def _check_coverage(self, principal, item, prior, *, need, sensitive, now):
+        """Refuse a closing verdict whose writer families are not covered.
+
+        Runs inside the verdict write lock, after every existing gate, on the
+        verdict that would close the item only.  ``Refused('coverage', ...)``
+        names the uncovered families and, because nothing has been appended
+        yet, leaves the item's state, round and verdict history untouched.
+        """
+        missing = self._missing_families(principal, item, prior, need=need,
+                                         sensitive=sensitive, now=now)
         if missing:
             raise Refused("coverage",
                           f"writer families not covered: {missing}")
