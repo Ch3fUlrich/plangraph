@@ -95,10 +95,11 @@ def site(tmp_path, monkeypatch):
 
 
 def make(site, run=None, popen=None, *, platform="linux", now=lambda: 1000.0,
-         resolve_budget=15.0, config_path=None, which=None):
+         resolve_budget=15.0, config_path=None, which=None, sleep=lambda _s: None):
     return Sessions(state_root=site.state, config_path=str(config_path or site.cfg),
                     run=run or FakeRun(), popen=popen or FakePopen(),
-                    now=now, platform=platform, resolve_budget=resolve_budget, which=which)
+                    now=now, platform=platform, resolve_budget=resolve_budget, which=which,
+                    sleep=sleep)
 
 
 def go(site, s, name="alpha", **over):
@@ -128,6 +129,7 @@ def test_argv_linux_is_list_no_shell(site):
     style.write_text("be terse\n")
     cfg2 = site.tmp_path / "sessions2.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    s.stop(name="alpha")  # a live record may only be replaced via relaunch
     run2 = FakeRun(stdout="session " + UUID1)
     s2 = make(site, run2, config_path=cfg2)
     go(site, s2)
@@ -146,6 +148,7 @@ def test_argv_windows_bg_and_wt(site):
     assert kw["creationflags"] == DETACHED
     assert kw.get("shell") in (None, False)
     assert not pop.calls
+    s.stop(name="alpha")  # a live record may only be replaced via relaunch
     cfg2 = site.tmp_path / "sessions-wt.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     run2 = FakeRun(stdout="session " + UUID1, agents_rows=[
@@ -320,6 +323,7 @@ def test_id_from_name_fallback_ignores_stale(site):
     s = make(site, run)
     res = go(site, s)
     assert res["session_id"] == UUID2  # newest fresh background row, never the stale one
+    s.stop(name="alpha")  # a live record may only be replaced via relaunch
     # stale-only: nothing resolves and the record keeps session_id null
     run2 = FakeRun(stdout="done\n", agents_rows=[stale])
     s2 = make(site, run2, resolve_budget=0.0)
@@ -472,7 +476,7 @@ def test_audit_and_record_hold_no_secret(site, monkeypatch):
     style.write_text("be terse with sk-test-xyz")
     cfg2 = site.tmp_path / "sessions-secret.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
-    res = go(site, make(site, FakeRun(), config_path=cfg2), prompt="abc", dry_run=True)
+    res = go(site, make(site, FakeRun(), config_path=cfg2), name="beta", prompt="abc", dry_run=True)
     assert "sk-test-xyz" not in json.dumps(res)
     assert "[autoos:redacted]" in json.dumps(res)
 
@@ -492,7 +496,8 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
     assert set(tools["plangraph_session_mark_ready"]["inputSchema"]["properties"]) == {"name", "handoff", "card"}
     assert tools["plangraph_session_list"]["inputSchema"]["properties"] == {}
     run, pop = FakeRun(stdout="session " + UUID1), FakePopen()
-    server = MCPSpawnerServer(state=site.state, session_run=run, session_popen=pop)
+    server = MCPSpawnerServer(state=site.state, session_run=run, session_popen=pop,
+                              session_sleep=lambda _s: None)
     monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
     hf = site.tmp_path / "handoff.md"
     hf.write_text("carry on")
@@ -506,6 +511,7 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
         assert (await server.call_tool("plangraph_session_mark_ready",
                 {"name": "alpha", "handoff": str(hf)}))["ok"] is True
         assert (await server.call_tool("plangraph_session_list", {}))["sessions"][0]["name"] == "alpha"
+        run.stdout = "session " + UUID2  # the new process reports a fresh id; the old one is excluded
         rel = await server.call_tool("plangraph_session_relaunch", {"name": "alpha", "force": True})
         assert rel["name"] == "alpha"
         assert (await server.call_tool("plangraph_session_stop", {"name": "alpha"}))["ok"] is True
@@ -615,6 +621,7 @@ def test_files_must_stay_inside_roots(site, tmp_path_factory):
     with pytest.raises(ParameterRefused, match="handoff"):
         s.relaunch("alpha", handoff=str(outside_handoff), force=True)
     # file_roots (absolute dirs) admit them
+    s.stop(name="alpha")  # a live record may only be replaced via relaunch
     cfg2 = site.tmp_path / "sessions-fr.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "file_roots": [str(stray)]}))
     s2 = make(site, FakeRun(stdout="session " + UUID1), config_path=cfg2)
@@ -900,6 +907,77 @@ def test_relaunch_launch_failure_after_stop_keeps_record(site):
     assert retry["ok"] is True and retry["session_id"] == UUID2
 
 
+def _ready(site, run, s):
+    """Launch alpha, mark it ready, hand back the marker + record paths."""
+    go(site, s)
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf))
+    return (site.state / "sessions" / "alpha.json"), (site.state / "sessions" / "alpha.ready.json")
+
+
+def _assert_old_record_kept(rec_path, marker_path, site):
+    rec = json.loads(rec_path.read_text())
+    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None
+    assert marker_path.exists()  # a retry can relaunch
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "relaunch" and line["ok"] is False
+
+
+def test_relaunch_timeout_keeps_record_and_marker(site):
+    class TimeoutRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"] and self.broken:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+            return super().__call__(argv, **kw)
+
+    run = TimeoutRun(stdout="session " + UUID1)
+    run.broken = False
+    s = make(site, run)
+    rec_path, marker_path = _ready(site, run, s)
+    run.stdout = "session " + UUID2
+    run.broken = True
+    with pytest.raises(subprocess.TimeoutExpired):
+        s.relaunch("alpha")
+    _assert_old_record_kept(rec_path, marker_path, site)
+
+
+def test_relaunch_oserror_keeps_record_and_marker(site):
+    class OsErrRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"] and self.broken:
+                raise OSError("exec format error")
+            return super().__call__(argv, **kw)
+
+    run = OsErrRun(stdout="session " + UUID1)
+    run.broken = False
+    s = make(site, run)
+    rec_path, marker_path = _ready(site, run, s)
+    run.stdout = "session " + UUID2
+    run.broken = True
+    res = s.relaunch("alpha")
+    assert res["ok"] is False
+    _assert_old_record_kept(rec_path, marker_path, site)
+
+
+def test_relaunch_record_write_failure_keeps_record_and_marker(site, monkeypatch):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, marker_path = _ready(site, run, s)
+    run.stdout = "session " + UUID2
+    real = s._write_record
+
+    def flaky(rec):
+        if rec.get("session_id") == UUID2:  # only the NEW record's write fails
+            raise OSError("no space left on device")
+        return real(rec)
+
+    monkeypatch.setattr(s, "_write_record", flaky)
+    res = s.relaunch("alpha")
+    assert res["ok"] is False
+    _assert_old_record_kept(rec_path, marker_path, site)
+
+
 def test_audit_caller_is_principal_or_user(site, monkeypatch):
     import getpass
     monkeypatch.setenv("PLANGRAPH_PRINCIPAL", "operator-7")
@@ -932,3 +1010,133 @@ def test_docs_context_pct_fraction(site):
     text = (Path(__file__).resolve().parents[1] / "docs" / "SPAWNER.md").read_text(encoding="utf-8")
     section = text.split("## Claude Code sessions", 1)[1]
     assert "context_pct" in section and "fraction" in section and "0..1" in section
+
+
+def test_wt_argv_escapes_semicolons(site):
+    exe = str(site.tmp_path / "claude.exe")
+    cfg2 = site.tmp_path / "sessions-wt-semi.json"
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    semi = site.root / "we;ird"
+    semi.mkdir()
+    run = FakeRun(stdout="session " + UUID1, agents_rows=[
+        {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
+    pop = FakePopen()
+    s = make(site, run, pop, platform="win32", config_path=cfg2, which=lambda _: exe)
+    go(site, s, cwd=str(semi), prompt="x; new-tab cmd")
+    wt_argv = pop.calls[0][0]
+    assert wt_argv[3] == "new-tab"  # the real wt command
+    assert wt_argv[-1] == "x\\; new-tab cmd"  # ';' escaped: stays inside one argument
+    assert wt_argv[wt_argv.index("-d") + 1] == str(semi.resolve()).replace(";", "\\;")
+    for arg in wt_argv[4:]:  # no unescaped ';' anywhere after new-tab
+        assert ";" not in arg.replace("\\;", "")
+    assert [a for a in wt_argv[4:] if "new-tab" in a] == [wt_argv[-1]]  # only the prompt mentions it
+
+
+def test_launch_refuses_while_record_active(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    with pytest.raises(ParameterRefused, match="relaunch"):
+        go(site, s)  # an active record is replaced only via relaunch
+    s.stop(name="alpha")
+    res = go(site, s)  # a stopped record may be replaced by a plain launch
+    assert res["ok"] is True and res["session_id"] == UUID1
+
+
+def test_prompt_file_written_before_start(site):
+    seen = {}
+
+    class ProbeRun(FakeRun):
+        def __call__(self, argv, **kw):
+            seen["prompt_file"] = (site.state / "sessions" / "alpha.prompt.txt").is_file()
+            return super().__call__(argv, **kw)
+
+    s = make(site, ProbeRun(stdout="session " + UUID1))
+    go(site, s, prompt="early write")
+    assert seen["prompt_file"] is True  # written before the session starts
+
+
+def test_relaunch_null_session_id_needs_force(site):
+    run = FakeRun(stdout="done\n")  # nothing resolvable: record session_id is null
+    s = make(site, run, resolve_budget=0.0)
+    res = go(site, s)
+    assert res["session_id"] is None
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf))
+    with pytest.raises(ParameterRefused, match="session id"):
+        s.relaunch("alpha")  # null id refuses unless forced
+    res2 = s.relaunch("alpha", force=True)  # forced: continues with a warning
+    assert res2["ok"] is True and "warning" in res2
+
+
+def test_launched_ms_taken_before_start(site):
+    clock = {"n": 0}
+
+    def now():
+        clock["n"] += 1
+        return 1000.0 if clock["n"] == 1 else 3000.0
+
+    row = {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background",
+           "startedAt": 1_001_000}  # just after the launch, far before the late clock
+    run = FakeRun(stdout="done\n", agents_rows=[row])
+    s = make(site, run, now=now)
+    res = go(site, s)
+    assert res["session_id"] == UUID2
+
+
+def test_resolve_polls_every_half_second_until_budget(site):
+    class LateRows(FakeRun):
+        def __init__(self, row_name="alpha"):
+            super().__init__(stdout="done\n", agents_rows=[])
+            self.agents_calls = 0
+            self.row_name = row_name
+
+        def __call__(self, argv, **kw):
+            if argv[:3] == ["claude", "agents", "--json"]:
+                self.agents_calls += 1
+                if self.agents_calls >= 3:
+                    self.agents_rows = [{"id": "f", "sessionId": UUID2, "name": self.row_name,
+                                         "kind": "background", "startedAt": 1_000_000}]
+            return super().__call__(argv, **kw)
+
+    sleeps = []
+    run = LateRows()
+    s = make(site, run, sleep=sleeps.append)
+    res = go(site, s)
+    assert res["session_id"] == UUID2  # a row appearing late is still found
+    assert run.agents_calls == 3 and sleeps[:2] == [0.5, 0.5]
+    # the wt launcher polls the same way
+    exe = str(site.tmp_path / "claude.exe")
+    cfg2 = site.tmp_path / "sessions-wt-poll.json"
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    sleeps2 = []
+    run2, pop2 = LateRows("beta"), FakePopen()
+    s2 = make(site, run2, pop2, platform="win32", config_path=cfg2, which=lambda _: exe, sleep=sleeps2.append)
+    res2 = go(site, s2, name="beta", prompt="do beta")
+    assert res2["session_id"] == UUID2 and sleeps2[:2] == [0.5, 0.5]
+
+
+def test_excluded_id_rejected_for_full_uuid_short_and_fallback(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)  # alpha at UUID1
+    run.agents_rows = [{"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background",
+                        "startedAt": 1_000_000}]
+    res = s.relaunch("alpha", force=True)
+    assert res["session_id"] == UUID2  # the old full UUID in stdout is not the new id
+    # a short id row carrying the excluded sessionId is rejected too
+    run.agents_rows = [
+        {"id": SHORT, "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000},
+        {"id": "g", "sessionId": UUID3, "name": "alpha", "kind": "background", "startedAt": 1_000_000}]
+    run.stdout = "backgrounded · " + SHORT + " · alpha"
+    res2 = s.relaunch("alpha", force=True)
+    assert res2["session_id"] == UUID3
+
+
+def test_short_id_matches_row_id_or_session_id_prefix(site):
+    row = {"id": "other", "sessionId": SHORT + "-1234-1234-1234-123456789abc",
+           "name": "wrong", "kind": "foreground", "startedAt": 0}
+    run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[row])
+    res = go(site, make(site, run))
+    assert res["session_id"] == row["sessionId"]  # sessionId prefix matches the short id

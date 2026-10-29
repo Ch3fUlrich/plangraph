@@ -77,18 +77,19 @@ class Sessions:
     One injectable runner carries every subprocess call (argv list, never a
     shell string). Constructor: ``state_root`` (session state directory),
     ``config_path`` (else $PLANGRAPH_SESSIONS_CONFIG), ``run`` / ``popen``
-    (injectables), ``now`` (clock), ``platform``, ``resolve_budget`` (seconds a
-    ``claude agents`` row may be old and still count as the new session),
-    ``which`` (exe resolver, consulted on win32 only).
+    (injectables), ``now`` (clock), ``platform``, ``resolve_budget`` (seconds to
+    keep polling ``claude agents`` for the new session's row, 0.5 s apart),
+    ``which`` (exe resolver, consulted on win32 only), ``sleep`` (poll wait).
     """
 
     def __init__(self, state_root=None, *, config_path=None, run=None, popen=None,
-                 now=None, platform=None, resolve_budget=15.0, which=None):
+                 now=None, platform=None, resolve_budget=15.0, which=None, sleep=None):
         self._run = run if run is not None else subprocess.run
         self._popen = popen if popen is not None else subprocess.Popen
         self._now = now if now is not None else time.time
         self._platform = platform if platform is not None else sys.platform
         self._which = which if which is not None else shutil.which
+        self._sleep = sleep if sleep is not None else time.sleep
         self._resolve_budget = float(resolve_budget)
         self._config_path = config_path or os.environ.get("PLANGRAPH_SESSIONS_CONFIG")
         if state_root is None:
@@ -356,8 +357,11 @@ class Sessions:
             tail += ["--append-system-prompt", style]
         tail += [prompt_arg]
         bg_argv = head + ["--bg"] + tail
-        wt_argv = ["wt.exe", "-w", "0", "new-tab", "--title", name,
-                   "-d", str(cwd_path)] + head + tail
+        # wt.exe splits its command line on unescaped ';' (R-17): every ';'
+        # in every argument after "new-tab" is escaped as wt documents.
+        wt_tail = [arg.replace(";", "\\;") for arg in
+                   ["--title", name, "-d", str(cwd_path)] + head + tail]
+        wt_argv = ["wt.exe", "-w", "0", "new-tab"] + wt_tail
         cap = cfg.get("ctx_cap_tokens") or 200000
         compact = cfg.get("compact_window") or str(int(round(float(cap) * 1.1)))
         env = {**os.environ, "FLEET_SESSION_NAME": name,
@@ -385,51 +389,68 @@ class Sessions:
         except (OSError, subprocess.SubprocessError, ValueError):
             return []
 
-    def _resolve_id(self, name, stdout, exclude=None):
+    def _resolve_id(self, name, stdout, exclude=None, launched_ms=None):
         """Map a just-launched session to its real session id. A full UUID in
-        the launcher's own stdout wins outright; otherwise `claude agents`
-        resolves the short id, falling back to name + startedAt (R-13). The
-        previous session id is excluded from every agents lookup so a relaunch
-        can never resolve to the session it replaced."""
+        the launcher's own stdout wins outright (unless it is the excluded,
+        replaced id); otherwise `claude agents` is polled every 0.5 s until the
+        resolve budget expires: the short id matches a row `id` or a `sessionId`
+        prefix, else the newest `background` row by name + startedAt near the
+        launch (launched_ms is taken before the process starts, R-18). The
+        previous session id is excluded from every lookup - full UUID, short id
+        and fallback alike - so a relaunch can never resolve to the session it
+        replaced."""
+        if launched_ms is None:
+            launched_ms = self._now() * 1000.0
         found = UUID_RE.search(stdout or "")
-        if found:
+        if found and found.group(0) != exclude:
             return found.group(0)
-        rows = self._agents_rows()
-        short = SHORT_RE.search(stdout or "")
-        if short:
+        cutoff = launched_ms - 5000.0
+        attempts = max(1, int(round(self._resolve_budget / 0.5)))
+        for attempt in range(attempts):
+            rows = self._agents_rows()
+            short = SHORT_RE.search(stdout or "")
+            if short:
+                token = short.group(1)
+                for row in rows:
+                    sid = row.get("sessionId")
+                    if not sid or sid == exclude:
+                        continue
+                    if str(row.get("id") or "") == token or str(sid).startswith(token):
+                        return sid
+            best = None
             for row in rows:
-                if str(row.get("id") or "") == short.group(1) and row.get("sessionId") != exclude:
-                    return row.get("sessionId")
-        cutoff = self._now() * 1000.0 - self._resolve_budget * 1000.0
-        best = None
-        for row in rows:
-            if row.get("name") != name or row.get("kind") != "background":
-                continue
-            sid = row.get("sessionId")
-            if not sid or sid == exclude:
-                continue
-            started = row.get("startedAt") or 0
-            if started < cutoff:
-                continue
-            if best is None or started >= (best.get("startedAt") or 0):
-                best = row
-        return best.get("sessionId") if best else None
+                if row.get("name") != name or row.get("kind") != "background":
+                    continue
+                sid = row.get("sessionId")
+                if not sid or sid == exclude:
+                    continue
+                started = row.get("startedAt") or 0
+                if started < cutoff:
+                    continue
+                if best is None or started >= (best.get("startedAt") or 0):
+                    best = row
+            if best is not None:
+                return best.get("sessionId")
+            if attempt + 1 < attempts:
+                self._sleep(0.5)
+        return None
 
     def _run_launch(self, name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg, exclude=None):
         """Start the session; returns (session_id, warning). Raises _ActionFailed
         on a non-zero exit and TimeoutExpired / OSError upward to the wrapper.
         `exclude` is the previous session id on a relaunch: it must never be
         resolved as the new session's id (R-13)."""
+        launched_ms = self._now() * 1000.0  # before the start: rows near it count
         if launcher == "wt":
             kw = {k: v for k, v in self._launch_run_kw(env).items() if k not in ("capture_output", "text")}
             self._popen(wt_argv, cwd=str(cwd_path), **kw)
             # wt only exposes name + startedAt; the launcher's stdout is ignored.
-            sid = self._resolve_id(name, "", exclude)
+            sid = self._resolve_id(name, "", exclude, launched_ms)
         else:
             proc = self._run(bg_argv, cwd=str(cwd_path), **self._launch_run_kw(env))
             if proc.returncode != 0:
                 raise _ActionFailed(f"claude exited {proc.returncode}")
-            sid = self._resolve_id(name, proc.stdout or "", exclude)
+            sid = self._resolve_id(name, proc.stdout or "", exclude, launched_ms)
         return sid, (None if sid else "session id could not be resolved")
 
     # ---- actions -------------------------------------------------------
@@ -458,14 +479,18 @@ class Sessions:
         bg_argv, wt_argv, env, launcher = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)
+        existing = self._find_record(name, None)
+        if existing is not None and existing.get("stopped_ts") is None:
+            # A live record is only replaced through relaunch (R-19).
+            raise _refuse(f"session {name} already has an active record; use relaunch")
         if dry_run:
             # D-2918: a refusing dry run is still dry; a passing one writes
             # nothing either - planned argv, cwd and env keys only.
             return {"argv": self._shown(bg_argv, prompt_arg), "cwd": str(cwd_path),
                     "env_keys": sorted(k for k in ("FLEET_SESSION_NAME", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"))}
-        sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
         prompt_path = self._sessions / f"{name}.prompt.txt"
-        atomic_write_private(prompt_path, text)
+        atomic_write_private(prompt_path, text)  # before the session starts (R-19)
+        sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
         rec = {"name": name, "cwd": str(cwd_path), "model": model, "effort": effort,
                "mcp": str(mcp_path), "prompt_file": str(prompt_path),
                "handoff": str(handoff_path) if handoff_path else None,
@@ -556,6 +581,12 @@ class Sessions:
         rec = self._find_record(name, None)
         if rec is None:
             raise _refuse(f"unknown session: {name}")
+        old_sid = rec.get("session_id")
+        no_old_id = old_sid is None
+        if no_old_id and not force:
+            # With no recorded id the old session cannot be stopped: force
+            # acknowledges that and carries a warning (R-20).
+            raise _refuse(f"record has no session id for {name}; pass force=True to relaunch")
         handoff_path = self._relaunch_handoff(rec, cfg, name, handoff, force)
         # The stored launch spec is re-validated in full BEFORE the old session
         # is stopped: a relaunch must never cost the user their session.
@@ -575,26 +606,38 @@ class Sessions:
         bg_argv, wt_argv, env, launcher = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)
-        old_sid = rec.get("session_id")
         if old_sid and rec.get("stopped_ts") is None:
             self._stop_record(rec)  # raises "stop failed" -> nothing is launched
+        new_rec = dict(rec)
         try:
             sid, warning = self._run_launch(
                 name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg, exclude=old_sid)
-        except _ActionFailed:
-            # The old session is already stopped: keep its record (with
-            # stopped_ts) and the ready marker so a plain retry can relaunch.
+            new_rec.update({"session_id": sid, "job_id": sid[:8] if sid else None,
+                            "stopped_ts": None, "ts": self._now(),
+                            "handoff": str(handoff_path) if handoff_path else None,
+                            "launcher": launcher})
+            self._write_record(new_rec)
+        except BaseException:
+            # ANY failure after the stop keeps the old record (with stopped_ts)
+            # and the ready marker so a plain retry can relaunch; the marker is
+            # removed only after the new record is written (R-21).
+            if rec.get("stopped_ts") is None:
+                rec["stopped_ts"] = self._now()
+            try:
+                self._write_record(rec)
+            except (OSError, ValueError):
+                pass  # the disk already holds the old record
             raise
-        rec.update({"session_id": sid, "job_id": sid[:8] if sid else None,
-                    "stopped_ts": None, "ts": self._now(),
-                    "handoff": str(handoff_path) if handoff_path else None,
-                    "launcher": launcher})
-        self._write_record(rec)
         self._marker_path(name).unlink(missing_ok=True)
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)}
+        warnings = []
+        if no_old_id:
+            warnings.append("previous session id was unknown; the old session was not stopped")
         if warning:
-            result["warning"] = warning
+            warnings.append(warning)
+        if warnings:
+            result["warning"] = "; ".join(warnings)
         return result
 
     def list(self):
