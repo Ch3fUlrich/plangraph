@@ -64,6 +64,17 @@ class FakePopen:
         return types.SimpleNamespace(pid=1)
 
 
+def write_config(path, text):
+    """Write a config file pinned owner-only (0600).
+
+    The sessions loader refuses group/world-writable configs; under a umask
+    like 002 plain write_text leaves the file group-writable and every action
+    would be refused, so the mode is set explicitly after writing."""
+    path.write_text(text)
+    path.chmod(0o600)
+    return path
+
+
 @pytest.fixture
 def site(tmp_path, monkeypatch):
     home = tmp_path / "home"
@@ -73,9 +84,9 @@ def site(tmp_path, monkeypatch):
     proj = root / "proj"
     proj.mkdir(parents=True)
     mcp = tmp_path / "mcp.json"
-    mcp.write_text("{}")
+    write_config(mcp, "{}")
     cfg = tmp_path / "sessions.json"
-    cfg.write_text(json.dumps({
+    write_config(cfg, json.dumps({
         "cwd_roots": [str(root)], "models": [MODEL], "efforts": [EFFORT],
         "permission_modes": [MODE], "mcp_configs": [str(mcp)], "ctx_cap_tokens": 300000,
         "file_roots": [str(tmp_path)]}))
@@ -116,7 +127,7 @@ def test_argv_linux_is_list_no_shell(site):
     style = site.tmp_path / "style.txt"
     style.write_text("be terse\n")
     cfg2 = site.tmp_path / "sessions2.json"
-    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
     run2 = FakeRun(stdout="session " + UUID1)
     s2 = make(site, run2, config_path=cfg2)
     go(site, s2)
@@ -136,7 +147,7 @@ def test_argv_windows_bg_and_wt(site):
     assert kw.get("shell") in (None, False)
     assert not pop.calls
     cfg2 = site.tmp_path / "sessions-wt.json"
-    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     run2 = FakeRun(stdout="session " + UUID1, agents_rows=[
         {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
     pop2 = FakePopen()
@@ -207,7 +218,7 @@ def test_refuses_missing_config(site):
     with pytest.raises(ParameterRefused, match="config"):
         go(site, s)
     bad = site.tmp_path / "bad.json"
-    bad.write_text("{not json")
+    write_config(bad, "{not json")
     s2 = make(site, run, config_path=bad)
     with pytest.raises(ParameterRefused, match="config"):
         go(site, s2)
@@ -460,7 +471,7 @@ def test_audit_and_record_hold_no_secret(site, monkeypatch):
     style = site.tmp_path / "style.txt"
     style.write_text("be terse with sk-test-xyz")
     cfg2 = site.tmp_path / "sessions-secret.json"
-    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
     res = go(site, make(site, FakeRun(), config_path=cfg2), prompt="abc", dry_run=True)
     assert "sk-test-xyz" not in json.dumps(res)
     assert "[autoos:redacted]" in json.dumps(res)
@@ -510,20 +521,20 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
 def test_config_requires_existing_real_files(site):
     cfg = json.loads(site.cfg.read_text())
     bad = site.tmp_path / "sessions-bad.json"
-    bad.write_text(json.dumps({**cfg, "mcp_configs": [str(site.tmp_path / "ghost-mcp.json")]}))
+    write_config(bad, json.dumps({**cfg, "mcp_configs": [str(site.tmp_path / "ghost-mcp.json")]}))
     s = make(site, FakeRun(), config_path=bad)
     with pytest.raises(ParameterRefused, match="config"):
         go(site, s)  # every configured entry must resolve to an existing regular file
     gone = site.tmp_path / "gone.json"
-    gone.write_text("{}")
+    write_config(gone, "{}")
     cfg2 = site.tmp_path / "sessions-gone.json"
-    cfg2.write_text(json.dumps({**cfg, "mcp_configs": [str(gone)]}))
+    write_config(cfg2, json.dumps({**cfg, "mcp_configs": [str(gone)]}))
     s2 = make(site, FakeRun(), config_path=cfg2)
     gone.unlink()
     with pytest.raises(ParameterRefused, match="mcp_config"):
         go(site, s2, mcp_config=str(gone))  # requested entry checked again at launch time
     cfg3 = site.tmp_path / "sessions-dir.json"
-    cfg3.write_text(json.dumps({**cfg, "mcp_configs": [str(site.tmp_path)]}))
+    write_config(cfg3, json.dumps({**cfg, "mcp_configs": [str(site.tmp_path)]}))
     with pytest.raises(ParameterRefused, match="config"):
         go(site, make(site, FakeRun(), config_path=cfg3))  # a directory is not a regular file
 
@@ -533,7 +544,7 @@ def test_config_refuses_root_roots_and_bad_scalars(site):
 
     def refused(over, match="config"):
         bad = site.tmp_path / "sessions-bad.json"
-        bad.write_text(json.dumps({**cfg, **over}))
+        write_config(bad, json.dumps({**cfg, **over}))
         with pytest.raises(ParameterRefused, match=match):
             go(site, make(site, FakeRun(), config_path=bad))
 
@@ -605,7 +616,7 @@ def test_files_must_stay_inside_roots(site, tmp_path_factory):
         s.relaunch("alpha", handoff=str(outside_handoff), force=True)
     # file_roots (absolute dirs) admit them
     cfg2 = site.tmp_path / "sessions-fr.json"
-    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "file_roots": [str(stray)]}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "file_roots": [str(stray)]}))
     s2 = make(site, FakeRun(stdout="session " + UUID1), config_path=cfg2)
     res = go(site, s2, prompt=None, prompt_file=str(outside_prompt), handoff=str(outside_handoff))
     assert res["ok"] is True
@@ -718,7 +729,7 @@ def test_windows_which_resolution(site):
 
 def test_launcher_effective_wt_only_on_win32(site):
     cfg2 = site.tmp_path / "sessions-wt2.json"
-    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[
         {"id": SHORT, "sessionId": UUID1, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
     s = make(site, run, platform="linux", config_path=cfg2)
@@ -787,7 +798,7 @@ def test_wt_popen_oserror_returns_audited_failure(site):
             raise OSError(2, "no wt.exe")
 
     cfg2 = site.tmp_path / "sessions-wt3.json"
-    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     exe = str(site.tmp_path / "claude.exe")
     s = make(site, FakeRun(), BrokenPopen(), platform="win32", config_path=cfg2, which=lambda _: exe)
     res = go(site, s)
