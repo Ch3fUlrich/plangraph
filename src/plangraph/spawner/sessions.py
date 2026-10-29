@@ -341,6 +341,19 @@ class Sessions:
             entry["argv"] = list(argv)
         append_private(self._sessions / "audit.log", json.dumps(_scrub(entry)) + "\n")
 
+    def _audit_guarded(self, action, name, ok, reason, session_id, argv, outcome):
+        """One guarded audit write: a failing audit write must never replace
+        the action's own outcome - the outcome (result dict or the exception
+        about to be raised) carries a warning field instead (R-22)."""
+        try:
+            self._audit(action, name, ok, reason, session_id, argv)
+        except (OSError, ValueError) as exc:
+            note = f"audit write failed: {type(exc).__name__}: {_scrub(str(exc))}"
+            if isinstance(outcome, dict):
+                outcome["warning"] = f"{outcome['warning']}; {note}" if outcome.get("warning") else note
+            else:
+                outcome.warning = note
+
     def _action(self, action, name, fn, *, dry=False):
         """Run one action; every outcome - success, refusal, timeout, OSError,
         subprocess failure - leaves exactly one scrubbed audit JSON line (no
@@ -352,35 +365,35 @@ class Sessions:
             result = fn()
         except ParameterRefused as exc:
             if not dry:
-                self._audit(action, name, False, str(exc), None, self._audit_argv)
+                self._audit_guarded(action, name, False, str(exc), None, self._audit_argv, exc)
             raise
         except subprocess.TimeoutExpired as exc:
-            self._audit(action, name, False, f"timeout after {exc.timeout}s", None, self._audit_argv)
-            raise subprocess.TimeoutExpired(_scrub(exc.cmd), exc.timeout) from None
+            outcome = subprocess.TimeoutExpired(_scrub(exc.cmd), exc.timeout)
+            self._audit_guarded(action, name, False, f"timeout after {exc.timeout}s",
+                                None, self._audit_argv, outcome)
+            raise outcome from None
         except _ActionFailed as exc:
-            self._audit(action, name, False, str(exc), None, self._audit_argv)
-            return _scrub({"ok": False, "name": name, "session_id": None})
+            outcome = {"ok": False, "name": name, "session_id": None}
+            self._audit_guarded(action, name, False, str(exc), None, self._audit_argv, outcome)
+            return _scrub(outcome)
         except (OSError, subprocess.SubprocessError) as exc:
-            self._audit(action, name, False, f"{type(exc).__name__}: {exc}", None, self._audit_argv)
-            return _scrub({"ok": False, "name": name, "session_id": None})
+            outcome = {"ok": False, "name": name, "session_id": None}
+            self._audit_guarded(action, name, False, f"{type(exc).__name__}: {exc}",
+                                None, self._audit_argv, outcome)
+            return _scrub(outcome)
         except Exception as exc:
             # Any other unexpected exception is an internal fault: it is
             # audited with its type and scrubbed message and surfaced as a
             # refusal carrying that same text, never as a raw traceback (R-22).
             text = f"{type(exc).__name__}: {_scrub(str(exc))}"
+            outcome = ParameterRefused(text)
             if not dry:
-                self._audit(action, name, False, text, None, self._audit_argv)
-            raise ParameterRefused(text) from None
+                self._audit_guarded(action, name, False, text, None, self._audit_argv, outcome)
+            raise outcome from None
         if dry:
             return _scrub(result)
         argv = result.pop("_audit_argv", None)
-        try:
-            self._audit(action, name, True, None, result.get("session_id"), argv)
-        except (OSError, ValueError) as exc:
-            # The action itself succeeded - a failing audit write must never
-            # turn success into failure; the caller is warned instead (R-22).
-            note = f"audit write failed: {type(exc).__name__}: {_scrub(str(exc))}"
-            result["warning"] = f"{result['warning']}; {note}" if result.get("warning") else note
+        self._audit_guarded(action, name, True, None, result.get("session_id"), argv, result)
         return _scrub(result)
 
     # ---- storage -------------------------------------------------------
@@ -588,15 +601,29 @@ class Sessions:
                     "env_keys": sorted(k for k in ("FLEET_SESSION_NAME", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"))}
         prompt_path = self._sessions / f"{name}.prompt.txt"
         atomic_write_private(prompt_path, text)  # before the session starts (R-19)
-        sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
         rec = {"name": name, "cwd": str(cwd_path), "model": model, "effort": effort,
                "mcp": str(mcp_path), "prompt_file": str(prompt_path),
                "handoff": str(handoff_path) if handoff_path else None,
-               "parent": parent, "children": [], "ts": self._now(),
-               "session_id": sid, "job_id": sid[:8] if sid else None,
+               "parent": parent, "children": [], "ts": None,
+               "session_id": None, "job_id": None,
                "permission_mode": mode, "platform": self._platform,
                "launcher": launcher, "stopped_ts": None}
+        try:
+            sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
+        except (subprocess.TimeoutExpired, OSError):
+            # The launch failed AFTER the process may have started: the record
+            # is still written - session_id null, stopped_ts None - so list
+            # shows the possible orphan and relaunch force can replace it.
+            # The write is best effort: the launch failure stays the outcome.
+            rec["ts"] = self._now()
+            try:
+                self._write_record(name, rec)
+            except (OSError, ValueError):
+                pass
+            raise
+        rec.update({"session_id": sid, "job_id": sid[:8] if sid else None, "ts": self._now()})
         self._write_record(name, rec)
+        self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)}
         if warning:

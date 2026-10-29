@@ -758,7 +758,12 @@ rewriting them, and on Windows they are not applied at all.
 State lives under `<spawner state>/sessions/`: a `<name>.json` record per session, `<name>.prompt.txt`
 (0600), the `<name>.ready.json` marker (handoff, card), and `audit.log` - one scrubbed JSON line per
 action with the argv (prompt length only); a dry run writes nothing and leaves no audit line. Prompts,
-records and audit text pass the env redactor.
+records and audit text pass the env redactor. A launch that fails after the process may have started -
+a timeout or OSError from the run, or a failed `wt.exe` spawn - still writes its record with
+`session_id` null and `stopped_ts` unset, so `plangraph_session_list` shows the possible orphan and
+`plangraph_session_relaunch` with `force=True` can replace it. A successful launch removes a stale
+`<name>.ready.json`. Every audit write is guarded: when `audit.log` cannot be written the action's
+own outcome stands and the caller is warned with a `warning` field instead.
 
 `plangraph_session_mark_ready` writes the marker. Relaunch uses the `handoff` argument, else the
 marker's handoff; `force=True` waives only the freshness check (handoff newer than the record), never

@@ -1447,3 +1447,160 @@ def test_stop_writes_record_only_to_validated_name_path(site):
     out = json.loads(rec_path.read_text())
     assert out["stopped_ts"] is not None
     assert not (site.state / "sessions" / "beta.json").exists()
+
+
+def test_launch_run_oserror_writes_null_id_record(site):
+    class OsErrRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"] and self.broken:
+                raise OSError("exec format error")
+            return super().__call__(argv, **kw)
+
+    run = OsErrRun(stdout="session " + UUID1)
+    run.broken = True
+    s = make(site, run)
+    res = go(site, s)
+    assert res["ok"] is False and res["name"] == "alpha" and res["session_id"] is None
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] is None and rec["stopped_ts"] is None  # list shows it
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert lines[-1]["action"] == "launch" and lines[-1]["ok"] is False
+    assert [r for r in s.list()["sessions"] if r["name"] == "alpha"][0]["id"] is None
+    run.broken = False
+    run.stdout = "session " + UUID2
+    retry = s.relaunch("alpha", force=True)  # force replaces the orphan record
+    assert retry["ok"] is True and retry["session_id"] == UUID2
+    rec2 = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec2["session_id"] == UUID2 and rec2["stopped_ts"] is None
+
+
+def test_launch_timeout_writes_null_id_record(site):
+    class TimeoutRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"]:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+            return super().__call__(argv, **kw)
+
+    s = make(site, TimeoutRun())
+    with pytest.raises(subprocess.TimeoutExpired):
+        go(site, s)
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] is None and rec["stopped_ts"] is None  # the process may exist
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert lines[-1]["action"] == "launch" and lines[-1]["ok"] is False
+
+
+def test_launch_wt_popen_oserror_writes_null_id_record(site):
+    class BrokenPopen(FakePopen):
+        def __call__(self, argv, **kw):
+            raise OSError(2, "no wt.exe")
+
+    cfg2 = site.tmp_path / "sessions-wt4.json"
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    exe = str(site.tmp_path / "claude.exe")
+    s = make(site, FakeRun(), BrokenPopen(), platform="win32", config_path=cfg2, which=lambda _: exe)
+    res = go(site, s)
+    assert res["ok"] is False and res["name"] == "alpha" and res["session_id"] is None
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] is None and rec["stopped_ts"] is None
+
+
+def test_successful_launch_unlinks_stale_ready_marker(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf))
+    marker = site.state / "sessions" / "alpha.ready.json"
+    assert marker.is_file()
+    s.stop(name="alpha")
+    run.stdout = "session " + UUID2
+    res = go(site, s)  # a fresh successful launch over the stopped record
+    assert res["ok"] is True
+    assert not marker.is_file()  # the old session's ready marker is stale and gone
+
+
+def test_refusal_outcome_survives_audit_write_failure(site, monkeypatch):
+    import plangraph.spawner.sessions as mod
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+
+    def dead(*_a, **_kw):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(mod, "append_private", dead)
+    with pytest.raises(ParameterRefused) as exc:
+        go(site, s, name="bad name")
+    assert "audit" in exc.value.warning  # the refusal stands; the caller is warned
+
+
+def test_timeout_outcome_survives_audit_write_failure(site, monkeypatch):
+    import plangraph.spawner.sessions as mod
+    class TimeoutRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"]:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+            return super().__call__(argv, **kw)
+
+    s = make(site, TimeoutRun())
+
+    def dead(*_a, **_kw):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(mod, "append_private", dead)
+    with pytest.raises(subprocess.TimeoutExpired) as exc:
+        go(site, s)
+    assert "audit" in exc.value.warning  # the timeout stands; the caller is warned
+
+
+def test_action_failed_outcome_survives_audit_write_failure(site, monkeypatch):
+    import plangraph.spawner.sessions as mod
+    run = FakeRun(stdout="session " + UUID1, launch_rc=1)
+    s = make(site, run)
+
+    def dead(*_a, **_kw):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(mod, "append_private", dead)
+    res = go(site, s)
+    assert res["ok"] is False and res["name"] == "alpha" and res["session_id"] is None
+    assert "audit" in res["warning"]  # the failure stands; the caller is warned
+
+
+def test_run_oserror_outcome_survives_audit_write_failure(site, monkeypatch):
+    import plangraph.spawner.sessions as mod
+    class OsErrRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"]:
+                raise OSError("exec format error")
+            return super().__call__(argv, **kw)
+
+    s = make(site, OsErrRun())
+
+    def dead(*_a, **_kw):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(mod, "append_private", dead)
+    res = go(site, s)
+    assert res["ok"] is False and res["name"] == "alpha"
+    assert "audit" in res["warning"]  # the failure stands; the caller is warned
+
+
+def test_unexpected_outcome_survives_audit_write_failure(site, monkeypatch):
+    import plangraph.spawner.sessions as mod
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("backend exploded")
+
+    def dead(*_a, **_kw):
+        raise OSError("audit disk full")
+
+    monkeypatch.setattr(s, "_check_cwd", boom)
+    monkeypatch.setattr(mod, "append_private", dead)
+    with pytest.raises(ParameterRefused) as exc:
+        go(site, s)
+    assert "RuntimeError" in str(exc.value) and "backend exploded" in str(exc.value)
+    assert "audit" in exc.value.warning  # the refusal stands; the caller is warned
