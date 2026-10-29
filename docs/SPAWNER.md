@@ -739,12 +739,20 @@ config lists, unlisted `mcp_config`, anything but exactly one of `prompt`/`promp
 prompt or one starting with `-`, prompt/handoff outside `file_roots`, non-boolean `dry_run`/`force`,
 `stop` of a session without a resolved id, or `relaunch` without a ready marker unless `force=True`.
 
-The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG` (conventionally
-`~/.config/plangraph/sessions.json`): `cwd_roots`, `file_roots`, `models`, `efforts`,
-`permission_modes`, `mcp_configs`, `style_file`, `compact_window`, `ctx_cap_tokens`,
+The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
+`~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `file_roots`, `models`,
+`efforts`, `permission_modes`, `mcp_configs`, `style_file`, `compact_window`, `ctx_cap_tokens`,
 `windows_launcher`. It fails closed - an unknown key, bad scalar or missing file refuses every
-action and there is no default model. On POSIX it must be owned by the current user and not
-group/world-writable (0600; looser modes are refused as untrusted).
+action and there is no default model.
+
+On POSIX (skipped on Windows) every file the config makes us obey must be ours alone: the config
+itself must not be a symlink and must be a regular file owned by the current user and not
+group/world-writable; the same ownership and mode checks apply to its directory, to every
+`mcp_configs` entry and to `style_file`, plus the directory each of those lives in. Checks fstat
+the opened file, never the path, and a symlink alias to an allowed file is fine because the
+resolved path is what is compared. These checks prove the files are owned by the invoking user
+account and writable by nobody else - they cannot defend against that same account or root
+rewriting them, and on Windows they are not applied at all.
 
 State lives under `<spawner state>/sessions/`: a `<name>.json` record per session, `<name>.prompt.txt`
 (0600), the `<name>.ready.json` marker (handoff, card), and `audit.log` - one scrubbed JSON line per

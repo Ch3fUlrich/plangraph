@@ -127,6 +127,7 @@ def test_argv_linux_is_list_no_shell(site):
     # style_file is appended via --append-system-prompt when configured
     style = site.tmp_path / "style.txt"
     style.write_text("be terse\n")
+    style.chmod(0o600)  # style_file is trust-checked like the config (R-24)
     cfg2 = site.tmp_path / "sessions2.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
     s.stop(name="alpha")  # a live record may only be replaced via relaunch
@@ -474,6 +475,7 @@ def test_audit_and_record_hold_no_secret(site, monkeypatch):
     # returned results scrubbed too (the style text reaches the dry-run argv)
     style = site.tmp_path / "style.txt"
     style.write_text("be terse with sk-test-xyz")
+    style.chmod(0o600)  # style_file is trust-checked like the config (R-24)
     cfg2 = site.tmp_path / "sessions-secret.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
     res = go(site, make(site, FakeRun(), config_path=cfg2), name="beta", prompt="abc", dry_run=True)
@@ -967,10 +969,10 @@ def test_relaunch_record_write_failure_keeps_record_and_marker(site, monkeypatch
     run.stdout = "session " + UUID2
     real = s._write_record
 
-    def flaky(rec):
+    def flaky(name, rec):
         if rec.get("session_id") == UUID2:  # only the NEW record's write fails
             raise OSError("no space left on device")
-        return real(rec)
+        return real(name, rec)
 
     monkeypatch.setattr(s, "_write_record", flaky)
     res = s.relaunch("alpha")
@@ -1195,3 +1197,185 @@ def test_scrub_touches_only_free_text_fields(site, monkeypatch):
         assert "sk-test-xyz" not in out[key] and "[autoos:redacted]" in out[key]
     assert "sk-test-xyz" not in json.dumps(out["argv"])
     assert "sk-test-xyz" not in out["children"][0]["warning"]  # nested free text too
+
+
+def test_config_refuses_symlink_and_nonregular(site):
+    alias = site.tmp_path / "alias-cfg.json"
+    alias.symlink_to(site.cfg)
+    s = make(site, FakeRun(), config_path=alias)
+    with pytest.raises(ParameterRefused, match="symlink"):
+        go(site, s)  # the config path itself must be the real file
+    dircfg = site.tmp_path / "cfg-dir"
+    dircfg.mkdir()
+    s2 = make(site, FakeRun(), config_path=dircfg)
+    with pytest.raises(ParameterRefused, match="regular"):
+        go(site, s2)
+
+
+def test_config_parent_dir_must_be_trusted(site):
+    parent = site.cfg.parent
+    saved = stat.S_IMODE(parent.stat().st_mode)
+    parent.chmod(0o777)  # a writable dir lets someone swap the config
+    s = make(site, FakeRun())
+    with pytest.raises(ParameterRefused, match="config"):
+        go(site, s)
+    parent.chmod(saved)
+    assert go(site, make(site, FakeRun()))["ok"] is True  # trusted dir is fine
+
+
+def test_config_owner_mismatch_refused(site, monkeypatch):
+    monkeypatch.setattr(os, "getuid", lambda: 12345)  # config owned by someone else
+    with pytest.raises(ParameterRefused, match="owned"):
+        go(site, make(site, FakeRun()))
+
+
+def test_config_world_writable_refused(site):
+    site.cfg.chmod(0o666)  # regular file, but anyone may rewrite it
+    try:
+        with pytest.raises(ParameterRefused, match="group/world-writable"):
+            go(site, make(site, FakeRun()))
+    finally:
+        site.cfg.chmod(0o600)
+
+
+def test_group_writable_sub_dir_refused(site):
+    sub = site.home / "sub"
+    sub.mkdir()
+    sub.chmod(0o770)  # even the parent dir of a style file must be ours alone
+    (sub / "style.md").write_text("p")
+    (sub / "style.md").chmod(0o600)
+    cfg = json.loads(site.cfg.read_text())
+    cfg2 = site.tmp_path / "sessions-sub.json"
+    write_config(cfg2, json.dumps({**cfg, "style_file": str(sub / "style.md")}))
+    with pytest.raises(ParameterRefused, match="group/world-writable"):
+        go(site, make(site, FakeRun(), config_path=cfg2))
+
+
+def test_mcp_owner_mismatch_refused(site, monkeypatch):
+    # A non-root test cannot chown the mcp file, so falsify the owner it
+    # reports to fstat: the check must notice the file is not ours.
+    ino = os.stat(site.mcp).st_ino
+    real_fstat = os.fstat
+
+    def lying_fstat(fd, *args, **kwargs):
+        st = real_fstat(fd, *args, **kwargs)
+        if st.st_ino == ino:
+            return os.stat_result((st[0], st[1], st[2], st[3], 12345, st[5], st[6], st[7], st[8], st[9]))
+        return st
+
+    monkeypatch.setattr(os, "fstat", lying_fstat)
+    with pytest.raises(ParameterRefused, match="mcp"):
+        go(site, make(site, FakeRun()))
+
+
+def test_mcp_world_writable_refused(site):
+    os.chmod(site.mcp, 0o666)
+    try:
+        with pytest.raises(ParameterRefused, match="mcp"):
+            go(site, make(site, FakeRun()))
+    finally:
+        os.chmod(site.mcp, 0o600)
+
+
+def test_mcp_and_style_trust_refuses_loose_files(site):
+    cfg = json.loads(site.cfg.read_text())
+    style = site.tmp_path / "style.txt"
+    style.write_text("be terse\n")
+    style.chmod(0o600)
+    os.chmod(site.mcp, 0o664)  # group-writable mcp file: not ours alone to obey
+    with pytest.raises(ParameterRefused, match="mcp_config"):
+        go(site, make(site, FakeRun()))
+    os.chmod(site.mcp, 0o600)
+    style.chmod(0o666)  # style_file gets the same trust checks
+    cfg2 = site.tmp_path / "sessions-style.json"
+    write_config(cfg2, json.dumps({**cfg, "style_file": str(style)}))
+    with pytest.raises(ParameterRefused, match="style_file"):
+        go(site, make(site, FakeRun(), config_path=cfg2))
+    style.chmod(0o600)
+    assert go(site, make(site, FakeRun(), config_path=cfg2))["ok"] is True
+
+
+def test_mcp_symlink_alias_to_allowed_file_is_not_a_finding(site):
+    alias = site.tmp_path / "alias-mcp.json"
+    alias.symlink_to(site.mcp.resolve())
+    run = FakeRun(stdout="session " + UUID1)
+    res = go(site, make(site, run), mcp_config=str(alias))
+    assert res["ok"] is True  # resolved-path comparison: the alias is fine
+
+
+def test_default_config_path_used_when_env_unset(site, monkeypatch):
+    monkeypatch.delenv("PLANGRAPH_SESSIONS_CONFIG", raising=False)
+    dflt = site.home / ".config" / "plangraph"
+    dflt.mkdir(parents=True, mode=0o700)
+    write_config(dflt / "sessions.json", site.cfg.read_text())
+    s = Sessions(state_root=site.state, run=FakeRun(), now=lambda: 1000.0, sleep=lambda _s: None)
+    res = go(site, s)
+    assert res["ok"] is True  # ~/.config/plangraph/sessions.json is the default
+
+
+def test_mcp_undeclared_args_refused_for_all_five(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun(), session_popen=FakePopen())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        calls = [("plangraph_session_launch", {
+                     "name": "alpha", "cwd": str(site.proj), "model": MODEL, "effort": EFFORT,
+                     "mcp_config": str(site.mcp), "permission_mode": MODE, "prompt": PROMPT,
+                     "dry_run": True, "bogus": 1}),
+                 ("plangraph_session_stop", {"name": "alpha", "bogus": 1}),
+                 ("plangraph_session_relaunch", {"name": "alpha", "bogus": 1}),
+                 ("plangraph_session_mark_ready", {"name": "alpha", "handoff": "x", "bogus": 1}),
+                 ("plangraph_session_list", {"bogus": 1})]
+        for tool, args in calls:
+            with pytest.raises(ParameterRefused, match="bogus"):
+                await server.call_tool(tool, args)
+
+    asyncio.run(go_rpc())
+
+
+def test_mcp_missing_wrong_type_args_audited(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun(), session_popen=FakePopen())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_launch", {
+                "name": "alpha", "cwd": 5, "model": MODEL, "effort": EFFORT,
+                "mcp_config": str(site.mcp), "permission_mode": MODE, "prompt": PROMPT})
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_relaunch", {})
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_stop", {"name": 7})
+
+    asyncio.run(go_rpc())
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert [l["action"] for l in lines] == ["launch", "relaunch", "stop"]
+    assert all(l["ok"] is False and l["reason"] for l in lines)  # same audit path
+
+
+def test_stop_rejects_name_id_mismatch(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    with pytest.raises(ParameterRefused, match="match"):
+        s.stop(name="alpha", session_id=UUID2)
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["stopped_ts"] is None  # nothing was stopped
+    assert not any(argv[:2] == ["claude", "stop"] for argv, _ in run.calls)
+    assert s.stop(name="alpha", session_id=UUID1)["ok"] is True  # matching pair works
+
+
+def test_stop_writes_record_only_to_validated_name_path(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    rec_path = site.state / "sessions" / "alpha.json"
+    rec = json.loads(rec_path.read_text())
+    rec["name"] = "beta"  # a lying record must not redirect the write
+    rec_path.write_text(json.dumps(rec))
+    assert s.stop(name="alpha")["ok"] is True
+    out = json.loads(rec_path.read_text())
+    assert out["stopped_ts"] is not None
+    assert not (site.state / "sessions" / "beta.json").exists()

@@ -139,6 +139,10 @@ SESSION_TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {}}},
 ]
 TOOLS_METADATA.extend(SESSION_TOOLS)
+for _t in SESSION_TOOLS:
+    # Undeclared argument keys are refused by _session_tool; the schema says
+    # so declaratively too (R-25).
+    _t['inputSchema']['additionalProperties'] = False
 
 
 for _verb in ('route', 'ps', 'result'):
@@ -176,40 +180,38 @@ class MCPSpawnerServer:
                         sleep=self._session_sleep)
 
     async def _session_tool(self, name, arguments):
-        """Dispatch only the five declared session tools (R-7). Every argument
-        is checked before it reaches Sessions: a missing or wrongly typed value
-        is ParameterRefused, never a KeyError or TypeError."""
+        """Dispatch only the five declared session tools (R-7). Undeclared
+        argument keys are refused outright for every tool, list included;
+        every other argument check happens inside Sessions' _action, so a
+        missing or wrongly typed value is an AUDITED refusal (R-25) - never a
+        KeyError, TypeError or an untracked error."""
         args = dict(arguments or {})
-
-        def need(key, *, required=False, kind=str):
-            value = args.get(key)
-            if value is None:
-                if required:
-                    raise ParameterRefused(f"session argument {key} is required")
-                return None
-            if kind is bool:
-                if not isinstance(value, bool):
-                    raise ParameterRefused(f"session argument {key} must be a boolean")
-                return value
-            if not isinstance(value, str):
-                raise ParameterRefused(f"session argument {key} must be a string")
-            return value
-
+        schema = {t['name']: t['inputSchema'] for t in SESSION_TOOLS}.get(name)
+        if schema is None:
+            raise ValueError(f"unknown session tool: {name}")
+        undeclared = sorted(set(args) - set(schema.get('properties', {})))
+        if undeclared:
+            raise ParameterRefused(
+                f"undeclared session arguments for {name}: {', '.join(undeclared)}")
         sessions = self._sessions()
         if name == 'plangraph_session_launch':
-            kw = {key: need(key) for key in ('prompt', 'prompt_file', 'handoff', 'parent')}
-            kw.update({key: need(key, required=True) for key in
-                       ('name', 'cwd', 'model', 'effort', 'mcp_config', 'permission_mode')})
-            kw['dry_run'] = need('dry_run', kind=bool) or False
-            return await asyncio.to_thread(sessions.launch, **kw)
+            return await asyncio.to_thread(sessions.launch,
+                name=args.get('name'), cwd=args.get('cwd'), model=args.get('model'),
+                effort=args.get('effort'), mcp_config=args.get('mcp_config'),
+                permission_mode=args.get('permission_mode'), prompt=args.get('prompt'),
+                prompt_file=args.get('prompt_file'), handoff=args.get('handoff'),
+                parent=args.get('parent'),
+                dry_run=args['dry_run'] if 'dry_run' in args else False)
         if name == 'plangraph_session_stop':
-            return await asyncio.to_thread(sessions.stop, name=need('name'), session_id=need('id'))
+            return await asyncio.to_thread(sessions.stop, name=args.get('name'),
+                                           session_id=args.get('id'))
         if name == 'plangraph_session_relaunch':
-            return await asyncio.to_thread(sessions.relaunch, need('name', required=True),
-                                           need('handoff'), force=need('force', kind=bool) or False)
+            return await asyncio.to_thread(sessions.relaunch, args.get('name'),
+                                           args.get('handoff'),
+                                           force=args['force'] if 'force' in args else False)
         if name == 'plangraph_session_mark_ready':
-            return await asyncio.to_thread(sessions.mark_ready, need('name', required=True),
-                                           need('handoff', required=True), need('card'))
+            return await asyncio.to_thread(sessions.mark_ready, args.get('name'),
+                                           args.get('handoff'), args.get('card'))
         if name == 'plangraph_session_list':
             return await asyncio.to_thread(sessions.list)
         raise ValueError(f"unknown session tool: {name}")

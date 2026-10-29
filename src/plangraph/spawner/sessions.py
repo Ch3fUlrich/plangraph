@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -129,20 +130,54 @@ class Sessions:
 
     # ---- config: parsed, trusted, fail-closed (R-1, R-3) ---------------
 
-    def _load_config(self):
-        if not self._config_path:
-            raise _refuse("sessions config missing: set PLANGRAPH_SESSIONS_CONFIG")
-        path = Path(self._config_path)
+    def _config_file(self):
+        """The configured path, else $PLANGRAPH_SESSIONS_CONFIG, else the
+        default ~/.config/plangraph/sessions.json (R-24)."""
+        return Path(self._config_path) if self._config_path else (
+            Path.home() / ".config" / "plangraph" / "sessions.json")
+
+    def _trust(self, path, what, *, directory=False, nofollow=False):
+        """POSIX trust checks (skipped on win32): open the path and fstat the
+        descriptor - never stat by name - so a swapped symlink cannot lie about
+        what was checked. The result must be a regular file (or directory),
+        owned by the current user and not group/world-writable (R-24).
+        Symlinks are followed on purpose except for the config itself: a
+        symlink alias to an allowed file is not a finding."""
+        if self._platform == "win32":
+            return
+        flags = os.O_RDONLY
+        if nofollow and hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
         try:
-            st = path.stat()
+            fd = os.open(str(path), flags)
+        except OSError:
+            raise _refuse(f"{what} is not a readable regular file: {path}")
+        try:
+            st = os.fstat(fd)
+        finally:
+            os.close(fd)
+        kind_ok = stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)
+        if not kind_ok:
+            raise _refuse(f"{what} is not a regular file: {path}")
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            raise _refuse(f"{what} is not owned by the current user: {path}")
+        if st.st_mode & 0o022:
+            raise _refuse(f"{what} is group/world-writable: {path}")
+
+    def _load_config(self):
+        path = self._config_file()
+        try:
+            path.stat()
         except OSError:
             raise _refuse(f"sessions config not found: {path}")
         if self._platform != "win32":
-            # POSIX trust: the config is only ours to obey if it is ours alone.
-            if hasattr(os, "getuid") and st.st_uid != os.getuid():
-                raise _refuse(f"sessions config not owned by the current user: {path}")
-            if st.st_mode & 0o022:
-                raise _refuse(f"sessions config is group/world-writable: {path}")
+            # POSIX trust: the config is only ours to obey if it is ours alone -
+            # it may not even be a symlink, and neither its directory nor the
+            # files it points at may be writable by anyone else (R-24).
+            if os.path.islink(path):
+                raise _refuse(f"sessions config must not be a symlink: {path}")
+            self._trust(path.parent, "sessions config directory", directory=True)
+            self._trust(path, "sessions config", nofollow=True)
         try:
             cfg = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -167,10 +202,17 @@ class Sessions:
         for raw in entries:
             if not isinstance(raw, str) or not Path(raw).expanduser().resolve().is_file():
                 raise _refuse(f"config mcp_configs entry is not a regular file: {raw}")
+            entry = Path(raw).expanduser().resolve()
+            # The entry's directory counts too: a writable dir lets someone
+            # swap the file after the check (the sub-dir finding).
+            self._trust(entry.parent, "config mcp_configs entry directory", directory=True)
+            self._trust(entry, "config mcp_configs entry")
         if cfg.get("style_file") is not None:
             style = cfg["style_file"]
             if not isinstance(style, str) or not Path(style).is_absolute() or not Path(style).is_file():
                 raise _refuse(f"config style_file must be an absolute readable file: {style}")
+            self._trust(Path(style).parent, "config style_file directory", directory=True)
+            self._trust(Path(style), "config style_file")
         if cfg.get("compact_window") is not None:
             window = cfg["compact_window"]
             if not isinstance(window, str) or not window.isdigit():
@@ -249,6 +291,9 @@ class Sessions:
             raise _refuse(f"mcp_config not listed in config mcp_configs: {mcp_config}")
         if not path.is_file():
             raise _refuse(f"mcp_config is not a regular file: {mcp_config}")
+        # The resolved path is the listed one: a symlink alias to an allowed
+        # file is not a finding, but the target must still be trusted (R-24).
+        self._trust(path, "mcp_config")
         return path
 
     def _prompt_text(self, prompt, prompt_file, cfg):
@@ -374,8 +419,10 @@ class Sessions:
                 return rec
         return None
 
-    def _write_record(self, rec):
-        atomic_write_private(self._record_path(rec.get("name")), json.dumps(_scrub(rec)) + "\n")
+    def _write_record(self, name, rec):
+        """Record writes go to the VALIDATED name's path only - never to a
+        path derived from record content (R-26)."""
+        atomic_write_private(self._record_path(name), json.dumps(_scrub(rec)) + "\n")
 
     # ---- subprocess argv construction (D-2873) -------------------------
 
@@ -508,6 +555,8 @@ class Sessions:
                       prompt, prompt_file, handoff, parent, dry_run):
         if not isinstance(dry_run, bool):
             raise _refuse("dry_run must be a real boolean")
+        if parent is not None and (not isinstance(parent, str) or not parent):
+            raise _refuse("parent must be a non-empty string")
         cfg = self._load_config()
         name = self._check_name(name)
         cwd_path = self._check_cwd(cwd, cfg)
@@ -541,7 +590,7 @@ class Sessions:
                "session_id": sid, "job_id": sid[:8] if sid else None,
                "permission_mode": mode, "platform": self._platform,
                "launcher": launcher, "stopped_ts": None}
-        self._write_record(rec)
+        self._write_record(name, rec)
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)}
         if warning:
@@ -551,33 +600,56 @@ class Sessions:
     def stop(self, name=None, session_id=None):
         return self._action("stop", name or session_id or "", lambda: self._stop_inner(name, session_id))
 
+    def _find_record_by_id(self, session_id):
+        """(record, name) for a session id: the write-back name is the record
+        file's stem, validated - never the record's own name field (R-26)."""
+        for path in sorted(self._sessions.glob("*.json")):
+            if path.name.endswith(".ready.json"):
+                continue
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(rec, dict) or rec.get("session_id") != session_id:
+                continue
+            if not NAME_RE.fullmatch(path.stem):
+                raise _refuse(f"record file name is not a valid session name: {path.name}")
+            return rec, path.stem
+        return None, None
+
     def _stop_inner(self, name, session_id):
         if not name and not session_id:
             raise _refuse("stop needs a name or id")
         if name:
-            self._check_name(name)
-        rec = self._find_record(name, session_id)
+            name = self._check_name(name)
+            rec = self._find_record(name, session_id)
+            if rec is not None and session_id and rec.get("session_id") != session_id:
+                raise _refuse(f"session_id does not match session {name}")
+        else:
+            rec, name = self._find_record_by_id(session_id)
         if rec is None:
             raise _refuse(f"unknown session: {name or session_id}")
         sid = rec.get("session_id")
         if not sid:
             raise _refuse(f"no session id recorded for {rec.get('name')}")
-        self._stop_record(rec)
-        return {"ok": True, "name": rec.get("name"), "session_id": sid}
+        self._stop_record(rec, name)
+        return {"ok": True, "name": name, "session_id": sid}
 
-    def _stop_record(self, rec):
+    def _stop_record(self, rec, name):
         """claude stop <id> - the one and only stop mechanism, never rm/kill."""
         proc = self._run(["claude", "stop", rec.get("session_id")],
                          capture_output=True, text=True, timeout=STOP_TIMEOUT)
         if proc.returncode != 0:
             raise _refuse(f"stop failed: claude stop exited {proc.returncode}")
         rec["stopped_ts"] = self._now()
-        self._write_record(rec)
+        self._write_record(name, rec)
 
     def mark_ready(self, name, handoff, card=None):
         return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
 
     def _mark_ready_inner(self, name, handoff, card):
+        if card is not None and not isinstance(card, str):
+            raise _refuse("card must be a string")
         cfg = self._load_config()
         # The handoff is checked first: a bad handoff is the caller's error to
         # see, whatever the session state is.
@@ -650,7 +722,7 @@ class Sessions:
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)
         if old_sid and rec.get("stopped_ts") is None:
-            self._stop_record(rec)  # raises "stop failed" -> nothing is launched
+            self._stop_record(rec, name)  # raises "stop failed" -> nothing is launched
         new_rec = dict(rec)
         try:
             sid, warning = self._run_launch(
@@ -659,7 +731,7 @@ class Sessions:
                             "stopped_ts": None, "ts": self._now(),
                             "handoff": str(handoff_path) if handoff_path else None,
                             "launcher": launcher})
-            self._write_record(new_rec)
+            self._write_record(name, new_rec)
         except BaseException:
             # ANY failure after the stop keeps the old record (with stopped_ts)
             # and the ready marker so a plain retry can relaunch; the marker is
@@ -667,7 +739,7 @@ class Sessions:
             if rec.get("stopped_ts") is None:
                 rec["stopped_ts"] = self._now()
             try:
-                self._write_record(rec)
+                self._write_record(name, rec)
             except (OSError, ValueError):
                 pass  # the disk already holds the old record
             raise
