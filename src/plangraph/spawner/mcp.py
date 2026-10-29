@@ -122,16 +122,19 @@ SESSION_TOOLS = [
          'name': {'type': 'string'}, 'cwd': {'type': 'string'}, 'model': {'type': 'string'},
          'effort': {'type': 'string'}, 'prompt': {'type': 'string'}, 'prompt_file': {'type': 'string'},
          'mcp_config': {'type': 'string'}, 'handoff': {'type': 'string'}, 'parent': {'type': 'string'},
-         'permission_mode': {'type': 'string'}, 'dry_run': {'type': 'boolean'}}}},
+         'permission_mode': {'type': 'string'}, 'dry_run': {'type': 'boolean'}},
+         'required': ['name', 'cwd', 'model', 'effort', 'mcp_config', 'permission_mode']}},
     {'name': 'plangraph_session_stop', 'description': 'Stop a Claude Code session by name or id',
      'inputSchema': {'type': 'object', 'properties': {
          'name': {'type': 'string'}, 'id': {'type': 'string'}}}},
     {'name': 'plangraph_session_relaunch', 'description': 'Relaunch a stopped session from its handoff',
      'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'handoff': {'type': 'string'}, 'force': {'type': 'boolean'}}}},
+         'name': {'type': 'string'}, 'handoff': {'type': 'string'}, 'force': {'type': 'boolean'}},
+         'required': ['name']}},
     {'name': 'plangraph_session_mark_ready', 'description': 'Mark a session ready with handoff and card',
      'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'handoff': {'type': 'string'}, 'card': {'type': 'string'}}}},
+         'name': {'type': 'string'}, 'handoff': {'type': 'string'}, 'card': {'type': 'string'}},
+         'required': ['name', 'handoff']}},
     {'name': 'plangraph_session_list', 'description': 'List sessions with context usage',
      'inputSchema': {'type': 'object', 'properties': {}}},
 ]
@@ -165,26 +168,54 @@ class MCPSpawnerServer:
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
+        import os
         from .sessions import Sessions
-        return Sessions(state_root=self.service.state, run=self._session_run, popen=self._session_popen)
+        return Sessions(state_root=self.service.state, run=self._session_run, popen=self._session_popen,
+                        config_path=os.environ.get('PLANGRAPH_SESSIONS_CONFIG'))
+
+    async def _session_tool(self, name, arguments):
+        """Dispatch only the five declared session tools (R-7). Every argument
+        is checked before it reaches Sessions: a missing or wrongly typed value
+        is ParameterRefused, never a KeyError or TypeError."""
+        args = dict(arguments or {})
+
+        def need(key, *, required=False, kind=str):
+            value = args.get(key)
+            if value is None:
+                if required:
+                    raise ParameterRefused(f"session argument {key} is required")
+                return None
+            if kind is bool:
+                if not isinstance(value, bool):
+                    raise ParameterRefused(f"session argument {key} must be a boolean")
+                return value
+            if not isinstance(value, str):
+                raise ParameterRefused(f"session argument {key} must be a string")
+            return value
+
+        sessions = self._sessions()
+        if name == 'plangraph_session_launch':
+            kw = {key: need(key) for key in ('prompt', 'prompt_file', 'handoff', 'parent')}
+            kw.update({key: need(key, required=True) for key in
+                       ('name', 'cwd', 'model', 'effort', 'mcp_config', 'permission_mode')})
+            kw['dry_run'] = need('dry_run', kind=bool) or False
+            return await asyncio.to_thread(sessions.launch, **kw)
+        if name == 'plangraph_session_stop':
+            return await asyncio.to_thread(sessions.stop, name=need('name'), session_id=need('id'))
+        if name == 'plangraph_session_relaunch':
+            return await asyncio.to_thread(sessions.relaunch, need('name', required=True),
+                                           need('handoff'), force=need('force', kind=bool) or False)
+        if name == 'plangraph_session_mark_ready':
+            return await asyncio.to_thread(sessions.mark_ready, need('name', required=True),
+                                           need('handoff', required=True), need('card'))
+        if name == 'plangraph_session_list':
+            return await asyncio.to_thread(sessions.list)
+        raise ValueError(f"unknown session tool: {name}")
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
-        if name.startswith('plangraph_session_'):
-            sessions = self._sessions()
-            if name == 'plangraph_session_launch':
-                return sessions.launch(**{k: arguments[k] for k in (
-                    'name', 'cwd', 'model', 'effort', 'prompt', 'prompt_file', 'mcp_config',
-                    'handoff', 'parent', 'permission_mode', 'dry_run') if k in arguments})
-            if name == 'plangraph_session_stop':
-                return sessions.stop(name=arguments.get('name'), session_id=arguments.get('id'))
-            if name == 'plangraph_session_relaunch':
-                return sessions.relaunch(arguments['name'], arguments.get('handoff'),
-                    force=arguments.get('force', False))
-            if name == 'plangraph_session_mark_ready':
-                return sessions.mark_ready(arguments['name'], arguments.get('handoff'),
-                    arguments.get('card'))
-            return sessions.list()
+        if isinstance(name, str) and name.startswith('plangraph_session_'):
+            return await self._session_tool(name, arguments)
         from .bench_entry import benchmark_options
         try:
             options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}

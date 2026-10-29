@@ -1,330 +1,632 @@
-"""Claude Code session lifecycle (SESSION-SPAWN-MCP, docs/spawner-sessions.md).
-Ports routing bin/fleet-launch (build_cmd, resolve) and bin/routerctl (transcript, ctx).
-Injectable run/popen callables; argv is always a list; refusals raise ParameterRefused.
+"""Claude Code session launching for plangraph plan handoff (SESSION-SPAWN-MCP).
+
+Launches background Claude Code agents that bootstrap a plan from a
+``handoff.md`` produced by a writer. ``SessionManager._spawner_session`` and the
+``spawner/mcp.py`` session tools drive the same ``Sessions`` class; config is
+data loaded from a JSON file - no shell command string is ever built from it
+(D-2873). Every outcome is one audited JSON line and nothing escapes untracked.
+
+Windows note: ``claude`` is an npm shim (``claude.cmd`` / ``claude.ps1``) on
+Windows and a shim would let cmd.exe parse the prompt, so the Windows path
+resolves ``claude`` to its real ``.exe`` (``shutil.which``), refuses shims, and
+either starts it detached (``--bg``) or hands it to Windows Terminal (``wt.exe``).
 """
+from __future__ import annotations
+
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
-from .env_redact import redact_env_values
-from .private_io import append_private, atomic_write_private
+from plangraph.routing_support.private_io import atomic_write_private, append_private
 
-NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
-UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-SHORT_ID = re.compile(r"backgrounded\W+([0-9a-f]{8})\b")
-STARTED_SLACK_MS = 5000
-RESOLVE_CALL_TIMEOUT, RESOLVE_WAIT = 5.0, 0.5
-CTX_TAIL = 256 * 1024
-DETACHED_PROCESS, CREATE_NEW_PROCESS_GROUP = 0x8, 0x200
-REQUIRED_KEYS = ("cwd_roots", "models", "efforts", "permission_modes", "mcp_configs")
+__all__ = ["SESSION_CONFIG_KEYS", "Sessions", "transcript_path"]
 
-def _started_ms(row):
-    v = row.get("startedAt")
-    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+SESSION_CONFIG_KEYS = frozenset({
+    "cwd_roots", "file_roots", "models", "efforts", "permission_modes",
+    "mcp_configs", "style_file", "compact_window", "ctx_cap_tokens",
+    "windows_launcher",
+})
+LAUNCH_TIMEOUT = 60
+STOP_TIMEOUT = 30
+DETACHED = 0x8 | 0x200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+SHORT_RE = re.compile(r"backgrounded\s*\W*([0-9a-fA-F]{8})\b")
+USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _scrub(value):
+    """Deep scrub through the env redactor. Records, audit lines, returned
+    results and error text all pass through here (R-6)."""
+    from plangraph.spawner.env_redact import redact_env_values
+    if isinstance(value, str):
+        return redact_env_values(value, os.environ)
+    if isinstance(value, dict):
+        return {_scrub(k): _scrub(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub(v) for v in value]
+    return value
+
+
+def _refuse(message):
+    """Refusal with scrubbed text: error messages reach callers and logs."""
+    return ParameterRefused(_scrub(str(message)))
+
 
 def transcript_path(cwd, session_id):
-    """routerctl.transcript_path: the Claude Code transcript of one session."""
-    return (Path.home() / ".claude/projects" / re.sub(r"[/.]", "-", str(cwd)) / f"{session_id}.jsonl") if cwd and session_id else None
+    """Claude transcript file for one session: every non-alphanumeric cwd
+    character maps to "-" (spelled out by the tests on purpose), the session id
+    is the file stem."""
+    safe = re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    return Path.home() / ".claude" / "projects" / safe / f"{session_id}.jsonl"
 
-def context_tokens(cwd, session_id):
-    """routerctl.context_tokens: last assistant usage (input + caches), tail read only."""
-    f = transcript_path(cwd, session_id)
-    if f is None:
-        return None
-    try:
-        with f.open("rb") as fh:
-            start = max(0, fh.seek(0, 2) - CTX_TAIL)
-            fh.seek(start)
-            lines = fh.read().decode("utf-8", "replace").splitlines()[1 if start else 0:]
-    except OSError:
-        return None
-    for line in reversed(lines):
-        try:
-            j = json.loads(line) if '"usage"' in line else {}
-            if j.get("type") == "assistant":
-                u = j["message"]["usage"]
-                vals = [u.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
-                if all(type(v) is int for v in vals):
-                    return sum(vals)
-        except (ValueError, KeyError, TypeError, AttributeError):
-            continue
-    return None
 
-def build_cmd(name, cwd, model, effort, mcp, permission_mode, prompt, style, platform, launcher):
-    """argv list for one launch; a list only, never a shell string (D-3142)."""
-    flags = ["--strict-mcp-config", "--mcp-config", str(mcp), "--remote-control", name, "-n", name, "--model", model, "--effort", effort, "--permission-mode", permission_mode]
-    if style:
-        flags += ["--append-system-prompt", style]
-    if platform == "win32" and launcher == "wt":
-        return ["wt.exe", "-w", "0", "new-tab", "--title", name, "-d", str(cwd), "claude"] + flags + [prompt]
-    return ["claude", "--bg"] + flags + [prompt]
+class _ActionFailed(Exception):
+    """Subprocess-level failure: audited, then reported as {"ok": False}."""
 
-def _scrub(obj):
-    """redact_env_values over every string before it reaches record or audit."""
-    if isinstance(obj, str):
-        return redact_env_values(obj, dict(os.environ))
-    if isinstance(obj, (list, tuple)):
-        return [_scrub(v) for v in obj]
-    return {k: _scrub(v) for k, v in obj.items()} if isinstance(obj, dict) else obj
-
-def _load_config(path):
-    try:
-        data = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        raise ParameterRefused(f"config {path} missing or invalid; refusing to launch") from None
-    ok = (isinstance(data, dict) and all(isinstance(data.get(k), list) and data[k]
-              and all(isinstance(v, str) and v for v in data[k]) for k in REQUIRED_KEYS)
-          and all(Path(v).is_absolute() for k in ("cwd_roots", "mcp_configs") for v in data[k])
-          and data.get("windows_launcher", "bg") in ("bg", "wt") and ("style_file" not in data or isinstance(data["style_file"], str))
-          and type(data.get("ctx_cap_tokens", 1)) is int and data.get("ctx_cap_tokens", 1) > 0)
-    if not ok:
-        raise ParameterRefused(f"config {path} invalid (fail closed)")
-    return data
-
-def _check_name(name, what="name"):
-    if not NAME_RE.fullmatch(str(name or "")): raise ParameterRefused(f"invalid {what} {name!r}: want [A-Za-z0-9._-] 1-64")
-
-def _inside_roots(cwd, roots):
-    try:
-        resolved = Path(cwd).resolve(strict=True)  # realpath: a symlink cannot escape a root
-    except OSError:
-        raise ParameterRefused(f"cwd {cwd!r} not resolvable") from None
-    if not resolved.is_dir(): raise ParameterRefused(f"cwd {cwd!r} is not a directory")
-    for root in roots:
-        if resolved == (r := Path(root).resolve()) or r in resolved.parents:
-            return resolved
-    raise ParameterRefused(f"cwd {cwd!r} is outside config cwd_roots")
-
-def _readable_file(path, what):
-    try:
-        p = Path(path).resolve(strict=True)
-        with p.open("rb"):
-            pass
-        if not p.is_file():
-            raise OSError
-    except OSError:
-        raise ParameterRefused(f"{what} {path!r} not a readable regular file") from None
-    return p
-
-def _read_prompt(prompt, prompt_file):
-    """Exactly one of prompt / prompt_file; returns (text, source_path_or_None)."""
-    if (prompt is None) == (prompt_file is None):
-        raise ParameterRefused("exactly one of prompt or prompt_file required")
-    if prompt is not None:
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ParameterRefused("prompt must be a non-empty string")
-        return prompt, None
-    p = _readable_file(prompt_file, "prompt_file")
-    text = p.read_text()  # the probe above proved readability
-    if not text.strip():
-        raise ParameterRefused("prompt must be non-empty")
-    return text, str(p)
-
-def _match_mcp(mcp_config, allowed):
-    cand = Path(mcp_config).resolve()
-    for entry in allowed:
-        if cand == Path(entry).resolve():
-            return cand
-    raise ParameterRefused(f"mcp_config {mcp_config!r} not in config allowlist")
-
-def _read_style(style_file):
-    return _readable_file(style_file, "style_file").read_text().rstrip("\n") if style_file else ""
 
 class Sessions:
-    """Claude Code session lifecycle over one state root (SpawnService.state)."""
+    """Launch / stop / relaunch Claude Code sessions.
 
-    def __init__(self, state_root, config_path=None, run=None, popen=None, now=None, platform=None, resolve_budget=15.0):
-        self.sessions_dir = Path(state_root) / "sessions"
-        self.config_path = Path(config_path or os.environ.get("PLANGRAPH_SESSIONS_CONFIG")
-                                or Path.home() / ".config/plangraph/sessions.json")
-        self.run, self.popen = run or subprocess.run, popen or subprocess.Popen
-        self.now, self.platform = now or time.time, (sys.platform if platform is None else platform)
-        self.resolve_budget = resolve_budget
+    One injectable runner carries every subprocess call (argv list, never a
+    shell string). Constructor: ``state_root`` (session state directory),
+    ``config_path`` (else $PLANGRAPH_SESSIONS_CONFIG), ``run`` / ``popen``
+    (injectables), ``now`` (clock), ``platform``, ``resolve_budget`` (seconds a
+    ``claude agents`` row may be old and still count as the new session),
+    ``which`` (exe resolver, consulted on win32 only).
+    """
 
-    def _path(self, name, suffix):
-        return self.sessions_dir / f"{name}{suffix}"
+    def __init__(self, state_root=None, *, config_path=None, run=None, popen=None,
+                 now=None, platform=None, resolve_budget=15.0, which=None):
+        self._run = run if run is not None else subprocess.run
+        self._popen = popen if popen is not None else subprocess.Popen
+        self._now = now if now is not None else time.time
+        self._platform = platform if platform is not None else sys.platform
+        self._which = which if which is not None else shutil.which
+        self._resolve_budget = float(resolve_budget)
+        self._config_path = config_path or os.environ.get("PLANGRAPH_SESSIONS_CONFIG")
+        if state_root is None:
+            state_root = os.environ.get("PLANGRAPH_SPAWN_STATE") or str(
+                Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "plangraph")
+        self._state = Path(state_root)
+        self._sessions = self._state / "sessions"
 
-    def _read_json(self, path):
+    # ---- config: parsed, trusted, fail-closed (R-1, R-3) ---------------
+
+    def _load_config(self):
+        if not self._config_path:
+            raise _refuse("sessions config missing: set PLANGRAPH_SESSIONS_CONFIG")
+        path = Path(self._config_path)
         try:
-            data = json.loads(Path(path).read_text())
+            st = path.stat()
+        except OSError:
+            raise _refuse(f"sessions config not found: {path}")
+        if self._platform != "win32":
+            # POSIX trust: the config is only ours to obey if it is ours alone.
+            if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                raise _refuse(f"sessions config not owned by the current user: {path}")
+            if st.st_mode & 0o022:
+                raise _refuse(f"sessions config is group/world-writable: {path}")
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return None
-        return data if isinstance(data, dict) else None
+            raise _refuse(f"sessions config is not valid JSON: {path}")
+        if not isinstance(cfg, dict):
+            raise _refuse(f"sessions config must be a JSON object: {path}")
+        self._check_config(cfg)
+        return cfg
 
-    def _records(self):
+    def _check_config(self, cfg):
+        roots = self._root_list(cfg, "cwd_roots")
+        if not roots:
+            raise _refuse("config cwd_roots must be a non-empty list of directories")
+        self._root_list(cfg, "file_roots")
+        for key in ("models", "efforts", "permission_modes"):
+            values = cfg.get(key)
+            if not isinstance(values, list) or not values or not all(isinstance(v, str) and v for v in values):
+                raise _refuse(f"config {key} must be a non-empty list of strings")
+        entries = cfg.get("mcp_configs")
+        if not isinstance(entries, list):
+            raise _refuse("config mcp_configs must be a list of file paths")
+        for raw in entries:
+            if not isinstance(raw, str) or not Path(raw).expanduser().resolve().is_file():
+                raise _refuse(f"config mcp_configs entry is not a regular file: {raw}")
+        if cfg.get("style_file") is not None:
+            style = cfg["style_file"]
+            if not isinstance(style, str) or not Path(style).is_absolute() or not Path(style).is_file():
+                raise _refuse(f"config style_file must be an absolute readable file: {style}")
+        if cfg.get("compact_window") is not None:
+            window = cfg["compact_window"]
+            if not isinstance(window, str) or not window.isdigit():
+                raise _refuse("config compact_window must be a digit string")
+        if cfg.get("ctx_cap_tokens") is not None:
+            cap = cfg["ctx_cap_tokens"]
+            if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+                raise _refuse("config ctx_cap_tokens must be a positive int")
+        if cfg.get("windows_launcher") not in (None, "bg", "wt"):
+            raise _refuse("config windows_launcher must be 'bg' or 'wt'")
+
+    def _root_list(self, cfg, key):
+        raw_list = cfg.get(key)
+        if raw_list is None:
+            return []
+        if not isinstance(raw_list, list):
+            raise _refuse(f"config {key} must be a list of directories")
+        roots = []
+        for raw in raw_list:
+            if not isinstance(raw, str) or not raw or not Path(raw).expanduser().is_absolute():
+                raise _refuse(f"config {key} entries must be absolute directory paths: {raw}")
+            path = Path(raw).expanduser().resolve()
+            # A filesystem root would allow any path; refuse it outright.
+            if len(path.parts) <= 1 or path.parent == path:
+                raise _refuse(f"config {key} must not be a filesystem root: {raw}")
+            if not path.is_dir():
+                raise _refuse(f"config {key} entry is not an existing directory: {raw}")
+            roots.append(path)
+        return roots
+
+    def _file_roots(self, cfg):
+        return self._root_list(cfg, "cwd_roots") + self._root_list(cfg, "file_roots")
+
+    def _inside(self, path, roots):
+        return any(path == root or root in path.parents for root in roots)
+
+    def _file_arg(self, value, cfg, what):
+        """prompt_file / handoff: inside the roots, a readable regular file."""
+        if not isinstance(value, str) or not value:
+            raise _refuse(f"{what} must be a non-empty path string")
+        path = Path(value).expanduser().resolve()
+        if not self._inside(path, self._file_roots(cfg)):
+            raise _refuse(f"{what} is outside the configured roots: {value}")
+        if not path.is_file():
+            raise _refuse(f"{what} is not a regular file: {value}")
+        if not os.access(path, os.R_OK):
+            raise _refuse(f"{what} is not readable: {value}")
+        return path
+
+    def _check_name(self, name):
+        if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+            raise _refuse(f"name must match [a-z0-9][a-z0-9-]{{0,63}}: {name!r}")
+        return name
+
+    def _check_cwd(self, cwd, cfg):
+        if not isinstance(cwd, str) or not cwd:
+            raise _refuse("cwd must be a non-empty path string")
+        path = Path(cwd).expanduser().resolve()
+        if not self._inside(path, self._root_list(cfg, "cwd_roots")):
+            raise _refuse(f"cwd outside cwd_roots: {cwd}")
+        if not path.is_dir():
+            raise _refuse(f"cwd does not exist or is not a directory: {cwd}")
+        return path
+
+    def _check_choice(self, value, allowed, what):
+        if not isinstance(value, str) or value not in (allowed or ()):
+            raise _refuse(f"{what} not allowed by config: {value!r}")
+        return value
+
+    def _check_mcp(self, mcp_config, cfg):
+        if not isinstance(mcp_config, str) or not mcp_config:
+            raise _refuse("mcp_config is required")
+        path = Path(mcp_config).expanduser().resolve()
+        listed = {str(Path(e).expanduser().resolve()) for e in cfg.get("mcp_configs") or ()}
+        if str(path) not in listed:
+            raise _refuse(f"mcp_config not listed in config mcp_configs: {mcp_config}")
+        if not path.is_file():
+            raise _refuse(f"mcp_config is not a regular file: {mcp_config}")
+        return path
+
+    def _prompt_text(self, prompt, prompt_file, cfg):
+        if (prompt is None) == (prompt_file is None):
+            raise _refuse("exactly one of prompt or prompt_file is required")
+        if prompt is not None:
+            if not isinstance(prompt, str):
+                raise _refuse("prompt must be a string")
+            text = prompt
+        else:
+            text = self._file_arg(prompt_file, cfg, "prompt_file").read_text(encoding="utf-8")
+        if not text.strip():
+            raise _refuse("prompt must not be blank")
+        # Dash guard runs on the raw prompt text, before any handoff prefix.
+        if text.startswith("-"):
+            raise _refuse("prompt must not start with '-'")
+        return text
+
+    def _style_text(self, cfg):
+        style = cfg.get("style_file")
+        if not style:
+            return None
+        return Path(style).read_text(encoding="utf-8").strip()
+
+    def _handoff_arg(self, handoff, cfg):
+        if not isinstance(handoff, str) or not handoff:
+            raise _refuse("handoff must be a non-empty path string")
+        return self._file_arg(handoff, cfg, "handoff")
+
+    # ---- one audit wrapper over every action (R-5) ---------------------
+
+    @staticmethod
+    def _caller():
+        frame = sys._getframe(1)
+        for _ in range(8):
+            if frame is None or Path(frame.f_code.co_filename).name != "sessions.py":
+                break
+            frame = frame.f_back
+        return f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno}" if frame else "unknown"
+
+    def _audit(self, action, name, ok, reason, session_id, argv):
+        entry = {"ts": self._now(), "action": action, "name": _scrub(str(name))[:80],
+                 "session_id": session_id, "ok": bool(ok),
+                 "reason": _scrub(reason) if reason else None, "caller": self._caller()}
+        if argv is not None:
+            entry["argv"] = list(argv)
+        append_private(self._sessions / "audit.log", json.dumps(_scrub(entry)) + "\n")
+
+    def _action(self, action, name, fn, *, dry=False):
+        """Run one action; every outcome - success, refusal, timeout, OSError,
+        subprocess failure - leaves exactly one scrubbed audit JSON line (no
+        line at all on a dry run, which stays side-effect free, D-2918)."""
+        try:
+            result = fn()
+        except ParameterRefused as exc:
+            if not dry:
+                self._audit(action, name, False, str(exc), None, None)
+            raise
+        except subprocess.TimeoutExpired as exc:
+            self._audit(action, name, False, f"timeout after {exc.timeout}s", None, None)
+            raise subprocess.TimeoutExpired(_scrub(exc.cmd), exc.timeout) from None
+        except _ActionFailed as exc:
+            self._audit(action, name, False, str(exc), None, None)
+            return _scrub({"ok": False, "name": name, "session_id": None})
+        except (OSError, subprocess.SubprocessError) as exc:
+            self._audit(action, name, False, f"{type(exc).__name__}: {exc}", None, None)
+            return _scrub({"ok": False, "name": name, "session_id": None})
+        if dry:
+            return _scrub(result)
+        argv = result.pop("_audit_argv", None)
+        self._audit(action, name, True, None, result.get("session_id"), argv)
+        return _scrub(result)
+
+    # ---- storage -------------------------------------------------------
+
+    def _record_path(self, name):
+        return self._sessions / f"{name}.json"
+
+    def _marker_path(self, name):
+        return self._sessions / f"{name}.ready.json"
+
+    def _all_records(self):
         out = []
-        for p in sorted(self.sessions_dir.glob("*.json")):
-            data = self._read_json(p)
-            if not p.name.endswith(".ready.json") and data and isinstance(data.get("name"), str):
-                out.append(data)
+        try:
+            paths = sorted(self._sessions.glob("*.json"))
+        except OSError:
+            return out
+        for path in paths:
+            if path.name.endswith(".ready.json"):
+                continue
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
         return out
 
-    def _audit(self, action, name, session_id, ok, reason=None, argv=None):
-        """One JSON line per action; argv keeps only '<N chars>' where the prompt was."""
-        line = {"ts": self.now(), "action": action, "name": name, "session_id": session_id, "ok": bool(ok),
-                "caller": os.environ.get("PLANGRAPH_PRINCIPAL") or os.environ.get("USER") or "unknown",
-                "reason": reason, **({"argv": list(argv)} if argv is not None else {})}
-        append_private(self.sessions_dir / "audit.log", json.dumps(_scrub(line)) + "\n")
+    def _find_record(self, name, session_id):
+        if name:
+            try:
+                rec = json.loads(self._record_path(name).read_text(encoding="utf-8"))
+                return rec if isinstance(rec, dict) else None
+            except (OSError, ValueError):
+                return None
+        for rec in self._all_records():
+            if session_id and rec.get("session_id") == session_id:
+                return rec
+        return None
+
+    def _write_record(self, rec):
+        atomic_write_private(self._record_path(rec.get("name")), json.dumps(_scrub(rec)) + "\n")
+
+    # ---- subprocess argv construction (D-2873) -------------------------
+
+    def _claude_head(self):
+        if self._platform != "win32":
+            return ["claude"]
+        # A .cmd/.bat shim would let cmd.exe parse the prompt: only the real
+        # .exe is ever handed to CreateProcess or Windows Terminal (R-9).
+        resolved = self._which("claude")
+        if not resolved:
+            raise _refuse("claude not found on PATH; refusing shim-less Windows launch")
+        if not str(resolved).endswith(".exe"):
+            raise _refuse(f"claude must resolve to an .exe, not a shim: {resolved}")
+        return [str(resolved)]
+
+    def _build_argv(self, name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg):
+        head = self._claude_head()
+        tail = ["--strict-mcp-config", "--mcp-config", str(mcp_path),
+                "--remote-control", name, "-n", name,
+                "--model", model, "--effort", effort, "--permission-mode", mode]
+        if style:
+            tail += ["--append-system-prompt", style]
+        tail += [prompt_arg]
+        bg_argv = head + ["--bg"] + tail
+        wt_argv = ["wt.exe", "-w", "0", "new-tab", "--title", name,
+                   "-d", str(cwd_path)] + head + tail
+        cap = cfg.get("ctx_cap_tokens") or 200000
+        compact = cfg.get("compact_window") or str(int(round(float(cap) * 1.1)))
+        env = {**os.environ, "FLEET_SESSION_NAME": name,
+               "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}
+        launcher = "wt" if (self._platform == "win32" and cfg.get("windows_launcher") == "wt") else "bg"
+        return bg_argv, wt_argv, env, launcher
+
+    def _launch_run_kw(self, env):
+        kw = {"capture_output": True, "text": True, "env": env, "timeout": LAUNCH_TIMEOUT}
+        if self._platform == "win32":
+            kw["creationflags"] = DETACHED
+        return kw
+
+    @staticmethod
+    def _shown(argv, prompt_arg):
+        shown = list(argv)
+        shown[-1] = f"<{len(prompt_arg)} chars>"
+        return shown
 
     def _agents_rows(self):
         try:
-            p = self.run(["claude", "agents", "--json"], capture_output=True, text=True, timeout=RESOLVE_CALL_TIMEOUT)
-            rows = json.loads(p.stdout) if p.returncode == 0 else []
-        except (OSError, ValueError, subprocess.SubprocessError):
-            rows = []
-        return [r for r in (rows if isinstance(rows, list) else []) if isinstance(r, dict) and isinstance(r.get("sessionId"), str)]
+            proc = self._run(["claude", "agents", "--json"], capture_output=True, text=True, timeout=STOP_TIMEOUT)
+            rows = json.loads(proc.stdout or "[]")
+            return rows if isinstance(rows, list) else []
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return []
 
-    def _resolve(self, stdout, name, launched_ms, launcher):
-        short = None
-        if launcher != "wt":  # wt has no stdout: name + startedAt lookup only
-            m, s = UUID.search(stdout or ""), SHORT_ID.search(stdout or "")
-            if m:
-                return m.group(0)
-            short = s.group(1) if s else None
-        deadline = time.monotonic() + self.resolve_budget
-        while True:
-            rows = self._agents_rows()
-            if short:
-                hit = [r for r in rows if r.get("id") == short or r["sessionId"].startswith(short)]
-            else:  # newest fresh background row; a stale same-name session never matches
-                hit = sorted([r for r in rows if r.get("name") == name and r.get("kind") == "background"
-                              and (_started_ms(r) or -1) >= launched_ms - STARTED_SLACK_MS], key=_started_ms, reverse=True)[:1]
-            if hit and UUID.fullmatch(hit[0]["sessionId"]): return hit[0]["sessionId"]
-            if time.monotonic() + RESOLVE_WAIT >= deadline:
-                return None
-            time.sleep(RESOLVE_WAIT)
+    def _resolve_id(self, name, stdout, exclude=None):
+        """Map a just-launched session to its real session id. A full UUID in
+        the launcher's own stdout wins outright; otherwise `claude agents`
+        resolves the short id, falling back to name + startedAt (R-13). The
+        previous session id is excluded from every agents lookup so a relaunch
+        can never resolve to the session it replaced."""
+        found = UUID_RE.search(stdout or "")
+        if found:
+            return found.group(0)
+        rows = self._agents_rows()
+        short = SHORT_RE.search(stdout or "")
+        if short:
+            for row in rows:
+                if str(row.get("id") or "") == short.group(1) and row.get("sessionId") != exclude:
+                    return row.get("sessionId")
+        cutoff = self._now() * 1000.0 - self._resolve_budget * 1000.0
+        best = None
+        for row in rows:
+            if row.get("name") != name or row.get("kind") != "background":
+                continue
+            sid = row.get("sessionId")
+            if not sid or sid == exclude:
+                continue
+            started = row.get("startedAt") or 0
+            if started < cutoff:
+                continue
+            if best is None or started >= (best.get("startedAt") or 0):
+                best = row
+        return best.get("sessionId") if best else None
 
-    def launch(self, name, cwd, model, effort, mcp_config, permission_mode, prompt=None, prompt_file=None,
-               handoff=None, parent=None, dry_run=False, children=None, audit=True):
-        cfg = _load_config(self.config_path)  # fail closed before anything runs
-        _check_name(name)
-        if parent is not None:
-            _check_name(parent, "parent")
-        root = _inside_roots(cwd, cfg["cwd_roots"])
-        text, source = _read_prompt(prompt, prompt_file)
-        mcp = _match_mcp(mcp_config, cfg["mcp_configs"])
-        for key, val, allowed in (("model", model, cfg["models"]), ("effort", effort, cfg["efforts"]),
-                                  ("permission_mode", permission_mode, cfg["permission_modes"])):
-            if val not in allowed: raise ParameterRefused(f"{key} {val!r} not in config allowlist")
-        hand = _readable_file(handoff, "handoff") if handoff else None
-        launcher = cfg.get("windows_launcher", "bg")
-        prompt_argv = (f"Restart from handoff {hand}.\n\n" + text) if hand else text
-        env = dict(os.environ, CLAUDE_CODE_AUTO_COMPACT_WINDOW=str(cfg.get("compact_window", "330000")), FLEET_SESSION_NAME=name)
-        argv = build_cmd(name, str(root), model, effort, mcp, permission_mode, prompt_argv,
-                         _read_style(cfg.get("style_file")), self.platform, launcher)
-        shown = argv[:-1] + [f"<{len(argv[-1])} chars>"]  # prompt never reaches logs
-        if dry_run:  # D-2918: nothing written, nothing started
-            return {"argv": shown, "cwd": str(root), "env_keys": sorted(env)}
-        if source is None:  # inline prompts get a 0600 file
-            atomic_write_private(self._path(name, ".prompt.txt"), text)
-        prompt_out = source or str(self._path(name, ".prompt.txt"))
-        flags = {"creationflags": DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP} if self.platform == "win32" else {}
-        launched_ms, stdout = int(self.now() * 1000), ""
-        if self.platform == "win32" and launcher == "wt":
-            self.popen(argv, cwd=str(root), env=env, **flags)  # detached, no wait
+    def _run_launch(self, name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg):
+        """Start the session; returns (session_id, warning). Raises _ActionFailed
+        on a non-zero exit and TimeoutExpired / OSError upward to the wrapper."""
+        if launcher == "wt":
+            kw = {k: v for k, v in self._launch_run_kw(env).items() if k not in ("capture_output", "text")}
+            self._popen(wt_argv, cwd=str(cwd_path), **kw)
+            # wt only exposes name + startedAt; the launcher's stdout is ignored.
+            sid = self._resolve_id(name, "")
         else:
-            p = self.run(argv, cwd=str(root), env=env, capture_output=True, text=True, **flags)
-            stdout = p.stdout or ""
-            if p.returncode != 0:
-                if audit:
-                    self._audit("launch", name, None, False, f"exit {p.returncode}", shown)
-                return {"ok": False, "name": name, "error": f"claude exited {p.returncode}", "session_id": None}
-        session_id = self._resolve(stdout, name, launched_ms, launcher)
-        warning = None if session_id else f"no session id for {name}; stop will refuse"
-        record = {"name": name, "cwd": str(root), "model": model, "effort": effort, "mcp": str(mcp),
-                  "prompt_file": prompt_out, "handoff": str(hand) if hand else None, "parent": parent,
-                  "children": list(children or []), "ts": int(self.now()), "session_id": session_id,
-                  "job_id": session_id[:8] if session_id else None, "permission_mode": permission_mode,
-                  "platform": self.platform, "launcher": launcher, "stopped_ts": None}
-        atomic_write_private(self._path(name, ".json"), json.dumps(_scrub(record), indent=1))
-        if audit:
-            self._audit("launch", name, session_id, True, warning, shown)
-        result = {"ok": True, "name": name, "session_id": session_id, "record": str(self._path(name, ".json"))}
-        return dict(result, warning=warning) if warning else result
+            proc = self._run(bg_argv, cwd=str(cwd_path), **self._launch_run_kw(env))
+            if proc.returncode != 0:
+                raise _ActionFailed(f"claude exited {proc.returncode}")
+            sid = self._resolve_id(name, proc.stdout or "")
+        return sid, (None if sid else "session id could not be resolved")
 
-    def stop(self, name=None, session_id=None, audit=True):
-        if name is None and session_id is None:
-            raise ParameterRefused("stop needs a name or id")
-        rec, label = None, name
-        if name is not None:
-            _check_name(name)
-            rec = self._read_json(self._path(name, ".json"))
-        else:
-            rec = next((c for c in self._records() if session_id in (c.get("session_id"), c.get("job_id"))), None)
-            label = rec["name"] if rec else name
-        if rec is None:
-            raise ParameterRefused(f"unknown session {name or session_id!r}")
-        _check_name(label)
-        sid = rec.get("session_id")
-        if not sid:
-            raise ParameterRefused(f"session {label!r} has no session id")
-        p = self.run(["claude", "stop", sid], capture_output=True, text=True)  # never rm, never kill
-        if p.returncode != 0:
-            if audit:
-                self._audit("stop", label, sid, False, f"exit {p.returncode}")
-            raise ParameterRefused(f"stop failed for {label!r}: exit {p.returncode}")
-        rec["stopped_ts"] = self.now()
-        atomic_write_private(self._path(label, ".json"), json.dumps(_scrub(rec), indent=1))
-        if audit:
-            self._audit("stop", label, sid, True, None)
-        return {"ok": True, "name": label, "session_id": sid, "stopped_ts": rec["stopped_ts"]}
+    # ---- actions -------------------------------------------------------
 
-    def relaunch(self, name, handoff=None, force=False):
-        _load_config(self.config_path)  # fail closed: a relaunch is a launch
-        _check_name(name)
-        rec = self._read_json(self._path(name, ".json"))
-        if rec is None:
-            raise ParameterRefused(f"unknown session {name!r}")
-        hand = None
-        if not force:
-            marker = self._read_json(self._path(name, ".ready.json"))
-            if marker is None:
-                raise ParameterRefused(f"ready marker missing for {name!r}; pass force to relaunch")
-            hand = marker.get("handoff")
-            try:
-                fresh = bool(hand) and Path(hand).is_file() and Path(hand).stat().st_mtime > rec.get("ts", 0)
-            except OSError:
-                fresh = False
-            if not fresh:
-                raise ParameterRefused(f"marker handoff {hand!r} missing or not newer than session ts")
-        hand = handoff or hand or rec.get("handoff")
-        self.stop(name=name, audit=False)  # failure to stop refuses; nothing is launched
-        result = self.launch(name=name, cwd=rec["cwd"], model=rec["model"], effort=rec["effort"],
-                             mcp_config=rec["mcp"], permission_mode=rec["permission_mode"],
-                             prompt_file=rec["prompt_file"], handoff=hand, parent=rec.get("parent"),
-                             children=rec.get("children") or [], audit=False)
-        self._path(name, ".ready.json").unlink(missing_ok=True)  # marker consumed
-        self._audit("relaunch", name, result.get("session_id"), result.get("ok", False), result.get("warning") or result.get("error"))
+    def launch(self, *, name, cwd, model, effort, permission_mode, mcp_config,
+               prompt=None, prompt_file=None, handoff=None, parent=None, dry_run=False):
+        return self._action("launch", name, lambda: self._launch_inner(
+            name, cwd, model, effort, permission_mode, mcp_config,
+            prompt, prompt_file, handoff, parent, dry_run), dry=dry_run is True)
+
+    def _launch_inner(self, name, cwd, model, effort, permission_mode, mcp_config,
+                      prompt, prompt_file, handoff, parent, dry_run):
+        if not isinstance(dry_run, bool):
+            raise _refuse("dry_run must be a real boolean")
+        cfg = self._load_config()
+        name = self._check_name(name)
+        cwd_path = self._check_cwd(cwd, cfg)
+        model = self._check_choice(model, cfg.get("models"), "model")
+        effort = self._check_choice(effort, cfg.get("efforts"), "effort")
+        mode = self._check_choice(permission_mode, cfg.get("permission_modes"), "permission_mode")
+        mcp_path = self._check_mcp(mcp_config, cfg)
+        text = self._prompt_text(prompt, prompt_file, cfg)
+        handoff_path = self._handoff_arg(handoff, cfg) if handoff is not None else None
+        prompt_arg = (f"Restart from handoff {handoff_path}.\n\n" + text) if handoff_path else text
+        style = self._style_text(cfg)
+        bg_argv, wt_argv, env, launcher = self._build_argv(
+            name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
+        if dry_run:
+            # D-2918: a refusing dry run is still dry; a passing one writes
+            # nothing either - planned argv, cwd and env keys only.
+            return {"argv": self._shown(bg_argv, prompt_arg), "cwd": str(cwd_path),
+                    "env_keys": sorted(k for k in ("FLEET_SESSION_NAME", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"))}
+        sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
+        prompt_path = self._sessions / f"{name}.prompt.txt"
+        atomic_write_private(prompt_path, text)
+        rec = {"name": name, "cwd": str(cwd_path), "model": model, "effort": effort,
+               "mcp": str(mcp_path), "prompt_file": str(prompt_path),
+               "handoff": str(handoff_path) if handoff_path else None,
+               "parent": parent, "children": [], "ts": self._now(),
+               "session_id": sid, "job_id": sid[:8] if sid else None,
+               "permission_mode": mode, "platform": self._platform,
+               "launcher": launcher, "stopped_ts": None}
+        self._write_record(rec)
+        result = {"ok": True, "name": name, "session_id": sid,
+                  "_audit_argv": self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)}
+        if warning:
+            result["warning"] = warning
         return result
 
+    def stop(self, name=None, session_id=None):
+        return self._action("stop", name or session_id or "", lambda: self._stop_inner(name, session_id))
+
+    def _stop_inner(self, name, session_id):
+        if not name and not session_id:
+            raise _refuse("stop needs a name or id")
+        if name:
+            self._check_name(name)
+        rec = self._find_record(name, session_id)
+        if rec is None:
+            raise _refuse(f"unknown session: {name or session_id}")
+        sid = rec.get("session_id")
+        if not sid:
+            raise _refuse(f"no session id recorded for {rec.get('name')}")
+        self._stop_record(rec)
+        return {"ok": True, "name": rec.get("name"), "session_id": sid}
+
+    def _stop_record(self, rec):
+        """claude stop <id> - the one and only stop mechanism, never rm/kill."""
+        proc = self._run(["claude", "stop", rec.get("session_id")],
+                         capture_output=True, text=True, timeout=STOP_TIMEOUT)
+        if proc.returncode != 0:
+            raise _refuse(f"stop failed: claude stop exited {proc.returncode}")
+        rec["stopped_ts"] = self._now()
+        self._write_record(rec)
+
     def mark_ready(self, name, handoff, card=None):
-        _check_name(name)
-        hand = _readable_file(handoff, "handoff")
-        path = self._path(name, ".ready.json")
-        atomic_write_private(path, json.dumps(_scrub({"handoff": str(hand), "card": card, "ts": self.now()}), indent=1))
-        rec = self._read_json(self._path(name, ".json")) or {}
-        self._audit("mark_ready", name, rec.get("session_id"), True, None)
-        return {"ok": True, "name": name, "marker": str(path)}
+        return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
+
+    def _mark_ready_inner(self, name, handoff, card):
+        cfg = self._load_config()
+        # The handoff is checked first: a bad handoff is the caller's error to
+        # see, whatever the session state is.
+        handoff_path = self._handoff_arg(handoff, cfg)
+        self._check_name(name)
+        if self._find_record(name, None) is None:
+            raise _refuse(f"unknown session: {name}")
+        marker = {"handoff": str(handoff_path), "card": card, "ts": self._now()}
+        atomic_write_private(self._marker_path(name), json.dumps(_scrub(marker)) + "\n")
+        return {"ok": True, "name": name, "handoff": str(handoff_path)}
+
+    def relaunch(self, name, handoff=None, force=False):
+        return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff, force))
+
+    def _relaunch_handoff(self, rec, cfg, name, handoff, force):
+        """Effective relaunch handoff: the argument wins, else the ready marker.
+        Freshness is waived under force, never existence or containment. A bare
+        forced relaunch carries no handoff at all - never the record's old one."""
+        if handoff is not None:
+            path = self._handoff_arg(handoff, cfg)
+        else:
+            marker_path = self._marker_path(name)
+            if not marker_path.is_file():
+                if force:
+                    return None
+                raise _refuse("ready marker required to relaunch; pass force=True to relaunch bare")
+            try:
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                marker = {}
+            raw = marker.get("handoff")
+            if not isinstance(raw, str) or not raw:
+                raise _refuse("ready marker handoff must be a path string")
+            path = self._handoff_arg(raw, cfg)
+        if not force and path.stat().st_mtime < float(rec.get("ts") or 0):
+            raise _refuse(f"handoff is not newer than the session record: {path}")
+        return path
+
+    def _relaunch_inner(self, name, handoff, force):
+        if not isinstance(force, bool):
+            raise _refuse("force must be a real boolean")
+        cfg = self._load_config()
+        name = self._check_name(name)
+        rec = self._find_record(name, None)
+        if rec is None:
+            raise _refuse(f"unknown session: {name}")
+        handoff_path = self._relaunch_handoff(rec, cfg, name, handoff, force)
+        # The stored launch spec is re-validated in full BEFORE the old session
+        # is stopped: a relaunch must never cost the user their session.
+        prompt_path = Path(rec.get("prompt_file") or "")
+        if not str(rec.get("prompt_file") or "") or not prompt_path.is_file():
+            raise _refuse(f"prompt_file is missing for session {name}: {rec.get('prompt_file')}")
+        text = prompt_path.read_text(encoding="utf-8")
+        if text.startswith("-"):
+            raise _refuse("prompt must not start with '-'")
+        cwd_path = self._check_cwd(rec.get("cwd"), cfg)
+        model = self._check_choice(rec.get("model"), cfg.get("models"), "model")
+        effort = self._check_choice(rec.get("effort"), cfg.get("efforts"), "effort")
+        mode = self._check_choice(rec.get("permission_mode"), cfg.get("permission_modes"), "permission_mode")
+        mcp_path = self._check_mcp(rec.get("mcp"), cfg)
+        prompt_arg = (f"Restart from handoff {handoff_path}.\n\n" + text) if handoff_path else text
+        style = self._style_text(cfg)
+        bg_argv, wt_argv, env, launcher = self._build_argv(
+            name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
+        old_sid = rec.get("session_id")
+        if old_sid and rec.get("stopped_ts") is None:
+            self._stop_record(rec)  # raises "stop failed" -> nothing is launched
+        try:
+            sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
+        except _ActionFailed:
+            # The old session is already stopped: keep its record (with
+            # stopped_ts) and the ready marker so a plain retry can relaunch.
+            raise
+        rec.update({"session_id": sid, "job_id": sid[:8] if sid else None,
+                    "stopped_ts": None, "ts": self._now(),
+                    "handoff": str(handoff_path) if handoff_path else None,
+                    "launcher": launcher})
+        self._write_record(rec)
+        self._marker_path(name).unlink(missing_ok=True)
+        result = {"ok": True, "name": name, "session_id": sid,
+                  "_audit_argv": self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)}
+        if warning:
+            result["warning"] = warning
+        return result
 
     def list(self):
-        try:
-            cap = _load_config(self.config_path).get("ctx_cap_tokens", 300000)
-        except ParameterRefused:
-            cap = 300000
+        return self._action("list", "", self._list_inner)
+
+    def _list_inner(self):
+        cfg = self._load_config()
+        cap = cfg.get("ctx_cap_tokens") or 200000
         rows = self._agents_rows()
-        out = []
-        for rec in self._records():
+        sessions = []
+        for rec in self._all_records():
             sid = rec.get("session_id")
-            row = next((r for r in rows if r.get("sessionId") == sid), None) if sid else None
-            toks = context_tokens(rec.get("cwd"), sid) if sid else None
-            out.append({"name": rec.get("name"), "id": sid, "cwd": rec.get("cwd"),
-                        "state": (row or {}).get("state") or ("stopped" if rec.get("stopped_ts") else "unknown"),
-                        "context_tokens": toks,
-                        "context_pct": (toks / cap) if isinstance(toks, int) and cap else None,
-                        "ready": self._path(rec.get("name"), ".ready.json").exists()})
-        return {"sessions": out}
+            agent = next((r for r in rows if (sid and r.get("sessionId") == sid)
+                          or (not sid and r.get("name") == rec.get("name"))), {})
+            tokens = self._context_tokens(rec.get("cwd"), sid)
+            sessions.append({
+                "name": rec.get("name"), "id": sid, "cwd": rec.get("cwd"),
+                "context_tokens": tokens, "context_pct": tokens / cap,
+                "state": agent.get("state") or ("stopped" if rec.get("stopped_ts") else "running"),
+                "ready": self._marker_path(rec.get("name")).is_file(),
+            })
+        return {"sessions": sessions}
+
+    def _context_tokens(self, cwd, sid):
+        """Latest assistant usage in the transcript - the live context size."""
+        if not cwd or not sid:
+            return 0
+        try:
+            lines = transcript_path(cwd, sid).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return 0
+        total = 0
+        for line in lines:
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            usage = (obj.get("message") or {}).get("usage") if isinstance(obj, dict) else None
+            if isinstance(usage, dict):
+                total = sum(int(usage.get(key) or 0) for key in USAGE_KEYS)
+        return total

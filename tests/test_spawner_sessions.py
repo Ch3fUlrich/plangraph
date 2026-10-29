@@ -8,8 +8,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import stat
+import subprocess
+import sys
+import threading
+import time
 import types
 from pathlib import Path
 
@@ -74,16 +77,17 @@ def site(tmp_path, monkeypatch):
     cfg = tmp_path / "sessions.json"
     cfg.write_text(json.dumps({
         "cwd_roots": [str(root)], "models": [MODEL], "efforts": [EFFORT],
-        "permission_modes": [MODE], "mcp_configs": [str(mcp)], "ctx_cap_tokens": 300000}))
+        "permission_modes": [MODE], "mcp_configs": [str(mcp)], "ctx_cap_tokens": 300000,
+        "file_roots": [str(tmp_path)]}))
     return types.SimpleNamespace(tmp_path=tmp_path, home=home, root=root, proj=proj,
                                  mcp=mcp, cfg=cfg, state=tmp_path / "state")
 
 
 def make(site, run=None, popen=None, *, platform="linux", now=lambda: 1000.0,
-         resolve_budget=15.0, config_path=None):
+         resolve_budget=15.0, config_path=None, which=None):
     return Sessions(state_root=site.state, config_path=str(config_path or site.cfg),
                     run=run or FakeRun(), popen=popen or FakePopen(),
-                    now=now, platform=platform, resolve_budget=resolve_budget)
+                    now=now, platform=platform, resolve_budget=resolve_budget, which=which)
 
 
 def go(site, s, name="alpha", **over):
@@ -121,12 +125,13 @@ def test_argv_linux_is_list_no_shell(site):
 
 
 def test_argv_windows_bg_and_wt(site):
+    exe = str(site.tmp_path / "claude.exe")
     run = FakeRun(stdout="session " + UUID1)
     pop = FakePopen()
-    s = make(site, run, pop, platform="win32")
+    s = make(site, run, pop, platform="win32", which=lambda _: exe)
     go(site, s)
     argv, kw = run.calls[0]
-    assert argv[:2] == ["claude", "--bg"]
+    assert argv[:2] == [exe, "--bg"]  # the resolved .exe path is argv[0]
     assert kw["creationflags"] == DETACHED
     assert kw.get("shell") in (None, False)
     assert not pop.calls
@@ -135,11 +140,11 @@ def test_argv_windows_bg_and_wt(site):
     run2 = FakeRun(stdout="session " + UUID1, agents_rows=[
         {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
     pop2 = FakePopen()
-    s2 = make(site, run2, pop2, platform="win32", config_path=cfg2)
+    s2 = make(site, run2, pop2, platform="win32", config_path=cfg2, which=lambda _: exe)
     res = go(site, s2)
     wt_argv, wt_kw = pop2.calls[0]
     assert wt_argv[:9] == ["wt.exe", "-w", "0", "new-tab", "--title", "alpha",
-                           "-d", str(site.proj.resolve()), "claude"]
+                           "-d", str(site.proj.resolve()), exe]
     assert "--bg" not in wt_argv
     assert wt_argv[-1] == PROMPT
     assert wt_kw["creationflags"] == DETACHED
@@ -245,6 +250,8 @@ def test_dry_run_writes_nothing(site):
     assert res["cwd"] == str(site.proj.resolve())
     assert run.calls == [] and pop.calls == []
     sessions_dir = site.state / "sessions"
+    with pytest.raises(ParameterRefused, match="model"):
+        go(site, s, dry_run=True, model="gpt-4")  # a refusing dry run is still dry
     assert not sessions_dir.exists() or not any(sessions_dir.iterdir())
 
 
@@ -318,7 +325,10 @@ def test_stop_calls_claude_stop_never_rm(site):
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     stop_calls = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stop_calls == [["claude", "stop", UUID1]]
+    assert stop_calls == [["claude", "stop", UUID1]]  # exact argv, never rm/kill
+    assert run.calls[-1][0] == ["claude", "stop", UUID1]  # the only subprocess call of the stop
+    assert len(run.calls) == 2  # the earlier launch + exactly one stop call
+    assert run.calls[-1][1]["timeout"] == 30  # bounded stop timeout
     for argv, _ in run.calls:
         assert "rm" not in argv and "kill" not in argv and "-9" not in argv
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
@@ -401,7 +411,9 @@ def test_list_reports_context_tokens(site):
          "state": "running", "startedAt": 1_000_000}])
     s = make(site, run)
     go(site, s)
-    tdir = site.home / ".claude" / "projects" / re.sub(r"[/.]", "-", str(site.proj.resolve()))
+    # Claude maps every non-alphanumeric cwd char to "-"; spelled out here on
+    # purpose so the test never reuses the implementation's regex.
+    tdir = site.home / ".claude" / "projects" / "".join(ch if ch.isalnum() else "-" for ch in str(site.proj.resolve()))
     tdir.mkdir(parents=True)
     usage = lambda n: json.dumps({"type": "assistant", "message": {"usage": {
         "input_tokens": n, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 5}}})
@@ -432,6 +444,26 @@ def test_audit_and_record_hold_no_secret(site, monkeypatch):
     assert prompt not in audit_text         # prompt text never logged
     assert "sk-test-xyz" not in rec_text    # env value never recorded
     assert "sk-test-xyz" in (site.state / "sessions" / "alpha.prompt.txt").read_text()
+    # the secret must reach a recorded field: the ready-marker card (this
+    # assertion fails if _scrub is ever removed from the marker write)
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf), card="card holding sk-test-xyz")
+    marker_text = (site.state / "sessions" / "alpha.ready.json").read_text()
+    assert "sk-test-xyz" not in marker_text
+    assert "[autoos:redacted]" in marker_text
+    # error text scrubbed before it reaches the caller
+    with pytest.raises(ParameterRefused) as exc:
+        go(site, s, mcp_config=str(site.tmp_path / "sk-test-xyz.json"))
+    assert "sk-test-xyz" not in str(exc.value)
+    # returned results scrubbed too (the style text reaches the dry-run argv)
+    style = site.tmp_path / "style.txt"
+    style.write_text("be terse with sk-test-xyz")
+    cfg2 = site.tmp_path / "sessions-secret.json"
+    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    res = go(site, make(site, FakeRun(), config_path=cfg2), prompt="abc", dry_run=True)
+    assert "sk-test-xyz" not in json.dumps(res)
+    assert "[autoos:redacted]" in json.dumps(res)
 
 
 def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
@@ -473,3 +505,385 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
         assert refused["error"]["code"] == -32602
 
     asyncio.run(go_rpc())
+
+
+def test_config_requires_existing_real_files(site):
+    cfg = json.loads(site.cfg.read_text())
+    bad = site.tmp_path / "sessions-bad.json"
+    bad.write_text(json.dumps({**cfg, "mcp_configs": [str(site.tmp_path / "ghost-mcp.json")]}))
+    s = make(site, FakeRun(), config_path=bad)
+    with pytest.raises(ParameterRefused, match="config"):
+        go(site, s)  # every configured entry must resolve to an existing regular file
+    gone = site.tmp_path / "gone.json"
+    gone.write_text("{}")
+    cfg2 = site.tmp_path / "sessions-gone.json"
+    cfg2.write_text(json.dumps({**cfg, "mcp_configs": [str(gone)]}))
+    s2 = make(site, FakeRun(), config_path=cfg2)
+    gone.unlink()
+    with pytest.raises(ParameterRefused, match="mcp_config"):
+        go(site, s2, mcp_config=str(gone))  # requested entry checked again at launch time
+    cfg3 = site.tmp_path / "sessions-dir.json"
+    cfg3.write_text(json.dumps({**cfg, "mcp_configs": [str(site.tmp_path)]}))
+    with pytest.raises(ParameterRefused, match="config"):
+        go(site, make(site, FakeRun(), config_path=cfg3))  # a directory is not a regular file
+
+
+def test_config_refuses_root_roots_and_bad_scalars(site):
+    cfg = json.loads(site.cfg.read_text())
+
+    def refused(over, match="config"):
+        bad = site.tmp_path / "sessions-bad.json"
+        bad.write_text(json.dumps({**cfg, **over}))
+        with pytest.raises(ParameterRefused, match=match):
+            go(site, make(site, FakeRun(), config_path=bad))
+
+    refused({"cwd_roots": ["/"]})  # a filesystem root would allow any cwd
+    refused({"cwd_roots": [str(site.mcp)]})  # a file is not a directory
+    refused({"cwd_roots": [str(site.tmp_path / "ghost-dir")]})  # must exist
+    refused({"file_roots": ["/"]})
+    refused({"style_file": "style.txt"})  # relative style file refused
+    refused({"style_file": str(site.tmp_path / "ghost-style.txt")})
+    refused({"compact_window": "33x"})
+    refused({"compact_window": 330000})
+    refused({"ctx_cap_tokens": 0})
+    refused({"ctx_cap_tokens": "300000"})
+    run = FakeRun()
+    s = make(site, run)
+    with pytest.raises(ParameterRefused, match="dry_run"):
+        go(site, s, dry_run=1)  # dry_run must be a real bool
+    with pytest.raises(ParameterRefused, match="force"):
+        s.relaunch("alpha", force=1)  # force must be a real bool
+    assert not run.calls
+
+
+def test_refuses_dash_prompt(site):
+    run = FakeRun()
+    s = make(site, run)
+    with pytest.raises(ParameterRefused, match="prompt"):
+        go(site, s, prompt="-n pwn --dangerously-skip-permissions")
+    pf = site.tmp_path / "flag-prompt.md"
+    pf.write_text("-flag in a file")
+    with pytest.raises(ParameterRefused, match="prompt"):
+        go(site, s, prompt=None, prompt_file=str(pf))
+    assert not run.calls
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX config ownership model")
+def test_config_trust_refuses_loose_permissions(site, monkeypatch):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    site.cfg.chmod(0o666)  # world-writable config: not ours to trust
+    with pytest.raises(ParameterRefused, match="config"):
+        go(site, s)
+    site.cfg.chmod(0o664)  # group-writable refused too
+    with pytest.raises(ParameterRefused, match="config"):
+        go(site, s)
+    site.cfg.chmod(0o600)
+    go(site, s)  # owner-only config launches fine
+    st = site.cfg.stat()
+    monkeypatch.setattr(os, "getuid", lambda: st.st_uid + 1)  # foreign owner refused
+    with pytest.raises(ParameterRefused, match="config"):
+        go(site, s, name="beta")
+
+
+def test_files_must_stay_inside_roots(site, tmp_path_factory):
+    stray = tmp_path_factory.mktemp("stray")
+    outside_prompt = stray / "prompt.md"
+    outside_prompt.write_text("from outside")
+    outside_handoff = stray / "handoff.md"
+    outside_handoff.write_text("state")
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    with pytest.raises(ParameterRefused, match="prompt_file"):
+        go(site, s, prompt=None, prompt_file=str(outside_prompt))
+    with pytest.raises(ParameterRefused, match="handoff"):
+        go(site, s, handoff=str(outside_handoff))
+    with pytest.raises(ParameterRefused, match="handoff"):
+        s.mark_ready("alpha", str(outside_handoff))
+    with pytest.raises(ParameterRefused, match="handoff"):
+        s.relaunch("alpha", handoff=str(outside_handoff), force=True)
+    # file_roots (absolute dirs) admit them
+    cfg2 = site.tmp_path / "sessions-fr.json"
+    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "file_roots": [str(stray)]}))
+    s2 = make(site, FakeRun(stdout="session " + UUID1), config_path=cfg2)
+    res = go(site, s2, prompt=None, prompt_file=str(outside_prompt), handoff=str(outside_handoff))
+    assert res["ok"] is True
+
+
+def test_audit_on_refusals_name_truncated(site):
+    run = FakeRun()
+    s = make(site, run)
+    with pytest.raises(ParameterRefused, match="name"):
+        go(site, s, name="x" * 100)
+    with pytest.raises(ParameterRefused, match="unknown session"):
+        s.stop(name="ghost")
+    with pytest.raises(ParameterRefused, match="handoff"):
+        s.mark_ready("alpha", str(site.tmp_path / "ghost-handoff.md"))
+    with pytest.raises(ParameterRefused, match="unknown session"):
+        s.relaunch("ghost", force=True)
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert [l["action"] for l in lines] == ["launch", "stop", "mark_ready", "relaunch"]
+    assert all(l["ok"] is False and l["reason"] for l in lines)
+    assert lines[0]["name"] == "x" * 80  # name as given, truncated to 80 chars
+    assert not run.calls
+
+
+def test_mcp_session_dispatch_rejects_unknown_and_bad_args(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer, SESSION_TOOLS
+    tools = {t["name"]: t for t in SESSION_TOOLS}
+    assert tools["plangraph_session_launch"]["inputSchema"]["required"] == \
+        ["name", "cwd", "model", "effort", "mcp_config", "permission_mode"]
+    assert tools["plangraph_session_stop"]["inputSchema"].get("required", []) == []
+    assert tools["plangraph_session_relaunch"]["inputSchema"]["required"] == ["name"]
+    assert tools["plangraph_session_mark_ready"]["inputSchema"]["required"] == ["name", "handoff"]
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun(), session_popen=FakePopen())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        with pytest.raises(ValueError):
+            await server.call_tool("plangraph_session_bogus", {})  # unknown session tool
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_relaunch", {})  # never KeyError
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_launch", {
+                "name": "alpha", "cwd": 5, "model": MODEL, "effort": EFFORT,
+                "mcp_config": str(site.mcp), "permission_mode": MODE, "prompt": PROMPT})
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_launch", {
+                "name": "alpha", "cwd": str(site.proj), "model": MODEL, "effort": EFFORT,
+                "mcp_config": str(site.mcp), "permission_mode": MODE, "prompt": PROMPT,
+                "dry_run": "yes"})  # never TypeError
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_mark_ready", {"name": "alpha"})
+        with pytest.raises(ParameterRefused):
+            await server.call_tool("plangraph_session_stop", {"name": 7})
+
+    asyncio.run(go_rpc())
+
+
+def test_mcp_session_calls_never_block_the_loop(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    main_ident = threading.get_ident()
+    seen = {}
+
+    def run(argv, **kw):
+        seen["ident"] = threading.get_ident()
+        return types.SimpleNamespace(returncode=0, stdout=UUID1, stderr="")
+
+    server = MCPSpawnerServer(state=site.state, session_run=run, session_popen=FakePopen())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        res = await server.call_tool("plangraph_session_launch", {
+            "name": "alpha", "cwd": str(site.proj), "model": MODEL, "effort": EFFORT,
+            "mcp_config": str(site.mcp), "permission_mode": MODE, "prompt": PROMPT})
+        assert res["session_id"] == UUID1
+
+    asyncio.run(go_rpc())
+    assert seen["ident"] != main_ident  # Sessions ran via asyncio.to_thread
+
+
+def test_transcript_path_maps_every_non_alnum(site):
+    from plangraph.spawner.sessions import transcript_path
+    p = transcript_path("C:\\Users\\x\\my_proj", UUID1)
+    assert p.parent.name == "C--Users-x-my-proj"
+    assert p.name == UUID1 + ".jsonl"
+    p2 = transcript_path("/home/u/my_proj", UUID1)
+    assert p2.parent.name == "-home-u-my-proj"
+
+
+def test_windows_which_resolution(site):
+    exe = str(site.tmp_path / "claude.exe")
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run, platform="win32", which=lambda _: exe)
+    go(site, s)
+    assert run.calls[0][0][0] == exe  # the full .exe path is argv[0]
+    run2 = FakeRun(stdout="session " + UUID1)
+    s2 = make(site, run2, platform="win32", which=lambda _: exe)
+    go(site, s2, name="beta", prompt="do beta")
+    # a .cmd/.bat shim would let cmd.exe parse the prompt: refused
+    s3 = make(site, FakeRun(), platform="win32", which=lambda _: str(site.tmp_path / "claude.cmd"))
+    with pytest.raises(ParameterRefused, match="exe"):
+        go(site, s3, name="gamma", prompt="do gamma")
+    s4 = make(site, FakeRun(), platform="win32", which=lambda _: None)
+    with pytest.raises(ParameterRefused, match="claude"):
+        go(site, s4, name="delta", prompt="do delta")
+    # non-win32 never consults which
+    calls = []
+    s5 = make(site, FakeRun(stdout="session " + UUID1), which=lambda n: calls.append(n) or "/x/claude")
+    go(site, s5, name="eps", prompt="do eps")
+    assert calls == []
+
+
+def test_launcher_effective_wt_only_on_win32(site):
+    cfg2 = site.tmp_path / "sessions-wt2.json"
+    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[
+        {"id": SHORT, "sessionId": UUID1, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
+    s = make(site, run, platform="linux", config_path=cfg2)
+    res = go(site, s)
+    assert res["session_id"] == UUID1  # short id resolved: effective launcher is bg on linux
+    assert run.calls[0][0][:2] == ["claude", "--bg"]
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["launcher"] == "bg"
+
+
+def test_resolve_short_id_miss_falls_back_and_excludes(site):
+    row_new = {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}
+    # a short-id miss falls back to name + startedAt
+    run = FakeRun(stdout="backgrounded · 00000000 · alpha", agents_rows=[row_new])
+    res = go(site, make(site, run))
+    assert res["session_id"] == UUID2
+    # relaunch excludes the previous session id from every lookup
+    run2 = FakeRun(stdout="session " + UUID1)
+    s2 = make(site, run2, resolve_budget=0.0)
+    go(site, s2, name="beta", prompt="do beta")
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s2.mark_ready("beta", str(hf))
+    run2.stdout = "done\n"
+    run2.agents_rows = [{"id": "x", "sessionId": UUID1, "name": "beta", "kind": "background",
+                         "startedAt": 2_000_000}]
+    res2 = s2.relaunch("beta", force=True)
+    assert res2["session_id"] is None and "warning" in res2  # only the excluded row matched
+
+
+def test_timeout_expired_is_audited_failure(site):
+    class TimeoutRun(FakeRun):
+        def __call__(self, argv, **kw):
+            self.calls.append((list(argv), kw))
+            if argv[:2] == ["claude", "--bg"]:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+            return super().__call__(argv, **kw)
+
+    run = TimeoutRun()
+    s = make(site, run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        go(site, s)
+    assert [kw for argv, kw in run.calls if argv[:2] == ["claude", "--bg"]][0]["timeout"] == 60
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert len(lines) == 1 and lines[0]["action"] == "launch" and lines[0]["ok"] is False
+
+    class StopTimeout(FakeRun):
+        def __call__(self, argv, **kw):
+            self.calls.append((list(argv), kw))
+            if argv[:2] == ["claude", "stop"]:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+            return super().__call__(argv, **kw)
+
+    run2 = StopTimeout(stdout="session " + UUID1)
+    s2 = make(site, run2)
+    go(site, s2, name="beta", prompt="do beta")
+    with pytest.raises(subprocess.TimeoutExpired):
+        s2.stop(name="beta")
+    lines2 = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert lines2[-1]["action"] == "stop" and lines2[-1]["ok"] is False
+
+
+def test_wt_popen_oserror_returns_audited_failure(site):
+    class BrokenPopen(FakePopen):
+        def __call__(self, argv, **kw):
+            raise OSError(2, "no wt.exe")
+
+    cfg2 = site.tmp_path / "sessions-wt3.json"
+    cfg2.write_text(json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    exe = str(site.tmp_path / "claude.exe")
+    s = make(site, FakeRun(), BrokenPopen(), platform="win32", config_path=cfg2, which=lambda _: exe)
+    res = go(site, s)
+    assert res["ok"] is False and res["session_id"] is None
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert len(lines) == 1 and lines[0]["action"] == "launch" and lines[0]["ok"] is False
+
+
+def test_relaunch_force_without_handoff_launches_bare(site):
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("state at stop")
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s, handoff=str(hf))
+    assert run.launch_calls()[0][-1].startswith("Restart from handoff")  # first launch had one
+    res = s.relaunch("alpha", force=True)  # no marker, no handoff argument
+    assert res["ok"] is True
+    assert run.launch_calls()[-1][-1] == PROMPT  # bare: never the record's old handoff
+
+
+def test_relaunch_refuses_stale_handoff_real_clock(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run, now=lambda: time.time())
+    go(site, s)  # record ts is real wall clock
+    stale = site.tmp_path / "stale.md"
+    stale.write_text("old state")
+    os.utime(stale, (1_000_000, 1_000_000))  # strictly older than the record ts
+    fresh = site.tmp_path / "fresh.md"
+    fresh.write_text("new state")
+    s.mark_ready("alpha", str(fresh))
+    with pytest.raises(ParameterRefused, match="newer"):
+        s.relaunch("alpha", handoff=str(stale))  # supplied handoff older than record ts
+    os.utime(fresh, (1_000_000, 1_000_000))  # marker handoff goes stale too
+    with pytest.raises(ParameterRefused, match="newer"):
+        s.relaunch("alpha")
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+
+
+def test_relaunch_stale_handoff_ok_under_force(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run, now=lambda: time.time())
+    go(site, s)
+    stale = site.tmp_path / "stale.md"
+    stale.write_text("old state")
+    os.utime(stale, (1_000_000, 1_000_000))
+    res = s.relaunch("alpha", handoff=str(stale), force=True)  # force waives freshness
+    assert res["ok"] is True
+    assert run.launch_calls()[-1][-1] == f"Restart from handoff {stale.resolve()}.\n\n" + PROMPT
+
+
+def test_relaunch_marker_handoff_not_string_refuses(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    marker = site.state / "sessions" / "alpha.ready.json"
+    marker.write_text(json.dumps({"handoff": 1234, "card": None, "ts": 1000.0}))
+    with pytest.raises(ParameterRefused, match="handoff"):
+        s.relaunch("alpha")
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+
+
+def test_relaunch_validation_failure_stops_nothing(site, tmp_path_factory):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    stray = tmp_path_factory.mktemp("stray3")
+    bad = stray / "handoff.md"
+    bad.write_text("state")
+    with pytest.raises(ParameterRefused, match="handoff"):
+        s.relaunch("alpha", handoff=str(bad), force=True)  # handoff outside the roots
+    # a stored spec that no longer validates: nothing is stopped either
+    (site.state / "sessions" / "alpha.prompt.txt").unlink()
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("state")
+    s.mark_ready("alpha", str(hf))
+    with pytest.raises(ParameterRefused, match="prompt_file"):
+        s.relaunch("alpha")
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]  # nothing was stopped
+
+
+def test_relaunch_launch_failure_after_stop_keeps_record(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf))
+    run.launch_rc = 1  # the relaunch's claude exits 1 after the old one is stopped
+    run.stdout = "session " + UUID2
+    res = s.relaunch("alpha")
+    assert res["ok"] is False and res["session_id"] is None
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None  # record kept, stopped
+    assert (site.state / "sessions" / "alpha.ready.json").exists()  # a retry can relaunch
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert lines[-1]["action"] == "relaunch" and lines[-1]["ok"] is False
+    run.launch_rc = 0
+    retry = s.relaunch("alpha")  # marker survived: a plain retry works
+    assert retry["ok"] is True and retry["session_id"] == UUID2
