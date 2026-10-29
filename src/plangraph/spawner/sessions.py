@@ -414,19 +414,21 @@ class Sessions:
                 best = row
         return best.get("sessionId") if best else None
 
-    def _run_launch(self, name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg):
+    def _run_launch(self, name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg, exclude=None):
         """Start the session; returns (session_id, warning). Raises _ActionFailed
-        on a non-zero exit and TimeoutExpired / OSError upward to the wrapper."""
+        on a non-zero exit and TimeoutExpired / OSError upward to the wrapper.
+        `exclude` is the previous session id on a relaunch: it must never be
+        resolved as the new session's id (R-13)."""
         if launcher == "wt":
             kw = {k: v for k, v in self._launch_run_kw(env).items() if k not in ("capture_output", "text")}
             self._popen(wt_argv, cwd=str(cwd_path), **kw)
             # wt only exposes name + startedAt; the launcher's stdout is ignored.
-            sid = self._resolve_id(name, "")
+            sid = self._resolve_id(name, "", exclude)
         else:
             proc = self._run(bg_argv, cwd=str(cwd_path), **self._launch_run_kw(env))
             if proc.returncode != 0:
                 raise _ActionFailed(f"claude exited {proc.returncode}")
-            sid = self._resolve_id(name, proc.stdout or "")
+            sid = self._resolve_id(name, proc.stdout or "", exclude)
         return sid, (None if sid else "session id could not be resolved")
 
     # ---- actions -------------------------------------------------------
@@ -574,7 +576,8 @@ class Sessions:
         if old_sid and rec.get("stopped_ts") is None:
             self._stop_record(rec)  # raises "stop failed" -> nothing is launched
         try:
-            sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
+            sid, warning = self._run_launch(
+                name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg, exclude=old_sid)
         except _ActionFailed:
             # The old session is already stopped: keep its record (with
             # stopped_ts) and the ready marker so a plain retry can relaunch.
