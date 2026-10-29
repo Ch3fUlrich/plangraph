@@ -726,3 +726,43 @@ on the keeper's atomic `(item, run_id, phase)` idempotency key.
 # Review policy
 
 See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.
+
+## Claude Code sessions
+
+Five MCP tools drive real Claude Code sessions: `plangraph_session_launch`, `plangraph_session_stop`,
+`plangraph_session_relaunch`, `plangraph_session_mark_ready`, `plangraph_session_list`. Subprocesses
+are argv lists, never shell strings.
+
+Everything invalid is refused with `ParameterRefused` before anything runs: name outside
+`[a-z0-9][a-z0-9-]{0,63}`, cwd outside `cwd_roots`, model/effort/permission_mode missing from the
+config lists, unlisted `mcp_config`, anything but exactly one of `prompt`/`prompt_file`, a blank
+prompt or one starting with `-`, prompt/handoff outside `file_roots`, non-boolean `dry_run`/`force`,
+`stop` of a session without a resolved id, or `relaunch` without a ready marker unless `force=True`.
+
+The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG` (conventionally
+`~/.config/plangraph/sessions.json`): `cwd_roots`, `file_roots`, `models`, `efforts`,
+`permission_modes`, `mcp_configs`, `style_file`, `compact_window`, `ctx_cap_tokens`,
+`windows_launcher`. It fails closed - an unknown key, bad scalar or missing file refuses every
+action and there is no default model. On POSIX it must be owned by the current user and not
+group/world-writable (0600; looser modes are refused as untrusted).
+
+State lives under `<spawner state>/sessions/`: a `<name>.json` record per session, `<name>.prompt.txt`
+(0600), the `<name>.ready.json` marker (handoff, card), and `audit.log` - one scrubbed JSON line per
+action with the argv (prompt length only); a dry run writes nothing and leaves no audit line. Prompts,
+records and audit text pass the env redactor.
+
+`plangraph_session_mark_ready` writes the marker. Relaunch uses the `handoff` argument, else the
+marker's handoff; `force=True` waives only the freshness check (handoff newer than the record), never
+path containment, and with no marker it restarts bare rather than reusing the record's old handoff.
+The stored launch spec is re-validated before the old session is stopped (`claude stop`, never
+`rm`/`kill`), the previous session id is excluded when resolving the new one (UUID in launcher
+stdout, else short id, else the newest `background` row by name + startedAt near launch), and a
+post-stop launch failure keeps the record and marker for a retry.
+
+`plangraph_session_list` reports `context_tokens` (latest assistant usage sum - input + cache read +
+cache creation - from the transcript under `~/.claude/projects/`) and `context_pct` against `ctx_cap_tokens`.
+
+On Windows the launcher must be the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
+refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`, or with
+`windows_launcher: "wt"` in a detached `wt.exe` window that only exposes name + startedAt, so the
+id comes from `claude agents`.
