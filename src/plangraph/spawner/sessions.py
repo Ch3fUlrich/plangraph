@@ -40,6 +40,7 @@ NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 SHORT_RE = re.compile(r"backgrounded\s*\W*([0-9a-fA-F]{8})\b")
 USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+TAIL_BYTES = 256 * 1024  # spec: only the transcript's last 256 KB is read
 
 
 _SCRUB_KEYS = frozenset({"reason", "error", "warning", "card", "message", "argv"})
@@ -452,8 +453,9 @@ class Sessions:
         wt_tail = [arg.replace(";", "\\;") for arg in
                    ["--title", name, "-d", str(cwd_path)] + head + tail]
         wt_argv = ["wt.exe", "-w", "0", "new-tab"] + wt_tail
-        cap = cfg.get("ctx_cap_tokens") or 200000
-        compact = cfg.get("compact_window") or str(int(round(float(cap) * 1.1)))
+        # Spec defaults: ctx_cap_tokens 300000, compact_window "330000".
+        cap = cfg.get("ctx_cap_tokens") or 300000
+        compact = cfg.get("compact_window") or "330000"
         env = {**os.environ, "FLEET_SESSION_NAME": name,
                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}
         launcher = "wt" if (self._platform == "win32" and cfg.get("windows_launcher") == "wt") else "bg"
@@ -472,8 +474,12 @@ class Sessions:
         return shown
 
     def _agents_rows(self):
+        # Head resolution refusals propagate out (ParameterRefused is not one
+        # of the swallowed errors): polling must never fall back to a bare
+        # "claude" on win32 (R-9).
+        head = self._claude_head()
         try:
-            proc = self._run(["claude", "agents", "--json"], capture_output=True, text=True, timeout=STOP_TIMEOUT)
+            proc = self._run(head + ["agents", "--json"], capture_output=True, text=True, timeout=STOP_TIMEOUT)
             rows = json.loads(proc.stdout or "[]")
             return rows if isinstance(rows, list) else []
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -636,8 +642,9 @@ class Sessions:
         return {"ok": True, "name": name, "session_id": sid}
 
     def _stop_record(self, rec, name):
-        """claude stop <id> - the one and only stop mechanism, never rm/kill."""
-        proc = self._run(["claude", "stop", rec.get("session_id")],
+        """claude stop <id> - the one and only stop mechanism, never rm/kill.
+        The argv head is the resolved _claude_head() like every other call."""
+        proc = self._run(self._claude_head() + ["stop", rec.get("session_id")],
                          capture_output=True, text=True, timeout=STOP_TIMEOUT)
         if proc.returncode != 0:
             raise _refuse(f"stop failed: claude stop exited {proc.returncode}")
@@ -760,7 +767,7 @@ class Sessions:
 
     def _list_inner(self):
         cfg = self._load_config()
-        cap = cfg.get("ctx_cap_tokens") or 200000
+        cap = cfg.get("ctx_cap_tokens") or 300000
         rows = self._agents_rows()
         sessions = []
         for rec in self._all_records():
@@ -777,15 +784,21 @@ class Sessions:
         return {"sessions": sessions}
 
     def _context_tokens(self, cwd, sid):
-        """Latest assistant usage in the transcript - the live context size."""
+        """Latest assistant usage in the transcript - the live context size.
+        Only the last 256 KB of the file is read (the spec's tail window):
+        the latest usage sits near the end and transcripts grow unbounded,
+        so a full read would cost more forever for no extra signal."""
         if not cwd or not sid:
             return 0
         try:
-            lines = transcript_path(cwd, sid).read_text(encoding="utf-8").splitlines()
+            with transcript_path(cwd, sid).open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                fh.seek(max(0, fh.tell() - TAIL_BYTES))
+                blob = fh.read()
         except OSError:
             return 0
         total = 0
-        for line in lines:
+        for line in blob.decode("utf-8", errors="replace").splitlines():
             try:
                 obj = json.loads(line)
             except ValueError:

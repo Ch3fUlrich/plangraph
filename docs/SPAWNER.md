@@ -743,7 +743,8 @@ The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
 `~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `file_roots`, `models`,
 `efforts`, `permission_modes`, `mcp_configs`, `style_file`, `compact_window`, `ctx_cap_tokens`,
 `windows_launcher`. It fails closed - an unknown key, bad scalar or missing file refuses every
-action and there is no default model.
+action and there is no default model. When unset, `ctx_cap_tokens` defaults to 300000 and
+`compact_window` to `330000`.
 
 On POSIX (skipped on Windows) every file the config makes us obey must be ours alone: the config
 itself must not be a symlink and must be a regular file owned by the current user and not
@@ -768,10 +769,11 @@ stdout, else short id, else the newest `background` row by name + startedAt near
 post-stop launch failure keeps the record and marker for a retry.
 
 `plangraph_session_list` reports `context_tokens` (latest assistant usage sum - input + cache read +
-cache creation - from the transcript under `~/.claude/projects/`) and `context_pct`, a fraction in
-0..1 of the configured `ctx_cap_tokens`.
+cache creation - from the transcript under `~/.claude/projects/`, reading only the file's last
+256 KB) and `context_pct`, a fraction in 0..1 of the configured `ctx_cap_tokens`.
 
-On Windows the launcher must be the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
+On Windows every `claude` invocation - the launch, `claude stop` and the `claude agents` poll -
+must run the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
 refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`, or with
 `windows_launcher: "wt"` in a detached `wt.exe` window that only exposes name + startedAt, so the
 id comes from `claude agents`.

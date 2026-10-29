@@ -43,11 +43,21 @@ class FakeRun:
         assert isinstance(argv, list) and all(isinstance(a, str) for a in argv), "argv must be a list of str"
         assert kw.get("shell") in (None, False), "shell=True must never be used"
         self.calls.append((list(argv), kw))
-        if argv[:3] == ["claude", "agents", "--json"]:
+        if self._is_agents(argv):
             return types.SimpleNamespace(returncode=0, stdout=json.dumps(self.agents_rows), stderr="")
-        if argv[:2] == ["claude", "stop"]:
+        if self._is_stop(argv):
             return types.SimpleNamespace(returncode=self.stop_rc, stdout="", stderr="")
         return types.SimpleNamespace(returncode=self.launch_rc, stdout=self.stdout, stderr="")
+
+    # Dispatch on the tail and accept both the bare name and the resolved
+    # win32 .exe head, so the fakes model what production really runs.
+    @staticmethod
+    def _is_agents(argv):
+        return Path(argv[0]).name in ("claude", "claude.exe") and argv[1:3] == ["agents", "--json"]
+
+    @staticmethod
+    def _is_stop(argv):
+        return Path(argv[0]).name in ("claude", "claude.exe") and argv[1:2] == ["stop"]
 
     def launch_calls(self):
         return [argv for argv, _ in self.calls if argv[:2] == ["claude", "--bg"] or argv[0] == "wt.exe"]
@@ -448,6 +458,39 @@ def test_list_reports_context_tokens(site):
     assert s.list()["sessions"][0]["ready"] is True
 
 
+def test_spec_defaults_ctx_cap_and_compact_window(site):
+    cfg = json.loads(site.cfg.read_text())
+    cfg.pop("ctx_cap_tokens")  # spec defaults only when the config is silent
+    cfg2 = site.tmp_path / "sessions-defaults.json"
+    write_config(cfg2, json.dumps(cfg))
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run, config_path=cfg2)
+    go(site, s)
+    argv, kw = run.calls[0]
+    assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "330000"
+    tdir = site.home / ".claude" / "projects" / "".join(ch if ch.isalnum() else "-" for ch in str(site.proj.resolve()))
+    tdir.mkdir(parents=True)
+    (tdir / f"{UUID1}.jsonl").write_text(json.dumps({"type": "assistant", "message": {"usage": {
+        "input_tokens": 350, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 5}}}) + "\n")
+    row = s.list()["sessions"][0]
+    assert row["context_tokens"] == 365
+    assert row["context_pct"] == pytest.approx(365 / 300000)
+
+
+def test_context_tokens_reads_only_last_256kb(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    tdir = site.home / ".claude" / "projects" / "".join(ch if ch.isalnum() else "-" for ch in str(site.proj.resolve()))
+    tdir.mkdir(parents=True)
+    usage = json.dumps({"type": "assistant", "message": {"usage": {
+        "input_tokens": 900, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}})
+    filler = json.dumps({"type": "user", "message": {"content": "x" * 1024}}) + "\n"
+    (tdir / f"{UUID1}.jsonl").write_text(usage + "\n" + filler * 300)  # > 256 KB past the usage
+    row = s.list()["sessions"][0]
+    assert row["context_tokens"] == 0  # the 900-token line is outside the tail window
+
+
 def test_audit_and_record_hold_no_secret(site, monkeypatch):
     monkeypatch.setenv("OMNIROUTE_API_KEY", "sk-test-xyz")
     prompt = "ship the fix; secret sk-test-xyz must stay out of logs"
@@ -734,6 +777,31 @@ def test_windows_which_resolution(site):
     s5 = make(site, FakeRun(stdout="session " + UUID1), which=lambda n: calls.append(n) or "/x/claude")
     go(site, s5, name="eps", prompt="do eps")
     assert calls == []
+
+
+def test_win32_stop_argv_uses_resolved_exe(site):
+    exe = str(site.tmp_path / "claude.exe")
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run, platform="win32", which=lambda _: exe)
+    go(site, s)
+    res = s.stop(name="alpha")
+    assert res["ok"] is True
+    stops = [a for a, _ in run.calls if a[1:2] == ["stop"]]
+    assert stops == [[exe, "stop", UUID1]]  # the resolved .exe, never bare "claude"
+
+
+def test_win32_wt_id_resolution_polls_resolved_exe(site):
+    exe = str(site.tmp_path / "claude.exe")
+    cfg2 = site.tmp_path / "sessions-wt-resolve.json"
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
+    run = FakeRun(stdout="session " + UUID1, agents_rows=[
+        {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
+    pop = FakePopen()
+    s = make(site, run, pop, platform="win32", config_path=cfg2, which=lambda _: exe)
+    res = go(site, s)
+    assert res["session_id"] == UUID2
+    polls = [a for a, _ in run.calls if a[1:3] == ["agents", "--json"]]
+    assert polls and all(a[0] == exe for a in polls)  # the resolved .exe, never bare "claude"
 
 
 def test_launcher_effective_wt_only_on_win32(site):
@@ -1095,7 +1163,7 @@ def test_resolve_polls_every_half_second_until_budget(site):
             self.row_name = row_name
 
         def __call__(self, argv, **kw):
-            if argv[:3] == ["claude", "agents", "--json"]:
+            if self._is_agents(argv):
                 self.agents_calls += 1
                 if self.agents_calls >= 3:
                     self.agents_rows = [{"id": "f", "sessionId": UUID2, "name": self.row_name,
