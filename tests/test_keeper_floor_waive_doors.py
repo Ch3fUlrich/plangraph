@@ -62,7 +62,8 @@ def test_http_waive_floor_router_waives_then_commit_ci_verifies(tmp_path):
         rows = _floor_events(world)
         assert len(rows) == 1
         assert json.loads(rows[0]["payload"]) == {"decision": "D-3066",
-                                                 "sha_floor": None}
+                                                 "sha_floor": None,
+                                                 "epoch": epoch}
 
         # The waived legacy row now verifies on the same commit+ci evidence.
         world.store.ctx = make_ctx(git=RecGit(trailers={"Plan-Item": key}))
@@ -84,7 +85,8 @@ def test_http_waive_floor_with_sha_floor_is_recorded(tmp_path):
         assert body == {"key": key, "decision": "D-3066", "sha_floor": FLOOR_A}
         rows = _floor_events(world)
         assert json.loads(rows[0]["payload"]) == {"decision": "D-3066",
-                                                 "sha_floor": FLOOR_A}
+                                                 "sha_floor": FLOOR_A,
+                                                 "epoch": epoch}
     finally:
         _shutdown(world, srv, thread)
 

@@ -145,7 +145,9 @@ def test_only_router_can_waive(w, who):
 
 @pytest.mark.parametrize("decision",
                          ["3066", "d-3066", "D-x", "D-3066x", "D-3066 ",
-                          "D-", "", None])
+                          "D-", "", None,
+                          "D-\u0663\u0660\u0666\u0663",   # Arabic-Indic digits
+                          "D-\u07c8"])                      # NKO digit
 def test_bad_decision_id_is_a_validation_refusal(w, decision):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     legacy_row(w, key)
@@ -225,7 +227,59 @@ def test_replay_and_fold_stay_clean_with_floor_waived(w):
         "SELECT payload FROM events WHERE key=? AND type='floor_waived'",
         (key,)).fetchone()
     assert json.loads(row["payload"]) == {"decision": "D-3066",
-                                         "sha_floor": FLOOR_A}
+                                         "sha_floor": FLOOR_A,
+                                         "epoch": epoch}
+
+
+def test_waive_refused_when_a_valid_floor_is_recorded(w):
+    """F3: a recorded floor base is provenance the waiver may not erase."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    epoch = legacy_row(w, key)
+
+    # A release with a recorded base makes _bind_floor answer (base, True).
+    w.store.ctx = make_ctx(git=FakeGit(head=FLOOR_A, trailers={"Plan-Item": key}))
+    w.store.release(w.p("workerA"), key, epoch)
+    assert w.store._bind_floor(w.store._item(key)) == (FLOOR_A, True)
+
+    with pytest.raises(Refused) as exc_info:
+        w.store.waive_floor(w.p("router"), key, "D-3066")
+    assert exc_info.value.code == "bad_state"
+    assert w.conn.execute(
+        "SELECT COUNT(*) FROM events WHERE type='floor_waived'").fetchone()[0] == 0
+
+
+def test_pinned_sha_floor_may_not_be_waived_away(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    legacy_row(w, key)
+    w.store.waive_floor(w.p("router"), key, "D-3066", sha_floor=FLOOR_A)
+    assert w.store._bind_floor(w.store._item(key)) == (FLOOR_A, True)
+
+    with pytest.raises(Refused) as exc_info:
+        w.store.waive_floor(w.p("router"), key, "D-3067")
+    assert exc_info.value.code == "bad_state"
+
+
+@pytest.mark.parametrize("payload", ['[]', '"floor"', '{"decision": "D-3066"}',
+                                     '{"sha_floor": null}', '{"epoch": 2}',
+                                     '{"decision": "D-3066", "sha_floor": null}',
+                                     '{"decision": "D-3066", "epoch": 2}'])
+def test_malformed_waiver_payload_fails_closed(w, payload):
+    """F1: anything but the recorded payload shape never lifts the floor."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    epoch = legacy_row(w, key)
+    w.store.waive_floor(w.p("router"), key, "D-3066")
+    assert w.store._bind_floor(w.store._item(key)) == (None, False)
+
+    w.conn.execute("UPDATE events SET payload=? WHERE key=? AND type='floor_waived'",
+                   (payload, key))
+    w.conn.commit()
+    assert w.store._bind_floor(w.store._item(key)) == (None, True)   # fail closed
+
+    w.store.ctx = make_ctx(git=RecGit(trailers={"Plan-Item": key}))
+    out = w.store.add_evidence(w.p("workerA"), key, epoch, "commit+ci",
+                               {"commit": SHA})
+    assert out["verified"] is False
+    assert "no ancestry floor" in out["detail"]
 
 
 def test_bind_floor_shapes(w):

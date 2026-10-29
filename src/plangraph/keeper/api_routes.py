@@ -156,7 +156,11 @@ def _set_legacy_state(store, principal, body, need):
 
 
 def _waive_floor(store, principal, body, need):
-    # decision is validated by the verb after its role gate: a non-router gets 403 first
+    # Role first (403 before any body validation, like _phase_plan): a
+    # non-router must not learn which fields are missing before being
+    # refused.  The store verb re-checks the role itself; the decision is
+    # validated by the verb after its role gate.
+    store._require_role(principal, "router")
     return store.waive_floor(principal, need(body, "key"),
                              body.get("decision"), body.get("sha_floor"))
 
