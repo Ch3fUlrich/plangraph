@@ -44,6 +44,7 @@ HANDLERS = {
     "set-kind": cli_verbs.cmd_set_kind,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
+    "waive-floor": cli_verbs.cmd_waive_floor,
     "priority": cli_verbs.cmd_priority,
     "migrate-descriptions": cli_names.cmd_migrate_descriptions,
     "rehome": cli_names.cmd_rehome,
@@ -171,6 +172,13 @@ def _add_writes(sub):
     legacy.add_argument("key")
     legacy.add_argument("state", choices=("claimed", "in_review"))
     legacy.add_argument("note", nargs="?", default="")
+
+    waive_floor = _p(sub, "waive-floor",
+                     help="router: waive the ancestry floor for one legacy item (D-3066)")
+    waive_floor.add_argument("key")
+    waive_floor.add_argument("--decision", required=True, metavar="D-NNN")
+    waive_floor.add_argument("--sha-floor", dest="sha_floor", default=None,
+                             metavar="SHA", help="pin the floor to this commit instead of lifting it")
 
     _p(sub, "aliases", help="list old -> new keys left by rehome")
     _p(sub, "migrate-descriptions",

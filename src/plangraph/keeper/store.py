@@ -28,6 +28,7 @@ from .store_cards import CardsMixin
 from .store_close import CloseMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
+from .store_floor import FloorMixin
 from .store_input import InputMixin
 from .store_metrics import MetricsMixin
 from .store_names import NamesMixin
@@ -71,7 +72,8 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 
 class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
-            ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
+            ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin,
+            FloorMixin, OpsMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,

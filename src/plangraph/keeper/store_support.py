@@ -52,6 +52,36 @@ def _json_dict(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _waiver_payload(raw):
+    """The exact recorded ``floor_waived`` payload, or ``None`` if malformed.
+
+    A waiver lifts or pins the ancestry floor, so unlike ``_json_dict`` (whose
+    forgiving ``{}`` default would *lift* a floor on garbage) the payload must
+    parse to the recorded shape — a dict carrying ``decision``, ``sha_floor``
+    and the bound ``epoch`` — before its words are trusted.  Anything else is
+    tampering and fails closed in ``_bind_floor``.
+    """
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if "sha_floor" not in payload or "epoch" not in payload:
+        return None
+    if not isinstance(payload.get("decision"), str) or not payload["decision"]:
+        return None
+    return payload
+
+
+def _same_epoch(recorded, current):
+    """True when a waiver's recorded epoch is the item's current one."""
+    try:
+        return recorded is not None and int(recorded) == int(current)
+    except (TypeError, ValueError):
+        return False
+
+
 class SupportMixin:
     """Row hydration, event append and evidence-verification helpers."""
 
@@ -147,21 +177,53 @@ class SupportMixin:
         release or claim by another principal), its recorded ``base`` commit
         is returned as ``(base, True)``, or ``(None, True)`` if unrecorded
         or invalid (failing closed).
+
+        D-3066: a router ``floor_waived`` event is also a floor event — the
+        newest of released | foreign claimed | floor_waived decides.  A waiver
+        with a ``sha_floor`` becomes the floor (``(sha_floor, True)``: the
+        descend check runs against it); one without lifts the requirement
+        (``(None, False)``).  Any later release or foreign claim supersedes
+        the waiver automatically by being newer.
+
+        Two fail-closed rules keep a waiver from owning more than its own
+        claim (KEEPER-FLOOR-LEGACY-CLAIM round 1):
+
+        * a ``floor_waived`` payload that is not the recorded shape answers
+          ``(None, True)`` — tampering must never lift the floor;
+        * the waiver is bound to the claim ``epoch`` it was written for
+          (:meth:`...store_floor.FloorMixin._waive_floor` records it).  One
+          recorded for another epoch is stale and is *ignored*: the scan
+          continues with older floor events, and with none left the item is
+          in its fresh first-claim shape again.
         """
         claimant = item.get("claimed_by") or ""
-        row = self.conn.execute(
-            "SELECT payload FROM events WHERE key=? AND ("
-            "type='released' OR (type='claimed' AND COALESCE(actor, '') != ?))"
-            " ORDER BY seq DESC LIMIT 1",
+        rows = self.conn.execute(
+            "SELECT type, payload FROM events WHERE key=? AND ("
+            "type='released' OR type='floor_waived' OR "
+            "(type='claimed' AND COALESCE(actor, '') != ?))"
+            " ORDER BY seq DESC",
             (item["key"], claimant),
-        ).fetchone()
-        if row is None:
-            return (None, False)
-        payload = _json_dict(row["payload"])
-        base = payload.get("base") if isinstance(payload, dict) else None
-        if isinstance(base, str) and valid_commit_ref(base) and base == base.lower():
-            return (base, True)
-        return (None, True)
+        ).fetchall()
+        for row in rows:
+            if row["type"] == "floor_waived":
+                payload = _waiver_payload(row["payload"])
+                if payload is None:
+                    return (None, True)   # malformed waiver payload: fail closed
+                if not _same_epoch(payload.get("epoch"), item.get("epoch")):
+                    continue              # stale waiver: not this claim's floor
+                sha_floor = payload.get("sha_floor")
+                if sha_floor is None:
+                    return (None, False)
+                if isinstance(sha_floor, str) and valid_commit_ref(sha_floor) \
+                        and sha_floor == sha_floor.lower():
+                    return (sha_floor, True)
+                return (None, True)       # tampered sha_floor: fail closed
+            payload = _json_dict(row["payload"])
+            base = payload.get("base") if isinstance(payload, dict) else None
+            if isinstance(base, str) and valid_commit_ref(base) and base == base.lower():
+                return (base, True)
+            return (None, True)
+        return (None, False)
 
     def verify_chain(self):
         return events.verify_chain(self.conn)

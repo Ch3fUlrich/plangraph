@@ -281,6 +281,14 @@ def fold(events, unknown=None):
                 item["reviewer"] = None
                 item["lease_until"] = None
                 item["review_waiver"] = None
+        elif kind == "floor_waived":
+            # D-3066 (KEEPER-FLOOR-LEGACY-CLAIM): the router waived the
+            # ancestry floor so a legacy row can close.  Metadata only — no
+            # state, epoch, round, holder or token moves — so replay leaves the
+            # row untouched.  Branched (rather than left branchless like
+            # ``review_verdict``) so ``fold`` names every type it decided
+            # about.
+            pass
         elif kind == "waiver_set":
             item["review_waiver"] = payload.get("decision_id")
         elif kind == "cancelled":
