@@ -1253,8 +1253,8 @@ def test_exit_failure_reason_carries_claude_output(site):
 
 
 def test_docs_context_pct_fraction(site):
-    text = (Path(__file__).resolve().parents[1] / "docs" / "SPAWNER.md").read_text(encoding="utf-8")
-    section = text.split("## Claude Code sessions", 1)[1]
+    text = (Path(__file__).resolve().parents[1] / "docs" / "spawner-sessions.md").read_text(encoding="utf-8")
+    section = text.split("# Claude Code sessions", 1)[1]
     assert "context_pct" in section and "fraction" in section and "0..1" in section
 
 
