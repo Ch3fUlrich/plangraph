@@ -118,31 +118,48 @@ class VerbsMixin:
                 "detail": result.detail, "ref": result.ref or ref or {}}
 
     # ------------------------------------------------------------ claim
-    def claim(self, principal, key, lease_s=None):
+    def claim(self, principal, key, lease_s=None, force_stale=None):
+        """TASK-CONTEXT-GUARD: a stale claim is refused unless *force_stale*."""
         return self._run(principal, "claim", key,
-                         lambda now: self._claim(principal, key, lease_s, now))
+                         lambda now: self._claim(principal, key, lease_s, now,
+                                                 force_stale=force_stale))
 
     def worker_claim_lease(self, principal, key, lease_s=None):
         return self._run(principal, "claim", key,
                          lambda now: self._claim(principal, key, lease_s, now, allow_system=True))
 
-    def _claim(self, principal, key, lease_s, now, *, allow_system=False):
+    def _claim(self, principal, key, lease_s, now, *, allow_system=False,
+               force_stale=None):
         # Only the worker_claim door admits the system principal (the phase worker runs as it); /v1/claim stays l1/worker.
         self._require_role(principal, *(("l1", "worker", "system") if allow_system else ("l1", "worker")))
         lease_seconds = self._lease_seconds(lease_s)
+        force_stale = self._force_stale_reason(force_stale)
+        override = None
+        first = self._item(key)
+        if first is not None and first["state"] == "open" and self._ready(first) \
+                and principal.role in ("l1", "worker"):
+            # The slow repo/decision reads run before the write lock.
+            self._require_project(principal, first["project"])
+            override = self._claim_guard(first, force_stale)
         with self._write():
             item = self._item(key)
             if item is None:
                 raise Refused("not_found", f"no item {key!r}")
+            if item["state"] == "cancelled":
+                raise Refused("locked", f"{key} is cancelled: "
+                              + self._reasons([key]).get(key, "no reason recorded"))
             self._assert_unlocked(item)
             if principal.role in ("l1", "worker"):
                 self._require_project(principal, item["project"])
             if item["state"] == "claimed":
                 raise Refused("conflict", f"{key} already claimed")
-            if item["state"] != "open":
-                raise Refused("bad_state", f"{key} is {item['state']}, not open")
-            if not self._ready(item):
-                raise Refused("bad_state", f"{key} has unfinished dependencies")
+            if item["state"] != "open" or not self._ready(item):
+                index = {it["key"]: it for it in self._all_items()}
+                facts = self._not_open_facts(item, index)
+                if item["state"] != "open":
+                    raise Refused("bad_state", f"{key} is {item['state']}, not open"
+                                  + (f" ({facts})" if facts else ""))
+                raise Refused("bad_state", f"{key} has unfinished dependencies: {facts}")
             epoch = item["epoch"] + 1
             lease = self._iso(now + lease_seconds)
             payload = {
@@ -152,6 +169,8 @@ class VerbsMixin:
             }
             if allow_system and principal.role == "system":
                 payload["via"] = "worker_claim"
+            if override is not None:
+                payload["force_stale"] = override
             base = self._ref_head(item["project"])
             if base is not None:
                 payload["base"] = base
