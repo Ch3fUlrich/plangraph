@@ -96,6 +96,10 @@ def brief_text(brief: dict) -> str:
         lines.append(f"done {brief['done_criteria']}")
     if brief.get("note"):
         lines.append(f"note {brief['note']}")
+    # TASK-CONTEXT-GUARD: set by the store after the cap, never truncated.
+    for name in ("decisions", "merged", "stale"):
+        if brief.get(name):
+            lines.append(f"{name} {brief[name]}")
     return "\n".join(lines)
 
 

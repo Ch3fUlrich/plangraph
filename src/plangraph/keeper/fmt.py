@@ -27,8 +27,28 @@ def ready_text(items, project=None, n=10, unblocks=None, owner=None, agent=False
     dependencies against the reply subset and drop items whose done dependency
     is not in it (PG-CLI-READY-FIX).  The offline snapshot path keeps the filter."""
     if server_items:
-        return views.brief_rows(items, unblocks or {})
+        return ready_context_rows(items, unblocks or {})
     return views.brief(items, project=project, n=n, ub=unblocks, owner=owner, agent=agent)
+
+
+def ready_context_rows(rows, ub) -> str:
+    """:func:`views.brief_rows` plus each row's TASK-CONTEXT-GUARD ``context``
+    (last 3 D-ids, ``STALE: why``) appended to the row's own line, so a parser
+    that reads ``key | ...`` lines still sees one line per item."""
+    if not rows:
+        return ""
+    lines = views.brief_rows(rows, ub).splitlines()
+    if not any(isinstance(row.get("context"), dict) for row in rows):
+        return "\n".join(lines)
+    out = []
+    for line, row in zip(lines, rows):
+        ctx = row.get("context") or {}
+        if ctx.get("linked_decisions"):
+            line += " | " + ",".join(ctx["linked_decisions"][-3:])
+        if ctx.get("stale"):
+            line += " | STALE: " + ctx["stale"]
+        out.append(line)
+    return "\n".join(out)
 
 
 def show_text(info: dict) -> str:
@@ -51,9 +71,11 @@ def show_text(info: dict) -> str:
     evidence = info.get("evidence") or []
     if evidence:
         lines.append("evidence " + "; ".join(
-            f"{e['kind']}{'✓' if e.get('verified') else '✗'}" for e in evidence))
+            f"{e['kind']}{'✓' if e.get('verified') else '✗'}" + _ev_ref(e)
+            for e in evidence))
     else:
         lines.append("evidence -")
+    lines.extend(_context_lines(info))
     if info.get("host"):
         lines.append(f"host {info['host']}")
     if info.get("wait"):
@@ -92,6 +114,53 @@ def show_text(info: dict) -> str:
         lines.append(_jev_summary(info.get("jev_agreement")))
         lines.extend(_jev_row_line(row) for row in shadow)
     return "\n".join(lines)
+
+
+def _ev_ref(row) -> str:
+    """``@<sha8>`` / ``@D-n`` / ``@<run>`` for an evidence row's ref, else ``""``."""
+    ref = row.get("ref") if isinstance(row.get("ref"), dict) else {}
+    for name in ("commit", "decision", "decision_id", "run_id"):
+        if isinstance(ref.get(name), str) and ref[name]:
+            return "@" + (ref[name][:8] if name == "commit" else ref[name])
+    return ""
+
+
+def _ctx_entry(entry) -> str:
+    text = f"{entry.get('key')}={entry.get('state')}"
+    return text + (f"({entry['reason']})" if entry.get("reason") else "")
+
+
+def _context_lines(info: dict) -> list:
+    """TASK-CONTEXT-GUARD lines; none when *info* carries no context keys."""
+    if "work_exists" not in info:
+        return []
+    lines = []
+    if any(e.get("reason") for e in info.get("dep_states") or []):
+        lines.append("dep_reasons " + ", ".join(
+            _ctx_entry(e) for e in info["dep_states"] if e.get("reason")))
+    lines.append("dependents " + (", ".join(
+        _ctx_entry(e) for e in info.get("dependents") or []) or "-"))
+    sup = info.get("superseded_premises") or {}
+    lines.append("decisions " + (", ".join(
+        d + (f"(superseded by {sup[d]})" if d in sup else "")
+        for d in info.get("linked_decisions") or []) or "-"))
+    last = info.get("last_activity") or {}
+    lines.append(f"last_activity {last.get('at') or '-'} {last.get('actor') or '-'}"
+                 f" {last.get('type') or ''}".rstrip())
+    work = info.get("work_exists") or {}
+    commits, lanes = work.get("commits"), work.get("lanes")
+    if commits is None:
+        merged = "unknown"
+    else:
+        merged = "; ".join(
+            f"{c['sha'][:8]} {c.get('date', '')[:10]}"
+            + (f" PR#{c['merge']['pr']}" if (c.get("merge") or {}).get("pr") else "")
+            for c in commits) or "-"
+    lines.append(f"merged_on_default {merged} | open_lanes "
+                 + ("unknown" if lanes is None else ", ".join(lanes) or "-"))
+    if info.get("stale"):
+        lines.append(f"STALE {info['stale']}")
+    return lines
 
 
 def _jev_summary(agreement) -> str:

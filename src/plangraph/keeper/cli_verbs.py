@@ -317,7 +317,7 @@ def cmd_whoami(args, session):
 # --------------------------------------------------------------------------- #
 
 def cmd_claim(args, session):
-    body = {"key": args.key}
+    body = {"key": args.key, **({"force_stale": args.force_stale} if args.force_stale else {})}
     if args.lease:
         body["lease_s"] = parse_duration(args.lease)
     return write(session, "claim", body, lambda r: fmt.result_text("claim", r))

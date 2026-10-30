@@ -326,9 +326,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
             text = store.ready(principal, project=project, n=n, owner=owner, agent=agent)
             if as_text:
                 return text, True
-            items = views.ready(store._all_items(), project=project, owner=owner, agent=agent)
-            if n is not None:
-                items = items[:int(n)]
+            items = store._ready_items(project=project, n=n, owner=owner, agent=agent)
             return {"items": items,
                     "unblocks": views.unblocks(store._all_items())}, False
         if name == "show":
@@ -410,7 +408,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "claim":
             lease = body.get("lease_s", body.get("lease"))
             return store.claim(principal, self._need(body, "key"),
-                               lease_s=None if lease is None else self._int(lease, "lease_s"))
+                               lease_s=None if lease is None else self._int(lease, "lease_s"),
+                               force_stale=body.get("force_stale"))
         if name == "delegate":
             return store.delegate(principal, self._need(body, "key"),
                                   self._need(body, "worker", "worker_principal"))
