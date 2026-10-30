@@ -273,3 +273,14 @@ def test_mcp_probe_string_leg_is_one_leg(tmp_path):
         assert response['error']['code'] == -32602
         assert response['error']['message'] == 'unknown legs: zz/nope'
     asyncio.run(run())
+
+
+def test_echoed_tool_output_is_not_a_harness_limit():
+    from plangraph.spawner.env_redact import harness_limit_line
+    # run-26fc5542: a writer's own test source echoed in tool output marked mimo limited.
+    echoed = "    store.record_harness_limit('agy/model', 'error: usage limit reached', 'spawner:harness', now=200)"
+    for text in (echoed, echoed.strip(), '+' + echoed):
+        assert harness_limit_line(1, text, '') is None
+        assert harness_limit_line(1, '', text) is None
+    assert harness_limit_line(0, '', 'error: usage limit reached') is None
+    assert harness_limit_line(1, '', 'error: usage limit reached') == 'error: usage limit reached'
