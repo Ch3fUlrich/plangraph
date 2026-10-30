@@ -21,7 +21,7 @@ SESSION_CONFIG_KEYS = frozenset({
     "cwd_roots", "models", "efforts", "permission_modes", "mcp_configs",
     "style_text", "compact_window", "ctx_cap_tokens",
 })
-NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
 def _refuse(message):
@@ -163,7 +163,11 @@ class _ConfigMixin:
 
     def _check_name(self, name):
         if not isinstance(name, str) or not NAME_RE.fullmatch(name):
-            raise _refuse(f"name must match [a-z0-9][a-z0-9-]{{0,63}}: {name!r}")
+            raise _refuse(f"name must match [A-Za-z0-9][A-Za-z0-9._-]{{0,63}}: {name!r}")
+        if name.lower().endswith(".ready"):
+            # <name>.ready.json is the ready-marker file name: a session name
+            # with that suffix would collide with its own marker.
+            raise _refuse("name must not end with .ready")
         return name
 
     def _check_cwd(self, cwd, cfg):
@@ -200,7 +204,10 @@ class _ConfigMixin:
                 raise _refuse("prompt must be a string")
             text = prompt
         else:
-            text = self._file_arg(prompt_file, cfg, "prompt_file").read_text(encoding="utf-8")
+            try:
+                text = self._file_arg(prompt_file, cfg, "prompt_file").read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                raise _refuse(f"prompt_file not readable: {prompt_file}")
         if not text.strip():
             raise _refuse("prompt must not be blank")
         # Dash guard runs on the raw prompt text, before any handoff prefix.
@@ -209,12 +216,43 @@ class _ConfigMixin:
         return text
 
     def _style_text(self, cfg):
-        return cfg.get("style_text")
+        style = cfg.get("style_text")
+        if isinstance(style, str) and style.startswith("-"):
+            # argv style: a leading dash would read as a CLI flag, never text.
+            raise _refuse("config style_text must not start with '-'")
+        return style
 
     def _handoff_arg(self, handoff, cfg):
         if not isinstance(handoff, str) or not handoff:
             raise _refuse("handoff must be a non-empty path string")
         return self._file_arg(handoff, cfg, "handoff")
+
+    def _relaunch_handoff(self, rec, cfg, name, handoff):
+        """Effective relaunch handoff: the argument wins, else the ready marker.
+        With neither, the relaunch is refused ("ready marker or handoff
+        required"). Freshness is measured against the last successful launch
+        (launched_ts, else ts): the handoff file must be strictly newer than
+        that launch time - an equal mtime is stale (seat finding). Existence
+        and containment always apply - the record's old handoff is never
+        reused."""
+        if handoff is not None:
+            path = self._handoff_arg(handoff, cfg)
+        else:
+            marker_path = self._marker_path(name)
+            if not marker_path.is_file():
+                raise _refuse("ready marker or handoff required")
+            try:
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                marker = {}
+            raw = marker.get("handoff")
+            if not isinstance(raw, str) or not raw:
+                raise _refuse("ready marker handoff must be a path string")
+            path = self._handoff_arg(raw, cfg)
+        launched = float(rec.get("launched_ts") or rec.get("ts") or 0)
+        if path.stat().st_mtime <= launched:
+            raise _refuse(f"handoff is not newer than the session record: {path}")
+        return path
 
 
 

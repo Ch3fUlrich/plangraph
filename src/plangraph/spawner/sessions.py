@@ -293,29 +293,6 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
     def relaunch(self, name, handoff=None):
         return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
 
-    def _relaunch_handoff(self, rec, cfg, name, handoff):
-        """Effective relaunch handoff: the argument wins, else the ready marker.
-        With neither, the relaunch is refused ("ready marker or handoff
-        required"). Freshness (handoff newer than the record), existence and
-        containment always apply - the record's old handoff is never reused."""
-        if handoff is not None:
-            path = self._handoff_arg(handoff, cfg)
-        else:
-            marker_path = self._marker_path(name)
-            if not marker_path.is_file():
-                raise _refuse("ready marker or handoff required")
-            try:
-                marker = json.loads(marker_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                marker = {}
-            raw = marker.get("handoff")
-            if not isinstance(raw, str) or not raw:
-                raise _refuse("ready marker handoff must be a path string")
-            path = self._handoff_arg(raw, cfg)
-        if path.stat().st_mtime < float(rec.get("ts") or 0):
-            raise _refuse(f"handoff is not newer than the session record: {path}")
-        return path
-
     def _relaunch_inner(self, name, handoff):
         cfg = self._load_config()
         name = self._check_name(name)

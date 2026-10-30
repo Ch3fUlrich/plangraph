@@ -8,9 +8,13 @@ never becomes the new session's id; _ActionFailed carries the session id.
 from __future__ import annotations
 
 import json
+import os
 
+import pytest
+
+from plangraph.routing_errors import ParameterRefused
 from plangraph.spawner.sessions_agents import _ActionFailed
-from sessions_support import UUID1, FakeRun, make, go, _stopped
+from sessions_support import UUID1, FakeRun, make, go, write_config, _ready, _stopped
 from sessions_support import site  # noqa: F401
 
 
@@ -97,3 +101,48 @@ def test_name_lock_is_stable_per_name(site):
     s = make(site)
     assert s._name_lock("a") is s._name_lock("a")
     assert s._name_lock("a") is not s._name_lock("b")
+
+
+def test_name_shape_accepts_fleet_names_refuses_marker_collisions(site):
+    """Spec ^[A-Za-z0-9._-]{1,64}$ plus the no-leading-dash guard: fleet names
+    like build-L1 and a.b_c pass and dry-launch; a leading dash or dot, or a
+    .ready suffix (would collide with <name>.ready.json markers, any case),
+    is refused."""
+    run = FakeRun()
+    s = make(site, run)
+    for ok in ("build-L1", "a.b_c"):
+        assert go(site, s, name=ok, dry_run=True)["argv"]
+    for bad in ("-x", ".x", "x.ready", "X.READY"):
+        with pytest.raises(ParameterRefused, match="name"):
+            go(site, s, name=bad, dry_run=True)
+    assert not run.calls  # every refusal came before any run
+
+
+def test_config_style_text_leading_dash_refused(site):
+    """A config style_text starting with "-" would read as a CLI flag in the
+    built argv: it is refused at style_text assembly (seat finding)."""
+    cfg2 = site.tmp_path / "dash.json"
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": "-x"}))
+    s = make(site, FakeRun(), config_path=cfg2)
+    with pytest.raises(ParameterRefused, match="style_text"):
+        go(site, s, name="alpha", dry_run=True)
+
+
+def test_relaunch_handoff_must_be_strictly_newer_than_launch(site):
+    """Freshness compares against the LAST SUCCESSFUL LAUNCH (seat finding):
+    a handoff whose mtime merely equals rec["launched_ts"] is stale and the
+    relaunch is refused; a strictly newer one relaunches."""
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, _marker = _ready(site, run, s)
+    rec = json.loads(rec_path.read_text())
+    rec["launched_ts"] = 2_000_000.0  # the launch time to beat (later than ts)
+    rec_path.write_text(json.dumps(rec))
+    hf = site.tmp_path / "retry.md"
+    hf.write_text("carry on again")
+    os.utime(hf, (rec["launched_ts"], rec["launched_ts"]))  # equal to the launch
+    with pytest.raises(ParameterRefused, match="newer"):
+        s.relaunch("alpha", handoff=str(hf))
+    os.utime(hf, (rec["launched_ts"] + 1, rec["launched_ts"] + 1))  # strictly newer
+    res = s.relaunch("alpha", handoff=str(hf))
+    assert res["ok"] is True and res["name"] == "alpha"
