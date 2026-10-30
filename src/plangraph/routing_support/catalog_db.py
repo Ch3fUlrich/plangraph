@@ -81,6 +81,7 @@ class CatalogDB:
         """Initialize schema and seed catalog tables idempotently."""
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
         self.conn.executescript(schema_sql)
+        self._migrate()
 
         # 1. Quota pools
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)
@@ -104,6 +105,21 @@ class CatalogDB:
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
         self.conn.commit()
+
+    #: Columns added after the first schema; CREATE TABLE IF NOT EXISTS leaves an
+    #: existing table as it was, so an older catalog file gains them here.
+    _ADDED_COLUMNS = (
+        ("catalog_models", "harness",
+         "TEXT CHECK (harness IS NULL OR harness IN ('qodercli', 'opencode', 'agy'))"),
+        ("catalog_models", "tool_mode",
+         "TEXT NOT NULL DEFAULT 'tools' CHECK (tool_mode IN ('tools', 'inline-only'))"),
+    )
+
+    def _migrate(self) -> None:
+        for table, column, decl in self._ADDED_COLUMNS:
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     def _insert_records(self, table_name: str, records: list[dict[str, Any]]) -> int:
         if not records:

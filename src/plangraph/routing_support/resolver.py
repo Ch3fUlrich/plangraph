@@ -732,9 +732,8 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
         d["id"] = d["model_id"]
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
-    # Explicit harness registration, not an inference from gateway transport.
-    if d.get('id') in ('mimo/mimo-v2.6-pro', 'omniroute/cx-gpt-6-luna', 'opencode-go/kimi-k3.1-pro', 'opencode-go/kimi-k3'):
-        d.setdefault('harness', 'opencode')
+    # Harness and tool mode are catalog columns (SPAWNER-REGISTRY-ROUTE), never
+    # inferred here from the id or the gateway transport.
     return d
 
 _catalog_failures = {}

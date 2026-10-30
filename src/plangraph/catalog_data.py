@@ -556,3 +556,34 @@ SEED_MODELS: list[dict[str, Any]] = [
     },
 ]
 
+# Runner harness per provider (planner/legs.py HARNESSES, SPAWNER-REGISTRY-ROUTE
+# D-3198): the catalog id is passed to that harness as --model.  None = no runner
+# harness addresses these ids (agy/qodercli take their own native ids, which the
+# routed legs in planner/legs.py carry; cxa = Codex ACP; claude -p, gemini and
+# the direct deepseek API are not runner harnesses).  A new provider must be
+# registered here: the KeyError below is deliberate.
+PROVIDER_HARNESS: dict[str, Any] = {
+    "opencode-go": "opencode",
+    "mimo": "opencode",
+    "cx": "opencode",
+    "agy": None,
+    "qoder": None,
+    "cxa": None,
+    "claude": None,
+    "gemini": None,
+    "deepseek": None,
+}
+
+# Review legs that give no verdict in tool mode: the spawner inlines the diff
+# (D-3134, D-3173).
+INLINE_ONLY_MODELS = frozenset({
+    "omniroute/cx-gpt-6-luna",
+    "cxa/gpt-6-luna-high",
+    "mimo/mimo-v2.6-pro",
+})
+
+for _row in SEED_MODELS:
+    _row["harness"] = PROVIDER_HARNESS[_row["provider_id"]]
+    _row["tool_mode"] = "inline-only" if _row["model_id"] in INLINE_ONLY_MODELS else "tools"
+del _row
+

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from dataclasses import asdict
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 import time
@@ -285,6 +286,7 @@ class SpawnPlan:
     gaps: tuple[dict, ...] = ()
     candidates: tuple[dict, ...] = ()
     writer_groups: tuple = ()
+    seat_coverage: tuple[dict, ...] = ()
 
     @property
     def first_leg(self) -> Leg | None:
@@ -294,16 +296,70 @@ class SpawnPlan:
         result = asdict(self)
         if not self.writer_groups:
             result.pop('writer_groups')
+        if not self.seat_coverage:
+            result.pop('seat_coverage')
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
 
 
+#: A git revision the inline-diff path accepts: no option-looking or spaced refs.
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$")
+
+
+def _check_diff_ref(ref):
+    """``card["diff_ref"]`` = ``{"repo": <absolute path>, "base": <rev>, "head": <rev>}``."""
+    if (not isinstance(ref, Mapping) or set(ref) != {"repo", "base", "head"}
+            or not all(isinstance(ref[k], str) for k in ref)
+            or not os.path.isabs(ref["repo"])
+            or not _REF_RE.match(ref["base"]) or not _REF_RE.match(ref["head"])):
+        raise SpawnRefused('diff_ref must be {"repo": absolute path, "base": rev, "head": rev}')
+
+
+def _seat_family(family):
+    # The keeper counts every Claude seat as one family named anthropic.
+    return "anthropic" if family == "claude" else family
+
+
+def pick_seats(ordered, writer_families, *, high):
+    """Seats covering every writer part (DECISIONS 3.2, keeper ``coverage.uncovered``).
+
+    A part (writer family) is covered by ``need`` distinct seat families other
+    than its own (1 standard, 2 high); a high part also needs one non-Claude
+    family other than its own.  A seat may share a family with ANOTHER writer
+    (D-3084).  Seats are taken in route order, one per family, only while they
+    help cover an open part; at least two families are always picked.  Returns
+    ``(seats, coverage, open_parts)``.
+    """
+    from plangraph.keeper.coverage import uncovered
+    writers = sorted({_seat_family(w) for w in writer_families if w})
+    need = 2 if high else 1
+    seats, families = [], []
+    for leg in ordered:
+        fam = _seat_family(leg.family)
+        if fam in families or (writers and all(fam == w for w in writers)):
+            continue
+        open_parts = uncovered(writers, families, need=need, sensitive=high)
+        if len(families) >= 2 and not any(fam != w for w in open_parts):
+            continue
+        seats.append(leg)
+        families.append(fam)
+        if len(families) >= 2 and not uncovered(writers, families, need=need, sensitive=high):
+            break
+    coverage = tuple({"leg": leg.id, "covers": [w for w in writers if w != _seat_family(leg.family)]}
+                     for leg in seats)
+    return seats, coverage, uncovered(writers, families, need=need, sensitive=high)
+
+
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
-                legs=DEFAULT_LEGS, benchmark=None, strict=False) -> SpawnPlan:
+                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
     The implement role ignores benchmark permutation (operator order D-2683).
     ``exclude_families`` excludes the specified family names from candidate legs.
+    ``policy`` (default :func:`load_route_policy`) skips banned/off families and
+    paused harnesses.  A review leg whose family is EVERY writer family is
+    excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
+    review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
@@ -324,6 +380,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             raise SpawnRefused(f'{field} has invalid value')
     if any(t not in RISK_TAGS for t in card.get('risk_tags', ())):
         raise SpawnRefused('risk_tags has invalid value')
+    if 'diff_ref' in card:
+        _check_diff_ref(card['diff_ref'])
+    if policy is None:
+        from .route_policy import load_route_policy
+        try:
+            policy = load_route_policy()
+        except ValueError as exc:
+            raise SpawnRefused(str(exc)) from None
     if role not in ("implement", "review", "orchestrate"):
         raise ValueError("role must be implement|review|orchestrate")
     from plangraph.routing_support.risk import evaluate_risk
@@ -359,7 +423,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
-    excluded = (set(writer_families) if role == "review" else set()) | set(exclude_families)
+    writer_set = {w for w in writer_families if w}
+    # D-3084 per-part seats: only a family that is EVERY writer covers no part.
+    excluded = (writer_set if role == "review" and len(writer_set) == 1 else set()) | set(exclude_families)
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and st["state"] != "limited" and "/" not in leg_obj.model:
@@ -376,11 +442,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # Route each leg through the same canonical eligibility rules to retain
     # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
-        reason = None
-        if leg.id in limited:
+        reason = policy.skip_reason(leg, role)
+        if reason:
+            pass
+        elif leg.id in limited:
             reason = "limited"
         elif leg.family in excluded:
             reason = "excluded_family"
+        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
+            reason = "inline_only_needs_diff"
         else:
             try:
                 route_card(card, legs=(leg,), role=role, exclude_families=excluded)
@@ -398,8 +468,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
+    policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff")}
     try:
-        route = route_card(card, legs=candidates, unavailable=limited,
+        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
@@ -422,16 +494,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 ordered[i] = leg
             if positions:
                 source = "benchmark"
-    seats = []
-    families = set(excluded)
+    seats, coverage, open_parts = [], (), []
     if role == "review":
-        for leg in ordered:
-            if leg.family not in families:
-                seats.append(leg)
-                families.add(leg.family)
-            if len(seats) == 2:
-                break
-    error = "two distinct review families unavailable" if role == "review" and len(seats) < 2 else None
+        high = ranking_risk in ("high", "critical") or bool(card.get('risk_tags'))
+        seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
+    error = None
+    if role == "review" and len(seats) < 2:
+        error = "two distinct review families unavailable"
+    elif open_parts:
+        error = "seat coverage unmet for writer parts: " + ", ".join(open_parts)
     if error:
         reasons.append(error)
     order = {leg.id: i for i, leg in enumerate(ordered)}
@@ -443,7 +514,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups)
+                     tuple(candidate_details), groups, coverage)
 
 
 def validate_model(model):

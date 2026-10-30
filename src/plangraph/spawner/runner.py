@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -1124,19 +1124,25 @@ def spawn_service(*args, **kwargs):
 
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
-                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
+                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
+                        seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
             # Let the base service handle audited overrides, which never fall through.
-            if model is not None or leg is not None or not card:
+            if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
                     card=card, prompt=prompt, role=role, writer_families=writer_families,
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
-                    dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=True,
+                    dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
+                    seats=seats,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
-            plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+            # A seat run (_plan from _spawn_seats) keeps to its own legs on re-route.
+            allowed = {l.id for l in _plan.legs} if _plan is not None else None
+            def restrict(p):
+                return p if allowed is None else replace(p, legs=tuple(l for l in p.legs if l.id in allowed))
+            plan = _plan if _plan is not None else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
                 plan = await plan_for_launch_async(plan, dry_run=dry_run)
@@ -1174,7 +1180,14 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
-                        job = await self.runner.spawn(prompt=prompt, model_or_combo=chosen.model,
+                        from .inline_diff import InlineDiffError
+                        try:
+                            leg_prompt = self._leg_prompt(prompt, card, role, chosen)
+                        except InlineDiffError as exc:
+                            record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
+                                skip_reason='inline_diff_failed: ' + redact(str(exc))))
+                            continue
+                        job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness)
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
@@ -1215,7 +1228,7 @@ def spawn_service(*args, **kwargs):
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
-                            current = await plan_for_launch_async(current, dry_run=dry_run)
+                            current = restrict(await plan_for_launch_async(current, dry_run=dry_run))
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)
@@ -1225,7 +1238,7 @@ def spawn_service(*args, **kwargs):
                     else:
                         record.update(status='failed', exit_code=1, error='attempt iteration limit exceeded')
                         return
-                    if any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts']):
+                    if any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing', 'inline_diff_failed')) for a in record['attempts']):
                         record.update(status='failed', exit_code=1,
                             error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
                     elif record['attempts'] and all(l.id in tried for l in current.legs) and current.legs:

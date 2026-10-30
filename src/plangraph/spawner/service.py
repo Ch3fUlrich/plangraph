@@ -206,14 +206,22 @@ class SpawnService:
 
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
-                    dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
+                    dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
+                    seats=False, _plan=None):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import DEFAULT_LEGS
         if not card:
             raise ParameterRefused('spawn by card; card required')
-        if model is not None or leg is not None or not card:
+        if seats:
+            return await self._spawn_seats(card=card, prompt=prompt, role=role,
+                writer_families=writer_families, review_of=review_of, model=model, leg=leg,
+                dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough,
+                benchmark=benchmark, require_bench=require_bench)
+        if _plan is not None:
+            plan = _plan
+        elif model is not None or leg is not None or not card:
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
             plan_spawn(card, role=role, legs=())
@@ -231,22 +239,29 @@ class SpawnService:
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg
+                from plangraph.planner.legs import HARNESSES, TOOL_MODES
                 row = next((r for r in get_catalog_models() if r['id'] == target), None)
-                # Harness registration must be explicit, independently of transport.
-                harness = row.get('harness') if row else None
-                if (row is None or row.get('tier') not in ('trial', 'free', 'subscription', 'paid')
-                        or harness not in ('opencode', 'qodercli', 'agy')
-                        or type(row.get('context_tokens')) is not int or row['context_tokens'] <= 0):
-                    raise SpawnRefused('override model missing registry data')
+                # Harness is a catalog column (SPAWNER-REGISTRY-ROUTE), never inferred.
+                missing = ('catalog row' if row is None else
+                           'tier' if row.get('tier') not in ('trial', 'free', 'subscription', 'paid') else
+                           'harness' if row.get('harness') not in HARNESSES else
+                           'context_tokens' if type(row.get('context_tokens')) is not int
+                           or row['context_tokens'] <= 0 else
+                           'tool_mode' if row.get('tool_mode', 'tools') not in TOOL_MODES else None)
+                if missing:
+                    raise SpawnRefused('override model missing registry data: ' + missing)
                 context = row.get('context_tokens', 0)
                 from plangraph.planner.routing import WINDOW_TOKENS
                 windows = tuple(w for w, n in WINDOW_TOKENS.items() if n <= context)
-                chosen = Leg('override', row['tier'], harness, target,
+                chosen = Leg('override', row['tier'], row['harness'], target,
                              detect_model_family(target), windows, context,
-                             bool(row.get('trains_on_prompts', True)), roles=(role,))
+                             bool(row.get('trains_on_prompts', True)), roles=(role,),
+                             tool_mode=row.get('tool_mode', 'tools'))
             if review_of and chosen.family == self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family'):
                 raise SpawnRefused('excluded writer family')
-            if role == 'review' and chosen.family in writer_families:
+            # D-3084 per-part: a seat is excluded only when it covers no writer part.
+            writers = {w for w in writer_families if w}
+            if role == 'review' and writers and writers <= {chosen.family}:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
         else:
@@ -265,8 +280,19 @@ class SpawnService:
 
         async def execute():
             try:
+                launched = False
                 for chosen in plan.legs:
-                    job = await self.runner.spawn(prompt=prompt, model_or_combo=chosen.model,
+                    from .inline_diff import InlineDiffError
+                    try:
+                        leg_prompt = self._leg_prompt(prompt, card, role, chosen)
+                    except InlineDiffError as exc:
+                        record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
+                            skip_reason='inline_diff_failed: ' + str(exc),
+                            served_model='unwitnessed', served_family='unwitnessed',
+                            served_witness_reason='leg skipped before launch'))
+                        continue
+                    launched = True
+                    job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness)
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
@@ -302,6 +328,9 @@ class SpawnService:
                         if not dry_run:
                             await self._continue_writer(record, job.stdout)
                         break
+                if not launched:
+                    record.update(status='failed', exit_code=1, error='; '.join(
+                        a['skip_reason'] for a in record['attempts']) or 'no leg launched')
             except Exception as exc:
                 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):
@@ -326,6 +355,41 @@ class SpawnService:
             except asyncio.TimeoutError:
                 pass
         return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
+
+    @staticmethod
+    def _leg_prompt(prompt, card, role, leg):
+        """The prompt one leg gets: an inline-only review leg gets the card's diff inlined."""
+        if role != 'review' or getattr(leg, 'tool_mode', 'tools') != 'inline-only':
+            return prompt
+        from .inline_diff import inline_diff_prompt
+        return inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3)
+
+    async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
+                           **options):
+        """One review run per seat ``route`` picked; callers never name legs (D-3198).
+
+        Seat *i* falls through only to spare legs of a family no other seat holds,
+        dealt round-robin so two seats never land on the same spare.
+        """
+        from plangraph.planner.routing import SpawnRefused
+        if role != 'review' or model is not None or leg is not None:
+            raise SpawnRefused('seats needs role review without model or leg')
+        plan = self._route(card, role, writer_families, review_of,
+                           benchmark=options.pop('benchmark'), require_bench=options.pop('require_bench'))
+        if plan.error:
+            raise SpawnRefused(plan.error)
+        seat_families = {s.family for s in plan.review_seats}
+        spares = []
+        for spare in plan.legs:
+            if spare.family not in seat_families:
+                spares.append(spare)
+                seat_families.add(spare.family)   # one spare per family
+        n = len(plan.review_seats)
+        runs = await asyncio.gather(*(
+            self._spawn(card=card, prompt=prompt, role=role, writer_families=writer_families,
+                        review_of=review_of, _plan=replace(plan, legs=(seat, *spares[i::n])), **options)
+            for i, seat in enumerate(plan.review_seats)))
+        return {'seats': list(runs), 'seat_coverage': list(plan.seat_coverage)}
 
     async def cancel(self, run_id):
         record = self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
