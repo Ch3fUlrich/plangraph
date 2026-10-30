@@ -164,9 +164,9 @@ class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
     def __init__(self, runner: SpawnerRunner | None = None, *, state=None,
-                 session_run=None, session_popen=None, session_sleep=None):
+                 session_run=None, session_sleep=None):
         self.runner = runner or SpawnerRunner()
-        self._session_run, self._session_popen = session_run, session_popen
+        self._session_run = session_run
         self._session_sleep = session_sleep
         from .runner import spawn_service
         self.service = spawn_service(self.runner, state=state)
@@ -175,7 +175,7 @@ class MCPSpawnerServer:
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
         import os
         from .sessions import Sessions
-        return Sessions(state_root=self.service.state, run=self._session_run, popen=self._session_popen,
+        return Sessions(state_root=self.service.state, run=self._session_run,
                         config_path=os.environ.get('PLANGRAPH_SESSIONS_CONFIG'),
                         sleep=self._session_sleep)
 

@@ -60,18 +60,7 @@ class FakeRun:
         return Path(argv[0]).name in ("claude", "claude.exe") and argv[1:2] == ["stop"]
 
     def launch_calls(self):
-        return [argv for argv, _ in self.calls if argv[:2] == ["claude", "--bg"] or argv[0] == "wt.exe"]
-
-
-class FakePopen:
-    def __init__(self):
-        self.calls = []
-
-    def __call__(self, argv, **kw):
-        assert isinstance(argv, list) and all(isinstance(a, str) for a in argv), "argv must be a list of str"
-        assert kw.get("shell") in (None, False), "shell=True must never be used"
-        self.calls.append((list(argv), kw))
-        return types.SimpleNamespace(pid=1)
+        return [argv for argv, _ in self.calls if argv[:2] == ["claude", "--bg"]]
 
 
 def write_config(path, text):
@@ -105,10 +94,10 @@ def site(tmp_path, monkeypatch):
                                  mcp=mcp, cfg=cfg, state=tmp_path / "state")
 
 
-def make(site, run=None, popen=None, *, platform="linux", now=lambda: 1000.0,
+def make(site, run=None, *, platform="linux", now=lambda: 1000.0,
          resolve_budget=15.0, config_path=None, which=None, sleep=lambda _s: None):
     return Sessions(state_root=site.state, config_path=str(config_path or site.cfg),
-                    run=run or FakeRun(), popen=popen or FakePopen(),
+                    run=run or FakeRun(),
                     now=now, platform=platform, resolve_budget=resolve_budget, which=which,
                     sleep=sleep)
 
@@ -119,19 +108,9 @@ def go(site, s, name="alpha", **over):
     return s.launch(**args)
 
 
-def admit_windows_launcher(monkeypatch):
-    """windows_launcher is refused as an unknown config key (cut feature), but
-    the wt argv path in _build_argv (unchanged) still reads it from the config
-    dict - the wt tests admit just that key again to keep exercising it."""
-    from plangraph.spawner import sessions as sessions_mod
-    monkeypatch.setattr(sessions_mod, "SESSION_CONFIG_KEYS",
-                        sessions_mod.SESSION_CONFIG_KEYS | {"windows_launcher"})
-
-
 def test_argv_linux_is_list_no_shell(site):
     run = FakeRun(stdout="session " + UUID1)
-    pop = FakePopen()
-    s = make(site, run, pop)
+    s = make(site, run)
     res = go(site, s)
     assert res["session_id"] == UUID1
     argv, kw = run.calls[0]
@@ -143,7 +122,6 @@ def test_argv_linux_is_list_no_shell(site):
     assert kw["cwd"] == str(site.proj.resolve())
     assert kw["env"]["FLEET_SESSION_NAME"] == "alpha"
     assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "330000"
-    assert not pop.calls
     # style_text is appended via --append-system-prompt when configured
     cfg2 = site.tmp_path / "sessions2.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": "be terse"}))
@@ -159,33 +137,12 @@ def test_argv_linux_is_list_no_shell(site):
 def test_argv_windows_bg_and_wt(site, monkeypatch):
     exe = str(site.tmp_path / "claude.exe")
     run = FakeRun(stdout="session " + UUID1)
-    pop = FakePopen()
-    s = make(site, run, pop, platform="win32", which=lambda _: exe)
+    s = make(site, run, platform="win32", which=lambda _: exe)
     go(site, s)
     argv, kw = run.calls[0]
     assert argv[:2] == [exe, "--bg"]  # the resolved .exe path is argv[0]
     assert kw["creationflags"] == DETACHED
     assert kw.get("shell") in (None, False)
-    assert not pop.calls
-    s.stop(name="alpha")  # a live record may only be replaced via relaunch
-    admit_windows_launcher(monkeypatch)
-    cfg2 = site.tmp_path / "sessions-wt.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
-    run2 = FakeRun(stdout="session " + UUID1, agents_rows=[
-        {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
-    pop2 = FakePopen()
-    s2 = make(site, run2, pop2, platform="win32", config_path=cfg2, which=lambda _: exe)
-    res = go(site, s2)
-    wt_argv, wt_kw = pop2.calls[0]
-    assert wt_argv[:9] == ["wt.exe", "-w", "0", "new-tab", "--title", "alpha",
-                           "-d", str(site.proj.resolve()), exe]
-    assert "--bg" not in wt_argv
-    assert wt_argv[-1] == PROMPT
-    assert wt_kw["creationflags"] == DETACHED
-    assert wt_kw.get("shell") in (None, False)
-    assert not run2.launch_calls()
-    # wt resolves by name + startedAt only: the UUID in stdout must be ignored
-    assert res["session_id"] == UUID2
 
 
 def test_handoff_prefixes_prompt(site):
@@ -274,8 +231,8 @@ def test_refuses_unreadable_prompt_or_handoff(site):
 
 
 def test_dry_run_writes_nothing(site):
-    run, pop = FakeRun(), FakePopen()
-    s = make(site, run, pop)
+    run = FakeRun()
+    s = make(site, run)
     res = go(site, s, prompt="abcdefg", dry_run=True)
     assert set(res) == {"argv", "cwd", "env_keys"}
     assert res["argv"][-1] == "<7 chars>"
@@ -283,7 +240,7 @@ def test_dry_run_writes_nothing(site):
     assert "FLEET_SESSION_NAME" in res["env_keys"]
     assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" in res["env_keys"]
     assert res["cwd"] == str(site.proj.resolve())
-    assert run.calls == [] and pop.calls == []
+    assert run.calls == []
     sessions_dir = site.state / "sessions"
     with pytest.raises(ParameterRefused, match="model"):
         go(site, s, dry_run=True, model="gpt-4")  # a refusing dry run is still dry
@@ -299,7 +256,7 @@ def test_launch_writes_record_and_audit(site):
     rec = json.loads(rec_path.read_text())
     for key in ("name", "cwd", "model", "effort", "mcp", "prompt_file", "handoff", "parent",
                 "children", "ts", "session_id", "job_id", "permission_mode", "platform",
-                "launcher", "stopped_ts"):
+                "stopped_ts"):
         assert key in rec, key
     assert rec["name"] == "alpha" and rec["session_id"] == UUID1
     assert rec["job_id"] == UUID1[:8] and rec["stopped_ts"] is None
@@ -549,8 +506,8 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
     assert set(tools["plangraph_session_relaunch"]["inputSchema"]["properties"]) == {"name", "handoff", "force"}
     assert set(tools["plangraph_session_mark_ready"]["inputSchema"]["properties"]) == {"name", "handoff", "card"}
     assert tools["plangraph_session_list"]["inputSchema"]["properties"] == {}
-    run, pop = FakeRun(stdout="session " + UUID1), FakePopen()
-    server = MCPSpawnerServer(state=site.state, session_run=run, session_popen=pop,
+    run = FakeRun(stdout="session " + UUID1)
+    server = MCPSpawnerServer(state=site.state, session_run=run,
                               session_sleep=lambda _s: None)
     monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
     hf = site.tmp_path / "handoff.md"
@@ -766,7 +723,7 @@ def test_mcp_session_dispatch_rejects_unknown_and_bad_args(site, monkeypatch):
     assert tools["plangraph_session_stop"]["inputSchema"].get("required", []) == []
     assert tools["plangraph_session_relaunch"]["inputSchema"]["required"] == ["name"]
     assert tools["plangraph_session_mark_ready"]["inputSchema"]["required"] == ["name", "handoff"]
-    server = MCPSpawnerServer(state=site.state, session_run=FakeRun(), session_popen=FakePopen())
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
     monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
 
     async def go_rpc():
@@ -800,7 +757,7 @@ def test_mcp_session_calls_never_block_the_loop(site, monkeypatch):
         seen["ident"] = threading.get_ident()
         return types.SimpleNamespace(returncode=0, stdout=UUID1, stderr="")
 
-    server = MCPSpawnerServer(state=site.state, session_run=run, session_popen=FakePopen())
+    server = MCPSpawnerServer(state=site.state, session_run=run)
     monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
 
     async def go_rpc():
@@ -856,35 +813,6 @@ def test_win32_stop_argv_uses_resolved_exe(site):
     assert stops == [[exe, "stop", UUID1]]  # the resolved .exe, never bare "claude"
 
 
-def test_win32_wt_id_resolution_polls_resolved_exe(site, monkeypatch):
-    exe = str(site.tmp_path / "claude.exe")
-    admit_windows_launcher(monkeypatch)
-    cfg2 = site.tmp_path / "sessions-wt-resolve.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
-    run = FakeRun(stdout="session " + UUID1, agents_rows=[
-        {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
-    pop = FakePopen()
-    s = make(site, run, pop, platform="win32", config_path=cfg2, which=lambda _: exe)
-    res = go(site, s)
-    assert res["session_id"] == UUID2
-    polls = [a for a, _ in run.calls if a[1:3] == ["agents", "--json"]]
-    assert polls and all(a[0] == exe for a in polls)  # the resolved .exe, never bare "claude"
-
-
-def test_launcher_effective_wt_only_on_win32(site, monkeypatch):
-    admit_windows_launcher(monkeypatch)
-    cfg2 = site.tmp_path / "sessions-wt2.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
-    run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[
-        {"id": SHORT, "sessionId": UUID1, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
-    s = make(site, run, platform="linux", config_path=cfg2)
-    res = go(site, s)
-    assert res["session_id"] == UUID1  # short id resolved: effective launcher is bg on linux
-    assert run.calls[0][0][:2] == ["claude", "--bg"]
-    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
-    assert rec["launcher"] == "bg"
-
-
 def test_resolve_short_id_miss_falls_back_and_excludes(site):
     row_new = {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}
     # a short-id miss falls back to name + startedAt
@@ -935,22 +863,6 @@ def test_timeout_expired_is_audited_failure(site):
         s2.stop(name="beta")
     lines2 = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
     assert lines2[-1]["action"] == "stop" and lines2[-1]["ok"] is False
-
-
-def test_wt_popen_oserror_returns_audited_failure(site, monkeypatch):
-    class BrokenPopen(FakePopen):
-        def __call__(self, argv, **kw):
-            raise OSError(2, "no wt.exe")
-
-    admit_windows_launcher(monkeypatch)
-    cfg2 = site.tmp_path / "sessions-wt3.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
-    exe = str(site.tmp_path / "claude.exe")
-    s = make(site, FakeRun(), BrokenPopen(), platform="win32", config_path=cfg2, which=lambda _: exe)
-    res = go(site, s)
-    assert res["ok"] is False and res["session_id"] is None
-    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
-    assert len(lines) == 1 and lines[0]["action"] == "launch" and lines[0]["ok"] is False
 
 
 def test_relaunch_force_without_handoff_launches_bare(site):
@@ -1220,31 +1132,22 @@ def test_ok_false_audit_includes_redacted_argv(site):
     assert secret_prompt not in json.dumps(line)
 
 
+def test_exit_failure_reason_carries_claude_output(site):
+    run = FakeRun(stdout="Workspace not trusted. Run `claude` in /x once and accept the trust prompt",
+                  launch_rc=1)
+    s = make(site, run)
+    res = go(site, s)
+    assert res["ok"] is False and res["session_id"] is None
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["ok"] is False
+    assert line["reason"].startswith("claude exited 1: ")  # rc first, then the output
+    assert "Workspace not trusted" in line["reason"]  # why claude refused, in the audit
+
+
 def test_docs_context_pct_fraction(site):
     text = (Path(__file__).resolve().parents[1] / "docs" / "SPAWNER.md").read_text(encoding="utf-8")
     section = text.split("## Claude Code sessions", 1)[1]
     assert "context_pct" in section and "fraction" in section and "0..1" in section
-
-
-def test_wt_argv_escapes_semicolons(site, monkeypatch):
-    exe = str(site.tmp_path / "claude.exe")
-    admit_windows_launcher(monkeypatch)
-    cfg2 = site.tmp_path / "sessions-wt-semi.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
-    semi = site.root / "we;ird"
-    semi.mkdir()
-    run = FakeRun(stdout="session " + UUID1, agents_rows=[
-        {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000}])
-    pop = FakePopen()
-    s = make(site, run, pop, platform="win32", config_path=cfg2, which=lambda _: exe)
-    go(site, s, cwd=str(semi), prompt="x; new-tab cmd")
-    wt_argv = pop.calls[0][0]
-    assert wt_argv[3] == "new-tab"  # the real wt command
-    assert wt_argv[-1] == "x\\; new-tab cmd"  # ';' escaped: stays inside one argument
-    assert wt_argv[wt_argv.index("-d") + 1] == str(semi.resolve()).replace(";", "\\;")
-    for arg in wt_argv[4:]:  # no unescaped ';' anywhere after new-tab
-        assert ";" not in arg.replace("\\;", "")
-    assert [a for a in wt_argv[4:] if "new-tab" in a] == [wt_argv[-1]]  # only the prompt mentions it
 
 
 def test_launch_refuses_while_record_active(site):
@@ -1321,16 +1224,6 @@ def test_resolve_polls_every_half_second_until_budget(site, monkeypatch):
     res = go(site, s)
     assert res["session_id"] == UUID2  # a row appearing late is still found
     assert run.agents_calls == 3 and sleeps[:2] == [0.5, 0.5]
-    # the wt launcher polls the same way
-    exe = str(site.tmp_path / "claude.exe")
-    admit_windows_launcher(monkeypatch)
-    cfg2 = site.tmp_path / "sessions-wt-poll.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
-    sleeps2 = []
-    run2, pop2 = LateRows("beta"), FakePopen()
-    s2 = make(site, run2, pop2, platform="win32", config_path=cfg2, which=lambda _: exe, sleep=sleeps2.append)
-    res2 = go(site, s2, name="beta", prompt="do beta")
-    assert res2["session_id"] == UUID2 and sleeps2[:2] == [0.5, 0.5]
 
 
 def test_excluded_id_rejected_for_full_uuid_short_and_fallback(site):
@@ -1487,7 +1380,7 @@ def test_default_config_path_used_when_env_unset(site, monkeypatch):
 
 def test_mcp_undeclared_args_refused_for_all_five(site, monkeypatch):
     from plangraph.spawner.mcp import MCPSpawnerServer
-    server = MCPSpawnerServer(state=site.state, session_run=FakeRun(), session_popen=FakePopen())
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
     monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
 
     async def go_rpc():
@@ -1508,7 +1401,7 @@ def test_mcp_undeclared_args_refused_for_all_five(site, monkeypatch):
 
 def test_mcp_missing_wrong_type_args_audited(site, monkeypatch):
     from plangraph.spawner.mcp import MCPSpawnerServer
-    server = MCPSpawnerServer(state=site.state, session_run=FakeRun(), session_popen=FakePopen())
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
     monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
 
     async def go_rpc():
@@ -1592,22 +1485,6 @@ def test_launch_timeout_writes_null_id_record(site):
     assert rec["session_id"] is None and rec["stopped_ts"] is None  # the process may exist
     lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
     assert lines[-1]["action"] == "launch" and lines[-1]["ok"] is False
-
-
-def test_launch_wt_popen_oserror_writes_null_id_record(site, monkeypatch):
-    class BrokenPopen(FakePopen):
-        def __call__(self, argv, **kw):
-            raise OSError(2, "no wt.exe")
-
-    admit_windows_launcher(monkeypatch)
-    cfg2 = site.tmp_path / "sessions-wt4.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
-    exe = str(site.tmp_path / "claude.exe")
-    s = make(site, FakeRun(), BrokenPopen(), platform="win32", config_path=cfg2, which=lambda _: exe)
-    res = go(site, s)
-    assert res["ok"] is False and res["name"] == "alpha" and res["session_id"] is None
-    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
-    assert rec["session_id"] is None and rec["stopped_ts"] is None
 
 
 def test_successful_launch_unlinks_stale_ready_marker(site):
@@ -1755,7 +1632,7 @@ def test_config_rejects_unknown_keys_and_bad_scalar_types(site):
     refused({"ctx_cap_tokens": True})       # a bool is not a positive int
     refused({"ctx_cap_tokens": 1.5})
     refused({"windows_launcher": None})
-    refused({"windows_launcher": "cmd"})    # only "bg" or "wt"
+    refused({"windows_launcher": "cmd"})    # the wt launcher is cut: the key is refused outright
     refused({"windows_launcher": 1})
 
 
