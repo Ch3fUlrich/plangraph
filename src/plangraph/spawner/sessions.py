@@ -234,29 +234,23 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         return {"ok": True, "name": name, "session_id": sid}
 
     def _stop_record(self, rec, name):
-        """claude stop <id> - the one and only stop mechanism, never rm/kill.
-        The argv head is the resolved _claude_head() like every other call.
-
-        A record without a session id gets one resolved first from the strict
-        `claude agents` poll: the newest background row of this name whose
-        startedAt is within 5 s of the record's own launch (launched_ms) is the
-        session to stop; no such row means nothing is left to stop and the
-        record is marked stopped outright. After a zero exit the strict poll is
-        the CONFIRMATION - the id's row must be absent or in a finished state -
-        and only then is the record marked stopped (D-3193). An unconfirmed
-        stop refuses and writes nothing; a failing poll propagates as
-        _ActionFailed and the record is not marked stopped.
-
-        The stopped fields are written as a merged copy, never onto `rec`:
-        relaunch reuses its rec as the base of the new record and must not
-        inherit the stop's state. Returns the stopped session id (None when
-        there was nothing to stop)."""
+        """claude stop <id> - the one and only stop mechanism, never rm/kill;
+        the argv head is the resolved _claude_head() like every other call.
+        One strict `claude agents` poll comes first (r7): it resolves a null
+        record id - the newest non-finished background row of this name within
+        5 s of the launch (launched_ms) - and pre-checks the id: absent or
+        finished means already gone, marked stopped without calling claude;
+        after a zero exit that poll CONFIRMS the stop (D-3193). The stopped
+        fields go on a merged copy, never onto rec; returns the session id."""
         sid = rec.get("session_id")
+        rows = self._agents_rows_strict()  # the one poll: resolve + pre-check
         if not sid:
             cutoff = float(rec.get("launched_ms") or 0) - 5000.0
             best = None
-            for row in self._agents_rows_strict():
+            for row in rows:
                 if row.get("name") != name or row.get("kind") != "background":
+                    continue
+                if str(row.get("state") or "") in FINISHED_STATES:
                     continue
                 row_sid = row.get("sessionId")
                 if not row_sid:
@@ -272,6 +266,12 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
                 self._write_record(name, {**rec, "state": "stopped",
                                           "stopped_ts": self._now()})
                 return None
+        row = next((r for r in rows if r.get("sessionId") == sid), None)
+        if row is None or str(row.get("state") or "") in FINISHED_STATES:
+            # Already gone (r7): the name is recovered without claude stop.
+            self._write_record(name, {**rec, "state": "stopped",
+                                      "stopped_ts": self._now(), "session_id": sid})
+            return sid
         proc = self._run(self._claude_head() + ["stop", sid],
                          capture_output=True, text=True, timeout=STOP_TIMEOUT)
         if proc.returncode != 0:

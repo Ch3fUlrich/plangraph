@@ -144,6 +144,9 @@ def test_stop_blocked_by_name_lock(site):
     run = FakeRun()
     s = make(site, run)
     _running_record(site)
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+                        "kind": "background", "state": "running",
+                        "startedAt": 1_000_000}]
     lock = s._name_lock("alpha")
     lock.acquire()
     out = {}
@@ -170,6 +173,9 @@ def test_stop_by_id_blocked_by_record_name_lock(site):
     run = FakeRun()
     s = make(site, run)
     _running_record(site)
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+                        "kind": "background", "state": "running",
+                        "startedAt": 1_000_000}]
     lock = s._name_lock("alpha")
     lock.acquire()
     out = {}
@@ -217,6 +223,76 @@ def test_mark_ready_blocked_by_name_lock(site):
     t.join(5)
     assert not t.is_alive() and out["res"]["ok"] is True
     assert marker.exists()
+
+
+def test_stop_absent_row_marks_stopped_without_claude_stop(site):
+    # Sonnet r7: a running record whose session already ended has no row to
+    # stop - polling first must recover the name instead of a non-zero
+    # `claude stop` refusing the stop (and with it launch and relaunch) forever.
+    run = FakeRun()
+    s = make(site, run)
+    _running_record(site)
+    res = s.stop(name="alpha")
+    assert res["ok"] is True and res["session_id"] == UUID1
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]  # never called
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "stopped" and rec["session_id"] == UUID1
+    assert rec["stopped_ts"] is not None
+
+
+def test_stop_finished_row_marks_stopped_without_claude_stop(site):
+    # Sonnet r7: a finished row is just as gone as no row at all - the record
+    # is marked stopped without ever calling claude stop.
+    run = FakeRun(agents_rows=[
+        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "finished", "startedAt": 1_000_000}])
+    s = make(site, run)
+    _running_record(site)
+    res = s.stop(name="alpha")
+    assert res["ok"] is True and res["session_id"] == UUID1
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "stopped" and rec["session_id"] == UUID1
+    assert rec["stopped_ts"] is not None
+
+
+def test_stop_null_id_skips_finished_rows_in_resolution(site):
+    # qwen r7: the null-id by-name resolution must skip FINISHED_STATES rows
+    # like _resolve_id does - a finished row is not this record's live
+    # session and its id must never be attributed to the record or stopped.
+    run = FakeRun(stdout="done\n")  # launch resolves no id
+    s = make(site, run, resolve_budget=0.0)
+    res = go(site, s)
+    assert res["session_id"] is None
+    run.agents_rows = [
+        {"id": "f", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "finished", "startedAt": 1_000_000}]  # finished, in window
+    res = s.stop(name="alpha")
+    assert res["ok"] is True and res["session_id"] is None
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "stopped" and rec["session_id"] is None
+    assert rec["stopped_ts"] is not None
+
+
+def test_stop_live_row_still_calls_claude_stop_then_confirms(site):
+    # The existing behaviour stays: a live row is stopped for real, and the
+    # strict poll after the stop confirms the id is gone (D-3193). The one
+    # pre-stop poll proves the row was checked before claude ran.
+    run = FakeRun()
+    s = make(site, run)
+    _running_record(site)
+    run.agents_rows = [
+        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "running", "startedAt": 1_000_000}]
+    res = s.stop(name="alpha")
+    assert res["ok"] is True and res["session_id"] == UUID1
+    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
+        [["claude", "stop", UUID1]]  # exact argv, never rm/kill
+    assert [a[:2] for a, _ in run.calls] == \
+        [["claude", "agents"], ["claude", "stop"], ["claude", "agents"]]
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "stopped" and rec["session_id"] == UUID1
 
 
 def test_unresolved_id_leaves_launched_ts_unset(site):

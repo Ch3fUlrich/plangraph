@@ -295,8 +295,9 @@ def test_relaunch_stop_not_confirmed_refuses_and_never_sees_bg_argv(site):
     run.stdout = "session " + UUID2
     with pytest.raises(ParameterRefused, match="stop not confirmed"):
         s.relaunch("alpha")
+    # r7: the pre-stop poll runs first, then the stop and its failed confirmation
     assert [a[:2] for a, _ in run.calls] == \
-        [["claude", "--bg"], ["claude", "stop"], ["claude", "agents"]]
+        [["claude", "--bg"], ["claude", "agents"], ["claude", "stop"], ["claude", "agents"]]
     assert len(run.launch_calls()) == 1  # the relaunch never handed the run a --bg argv
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["session_id"] == UUID1 and rec["stopped_ts"] is None  # fail closed: unchanged

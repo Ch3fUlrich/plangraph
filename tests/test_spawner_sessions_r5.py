@@ -155,6 +155,9 @@ def test_stop_of_stopped_record_with_live_id_stops_again(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     go(site, s)
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+                        "kind": "background", "state": "running",
+                        "startedAt": 1_000_000}]
     s.stop(name="alpha")
     run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
                         "kind": "background", "state": "running", "startedAt": 1_000_000}]

@@ -10,7 +10,11 @@ from sessions_support import site  # noqa: F401
 
 
 def test_stop_calls_claude_stop_never_rm(site):
-    run = FakeRun(stdout="session " + UUID1)
+    # r7 adapt: the fake rows carry the live row a real stop sees - with no
+    # row the poll-first check marks stopped without calling claude stop.
+    run = FakeRun(stdout="session " + UUID1, agents_rows=[
+        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "running", "startedAt": 1_000_000}])
     s = make(site, run, now=lambda: 2000.0)
     go(site, s)
     res = s.stop(name="alpha")
@@ -20,7 +24,8 @@ def test_stop_calls_claude_stop_never_rm(site):
     # the stop is one subprocess call plus the confirmation agents poll
     assert run.calls[-2][0] == ["claude", "stop", UUID1]
     assert run.calls[-1][0][:3] == ["claude", "agents", "--json"]  # the confirmation
-    assert len(run.calls) == 3  # the earlier launch + the stop + its confirmation
+    # r7: the earlier launch + the pre-stop poll + the stop + its confirmation
+    assert len(run.calls) == 4
     assert run.calls[-2][1]["timeout"] == 30  # bounded stop timeout
     for argv, _ in run.calls:
         assert "rm" not in argv and "kill" not in argv and "-9" not in argv
@@ -106,7 +111,9 @@ def test_stop_already_stopped_runs_no_subprocess(site):
 
 
 def test_stop_argv_is_never_rm_or_kill(site):
-    run = FakeRun(stdout="session " + UUID1)
+    run = FakeRun(stdout="session " + UUID1, agents_rows=[  # r7 adapt: live row
+        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "running", "startedAt": 1_000_000}])
     s = make(site, run)
     go(site, s)
     s.stop(name="alpha")
@@ -119,7 +126,9 @@ def test_stop_argv_is_never_rm_or_kill(site):
 
 def test_win32_stop_argv_uses_resolved_exe(site):
     exe = str(site.tmp_path / "claude.exe")
-    run = FakeRun(stdout="session " + UUID1)
+    run = FakeRun(stdout="session " + UUID1, agents_rows=[  # r7 adapt: live row
+        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "running", "startedAt": 1_000_000}])
     s = make(site, run, platform="win32", which=lambda _: exe)
     go(site, s)
     res = s.stop(name="alpha")
