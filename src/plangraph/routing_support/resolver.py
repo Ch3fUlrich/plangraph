@@ -532,18 +532,11 @@ def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli'):
         return None if shutil.which(harness) else 'harness_missing: ' + harness
-    if harness != 'opencode':
-        return None
+    if harness != 'opencode': return None
     model = row.get('model') or row.get('id') or row.get('model_id')
-    if not model or '/' not in model:
-        return None
-    if model.startswith('console-anthropic/'):
-        from plangraph.planner.model_admission import cached_models, opencode_models
-        try:
-            models = probe(host_probe_env(env)) if probe else cached_models('opencode', opencode_models)
-        except Exception:
-            models = None
-        return None if model in (models or ()) else 'not_served_on_host: ' + model
+    if not model or '/' not in model: return None
+    from plangraph.planner.model_admission import console_host_skip
+    if model.startswith('console-anthropic/'): return console_host_skip(model, probe, env)
     child = host_probe_env(env)
     from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING
     if child.get(OVERLAY_UNKNOWN):

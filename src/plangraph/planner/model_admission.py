@@ -41,6 +41,16 @@ def opencode_models():
             re.fullmatch(r'[\w./:#-]+', line.split()[0])}
 
 
+def console_host_skip(model, probe, env):
+    """Console providers require positive host evidence, including on probe failure."""
+    from plangraph.routing_support.resolver import host_probe_env
+    try:
+        models = probe(host_probe_env(env)) if probe else cached_models('opencode', opencode_models)
+    except Exception:
+        models = None
+    return None if model in (models or ()) else 'not_served_on_host: ' + model
+
+
 def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
     from plangraph.routing_support.private_io import atomic_write_private
     state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE') or
