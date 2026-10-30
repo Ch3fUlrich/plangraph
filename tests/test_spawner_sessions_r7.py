@@ -120,3 +120,37 @@ def test_list_null_id_never_matches_finished_row(site):
     run.agents_rows[0]["state"] = "working"  # a live background row still matches
     row = s.list()["sessions"][0]
     assert row["state"] == "working"
+
+
+def test_audit_caller_unknown_when_getuser_raises(site, monkeypatch):
+    # qwen LOW: getpass.getuser() can raise KeyError in a bare MCP server env;
+    # _caller must fall back to a literal so the audit line still gets written.
+    import getpass
+    monkeypatch.delenv("PLANGRAPH_PRINCIPAL", raising=False)
+
+    def no_user():
+        raise KeyError("USER")
+
+    monkeypatch.setattr(getpass, "getuser", no_user)
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    res = go(site, s)
+    assert res["ok"] is True
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "launch" and line["ok"] is True
+    assert line["caller"] == "unknown"
+
+
+def test_audit_runtime_error_never_replaces_launch_outcome(site, monkeypatch):
+    # qwen LOW: an exception raised inside _audit escaped _audit_guarded (it
+    # caught only OSError/ValueError), replacing the action's own outcome.
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("audit sink exploded")
+
+    monkeypatch.setattr(s, "_audit", boom)
+    res = go(site, s)
+    assert res["ok"] is True and res["session_id"] == UUID1  # the launch stands
+    assert "audit" in res.get("warning", "") and "RuntimeError" in res["warning"]

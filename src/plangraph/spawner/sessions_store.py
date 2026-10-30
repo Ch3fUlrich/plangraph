@@ -89,9 +89,14 @@ class _StoreMixin:
     @staticmethod
     def _caller():
         """Audit caller: the operating principal ($PLANGRAPH_PRINCIPAL) or the
-        OS user - never a source location (R-15)."""
-        import getpass
-        return os.environ.get("PLANGRAPH_PRINCIPAL") or getpass.getuser()
+        OS user - never a source location (R-15). Falls back to a literal when
+        the OS user cannot be determined (qwen LOW: getpass.getuser() can raise
+        KeyError in a bare MCP server env)."""
+        try:
+            import getpass
+            return os.environ.get("PLANGRAPH_PRINCIPAL") or getpass.getuser()
+        except (KeyError, OSError, ImportError):
+            return "unknown"
 
     def _audit(self, action, name, ok, reason, session_id, argv):
         entry = {"ts": self._now(), "action": action, "name": str(name)[:80],
@@ -107,7 +112,7 @@ class _StoreMixin:
         about to be raised) carries a warning field instead (R-22)."""
         try:
             self._audit(action, name, ok, reason, session_id, argv)
-        except (OSError, ValueError) as exc:
+        except Exception as exc:
             note = f"audit write failed: {type(exc).__name__}: {_scrub(str(exc))}"
             if isinstance(outcome, dict):
                 outcome["warning"] = f"{outcome['warning']}; {note}" if outcome.get("warning") else note
