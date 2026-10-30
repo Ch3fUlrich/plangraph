@@ -449,22 +449,14 @@ class SpawnerRunner:
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+            # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
+            # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
+            from .opencode_isolation import close_config_layers
+            oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
-                # D-2905 (1): a spawner-owned per-job store dir, created before
-                # launch and read only after child exit -- the shared store is
-                # child-writable and proves nothing about the served model.
-                import tempfile
-                oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')  # mode 0700
-                self._ocdata_dirs[job_id] = oc_dir
+                # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
+                # child exit -- the shared store is child-writable and proves nothing.
                 child_env['XDG_DATA_HOME'] = oc_dir
-                # D-2921 F1: close every other config layer -- no repo, user,
-                # Claude Code, MCP or plugin tool may re-enable anything.
-                child_env['OPENCODE_DISABLE_PROJECT_CONFIG'] = '1'
-                child_env['OPENCODE_DISABLE_CLAUDE_CODE'] = '1'
-                child_env['OPENCODE_CONFIG_DIR'] = oc_dir
-                empty_cfg = Path(oc_dir) / 'pg-empty.json'
-                empty_cfg.write_text('{}')
-                child_env['OPENCODE_CONFIG'] = str(empty_cfg)
                 # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
                 # config layer at all -- HOME and XDG_CONFIG_HOME live in the
                 # per-job dir and every caller-set OPENCODE_* override outside
@@ -473,7 +465,6 @@ class SpawnerRunner:
                 xdg_config = os.path.join(oc_dir, 'config')
                 os.mkdir(xdg_config, 0o700)
                 child_env['XDG_CONFIG_HOME'] = xdg_config
-                child_env['OPENCODE_DISABLE_CLAUDE_CODE_SKILLS'] = '1'
                 for name in [n for n in child_env
                              if str(n).startswith('OPENCODE_') and n not in _REVIEW_OPENCODE_ENV_ALLOW]:
                     del child_env[name]
@@ -593,6 +584,8 @@ class SpawnerRunner:
                 guard = self._init_git_config_guard(work_dir)
                 if guard is not None:
                     self._git_guards[job_id] = guard
+                from .opencode_isolation import record_baseline
+                record_baseline(job, work_dir)   # D-3236: a writer that changes nothing fails
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -774,6 +767,8 @@ class SpawnerRunner:
             job.exit_code = exit_code
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
+            from .opencode_isolation import fail_unchanged_writer
+            await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
             # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
             # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
