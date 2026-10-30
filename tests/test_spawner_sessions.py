@@ -1518,6 +1518,86 @@ def test_mcp_missing_wrong_type_args_audited(site, monkeypatch):
     assert all(l["ok"] is False and l["reason"] for l in lines)  # same audit path
 
 
+def test_mcp_launch_missing_required_arg_refused_and_audited(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        with pytest.raises(ParameterRefused, match="missing required argument: cwd"):
+            await server.call_tool("plangraph_session_launch", {
+                "name": "alpha", "model": MODEL, "effort": EFFORT,
+                "mcp_config": str(site.mcp), "permission_mode": MODE})
+
+    asyncio.run(go_rpc())
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert [l["action"] for l in lines] == ["launch"]  # exactly one audit line
+    assert lines[0]["ok"] is False
+    assert lines[0]["reason"] == "missing required argument: cwd"
+
+
+def test_mcp_wrong_typed_name_refused_and_audited(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        with pytest.raises(ParameterRefused, match="argument name must be string"):
+            await server.call_tool("plangraph_session_launch", {
+                "name": 5, "cwd": str(site.proj), "model": MODEL, "effort": EFFORT,
+                "mcp_config": str(site.mcp), "permission_mode": MODE})
+
+    asyncio.run(go_rpc())
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert [l["action"] for l in lines] == ["launch"]
+    assert lines[0]["ok"] is False and lines[0]["reason"] == "argument name must be string"
+
+
+def test_mcp_dry_run_string_refused_and_audited(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        with pytest.raises(ParameterRefused, match="argument dry_run must be boolean"):
+            await server.call_tool("plangraph_session_launch", {
+                "name": "alpha", "cwd": str(site.proj), "model": MODEL, "effort": EFFORT,
+                "mcp_config": str(site.mcp), "permission_mode": MODE, "dry_run": "yes"})
+
+    asyncio.run(go_rpc())
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert [l["action"] for l in lines] == ["launch"]  # refused before dispatch, still audited
+    assert lines[0]["ok"] is False
+
+
+def test_mcp_extra_key_refused_writes_one_audit_line(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        with pytest.raises(ParameterRefused,
+                match="undeclared session arguments for plangraph_session_list: bogus"):
+            await server.call_tool("plangraph_session_list", {"bogus": 1})
+
+    asyncio.run(go_rpc())
+    lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
+    assert [l["action"] for l in lines] == ["list"]  # exactly one audit line
+    assert lines[0]["ok"] is False and "bogus" in lines[0]["reason"]
+
+
+def test_mcp_list_with_empty_args_still_works(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        res = await server.call_tool("plangraph_session_list", {})
+        assert res["sessions"] == []
+
+    asyncio.run(go_rpc())
+
+
 def test_stop_rejects_name_id_mismatch(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)

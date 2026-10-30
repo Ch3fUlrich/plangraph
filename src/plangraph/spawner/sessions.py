@@ -402,6 +402,13 @@ class Sessions:
         self._audit_guarded(action, name, True, None, result.get("session_id"), argv, result)
         return _scrub(result)
 
+    def audit_refusal(self, action, name, reason):
+        """Public entry for refusals raised at the MCP boundary, before any
+        _action runs (D-3193 point 6): the same single scrubbed audit line,
+        best effort - the caller's ParameterRefused is the real outcome."""
+        self._audit_guarded(action, name, False, reason, None, None,
+                            ParameterRefused(reason))
+
     # ---- storage -------------------------------------------------------
 
     def _record_path(self, name):

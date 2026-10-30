@@ -140,9 +140,39 @@ SESSION_TOOLS = [
 ]
 TOOLS_METADATA.extend(SESSION_TOOLS)
 for _t in SESSION_TOOLS:
-    # Undeclared argument keys are refused by _session_tool; the schema says
-    # so declaratively too (R-25).
+    # Undeclared argument keys are refused at the MCP boundary
+    # (_session_arg_errors); the schema says so declaratively too (R-25).
     _t['inputSchema']['additionalProperties'] = False
+
+
+def _session_arg_errors(schema, args):
+    """First MCP boundary error for one session tool's arguments, or None
+    (D-3193 point 6). `schema` is the tool's SESSION_TOOLS entry. JSON types
+    are matched strictly - bool is not an integer, and a truthy string is not
+    a boolean - so a wrong-typed value is refused before dispatch instead of
+    being coerced (dry_run="yes")."""
+    if not isinstance(args, dict):
+        return "arguments must be an object"
+    input_schema = schema.get('inputSchema', {})
+    props = input_schema.get('properties', {})
+    undeclared = sorted(set(args) - set(props))
+    if undeclared:
+        return f"undeclared session arguments for {schema['name']}: {', '.join(undeclared)}"
+    for key in input_schema.get('required', ()):
+        if key not in args:
+            return f"missing required argument: {key}"
+    json_types = {'string': str, 'boolean': bool, 'object': dict}
+    for key, value in args.items():
+        expected = props.get(key, {}).get('type')
+        if expected == 'integer':
+            ok = isinstance(value, int) and not isinstance(value, bool)
+        elif expected in json_types:
+            ok = isinstance(value, json_types[expected])
+        else:
+            ok = True  # untyped property: nothing to compare against
+        if not ok:
+            return f"argument {key} must be {expected}"
+    return None
 
 
 for _verb in ('route', 'ps', 'result'):
@@ -180,19 +210,27 @@ class MCPSpawnerServer:
                         sleep=self._session_sleep)
 
     async def _session_tool(self, name, arguments):
-        """Dispatch only the five declared session tools (R-7). Undeclared
-        argument keys are refused outright for every tool, list included;
-        every other argument check happens inside Sessions' _action, so a
-        missing or wrongly typed value is an AUDITED refusal (R-25) - never a
-        KeyError, TypeError or an untracked error."""
-        args = dict(arguments or {})
-        schema = {t['name']: t['inputSchema'] for t in SESSION_TOOLS}.get(name)
+        """Dispatch only the five declared session tools (R-7). The MCP
+        boundary validates arguments against the tool's schema first
+        (_session_arg_errors, D-3193 point 6): undeclared keys, missing
+        required keys and wrong JSON types become audited refusals - never a
+        KeyError, TypeError or a coerced value (dry_run="yes"). Deeper checks
+        stay inside Sessions' _action, so they are audited too (R-25)."""
+        schema = {t['name']: t for t in SESSION_TOOLS}.get(name)
         if schema is None:
             raise ValueError(f"unknown session tool: {name}")
-        undeclared = sorted(set(args) - set(schema.get('properties', {})))
-        if undeclared:
-            raise ParameterRefused(
-                f"undeclared session arguments for {name}: {', '.join(undeclared)}")
+        args = {} if arguments is None else arguments
+        error = _session_arg_errors(schema, args)
+        if error:
+            raw_name = args.get('name') if isinstance(args, dict) else None
+            try:
+                self._sessions().audit_refusal(
+                    name[len('plangraph_session_'):],
+                    raw_name if isinstance(raw_name, str) else '', error)
+            except OSError:
+                pass  # audit is best effort: the refusal below is the outcome
+            raise ParameterRefused(error)
+        args = dict(args)
         sessions = self._sessions()
         if name == 'plangraph_session_launch':
             return await asyncio.to_thread(sessions.launch,
