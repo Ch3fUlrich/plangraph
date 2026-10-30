@@ -125,7 +125,7 @@ def test_real_run(tmp_path, monkeypatch, kind, rule):
     }
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path))
-        job = JobInfo('j', 'running', '', 'm', role='review', cwd=str(tmp_path))
+        job = JobInfo('j', 'running', '', 'm', role='implement', cwd=str(tmp_path))
         job._watchdog_limits = thresholds({'stall_min': .01, 'first_edit_min': .025, 'max_min': .04})
         job._watchdog_baseline = edit_signature(tmp_path)
         job._live_log = tmp_path / 'logs' / 'live.log'
@@ -152,3 +152,12 @@ def test_real_run(tmp_path, monkeypatch, kind, rule):
             path = __import__('pathlib').Path(f'/proc/{pid}/stat')
             assert not path.exists() or path.read_text().rsplit(')', 1)[1].split()[0] == 'Z'
     asyncio.run(run())
+
+
+def test_review_seat_only_max_rule():
+    # Seats never edit and qodercli -p buffers output: quiet 25 min is a working
+    # review (run-a0217dad, run-feca26fc were killed as stalled).
+    limits = thresholds({'stall_min': 1, 'first_edit_min': 2, 'max_min': 90})
+    w = Watchdog(limits, 0, ('files', 'head'), writer=False)
+    assert w.decide(1500, ('files', 'head'), None, None) is None
+    assert w.decide(90 * 60, ('files', 'head'), None, None)['rule'] == 'max'

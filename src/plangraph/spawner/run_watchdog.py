@@ -63,8 +63,9 @@ def is_activity(line):
 
 
 class Watchdog:
-    def __init__(self, limits, start, edit):
-        self.limits, self.start, self.edit = limits, start, edit
+    def __init__(self, limits, start, edit, writer=True):
+        # Non-writer roles never edit and may buffer output: only 'max' applies.
+        self.limits, self.start, self.edit, self.writer = limits, start, edit, writer
         self.edited = False
         self.cpu = None
         self.progress = dict(edit=start, activity=start, cpu=start)
@@ -84,6 +85,8 @@ class Watchdog:
         rule = None
         if now - self.start >= self.limits['max_s']:
             rule = 'max'
+        elif not self.writer:
+            pass
         elif not self.edited:
             if now - (activity if activity is not None else self.start) >= stall:
                 rule = 'no-activity'
@@ -177,7 +180,7 @@ async def collect(runner, job_id, proc):
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
     baseline = getattr(job, '_watchdog_baseline', None)
-    w = Watchdog(limits, job.start_time, baseline)
+    w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
     def scrub(text):
         return redact(redact_env_values(text, env))
     async def reader(stream, name):
