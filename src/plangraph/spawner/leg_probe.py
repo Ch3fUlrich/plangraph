@@ -135,6 +135,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
         shutil.rmtree(root, ignore_errors=True)
 
 
+_INFLIGHT = {}
+
+
 async def before_launch(runner, leg, role, dry_run):
     ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
     if not ttl or dry_run or role not in ('implement', 'fix'):
@@ -143,16 +146,24 @@ async def before_launch(runner, leg, role, dry_run):
     ts = state.last_probe_ts(key(leg))  # successes only: a failed probe is not fresh evidence
     if ts is not None and time.time() - ts < ttl:
         return None
-    result = await probe(runner, leg, store=state)
+    # Single flight per leg: concurrent launches share one in-flight probe and
+    # its verdict, fresh failure included, instead of each paying a model run.
+    pending = _INFLIGHT.get(key(leg))
+    if pending is None:
+        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
+        pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
+    result = await asyncio.shield(pending)
     return None if result['ok'] or result.get('infra') else 'down: ' + result['reason']
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
     from plangraph.planner.legs import DEFAULT_LEGS
-    ids = set(legs)
+    ids = {legs} if isinstance(legs, str) else set(legs or ())
+    if not (ids or all_writers):
+        raise ValueError('select --leg ID or --all-writers')
     unknown = ids - {leg.id for leg in DEFAULT_LEGS}
-    if unknown or not (ids or all_writers):
-        raise ValueError('select --leg ID or --all-writers; unknown legs: ' + ', '.join(sorted(unknown)))
+    if unknown:
+        raise ValueError('unknown legs: ' + ', '.join(sorted(unknown)))
     selected = [leg for leg in DEFAULT_LEGS if leg.id in ids or
                 (all_writers and any(role in leg.roles for role in ('implement', 'fix')))]
     results = []

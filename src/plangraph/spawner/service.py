@@ -26,8 +26,7 @@ class SpawnService(SeatSpawnMixin):
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
         self.leg_reader = leg_reader
-        if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):
-            # Probes write through the same store this service's planner reads.
+        if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):  # probes write where the planner reads
             self.runner.leg_reader = leg_reader
         self.tasks = {}
 
@@ -321,8 +320,7 @@ class SpawnService(SeatSpawnMixin):
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
-                    if hasattr(self, '_running_records'):
-                        self._running_records[job.job_id] = record
+                    getattr(self, '_running_records', {})[job.job_id] = record
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
@@ -338,8 +336,7 @@ class SpawnService(SeatSpawnMixin):
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
-                    reason = unavailable or ('provider_stop' if stop else
-                        (first_reason(job.stderr) if first_reason(job.stderr) else f'harness exit code {job.exit_code}')
+                    reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                         served_model=job.served_model, served_family=job.served_family,

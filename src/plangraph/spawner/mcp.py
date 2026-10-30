@@ -156,8 +156,11 @@ class MCPSpawnerServer:
         from .bench_entry import benchmark_options
         if name == 'plangraph_agent_probe':
             from .leg_probe import probe_many
-            return await probe_many(self.runner, arguments.get('leg', ()),
-                                    arguments.get('all_writers', False), arguments.get('timeout'))
+            try:
+                return await probe_many(self.runner, arguments.get('leg', ()),
+                                        arguments.get('all_writers', False), arguments.get('timeout'))
+            except ValueError as exc:
+                return {'status': 'refused', 'refusal': 'ParameterRefused', 'error': str(exc), 'exit_code': 2}
         try:
             options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
         except Exception as exc:

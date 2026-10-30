@@ -118,7 +118,9 @@ def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
         return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
 
     runner = SpawnerRunner(process_factory=factory)
-    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=20))
+    # a model the runner's catalog accepts: the probe must reach the child commit
+    leg = SimpleNamespace(model='gemini-3.8-flash', harness='agy')
+    result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=20))
     assert result['ok'] is True, result
 
 
