@@ -21,7 +21,8 @@ def test_tier_first_and_swap():
     data = rows()
     plan = plan_spawn(CARD, role='implement', benchmark=data)
     assert plan.first_leg == WRITERS[4]
-    assert plan.legs[-1].id == 'deepseek'
+    last_writer = [w for w in WRITERS if w.tier != 'credit'][-1]  # console credit legs lead WRITER_ORDER or are skipped; the last non-credit writer closes the plan
+    assert plan.legs[-1] == last_writer
     data[WRITERS[4].model], data[WRITERS[6].model] = data[WRITERS[6].model], data[WRITERS[4].model]
     assert plan_spawn(CARD, role='implement', benchmark=data).first_leg == WRITERS[4]
 
