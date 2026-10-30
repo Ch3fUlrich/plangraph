@@ -128,6 +128,7 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true',
                            help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
+    commands.add_parser('credits').add_argument('--json', action='store_true')
     p = commands.add_parser('wait')
     p.add_argument('run_id')
     p.add_argument('--timeout', type=float)
@@ -143,6 +144,10 @@ def main(argv=None):
             if args.verb in ('route', 'spawn'):
                 service.save_refusal(exc, args.role)
             raise
+        if args.verb == 'credits':
+            from .credit import credit_report
+            print(json.dumps(credit_report(service.state), indent=2))
+            return 0
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
         elif args.verb == 'spawn':

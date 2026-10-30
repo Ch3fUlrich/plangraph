@@ -364,7 +364,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
-        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat", "credit_expired")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role)

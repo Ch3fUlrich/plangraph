@@ -6,7 +6,7 @@ preference order (position = preference).  The numbers are defaults; the measure
 windows kept in the registry override them via :func:`with_measured`.  An operator
 file (``{"legs": [...]}``) replaces the whole list via :func:`load_legs`.
 
-Tiers run cheapest first: ``trial``, ``free``, ``subscription``, ``paid``.  The trial
+Tiers run credit-first: ``credit``, ``trial``, ``free``, ``subscription``, ``paid``.  The trial
 tier is empty by default.  Pure data and validation; the only I/O is reading the
 optional JSON override file.
 """
@@ -24,7 +24,7 @@ from plangraph.mimo_policy import MimoPathError, check_mimo_path
 __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "load_legs", "with_measured"]
 
 #: Cost tiers, cheapest first.
-TIERS = ("trial", "free", "subscription", "paid")
+TIERS = ("credit", "trial", "free", "subscription", "paid")
 #: Harness names a leg may run under.
 HARNESSES = ("qodercli", "opencode", "agy")
 #: How a review leg reads the change: with its own tools, or only from a diff the
@@ -117,10 +117,20 @@ DEFAULT_LEGS = (
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
     _legacy["agy-sonnet-5.5"],
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
+    Leg("console-sonnet-5.5", "credit", "opencode", "console-anthropic/claude-sonnet-5-5",
+        "claude", ("128k", "256k", "1m"), 900000, False, True,
+        "Console API credit; expires per route_policy credit_tiers", ("implement", "review")),
+    Leg("console-opus-5.5", "credit", "opencode", "console-anthropic/claude-opus-5-5",
+        "claude", ("128k", "256k", "1m"), 900000, False, True,
+        "Console API credit; expires per route_policy credit_tiers", ("review", "orchestrate")),
+    Leg("console-haiku-5.5", "credit", "opencode", "console-anthropic/claude-haiku-5-5",
+        "claude", ("128k",), 180000, False, True,
+        "Console API credit; expires per route_policy credit_tiers", ("review",)),
 )
 
 # D-2683 operator writer order
 WRITER_ORDER: tuple[str, ...] = (
+    "console-sonnet-5.5",
     "agy-gemini-3.8-flash",
     "mimo-v2.6-pro",
     "openrouter-free",

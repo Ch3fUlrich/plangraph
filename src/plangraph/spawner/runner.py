@@ -1150,6 +1150,7 @@ def spawn_service(*args, **kwargs):
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
+                        from .credit import record_spend; record_spend(self.state, record, chosen, job)
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,

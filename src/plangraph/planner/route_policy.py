@@ -18,12 +18,13 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from datetime import date, datetime, timezone
 
 __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
 _ROLES = ("implement", "review", "orchestrate")
-_KEYS = ("banned_families", "off_families", "paused_harnesses")
+_KEYS = ("banned_families", "off_families", "paused_harnesses", "credit_tiers")
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,8 @@ class RoutePolicy:
     banned_families: tuple[str, ...] = ()
     off_families: tuple[str, ...] = ()
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    credit_tiers: Mapping[str, dict] = field(default_factory=dict)
+    today: date | None = None
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -38,6 +41,10 @@ class RoutePolicy:
         return allowed is None or role in allowed
 
     def skip_reason(self, leg, role: str) -> str | None:
+        if leg.tier == 'credit':
+            entry = self.credit_tiers.get(leg.model.partition('/')[0])
+            if not entry or date.fromisoformat(entry['expires']) < (self.today or datetime.now(timezone.utc).date()):
+                return 'credit_expired'
         # Keeper families too: "zhipu" bans glm legs, "deepseek" every deepseek spelling.
         from .seats import seat_family
 
@@ -97,6 +104,19 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
             problems.append(f"paused_harnesses.{harness}: needs allowed_roles, a subset of {_ROLES}")
             continue
         paused[harness] = tuple(roles)
+    credits = doc.get('credit_tiers', {})
+    if not isinstance(credits, Mapping):
+        problems.append('credit_tiers: must be an object')
+        credits = {}
+    for provider, entry in credits.items():
+        try:
+            if not isinstance(entry, Mapping) or set(entry) - {'expires', 'note'}:
+                raise ValueError()
+            if not isinstance(provider, str) or not provider or not isinstance(entry.get('note', ''), str):
+                raise ValueError()
+            date.fromisoformat(entry['expires'])
+        except (ValueError, TypeError, KeyError):
+            problems.append(f'credit_tiers.{provider}: requires expires YYYY-MM-DD and optional note')
     if problems:
         raise ValueError("invalid route policy: " + "; ".join(problems))
-    return RoutePolicy(banned, off, paused)
+    return RoutePolicy(banned, off, paused, credits)
