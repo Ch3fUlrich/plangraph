@@ -55,7 +55,11 @@ redacted argv and `launched_ms`) is written before the process starts, ending `r
 id, `stopped` on a non-zero exit, `unknown` after a timeout, OSError or unresolved id - `session_id` null, `stopped_ts` unset, so `plangraph_session_list` shows the possible orphan and
 `plangraph_session_relaunch` can replace it. A successful launch removes a stale
 `<name>.ready.json`. Every audit write is guarded: when `audit.log` cannot be written the action's
-own outcome stands and the caller is warned with a `warning` field instead. `stop` on a stopped
+own outcome stands. A successful or failed result dict carries the failure in a `warning` field; a
+refusal or timeout keeps its own error and the audit failure is attached to the raised exception
+only (as a `warning` attribute, not shown to MCP callers). `list` is audited like every action -
+one audit line per call - and `audit.log` is not rotated by the spawner: rotate it with the host's
+log rotation when a poller (e.g. ctx-watchdog) calls `list` often. `stop` on a stopped
 record re-checks `claude agents --json` and stops a still-live id. The stop rule: the strict
 `claude agents` poll runs first, and an id is sent `claude stop <id>` once unless the poll lists it
 `finished` - a listed finished id is marked stopped without any `claude stop`, while an unlisted id
