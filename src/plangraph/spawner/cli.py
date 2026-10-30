@@ -318,9 +318,11 @@ raise SystemExit(code)
                                          ('\n' + tail if tail else ''))
                 result = json.loads(line)
                 deadline = time.monotonic() + max(0, args.wait)
-                while result['status'] == 'running' and time.monotonic() < deadline:
+                runs = result['seats'] if 'seats' in result else [result]   # --seats: group envelope
+                while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
                     time.sleep(min(.02, max(0, deadline - time.monotonic())))
-                    result = service.result(result['run_id'])
+                    runs[:] = [service.result(r['run_id']) if r.get('status') == 'running' else r for r in runs]
+                result = result if 'seats' in result else runs[0]
         elif args.verb == 'ps':
             result = service.ps()
         elif args.verb == 'cancel':
@@ -343,6 +345,8 @@ raise SystemExit(code)
                     seen.add(line)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
+            if 'seats' in result:
+                return 0 if any(r.get('status') != 'refused' for r in result['seats']) else 1
             if 'status' not in result:
                 return 2 if result.get('error') else 0
             code = result.get('exit_code')
