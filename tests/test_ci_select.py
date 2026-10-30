@@ -93,6 +93,11 @@ def test_skill_page_change_runs_pytest():
     assert res["full"] is False
 
 
+def test_skill_non_page_change_is_unknown_full():
+    res = select(["skills/routing-registry/scripts/x.sh"])
+    assert res["full"] is True
+
+
 def test_ci_github_workflow_full():
     res = select([".github/workflows/tests.yml"])
     assert res["full"] is True

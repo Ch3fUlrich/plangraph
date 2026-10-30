@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from routing_registry_skill_lib import (  # noqa: E402
     DATE_IN_NAME_RE, INDEX, INDEX_MAX_LINES, NEEDLE, REFERENCES,
-    REFERENCE_MAX_LINES, REQUIRED_STEPS, ROOT, CODE_ROOT, _links,
+    REFERENCE_MAX_LINES, REQUIRED_STEPS, ROOT, AUTOOS_ROOT, _links,
     _repo_markdown, needs_autoos,
     _script_paths, _skill_files, _tracked_files, _wrapped_repo_paths)
 
@@ -150,7 +150,7 @@ class RoutingRegistrySkillTests(unittest.TestCase):
         missing = ["%s: %s" % (p.relative_to(ROOT), s)
                    for p in _skill_files()
                    for s in _script_paths(p)
-                   if not (CODE_ROOT / s).is_file()]
+                   if not (AUTOOS_ROOT / s).is_file()]
         self.assertEqual(
             missing, [],
             "script path(s) named by the skill do not exist in AutoOS: %s"

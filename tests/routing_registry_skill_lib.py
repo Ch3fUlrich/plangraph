@@ -30,9 +30,12 @@ REFERENCES = SKILL_DIR / "references"
 # otherwise; the skill's own structure is checked here unconditionally.
 _AUTOOS_ENV = os.environ.get("PLANGRAPH_AUTOOS_ROOT", "")
 AUTOOS = Path(_AUTOOS_ENV).resolve() if _AUTOOS_ENV else None
-CODE_ROOT = AUTOOS or ROOT
+if AUTOOS is not None and not (AUTOOS / "tools" / "registry.py").is_file():
+    raise RuntimeError("PLANGRAPH_AUTOOS_ROOT=%s is not an AutoOS checkout "
+                       "(no tools/registry.py)" % AUTOOS)
+AUTOOS_ROOT = AUTOOS or ROOT
 needs_autoos = unittest.skipUnless(
-    AUTOOS is not None and (CODE_ROOT / "tools" / "registry.py").is_file(),
+    AUTOOS is not None,
     "set PLANGRAPH_AUTOOS_ROOT to an AutoOS checkout to check the skill "
     "against the AutoOS registry tool and appliers")
 
@@ -105,8 +108,8 @@ REQUIRED_STEPS = {
 # MED 4: the applier scripts' own argument handling is the truth about their
 # flags. apply.sh refuses unknown arguments with exit 2 by design, so a flag
 # its case arms do not carry is a command that fails when it is run.
-APPLY_SH = CODE_ROOT / "configuration" / "omniroute" / "apply.sh"
-APPLY_PS1 = CODE_ROOT / "configuration" / "omniroute" / "apply.ps1"
+APPLY_SH = AUTOOS_ROOT / "configuration" / "omniroute" / "apply.sh"
+APPLY_PS1 = AUTOOS_ROOT / "configuration" / "omniroute" / "apply.ps1"
 
 # A flag claim inside an invocation: a whitespace token starting with a dash
 # and a letter. Matched as a whole token on purpose — `--go-shaX` must not be
@@ -176,9 +179,9 @@ def _render_help(*args):
     every `--out` claim pass silently."""
     if args not in _RENDER_HELP:
         run = subprocess.run(
-            [sys.executable, str(CODE_ROOT / "tools" / "registry.py"),
+            [sys.executable, str(AUTOOS_ROOT / "tools" / "registry.py"),
              "render", *args, "--help"],
-            cwd=str(CODE_ROOT), capture_output=True, encoding="utf-8",
+            cwd=str(AUTOOS_ROOT), capture_output=True, encoding="utf-8",
             errors="replace")
         if run.returncode != 0 or not run.stdout.strip():
             raise AssertionError(

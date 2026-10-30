@@ -39,7 +39,7 @@ tool is Python-only (`graphifyy[mcp]`, upstream `github.com/safishamsi/graphify`
   option if you want to shave cold-start.
 
 - **Server** (e.g. `<server-host>` — runs graphify via Docker). MCP args aren't shell-expanded, so
-  a raw entry can't inject `$PWD`; the tracked cwd wrapper
+  a raw entry can't inject `$PWD`; the cwd wrapper tracked in
   AutoOS `infra/mcp-servers/bin/graphify-mcp` does it:
   ```sh
   exec docker run -i --rm -v "$PWD:/repo" graphify-mcp:latest "$@"

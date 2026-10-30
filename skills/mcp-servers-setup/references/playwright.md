@@ -28,7 +28,7 @@ claude mcp add -s user playwright -- \
 > for the global install — **9× slower**, and npx additionally serializes on the
 > shared npm cache, so the cost compounds with concurrency. That is what pushed
 > `context7` past the 30 s connect deadline; see
-> `unattended-orchestration` (AutoOS `.agents/skills/unattended-orchestration/SKILL.md`) for why spawn
+> the `unattended-orchestration` skill (kept in AutoOS) for why spawn
 > concurrency, not CPU, is the variable that matters. Update deliberately with
 > `npm i -g @playwright/mcp@latest`.
 
