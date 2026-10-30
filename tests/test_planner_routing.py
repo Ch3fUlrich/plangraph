@@ -11,6 +11,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
                                         plan_spawn, route_card)
 
+CANONICAL_DEFAULT_LEGS = DEFAULT_LEGS  # the true plangraph.planner.legs.DEFAULT_LEGS, before the filter below
 DEFAULT_LEGS = tuple(l for l in DEFAULT_LEGS if l.tier != 'credit')
 WRITER_ORDER = tuple(w for w in WRITER_ORDER if not w.startswith('console-'))
 _route_card = route_card
@@ -52,6 +53,7 @@ def test_default_legs_exact_d25_order():
 
 
 def test_load_legs_none_is_default():
+    assert load_legs(None) is CANONICAL_DEFAULT_LEGS
     assert tuple(l for l in load_legs(None) if l.tier != 'credit') == DEFAULT_LEGS
 
 
