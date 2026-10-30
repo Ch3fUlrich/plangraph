@@ -7,6 +7,9 @@ _audit_argv is per-thread so concurrent actions cannot cross-audit argv.
 Slice 2: names that case-fold onto an existing record or onto Windows
 reserved device names are refused at launch, and _claude_head accepts an
 upper-case .EXE on win32 while still refusing .cmd shims.
+Slice 3: stop and mark_ready take the name lock too (an id-only stop locks
+the resolved record name), and launched_ts is stamped only on a resolved
+launch.
 """
 
 from __future__ import annotations
@@ -121,3 +124,120 @@ def test_claude_head_win32_exe_case_insensitive(site):
     shim = make(site, platform="win32", which=lambda _cmd: "C:/x/claude.cmd")
     with pytest.raises(ParameterRefused, match="shim"):
         shim._claude_head()
+
+
+def _running_record(site):
+    """A hand-written running record for alpha with session id UUID1 - the
+    state a stop must serialize against, with no prior launch calls."""
+    sess = site.state / "sessions"
+    sess.mkdir(parents=True)
+    (sess / "alpha.json").write_text(json.dumps({
+        "name": "alpha", "state": "running", "session_id": UUID1,
+        "ts": 1000, "stopped_ts": None}) + "\n")
+    return sess
+
+
+def test_stop_blocked_by_name_lock(site):
+    # A stop racing a relaunch read the pre-stop record, confirmed its own
+    # stop and overwrote the record _start had just written (r6 seat): stop
+    # takes the name lock and _stop_inner re-reads the record under it.
+    run = FakeRun()
+    s = make(site, run)
+    _running_record(site)
+    lock = s._name_lock("alpha")
+    lock.acquire()
+    out = {}
+
+    def worker():
+        out["res"] = s.stop(name="alpha")
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    try:
+        t.join(0.3)
+        assert t.is_alive()  # stop waits for the name lock
+        assert run.calls == []  # no claude stop ran while the lock is held
+    finally:
+        lock.release()
+    t.join(5)
+    assert not t.is_alive() and out["res"]["ok"] is True
+    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID1]
+
+
+def test_stop_by_id_blocked_by_record_name_lock(site):
+    # An id-only stop locks the RESOLVED record name, not the id string -
+    # otherwise a launch on the name races straight through (r6 seat).
+    run = FakeRun()
+    s = make(site, run)
+    _running_record(site)
+    lock = s._name_lock("alpha")
+    lock.acquire()
+    out = {}
+
+    def worker():
+        out["res"] = s.stop(session_id=UUID1)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    try:
+        t.join(0.3)
+        assert t.is_alive() and run.calls == []  # blocked before any call
+    finally:
+        lock.release()
+    t.join(5)
+    assert not t.is_alive() and out["res"]["ok"] is True
+    assert out["res"]["name"] == "alpha"
+    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID1]
+
+
+def test_mark_ready_blocked_by_name_lock(site):
+    # mark_ready writes the ready marker and must serialize with launch and
+    # relaunch on the same name too (r6 seat).
+    run = FakeRun()
+    s = make(site, run)
+    sess = _running_record(site)
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    marker = sess / "alpha.ready.json"
+    lock = s._name_lock("alpha")
+    lock.acquire()
+    out = {}
+
+    def worker():
+        out["res"] = s.mark_ready("alpha", str(hf))
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    try:
+        t.join(0.3)
+        assert t.is_alive()  # mark_ready waits for the name lock
+        assert not marker.exists()  # no marker written while the lock is held
+    finally:
+        lock.release()
+    t.join(5)
+    assert not t.is_alive() and out["res"]["ok"] is True
+    assert marker.exists()
+
+
+def test_unresolved_id_leaves_launched_ts_unset(site):
+    # _start stamped launched_ts even when the id stayed unresolved (r6
+    # qwen LOW): the stamp marks the last SUCCESSFUL launch only - unset on
+    # a fresh unknown-id record, unchanged when the record carries one.
+    ticks = iter([1000.0 + 10.0 * i for i in range(100)])
+    run = FakeRun(stdout="done\n")  # no id anywhere
+    s = make(site, run, resolve_budget=0.0, now=lambda: next(ticks))
+    res = go(site, s)
+    assert res["ok"] is True and res["session_id"] is None
+    rec_path = site.state / "sessions" / "alpha.json"
+    rec = json.loads(rec_path.read_text())
+    assert rec["state"] == "unknown" and rec.get("launched_ts") is None
+    rec["launched_ts"] = 1500.0  # as if an earlier launch had resolved
+    rec_path.write_text(json.dumps(rec) + "\n")
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf))
+    res = s.relaunch("alpha")  # still no resolvable id
+    assert res["ok"] is True and res["session_id"] is None
+    rec = json.loads(rec_path.read_text())
+    assert rec["state"] == "unknown"
+    assert rec["launched_ts"] == 1500.0  # unchanged from before

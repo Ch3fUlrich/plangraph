@@ -92,8 +92,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         the original exception re-raised. The marker is unlinked only after
         the "running"/"unknown" write. Returns (session_id, warning)."""
         launched_ms = self._now() * 1000.0  # before the start: rows near it count
-        # The write-ahead keeps the record's existing launched_ts: handoff
-        # freshness must keep pointing at the last SUCCESSFUL launch.
+        # The write-ahead keeps any existing launched_ts: only SUCCESSFUL launches stamp it.
         rec.update({"state": "launching", "session_id": None, "job_id": None,
                     "stopped_ts": None, "ts": self._now(),
                     "launched_ms": launched_ms, "argv": self._shown(argv, prompt_arg)})
@@ -124,7 +123,9 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             raise
         rec.update({"state": "running" if sid else "unknown",
                     "session_id": sid, "job_id": sid[:8] if sid else None,
-                    "ts": self._now(), "launched_ts": self._now()})
+                    "ts": self._now()})
+        if sid:  # launched_ts stamps a RESOLVED launch only (r6)
+            rec["launched_ts"] = self._now()
         try:
             self._write_record(name, rec)
             self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
@@ -204,7 +205,15 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         return result
 
     def stop(self, name=None, session_id=None):
-        return self._action("stop", name or session_id or "", lambda: self._stop_inner(name, session_id))
+        # Lock the resolved record name (r6); _stop_inner re-reads under it.
+        key = name
+        if not name and session_id:
+            try:
+                _, key = self._find_record_by_id(session_id)
+            except (ParameterRefused, OSError):
+                key = None
+        with self._name_lock(str(key or session_id or "")):
+            return self._action("stop", name or session_id or "", lambda: self._stop_inner(name, session_id))
 
     def _stop_inner(self, name, session_id):
         if not name and not session_id:
@@ -293,7 +302,8 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         return sid
 
     def mark_ready(self, name, handoff, card=None):
-        return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
+        with self._name_lock(str(name)):  # serializes with launch/relaunch
+            return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
 
     def _mark_ready_inner(self, name, handoff, card):
         if card is not None and not isinstance(card, str):
