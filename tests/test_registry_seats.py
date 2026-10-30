@@ -160,7 +160,12 @@ def test_one_seat_refusal_keeps_the_other_seat(tmp_path, monkeypatch):
     assert sorted(r["status"] for r in out["seats"]) == ["dry_run", "refused"]
     refused = next(r for r in out["seats"] if r["status"] == "refused")
     assert refused["error"] == "seat refused in test"
-    assert svc.result(refused["run_id"])["status"] == "refused"
+    saved = svc.result(refused["run_id"])
+    assert saved["status"] == "refused"
+    # Round-2 luna LOW: the refused seat keeps its group id and its own coverage entry.
+    (own,) = saved["plan"]["seat_coverage"]
+    assert own["seat_group"] == out["seat_group"] and own["leg"] == saved["seat_leg"]
+    assert own["leg"] in {c["leg"] for c in out["seat_coverage"]}
 
 
 def _dispatch(tmp_path, monkeypatch, runner):

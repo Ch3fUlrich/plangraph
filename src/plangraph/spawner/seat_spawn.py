@@ -46,15 +46,18 @@ class SeatSpawnMixin:
         group = 'seats-' + uuid.uuid4().hex
         coverage = {c['leg']: c for c in plan.seat_coverage}
         # Each seat record carries only its own coverage entry plus the group id.
+        own = [dict(coverage.get(seat.id, {'leg': seat.id}), seat_group=group) for seat in plan.review_seats]
         runs = await asyncio.gather(*(
             self._spawn(card=card, prompt=prompt, role=role, writer_families=writer_families,
                         review_of=review_of, _plan=replace(
-                            plan, legs=(seat, *spares[i::n]),
-                            seat_coverage=(dict(coverage.get(seat.id, {'leg': seat.id}), seat_group=group),)),
+                            plan, legs=(seat, *spares[i::n]), seat_coverage=(own[i],)),
                         **options)
             for i, seat in enumerate(plan.review_seats)), return_exceptions=True)
-        # A seat that raised still gets a record; the others keep running and are awaited by callers.
-        runs = [self.save_refusal(r, role) if isinstance(r, Exception) else r for r in runs]
+        # A seat that raised still gets a record (with its group and coverage); the
+        # others keep running and are awaited by callers.
+        runs = [self.save_refusal(r, role, seat_leg=seat.id, plan={'seat_coverage': [own[i]]})
+                if isinstance(r, Exception) else r
+                for i, (seat, r) in enumerate(zip(plan.review_seats, runs))]
         for r in runs:
             if isinstance(r, BaseException):
                 raise r

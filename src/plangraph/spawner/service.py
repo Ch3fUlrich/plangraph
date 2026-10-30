@@ -187,8 +187,8 @@ class SpawnService(SeatSpawnMixin):
             child['ended'] = time.time()
             self._save(child)
 
-    def save_refusal(self, exc, role='implement'):
-        """Persist pre-service refusals using the same record contract."""
+    def save_refusal(self, exc, role='implement', **extra):
+        """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
                       started=time.time(), ended=time.time(),
@@ -196,7 +196,7 @@ class SpawnService(SeatSpawnMixin):
                       exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
                       refusal=type(exc).__name__, error=str(exc),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
-                      evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [])
+                      evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
         try:
             self._save(record)
         except Exception as storage_error:
