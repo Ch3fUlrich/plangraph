@@ -736,8 +736,8 @@ are argv lists, never shell strings.
 Everything invalid is refused with `ParameterRefused` before anything runs: name outside
 `[a-z0-9][a-z0-9-]{0,63}`, cwd outside `cwd_roots`, model/effort/permission_mode missing from the
 config lists, unlisted `mcp_config`, anything but exactly one of `prompt`/`prompt_file`, a blank
-prompt or one starting with `-`, prompt/handoff outside `cwd_roots`, non-boolean `dry_run`/`force`,
-`stop` of a session without a resolved id, or `relaunch` without a ready marker unless `force=True`.
+prompt or one starting with `-`, prompt/handoff outside `cwd_roots`, non-boolean `dry_run`,
+`stop` of a session without a resolved id, or `relaunch` with neither a ready marker nor a `handoff`.
 
 An old id is checked against `claude agents --json` before `launch` replaces a stopped record or a
 relaunch proceeds: a poll that fails or returns garbage refuses the action (fail closed), and a
@@ -774,13 +774,13 @@ action with the argv (prompt length only); a dry run writes nothing and leaves n
 records and audit text pass the env redactor. The record carries a `state`: `launching` (with the
 redacted argv and `launched_ms`) is written before the process starts, ending `running` on a resolved
 id, `stopped` on a non-zero exit, `unknown` after a timeout, OSError or unresolved id - `session_id` null, `stopped_ts` unset, so `plangraph_session_list` shows the possible orphan and
-`plangraph_session_relaunch` with `force=True` can replace it. A successful launch removes a stale
+`plangraph_session_relaunch` can replace it. A successful launch removes a stale
 `<name>.ready.json`. Every audit write is guarded: when `audit.log` cannot be written the action's
 own outcome stands and the caller is warned with a `warning` field instead.
 
 `plangraph_session_mark_ready` writes the marker. Relaunch uses the `handoff` argument, else the
-marker's handoff; `force=True` waives only the freshness check (handoff newer than the record), never
-path containment, and with no marker it restarts bare rather than reusing the record's old handoff.
+marker's handoff; with neither, the relaunch is refused. The freshness check (handoff newer than the
+record) and path containment always apply, and the record's old handoff is never reused.
 The stored launch spec is re-validated before the old session is stopped (`claude stop`, never
 `rm`/`kill`), the previous session id is excluded when resolving the new one (UUID in launcher
 stdout, else a short id on a `background` row of the same name, else the newest `background` row by

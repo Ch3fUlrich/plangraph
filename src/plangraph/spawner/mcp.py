@@ -129,7 +129,7 @@ SESSION_TOOLS = [
          'name': {'type': 'string'}, 'id': {'type': 'string'}}}},
     {'name': 'plangraph_session_relaunch', 'description': 'Relaunch a stopped session from its handoff',
      'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'handoff': {'type': 'string'}, 'force': {'type': 'boolean'}},
+         'name': {'type': 'string'}, 'handoff': {'type': 'string'}},
          'required': ['name']}},
     {'name': 'plangraph_session_mark_ready', 'description': 'Mark a session ready with handoff and card',
      'inputSchema': {'type': 'object', 'properties': {
@@ -207,8 +207,7 @@ class MCPSpawnerServer:
                                            session_id=args.get('id'))
         if name == 'plangraph_session_relaunch':
             return await asyncio.to_thread(sessions.relaunch, args.get('name'),
-                                           args.get('handoff'),
-                                           force=args['force'] if 'force' in args else False)
+                                           args.get('handoff'))
         if name == 'plangraph_session_mark_ready':
             return await asyncio.to_thread(sessions.mark_ready, args.get('name'),
                                            args.get('handoff'), args.get('card'))

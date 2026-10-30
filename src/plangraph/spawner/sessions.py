@@ -615,7 +615,7 @@ class Sessions:
         except (subprocess.TimeoutExpired, OSError, ParameterRefused):
             # The process may have started: state "unknown" records the
             # possible orphan (session_id null, stopped_ts unset) so list
-            # shows it and relaunch force can replace it. The write is best
+            # shows it and relaunch can replace it. The write is best
             # effort: the launch failure stays the outcome.
             rec["state"] = "unknown"
             try:
@@ -810,21 +810,20 @@ class Sessions:
         atomic_write_private(self._marker_path(name), json.dumps(_scrub(marker)) + "\n")
         return {"ok": True, "name": name, "handoff": str(handoff_path)}
 
-    def relaunch(self, name, handoff=None, force=False):
-        return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff, force))
+    def relaunch(self, name, handoff=None):
+        return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
 
-    def _relaunch_handoff(self, rec, cfg, name, handoff, force):
+    def _relaunch_handoff(self, rec, cfg, name, handoff):
         """Effective relaunch handoff: the argument wins, else the ready marker.
-        Freshness is waived under force, never existence or containment. A bare
-        forced relaunch carries no handoff at all - never the record's old one."""
+        With neither, the relaunch is refused ("ready marker or handoff
+        required"). Freshness (handoff newer than the record), existence and
+        containment always apply - the record's old handoff is never reused."""
         if handoff is not None:
             path = self._handoff_arg(handoff, cfg)
         else:
             marker_path = self._marker_path(name)
             if not marker_path.is_file():
-                if force:
-                    return None
-                raise _refuse("ready marker required to relaunch; pass force=True to relaunch bare")
+                raise _refuse("ready marker or handoff required")
             try:
                 marker = json.loads(marker_path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -833,25 +832,18 @@ class Sessions:
             if not isinstance(raw, str) or not raw:
                 raise _refuse("ready marker handoff must be a path string")
             path = self._handoff_arg(raw, cfg)
-        if not force and path.stat().st_mtime < float(rec.get("ts") or 0):
+        if path.stat().st_mtime < float(rec.get("ts") or 0):
             raise _refuse(f"handoff is not newer than the session record: {path}")
         return path
 
-    def _relaunch_inner(self, name, handoff, force):
-        if not isinstance(force, bool):
-            raise _refuse("force must be a real boolean")
+    def _relaunch_inner(self, name, handoff):
         cfg = self._load_config()
         name = self._check_name(name)
         rec = self._find_record(name, None)
         if rec is None:
             raise _refuse(f"unknown session: {name}")
         old_sid = rec.get("session_id")
-        no_old_id = old_sid is None
-        if no_old_id and not force:
-            # With no recorded id the old session cannot be stopped: force
-            # acknowledges that and carries a warning (R-20).
-            raise _refuse(f"record has no session id for {name}; pass force=True to relaunch")
-        handoff_path = self._relaunch_handoff(rec, cfg, name, handoff, force)
+        handoff_path = self._relaunch_handoff(rec, cfg, name, handoff)
         # The stored launch spec is re-validated in full BEFORE the old session
         # is stopped: a relaunch must never cost the user their session.
         prompt_path = Path(rec.get("prompt_file") or "")
@@ -870,8 +862,11 @@ class Sessions:
         bg_argv, env = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv, prompt_arg)
-        if old_sid and rec.get("stopped_ts") is None:
-            self._stop_record(rec, name)  # raises "stop failed" -> nothing is launched
+        if rec.get("stopped_ts") is None:
+            # A record without a session id is left to _stop_record (D-3193):
+            # it resolves a null id by name first. Raises "stop failed"
+            # -> nothing is launched.
+            self._stop_record(rec, name)
         elif old_sid:
             # The record says stopped, but the session may have outlived its
             # stop: `claude agents --json` is the source of truth. A listed id
@@ -913,8 +908,6 @@ class Sessions:
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv, prompt_arg)}
         warnings = []
-        if no_old_id:
-            warnings.append("previous session id was unknown; the old session was not stopped")
         if warning:
             warnings.append(warning)
         if warnings:

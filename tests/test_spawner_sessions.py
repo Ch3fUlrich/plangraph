@@ -218,7 +218,7 @@ def test_refuses_missing_config(site):
     (site.state / "sessions").mkdir(parents=True, exist_ok=True)
     (site.state / "sessions" / "alpha.json").write_text(json.dumps({"name": "alpha", "ts": 1000}))
     with pytest.raises(ParameterRefused, match="config"):
-        s.relaunch("alpha", force=True)
+        s.relaunch("alpha")  # config load refuses first, marker or not
     assert not run.calls
 
 
@@ -464,7 +464,7 @@ def test_relaunch_keeps_name_and_uses_handoff(site):
     actions = [json.loads(l)["action"] for l in
                (site.state / "sessions" / "audit.log").read_text().splitlines()]
     assert actions == ["launch", "mark_ready", "relaunch"]
-    res2 = s.relaunch("alpha", force=True)  # force works without a fresh marker
+    res2 = s.relaunch("alpha", handoff=str(hf))  # a handoff argument works without a marker
     assert res2["name"] == "alpha" and len(run.launch_calls()) == 3
 
 
@@ -485,6 +485,15 @@ def test_relaunch_refuses_without_ready_marker(site):
     with pytest.raises(ParameterRefused, match="newer"):
         s.relaunch("alpha")
     assert len(run.launch_calls()) == 1  # nothing was ever relaunched
+
+
+def test_relaunch_without_marker_or_handoff_refused(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    with pytest.raises(ParameterRefused, match="ready marker or handoff required"):
+        s.relaunch("alpha")  # neither a ready marker nor a handoff argument
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]  # nothing was stopped
 
 
 def test_relaunch_stop_failure_launches_nothing(site):
@@ -605,7 +614,7 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
                 "handoff", "parent", "permission_mode", "dry_run"):
         assert key in props
     assert set(tools["plangraph_session_stop"]["inputSchema"]["properties"]) == {"name", "id"}
-    assert set(tools["plangraph_session_relaunch"]["inputSchema"]["properties"]) == {"name", "handoff", "force"}
+    assert set(tools["plangraph_session_relaunch"]["inputSchema"]["properties"]) == {"name", "handoff"}
     assert set(tools["plangraph_session_mark_ready"]["inputSchema"]["properties"]) == {"name", "handoff", "card"}
     assert tools["plangraph_session_list"]["inputSchema"]["properties"] == {}
     run = FakeRun(stdout="session " + UUID1)
@@ -625,7 +634,8 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
                 {"name": "alpha", "handoff": str(hf)}))["ok"] is True
         assert (await server.call_tool("plangraph_session_list", {}))["sessions"][0]["name"] == "alpha"
         run.stdout = "session " + UUID2  # the new process reports a fresh id; the old one is excluded
-        rel = await server.call_tool("plangraph_session_relaunch", {"name": "alpha", "force": True})
+        hf.write_text("carry on again")  # the marker's handoff must be newer than the record
+        rel = await server.call_tool("plangraph_session_relaunch", {"name": "alpha"})
         assert rel["name"] == "alpha"
         assert (await server.call_tool("plangraph_session_stop", {"name": "alpha"}))["ok"] is True
         refused = await server.handle_rpc_request({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
@@ -633,6 +643,19 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
                 "name": "bad name", "cwd": str(site.proj), "model": MODEL, "effort": EFFORT,
                 "mcp_config": str(site.mcp), "permission_mode": MODE, "prompt": "x", "dry_run": True}}})
         assert refused["error"]["code"] == -32602
+
+    asyncio.run(go_rpc())
+
+
+def test_mcp_relaunch_refuses_undeclared_force(site, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=site.state, session_run=FakeRun())
+    monkeypatch.setenv("PLANGRAPH_SESSIONS_CONFIG", str(site.cfg))
+
+    async def go_rpc():
+        with pytest.raises(ParameterRefused, match="undeclared"):
+            await server.call_tool("plangraph_session_relaunch",
+                                   {"name": "alpha", "force": True})  # cut key: undeclared
 
     asyncio.run(go_rpc())
 
@@ -681,8 +704,6 @@ def test_config_refuses_root_roots_and_bad_scalars(site):
     s = make(site, run)
     with pytest.raises(ParameterRefused, match="dry_run"):
         go(site, s, dry_run=1)  # dry_run must be a real bool
-    with pytest.raises(ParameterRefused, match="force"):
-        s.relaunch("alpha", force=1)  # force must be a real bool
     assert not run.calls
 
 
@@ -796,7 +817,7 @@ def test_files_must_stay_inside_roots(site, tmp_path_factory):
     with pytest.raises(ParameterRefused, match="handoff"):
         s.mark_ready("alpha", str(outside_handoff))
     with pytest.raises(ParameterRefused, match="handoff"):
-        s.relaunch("alpha", handoff=str(outside_handoff), force=True)
+        s.relaunch("alpha", handoff=str(outside_handoff))
 
 
 def test_audit_on_refusals_name_truncated(site):
@@ -809,7 +830,7 @@ def test_audit_on_refusals_name_truncated(site):
     with pytest.raises(ParameterRefused, match="handoff"):
         s.mark_ready("alpha", str(site.tmp_path / "ghost-handoff.md"))
     with pytest.raises(ParameterRefused, match="unknown session"):
-        s.relaunch("ghost", force=True)
+        s.relaunch("ghost")
     lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
     assert [l["action"] for l in lines] == ["launch", "stop", "mark_ready", "relaunch"]
     assert all(l["ok"] is False and l["reason"] for l in lines)
@@ -931,7 +952,7 @@ def test_resolve_short_id_miss_falls_back_and_excludes(site):
     run2.stdout = "done\n"
     run2.agents_rows = [{"id": "x", "sessionId": UUID1, "name": "beta", "kind": "background",
                          "startedAt": 2_000_000}]
-    res2 = s2.relaunch("beta", force=True)
+    res2 = s2.relaunch("beta")  # the marker's handoff carries the relaunch
     assert res2["session_id"] is None and "warning" in res2  # only the excluded row matched
 
 
@@ -967,18 +988,6 @@ def test_timeout_expired_is_audited_failure(site):
     assert lines2[-1]["action"] == "stop" and lines2[-1]["ok"] is False
 
 
-def test_relaunch_force_without_handoff_launches_bare(site):
-    hf = site.tmp_path / "handoff.md"
-    hf.write_text("state at stop")
-    run = FakeRun(stdout="session " + UUID1)
-    s = make(site, run)
-    go(site, s, handoff=str(hf))
-    assert run.launch_calls()[0][-1].startswith("Restart from handoff")  # first launch had one
-    res = s.relaunch("alpha", force=True)  # no marker, no handoff argument
-    assert res["ok"] is True
-    assert run.launch_calls()[-1][-1] == PROMPT  # bare: never the record's old handoff
-
-
 def test_relaunch_refuses_stale_handoff_real_clock(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run, now=lambda: time.time())
@@ -995,18 +1004,6 @@ def test_relaunch_refuses_stale_handoff_real_clock(site):
     with pytest.raises(ParameterRefused, match="newer"):
         s.relaunch("alpha")
     assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-
-
-def test_relaunch_stale_handoff_ok_under_force(site):
-    run = FakeRun(stdout="session " + UUID1)
-    s = make(site, run, now=lambda: time.time())
-    go(site, s)
-    stale = site.tmp_path / "stale.md"
-    stale.write_text("old state")
-    os.utime(stale, (1_000_000, 1_000_000))
-    res = s.relaunch("alpha", handoff=str(stale), force=True)  # force waives freshness
-    assert res["ok"] is True
-    assert run.launch_calls()[-1][-1] == f"Restart from handoff {stale.resolve()}.\n\n" + PROMPT
 
 
 def test_relaunch_marker_handoff_not_string_refuses(site):
@@ -1028,7 +1025,7 @@ def test_relaunch_validation_failure_stops_nothing(site, tmp_path_factory):
     bad = stray / "handoff.md"
     bad.write_text("state")
     with pytest.raises(ParameterRefused, match="handoff"):
-        s.relaunch("alpha", handoff=str(bad), force=True)  # handoff outside the roots
+        s.relaunch("alpha", handoff=str(bad))  # handoff outside the roots
     # a stored spec that no longer validates: nothing is stopped either
     (site.state / "sessions" / "alpha.prompt.txt").unlink()
     hf = site.tmp_path / "handoff.md"
@@ -1278,20 +1275,6 @@ def test_prompt_file_written_before_start(site):
     assert seen["prompt_file"] is True  # written before the session starts
 
 
-def test_relaunch_null_session_id_needs_force(site):
-    run = FakeRun(stdout="done\n")  # nothing resolvable: record session_id is null
-    s = make(site, run, resolve_budget=0.0)
-    res = go(site, s)
-    assert res["session_id"] is None
-    hf = site.tmp_path / "handoff.md"
-    hf.write_text("carry on")
-    s.mark_ready("alpha", str(hf))
-    with pytest.raises(ParameterRefused, match="session id"):
-        s.relaunch("alpha")  # null id refuses unless forced
-    res2 = s.relaunch("alpha", force=True)  # forced: continues with a warning
-    assert res2["ok"] is True and "warning" in res2
-
-
 def test_launched_ms_taken_before_start(site):
     clock = {"n": 0}
 
@@ -1334,16 +1317,18 @@ def test_excluded_id_rejected_for_full_uuid_short_and_fallback(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     go(site, s)  # alpha at UUID1
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
     run.agents_rows = [{"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background",
                         "startedAt": 1_000_000}]
-    res = s.relaunch("alpha", force=True)
+    res = s.relaunch("alpha", handoff=str(hf))
     assert res["session_id"] == UUID2  # the old full UUID in stdout is not the new id
     # a short id row carrying the excluded sessionId is rejected too
     run.agents_rows = [
         {"id": SHORT, "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000},
         {"id": "g", "sessionId": UUID3, "name": "alpha", "kind": "background", "startedAt": 1_000_000}]
     run.stdout = "backgrounded · " + SHORT + " · alpha"
-    res2 = s.relaunch("alpha", force=True)
+    res2 = s.relaunch("alpha", handoff=str(hf))
     assert res2["session_id"] == UUID3
 
 
@@ -1377,7 +1362,9 @@ def test_short_id_match_requires_launched_name_and_background_kind(site):
         {"id": SHORT, "sessionId": UUID1, "name": "delta", "kind": "background", "startedAt": 0},
         {"id": "g", "sessionId": UUID3, "name": "delta", "kind": "background", "startedAt": 2_000_000}]
     run4.stdout = "backgrounded · " + SHORT + " · delta"
-    res4 = s4.relaunch("delta", force=True)
+    hf4 = site.tmp_path / "handoff4.md"
+    hf4.write_text("carry on")
+    res4 = s4.relaunch("delta", handoff=str(hf4))
     assert res4["session_id"] == UUID3  # the excluded id stays rejected despite name + kind
 
 
@@ -1569,7 +1556,9 @@ def test_launch_run_oserror_writes_null_id_record(site):
     assert [r for r in s.list()["sessions"] if r["name"] == "alpha"][0]["id"] is None
     run.broken = False
     run.stdout = "session " + UUID2
-    retry = s.relaunch("alpha", force=True)  # force replaces the orphan record
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    retry = s.relaunch("alpha", handoff=str(hf))  # relaunch replaces the orphan record
     assert retry["ok"] is True and retry["session_id"] == UUID2
     rec2 = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec2["session_id"] == UUID2 and rec2["stopped_ts"] is None
