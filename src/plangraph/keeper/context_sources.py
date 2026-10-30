@@ -31,6 +31,7 @@ COMMIT_LIMIT = 5
 _LANE_LIMIT = 5
 _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
+_MERGE_SCAN = 500
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
@@ -154,9 +155,11 @@ def plan_item_commits(git, project, key, *, fetch=True):
 def _merge_of(git, repo, ref, sha):
     """The first-parent merge on *ref* that introduced *sha*, or ``None``."""
     out = _ok(git, repo, ["rev-list", "--ancestry-path", "--first-parent",
-                          "--merges", "--end-of-options", f"{sha}..{ref}"])
+                          "--merges", f"--max-count={_MERGE_SCAN}",
+                          "--end-of-options", f"{sha}..{ref}"])
     found = (out or "").split()
-    if not found or not valid_commit_ref(found[-1]):
+    # the introducing merge is the oldest; a full window may have cut it off
+    if not found or len(found) >= _MERGE_SCAN or not valid_commit_ref(found[-1]):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                "--end-of-options", found[-1]]) or "").strip()
@@ -191,7 +194,7 @@ def _refs(git, repo):
         return None
     snapshot = (tuple(names), frozenset(remotes.split()))
     with _REFS_LOCK:
-        _REFS[repo] = (now, snapshot)
+        _REFS[repo] = (time.monotonic(), snapshot)
     return snapshot
 
 
@@ -247,23 +250,21 @@ def decision_book(decisions):
     lookups cost one dict probe.  Built once per file version (path, inode,
     mtime, size; up to three files kept); an unreadable source is an empty book.
     """
-    path = getattr(decisions, "_path", None) if decisions is not None else None
-    if path is None:
+    if decisions is None:
         return _build_book({})
+    path = getattr(decisions, "_path", None)
     try:
-        stat = os.stat(path)
+        stat = os.stat(path) if path is not None else None
     except OSError:
-        return _build_book({})
+        stat = None
+    if stat is None:             # no file identity: parse, but do not cache
+        return _build_book(_read_rows(decisions))
     stamp = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
     with _BOOK_LOCK:
         book = _BOOKS.get(stamp)
     if book is not None:
         return book
-    try:
-        rows = {did: tuple(lines) for did, lines in decisions._rows().items()}
-    except Exception:
-        rows = {}
-    book = _build_book(rows)
+    book = _build_book(_read_rows(decisions))
     with _BOOK_LOCK:
         for old in [k for k in _BOOKS if k[0] == stamp[0]]:
             del _BOOKS[old]
@@ -273,13 +274,20 @@ def decision_book(decisions):
     return book
 
 
+def _read_rows(decisions):
+    try:
+        return {did: tuple(lines) for did, lines in decisions._rows().items()}
+    except Exception:
+        return {}
+
+
 def _build_book(rows):
     index = {}
     for did, lines in rows.items():
         for line in lines:
             for token in _TOKEN_RE.findall(line):
                 token = token.strip(".:")
-                if token:
+                if "-" in token or ":" in token:     # key-like only
                     index.setdefault(token, set()).add(did)
     return {"rows": rows, "superseded": superseded_map(rows), "index": index}
 

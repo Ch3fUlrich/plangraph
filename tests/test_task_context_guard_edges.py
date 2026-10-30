@@ -159,3 +159,14 @@ def test_ready_checks_the_repo_before_the_cut_to_n(w, repo):
     _merge_lane(repo, keys[0])
     rows = w.store._ready_items(project="demo", n=1)
     assert [r["key"] for r in rows] == ["demo:B"]
+
+
+def test_a_decisions_source_without_a_file_is_still_read(w):
+    class Source:
+        def _rows(self):
+            return {"D-12": ["| D-12 | demo | GEN-LOWS: premise changed |"]}
+
+    w.store.create_items(w.p("router"), [
+        defn("GEN-LOWS", description="per D-10"), defn("GOAL", ["GEN-LOWS"], kind="goal")])
+    w.store.ctx["decisions"] = Source()
+    assert w.store.show(w.p("reader"), "demo:GEN-LOWS")["newer_decisions"] == ["D-12"]
