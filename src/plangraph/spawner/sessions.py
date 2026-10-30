@@ -550,6 +550,11 @@ class Sessions:
     def _shown(argv, prompt_arg):
         shown = list(argv)
         shown[-1] = f"<{len(prompt_arg)} chars>"
+        # The value after --append-system-prompt is config style prose like the
+        # prompt: log its length, never its text (SESSION-SPAWN-MCP).
+        for i, arg in enumerate(argv):
+            if arg == "--append-system-prompt" and i + 1 < len(argv):
+                shown[i + 1] = f"<{len(argv[i + 1])} chars>"
         return shown
 
     def _agents_rows(self):

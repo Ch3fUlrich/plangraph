@@ -515,7 +515,8 @@ def test_audit_and_record_hold_no_secret(site, monkeypatch):
     with pytest.raises(ParameterRefused) as exc:
         go(site, s, mcp_config=str(site.tmp_path / "sk-test-xyz.json"))
     assert "sk-test-xyz" not in str(exc.value)
-    # returned results scrubbed too (the style text reaches the dry-run argv)
+    # returned results carry no secret either: _shown length-redacts the style
+    # text before it reaches the dry-run argv (SESSION-SPAWN-MCP)
     style = site.tmp_path / "style.txt"
     style.write_text("be terse with sk-test-xyz")
     style.chmod(0o600)  # style_file is trust-checked like the config (R-24)
@@ -523,7 +524,7 @@ def test_audit_and_record_hold_no_secret(site, monkeypatch):
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
     res = go(site, make(site, FakeRun(), config_path=cfg2), name="beta", prompt="abc", dry_run=True)
     assert "sk-test-xyz" not in json.dumps(res)
-    assert "[autoos:redacted]" in json.dumps(res)
+    assert f"<{len('be terse with sk-test-xyz')} chars>" in json.dumps(res)
 
 
 def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
@@ -1783,3 +1784,24 @@ def test_config_rejects_unknown_keys_and_bad_scalar_types(site):
     refused({"windows_launcher": None})
     refused({"windows_launcher": "cmd"})    # only "bg" or "wt"
     refused({"windows_launcher": 1})
+
+
+def test_audit_argv_redacts_style_text(site):
+    # The value after --append-system-prompt is config style prose: the audit
+    # argv must show its length like the prompt, never its text (SESSION-SPAWN-MCP).
+    style_text = "STYLE-SECRET-TEXT"  # 17 chars
+    style = site.tmp_path / "style-secret.txt"
+    style.write_text(style_text)
+    style.chmod(0o600)  # style_file is trust-checked like the config (R-24)
+    cfg2 = site.tmp_path / "sessions-secret.json"
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run, config_path=cfg2)
+    assert go(site, s)["ok"] is True
+    audit_text = (site.state / "sessions" / "audit.log").read_text()
+    assert style_text not in audit_text
+    line = json.loads(audit_text.splitlines()[-1])
+    argv = line["argv"]
+    assert argv[argv.index("--append-system-prompt") + 1] == "<17 chars>"
+    res = go(site, s, name="beta", dry_run=True)
+    assert all(style_text not in a for a in res["argv"])
