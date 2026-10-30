@@ -55,3 +55,67 @@ def test_excluded_writer_family_override_leaves_no_audit_line(tmp_path):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x', role='review', model=leg.model,
                                   writer_families=[leg.family], override_reason='operator selection', dry_run=True))
     assert not (tmp_path / 'spawn-overrides.jsonl').exists()
+
+
+def test_cli_route_error_saves_one_refused_record(tmp_path):
+    # cli.py saved a second refusal after service.route() had already saved one.
+    rc = cli.main(['--state', str(tmp_path), 'spawn', 'x', '--card', '{"estimate_tokens":1000}', '--role', 'review'])
+    assert rc == 2
+    assert len(list((tmp_path / 'runs').glob('run-*/record.json'))) == 1
+
+
+def test_plan_spawn_review_without_writer_refuses():
+    from plangraph.planner.routing import SpawnRefused, plan_spawn
+    with pytest.raises(SpawnRefused, match='review needs a writer family'):
+        plan_spawn({'estimate_tokens': 1000}, role='review', writer_families=())
+
+
+def test_long_seat_verdict_kept_whole(tmp_path):
+    # Live: qwen run-3654dec2 answered 6749 bytes; the record kept the last 4096, cutting the verdict.
+    from plangraph.spawner.service import OUTPUT_KEEP
+    service = SpawnService(state=tmp_path)
+    verdict = 'VERDICT: CHANGES\n' + 'finding line\n' * 600
+    service._save(dict(run_id='run-abc', status='completed', ended=1.0, stdout_tail=verdict,
+                       attempts=[{'leg': 'x', 'status': 'completed', 'stdout_tail': verdict * 20}]))
+    stored = service.result('run-abc')
+    assert stored['stdout_tail'] == verdict
+    attempt = stored['attempts'][0]['stdout_tail']
+    assert attempt.startswith('VERDICT: CHANGES') and '[... output truncated ...]' in attempt
+    assert len(attempt.encode()) <= OUTPUT_KEEP + 64
+
+
+def test_card_refusal_names_missing_estimate_tokens():
+    # D-3234 (d): the refusal names the missing field.
+    from plangraph.planner.routing import SpawnRefused, plan_spawn
+    with pytest.raises(SpawnRefused, match='card required: missing estimate_tokens'):
+        plan_spawn({'risk': 'normal'}, role='implement')
+    with pytest.raises(SpawnRefused, match='^card required$'):
+        plan_spawn({}, role='implement')
+
+
+def test_routing_skill_says_ask_route():
+    # D-3209: AutoOS is read-only; the skill sends model picks to the spawner's route.
+    from pathlib import Path
+    text = Path(__file__).resolve().parents[1].joinpath('skills/routing-registry/SKILL.md').read_text()
+    assert 'ask `route`' in text and 'plangraph.spawner.cli route' in text and 'D-3209' in text
+
+
+def test_opencode_go_qwen_never_a_seat(tmp_path, monkeypatch):
+    # D-3225: opencode-go/qwen3.8-flash via OmniRoute = empty content 6/6 (~289 s).
+    # Not in the catalog today; the guard holds once a registry row admits it.
+    import asyncio
+    from plangraph.planner import routing
+    from plangraph.planner.legs import Leg
+    from plangraph.planner.routing import SpawnRefused, plan_spawn
+    monkeypatch.setattr(routing, 'validate_model', lambda model: None)
+    bad = Leg('og-qwen', 'subscription', 'opencode', 'opencode-go/qwen3.8-flash', 'qwen',
+              ('128k',), 100000, False, roles=('review',))
+    plan = plan_spawn({'estimate_tokens': 1000}, role='review', writer_families=('claude',), legs=(bad,),
+                      leg_reader=lambda *a, **kw: {'state': 'available', 'evidence': None})
+    assert not plan.legs and plan.skipped[0]['reason'] == 'no_verdict_seat'
+    service = SpawnService(state=tmp_path)
+    with pytest.raises(SpawnRefused, match='no-verdict seat'):
+        asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x', role='review',
+                                  model='opencode-go/qwen3.8-flash', writer_families=['claude'],
+                                  override_reason='operator selection', dry_run=True))
+    assert not (tmp_path / 'spawn-overrides.jsonl').exists()

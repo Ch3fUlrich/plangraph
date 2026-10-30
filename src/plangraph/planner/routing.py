@@ -257,7 +257,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Account/combo scope comes from the card and is never a wildcard.
     """
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
-        raise SpawnRefused("card required")
+        raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
     for field in ('paths', 'write_set', 'risk_tags'):
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):
@@ -318,6 +318,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
     # Review writers are keeper families (fail closed on an unknown name).
     writer_set = writer_parts(writer_families) if role == "review" else {w for w in writer_families if w}
+    if role == "review" and not writer_set:   # D-1533: no writer named = none excluded; fail closed
+        raise SpawnRefused("review needs a writer family (writer_families or review_of)")
     # D-3084 per-part seats: only a family that is EVERY writer covers no part.
     excluded = family_spellings((writer_set if role == "review" and len(writer_set) == 1 else set())
                                 | set(exclude_families), legs)
@@ -337,11 +339,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # Route each leg through the same canonical eligibility rules to retain
     # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
-        reason = policy.skip_reason(leg, role)
+        reason = policy.skip_reason(leg, role) or ("limited" if leg.id in limited else None)
         if reason:
             pass
-        elif leg.id in limited:
-            reason = "limited"
         elif leg.family in excluded:
             reason = "excluded_family"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
@@ -364,7 +364,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
-        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff")}
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role)

@@ -484,8 +484,9 @@ class SpawnerRunner:
                     if not isinstance(cfg, dict):
                         raise ValueError('not an object')
                     cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
-                    cfg['mcp'] = {}   # D-2921 F1: drop every MCP server
-                    cfg['plugin'] = []  # D-2921 F1: drop every plugin
+                    cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
+                    from .gateway_witness import tag_session
+                    tag_session(cfg, job_id)   # D-3226: the gateway logs this run's sessionTag
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
@@ -774,11 +775,8 @@ class SpawnerRunner:
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
 
-            # D-2905 (2): the session store is request-side metadata written by
-            # a child that could forge it -- record kind
-            # 'request-side-opencode-store', never 'served'. Only a review
-            # leg's spawner-owned store is read (D-2905 (1)), only when the
-            # spawner found every tool denied, and only on exit 0.
+            # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
+            # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
             if (job.command and job.command[0] == 'opencode' and job.role == 'review'
                     and exit_code == 0):
                 oc_dir = self._ocdata_dirs.get(job_id)
@@ -795,9 +793,11 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
+                if denied:   # D-3226 response-side: the gateway call log names the served model
+                    from .gateway_witness import witness
+                    await asyncio.to_thread(witness, self, job_id, job, env)
 
-            # Free text is child-controlled, including plausible provider headers.
-            # Absence of an authenticated adapter witness must remain explicit.
+            # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:

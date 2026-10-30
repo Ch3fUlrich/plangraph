@@ -17,6 +17,19 @@ from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 
 
+OUTPUT_KEEP = 65536   # bytes of stdout a run record keeps
+
+
+def keep_output(text, limit=OUTPUT_KEEP):
+    """Whole ``text`` up to ``limit`` bytes; beyond it the head (verdict) and the tail, marked."""
+    data = text.encode()
+    if len(data) <= limit:
+        return text
+    head = limit // 4
+    return (data[:head].decode('utf-8', errors='ignore') + '\n[... output truncated ...]\n'
+            + data[-(limit - head):].decode('utf-8', errors='ignore'))
+
+
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -94,9 +107,12 @@ class SpawnService(SeatSpawnMixin):
                 a.get('skip_reason') or 'harness failed' for a in record.get('attempts', [])) or 'harness failed'
         if record.get('error'):
             record['error'] = '; '.join(p[:300] for p in clean(record['error']).split('; '))[:2000]
-        for stream in ('stdout_tail', 'stderr_tail'):
-            if stream in record:
-                record[stream] = clean(record[stream]).encode()[-4096:].decode('utf-8', errors='ignore')
+        if 'stderr_tail' in record:
+            record['stderr_tail'] = clean(record['stderr_tail']).encode()[-4096:].decode('utf-8', errors='ignore')
+        # A seat's verdict is its stdout: keep it whole (D-3226; the 4 KB tail cut a verdict's head).
+        for target in [record, *record.get('attempts', [])]:
+            if isinstance(target.get('stdout_tail'), str):
+                target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
         atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
@@ -229,7 +245,9 @@ class SpawnService(SeatSpawnMixin):
         elif model is not None or leg is not None or not card:
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
-            plan_spawn(card, role=role, legs=())
+            from plangraph.planner.seats import seat_family, writer_parts
+            reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
+            plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *([reviewed] if reviewed else [])])
             chosen = next((l for l in DEFAULT_LEGS if l.id == leg), None) if leg else None
             if leg and chosen is None:
                 raise SpawnRefused('unknown leg')
@@ -239,11 +257,12 @@ class SpawnService(SeatSpawnMixin):
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
             # Every refusal runs before hand_picked: a refused override leaves no audit line.
-            from plangraph.planner.seats import seat_family, writer_parts
-            reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
+            from plangraph.planner.legs import NO_VERDICT_SEATS
+            if role == 'review' and target in NO_VERDICT_SEATS:
+                raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family

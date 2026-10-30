@@ -342,7 +342,7 @@ def test_writer_order_d2683_unavailable_skipped():
 def test_writer_order_d2683_review_order_unchanged():
     # (c) review plan order is unchanged (qodercli-qwen3.8-flash first)
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="review")
+    plan = plan_spawn(c, role="review", writer_families=("claude",))
     assert plan.first_leg.id == "qodercli-qwen3.8-flash"
 
 
@@ -404,7 +404,7 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
         return {"state": "available", "evidence": None}
 
     c_rev = {"estimate_tokens": 20000, "risk_tags": []}
-    plan_rev = plan_spawn(c_rev, role="review", leg_reader=qoder_mock_reader)
+    plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader)
     assert plan_rev.first_leg.id == "qodercli-qwen3.8-flash"
     assert not any(s["leg"] == "qodercli-qwen3.8-flash" for s in plan_rev.skipped)
 

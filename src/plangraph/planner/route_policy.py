@@ -50,6 +50,9 @@ class RoutePolicy:
             return "off_family"
         if not self.allows(leg.harness, role):
             return "paused_harness"
+        from .legs import NO_VERDICT_SEATS
+        if role == "review" and leg.model in NO_VERDICT_SEATS:
+            return "no_verdict_seat"
         return None
 
 

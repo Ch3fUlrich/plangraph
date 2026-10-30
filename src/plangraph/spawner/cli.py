@@ -172,11 +172,8 @@ def main(argv=None):
             if not args.model and not args.leg:
                 if not args.card:
                     raise ValueError('spawn by card; card required')
-                try:
-                    service.route(args.card, args.role, args.writer_family, args.review_of, **options)
-                except Exception as exc:
-                    service.save_refusal(exc, args.role)
-                    raise
+                # service.route saves the refusal record itself (one record per route error).
+                service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:

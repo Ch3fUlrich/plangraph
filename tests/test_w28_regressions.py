@@ -63,7 +63,7 @@ def test_failed_harness_record_tails(tmp_path, monkeypatch, padding):
     assert '[autoos:redacted]' in stored['attempts'][0]['skip_reason']
     if not padding:
         assert 'Error: Model unavailable: x [autoos:redacted]' in stored['stderr_tail']
-    assert len(stored['stdout_tail'].encode()) <= 4096
+    assert stored['stdout_tail'].startswith('x' * 5000)   # whole verdict kept (D-3226)
     assert len(stored['stderr_tail'].encode()) <= 4096
     assert stored['attempts'][0]['skip_reason'] == 'Error: Model unavailable: x [autoos:redacted]'
     assert 'opaque-testsecret' not in json.dumps(stored)
