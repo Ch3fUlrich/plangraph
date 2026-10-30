@@ -734,21 +734,64 @@ class Sessions:
             rec, name = self._find_record_by_id(session_id)
         if rec is None:
             raise _refuse(f"unknown session: {name or session_id}")
-        sid = rec.get("session_id")
-        if not sid:
-            raise _refuse(f"no session id recorded for {rec.get('name')}")
-        self._stop_record(rec, name)
+        if _state(rec) == "stopped":
+            # Nothing can be live behind a stopped record: ok without any
+            # subprocess. A record with no session id is NOT refused here -
+            # _stop_record resolves or clears it (D-3193).
+            return {"ok": True, "name": name, "session_id": rec.get("session_id")}
+        sid = self._stop_record(rec, name)
         return {"ok": True, "name": name, "session_id": sid}
 
     def _stop_record(self, rec, name):
         """claude stop <id> - the one and only stop mechanism, never rm/kill.
-        The argv head is the resolved _claude_head() like every other call."""
-        proc = self._run(self._claude_head() + ["stop", rec.get("session_id")],
+        The argv head is the resolved _claude_head() like every other call.
+
+        A record without a session id gets one resolved first from the strict
+        `claude agents` poll: the newest background row of this name whose
+        startedAt is within 5 s of the record's own launch (launched_ms) is the
+        session to stop; no such row means nothing is left to stop and the
+        record is marked stopped outright. After a zero exit the strict poll is
+        the CONFIRMATION - the id's row must be absent or in a finished state -
+        and only then is the record marked stopped (D-3193). An unconfirmed
+        stop refuses and writes nothing; a failing poll propagates as
+        _ActionFailed and the record is not marked stopped.
+
+        The stopped fields are written as a merged copy, never onto `rec`:
+        relaunch reuses its rec as the base of the new record and must not
+        inherit the stop's state. Returns the stopped session id (None when
+        there was nothing to stop)."""
+        sid = rec.get("session_id")
+        if not sid:
+            cutoff = float(rec.get("launched_ms") or 0) - 5000.0
+            best = None
+            for row in self._agents_rows_strict():
+                if row.get("name") != name or row.get("kind") != "background":
+                    continue
+                row_sid = row.get("sessionId")
+                if not row_sid:
+                    continue
+                started = row.get("startedAt") or 0
+                if started < cutoff:
+                    continue
+                if best is None or started >= (best.get("startedAt") or 0):
+                    best = row
+            sid = (best or {}).get("sessionId")
+            if not sid:
+                # No row, nothing to stop: the record ends here.
+                self._write_record(name, {**rec, "state": "stopped",
+                                          "stopped_ts": self._now()})
+                return None
+        proc = self._run(self._claude_head() + ["stop", sid],
                          capture_output=True, text=True, timeout=STOP_TIMEOUT)
         if proc.returncode != 0:
             raise _refuse(f"stop failed: claude stop exited {proc.returncode}")
-        rec["stopped_ts"] = self._now()
-        self._write_record(name, rec)
+        row = next((r for r in self._agents_rows_strict()
+                    if r.get("sessionId") == sid), None)
+        if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+            raise _refuse(f"stop not confirmed: {sid} still {row.get('state')}")
+        self._write_record(name, {**rec, "state": "stopped",
+                                  "stopped_ts": self._now(), "session_id": sid})
+        return sid
 
     def mark_ready(self, name, handoff, card=None):
         return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))

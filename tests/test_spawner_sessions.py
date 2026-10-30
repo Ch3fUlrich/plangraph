@@ -46,6 +46,8 @@ class FakeRun:
         if self._is_agents(argv):
             return types.SimpleNamespace(returncode=0, stdout=json.dumps(self.agents_rows), stderr="")
         if self._is_stop(argv):
+            if self.stop_rc == 0:
+                self._finish_rows(argv[2] if len(argv) > 2 else None)
             return types.SimpleNamespace(returncode=self.stop_rc, stdout="", stderr="")
         return types.SimpleNamespace(returncode=self.launch_rc, stdout=self.stdout, stderr="")
 
@@ -58,6 +60,15 @@ class FakeRun:
     @staticmethod
     def _is_stop(argv):
         return Path(argv[0]).name in ("claude", "claude.exe") and argv[1:2] == ["stop"]
+
+    def _finish_rows(self, sid):
+        """Answer the confirmation `claude agents` poll a stop triggers: a
+        successful `claude stop <sid>` ends that session's row, so the poll
+        right after the stop must see the id gone or in a finished state
+        (D-3193). Tests modelling an unconfirmed stop override this."""
+        for row in self.agents_rows:
+            if row.get("sessionId") == sid:
+                row["state"] = "finished"
 
     def launch_calls(self):
         return [argv for argv, _ in self.calls if argv[:2] == ["claude", "--bg"]]
@@ -319,9 +330,11 @@ def test_stop_calls_claude_stop_never_rm(site):
     assert res["ok"] is True and res["session_id"] == UUID1
     stop_calls = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
     assert stop_calls == [["claude", "stop", UUID1]]  # exact argv, never rm/kill
-    assert run.calls[-1][0] == ["claude", "stop", UUID1]  # the only subprocess call of the stop
-    assert len(run.calls) == 2  # the earlier launch + exactly one stop call
-    assert run.calls[-1][1]["timeout"] == 30  # bounded stop timeout
+    # the stop is one subprocess call plus the confirmation agents poll
+    assert run.calls[-2][0] == ["claude", "stop", UUID1]
+    assert run.calls[-1][0][:3] == ["claude", "agents", "--json"]  # the confirmation
+    assert len(run.calls) == 3  # the earlier launch + the stop + its confirmation
+    assert run.calls[-2][1]["timeout"] == 30  # bounded stop timeout
     for argv, _ in run.calls:
         assert "rm" not in argv and "kill" not in argv and "-9" not in argv
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
@@ -333,13 +346,102 @@ def test_stop_without_id_refuses(site):
     s = make(site, run, resolve_budget=0.0)
     res = go(site, s)
     assert res["session_id"] is None
-    with pytest.raises(ParameterRefused, match="no session id"):
-        s.stop(name="alpha")
+    # a null id is no longer refused (slice 3a): no row means nothing to stop
+    res = s.stop(name="alpha")
+    assert res["ok"] is True
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "stopped" and rec["stopped_ts"] is not None
     with pytest.raises(ParameterRefused, match="unknown session"):
         s.stop(name="ghost")
     with pytest.raises(ParameterRefused, match="name or id"):
         s.stop()
     assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+
+
+def test_stop_confirmation_still_live_refuses_keeps_record(site):
+    class RowsOutliveStop(FakeRun):
+        """The unconfirmed stop: the row outlives the stop call."""
+        def _finish_rows(self, sid):
+            pass  # the row keeps its "working" state
+
+    run = RowsOutliveStop(stdout="session " + UUID1, agents_rows=[
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "working", "startedAt": 1_000_000}])
+    s = make(site, run)
+    go(site, s)
+    before = (site.state / "sessions" / "alpha.json").read_text()
+    with pytest.raises(ParameterRefused, match="stop not confirmed"):
+        s.stop(name="alpha")
+    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [["claude", "stop", UUID1]]
+    assert (site.state / "sessions" / "alpha.json").read_text() == before  # record unchanged
+
+
+def test_stop_confirmation_poll_failure_leaves_record_unchanged(site):
+    class PollDown(FakeRun):
+        def __call__(self, argv, **kw):
+            if self._is_agents(argv):
+                raise OSError("agents poll down")  # -> _ActionFailed from the strict poll
+            return super().__call__(argv, **kw)
+
+    run = PollDown(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    before = (site.state / "sessions" / "alpha.json").read_text()
+    res = s.stop(name="alpha")
+    # the poll failure propagates as is (_ActionFailed): the stop does not
+    # succeed and the record is never marked stopped
+    assert res["ok"] is False and res["session_id"] is None
+    assert (site.state / "sessions" / "alpha.json").read_text() == before  # record unchanged
+
+
+def test_stop_null_id_finds_id_by_name_and_stops(site):
+    run = FakeRun(stdout="done\n")  # launch resolves no id -> record state "unknown"
+    s = make(site, run, resolve_budget=0.0)
+    res = go(site, s)
+    assert res["session_id"] is None
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "unknown" and rec["session_id"] is None
+    # by stop time the agent is listed: only name + kind + startedAt near the
+    # record's own launch (now*1000 = 1_000_000) may resolve it, newest wins
+    run.agents_rows = [
+        {"id": "s", "sessionId": UUID3, "name": "alpha", "kind": "background",
+         "startedAt": 1_000_000 - 60_000},  # too old for the launch window
+        {"id": "k", "sessionId": UUID2, "name": "alpha", "kind": "foreground",
+         "startedAt": 1_000_000},  # wrong kind
+        {"id": "o", "sessionId": UUID2, "name": "alpha", "kind": "background",
+         "startedAt": 996_000},  # in window but older
+        {"id": "f", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "startedAt": 1_000_000},  # newest in-window background row
+    ]
+    res = s.stop(name="alpha")
+    assert res["ok"] is True and res["session_id"] == UUID1
+    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [["claude", "stop", UUID1]]
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "stopped" and rec["session_id"] == UUID1
+    assert rec["stopped_ts"] is not None
+
+
+def test_stop_already_stopped_runs_no_subprocess(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    s.stop(name="alpha")
+    calls_before = list(run.calls)
+    res = s.stop(name="alpha")  # the record is already stopped
+    assert res["ok"] is True and res["session_id"] == UUID1
+    assert run.calls == calls_before  # not one subprocess call
+
+
+def test_stop_argv_is_never_rm_or_kill(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    s.stop(name="alpha")
+    for argv, _ in run.calls:
+        assert not {"rm", "kill", "killall", "pkill"} & set(argv)
+        assert "-9" not in argv
+    stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+    assert stops == [["claude", "stop", UUID1]]  # claude stop is the only stop mechanism
 
 
 def test_relaunch_keeps_name_and_uses_handoff(site):
@@ -994,9 +1096,11 @@ def test_relaunch_already_stopped_live_row_is_stopped_first(site, state):
     res = s.relaunch("alpha")
     assert res["ok"] is True and res["session_id"] == UUID2
     kinds = [a[:2] for a, _ in run.calls]
-    # the old session is looked up in claude agents and stopped BEFORE the relaunch
+    # the old session is looked up in claude agents and stopped BEFORE the
+    # relaunch; each stop is confirmed by a follow-up agents poll (D-3193)
     assert kinds == [["claude", "--bg"], ["claude", "stop"], ["claude", "agents"],
-                     ["claude", "stop"], ["claude", "--bg"]]
+                     ["claude", "agents"], ["claude", "stop"], ["claude", "agents"],
+                     ["claude", "--bg"]]
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
         [["claude", "stop", UUID1], ["claude", "stop", UUID1]]  # exact argv, never rm/kill
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
