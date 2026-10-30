@@ -62,7 +62,7 @@ def test_ready_card_moves_to_ready(w, repo):
     result = gate(w, repo, key)
     assert result.ready and result.acted and result.state == "ready"
     assert result.question_id is None and result.route_error is None
-    assert result.route.first_leg.harness == "qodercli"
+    assert result.route.first_leg.id == "console-sonnet-5.5"
     assert state_of(w, key) == "ready"
     assert gate(w, repo, key).state == "ready"
     assert open_questions(w, key) == []
@@ -259,5 +259,5 @@ def test_route_for_card_prefers_qodercli(w):
     (key,) = seed(w, [("A", [])])
     put(w, key, estimate_tokens=40000, risk_tags=[])
     route = service.route_for_card(w.store, w.p("router"), key)
-    assert route.first_leg.harness == "qodercli"
+    assert route.first_leg.id == "console-sonnet-5.5"
     assert route.window_class == "128k"

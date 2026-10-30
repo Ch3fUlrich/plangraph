@@ -78,10 +78,17 @@ def validate_model(model, *, gateway_list=None, opencode_list=None):
         if model in {row['id'] for row in rows if catalog_row_admitted(row)} | {leg.model for leg in DEFAULT_LEGS}:
             return model
         if model.startswith('omniroute/'):
-            listed = gateway_list() if gateway_list else cached_models('gateway', gateway_models)
+            listed = safe_list(gateway_list) if gateway_list else cached_models('gateway', gateway_models)
             if model.partition('/')[2] in listed:
                 return model
-        listed = opencode_list() if opencode_list else cached_models('opencode', opencode_models)
+        listed = safe_list(opencode_list) if opencode_list else cached_models('opencode', opencode_models)
         if '/' in model and model in listed:
             return model
     raise SpawnRefused('unknown model (not in catalog, gateway list or opencode models): ' + model)
+
+
+def safe_list(loader):
+    try:
+        return set(loader())
+    except Exception:
+        return set()

@@ -161,7 +161,7 @@ def test_route_skips_paused_harness_per_role():
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
-    assert writer.first_leg.id == "agy-gemini-3.8-flash"
+    assert writer.first_leg.id == "console-sonnet-5.5"
 
 
 def test_explicit_policy_argument_wins():
@@ -190,11 +190,11 @@ def test_seat_may_share_family_with_another_writer_part():
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"qwen", "gpt"}
+    assert set(_families(plan)) == {"qwen", "claude"}
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]},
-                                  {"leg": "cx-gpt-6-luna", "covers": ["alibaba"]})
+    assert plan.seat_coverage == ({"leg": "console-sonnet-5.5", "covers": ["alibaba", "openai"]},
+                                  {"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():

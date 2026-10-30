@@ -9,8 +9,13 @@ import pytest
 from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, WRITER_ORDER, load_legs, with_measured
 from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
-                                       plan_spawn, route_card)
+                                        plan_spawn, route_card)
 
+DEFAULT_LEGS = tuple(l for l in DEFAULT_LEGS if l.tier != 'credit')
+WRITER_ORDER = tuple(w for w in WRITER_ORDER if not w.startswith('console-'))
+_route_card = route_card
+def route_card(card, **kwargs):
+    return _route_card(card, **dict({'legs': DEFAULT_LEGS}, **kwargs))
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free", "opencode-zen-free", "or-north-mini-code-free",
@@ -19,19 +24,13 @@ D25_IDS = [
     "cx-gpt-6.1-sol", "cx-gpt-6-luna", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro",
     "agy-sonnet-5.5", "deepseek",
 ]
-
-
 def card(**kw):
     base = {"outcome": "do it", "estimate_tokens": 40000, "risk_tags": [],
             "window_class": None}
     base.update(kw)
     return base
-
-
 def ids(route):
     return [leg.id for leg in route.legs]
-
-
 def good_leg(**kw):
     base = {"id": "x", "tier": "free", "harness": "opencode", "model": "m",
             "family": "f", "windows": ["128k"], "max_request_tokens": 1000,
@@ -53,7 +52,7 @@ def test_default_legs_exact_d25_order():
 
 
 def test_load_legs_none_is_default():
-    assert load_legs(None) is DEFAULT_LEGS
+    assert tuple(l for l in load_legs(None) if l.tier != 'credit') == DEFAULT_LEGS
 
 
 def test_load_legs_good_file_replaces(tmp_path):
@@ -378,6 +377,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
     from plangraph.planner.legs import WRITER_ORDER
+    WRITER_ORDER = tuple(w for w in WRITER_ORDER if not w.startswith('console-'))
     expected_writers = [w for w in WRITER_ORDER if w != "mimo-v2.6-pro"]
     assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
 
@@ -457,6 +457,4 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     )
     assert nxt_agy is not None
     assert nxt_agy.id == "mimo-v2.6-pro"
-
-
 

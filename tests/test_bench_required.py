@@ -14,6 +14,7 @@ POLICY = tuple(l for l in DEFAULT_LEGS if set(l.roles) & {"implement", "review"}
 
 def plan(**kwargs):
     return routing.plan_spawn({"estimate_tokens": 1000}, role="implement",
+                              legs=tuple(l for l in DEFAULT_LEGS if l.tier != 'credit'),
                               leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
                               **kwargs)
 

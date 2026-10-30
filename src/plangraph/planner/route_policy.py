@@ -114,7 +114,9 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
                 raise ValueError()
             if not isinstance(provider, str) or not provider or not isinstance(entry.get('note', ''), str):
                 raise ValueError()
-            date.fromisoformat(entry['expires'])
+            parsed = date.fromisoformat(entry['expires'])
+            if parsed.isoformat() != entry['expires']:
+                raise ValueError()
         except (ValueError, TypeError, KeyError):
             problems.append(f'credit_tiers.{provider}: requires expires YYYY-MM-DD and optional note')
     if problems:
