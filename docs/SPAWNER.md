@@ -736,7 +736,7 @@ are argv lists, never shell strings.
 Everything invalid is refused with `ParameterRefused` before anything runs: name outside
 `[a-z0-9][a-z0-9-]{0,63}`, cwd outside `cwd_roots`, model/effort/permission_mode missing from the
 config lists, unlisted `mcp_config`, anything but exactly one of `prompt`/`prompt_file`, a blank
-prompt or one starting with `-`, prompt/handoff outside `file_roots`, non-boolean `dry_run`/`force`,
+prompt or one starting with `-`, prompt/handoff outside `cwd_roots`, non-boolean `dry_run`/`force`,
 `stop` of a session without a resolved id, or `relaunch` without a ready marker unless `force=True`.
 
 An old id is checked against `claude agents --json` before `launch` replaces a stopped record or a
@@ -745,27 +745,28 @@ listed id outside `finished`/`stopped` refuses `launch` with "use relaunch" - in
 it only reads. Once the process has started, a record write failure still reports the started id.
 
 The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
-`~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `file_roots`, `models`,
-`efforts`, `permission_modes`, `mcp_configs`, `style_file`, `compact_window`, `ctx_cap_tokens`,
-`windows_launcher`. It fails closed - an unknown key, bad scalar or missing file refuses every
-action and there is no default model. A present key must carry its type and may not be `null`:
-`style_file` a string path, `windows_launcher` only `bg` or `wt`, `compact_window` a digit string,
-`ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
+`~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `models`, `efforts`,
+`permission_modes`, `mcp_configs`, `style_text`, `compact_window`, `ctx_cap_tokens`. It fails
+closed - an unknown key (including the removed `style_file`, `file_roots` and `windows_launcher`),
+bad scalar or missing file refuses every action and there is no default model. A present key must
+carry its type and may not be `null`: `style_text` a non-empty string, `compact_window` a digit
+string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
 `compact_window` to `330000`.
 
-On POSIX (skipped on Windows) every file the config makes us obey must be ours alone: the config
-itself must not be a symlink and must be a regular file owned by the current user and not
-group/world-writable; the same ownership and mode checks apply to its directory, to every
-`mcp_configs` entry and to `style_file`, plus the directory each of those lives in (only that
-immediate parent; deeper ancestors are covered by the same-account limit below). Checks fstat
-the opened file, never the path, and a symlink alias to an allowed `mcp_config` is fine because the
-resolved path is what is compared. `style_file` is stricter: it must resolve inside
-`cwd_roots`/`file_roots` and must not be a symlink itself - the configured path is lstat'ed. The
-config and `style_file` are read through the descriptor their checks ran on, so the bytes obeyed
-are the bytes that passed the checks and a path swapped after a check cannot substitute content.
-These checks prove the files are owned by the invoking user account and writable by nobody else -
-they cannot defend against that same account or root rewriting them, and on Windows they are not
-applied at all.
+**Threat model.** The caller is the authenticated MCP principal. Other processes of the same OS
+account are trusted - they can already run `claude` themselves - so same-account file swaps are out
+of scope. The config is the trust anchor: on POSIX it must be a regular file (not a symlink) owned
+by the current user with mode 0600 or stricter (no group/other bits), opened once with `O_NOFOLLOW`
+and read from that fd. Windows applies no POSIX checks.
+
+The config read is fail-closed on POSIX: a platform without `O_NOFOLLOW` refuses the config
+outright, `os.open` with `O_NOFOLLOW` refuses symlinks and any open failure ("not a readable
+regular non-symlink file"), and the fstat of that one descriptor must show a regular file owned by
+the current user with mode 0600 or stricter. The bytes obeyed are read from that same fd, never
+re-opened by name after the checks (a swapped path cannot substitute content). `prompt_file` and
+`handoff` must resolve inside `cwd_roots` and be readable regular files. An `mcp_config` must match
+one of the `mcp_configs` entries by exact resolved path and still be a regular file when the action
+runs; entries get no further per-file checks.
 
 State lives under `<spawner state>/sessions/`: a `<name>.json` record per session, `<name>.prompt.txt`
 (0600), the `<name>.ready.json` marker (handoff, card), and `audit.log` - one scrubbed JSON line per
@@ -796,6 +797,6 @@ cache creation - from the transcript under `~/.claude/projects/`, reading only t
 
 On Windows every `claude` invocation - the launch, `claude stop` and the `claude agents` poll -
 must run the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
-refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`, or with
-`windows_launcher: "wt"` in a detached `wt.exe` window that only exposes name + startedAt, so the
-id comes from `claude agents`.
+refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`; the detached
+`wt.exe` window path (exposing name + startedAt only, so the id comes from `claude agents`) still
+exists in the launcher code, but no config key selects it any more.

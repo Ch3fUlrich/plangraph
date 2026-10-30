@@ -96,10 +96,11 @@ def site(tmp_path, monkeypatch):
     mcp = tmp_path / "mcp.json"
     write_config(mcp, "{}")
     cfg = tmp_path / "sessions.json"
+    # tmp_path is admitted via cwd_roots (file_roots is a cut config key);
+    # the tests keep writing their handoff/prompt fixtures under tmp_path.
     write_config(cfg, json.dumps({
-        "cwd_roots": [str(root)], "models": [MODEL], "efforts": [EFFORT],
-        "permission_modes": [MODE], "mcp_configs": [str(mcp)], "ctx_cap_tokens": 300000,
-        "file_roots": [str(tmp_path)]}))
+        "cwd_roots": [str(root), str(tmp_path)], "models": [MODEL], "efforts": [EFFORT],
+        "permission_modes": [MODE], "mcp_configs": [str(mcp)], "ctx_cap_tokens": 300000}))
     return types.SimpleNamespace(tmp_path=tmp_path, home=home, root=root, proj=proj,
                                  mcp=mcp, cfg=cfg, state=tmp_path / "state")
 
@@ -118,6 +119,15 @@ def go(site, s, name="alpha", **over):
     return s.launch(**args)
 
 
+def admit_windows_launcher(monkeypatch):
+    """windows_launcher is refused as an unknown config key (cut feature), but
+    the wt argv path in _build_argv (unchanged) still reads it from the config
+    dict - the wt tests admit just that key again to keep exercising it."""
+    from plangraph.spawner import sessions as sessions_mod
+    monkeypatch.setattr(sessions_mod, "SESSION_CONFIG_KEYS",
+                        sessions_mod.SESSION_CONFIG_KEYS | {"windows_launcher"})
+
+
 def test_argv_linux_is_list_no_shell(site):
     run = FakeRun(stdout="session " + UUID1)
     pop = FakePopen()
@@ -134,12 +144,9 @@ def test_argv_linux_is_list_no_shell(site):
     assert kw["env"]["FLEET_SESSION_NAME"] == "alpha"
     assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "330000"
     assert not pop.calls
-    # style_file is appended via --append-system-prompt when configured
-    style = site.tmp_path / "style.txt"
-    style.write_text("be terse\n")
-    style.chmod(0o600)  # style_file is trust-checked like the config (R-24)
+    # style_text is appended via --append-system-prompt when configured
     cfg2 = site.tmp_path / "sessions2.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": "be terse"}))
     s.stop(name="alpha")  # a live record may only be replaced via relaunch
     run2 = FakeRun(stdout="session " + UUID1)
     s2 = make(site, run2, config_path=cfg2)
@@ -149,7 +156,7 @@ def test_argv_linux_is_list_no_shell(site):
     assert argv2[-3:] == ["--append-system-prompt", "be terse", PROMPT]
 
 
-def test_argv_windows_bg_and_wt(site):
+def test_argv_windows_bg_and_wt(site, monkeypatch):
     exe = str(site.tmp_path / "claude.exe")
     run = FakeRun(stdout="session " + UUID1)
     pop = FakePopen()
@@ -161,6 +168,7 @@ def test_argv_windows_bg_and_wt(site):
     assert kw.get("shell") in (None, False)
     assert not pop.calls
     s.stop(name="alpha")  # a live record may only be replaced via relaunch
+    admit_windows_launcher(monkeypatch)
     cfg2 = site.tmp_path / "sessions-wt.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     run2 = FakeRun(stdout="session " + UUID1, agents_rows=[
@@ -199,11 +207,12 @@ def test_refuses_bad_name(site):
     assert not (site.state / "sessions").exists() or not list((site.state / "sessions").glob("*.json"))
 
 
-def test_refuses_cwd_outside_roots(site):
+def test_refuses_cwd_outside_roots(site, tmp_path_factory):
     run = FakeRun()
     s = make(site, run)
-    elsewhere = site.tmp_path / "elsewhere"
-    elsewhere.mkdir()
+    # a sibling of tmp_path: outside every configured root (the fixture admits
+    # tmp_path itself via cwd_roots)
+    elsewhere = tmp_path_factory.mktemp("outside-cwd")
     with pytest.raises(ParameterRefused, match="cwd_roots"):
         go(site, s, cwd=str(elsewhere))
     link = site.root / "link"
@@ -518,11 +527,9 @@ def test_audit_and_record_hold_no_secret(site, monkeypatch):
     assert "sk-test-xyz" not in str(exc.value)
     # returned results carry no secret either: _shown length-redacts the style
     # text before it reaches the dry-run argv (SESSION-SPAWN-MCP)
-    style = site.tmp_path / "style.txt"
-    style.write_text("be terse with sk-test-xyz")
-    style.chmod(0o600)  # style_file is trust-checked like the config (R-24)
     cfg2 = site.tmp_path / "sessions-secret.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    write_config(cfg2, json.dumps(
+        {**json.loads(site.cfg.read_text()), "style_text": "be terse with sk-test-xyz"}))
     res = go(site, make(site, FakeRun(), config_path=cfg2), name="beta", prompt="abc", dry_run=True)
     assert "sk-test-xyz" not in json.dumps(res)
     assert f"<{len('be terse with sk-test-xyz')} chars>" in json.dumps(res)
@@ -650,6 +657,70 @@ def test_config_trust_refuses_loose_permissions(site, monkeypatch):
         go(site, s, name="beta")
 
 
+def test_config_symlink_refused(site):
+    alias = site.tmp_path / "alias-cfg2.json"
+    alias.symlink_to(site.cfg)
+    with pytest.raises(ParameterRefused, match="symlink"):
+        go(site, make(site, FakeRun(), config_path=alias))  # O_NOFOLLOW refuses the alias
+
+
+def test_config_mode_0640_refused(site):
+    site.cfg.chmod(0o640)  # group-readable: any group/other bit refuses
+    try:
+        with pytest.raises(ParameterRefused, match="0600"):
+            go(site, make(site, FakeRun()))
+    finally:
+        site.cfg.chmod(0o600)
+
+
+def test_config_owned_by_other_uid_refused(site, monkeypatch):
+    # A non-root test cannot chown the config, so falsify the owner its fd
+    # reports to fstat: the check must notice the file is not ours.
+    ino = os.stat(site.cfg).st_ino
+    real_fstat = os.fstat
+
+    def lying_fstat(fd, *args, **kwargs):
+        st = real_fstat(fd, *args, **kwargs)
+        if st.st_ino == ino:
+            return os.stat_result((st[0], st[1], st[2], st[3], 12345, st[5], st[6], st[7], st[8], st[9]))
+        return st
+
+    monkeypatch.setattr(os, "fstat", lying_fstat)
+    with pytest.raises(ParameterRefused, match="owned"):
+        go(site, make(site, FakeRun()))
+
+
+def test_config_read_without_no_follow_refused(site, monkeypatch):
+    monkeypatch.delattr(os, "O_NOFOLLOW")  # no safe open possible: refuse, never fall back
+    with pytest.raises(ParameterRefused, match="O_NOFOLLOW"):
+        go(site, make(site, FakeRun()))
+
+
+def test_config_style_text_non_string_refused(site):
+    for bad in (5, None, "", ["be terse"]):
+        bad_cfg = site.tmp_path / "sessions-style-bad.json"
+        write_config(bad_cfg, json.dumps({**json.loads(site.cfg.read_text()), "style_text": bad}))
+        with pytest.raises(ParameterRefused, match="style_text"):
+            go(site, make(site, FakeRun(), config_path=bad_cfg))
+
+
+def test_config_refuses_old_keys_as_unknown(site):
+    for key, value in (("style_file", "style.txt"), ("file_roots", [str(site.tmp_path)]),
+                       ("windows_launcher", "wt")):
+        old_cfg = site.tmp_path / "sessions-old-key.json"
+        write_config(old_cfg, json.dumps({**json.loads(site.cfg.read_text()), key: value}))
+        with pytest.raises(ParameterRefused, match="unknown"):
+            go(site, make(site, FakeRun(), config_path=old_cfg))
+
+
+def test_prompt_file_outside_cwd_roots_refused(site, tmp_path_factory):
+    stray = tmp_path_factory.mktemp("stray-prompt")
+    outside = stray / "prompt.md"
+    outside.write_text("from outside")
+    with pytest.raises(ParameterRefused, match="prompt_file"):
+        go(site, make(site, FakeRun()), prompt=None, prompt_file=str(outside))
+
+
 def test_files_must_stay_inside_roots(site, tmp_path_factory):
     stray = tmp_path_factory.mktemp("stray")
     outside_prompt = stray / "prompt.md"
@@ -667,13 +738,6 @@ def test_files_must_stay_inside_roots(site, tmp_path_factory):
         s.mark_ready("alpha", str(outside_handoff))
     with pytest.raises(ParameterRefused, match="handoff"):
         s.relaunch("alpha", handoff=str(outside_handoff), force=True)
-    # file_roots (absolute dirs) admit them
-    s.stop(name="alpha")  # a live record may only be replaced via relaunch
-    cfg2 = site.tmp_path / "sessions-fr.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "file_roots": [str(stray)]}))
-    s2 = make(site, FakeRun(stdout="session " + UUID1), config_path=cfg2)
-    res = go(site, s2, prompt=None, prompt_file=str(outside_prompt), handoff=str(outside_handoff))
-    assert res["ok"] is True
 
 
 def test_audit_on_refusals_name_truncated(site):
@@ -792,8 +856,9 @@ def test_win32_stop_argv_uses_resolved_exe(site):
     assert stops == [[exe, "stop", UUID1]]  # the resolved .exe, never bare "claude"
 
 
-def test_win32_wt_id_resolution_polls_resolved_exe(site):
+def test_win32_wt_id_resolution_polls_resolved_exe(site, monkeypatch):
     exe = str(site.tmp_path / "claude.exe")
+    admit_windows_launcher(monkeypatch)
     cfg2 = site.tmp_path / "sessions-wt-resolve.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     run = FakeRun(stdout="session " + UUID1, agents_rows=[
@@ -806,7 +871,8 @@ def test_win32_wt_id_resolution_polls_resolved_exe(site):
     assert polls and all(a[0] == exe for a in polls)  # the resolved .exe, never bare "claude"
 
 
-def test_launcher_effective_wt_only_on_win32(site):
+def test_launcher_effective_wt_only_on_win32(site, monkeypatch):
+    admit_windows_launcher(monkeypatch)
     cfg2 = site.tmp_path / "sessions-wt2.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[
@@ -871,11 +937,12 @@ def test_timeout_expired_is_audited_failure(site):
     assert lines2[-1]["action"] == "stop" and lines2[-1]["ok"] is False
 
 
-def test_wt_popen_oserror_returns_audited_failure(site):
+def test_wt_popen_oserror_returns_audited_failure(site, monkeypatch):
     class BrokenPopen(FakePopen):
         def __call__(self, argv, **kw):
             raise OSError(2, "no wt.exe")
 
+    admit_windows_launcher(monkeypatch)
     cfg2 = site.tmp_path / "sessions-wt3.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     exe = str(site.tmp_path / "claude.exe")
@@ -1159,8 +1226,9 @@ def test_docs_context_pct_fraction(site):
     assert "context_pct" in section and "fraction" in section and "0..1" in section
 
 
-def test_wt_argv_escapes_semicolons(site):
+def test_wt_argv_escapes_semicolons(site, monkeypatch):
     exe = str(site.tmp_path / "claude.exe")
+    admit_windows_launcher(monkeypatch)
     cfg2 = site.tmp_path / "sessions-wt-semi.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     semi = site.root / "we;ird"
@@ -1232,7 +1300,7 @@ def test_launched_ms_taken_before_start(site):
     assert res["session_id"] == UUID2
 
 
-def test_resolve_polls_every_half_second_until_budget(site):
+def test_resolve_polls_every_half_second_until_budget(site, monkeypatch):
     class LateRows(FakeRun):
         def __init__(self, row_name="alpha"):
             super().__init__(stdout="done\n", agents_rows=[])
@@ -1255,6 +1323,7 @@ def test_resolve_polls_every_half_second_until_budget(site):
     assert run.agents_calls == 3 and sleeps[:2] == [0.5, 0.5]
     # the wt launcher polls the same way
     exe = str(site.tmp_path / "claude.exe")
+    admit_windows_launcher(monkeypatch)
     cfg2 = site.tmp_path / "sessions-wt-poll.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     sleeps2 = []
@@ -1383,17 +1452,6 @@ def test_config_refuses_symlink_and_nonregular(site):
         go(site, s2)
 
 
-def test_config_parent_dir_must_be_trusted(site):
-    parent = site.cfg.parent
-    saved = stat.S_IMODE(parent.stat().st_mode)
-    parent.chmod(0o777)  # a writable dir lets someone swap the config
-    s = make(site, FakeRun())
-    with pytest.raises(ParameterRefused, match="config"):
-        go(site, s)
-    parent.chmod(saved)
-    assert go(site, make(site, FakeRun()))["ok"] is True  # trusted dir is fine
-
-
 def test_config_owner_mismatch_refused(site, monkeypatch):
     monkeypatch.setattr(os, "getuid", lambda: 12345)  # config owned by someone else
     with pytest.raises(ParameterRefused, match="owned"):
@@ -1407,63 +1465,6 @@ def test_config_world_writable_refused(site):
             go(site, make(site, FakeRun()))
     finally:
         site.cfg.chmod(0o600)
-
-
-def test_group_writable_sub_dir_refused(site):
-    sub = site.home / "sub"
-    sub.mkdir()
-    sub.chmod(0o770)  # even the parent dir of a style file must be ours alone
-    (sub / "style.md").write_text("p")
-    (sub / "style.md").chmod(0o600)
-    cfg = json.loads(site.cfg.read_text())
-    cfg2 = site.tmp_path / "sessions-sub.json"
-    write_config(cfg2, json.dumps({**cfg, "style_file": str(sub / "style.md")}))
-    with pytest.raises(ParameterRefused, match="group/world-writable"):
-        go(site, make(site, FakeRun(), config_path=cfg2))
-
-
-def test_mcp_owner_mismatch_refused(site, monkeypatch):
-    # A non-root test cannot chown the mcp file, so falsify the owner it
-    # reports to fstat: the check must notice the file is not ours.
-    ino = os.stat(site.mcp).st_ino
-    real_fstat = os.fstat
-
-    def lying_fstat(fd, *args, **kwargs):
-        st = real_fstat(fd, *args, **kwargs)
-        if st.st_ino == ino:
-            return os.stat_result((st[0], st[1], st[2], st[3], 12345, st[5], st[6], st[7], st[8], st[9]))
-        return st
-
-    monkeypatch.setattr(os, "fstat", lying_fstat)
-    with pytest.raises(ParameterRefused, match="mcp"):
-        go(site, make(site, FakeRun()))
-
-
-def test_mcp_world_writable_refused(site):
-    os.chmod(site.mcp, 0o666)
-    try:
-        with pytest.raises(ParameterRefused, match="mcp"):
-            go(site, make(site, FakeRun()))
-    finally:
-        os.chmod(site.mcp, 0o600)
-
-
-def test_mcp_and_style_trust_refuses_loose_files(site):
-    cfg = json.loads(site.cfg.read_text())
-    style = site.tmp_path / "style.txt"
-    style.write_text("be terse\n")
-    style.chmod(0o600)
-    os.chmod(site.mcp, 0o664)  # group-writable mcp file: not ours alone to obey
-    with pytest.raises(ParameterRefused, match="mcp_config"):
-        go(site, make(site, FakeRun()))
-    os.chmod(site.mcp, 0o600)
-    style.chmod(0o666)  # style_file gets the same trust checks
-    cfg2 = site.tmp_path / "sessions-style.json"
-    write_config(cfg2, json.dumps({**cfg, "style_file": str(style)}))
-    with pytest.raises(ParameterRefused, match="style_file"):
-        go(site, make(site, FakeRun(), config_path=cfg2))
-    style.chmod(0o600)
-    assert go(site, make(site, FakeRun(), config_path=cfg2))["ok"] is True
 
 
 def test_mcp_symlink_alias_to_allowed_file_is_not_a_finding(site):
@@ -1593,11 +1594,12 @@ def test_launch_timeout_writes_null_id_record(site):
     assert lines[-1]["action"] == "launch" and lines[-1]["ok"] is False
 
 
-def test_launch_wt_popen_oserror_writes_null_id_record(site):
+def test_launch_wt_popen_oserror_writes_null_id_record(site, monkeypatch):
     class BrokenPopen(FakePopen):
         def __call__(self, argv, **kw):
             raise OSError(2, "no wt.exe")
 
+    admit_windows_launcher(monkeypatch)
     cfg2 = site.tmp_path / "sessions-wt4.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "windows_launcher": "wt"}))
     exe = str(site.tmp_path / "claude.exe")
@@ -1709,50 +1711,20 @@ def test_unexpected_outcome_survives_audit_write_failure(site, monkeypatch):
     assert "audit" in exc.value.warning  # the refusal stands; the caller is warned
 
 
-def test_style_file_stays_inside_roots_and_refuses_symlinks(site, tmp_path_factory):
-    stray = tmp_path_factory.mktemp("stray-style")
-    outside = stray / "style.txt"
-    outside.write_text("be terse\n")
-    outside.chmod(0o600)
-    cfg = json.loads(site.cfg.read_text())
-    out_cfg = site.tmp_path / "sessions-style-out.json"
-    write_config(out_cfg, json.dumps({**cfg, "style_file": str(outside)}))
-    with pytest.raises(ParameterRefused, match="style_file"):
-        go(site, make(site, FakeRun(), config_path=out_cfg))  # style_file must resolve inside cwd_roots/file_roots
-    real = site.tmp_path / "style.txt"
-    real.write_text("be terse\n")
-    real.chmod(0o600)
-    alias = site.tmp_path / "style-alias.txt"
-    alias.symlink_to(real)
-    sym_cfg = site.tmp_path / "sessions-style-sym.json"
-    write_config(sym_cfg, json.dumps({**cfg, "style_file": str(alias)}))
-    with pytest.raises(ParameterRefused, match="symlink"):
-        go(site, make(site, FakeRun(), config_path=sym_cfg))  # the configured style path itself must be the real file
-    ok_cfg = site.tmp_path / "sessions-style-ok.json"
-    write_config(ok_cfg, json.dumps({**cfg, "style_file": str(real)}))
-    run = FakeRun(stdout="session " + UUID1)
-    res = go(site, make(site, run, config_path=ok_cfg))
-    assert res["ok"] is True
-    argv, _ = run.calls[0]
-    assert argv[-3:] == ["--append-system-prompt", "be terse", PROMPT]
-
-
 def test_config_and_style_are_read_from_the_checked_fd(site, monkeypatch):
     import io
-    style = site.tmp_path / "style.txt"
-    style.write_text("be terse\n")
-    style.chmod(0o600)
     cfg2 = site.tmp_path / "sessions-fd.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
-    forbidden = {str(cfg2.resolve()), str(style.resolve())}
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": "be terse"}))
+    forbidden = {str(cfg2.resolve())}
     real_open, real_io_open = open, io.open
 
     def guard(fn):
         def wrapped(file, *args, **kwargs):
-            # A by-name open of the config or the style file is exactly the
-            # finding: the checked fd is the only fd its bytes may come from.
+            # A by-name open of the config is exactly the finding: the checked
+            # fd is the only fd its bytes may come from (style_text rides in the
+            # config itself now - the style_file half is a cut feature).
             if isinstance(file, (str, Path)) and str(Path(file).resolve()) in forbidden:
-                raise AssertionError("config and style_file must be read from the checked fd")
+                raise AssertionError("the config must be read from the checked fd")
             return fn(file, *args, **kwargs)
         return wrapped
 
@@ -1791,11 +1763,8 @@ def test_audit_argv_redacts_style_text(site):
     # The value after --append-system-prompt is config style prose: the audit
     # argv must show its length like the prompt, never its text (SESSION-SPAWN-MCP).
     style_text = "STYLE-SECRET-TEXT"  # 17 chars
-    style = site.tmp_path / "style-secret.txt"
-    style.write_text(style_text)
-    style.chmod(0o600)  # style_file is trust-checked like the config (R-24)
     cfg2 = site.tmp_path / "sessions-secret.json"
-    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": style_text}))
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run, config_path=cfg2)
     assert go(site, s)["ok"] is True

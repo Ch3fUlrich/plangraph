@@ -6,6 +6,11 @@ Launches background Claude Code agents that bootstrap a plan from a
 data loaded from a JSON file - no shell command string is ever built from it
 (D-2873). Every outcome is one audited JSON line and nothing escapes untracked.
 
+The config is the trust anchor (docs/SPAWNER.md, "Threat model"): on POSIX it
+is opened once with ``O_NOFOLLOW`` and read from that fd, and must be a regular
+file owned by the current user with mode 0600 or stricter. Other processes of
+the same OS account are trusted - they can already run ``claude`` themselves.
+
 Windows note: ``claude`` is an npm shim (``claude.cmd`` / ``claude.ps1``) on
 Windows and a shim would let cmd.exe parse the prompt, so the Windows path
 resolves ``claude`` to its real ``.exe`` (``shutil.which``), refuses shims, and
@@ -29,9 +34,8 @@ from plangraph.routing_support.private_io import atomic_write_private, append_pr
 __all__ = ["SESSION_CONFIG_KEYS", "Sessions", "transcript_path"]
 
 SESSION_CONFIG_KEYS = frozenset({
-    "cwd_roots", "file_roots", "models", "efforts", "permission_modes",
-    "mcp_configs", "style_file", "compact_window", "ctx_cap_tokens",
-    "windows_launcher",
+    "cwd_roots", "models", "efforts", "permission_modes", "mcp_configs",
+    "style_text", "compact_window", "ctx_cap_tokens",
 })
 LAUNCH_TIMEOUT = 60
 STOP_TIMEOUT = 30
@@ -141,82 +145,50 @@ class Sessions:
         return Path(self._config_path) if self._config_path else (
             Path.home() / ".config" / "plangraph" / "sessions.json")
 
-    def _trust(self, path, what, *, directory=False, nofollow=False):
-        """POSIX trust checks (skipped on win32): open the path and fstat the
-        descriptor - never stat by name - so a swapped symlink cannot lie about
-        what was checked. The result must be a regular file (or directory),
-        owned by the current user and not group/world-writable (R-24).
-        Symlinks are followed on purpose except for the config itself: a
-        symlink alias to an allowed file is not a finding."""
+    def _read_config_bytes(self, path):
+        """Read the config through the one descriptor that passed the checks
+        (R-24). POSIX: refuse when the platform lacks O_NOFOLLOW, open the path
+        once with it (ELOOP and friends refuse), fstat that fd - regular file,
+        owned by the current user, mode 0600 or stricter - and read the bytes
+        from the same fd, never re-opened by name. win32: plain read."""
         if self._platform == "win32":
-            return
-        flags = os.O_RDONLY
-        if nofollow and hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+            try:
+                return Path(path).read_bytes()
+            except OSError:
+                raise _refuse(f"sessions config is not a readable regular non-symlink file: {path}")
+        if not hasattr(os, "O_NOFOLLOW"):
+            raise _refuse(f"no O_NOFOLLOW on this platform: cannot safely read {path}")
         try:
-            fd = os.open(str(path), flags)
+            fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
-            raise _refuse(f"{what} is not a readable regular file: {path}")
+            raise _refuse(f"sessions config is not a readable regular non-symlink file: {path}")
         try:
-            self._trust_stat(os.fstat(fd), path, what, directory=directory)
-        finally:
-            os.close(fd)
-
-    def _trust_stat(self, st, path, what, *, directory=False):
-        """The fstat side of the trust checks: kind, owner, mode (R-24)."""
-        kind_ok = stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)
-        if not kind_ok:
-            raise _refuse(f"{what} is not a regular file: {path}")
-        if hasattr(os, "getuid") and st.st_uid != os.getuid():
-            raise _refuse(f"{what} is not owned by the current user: {path}")
-        if st.st_mode & 0o022:
-            raise _refuse(f"{what} is group/world-writable: {path}")
-
-    def _read_trusted(self, path, what, *, nofollow=False):
-        """Open once, run the trust checks on the descriptor and read the
-        content from that same fd (R-24): the bytes obeyed are the bytes that
-        passed the checks - never re-open the path by name afterwards."""
-        flags = os.O_RDONLY
-        if nofollow and hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        try:
-            fd = os.open(str(path), flags)
-        except OSError:
-            raise _refuse(f"{what} is not a readable regular file: {path}")
-        try:
-            if self._platform != "win32":
-                self._trust_stat(os.fstat(fd), path, what)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise _refuse(f"sessions config is not a regular file: {path}")
+            if st.st_uid != os.getuid():
+                raise _refuse(f"sessions config is not owned by the current user: {path}")
+            if st.st_mode & 0o077:
+                raise _refuse(
+                    f"sessions config mode must be 0600 or stricter (group/world-writable or readable): {path}")
             chunks = []
-            while True:
-                try:
+            try:
+                while True:
                     chunk = os.read(fd, 65536)
-                except OSError:
-                    raise _refuse(f"{what} is not a readable regular file: {path}")
-                if not chunk:
-                    break
-                chunks.append(chunk)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            except OSError:
+                raise _refuse(f"sessions config is not a readable regular non-symlink file: {path}")
             return b"".join(chunks)
         finally:
             os.close(fd)
 
     def _load_config(self):
         path = self._config_file()
-        try:
-            path.stat()
-        except OSError:
-            raise _refuse(f"sessions config not found: {path}")
-        if self._platform != "win32":
-            # POSIX trust: the config is only ours to obey if it is ours alone -
-            # it may not even be a symlink, and neither its directory nor the
-            # files it points at may be writable by anyone else (R-24).
-            if os.path.islink(path):
-                raise _refuse(f"sessions config must not be a symlink: {path}")
-            self._trust(path.parent, "sessions config directory", directory=True)
-        # The JSON is read from the descriptor the trust checks ran on, never
-        # re-opened by name after they passed (R-24). The read sits outside
-        # the parse guard: ParameterRefused is a ValueError and must not be
-        # re-read as "not valid JSON".
-        raw = self._read_trusted(path, "sessions config", nofollow=True)
+        raw = self._read_config_bytes(path)
+        # The parse guard must not swallow the read's ParameterRefused: it is a
+        # ValueError and would otherwise surface as "not valid JSON".
         try:
             cfg = json.loads(raw)
         except ValueError:
@@ -233,7 +205,6 @@ class Sessions:
         roots = self._root_list(cfg, "cwd_roots")
         if not roots:
             raise _refuse("config cwd_roots must be a non-empty list of directories")
-        self._root_list(cfg, "file_roots")
         for key in ("models", "efforts", "permission_modes"):
             values = cfg.get(key)
             if not isinstance(values, list) or not values or not all(isinstance(v, str) and v for v in values):
@@ -244,13 +215,11 @@ class Sessions:
         for raw in entries:
             if not isinstance(raw, str) or not Path(raw).expanduser().resolve().is_file():
                 raise _refuse(f"config mcp_configs entry is not a regular file: {raw}")
-            entry = Path(raw).expanduser().resolve()
-            # The entry's directory counts too: a writable dir lets someone
-            # swap the file after the check (the sub-dir finding).
-            self._trust(entry.parent, "config mcp_configs entry directory", directory=True)
-            self._trust(entry, "config mcp_configs entry")
         # Scalars: a present key must carry its type - a null is not a value.
-        self._style_arg(cfg)
+        if "style_text" in cfg:
+            style_text = cfg["style_text"]
+            if not isinstance(style_text, str) or not style_text:
+                raise _refuse("config style_text must be a non-empty string")
         if "compact_window" in cfg:
             window = cfg["compact_window"]
             if not isinstance(window, str) or not window.isdigit():
@@ -259,36 +228,6 @@ class Sessions:
             cap = cfg["ctx_cap_tokens"]
             if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
                 raise _refuse("config ctx_cap_tokens must be a positive int")
-        if "windows_launcher" in cfg and cfg["windows_launcher"] not in ("bg", "wt"):
-            raise _refuse("config windows_launcher must be 'bg' or 'wt'")
-
-    def _style_arg(self, cfg):
-        """style_file: resolves inside cwd_roots/file_roots, is a regular file
-        that is not a symlink (lstat) and passes the owner/mode trust checks
-        (R-24). Ancestor directories beyond the immediate parent are covered
-        by the documented same-user limit, not checked here."""
-        if "style_file" not in cfg:
-            return None
-        style = cfg["style_file"]
-        if not isinstance(style, str):
-            raise _refuse(f"config style_file must be a string: {style!r}")
-        if not Path(style).is_absolute():
-            raise _refuse(f"config style_file must be an absolute readable file: {style}")
-        raw = Path(style)
-        try:
-            mode = os.lstat(raw).st_mode
-        except OSError:
-            raise _refuse(f"config style_file must be an absolute readable file: {style}")
-        if stat.S_ISLNK(mode):
-            raise _refuse(f"config style_file must not be a symlink: {style}")
-        path = raw.resolve()
-        if not self._inside(path, self._file_roots(cfg)):
-            raise _refuse(f"config style_file is outside the configured roots: {style}")
-        if not path.is_file():
-            raise _refuse(f"config style_file must be an absolute readable file: {style}")
-        self._trust(path.parent, "config style_file directory", directory=True)
-        self._trust(path, "config style_file")
-        return path
 
     def _root_list(self, cfg, key):
         raw_list = cfg.get(key)
@@ -309,18 +248,15 @@ class Sessions:
             roots.append(path)
         return roots
 
-    def _file_roots(self, cfg):
-        return self._root_list(cfg, "cwd_roots") + self._root_list(cfg, "file_roots")
-
     def _inside(self, path, roots):
         return any(path == root or root in path.parents for root in roots)
 
     def _file_arg(self, value, cfg, what):
-        """prompt_file / handoff: inside the roots, a readable regular file."""
+        """prompt_file / handoff: inside cwd_roots, a readable regular file."""
         if not isinstance(value, str) or not value:
             raise _refuse(f"{what} must be a non-empty path string")
         path = Path(value).expanduser().resolve()
-        if not self._inside(path, self._file_roots(cfg)):
+        if not self._inside(path, self._root_list(cfg, "cwd_roots")):
             raise _refuse(f"{what} is outside the configured roots: {value}")
         if not path.is_file():
             raise _refuse(f"{what} is not a regular file: {value}")
@@ -357,9 +293,6 @@ class Sessions:
             raise _refuse(f"mcp_config not listed in config mcp_configs: {mcp_config}")
         if not path.is_file():
             raise _refuse(f"mcp_config is not a regular file: {mcp_config}")
-        # The resolved path is the listed one: a symlink alias to an allowed
-        # file is not a finding, but the target must still be trusted (R-24).
-        self._trust(path, "mcp_config")
         return path
 
     def _prompt_text(self, prompt, prompt_file, cfg):
@@ -379,11 +312,7 @@ class Sessions:
         return text
 
     def _style_text(self, cfg):
-        path = self._style_arg(cfg)
-        if path is None:
-            return None
-        # The text is read from the descriptor the checks ran on (R-24).
-        return self._read_trusted(path, "config style_file", nofollow=True).decode("utf-8").strip()
+        return cfg.get("style_text")
 
     def _handoff_arg(self, handoff, cfg):
         if not isinstance(handoff, str) or not handoff:
