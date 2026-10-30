@@ -81,8 +81,7 @@ class ContextMixin:
     # ------------------------------------------------------------ inputs
     def _inputs(self, index):
         """Per-request shared inputs: decision rows, retirements, graph, clock."""
-        rows = src.decision_rows(self._adapter("decisions"))
-        return {"rows": rows, "superseded": src.superseded_map(rows),
+        return {"book": src.decision_book(self._adapter("decisions")),
                 "graph": _graph(index), "clock": self._decision_clock()}
 
     def _last_activity_map(self):
@@ -104,13 +103,15 @@ class ContextMixin:
 
     def _reasons(self, keys):
         """``key -> cancel reason`` for the cancelled items among *keys*."""
+        keys = sorted(set(keys))
         out = {}
-        for key in keys:
-            row = self.conn.execute(
-                "SELECT payload FROM events WHERE key=? AND type='cancelled'"
-                " ORDER BY seq DESC LIMIT 1", (key,)).fetchone()
-            if row:
-                out[key] = _payload(row["payload"]).get("reason") or "cancelled"
+        if not keys:
+            return out
+        marks = ",".join("?" * len(keys))
+        for row in self.conn.execute(      # one query; ascending, so newest wins
+                f"SELECT key, payload FROM events WHERE type='cancelled'"
+                f" AND key IN ({marks}) ORDER BY seq", keys):
+            out[row["key"]] = _payload(row["payload"]).get("reason") or "cancelled"
         return out
 
     def _decision_clock(self):
@@ -118,14 +119,14 @@ class ContextMixin:
 
         ``marks[i]`` is the highest D-id cited by any item definition up to
         ``seqs[i]``; ``last`` maps a key to its newest definition seq.  Kept on
-        the store and rebuilt whenever the (count, max seq) of definition
+        the store and rebuilt whenever the (count, max, sum of seq) of definition
         events changes, so a rollback or an out-of-order commit never leaves
         it behind.
         """
         row = self.conn.execute(
-            "SELECT COUNT(*), MAX(seq) FROM events WHERE type IN (?,?)",
-            _DEF_TYPES).fetchone()
-        stamp = (row[0], row[1])
+            "SELECT COUNT(*) AS n, MAX(seq) AS m, COALESCE(SUM(seq), 0) AS s"
+            " FROM events WHERE type IN (?,?)", _DEF_TYPES).fetchone()
+        stamp = (row["n"], row["m"], row["s"])
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
             return clock
@@ -144,14 +145,14 @@ class ContextMixin:
         self._ctx_clock = clock
         return clock
 
-    def _watermark(self, item, clock):
+    def _watermark(self, item, clock, cited=None):
         """The newest decision the item's premise knew of, as a number.
 
         The highest D-id cited in the item text; failing that, the decision
         clock at its last definition (the highest D-id any definition had
         cited by then).  ``None`` = unknown, which never refuses.
         """
-        cited = src.decision_ids(*self._texts(item))
+        cited = src.decision_ids(*self._texts(item)) if cited is None else cited
         if cited:
             return _num(cited[-1])
         seq = clock["last"].get(item["key"])
@@ -190,11 +191,11 @@ class ContextMixin:
             return {"key": k, "state": index.get(k, {}).get("state"), "reason": why}
 
         cited = src.decision_ids(*self._texts(item))
-        naming = src.decisions_naming(inputs["rows"], key)
-        mark = self._watermark(item, inputs["clock"])
+        naming = src.decisions_naming(inputs["book"], key)
+        mark = self._watermark(item, inputs["clock"], cited)
         newer = [d for d in naming if d not in cited
                  and mark is not None and _num(d) > mark]
-        superseded = inputs["superseded"]
+        superseded = inputs["book"]["superseded"]
         ctx = {
             "dep_states": [entry(k) for k in deps],
             "dependents": [entry(k) for k in dependents],
@@ -286,6 +287,7 @@ class ContextMixin:
 
     def _claim_guard(self, item, reason):
         """Refuse a stale claim with the facts, or return the override record."""
+        reason = self._force_stale_reason(reason)
         index = {it["key"]: it for it in self._all_items()}
         ctx = self._task_context(item, index, fetch=True)
         facts = []

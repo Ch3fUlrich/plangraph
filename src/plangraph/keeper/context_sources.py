@@ -18,17 +18,19 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
 
 from .evidence_decisions import _decision_cell
 from .evidence_git import valid_ref
 from .evidence_types import valid_commit_ref
 
-__all__ = ["plan_item_commits", "open_lanes", "decision_ids", "decision_rows",
+__all__ = ["plan_item_commits", "open_lanes", "decision_ids", "decision_book",
            "decisions_naming", "superseded_map", "COMMIT_LIMIT"]
 
 COMMIT_LIMIT = 5
 _LANE_LIMIT = 5
 _REF_COUNT = 5000
+_GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
@@ -86,6 +88,11 @@ def _ok(git, repo, args):
     return out if code == 0 else None
 
 
+def _ere(text):
+    """*text* as a POSIX ERE literal (``re.escape`` would also escape ``-``)."""
+    return re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", text)
+
+
 def _split(key):
     """``(project, bare id)`` of a well-formed key, else ``(None, None)``."""
     if not isinstance(key, str) or not _KEY_RE.fullmatch(key):
@@ -114,26 +121,29 @@ def plan_item_commits(git, project, key, *, fetch=True):
             git._maybe_fetch(repo)
         except Exception:
             pass
-    prefix = f"({re.escape(proj)}:)?" if proj else ""
+    prefix = f"({_ere(proj)}:)?" if proj else ""
     out = _ok(git, repo, [
         "log", "--no-show-signature", "-E", "--grep",
-        f"^Plan-Item:[[:space:]]*{prefix}{re.escape(bare)}[[:space:]]*$",
-        "-n", str(COMMIT_LIMIT * 4),
+        f"^Plan-Item:[[:space:]]*{prefix}{_ere(bare)}[[:space:]]*$",
+        "-n", str(_GREP_WINDOW),
         "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d",
         "--end-of-options", ref])
     if out is None:
         return None
-    commits = []
+    commits, seen = [], 0
     for record in out.split("\x1d"):
         fields = record.strip("\n").split("\x1f")
         if len(fields) != 4:
             continue
+        seen += 1
         sha, date, subject, trailers = fields
         names = {value.strip() for value in trailers.split("\x1e") if value.strip()}
         if (key in names or bare in names) and valid_commit_ref(sha.strip()):
             commits.append({"sha": sha.strip(), "date": date, "subject": subject})
         if len(commits) >= COMMIT_LIMIT:
             break
+    if not commits and seen >= _GREP_WINDOW:
+        return None              # window full of near misses: not proven absent
     if commits:
         merge = _merge_of(git, repo, ref, commits[0]["sha"])
         if merge:
@@ -155,6 +165,36 @@ def _merge_of(git, repo, ref, sha):
             "pr": int(match.group(1)) if match else None}
 
 
+_REFS_LOCK = threading.Lock()
+_REFS = {}
+_REFS_TTL = 10.0
+
+
+def _refs(git, repo):
+    """``(branch names, remote names)`` of *repo*, reused for ``_REFS_TTL`` s.
+
+    One listing serves every row of a ``ready``.  ``None`` = unknown: git
+    failed, or the listing hit ``_REF_COUNT`` and may be incomplete.
+    """
+    now = time.monotonic()
+    with _REFS_LOCK:
+        hit = _REFS.get(repo)
+        if hit is not None and now - hit[0] < _REFS_TTL:
+            return hit[1]
+    out = _ok(git, repo, ["for-each-ref", f"--count={_REF_COUNT}",
+                          "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+    remotes = _ok(git, repo, ["remote"])
+    if out is None or remotes is None:
+        return None
+    names = out.split()
+    if len(names) >= _REF_COUNT:
+        return None
+    snapshot = (tuple(names), frozenset(remotes.split()))
+    with _REFS_LOCK:
+        _REFS[repo] = (now, snapshot)
+    return snapshot
+
+
 def open_lanes(git, project, key):
     """Branches whose name carries the item id and that are not on the ref.
 
@@ -166,14 +206,13 @@ def open_lanes(git, project, key):
     _, bare = _split(key)
     if repo is None or not bare:
         return None
-    out = _ok(git, repo, ["for-each-ref", f"--count={_REF_COUNT}",
-                          "--format=%(refname:short)", "refs/heads", "refs/remotes"])
-    if out is None:
+    snapshot = _refs(git, repo)
+    if snapshot is None:
         return None
+    names, remotes = snapshot
     slug = bare.lower()
-    remotes = (_ok(git, repo, ["remote"]) or "").split()
     lanes, seen = [], set()
-    for name in out.split():
+    for name in names:
         if slug not in name.lower() or name == ref or not valid_ref(name):
             continue
         head, _, rest = name.partition("/")
@@ -194,51 +233,68 @@ def open_lanes(git, project, key):
 
 
 # ------------------------------------------------------------ decisions
-_CACHE_LOCK = threading.Lock()
-_CACHE = {}
+_BOOK_LOCK = threading.Lock()
+_BOOKS = {}
+_BOOK_SLOTS = 3
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 
 
-def decision_rows(decisions):
-    """``{"D-n": [row lines]}`` from a :class:`DecisionsAdapter` (empty if none).
+def decision_book(decisions):
+    """``{"rows", "superseded", "index"}`` for a :class:`DecisionsAdapter`.
 
-    Parsed once per file version (path, mtime, size), so reads stay cheap.
+    ``rows`` = ``{"D-n": [row lines]}``, ``superseded`` = :func:`superseded_map`
+    and ``index`` = ``{token: {D-ids}}`` over every key-like token, so naming
+    lookups cost one dict probe.  Built once per file version (path, inode,
+    mtime, size; up to three files kept); an unreadable source is an empty book.
     """
-    if decisions is None:
-        return {}
-    path = getattr(decisions, "_path", None)
+    path = getattr(decisions, "_path", None) if decisions is not None else None
+    if path is None:
+        return _build_book({})
     try:
-        stat = os.stat(path) if path else None
-        stamp = (str(path), stat.st_mtime_ns, stat.st_size) if stat else None
+        stat = os.stat(path)
     except OSError:
-        stamp = None
-    if stamp is not None:
-        with _CACHE_LOCK:
-            if _CACHE.get("stamp") == stamp:
-                return _CACHE["rows"]
+        return _build_book({})
+    stamp = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
+    with _BOOK_LOCK:
+        book = _BOOKS.get(stamp)
+    if book is not None:
+        return book
     try:
-        rows = {did: list(lines) for did, lines in decisions._rows().items()}
+        rows = {did: tuple(lines) for did, lines in decisions._rows().items()}
     except Exception:
-        return {}
-    if stamp is not None:
-        with _CACHE_LOCK:
-            _CACHE.clear()
-            _CACHE.update(stamp=stamp, rows=rows, superseded=None)
-    return rows
+        rows = {}
+    book = _build_book(rows)
+    with _BOOK_LOCK:
+        for old in [k for k in _BOOKS if k[0] == stamp[0]]:
+            del _BOOKS[old]
+        while len(_BOOKS) >= _BOOK_SLOTS:
+            del _BOOKS[next(iter(_BOOKS))]
+        _BOOKS[stamp] = book
+    return book
 
 
-def decisions_naming(rows, key):
-    """Decision ids whose row (of :func:`decision_rows`) names *key*, by number.
+def _build_book(rows):
+    index = {}
+    for did, lines in rows.items():
+        for line in lines:
+            for token in _TOKEN_RE.findall(line):
+                token = token.strip(".:")
+                if token:
+                    index.setdefault(token, set()).add(did)
+    return {"rows": rows, "superseded": superseded_map(rows), "index": index}
+
+
+def decisions_naming(book, key):
+    """Decision ids whose row names *key*, sorted by number.
 
     The full ``project:ID`` key always counts; the bare id counts when it is
     distinctive (contains ``-`` and is at least 6 chars), since rows often
-    drop the project prefix.
+    drop the project prefix.  A longer id (``X-FU``) is a different token.
     """
     bare = key.split(":", 1)[-1]
-    patterns = [re.compile(r"(?<![\w-])" + re.escape(key) + r"(?![\w-])")]
+    hits = set(book["index"].get(key, ()))
     if "-" in bare and len(bare) >= 6:
-        patterns.append(re.compile(r"(?<![\w:-])" + re.escape(bare) + r"(?![\w-])"))
-    hits = [did for did, lines in rows.items()
-            if any(p.search(line) for line in lines for p in patterns)]
+        hits |= book["index"].get(bare, set())
     return sorted(hits, key=_did_num)
 
 
@@ -247,10 +303,8 @@ def superseded_map(rows):
 
     Row ``D-new`` says ``supersedes|corrects|withdraws|replaces D-old``, or
     row ``D-old``'s DECISION cell opens with ``WITHDRAWN|superseded by D-new``.
+    Only the DECISION cell (3rd column) is read.
     """
-    with _CACHE_LOCK:
-        if _CACHE.get("rows") is rows and _CACHE.get("superseded") is not None:
-            return _CACHE["superseded"]
     out = {}
     for did, lines in rows.items():
         own = _did_num(did)
@@ -264,7 +318,4 @@ def superseded_map(rows):
                 newest = out.get(old)
                 if _did_num(old) < own and (newest is None or _did_num(newest) < own):
                     out[old] = did
-    with _CACHE_LOCK:
-        if _CACHE.get("rows") is rows:
-            _CACHE["superseded"] = out
     return out
