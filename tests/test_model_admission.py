@@ -75,3 +75,78 @@ def test_mimo_policy_before_lookup():
         pytest.fail('MiMo violation must not trigger lookup')
     with pytest.raises(MimoPathError):
         validate_model('omniroute/mimo-v2.6-pro', gateway_list=forbidden, opencode_list=forbidden)
+
+
+def test_parse_opencode_models_plain():
+    from plangraph.planner.opencode_listing import parse_opencode_models
+    text = 'anthropic/claude-sonnet-4-5\nopenai/gpt-5-codex\n'
+    assert parse_opencode_models(text) == {'anthropic/claude-sonnet-4-5', 'openai/gpt-5-codex'}
+
+
+def test_parse_opencode_models_annotated():
+    from plangraph.planner.opencode_listing import parse_opencode_models
+    text = 'anthropic/claude-sonnet-4-5 (default)\nopenai/gpt-5-codex  400k context  released 2026-01-01\n'
+    assert parse_opencode_models(text) == {'anthropic/claude-sonnet-4-5', 'openai/gpt-5-codex'}
+
+
+def test_parse_opencode_models_columnar():
+    from plangraph.planner.opencode_listing import parse_opencode_models
+    text = ('MODEL                        PROVIDER   CONTEXT\n'
+            'anthropic/claude-sonnet-4-5  anthropic  200000\n'
+            'openai/gpt-5-codex           openai     400000\n')
+    assert parse_opencode_models(text) == {'anthropic/claude-sonnet-4-5', 'openai/gpt-5-codex'}
+
+
+def test_parse_opencode_models_non_ascii_bytes():
+    from plangraph.planner.opencode_listing import parse_opencode_models
+    raw = ('anthropic/claude-sonnet-4-5  默认 (défaut)\n'
+           'openai/gpt-5-codex  café ☕ 2026\n').encode('utf-8')
+    assert parse_opencode_models(raw) == {'anthropic/claude-sonnet-4-5', 'openai/gpt-5-codex'}
+
+
+def test_parse_opencode_models_providerless_and_empty():
+    from plangraph.planner.opencode_listing import parse_opencode_models
+    assert parse_opencode_models('future-local\n') == {'future-local'}
+    assert parse_opencode_models('') == set()
+
+
+def test_opencode_models_wires_parser_and_utf8(tmp_path, monkeypatch):
+    from plangraph.planner import model_admission
+    import subprocess
+    seen = {}
+    class Result:
+        returncode = 0
+        stdout = 'anthropic/claude-sonnet-4-5  (default)\nMODEL  PROVIDER\nopenai/gpt-5-codex  openai\n'
+    def fake(run, **kwargs):
+        seen.update(kwargs)
+        return Result()
+    monkeypatch.setattr(subprocess, 'run', fake)
+    monkeypatch.setattr(model_admission.shutil, 'which', lambda name: '/bin/opencode')
+    assert model_admission.opencode_models() == {'anthropic/claude-sonnet-4-5', 'openai/gpt-5-codex'}
+    assert seen.get('encoding') == 'utf-8'
+
+
+def test_opencode_models_unrecognised_output_is_uncached(tmp_path, monkeypatch):
+    from plangraph.planner import model_admission
+    import subprocess
+    class Result:
+        returncode = 0
+        stdout = 'display names only, no ids here\n'
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: Result())
+    monkeypatch.setattr(model_admission.shutil, 'which', lambda name: '/bin/opencode')
+    with pytest.raises(OSError, match='unrecognised'):
+        model_admission.opencode_models()
+    monkeypatch.setenv('PLANGRAPH_MODEL_LIST_TTL_S', '600')
+    assert model_admission.cached_models('opencode', model_admission.opencode_models,
+                                         state=tmp_path) == set()
+    assert not (tmp_path / 'model-list-opencode.json').exists()
+
+
+def test_explicit_empty_lists_never_probe(monkeypatch):
+    from plangraph.planner.model_admission import validate_model
+    def forbidden(*args, **kwargs):
+        pytest.fail('an explicit empty list must not trigger a live lookup')
+    monkeypatch.setattr('plangraph.planner.model_admission.opencode_models', forbidden)
+    monkeypatch.setattr('plangraph.planner.model_admission.gateway_models', forbidden)
+    with pytest.raises(SpawnRefused, match='unknown model'):
+        validate_model('omniroute/absent', gateway_list=[], opencode_list=[])

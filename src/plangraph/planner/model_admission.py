@@ -35,10 +35,12 @@ def opencode_models():
             exe = str(sibling)
     result = subprocess.run([exe, 'models'], capture_output=True, text=True,
                             encoding='utf-8', errors='replace', timeout=20, check=True)
-    import re
-    lines = [re.sub(r'\x1b\[[0-9;]*m', '', line).strip() for line in result.stdout.splitlines()]
-    return {line.split()[0] for line in lines if line and
-            re.fullmatch(r'[\w./:#-]+', line.split()[0])}
+    from .opencode_listing import parse_opencode_models
+    models = parse_opencode_models(result.stdout)
+    if result.stdout.strip() and not models:
+        # Format drift is an outage, not an empty host: refuse to cache it.
+        raise OSError('opencode models output unrecognised')
+    return models
 
 
 def console_host_skip(model, probe, env):
