@@ -33,11 +33,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from routing_registry_skill_lib import (  # noqa: E402
     APPLY_PS1, APPLY_SH, ROOT, _apply_ps1_flags, _apply_sh_flags,
     _invocation_units, _never_the_real, _out_violations, _render_help,
-    _render_out_mentions, _render_targets, _skill_files, _unit_flags,
-    needs_autoos)
+    _render_out_mentions, _render_targets, _script_paths, _skill_files,
+    _unit_flags, AUTOOS, VENDORED)
+import autoos_fixture  # noqa: E402
+
 
 class RoutingRegistrySkillTests(unittest.TestCase):
-    @needs_autoos
     def test_every_apply_invocation_flag_is_handled_by_the_script(self):
         """Every flag the skill names in an apply.sh / apply.ps1 invocation
         must appear in that script's argument handling."""
@@ -53,7 +54,6 @@ class RoutingRegistrySkillTests(unittest.TestCase):
             "flag(s) named in the skill's apply invocations that the script's "
             "argument handling does not accept: %s" % "; ".join(problems))
 
-    @needs_autoos
     def test_the_apply_flag_check_is_not_vacuous(self):
         """If a parser stops matching the script's argument handling, every
         flag above would pass vacuously — pin the parse and the failure shape."""
@@ -84,7 +84,6 @@ class RoutingRegistrySkillTests(unittest.TestCase):
             "a PowerShell-style flag in a bash twin's invocation belongs to "
             "the bash twin, which refuses it")
 
-    @needs_autoos
     def test_no_render_out_names_a_never_the_real_file(self):
         """Every `render <target> --out <path>` the skill names — fenced or
         inline — is checked against that target's own `render --help`: a path
@@ -119,7 +118,6 @@ class RoutingRegistrySkillTests(unittest.TestCase):
             "the committed file back in line through its sanctioned updater "
             "instead: %s" % "; ".join(problems))
 
-    @needs_autoos
     def test_render_ide_out_stays_allowed(self):
         """`render ide --out catalog/ide-models.json` is the one render write
         a committed file may take — its own --help says "to update the
@@ -146,7 +144,6 @@ class RoutingRegistrySkillTests(unittest.TestCase):
             "render ide's --help no longer sanctions the committed write; "
             "the skill's ide --out is unsanctioned")
 
-    @needs_autoos
     def test_every_target_but_ide_carries_its_refusal(self):
         """The guard reads each target's refusal from its help, so a target
         whose help names no "never the real" file is one it cannot see: its
@@ -163,6 +160,25 @@ class RoutingRegistrySkillTests(unittest.TestCase):
         """A help that cannot run must not read as "no refusal"."""
         with self.assertRaises(AssertionError):
             _render_help("no-such-target")
+
+    def test_vendored_fixture_is_complete(self):
+        """CI reads the vendored copy: it must hold every part the guards
+        read, or a guard above checks against nothing."""
+        fix = VENDORED or autoos_fixture.load()
+        self.assertTrue(fix["apply_sh_argloop"] and fix["apply_ps1_param"])
+        self.assertIn("ide", fix["render_help"])
+        named = {s for p in _skill_files() for s in _script_paths(p)}
+        self.assertTrue(named and set(fix["script_paths"]) <= named)
+
+    @unittest.skipUnless(AUTOOS is not None, "drift check needs "
+                         "PLANGRAPH_AUTOOS_ROOT; CI uses the vendored copy")
+    def test_vendored_fixture_matches_autoos(self):
+        named = {s for p in _skill_files() for s in _script_paths(p)}
+        live = autoos_fixture.build_live(AUTOOS, named)
+        fix = autoos_fixture.load()
+        live.pop("autoos_sha"), fix.pop("autoos_sha")
+        self.assertEqual(fix, live, "vendored fixture drifted from AutoOS: "
+                         "refresh with tests/autoos_fixture.py")
 
 
 if __name__ == "__main__":

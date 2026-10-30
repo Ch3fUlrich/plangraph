@@ -57,24 +57,24 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      # fetch-depth 0: the file-size gate ratchets .filesize-baseline against
-      # origin/main; without it the reference is HEAD, i.e. the tree itself.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: scrub_check (public patterns)
         run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
-      # AO-400LOC (moved D-3198): a tracked file over 400 lines needs a
-      # .filesize-baseline entry, and that entry may only shrink. Lives in
-      # the scrub job because ci_select selects scrub on every change.
-      - name: File size gate
-        env:
-          FILESIZE_REQUIRE_BASE: origin/main
-        run: python tools/check_file_size.py
+
+  # AO-400LOC (D-3198): a file over 400 lines needs a .filesize-baseline entry
+  # that may only shrink vs origin/main (full fetch). Own job, never selected.
+  file-size:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - env: {FILESIZE_REQUIRE_BASE: origin/main}
+        run: python3 tools/check_file_size.py
 
   pytest:
     needs: select

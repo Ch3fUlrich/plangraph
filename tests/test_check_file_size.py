@@ -13,6 +13,7 @@ Run directly:
     python3 tests/test_check_file_size.py
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -270,6 +271,18 @@ class GateHookTests(RepoFixture):
         self.file("small_module.py", 400)
         run = self.push()
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    def test_the_documented_install_runs_this_hook(self):
+        """The tests above run HOOK; git runs <core.hooksPath>/pre-push. Pin
+        that CONTRIBUTING's install points git at that same file, and that
+        the file git runs carries the gate."""
+        m = re.search(r"git config core\.hooksPath (\S+)",
+                      (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"))
+        self.assertIsNotNone(m, "CONTRIBUTING.md lost the hook install line")
+        self.assertEqual((ROOT / m.group(1) / "pre-push").resolve(),
+                         HOOK.resolve())
+        self.assertTrue(os.access(HOOK, os.X_OK), "pre-push not executable")
+        self.assertIn("file_size_gate()", HOOK.read_text(encoding="utf-8"))
 
 
 class RealTreeTests(unittest.TestCase):

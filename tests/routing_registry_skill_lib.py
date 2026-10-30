@@ -16,8 +16,9 @@ import os
 import re
 import subprocess
 import sys
-import unittest
 from pathlib import Path
+
+import autoos_fixture
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILL_DIR = ROOT / "skills" / "routing-registry"
@@ -25,9 +26,9 @@ INDEX = SKILL_DIR / "SKILL.md"
 REFERENCES = SKILL_DIR / "references"
 
 # The skill documents AutoOS code (tools/registry.py, the OmniRoute appliers)
-# that stays in AutoOS until AUTOOS-INTO-PLANGRAPH moves it. Checks against
-# that code run when PLANGRAPH_AUTOOS_ROOT names an AutoOS checkout and skip
-# otherwise; the skill's own structure is checked here unconditionally.
+# that stays in AutoOS until AUTOOS-INTO-PLANGRAPH moves it. The checks read
+# the vendored copy (autoos_fixture.py) unless PLANGRAPH_AUTOOS_ROOT names an
+# AutoOS checkout, which they then read live.
 _AUTOOS_ENV = os.environ.get("PLANGRAPH_AUTOOS_ROOT", "")
 AUTOOS = Path(_AUTOOS_ENV).resolve() if _AUTOOS_ENV else None
 _AUTOOS_NEEDS = ("tools/registry.py", "configuration/omniroute/apply.sh",
@@ -38,10 +39,17 @@ if AUTOOS is not None:
         raise RuntimeError("PLANGRAPH_AUTOOS_ROOT=%s is not an AutoOS checkout "
                            "(missing %s)" % (AUTOOS, ", ".join(_absent)))
 AUTOOS_ROOT = AUTOOS or ROOT
-needs_autoos = unittest.skipUnless(
-    AUTOOS is not None,
-    "set PLANGRAPH_AUTOOS_ROOT to an AutoOS checkout to check the skill "
-    "against the AutoOS registry tool and appliers")
+VENDORED = None if AUTOOS is not None else autoos_fixture.load()
+
+
+def _autoos_has_script(rel):
+    """True if plangraph or AutoOS (live, or per the fixture) has `rel`."""
+    if (ROOT / rel).is_file():
+        return True
+    if VENDORED is None:
+        return (AUTOOS / rel).is_file()
+    return rel in VENDORED["script_paths"]
+
 
 INDEX_MAX_LINES = 150
 REFERENCE_MAX_LINES = 500
@@ -181,6 +189,12 @@ def _render_help(*args):
     A help that exits non-zero or prints nothing fails loudly: an empty help
     carries no "never the real", which would read as "no refusal" and let
     every `--out` claim pass silently."""
+    if args not in _RENDER_HELP and VENDORED is not None:
+        text = VENDORED["render_help"].get(" ".join(args), "")
+        if not text.strip():
+            raise AssertionError("render %s --help is not in the vendored "
+                                 "fixture" % " ".join(args))
+        _RENDER_HELP[args] = re.sub(r"\s+", " ", text)
     if args not in _RENDER_HELP:
         run = subprocess.run(
             [sys.executable, str(AUTOOS_ROOT / "tools" / "registry.py"),
@@ -312,7 +326,8 @@ def _unit_flags(unit):
 
 def _apply_sh_flags():
     """The flags apply.sh's argument loop accepts (its `case "$1"` arms)."""
-    text = APPLY_SH.read_text(encoding="utf-8")
+    text = (VENDORED["apply_sh_argloop"] if VENDORED is not None
+            else APPLY_SH.read_text(encoding="utf-8"))
     loop = re.search(r"(?ms)^while \[\[ \$# -gt 0 \]\]; do\n(.*?)^done$", text)
     if loop is None:
         return set()  # reshaped; the vacuity guard fails loudly
@@ -322,7 +337,8 @@ def _apply_sh_flags():
 
 def _apply_ps1_flags():
     """The flags apply.ps1's top-level param() block accepts."""
-    text = APPLY_PS1.read_text(encoding="utf-8")
+    text = (VENDORED["apply_ps1_param"] if VENDORED is not None
+            else APPLY_PS1.read_text(encoding="utf-8"))
     try:
         start = text.index("param(", text.index("[CmdletBinding()]")) \
             + len("param(")

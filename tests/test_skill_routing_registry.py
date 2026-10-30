@@ -40,8 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from routing_registry_skill_lib import (  # noqa: E402
     DATE_IN_NAME_RE, INDEX, INDEX_MAX_LINES, NEEDLE, REFERENCES,
-    REFERENCE_MAX_LINES, REQUIRED_STEPS, ROOT, AUTOOS_ROOT, _links,
-    _repo_markdown, needs_autoos,
+    REFERENCE_MAX_LINES, REQUIRED_STEPS, ROOT, _autoos_has_script, _links,
+    _repo_markdown,
     _script_paths, _skill_files, _tracked_files, _wrapped_repo_paths)
 
 class RoutingRegistrySkillTests(unittest.TestCase):
@@ -145,15 +145,15 @@ class RoutingRegistrySkillTests(unittest.TestCase):
                        path.read_text(encoding="utf-8"))]
         self.assertEqual(wrapped, [], "wrapped repo path(s): %s" % wrapped)
 
-    @needs_autoos
     def test_every_script_path_named_exists(self):
         missing = ["%s: %s" % (p.relative_to(ROOT), s)
                    for p in _skill_files()
                    for s in _script_paths(p)
-                   if not (AUTOOS_ROOT / s).is_file()]
+                   if not _autoos_has_script(s)]
         self.assertEqual(
             missing, [],
-            "script path(s) named by the skill do not exist in AutoOS: %s"
+            "script path(s) named by the skill exist in neither plangraph nor "
+            "AutoOS: %s"
             % "; ".join(missing))
 
     def test_add_modify_and_remove_carry_every_required_step(self):
