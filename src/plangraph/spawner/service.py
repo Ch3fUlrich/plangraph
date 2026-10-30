@@ -218,7 +218,8 @@ class SpawnService:
             return await self._spawn_seats(card=card, prompt=prompt, role=role,
                 writer_families=writer_families, review_of=review_of, model=model, leg=leg,
                 dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough,
-                benchmark=benchmark, require_bench=require_bench)
+                benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
+                override_reason=override_reason)
         if _plan is not None:
             plan = _plan
         elif model is not None or leg is not None or not card:
@@ -385,11 +386,32 @@ class SpawnService:
                 spares.append(spare)
                 seat_families.add(spare.family)   # one spare per family
         n = len(plan.review_seats)
+        group = 'seats-' + uuid.uuid4().hex
+        coverage = {c['leg']: c for c in plan.seat_coverage}
+        # Each seat record carries only its own coverage entry plus the group id.
         runs = await asyncio.gather(*(
             self._spawn(card=card, prompt=prompt, role=role, writer_families=writer_families,
-                        review_of=review_of, _plan=replace(plan, legs=(seat, *spares[i::n])), **options)
-            for i, seat in enumerate(plan.review_seats)))
-        return {'seats': list(runs), 'seat_coverage': list(plan.seat_coverage)}
+                        review_of=review_of, _plan=replace(
+                            plan, legs=(seat, *spares[i::n]),
+                            seat_coverage=(dict(coverage.get(seat.id, {'leg': seat.id}), seat_group=group),)),
+                        **options)
+            for i, seat in enumerate(plan.review_seats)), return_exceptions=True)
+        # A seat that raised still gets a record; the others keep running and are awaited by callers.
+        runs = [self.save_refusal(r, role) if isinstance(r, Exception) else r for r in runs]
+        for r in runs:
+            if isinstance(r, BaseException):
+                raise r
+        envelope = {'seat_group': group, 'seats': runs, 'seat_coverage': list(plan.seat_coverage)}
+        self._save_seat_group(envelope)
+        return envelope
+
+    def _save_seat_group(self, envelope):
+        """Persist the seat set next to the run records (``<state>/seat-groups/<id>.json``)."""
+        from .private_io import atomic_write_private
+        atomic_write_private(self.state / 'seat-groups' / (envelope['seat_group'] + '.json'),
+                             json.dumps({'seat_group': envelope['seat_group'],
+                                         'runs': [r.get('run_id') for r in envelope['seats']],
+                                         'seat_coverage': envelope['seat_coverage']}, sort_keys=True))
 
     async def cancel(self, run_id):
         record = self.result(run_id, attempts=SAVE_READ_ATTEMPTS)

@@ -104,6 +104,7 @@ class CatalogDB:
         # 7. Route legs
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
+        self._derive_registry_columns()
         self.conn.commit()
 
     #: Columns added after the first schema; CREATE TABLE IF NOT EXISTS leaves an
@@ -120,6 +121,17 @@ class CatalogDB:
             have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
             if column not in have:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+    def _derive_registry_columns(self) -> None:
+        """Fill harness/tool_mode on rows that lack them (older or imported rows)."""
+        from plangraph.catalog_data import INLINE_ONLY_MODELS, PROVIDER_HARNESS
+        for provider, harness in PROVIDER_HARNESS.items():
+            if harness is not None:
+                self.conn.execute("UPDATE catalog_models SET harness = ? "
+                                  "WHERE provider_id = ? AND harness IS NULL", (harness, provider))
+        for model in sorted(INLINE_ONLY_MODELS):
+            self.conn.execute("UPDATE catalog_models SET tool_mode = 'inline-only' "
+                              "WHERE model_id = ?", (model,))
 
     def _insert_records(self, table_name: str, records: list[dict[str, Any]]) -> int:
         if not records:
@@ -441,6 +453,7 @@ class CatalogDB:
             records = payload.get(payload_key, [])
             total_inserted += self._insert_records(table_name, records)
 
+        self._derive_registry_columns()
         self.conn.commit()
         return total_inserted
 

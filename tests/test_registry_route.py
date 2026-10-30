@@ -13,6 +13,7 @@ import asyncio
 import json
 import sqlite3
 import subprocess
+from dataclasses import replace
 
 import pytest
 
@@ -356,3 +357,149 @@ def test_mcp_spawn_schema_has_seats():
     from plangraph.spawner.mcp import TOOLS_METADATA
     spawn = next(t for t in TOOLS_METADATA if t["name"] == "plangraph_agent_spawn")
     assert spawn["inputSchema"]["properties"]["seats"]["type"] == "boolean"
+
+
+# --- 6. round-1 seat findings (luna run-7ebcab85, qwen run-3654dec2) -----------
+
+def test_writer_spelled_anthropic_excludes_claude_legs():
+    open_policy = RoutePolicy(banned_families=(), off_families=(), paused_harnesses={})
+    as_keeper = plan_spawn(RCARD, role="review", writer_families=("anthropic",), policy=open_policy)
+    as_leg = plan_spawn(RCARD, role="review", writer_families=("claude",), policy=open_policy)
+    assert "claude" not in _families(as_keeper)
+    assert as_keeper.review_seats == as_leg.review_seats and as_keeper.skipped == as_leg.skipped
+
+
+@pytest.mark.parametrize("card", [CARD, RCARD], ids=["no-diff", "diff"])
+def test_live_policy_every_writer_family_routes_or_names_why(card):
+    # Each family a writer can have gets seats, or one named refusal (never a crash).
+    for fam in sorted({leg.family for leg in DEFAULT_LEGS if "implement" in leg.roles}):
+        plan = plan_spawn(card, role="review", writer_families=(fam,))
+        assert plan.error is None or plan.error.startswith(
+            ("two distinct review families unavailable", "seat coverage unmet")), (fam, plan.error)
+        assert fam not in _families(plan) or plan.error
+
+
+def test_inline_diff_size_cap(tmp_path):
+    from plangraph.spawner.inline_diff import InlineDiffError, inline_diff_prompt
+    repo, base, head = _repo(tmp_path)
+    ref = {"repo": str(repo), "base": base, "head": head}
+    assert "+two" in inline_diff_prompt("p", ref, max_chars=10_000)
+    with pytest.raises(InlineDiffError, match="too large|exceeds|cap"):
+        inline_diff_prompt("p", ref, max_chars=10)
+
+
+def test_seat_records_carry_own_coverage_and_group(tmp_path, monkeypatch):
+    repo, base, head = _repo(tmp_path)
+    card = dict(HIGH, diff_ref={"repo": str(repo), "base": base, "head": head})
+    svc = _service(tmp_path / "state", monkeypatch)
+    out = asyncio.run(svc.spawn(card=card, prompt="r", role="review", writer_families=("claude",),
+                                seats=True, dry_run=True, review_scope="batch"))
+    group = out["seat_group"]
+    for run in out["seats"]:
+        (own,) = run["plan"]["seat_coverage"]
+        assert own["leg"] == run["chosen_leg"]["id"] and own["seat_group"] == group
+    saved = json.loads((tmp_path / "state" / "seat-groups" / (group + ".json")).read_text())
+    assert saved["runs"] == [r["run_id"] for r in out["seats"]]
+
+
+def test_one_seat_refusal_keeps_the_other_seat(tmp_path, monkeypatch):
+    from plangraph.spawner.service import SpawnService
+    repo, base, head = _repo(tmp_path)
+    card = dict(HIGH, diff_ref={"repo": str(repo), "base": base, "head": head})
+    svc = _service(tmp_path / "state", monkeypatch)
+    original = SpawnService._spawn
+
+    async def flaky(self, *a, _plan=None, **kw):
+        if _plan is not None and _plan.legs[0].family == "qwen":
+            raise SpawnRefused("seat refused in test")
+        return await original(self, *a, _plan=_plan, **kw)
+    monkeypatch.setattr(SpawnService, "_spawn", flaky)
+    out = asyncio.run(svc.spawn(card=card, prompt="r", role="review", writer_families=("claude",),
+                                seats=True, dry_run=True))
+    assert sorted(r["status"] for r in out["seats"]) == ["dry_run", "refused"]
+    refused = next(r for r in out["seats"] if r["status"] == "refused")
+    assert refused["error"] == "seat refused in test"
+    assert svc.result(refused["run_id"])["status"] == "refused"
+
+
+def _dispatch(tmp_path, monkeypatch, runner):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+
+    async def admit_all(plan, dry_run=False):
+        return plan
+    monkeypatch.setattr(resolver, "plan_for_launch_async", admit_all)
+    return MCPSpawnerServer(runner, state=tmp_path / "state")
+
+
+class _StopRunner(_Runner):
+    """Every launched leg answers with a provider stop (rate limit)."""
+    async def spawn(self, **kw):
+        job = await super().spawn(**kw)
+        job.exit_code = 0
+        self.provider_responses[job.job_id] = {"status": 429, "body": "rate limited"}
+        return job
+
+
+def test_seat_reroute_stays_on_its_own_legs(tmp_path, monkeypatch):
+    repo, base, head = _repo(tmp_path)
+    runner = _StopRunner()
+    server = _dispatch(tmp_path, monkeypatch, runner)
+    card = dict(HIGH, diff_ref={"repo": str(repo), "base": base, "head": head})
+    out = asyncio.run(server.call_tool("plangraph_agent_spawn", {
+        "card": card, "prompt": "review", "role": "review", "writer_families": ["claude"],
+        "seats": True, "wait_seconds": None}))
+    for run in out["seats"]:
+        record = server.service.result(run["run_id"])
+        own = {leg["model"] for leg in run["plan"]["legs"]}
+        launched = [a["leg"]["model"] for a in record["attempts"]
+                    if a["status"] != "skipped" and isinstance(a.get("leg"), dict)]
+        assert launched and set(launched) <= own, (own, launched)
+    models = [c["model_or_combo"] for c in runner.calls]
+    assert len(models) == len(set(models))   # no two seats share a launched leg
+
+
+def test_inline_failure_does_not_decide_a_launched_run(tmp_path, monkeypatch):
+    # luna MED: an inline_diff_failed skip must not mark a run failed when a later
+    # leg launched and the run ended on route exhaustion.
+    from plangraph.planner.routing import SpawnPlan
+    runner = _StopRunner()
+    svc = _dispatch(tmp_path, monkeypatch, runner).service
+    card = dict(HIGH, diff_ref={"repo": str(tmp_path / "nope"), "base": "a1", "head": "b2"})
+    seat_plan = plan_spawn(card, role="review", writer_families=("claude",))
+    inline = next(l for l in seat_plan.legs if l.tool_mode == "inline-only")
+    tools = next(l for l in seat_plan.legs if l.tool_mode == "tools")
+    monkeypatch.setattr(svc, "_route", lambda *a, **k: SpawnPlan((), (), "operator-order", (), (), "all limited"))
+    record = asyncio.run(svc._spawn(card=card, prompt="r", role="review", writer_families=("claude",),
+                                    _plan=replace(seat_plan, legs=(inline, tools)), wait_seconds=None))
+    record = svc.result(record["run_id"])
+    assert record["attempts"][0]["skip_reason"].startswith("inline_diff_failed")
+    assert record["status"] == "limited", record.get("error")
+
+
+def test_all_legs_inline_failed_reports_reasons(tmp_path, monkeypatch):
+    runner = _StopRunner()
+    svc = _dispatch(tmp_path, monkeypatch, runner).service
+    card = dict(HIGH, diff_ref={"repo": str(tmp_path / "nope"), "base": "a1", "head": "b2"})
+    seat_plan = plan_spawn(card, role="review", writer_families=("claude",))
+    inline = tuple(l for l in seat_plan.legs if l.tool_mode == "inline-only")
+    record = asyncio.run(svc._spawn(card=card, prompt="r", role="review", writer_families=("claude",),
+                                    _plan=replace(seat_plan, legs=inline), wait_seconds=None))
+    record = svc.result(record["run_id"])
+    assert record["status"] == "failed" and "inline_diff_failed" in record["error"]
+    assert runner.calls == []
+
+
+def test_import_json_derives_registry_columns():
+    db = _seeded()
+    row = dict(next(r for r in SEED_MODELS if r["model_id"] == "omniroute/cx-gpt-6-luna"))
+    row.pop("harness"), row.pop("tool_mode")
+    db.conn.execute("DELETE FROM catalog_models WHERE model_id=?", (row["model_id"],))
+    db.import_json({"models": [row]})
+    got = _row(db, "omniroute/cx-gpt-6-luna")
+    assert got["harness"] == "opencode" and got["tool_mode"] == "inline-only"
+
+
+def test_fallback_rows_carry_tool_mode():
+    by_id = {r["id"]: r for r in resolver.DEFAULT_FALLBACK_MODELS}
+    assert all(r["tool_mode"] in TOOL_MODES for r in by_id.values())
+    assert by_id["mimo/mimo-v2.6-pro"]["tool_mode"] == "inline-only"

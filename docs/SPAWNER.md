@@ -63,7 +63,10 @@ python -m plangraph.spawner.cli spawn --card @card.json --role review --writer-f
 
 MCP: `plangraph_agent_spawn` with `role: review`, `writer_families`, `seats: true`
 and no `model_or_combo`. `--seats` spawns one run per seat `route` picked and
-returns `{"seats": [records], "seat_coverage": [...]}`; a seat that fails over
+returns `{"seat_group": "seats-<hex>", "seats": [records], "seat_coverage": [...]}`
+(also saved as `<state>/seat-groups/<seat_group>.json`); each seat record's
+`plan.seat_coverage` holds only its own entry with the `seat_group`. A seat
+refused before launch still gets its own refused record. A seat that fails over
 falls through only to a spare leg of a family no other seat holds.
 
 * **Per writer part** (DECISIONS 3.2, D-3084): each writer family is covered by

@@ -426,6 +426,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     writer_set = {w for w in writer_families if w}
     # D-3084 per-part seats: only a family that is EVERY writer covers no part.
     excluded = (writer_set if role == "review" and len(writer_set) == 1 else set()) | set(exclude_families)
+    if excluded & {"claude", "anthropic"}:
+        excluded |= {"claude", "anthropic"}   # one family, two spellings
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and st["state"] != "limited" and "/" not in leg_obj.model:

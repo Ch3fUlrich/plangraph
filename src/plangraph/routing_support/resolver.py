@@ -242,8 +242,10 @@ def admission_models() -> set[str]:
 
 
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
+from plangraph.catalog_data import INLINE_ONLY_MODELS as _INLINE_ONLY
 for _row in DEFAULT_FALLBACK_MODELS:
     _row['active'] = _row['id'] in _fallback_legs
+    _row.setdefault('tool_mode', 'inline-only' if _row['id'] in _INLINE_ONLY else 'tools')
     if not _row['active']:
         _row['available'] = 0
 for _leg in DEFAULT_LEGS:
@@ -253,7 +255,7 @@ for _leg in DEFAULT_LEGS:
             id=_model, family=_leg.family, harness=_leg.harness,
             tier=_leg.tier, available=int(_model in _fallback_legs),
             active=_model in _fallback_legs,
-            context_window=_leg.max_request_tokens,
+            context_window=_leg.max_request_tokens, tool_mode=_leg.tool_mode,
             aa_intelligence=0.0, combos=[]))
 
 _DEFAULT_CATALOG_DB: Any = None
