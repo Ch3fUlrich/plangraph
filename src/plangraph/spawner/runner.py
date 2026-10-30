@@ -48,6 +48,7 @@ _keeper_unconfigured_last_warned = None
 from .env_redact import first_reason
 from .exit_outcome import fallthrough_reason, terminal_reason
 from .git_guard import writer_launch
+from .proc_kill import kill_process_tree
 
 
 def redact(value):
@@ -888,18 +889,6 @@ class SpawnerRunner:
         job.end_time = time.time()
         self._check_git_config_guard(job_id)
         return {"job_id": job_id, "status": job.status}
-
-
-async def kill_process_tree(pid, *, platform=None, command_factory=None):
-    """Terminate the isolated POSIX group or Windows process tree."""
-    if (platform or os.name) == 'nt':
-        factory = command_factory or asyncio.create_subprocess_exec
-        proc = await factory('taskkill', '/PID', str(pid), '/T', '/F',
-                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
-    else:
-        import signal
-        os.killpg(pid, signal.SIGKILL)
 
 
 def spawn_service(*args, **kwargs):

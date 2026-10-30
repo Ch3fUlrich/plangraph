@@ -13,6 +13,11 @@ import time
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
 HEADER = re.compile(r'^>\s+\S+\s+·\s+\S+')
 SKIP = {'.git', '.pytest_cache', '__pycache__', '.venv', 'logs', 'output', 'node_modules', 'site'}
+LIVE_LOG_FLUSH = 16384        # batched appends: one write+fsync per 16 KB, not per line
+LIVE_LOG_MAX = 2 * 1024 * 1024
+LIVE_LOG_ERRORS = 3           # record at most this many live.log failures per run
+READER_GRACE_S = 5.0          # bounded drain once the run is gone (M6)
+EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreadable (Q7)
 
 
 def terminal_record(record, job):
@@ -38,6 +43,7 @@ def thresholds(card=None):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
         result[key.replace('_min', '_s')] = value * 60
+    result['hard_max'] = False   # table max_min may carry the first-edit hold (M5)
     timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
     if timeout and 'max_min' not in card:
         try:
@@ -45,8 +51,12 @@ def thresholds(card=None):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError
         except ValueError:
-            raise ValueError('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
+            # M17: a bad env knob is refused before launch (exit 2), like a bad card.
+            raise SpawnRefused('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
         result['max_s'] = value
+        # An operator-set run timeout is a wall clock: the first-edit hold
+        # never extends it (M5's hold 'does not extend the max deadline').
+        result['hard_max'] = True
     interval = os.environ.get('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL')
     try:
         result['interval'] = float(interval) if interval else min(120, result['stall_s'] / 4)
@@ -70,11 +80,28 @@ class Watchdog:
         self.cpu = None
         self.progress = dict(edit=start, activity=start, cpu=start)
 
+    def budget(self):
+        """Hard deadline in seconds. A pre-edit writer whose edits we can see is
+        owed its first-edit window on top of the table run budget (M5's 'holds
+        while output flows' ends at max_s + first_edit_s); once edited, or when
+        the edit signal is unavailable, or for non-writers, max_s ends the run.
+        An operator-set PLANGRAPH_SPAWN_RUN_TIMEOUT is a wall clock and is
+        never extended."""
+        if self.limits.get('hard_max'):
+            return self.limits['max_s']
+        return self.limits['max_s'] + (self.limits['first_edit_s']
+                                       if self.writer and not self.edited and self.edit is not None
+                                       else 0)
+
     def decide(self, now, edit, activity, cpu):
-        if edit != self.edit and edit is not None and self.edit is not None:
-            self.edited = True
-            self.progress['edit'] = now
         if edit is not None:
+            if self.edit is None:
+                # Q7/M4: the spawn baseline was unreadable; adopt the first
+                # readable signature as baseline instead of pinning pre-edit.
+                self.progress['edit'] = now
+            elif edit != self.edit:
+                self.edited = True
+                self.progress['edit'] = now
             self.edit = edit
         if activity is not None:
             self.progress['activity'] = activity
@@ -83,14 +110,21 @@ class Watchdog:
         self.cpu = cpu
         stall = self.limits['stall_s']
         rule = None
-        if now - self.start >= self.limits['max_s']:
+        if now - self.start >= self.budget():
             rule = 'max'
         elif not self.writer:
             pass
         elif not self.edited:
-            if now - (activity if activity is not None else self.start) >= stall:
+            if edit is None:
+                # Q7/M4: edits are invisible this tick; no rule may assert
+                # 'no worktree edit' (max is the backstop).
+                pass
+            elif activity is not None and now - activity >= stall:
+                # Q6: no activity signal (buffered harness) is not a stall.
                 rule = 'no-activity'
-            elif now - self.start >= self.limits['first_edit_s']:
+            elif now - self.start >= self.limits['first_edit_s'] and now - (
+                    activity if activity is not None else self.start) >= stall:
+                # no-first-edit = no output AND no edit (M5/Q6, goal 1).
                 rule = 'no-first-edit'
         elif now - max(self.progress.values()) >= stall:
             rule = 'no-progress'
@@ -172,52 +206,109 @@ async def cpu_seconds(runner, job_id, pid, tick):
         return None
 
 
+async def run_gone(proc):
+    """Resolve once the run has exited. ``Process.wait()`` cannot signal this:
+    asyncio resolves its waiters only after every pipe transport disconnects
+    (CPython base_subprocess._try_finish), so a detached grandchild holding the
+    pipes wedges it forever although the return code is already known (M6)."""
+    delay = .05
+    while getattr(proc, 'returncode', None) is None:
+        await asyncio.sleep(delay)
+        delay = min(2.0, delay * 2)
+
+
+class LiveLog:
+    """Batched, error-tolerant live.log appender (Q4/M3/Q5)."""
+
+    def __init__(self, job):
+        self.job = job
+        self.path = getattr(job, '_live_log', None)
+        self.buf, self.pending, self.written, self.errors = [], 0, None, 0
+
+    def feed(self, text):
+        self.buf.append(text)
+        self.pending += len(text)
+        if self.pending >= LIVE_LOG_FLUSH:
+            self.flush()
+
+    def flush(self):
+        text, self.buf, self.pending = ''.join(self.buf), [], 0
+        if text:
+            self.write(text)
+
+    def write(self, text):
+        from .private_io import append_private, atomic_write_private
+        if not self.path or self.errors >= LIVE_LOG_ERRORS:
+            return
+        try:
+            append_private(self.path, text)
+            if self.written is None:
+                try:
+                    self.written = Path(self.path).stat().st_size
+                except OSError:
+                    self.written = len(text)
+            else:
+                self.written += len(text)
+            if self.written > LIVE_LOG_MAX:
+                data = Path(self.path).read_bytes()[-LIVE_LOG_MAX // 2:]
+                atomic_write_private(self.path, data.decode('utf-8', 'replace'))
+                self.written = len(data)
+        except Exception as exc:
+            # Q5: live.log trouble is an event, never a failed run.
+            self.errors += 1
+            try:
+                self.job.events.append({'event': 'live_log_error', 'error': type(exc).__name__})
+            except Exception:
+                pass
+
+
 async def collect(runner, job_id, proc):
     from .runner import redact
     from .env_redact import redact_env_values
-    from .private_io import append_private, atomic_write_private
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
     baseline = getattr(job, '_watchdog_baseline', None)
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
+    captured = {'stdout': [], 'stderr': []}
     def scrub(text):
         return redact(redact_env_values(text, env))
     async def reader(stream, name):
-        chunks, pending = [], ''
+        pending, tail = '', ''
+        log = LiveLog(job)
         decoder = codecs.getincrementaldecoder('utf-8')('replace')
-        async def consume(text):
-            nonlocal pending
-            chunks.append(text)
+        def consume(text):
+            nonlocal pending, tail
+            if not text:
+                return
+            captured[name].append(text)   # raw; kept even if a drain grace cancels us
             pending += text
             lines = pending.splitlines(keepends=True)
             pending = ''
+            active = False
             for line in lines:
                 if not line.endswith(('\n', '\r')):
                     pending = line
                     continue
                 if is_activity(line):
-                    job.last_activity_ts = time.time()
-                path = getattr(job, '_live_log', None)
-                if path:
-                    append_private(path, scrub(line))
-                    if Path(path).stat().st_size > 2 * 1024 * 1024:
-                        data = Path(path).read_bytes()[-1024 * 1024:]
-                        atomic_write_private(path, data.decode('utf-8', 'replace'))
-            setattr(job, name, scrub(''.join(chunks))[-4096:])
-        while True:
-            data = await stream.read(65536)
-            if not data:
-                break
-            await consume(decoder.decode(data))
-        await consume(decoder.decode(b'', final=True))
-        if pending:
-            if is_activity(pending):
+                    active = True
+            if active:
                 job.last_activity_ts = time.time()
-            path = getattr(job, '_live_log', None)
-            if path:
-                append_private(path, scrub(pending))
-        return ''.join(chunks).encode('utf-8')
+            scrubbed = scrub(text)      # once per chunk: linear (Q4/M3)
+            tail = (tail + scrubbed)[-4096:]
+            setattr(job, name, tail)
+            log.feed(scrubbed)
+        try:
+            while True:
+                data = await stream.read(65536)
+                if not data:
+                    break
+                consume(decoder.decode(data))
+            consume(decoder.decode(b'', final=True))
+            if pending and is_activity(pending):
+                job.last_activity_ts = time.time()
+        finally:
+            log.flush()   # also on drain-grace cancellation: batched bytes land
     async def output():
         payload = runner._stdin_payloads.get(job_id)
         if all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
@@ -231,9 +322,23 @@ async def collect(runner, job_id, proc):
                         pass
                     finally:
                         proc.stdin.close()
-                result = await asyncio.gather(*readers)
-                await proc.wait()
-                return result
+                drain = asyncio.ensure_future(asyncio.gather(*readers, return_exceptions=True))
+                gone = asyncio.ensure_future(run_gone(proc))
+                await asyncio.wait([drain, gone], return_when=asyncio.FIRST_COMPLETED)
+                if not drain.done():
+                    # M6: a detached grandchild may hold the pipes after the run
+                    # is gone; bound the drain so the run record goes terminal.
+                    try:
+                        await asyncio.wait_for(asyncio.shield(drain), READER_GRACE_S)
+                    except asyncio.TimeoutError:
+                        pass
+                if not drain.done():
+                    for task in readers:
+                        task.cancel()
+                    await asyncio.gather(*readers, return_exceptions=True)
+                    drain.cancel()
+                gone.cancel()
+                return tuple(''.join(captured[n]).encode('utf-8') for n in ('stdout', 'stderr'))
             finally:
                 for task in readers:
                     if not task.done():
@@ -248,8 +353,10 @@ async def collect(runner, job_id, proc):
     task = asyncio.create_task(output())
     try:
         while not task.done():
-            # Max deadlines remain accurate even with the default 120s sample interval.
-            delay = min(limits['interval'], max(.001, job.start_time + limits['max_s'] - time.time()))
+            # Deadlines stay accurate even with the default 120s sample interval.
+            delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
+            if w.edit is None:
+                delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
             done, _ = await asyncio.wait([task], timeout=delay)
             if done:
                 break
