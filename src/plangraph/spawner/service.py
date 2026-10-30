@@ -26,6 +26,9 @@ class SpawnService(SeatSpawnMixin):
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
         self.leg_reader = leg_reader
+        if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):
+            # Probes write through the same store this service's planner reads.
+            self.runner.leg_reader = leg_reader
         self.tasks = {}
 
     def _path(self, run_id):
