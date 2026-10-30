@@ -1,10 +1,18 @@
-"""Free-text scrubbing and record-state derivation for session records.
+"""Free-text scrubbing, record-state derivation and record storage for
+session records (``_StoreMixin`` carries Sessions' audit wrapper and the
+on-disk record paths/writes).
 
-Moved verbatim from sessions.py (SESSION-SPAWN-MCP split 3a, 400-line
+Moved verbatim from sessions.py (SESSION-SPAWN-MCP split 3a/3b, 400-line
 file gate); plangraph.spawner.sessions re-exports every name defined here.
 """
 
+import json
 import os
+import subprocess
+import sys
+
+from plangraph.routing_errors import ParameterRefused
+from plangraph.routing_support.private_io import atomic_write_private, append_private
 
 
 _SCRUB_KEYS = frozenset({"reason", "error", "warning", "card", "message", "argv"})
@@ -57,3 +65,165 @@ def _state(rec):
         return "stopped"
     state = rec.get("state")
     return state if state in ("launching", "running", "unknown", "stopped") else "running"
+
+
+class _StoreMixin:
+    """Audit wrapper and on-disk record storage for ``Sessions``.
+
+    Method bodies moved verbatim from ``Sessions`` (SESSION-SPAWN-MCP split
+    3b, 400-line file gate); they resolve their module globals here.
+    """
+
+    # ---- one audit wrapper over every action (R-5) ---------------------
+
+    @staticmethod
+    def _caller():
+        """Audit caller: the operating principal ($PLANGRAPH_PRINCIPAL) or the
+        OS user - never a source location (R-15)."""
+        import getpass
+        return os.environ.get("PLANGRAPH_PRINCIPAL") or getpass.getuser()
+
+    def _audit(self, action, name, ok, reason, session_id, argv):
+        entry = {"ts": self._now(), "action": action, "name": str(name)[:80],
+                 "session_id": session_id, "ok": bool(ok),
+                 "reason": _scrub(reason) if reason else None, "caller": self._caller()}
+        if argv is not None:
+            entry["argv"] = list(argv)
+        append_private(self._sessions / "audit.log", json.dumps(_scrub(entry)) + "\n")
+
+    def _audit_guarded(self, action, name, ok, reason, session_id, argv, outcome):
+        """One guarded audit write: a failing audit write must never replace
+        the action's own outcome - the outcome (result dict or the exception
+        about to be raised) carries a warning field instead (R-22)."""
+        try:
+            self._audit(action, name, ok, reason, session_id, argv)
+        except (OSError, ValueError) as exc:
+            note = f"audit write failed: {type(exc).__name__}: {_scrub(str(exc))}"
+            if isinstance(outcome, dict):
+                outcome["warning"] = f"{outcome['warning']}; {note}" if outcome.get("warning") else note
+            else:
+                outcome.warning = note
+
+    def _action(self, action, name, fn, *, dry=False):
+        """Run one action; every outcome - success, refusal, timeout, OSError,
+        subprocess failure - leaves exactly one scrubbed audit JSON line (no
+        line at all on a dry run, which stays side-effect free, D-2918).
+        `self._audit_argv` is the prompt-redacted argv once one is built, so
+        failure audit lines carry it too (R-16)."""
+        self._audit_argv = None
+        try:
+            result = fn()
+        except ParameterRefused as exc:
+            if not dry:
+                self._audit_guarded(action, name, False, str(exc), None, self._audit_argv, exc)
+            raise
+        except subprocess.TimeoutExpired as exc:
+            outcome = subprocess.TimeoutExpired(_scrub(exc.cmd), exc.timeout)
+            self._audit_guarded(action, name, False, f"timeout after {exc.timeout}s",
+                                None, self._audit_argv, outcome)
+            raise outcome from None
+        except _ActionFailed as exc:
+            outcome = {"ok": False, "name": name, "session_id": None}
+            self._audit_guarded(action, name, False, str(exc), None, self._audit_argv, outcome)
+            return _scrub(outcome)
+        except (OSError, subprocess.SubprocessError) as exc:
+            outcome = {"ok": False, "name": name, "session_id": None}
+            self._audit_guarded(action, name, False, f"{type(exc).__name__}: {exc}",
+                                None, self._audit_argv, outcome)
+            return _scrub(outcome)
+        except Exception as exc:
+            # Any other unexpected exception is an internal fault: it is
+            # audited with its type and scrubbed message and surfaced as a
+            # refusal carrying that same text, never as a raw traceback (R-22).
+            text = f"{type(exc).__name__}: {_scrub(str(exc))}"
+            outcome = ParameterRefused(text)
+            if not dry:
+                self._audit_guarded(action, name, False, text, None, self._audit_argv, outcome)
+            raise outcome from None
+        if dry:
+            return _scrub(result)
+        argv = result.pop("_audit_argv", None)
+        self._audit_guarded(action, name, True, None, result.get("session_id"), argv, result)
+        return _scrub(result)
+
+    def audit_refusal(self, action, name, reason):
+        """Public entry for refusals raised at the MCP boundary, before any
+        _action runs (D-3193 point 6): the same single scrubbed audit line,
+        best effort - the caller's ParameterRefused is the real outcome."""
+        self._audit_guarded(action, name, False, reason, None, None,
+                            ParameterRefused(reason))
+
+    # ---- storage -------------------------------------------------------
+
+    def _record_path(self, name):
+        return self._sessions / f"{name}.json"
+
+    def _marker_path(self, name):
+        return self._sessions / f"{name}.ready.json"
+
+    def _all_records(self):
+        out = []
+        try:
+            paths = sorted(self._sessions.glob("*.json"))
+        except OSError:
+            return out
+        for path in paths:
+            if path.name.endswith(".ready.json"):
+                continue
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+        return out
+
+    def _find_record(self, name, session_id):
+        if name:
+            try:
+                rec = json.loads(self._record_path(name).read_text(encoding="utf-8"))
+                return rec if isinstance(rec, dict) else None
+            except (OSError, ValueError):
+                return None
+        for rec in self._all_records():
+            if session_id and rec.get("session_id") == session_id:
+                return rec
+        return None
+
+    def _write_record(self, name, rec):
+        """Record writes go to the VALIDATED name's path only - never to a
+        path derived from record content (R-26)."""
+        atomic_write_private(self._record_path(name), json.dumps(_scrub(rec)) + "\n")
+
+    def _find_record_by_id(self, session_id):
+        """(record, name) for a session id: the write-back name is the record
+        file's stem, validated - never the record's own name field (R-26)."""
+        for path in sorted(self._sessions.glob("*.json")):
+            if path.name.endswith(".ready.json"):
+                continue
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(rec, dict) or rec.get("session_id") != session_id:
+                continue
+            if not NAME_RE.fullmatch(path.stem):
+                raise _refuse(f"record file name is not a valid session name: {path.name}")
+            return rec, path.stem
+        return None, None
+
+
+# NAME_RE, _refuse and _ActionFailed are imported LAST on purpose, mirroring
+# the cross-import arrangement documented in sessions.py: sessions_config
+# ends by binding _scrub from plangraph.spawner.sessions, and that module
+# takes its _scrub from THIS module - so when this module is first imported
+# FROM sessions.py, that module is still mid-import and has not bound _scrub
+# yet. Bind it there first (the same function object); then every import
+# order resolves.
+
+_landing = sys.modules.get("plangraph.spawner.sessions")
+if _landing is not None and getattr(_landing, "_scrub", None) is None:
+    _landing._scrub = _scrub
+
+from plangraph.spawner.sessions_agents import _ActionFailed
+from plangraph.spawner.sessions_config import NAME_RE, _refuse
