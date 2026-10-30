@@ -585,7 +585,7 @@ class SpawnerRunner:
                 if guard is not None:
                     self._git_guards[job_id] = guard
                 from .opencode_isolation import record_baseline
-                await asyncio.to_thread(record_baseline, job, work_dir)   # D-3236: no change = failed
+                await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -772,9 +772,8 @@ class SpawnerRunner:
 
             # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
             # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
-            if (job.command and job.command[0] == 'opencode' and job.role == 'review'
-                    and exit_code == 0):
-                oc_dir = self._ocdata_dirs.get(job_id)
+            if job.command and job.command[0] == 'opencode' and job.role == 'review':
+                oc_dir = self._ocdata_dirs.get(job_id) if exit_code == 0 else None
                 denied = _opencode_tools_denied(
                     env.get('OPENCODE_CONFIG_CONTENT') or '', env)
                 # R2: the store read may block up to its 2s sqlite timeout on a
@@ -788,7 +787,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
-                if denied:   # D-3226 response-side: the gateway call log names the served model
+                if denied:   # D-3226 response-side, any exit code: the gateway call log names the model
                     from .gateway_witness import witness
                     await asyncio.to_thread(witness, self, job_id, job, env)
 

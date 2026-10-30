@@ -48,12 +48,6 @@ def tagged(config_content, job_id):
     return session_tag(job_id) in (config_content or '') and SESSION_HEADER in (config_content or '')
 
 
-def served_from_rows(rows, tag):
-    """The one model the gateway served for ``tag``; None when absent or ambiguous."""
-    served = served_models(rows, tag)
-    return served.pop() if len(served) == 1 else None
-
-
 def served_models(rows, tag):
     """Every model the gateway served (2xx rows) for ``tag``, as ``provider/model``."""
     served = set()
@@ -100,10 +94,12 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     # omniroute block to every config, so the tag alone does not mean a gateway leg.
     if not str(getattr(job, 'model_or_combo', '') or '').startswith('omniroute/'):
         return
-    if job.served_model not in (None, '', 'unwitnessed') or not tagged(env.get('OPENCODE_CONFIG_CONTENT'), job_id):
+    if job.served_model not in (None, '', 'unwitnessed'):
         return
     tag = session_tag(job_id)
     reason = 'no call log row for the session tag'
+    if not tagged(env.get('OPENCODE_CONFIG_CONTENT'), job_id):
+        attempts, reason = 0, 'final config carries no session tag'
     for attempt in range(attempts):   # the gateway may write the row after the response
         try:
             served = served_models(fetch(tag, env), tag)

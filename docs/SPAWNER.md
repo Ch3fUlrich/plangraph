@@ -636,7 +636,8 @@ not establish a private ACL; operators must secure the state directory ACL.
 
 Spawn refusals, including CLI/MCP preflight failures, persist private run records
 with an exit code. Codes are 1 for execution/I/O failure, 2 for card/policy
-refusal, 3 for benchmark policy/data failure, and 4 for exhausted provider legs.
+refusal, 3 for benchmark policy/data failure, 4 for exhausted provider legs (status
+`limited`), 5 for a writer that changed nothing (`failed`, `writer_no_changes`, D-3236).
 If storage itself fails, the original refusal is retained and the persistence
 failure is logged. Explicit override leg IDs are preserved even for shared models.
 

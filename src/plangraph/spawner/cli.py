@@ -343,8 +343,8 @@ raise SystemExit(code)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
             if 'seats' in result:
-                # rc 0 only while some seat can still deliver a verdict (running or completed).
-                return 0 if any(r.get('status') in ('running', 'completed') for r in result['seats']) else 1
+                # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
+                return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
             if 'status' not in result:
                 return 2 if result.get('error') else 0
             code = result.get('exit_code')

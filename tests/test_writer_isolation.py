@@ -76,7 +76,7 @@ def test_writer_gets_a_private_config_dir_not_the_global_one(tmp_path, monkeypat
 def test_writer_that_changes_nothing_fails(tmp_path, monkeypatch):
     work = _git_repo(tmp_path / 'work')
     job, _ = _run_writer(tmp_path, monkeypatch, work)
-    assert job.status == 'failed' and job.exit_code == 4
+    assert job.status == 'failed' and job.exit_code == 5   # not 4: that is exhausted legs (r2 seat)
     assert {'event': 'writer_no_changes'} in job.events
     assert job.stderr.startswith('writer_no_changes:')
 
@@ -109,3 +109,48 @@ def test_review_seat_is_not_held_to_a_change(tmp_path, monkeypatch):
     job, _ = _run_writer(tmp_path, monkeypatch, work, role='review')
     assert job.status == 'completed'
     assert not any(e.get('event') == 'writer_baseline' for e in job.events)
+
+
+@pytest.mark.writer_change_check
+def test_writers_sharing_a_cwd_are_both_left_unchecked(tmp_path):
+    # r2 seats (qwen run-9ee7830a, mimo-pro run-3b4a1f22): one whole-tree hash cannot judge two
+    # writers in one cwd -- B's edit would pass an inert A.
+    from plangraph.spawner.opencode_isolation import UNCHECKED, fail_unchanged_writer, record_baseline
+    work = _git_repo(tmp_path / 'work')
+    def job(job_id, role='implement'):
+        return SimpleNamespace(job_id=job_id, role=role, cwd=str(work), status='running', events=[],
+                               exit_code=None, stderr='')
+    a, b, seat = job('a'), job('b'), job('s', role='review')
+    record_baseline(a, work, [seat])
+    assert a.events[0]['event'] == 'writer_baseline'
+    record_baseline(b, work, [a, b, seat])
+    assert UNCHECKED in a.events and UNCHECKED in b.events and not seat.events
+    a.status = 'completed'
+    fail_unchanged_writer(a, work)
+    assert a.status == 'completed'
+
+
+def test_unchanged_check_ignores_non_writer_roles(tmp_path):
+    from plangraph.spawner.opencode_isolation import fail_unchanged_writer
+    work = _git_repo(tmp_path / 'work')
+    from plangraph.spawner.opencode_isolation import tree_state
+    job = SimpleNamespace(role='review', status='completed', exit_code=0, stderr='',
+                          events=[{'event': 'writer_baseline', 'state': tree_state(work)}])
+    fail_unchanged_writer(job, work)
+    assert job.status == 'completed' and job.exit_code == 0
+
+
+@pytest.mark.parametrize('env', [{'HOME': '/srv/u', 'XDG_CONFIG_HOME': '/srv/u/.config'},
+                                 {'USERPROFILE': r'D:\profiles\u', 'APPDATA': r'D:\profiles\u\AppData\Roaming'}])
+def test_config_layers_close_independent_of_platform_home(env):
+    # r2 seat (mimo-pro): the closed layers do not depend on HOME/XDG (POSIX) or USERPROFILE (Windows).
+    import shutil
+    from plangraph.spawner.opencode_isolation import close_config_layers
+    child = dict(env)
+    oc_dir = close_config_layers(child)
+    try:
+        assert child['OPENCODE_CONFIG_DIR'] == oc_dir and Path(child['OPENCODE_CONFIG']).parent == Path(oc_dir)
+        assert all(not oc_dir.startswith(v) for v in env.values())
+        assert json.loads(Path(child['OPENCODE_CONFIG']).read_text()) == {}
+    finally:
+        shutil.rmtree(oc_dir)

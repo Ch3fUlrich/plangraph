@@ -112,7 +112,7 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     # no-change check is exercised only by tests marked writer_change_check.
     if 'writer_change_check' not in request.keywords:
         from plangraph.spawner import opencode_isolation
-        monkeypatch.setattr(opencode_isolation, 'record_baseline', lambda job, work_dir: None)
+        monkeypatch.setattr(opencode_isolation, 'record_baseline', lambda job, work_dir, live_jobs=(): None)
     from plangraph.spawner import resolver
     probe = resolver.served_models
     probe.cache_clear()

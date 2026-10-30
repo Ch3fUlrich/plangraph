@@ -58,15 +58,15 @@ def test_witness_names_ambiguous_rows():
                            'reason': 'ambiguous: call log rows name 2 served models'}]
 
 
-def test_served_from_rows_matches_tag_ok_status_and_one_model():
+def test_served_models_matches_tag_and_ok_status():
     tag = 'plangraph-job-1'
     rows = [{'sessionTag': tag, 'status': 200, 'model': 'gpt-6-luna', 'provider': 'cx'},
             {'sessionTag': 'plangraph-other', 'status': 200, 'model': 'qwen', 'provider': 'x'},
             {'sessionTag': tag, 'status': 502, 'model': 'other', 'provider': 'y'}]
-    assert gw.served_from_rows(rows, tag) == 'cx/gpt-6-luna'
+    assert gw.served_models(rows, tag) == {'cx/gpt-6-luna'}
     rows.append({'sessionTag': tag, 'status': 200, 'model': 'mimo/mimo-v2.6-pro'})
-    assert gw.served_from_rows(rows, tag) is None   # two served models: ambiguous, never a guess
-    assert gw.served_from_rows({'error': 'x'}, tag) is None
+    assert gw.served_models(rows, tag) == {'cx/gpt-6-luna', 'mimo/mimo-v2.6-pro'}
+    assert gw.served_models({'error': 'x'}, tag) == set()
 
 
 def test_witness_records_gateway_model(monkeypatch):
@@ -88,6 +88,9 @@ def test_witness_retries_then_records_absence():
 def test_witness_skips_untagged_or_witnessed_jobs():
     runner, job = _Runner('job-1'), _job()
     gw.witness(runner, 'job-1', job, {'OPENCODE_CONFIG_CONTENT': '{}'}, fetch=pytest.fail)
+    # r2 seat (mimo-pro run-3b4a1f22): an untagged config is an explicit event, never silent.
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'final config carries no session tag'}]
+    job.events.clear()
     job.served_model = 'cx/gpt-6-luna'
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
     assert not job.events and not runner.calls
@@ -107,7 +110,8 @@ def test_fetch_rows_needs_spawner_token_and_sends_it():
     assert sent[0].get_header('Authorization') == 'Bearer tok'
 
 
-def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, monkeypatch):
+@pytest.mark.parametrize('returncode', [0, 1])   # r2 seat (mimo-pro): a failed seat is witnessed too
+def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, monkeypatch, returncode):
     # Real SpawnerRunner, fake process: the child's final config carries the session header and
     # the runner records the call log's served model as an authenticated adapter witness.
     import asyncio
@@ -126,7 +130,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
         async def communicate():
             return b'VERDICT: ACCEPT', b''
-        return SimpleNamespace(pid=123, returncode=0, communicate=communicate)
+        return SimpleNamespace(pid=123, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():
         job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6-luna', role='review',
@@ -138,6 +142,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     providers = seen['cfg'].get('providers') or seen['cfg'].get('provider')
     assert providers['omniroute']['options']['headers'][gw.SESSION_HEADER] == seen['tag'] == f'plangraph-{job.job_id}'
     assert job.served_model == 'cx/gpt-6-luna' and job.witness_kind == gw.WITNESS_KIND
+    assert job.status == ('completed' if returncode == 0 else 'failed')
 
 
 def test_child_env_never_carries_the_call_log_token(monkeypatch):

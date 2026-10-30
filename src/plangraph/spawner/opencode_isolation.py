@@ -18,6 +18,7 @@ import tempfile
 
 CLOSED_LAYERS = {'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUDE_CODE': '1',
                  'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS': '1'}
+WRITER_ROLES = ('implement', 'fix')
 
 
 def close_config_layers(child_env):
@@ -46,7 +47,23 @@ def tree_state(work_dir):
         return None
 
 
-def record_baseline(job, work_dir):
+#: Run exit code of a writer that changed nothing; distinct from 4 (exhausted legs).
+WRITER_NO_CHANGES_EXIT = 5
+
+
+UNCHECKED = {'event': 'writer_change_unchecked', 'reason': 'cwd shared with a live writer'}
+
+
+def record_baseline(job, work_dir, live_jobs=()):
+    """Hash the tree before a writer starts. A cwd shared with another live writer leaves
+    both unchecked (a whole-tree hash cannot tell their changes apart) and says so."""
+    sharers = [o for o in live_jobs if o.role in WRITER_ROLES and o.cwd == job.cwd
+               and o.status == 'running' and o.job_id != job.job_id]
+    if sharers:
+        for o in [job, *sharers]:
+            if UNCHECKED not in o.events:
+                o.events.append(dict(UNCHECKED))
+        return
     state = tree_state(work_dir) if work_dir else None
     if state:
         job.events.append({'event': 'writer_baseline', 'state': state})
@@ -55,9 +72,10 @@ def record_baseline(job, work_dir):
 def fail_unchanged_writer(job, work_dir):
     """A writer that exits 0 without a commit or a tree change ends failed, not completed."""
     base = next((e['state'] for e in job.events if e.get('event') == 'writer_baseline'), None)
-    if base is None or job.status != 'completed' or tree_state(work_dir) != base:
+    if (job.role not in WRITER_ROLES or base is None or job.status != 'completed'
+            or UNCHECKED in job.events or tree_state(work_dir) != base):
         return
     job.status = 'failed'
-    job.exit_code = 4
+    job.exit_code = WRITER_NO_CHANGES_EXIT
     job.events.append({'event': 'writer_no_changes'})
     job.stderr = 'writer_no_changes: exit 0 with no commit and no working-tree change\n' + (job.stderr or '')

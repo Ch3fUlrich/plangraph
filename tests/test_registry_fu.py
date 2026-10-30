@@ -25,7 +25,7 @@ def _fake_supervisor(envelope, seen):
 
 
 @pytest.mark.parametrize('statuses, code', [(['running', 'refused'], 0), (['refused', 'refused'], 1),
-                                            (['failed', 'refused'], 1)])
+                                            (['failed', 'refused'], 1), (['dry_run', 'dry_run'], 0)])
 def test_cli_spawn_seats_prints_group(tmp_path, monkeypatch, capsys, statuses, code):
     # Live proof on main 7062cc54: `spawn --seats` exited 1 printing "'status'" (cli.py read
     # result['status'] on the seat-group envelope).
@@ -41,6 +41,7 @@ def test_cli_spawn_seats_prints_group(tmp_path, monkeypatch, capsys, statuses, c
     assert rc == code
     assert out['seat_group'] == 'seats-abc' and seen[0]['seats'] is True
     # --wait polls each running seat; refused seats keep their record.
+    # r2 seat (qwen run-9ee7830a): a planned (dry_run) group exits 0 like a single dry run.
     assert [r['status'] for r in out['seats']] == ['completed' if s == 'running' else s for s in statuses]
 
 
