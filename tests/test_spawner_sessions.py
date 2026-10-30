@@ -1716,9 +1716,15 @@ def test_launch_refuses_when_stopped_old_id_still_listed(site, dry):
 def test_launch_record_write_failure_reports_started_id(site, monkeypatch):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
+    real = s._write_record
 
     def dead(name, rec):
-        raise OSError("no space left on device")
+        # Only the post-start write fails: the write-ahead "launching" record
+        # must land before the process starts (D-3193) - this test's subject
+        # is the write AFTER the start, which must report the started id.
+        if rec.get("state") == "running":
+            raise OSError("no space left on device")
+        return real(name, rec)
 
     monkeypatch.setattr(s, "_write_record", dead)
     res = go(site, s)
@@ -1784,3 +1790,99 @@ def test_launch_parameter_refused_after_start_writes_orphan_record(site):
     assert rec["session_id"] is None and rec["stopped_ts"] is None  # the orphan is recorded
     line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
     assert line["action"] == "launch" and line["ok"] is False
+
+
+def test_record_state_launching_when_run_called(site):
+    class ProbeRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"]:
+                rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+                assert rec["state"] == "launching"  # written before the run
+                assert rec["session_id"] is None
+                assert rec["launched_ms"] == 1_000_000.0  # taken before the start
+                assert rec["argv"][-1] == f"<{len(PROMPT)} chars>"  # redacted argv
+            return super().__call__(argv, **kw)
+
+    s = make(site, ProbeRun(stdout="session " + UUID1), now=lambda: 1000.0)
+    go(site, s)
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "running" and rec["session_id"] == UUID1
+
+
+def test_timeout_record_state_unknown(site):
+    class TimeoutRun(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"]:
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+            return super().__call__(argv, **kw)
+
+    s = make(site, TimeoutRun())
+    with pytest.raises(subprocess.TimeoutExpired):
+        go(site, s)
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "unknown" and rec["stopped_ts"] is None  # the process may exist
+
+
+def test_exit_failure_record_state_stopped(site):
+    run = FakeRun(stdout="untrusted workspace", launch_rc=1)
+    s = make(site, run)
+    res = go(site, s)
+    assert res["ok"] is False
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "stopped" and rec["stopped_ts"] is not None  # nothing was started
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert "claude exited 1: untrusted workspace" in line["reason"]  # slice-2a stdout text
+
+
+def test_launch_refuses_over_unknown_record(site):
+    s = make(site, FakeRun(stdout="done\n"), resolve_budget=0.0)
+    res = go(site, s)
+    assert res["ok"] is True and res["session_id"] is None and "warning" in res
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["state"] == "unknown"  # rc 0 but no resolvable id
+    run2 = FakeRun(stdout="session " + UUID1)
+    s2 = make(site, run2)
+    with pytest.raises(ParameterRefused, match="has a unknown record; stop or relaunch it"):
+        go(site, s2)  # a possibly-live record is replaced only via relaunch
+    assert run2.launch_calls() == []  # nothing was started
+
+
+def test_dry_run_writes_no_launch_record(site):
+    run = FakeRun()
+    s = make(site, run)
+    go(site, s, dry_run=True)
+    assert run.calls == []  # nothing ran
+    assert not (site.state / "sessions" / "alpha.json").exists()  # no write-ahead record
+    assert not (site.state / "sessions" / "audit.log").exists()
+
+
+def test_legacy_record_without_state_is_read(site):
+    sessions = site.state / "sessions"
+    sessions.mkdir(parents=True)
+    legacy = {"name": "alpha", "session_id": None, "stopped_ts": None}
+    (sessions / "alpha.json").write_text(json.dumps(legacy))
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    listed = [r for r in s.list()["sessions"] if r["name"] == "alpha"][0]
+    assert listed["state"] == "running"  # no state field, stopped_ts unset
+    with pytest.raises(ParameterRefused, match="has a running record"):
+        go(site, s)  # a legacy live record refuses a plain launch
+    assert run.launch_calls() == []
+    legacy["stopped_ts"] = 500.0
+    (sessions / "alpha.json").write_text(json.dumps(legacy))
+    listed = [r for r in s.list()["sessions"] if r["name"] == "alpha"][0]
+    assert listed["state"] == "stopped"  # no state field, stopped_ts set
+    res = go(site, s)  # a legacy stopped record is replaced by a plain launch
+    assert res["ok"] is True
+    rec = json.loads((sessions / "alpha.json").read_text())
+    assert rec["state"] == "running"  # the new record carries the state field
+
+
+def test_list_state_prefers_agents_row(site):
+    run = FakeRun(stdout="session " + UUID1, agents_rows=[
+        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+         "state": "working", "startedAt": 1_000_000}])
+    s = make(site, run)
+    go(site, s)
+    listed = [r for r in s.list()["sessions"] if r["name"] == "alpha"][0]
+    assert listed["state"] == "working"  # the live row wins over the record

@@ -107,6 +107,17 @@ def transcript_path(cwd, session_id):
     return Path.home() / ".claude" / "projects" / safe / f"{session_id}.jsonl"
 
 
+def _state(rec):
+    """Record state for launch gating and list (D-3193). stop() writes only
+    the stopped_ts timestamp, so a set stopped_ts means "stopped" whatever the
+    state field says; records predating the write-ahead launch record carry no
+    state field and derive it the same way."""
+    if rec.get("stopped_ts") is not None:
+        return "stopped"
+    state = rec.get("state")
+    return state if state in ("launching", "running", "unknown", "stopped") else "running"
+
+
 class _ActionFailed(Exception):
     """Subprocess-level failure: audited, then reported as {"ok": False}."""
 
@@ -554,12 +565,16 @@ class Sessions:
                 self._sleep(0.5)
         return None
 
-    def _run_launch(self, name, bg_argv, env, cwd_path, prompt_arg, exclude=None):
+    def _run_launch(self, name, bg_argv, env, cwd_path, prompt_arg, exclude=None,
+                    launched_ms=None):
         """Start the session; returns (session_id, warning). Raises _ActionFailed
         on a non-zero exit and TimeoutExpired / OSError upward to the wrapper.
         `exclude` is the previous session id on a relaunch: it must never be
-        resolved as the new session's id (R-13)."""
-        launched_ms = self._now() * 1000.0  # before the start: rows near it count
+        resolved as the new session's id (R-13). `launched_ms` is the clock
+        reading taken before the start (R-18) when the caller already wrote it
+        into the write-ahead record; it defaults to a fresh pre-start reading."""
+        if launched_ms is None:
+            launched_ms = self._now() * 1000.0  # before the start: rows near it count
         proc = self._run(bg_argv, cwd=str(cwd_path), **self._launch_run_kw(env))
         if proc.returncode != 0:
             # First 300 chars of the process output: enough to see why claude
@@ -568,6 +583,57 @@ class Sessions:
             raise _ActionFailed(f"claude exited {proc.returncode}: {detail}")
         sid = self._resolve_id(name, proc.stdout or "", exclude, launched_ms)
         return sid, (None if sid else "session id could not be resolved")
+
+    def _start(self, name, rec, argv, env, cwd_path, prompt_arg, exclude=None):
+        """Write-ahead launch (D-3193): the record is written with state
+        "launching", the redacted argv and the pre-start launched_ms BEFORE the
+        process starts, so every later outcome is a state update on a record
+        that already exists. rc 0 + id -> "running" (+ session_id, job_id);
+        rc 0 + no id -> "unknown", ok result with warning; rc != 0 ->
+        "stopped" + stopped_ts and _ActionFailed; TimeoutExpired / OSError /
+        ParameterRefused from the run or the id poll -> "unknown" written and
+        the original exception re-raised. The marker is unlinked only after
+        the "running"/"unknown" write. Returns (session_id, warning)."""
+        launched_ms = self._now() * 1000.0  # before the start: rows near it count
+        rec.update({"state": "launching", "session_id": None, "job_id": None,
+                    "stopped_ts": None, "ts": self._now(),
+                    "launched_ms": launched_ms, "argv": self._shown(argv, prompt_arg)})
+        # The write-ahead record must land before the process starts: if it
+        # cannot, no process is started at all.
+        self._write_record(name, rec)
+        try:
+            sid, warning = self._run_launch(name, argv, env, cwd_path, prompt_arg,
+                                            exclude=exclude, launched_ms=launched_ms)
+        except _ActionFailed:
+            # claude exited non-zero: nothing is live, the run failed outright.
+            rec.update({"state": "stopped", "stopped_ts": self._now()})
+            try:
+                self._write_record(name, rec)
+            except (OSError, ValueError):
+                pass  # the launch failure stays the outcome
+            raise
+        except (subprocess.TimeoutExpired, OSError, ParameterRefused):
+            # The process may have started: state "unknown" records the
+            # possible orphan (session_id null, stopped_ts unset) so list
+            # shows it and relaunch force can replace it. The write is best
+            # effort: the launch failure stays the outcome.
+            rec["state"] = "unknown"
+            try:
+                self._write_record(name, rec)
+            except (OSError, ValueError):
+                pass
+            raise
+        rec.update({"state": "running" if sid else "unknown",
+                    "session_id": sid, "job_id": sid[:8] if sid else None,
+                    "ts": self._now()})
+        try:
+            self._write_record(name, rec)
+            self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
+        except (OSError, ValueError) as exc:
+            # The session is running: its id must survive the failure or the
+            # new session is untracked (round 4).
+            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
+        return sid, warning
 
     # ---- actions -------------------------------------------------------
 
@@ -598,20 +664,23 @@ class Sessions:
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv, prompt_arg)
         existing = self._find_record(name, None)
-        if existing is not None and existing.get("stopped_ts") is None:
-            # A live record is only replaced through relaunch (R-19).
-            raise _refuse(f"session {name} already has an active record; use relaunch")
-        if existing is not None and existing.get("session_id"):
-            # A stopped record's old id may have outlived its stop: a listed id
-            # outside a finished state means the old session is still running
-            # and a launch here would start a second one. Checked in dry_run
-            # too - it only reads (round 4).
-            old = existing.get("session_id")
-            row = next((r for r in self._agents_rows_strict()
-                        if r.get("sessionId") == old), None)
-            if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
-                raise _refuse(f"session {name} old id {old} still listed "
-                              f"({row.get('state')}); use relaunch")
+        if existing is not None:
+            state = _state(existing)
+            if state in ("launching", "running", "unknown"):
+                # A live - or possibly live ("unknown": the process may have
+                # started) - record is only replaced through relaunch (R-19).
+                raise _refuse(f"session {name} has a {state} record; stop or relaunch it")
+            if existing.get("session_id"):
+                # A stopped record's old id may have outlived its stop: a listed id
+                # outside a finished state means the old session is still running
+                # and a launch here would start a second one. Checked in dry_run
+                # too - it only reads (round 4).
+                old = existing.get("session_id")
+                row = next((r for r in self._agents_rows_strict()
+                            if r.get("sessionId") == old), None)
+                if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+                    raise _refuse(f"session {name} old id {old} still listed "
+                                  f"({row.get('state')}); use relaunch")
         if dry_run:
             # D-2918: a refusing dry run is still dry; a passing one writes
             # nothing either - planned argv, cwd and env keys only.
@@ -626,29 +695,7 @@ class Sessions:
                "session_id": None, "job_id": None,
                "permission_mode": mode, "platform": self._platform,
                "stopped_ts": None}
-        try:
-            sid, warning = self._run_launch(name, bg_argv, env, cwd_path, prompt_arg)
-        except (subprocess.TimeoutExpired, OSError, ParameterRefused):
-            # The launch failed AFTER the process may have started (a
-            # ParameterRefused here is win32 head resolution inside the id
-            # poll): the record is still written - session_id null, stopped_ts
-            # None - so list shows the possible orphan and relaunch force can
-            # replace it. The write is best effort: the launch failure stays
-            # the outcome.
-            rec["ts"] = self._now()
-            try:
-                self._write_record(name, rec)
-            except (OSError, ValueError):
-                pass
-            raise
-        rec.update({"session_id": sid, "job_id": sid[:8] if sid else None, "ts": self._now()})
-        try:
-            self._write_record(name, rec)
-            self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
-        except (OSError, ValueError) as exc:
-            # The session is running: its id must survive the failure or the
-            # new session is untracked (round 4).
-            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
+        sid, warning = self._start(name, rec, bg_argv, env, cwd_path, prompt_arg)
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv, prompt_arg)}
         if warning:
@@ -847,7 +894,7 @@ class Sessions:
             sessions.append({
                 "name": rec.get("name"), "id": sid, "cwd": rec.get("cwd"),
                 "context_tokens": tokens, "context_pct": tokens / cap,
-                "state": agent.get("state") or ("stopped" if rec.get("stopped_ts") else "running"),
+                "state": agent.get("state") or _state(rec),
                 "ready": self._marker_path(rec.get("name")).is_file(),
             })
         return {"sessions": sessions}

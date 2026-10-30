@@ -771,9 +771,9 @@ runs; entries get no further per-file checks.
 State lives under `<spawner state>/sessions/`: a `<name>.json` record per session, `<name>.prompt.txt`
 (0600), the `<name>.ready.json` marker (handoff, card), and `audit.log` - one scrubbed JSON line per
 action with the argv (prompt length only); a dry run writes nothing and leaves no audit line. Prompts,
-records and audit text pass the env redactor. A launch that fails after the process may have started -
-a timeout or OSError from the run, or a failed `wt.exe` spawn - still writes its record with
-`session_id` null and `stopped_ts` unset, so `plangraph_session_list` shows the possible orphan and
+records and audit text pass the env redactor. The record carries a `state`: `launching` (with the
+redacted argv and `launched_ms`) is written before the process starts, ending `running` on a resolved
+id, `stopped` on a non-zero exit, `unknown` after a timeout, OSError or unresolved id - `session_id` null, `stopped_ts` unset, so `plangraph_session_list` shows the possible orphan and
 `plangraph_session_relaunch` with `force=True` can replace it. A successful launch removes a stale
 `<name>.ready.json`. Every audit write is guarded: when `audit.log` cannot be written the action's
 own outcome stands and the caller is warned with a `warning` field instead.
