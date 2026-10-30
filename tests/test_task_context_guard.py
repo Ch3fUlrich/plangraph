@@ -288,3 +288,104 @@ def test_mcp_claim_passes_force_stale_through():
                            "arguments": {"key": "demo:A", "force_stale": "why"}}},
                Client())
     assert seen == [("POST", "claim", {"key": "demo:A", "force_stale": "why"})]
+
+
+# ------------------------------------------------- fix round 1 (seat gaps)
+class _Proc:
+    def __init__(self, code, out=""):
+        self.returncode, self.stdout = code, out
+
+
+def test_a_git_failure_is_unknown_and_never_refuses(w, repo, monkeypatch):
+    key, = seed(w, [("A", [])])
+    _merge_lane(repo, key)
+    monkeypatch.setattr(w.store.ctx["git"], "_run", lambda *a, **k: _Proc(128))
+    info = w.store.show(w.p("reader"), key)
+    assert info["work_exists"] == {"commits": None, "lanes": None}
+    assert w.store.claim(w.p("l1main"), key)["epoch"] == 1
+
+
+def test_open_lanes_is_unknown_when_the_ancestry_check_fails(w, repo, monkeypatch):
+    key, = seed(w, [("LANE-TWO", [])])
+    _git(repo, "branch", "lane/lane-two")
+    adapter = w.store.ctx["git"]
+    real = adapter._run
+
+    def run(repo_path, args, **kw):
+        return _Proc(128) if args[0] == "merge-base" else real(repo_path, args, **kw)
+    monkeypatch.setattr(adapter, "_run", run)
+    assert w.store.show(w.p("reader"), key)["work_exists"]["lanes"] is None
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "x" * 501])
+def test_force_stale_blank_or_too_long_is_a_validation_refusal(w, repo, reason):
+    key, = seed(w, [("A", [])])
+    _merge_lane(repo, key)
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), key, force_stale=reason)
+    assert exc.value.code == "validation"
+    assert w.store._item(key)["state"] == "open"
+
+
+def test_force_stale_over_a_newer_decision_is_audited(w, decisions):
+    w.store.create_items(w.p("router"), [
+        defn("GEN-LOWS", description="per D-10"), defn("GOAL", ["GEN-LOWS"], kind="goal")])
+    _decide(decisions, 12, "GEN-LOWS: premise changed")
+    w.store.claim(w.p("l1main"), "demo:GEN-LOWS", force_stale="  D-12 read, plan unchanged  ")
+    row = w.conn.execute("SELECT payload FROM events WHERE key=? AND type='claimed'",
+                         ("demo:GEN-LOWS",)).fetchone()
+    audit = json.loads(row["payload"])["force_stale"]
+    assert audit["reason"] == "D-12 read, plan unchanged"
+    assert audit["overrode"][0].startswith("premise outdated: D-12")
+
+
+def test_cli_claim_sends_force_stale():
+    from plangraph.keeper import cli, cli_verbs
+    sent = []
+
+    class Session:
+        json_mode = True
+
+        def call(self, method, verb, body=None):
+            sent.append((method, verb, body))
+            return {"key": body["key"], "epoch": 1}
+
+    args = cli.build_parser().parse_args(["claim", "demo:A", "--force-stale", "why"])
+    assert cli_verbs.cmd_claim(args, Session()) == 0
+    assert sent == [("POST", "claim", {"key": "demo:A", "force_stale": "why"})]
+
+
+def test_show_text_renders_the_evidence_ref():
+    assert fmt._ev_ref({"ref": {"commit": "0123456789abcdef"}}) == "@01234567"
+    assert fmt._ev_ref({"ref": {"decision": "D-7"}}) == "@D-7"
+    assert fmt._ev_ref({"ref": {}}) == "" and fmt._ev_ref({}) == ""
+
+
+def test_a_mention_is_not_a_supersede(w, decisions):
+    w.store.create_items(w.p("router"), [
+        defn("A", description="per D-5"), defn("GOAL", ["A"], kind="goal")])
+    _decide(decisions, 9, "keeps D-5; the old note superseded by D-12 is about B")
+    assert w.store.show(w.p("reader"), "demo:A")["superseded_premises"] == {}
+    _decide(decisions, 5, "WITHDRAWN by D-11: premise gone")
+    assert w.store.show(w.p("reader"), "demo:A")["superseded_premises"] == {"D-5": "D-11"}
+
+
+def test_brief_stays_under_the_cap_with_many_decisions(w, decisions):
+    from plangraph.keeper.brief import BRIEF_CAP, brief_text
+    w.store.create_items(w.p("router"), [
+        defn("GEN-LOWS", description="per D-10 " + "x" * 900, done_criteria="y" * 500),
+        defn("GOAL", ["GEN-LOWS"], kind="goal")])
+    for did in range(100, 160):
+        _decide(decisions, did, "GEN-LOWS premise moved again")
+    brief = w.store.show(w.p("reader"), "demo:GEN-LOWS", brief=True)
+    assert brief["decisions"].count("D-") == 6 and brief["decisions"].endswith("D-159")
+    assert len(brief["stale"]) <= 240
+    assert len(brief_text(brief)) <= BRIEF_CAP + 200
+
+
+def test_ready_checks_the_repo_before_the_cut_to_n(w, repo):
+    keys = seed(w, [("A", []), ("B", [])])
+    w.store.set_priority(w.p("router"), keys[0], 5)
+    _merge_lane(repo, keys[0])
+    rows = w.store._ready_items(project="demo", n=1)
+    assert [r["key"] for r in rows] == ["demo:B"]

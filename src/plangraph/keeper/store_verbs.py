@@ -133,8 +133,7 @@ class VerbsMixin:
         # Only the worker_claim door admits the system principal (the phase worker runs as it); /v1/claim stays l1/worker.
         self._require_role(principal, *(("l1", "worker", "system") if allow_system else ("l1", "worker")))
         lease_seconds = self._lease_seconds(lease_s)
-        if force_stale is not None and not isinstance(force_stale, str):
-            raise Refused("validation", "force_stale must be a reason string")
+        force_stale = self._force_stale_reason(force_stale)
         override = None
         first = self._item(key)
         if first is not None and first["state"] == "open" and self._ready(first) \
