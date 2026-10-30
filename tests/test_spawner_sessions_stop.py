@@ -98,7 +98,11 @@ def test_stop_already_stopped_runs_no_subprocess(site):
     calls_before = list(run.calls)
     res = s.stop(name="alpha")  # the record is already stopped
     assert res["ok"] is True and res["session_id"] == UUID1
-    assert run.calls == calls_before  # not one subprocess call
+    # adapted (r5 slice 4, seat HIGH): the stopped record's id is re-checked
+    # with one strict poll - and never stopped twice, no other subprocess.
+    added = [a for a, _ in run.calls[len(calls_before):]]
+    assert [a[:3] for a in added] == [["claude", "agents", "--json"]]
+    assert not any(a[:2] == ["claude", "stop"] for a in added)
 
 
 def test_stop_argv_is_never_rm_or_kill(site):

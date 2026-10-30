@@ -92,6 +92,8 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         the original exception re-raised. The marker is unlinked only after
         the "running"/"unknown" write. Returns (session_id, warning)."""
         launched_ms = self._now() * 1000.0  # before the start: rows near it count
+        # The write-ahead keeps the record's existing launched_ts: handoff
+        # freshness must keep pointing at the last SUCCESSFUL launch.
         rec.update({"state": "launching", "session_id": None, "job_id": None,
                     "stopped_ts": None, "ts": self._now(),
                     "launched_ms": launched_ms, "argv": self._shown(argv, prompt_arg)})
@@ -122,23 +124,25 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             raise
         rec.update({"state": "running" if sid else "unknown",
                     "session_id": sid, "job_id": sid[:8] if sid else None,
-                    "ts": self._now()})
+                    "ts": self._now(), "launched_ts": self._now()})
         try:
             self._write_record(name, rec)
             self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
         except (OSError, ValueError) as exc:
             # The session is running: its id must survive the failure or the
             # new session is untracked (round 4).
-            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
+            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}",
+                                session_id=sid) from exc
         return sid, warning
 
     # ---- actions -------------------------------------------------------
 
     def launch(self, *, name, cwd, model, effort, permission_mode, mcp_config,
                prompt=None, prompt_file=None, handoff=None, parent=None, dry_run=False):
-        return self._action("launch", name, lambda: self._launch_inner(
-            name, cwd, model, effort, permission_mode, mcp_config,
-            prompt, prompt_file, handoff, parent, dry_run), dry=dry_run is True)
+        with self._name_lock(str(name)):
+            return self._action("launch", name, lambda: self._launch_inner(
+                name, cwd, model, effort, permission_mode, mcp_config,
+                prompt, prompt_file, handoff, parent, dry_run), dry=dry_run is True)
 
     def _launch_inner(self, name, cwd, model, effort, permission_mode, mcp_config,
                       prompt, prompt_file, handoff, parent, dry_run):
@@ -214,12 +218,10 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             rec, name = self._find_record_by_id(session_id)
         if rec is None:
             raise _refuse(f"unknown session: {name or session_id}")
-        if _state(rec) == "stopped":
-            # Nothing can be live behind a stopped record: ok without any
-            # subprocess. A record with no session id is NOT refused here -
-            # _stop_record resolves or clears it (D-3193).
-            return {"ok": True, "name": name, "session_id": rec.get("session_id")}
-        sid = self._stop_record(rec, name)
+        # _ensure_stopped confirms the record's id is really gone: stop never
+        # reports ok behind a live id. A record with no session id is NOT
+        # refused here - _stop_record resolves or clears it (D-3193).
+        sid = self._ensure_stopped(rec, name)
         return {"ok": True, "name": name, "session_id": sid}
 
     def _stop_record(self, rec, name):
@@ -273,6 +275,23 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
                                   "stopped_ts": self._now(), "session_id": sid})
         return sid
 
+    def _ensure_stopped(self, rec, name):
+        """The id behind a record, stopped and confirmed; returns the id that
+        was stopped or is confirmed gone (None when there is none). Anything
+        not recorded stopped goes through _stop_record; a stopped record's id
+        may have outlived its stop - `claude agents` is the source of truth
+        (D-3193): a listed id outside FINISHED_STATES is stopped again, an
+        unlisted or finished one is gone for good."""
+        if _state(rec) != "stopped":
+            return self._stop_record(rec, name)
+        sid = rec.get("session_id")
+        if sid:
+            row = next((r for r in self._agents_rows_strict()
+                        if r.get("sessionId") == sid), None)
+            if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+                return self._stop_record(rec, name)
+        return sid
+
     def mark_ready(self, name, handoff, card=None):
         return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
 
@@ -291,7 +310,8 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         return {"ok": True, "name": name, "handoff": str(handoff_path)}
 
     def relaunch(self, name, handoff=None):
-        return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
+        with self._name_lock(str(name)):
+            return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
 
     def _relaunch_inner(self, name, handoff):
         cfg = self._load_config()
@@ -319,33 +339,23 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         bg_argv, env = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv, prompt_arg)
-        # The old session is stopped BEFORE the relaunch (D-3193): anything not
-        # recorded as stopped is stopped and confirmed by _stop_record (a null
-        # id is resolved by name there); a stopped record's id may have
-        # outlived its stop - `claude agents --json` is the source of truth and
-        # a listed id outside a finished/stopped state is stopped first, a
-        # failed stop refuses the relaunch and nothing is launched, while an
-        # unlisted id is gone for good and proceeds untouched.
-        if _state(rec) != "stopped":
-            self._stop_record(rec, name)
-        elif old_sid:
-            row = next((r for r in self._agents_rows_strict()
-                        if r.get("sessionId") == old_sid), None)
-            if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
-                self._stop_record(rec, name)
+        # The old session is stopped and confirmed BEFORE the relaunch
+        # (D-3193): a failed stop refuses and nothing is launched.
+        stopped_sid = self._ensure_stopped(rec, name)
         new_rec = dict(rec)
         new_rec["handoff"] = str(handoff_path) if handoff_path else None
         # The relaunch starts through _start (D-3193): the write-ahead record
         # and every outcome - running, unknown, stopped - are _start's to
         # write; a failure propagates with the old session already stopped.
         sid, warning = self._start(name, new_rec, bg_argv, env, cwd_path, prompt_arg,
-                                   exclude=old_sid)
+                                   exclude=stopped_sid or old_sid)
         # The ready marker is unlinked only after _start returned: a failed
         # relaunch keeps it so a plain retry can relaunch (R-21).
         try:
             self._marker_path(name).unlink(missing_ok=True)
         except (OSError, ValueError) as exc:
-            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
+            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}",
+                                session_id=sid) from exc
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv, prompt_arg)}
         warnings = []
@@ -372,6 +382,8 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
                 "name": rec.get("name"), "id": sid, "cwd": rec.get("cwd"),
                 "context_tokens": tokens, "context_pct": tokens / cap,
                 "state": agent.get("state") or _state(rec),
-                "ready": self._marker_path(rec.get("name")).is_file(),
+                "ready": (isinstance(rec.get("name"), str)
+                          and bool(NAME_RE.fullmatch(rec["name"]))
+                          and self._marker_path(rec["name"]).is_file()),
             })
         return {"sessions": sessions}

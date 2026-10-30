@@ -14,7 +14,7 @@ import pytest
 
 from plangraph.routing_errors import ParameterRefused
 from plangraph.spawner.sessions_agents import _ActionFailed
-from sessions_support import UUID1, FakeRun, make, go, write_config, _ready, _stopped
+from sessions_support import UUID1, UUID2, FakeRun, make, go, write_config, _ready, _stopped
 from sessions_support import site  # noqa: F401
 
 
@@ -146,3 +146,92 @@ def test_relaunch_handoff_must_be_strictly_newer_than_launch(site):
     os.utime(hf, (rec["launched_ts"] + 1, rec["launched_ts"] + 1))  # strictly newer
     res = s.relaunch("alpha", handoff=str(hf))
     assert res["ok"] is True and res["name"] == "alpha"
+
+
+def test_stop_of_stopped_record_with_live_id_stops_again(site):
+    """Seat HIGH: stop never reports ok behind a live id. A stopped record
+    whose id is listed running is stopped again - `claude stop <id>` runs and
+    only a confirmed stop reports ok."""
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    s.stop(name="alpha")
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+                        "kind": "background", "state": "running", "startedAt": 1_000_000}]
+    res = s.stop(name="alpha")  # the stopped record's id is still live
+    assert res["ok"] is True and res["session_id"] == UUID1
+    stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+    assert stops == [["claude", "stop", UUID1], ["claude", "stop", UUID1]]
+
+
+def test_relaunch_resolved_old_id_is_never_the_new_id(site):
+    """R-13: a null-id record's relaunch stops the by-name resolved id first
+    (here UUID2); with "done" in the launch stdout the new id is read from
+    the rows AFTER that stop - the finished UUID2 row can never be it, so
+    result and record carry UUID1, never UUID2."""
+    class SwapRun(FakeRun):
+        def _finish_rows(self, sid):
+            # the stop ends UUID2; the relaunch's own row appeared meanwhile
+            self.agents_rows[:] = [
+                {"id": "a", "sessionId": UUID2, "name": "alpha", "kind": "background",
+                 "state": "finished", "startedAt": 1_005_000},  # newest, but replaced
+                {"id": "b", "sessionId": UUID1, "name": "alpha", "kind": "background",
+                 "state": "running", "startedAt": 1_000_000},
+            ]
+
+    run = SwapRun(stdout="done\n")
+    s = make(site, run, resolve_budget=0.0)
+    rec_path, _marker = _ready(site, run, s)
+    run.agents_rows = [{"id": "x", "sessionId": UUID2, "name": "alpha",
+                        "kind": "background", "state": "running", "startedAt": 1_005_000}]
+    res = s.relaunch("alpha")
+    assert res["ok"] is True
+    assert res["session_id"] == UUID1  # never the replaced UUID2
+    assert json.loads(rec_path.read_text())["session_id"] == UUID1
+    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID2]
+
+
+def test_failed_relaunch_retry_with_same_handoff_ok(site):
+    """Freshness points at the last SUCCESSFUL launch (seat): with an
+    advancing clock and a handoff written after the first launch, a failed
+    relaunch must not advance launched_ts - the retry relaunches with the
+    same handoff instead of refusing it as stale."""
+    class Clock:
+        def __init__(self):
+            self.t = 2_000_000.0
+
+        def __call__(self):
+            self.t += 10.0
+            return self.t
+
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run, now=Clock())
+    rec_path, _marker = _stopped(site, run, s)
+    launched_ts = json.loads(rec_path.read_text())["launched_ts"]
+    hf = site.tmp_path / "handoff.md"
+    os.utime(hf, (launched_ts + 1, launched_ts + 1))  # written after the launch
+    run.launch_rc = 1
+    assert s.relaunch("alpha")["ok"] is False  # the relaunch fails outright
+    run.launch_rc = 0
+    res = s.relaunch("alpha")  # the retry uses the same (marker) handoff
+    assert res["ok"] is True and res["session_id"] == UUID1
+
+
+def test_record_write_failure_after_start_reports_started_id(site, monkeypatch):
+    """The started id survives a failing record write (round 4): the
+    _ActionFailed carries session_id=sid, so the result is the id the
+    session was started with - never None."""
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    real = s._write_record
+
+    def dead(name, rec):
+        if rec.get("state") == "running":  # only the post-start write fails
+            raise OSError("no space left on device")
+        return real(name, rec)
+
+    monkeypatch.setattr(s, "_write_record", dead)
+    res = go(site, s)
+    assert res["ok"] is False
+    assert res["session_id"] == UUID1  # the started id reaches the result
+    assert "record write failed" in res["error"]

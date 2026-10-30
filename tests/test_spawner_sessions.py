@@ -156,7 +156,9 @@ def test_launch_record_write_failure_reports_started_id(site, monkeypatch):
 
     monkeypatch.setattr(s, "_write_record", dead)
     res = go(site, s)
-    assert res["ok"] is False and res["session_id"] is None
+    # adapted (r5 slice 4, seat): the record-write failure _ActionFailed now
+    # carries session_id=sid, so the result reports the started id, not None.
+    assert res["ok"] is False and res["session_id"] == UUID1
     assert len(run.launch_calls()) == 1  # Claude may be running: the id must survive
     line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
     assert line["action"] == "launch" and line["ok"] is False
