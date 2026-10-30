@@ -390,7 +390,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             tokens = self._context_tokens(rec.get("cwd"), sid)
             sessions.append({
                 "name": rec.get("name"), "id": sid, "cwd": rec.get("cwd"),
-                "context_tokens": tokens, "context_pct": tokens / cap,
+                "context_tokens": tokens, "context_pct": min(1.0, tokens / cap),
                 "state": agent.get("state") or _state(rec),
                 "ready": (isinstance(rec.get("name"), str)
                           and bool(NAME_RE.fullmatch(rec["name"]))

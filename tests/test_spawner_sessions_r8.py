@@ -97,3 +97,23 @@ def test_list_odd_usage_values_never_raise(site):
     tf.write_text(good + "\n" + junk + "\n")
     row = s.list()["sessions"][0]  # last assistant line's odd usage: never raises
     assert isinstance(row["context_tokens"], int) and row["context_tokens"] == 0
+
+
+def test_list_context_pct_clamped_to_one(site):
+    # Sonnet LOW: _list_inner computed context_pct = tokens / cap unclamped,
+    # so a transcript whose last assistant usage passed ctx_cap_tokens yielded
+    # a fraction above 1 despite the docs saying "a fraction in 0..1". The
+    # pct clamps at 1.0; the raw context_tokens is still reported over the cap.
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    tdir = site.home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(site.proj))
+    tdir.mkdir(parents=True)
+    over = json.dumps({"type": "assistant", "message": {"role": "assistant", "usage": {
+        "input_tokens": 400000, "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0}}})
+    (tdir / f"{UUID1}.jsonl").write_text(over + "\n")
+    row = s.list()["sessions"][0]
+    assert row["context_tokens"] == 400000  # raw size, above the 300000 cap
+    assert row["context_tokens"] > 300000
+    assert row["context_pct"] == 1.0  # clamped, not 400000 / 300000
