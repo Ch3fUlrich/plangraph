@@ -28,6 +28,7 @@ from plangraph.spawner.resolver import (
 )
 from plangraph.spawner.risk import evaluate_risk
 from plangraph.spawner.runner import JobInfo, SpawnerRunner
+from plangraph.spawner.session_tools import SESSION_TOOLS, _session_arg_errors
 
 TOOLS_METADATA = [
     {
@@ -116,64 +117,7 @@ for _tool in TOOLS_METADATA:
             'seats': {'type': 'boolean', 'description': 'role review: spawn every seat route picks (per writer part); inline-only legs get card.diff_ref inlined'}})
         _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
-# SESSION-SPAWN-MCP: Claude Code session lifecycle (docs/spawner-sessions.md).
-SESSION_TOOLS = [
-    {'name': 'plangraph_session_launch', 'description': 'Launch a background Claude Code session',
-     'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'cwd': {'type': 'string'}, 'model': {'type': 'string'},
-         'effort': {'type': 'string'}, 'prompt': {'type': 'string'}, 'prompt_file': {'type': 'string'},
-         'mcp_config': {'type': 'string'}, 'handoff': {'type': 'string'}, 'parent': {'type': 'string'},
-         'permission_mode': {'type': 'string'}, 'dry_run': {'type': 'boolean'}},
-         'required': ['name', 'cwd', 'model', 'effort', 'mcp_config', 'permission_mode']}},
-    {'name': 'plangraph_session_stop', 'description': 'Stop a Claude Code session by name or id',
-     'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'id': {'type': 'string'}}}},
-    {'name': 'plangraph_session_relaunch', 'description': 'Relaunch a stopped session from its handoff',
-     'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'handoff': {'type': 'string'}},
-         'required': ['name']}},
-    {'name': 'plangraph_session_mark_ready', 'description': 'Mark a session ready with handoff and card',
-     'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'handoff': {'type': 'string'}, 'card': {'type': 'string'}},
-         'required': ['name', 'handoff']}},
-    {'name': 'plangraph_session_list', 'description': 'List sessions with context usage',
-     'inputSchema': {'type': 'object', 'properties': {}}},
-]
 TOOLS_METADATA.extend(SESSION_TOOLS)
-for _t in SESSION_TOOLS:
-    # Undeclared argument keys are refused at the MCP boundary
-    # (_session_arg_errors); the schema says so declaratively too (R-25).
-    _t['inputSchema']['additionalProperties'] = False
-
-
-def _session_arg_errors(schema, args):
-    """First MCP boundary error for one session tool's arguments, or None
-    (D-3193 point 6). `schema` is the tool's SESSION_TOOLS entry. JSON types
-    are matched strictly - bool is not an integer, and a truthy string is not
-    a boolean - so a wrong-typed value is refused before dispatch instead of
-    being coerced (dry_run="yes")."""
-    if not isinstance(args, dict):
-        return "arguments must be an object"
-    input_schema = schema.get('inputSchema', {})
-    props = input_schema.get('properties', {})
-    undeclared = sorted(set(args) - set(props))
-    if undeclared:
-        return f"undeclared session arguments for {schema['name']}: {', '.join(undeclared)}"
-    for key in input_schema.get('required', ()):
-        if key not in args:
-            return f"missing required argument: {key}"
-    json_types = {'string': str, 'boolean': bool, 'object': dict}
-    for key, value in args.items():
-        expected = props.get(key, {}).get('type')
-        if expected == 'integer':
-            ok = isinstance(value, int) and not isinstance(value, bool)
-        elif expected in json_types:
-            ok = isinstance(value, json_types[expected])
-        else:
-            ok = True  # untyped property: nothing to compare against
-        if not ok:
-            return f"argument {key} must be {expected}"
-    return None
 
 
 for _verb in ('route', 'ps', 'result'):
