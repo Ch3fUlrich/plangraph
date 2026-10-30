@@ -39,8 +39,11 @@ falls through only to a spare leg of a family no other seat holds.
 * **Registry data:** `catalog_models.harness` and `catalog_models.tool_mode`
   are catalog columns (schema, seed in `registry_columns.py` `PROVIDER_HARNESS` /
   `INLINE_ONLY_MODELS`, migration for older catalog files). Rows that lack a
-  value (NULL) are derived after seeding and `import_json`; a value set in the
-  catalog stays. An override whose
+  value (NULL) are derived after seeding and `import_json`; a value set on a
+  non-seed row stays. A seed row is rewritten from the seed on every
+  `init_and_seed` (`INSERT OR REPLACE`): change `INLINE_ONLY_MODELS`, not the
+  catalog cell. A review route or spawn without a writer family (no
+  `writer_families`, no `review_of`) refuses. An override whose
   row has no harness refuses with `override model missing registry data:
   harness` (the missing field is named).
 

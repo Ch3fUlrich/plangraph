@@ -76,7 +76,7 @@ def test_benchmark_entry_roundtrips(tmp_path, capsys, monkeypatch, verb):
         db.execute('CREATE TABLE catalog_benchmarks (model_id TEXT, aa_intelligence REAL)')
         db.executemany('INSERT INTO catalog_benchmarks VALUES (?, 50)', [(l.model,) for l in DEFAULT_LEGS])
     # implement keeps operator writer order (D-2683); review shows the benchmark ranking
-    args = ['--state', str(tmp_path), verb, '--card', '{"estimate_tokens":100}', '--role', 'review',
+    args = ['--state', str(tmp_path), verb, '--card', '{"estimate_tokens":100}', '--role', 'review', '--writer-family', 'claude',
             '--require-bench', '--bench-db', str(path)]
     if verb == 'spawn':
         args += ['task', '--dry-run']

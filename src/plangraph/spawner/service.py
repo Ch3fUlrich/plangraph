@@ -126,6 +126,9 @@ class SpawnService(SeatSpawnMixin):
             if not family:
                 raise SpawnRefused('writer family unavailable')
             families.append(family)
+        if role == 'review' and not any(str(f or '').strip() for f in families):
+            # No writer named = no family excluded (D-1533): fail closed.
+            raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
 
     async def spawn(self, *args, **kwargs):
@@ -265,6 +268,8 @@ class SpawnService(SeatSpawnMixin):
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             writers = writer_parts(writer_families) if role == 'review' else set()
+            if role == 'review' and not writers and not reviewed:
+                raise SpawnRefused('review needs a writer family (writer_families or review_of)')
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())

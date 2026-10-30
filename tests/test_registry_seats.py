@@ -286,6 +286,17 @@ def test_unknown_writer_family_is_refused():
         plan_spawn(HIGH, role="review", writer_families=("nosuchfamily",))
 
 
+@pytest.mark.parametrize("model", [None, "omniroute/cx-gpt-6-luna"])
+def test_review_without_writer_family_is_refused(tmp_path, monkeypatch, model):
+    # Round-3 qwen MED: no writer named = no family excluded; refuse, fail closed.
+    svc = _service(tmp_path / "state", monkeypatch)
+    with pytest.raises(SpawnRefused, match="writer family"):
+        asyncio.run(svc.spawn(card=RCARD | HIGH, prompt="r", role="review", model=model,
+                              override_reason="registry seat test" if model else None, dry_run=True))
+    with pytest.raises(SpawnRefused, match="writer family"):
+        svc.route(RCARD | HIGH, role="review")
+
+
 def test_derive_keeps_an_operator_tool_mode():
     # qwen LOW: derive() fills only rows that lack tool_mode; an explicit value stays.
     from plangraph import registry_columns

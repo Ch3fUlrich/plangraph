@@ -78,7 +78,7 @@ def route_json(tmp_path, capsys, *extra):
     from plangraph.spawner.cli import main as cli_main
     capsys.readouterr()  # drain earlier prints; only the route JSON is parsed
     assert cli_main(["--state", str(tmp_path / "state"), "route", "--card", json.dumps(CARD),
-                     "--role", "review", "--json", *extra]) == 0
+                     "--role", "review", "--writer-family", "claude", "--json", *extra]) == 0
     return json.loads(capsys.readouterr().out)
 
 
