@@ -227,14 +227,16 @@ def test_mark_ready_blocked_by_name_lock(site):
 
 def test_stop_absent_row_marks_stopped_without_claude_stop(site):
     # Sonnet r7: a running record whose session already ended has no row to
-    # stop - polling first must recover the name instead of a non-zero
-    # `claude stop` refusing the stop (and with it launch and relaunch) forever.
+    # stop - polling must recover the name instead of refusing forever. r8
+    # (qwen MED): an absent row no longer means "already gone" - `claude stop
+    # <id>` runs once; rc 0 confirms, and the name is still recovered.
     run = FakeRun()
     s = make(site, run)
     _running_record(site)
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
-    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]  # never called
+    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
+        [["claude", "stop", UUID1]]  # attempted once on the unlisted id
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["state"] == "stopped" and rec["session_id"] == UUID1
     assert rec["stopped_ts"] is not None

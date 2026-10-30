@@ -227,23 +227,21 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             rec, name = self._find_record_by_id(session_id)
         if rec is None:
             raise _refuse(f"unknown session: {name or session_id}")
-        # _ensure_stopped confirms the record's id is really gone: stop never
-        # reports ok behind a live id. A record with no session id is NOT
-        # refused here - _stop_record resolves or clears it (D-3193).
+        # _ensure_stopped confirms the id is really gone (D-3193); a record
+        # with no session id is not refused - _stop_record resolves or clears.
         sid = self._ensure_stopped(rec, name)
         return {"ok": True, "name": name, "session_id": sid}
 
     def _stop_record(self, rec, name):
-        """claude stop <id> - the one and only stop mechanism, never rm/kill;
-        the argv head is the resolved _claude_head() like every other call.
-        One strict `claude agents` poll comes first (r7): it resolves a null
-        record id - the newest non-finished background row of this name within
-        5 s of the launch (launched_ms) - and pre-checks the id: absent or
-        finished means already gone, marked stopped without calling claude;
-        after a zero exit that poll CONFIRMS the stop (D-3193). The stopped
-        fields go on a merged copy, never onto rec; returns the session id."""
+        """claude stop <id> - the one and only stop mechanism, never rm/kill.
+        One strict `claude agents` pre-poll (r7) resolves a null record id
+        (newest non-finished background row of this name within 5 s of launch)
+        and pre-checks it: a listed finished id is gone - stopped without
+        claude; anything else attempts claude stop ONCE (r8). rc 0 is then
+        confirmed by a second strict poll (D-3193); rc 1 refuses "stop failed"
+        unless the id is unlisted before AND after - it had already ended."""
         sid = rec.get("session_id")
-        rows = self._agents_rows_strict()  # the one poll: resolve + pre-check
+        rows = self._agents_rows_strict()  # pre-poll: resolve + pre-check
         if not sid:
             cutoff = float(rec.get("launched_ms") or 0) - 5000.0
             best = None
@@ -261,20 +259,25 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
                 if best is None or started >= (best.get("startedAt") or 0):
                     best = row
             sid = (best or {}).get("sessionId")
-            if not sid:
-                # No row, nothing to stop: the record ends here.
+            if not sid:  # nothing resolved: no row to stop, the record ends here
                 self._write_record(name, {**rec, "state": "stopped",
                                           "stopped_ts": self._now()})
                 return None
         row = next((r for r in rows if r.get("sessionId") == sid), None)
-        if row is None or str(row.get("state") or "") in FINISHED_STATES:
-            # Already gone (r7): the name is recovered without claude stop.
+        if row is not None and str(row.get("state") or "") in FINISHED_STATES:
+            # Listed and finished (r7): recovered without claude stop.
             self._write_record(name, {**rec, "state": "stopped",
                                       "stopped_ts": self._now(), "session_id": sid})
             return sid
         proc = self._run(self._claude_head() + ["stop", sid],
                          capture_output=True, text=True, timeout=STOP_TIMEOUT)
         if proc.returncode != 0:
+            if row is None and not any(r.get("sessionId") == sid
+                                       for r in self._agents_rows_strict()):
+                # Unlisted before and after: the session had already ended.
+                self._write_record(name, {**rec, "state": "stopped",
+                                          "stopped_ts": self._now(), "session_id": sid})
+                return sid
             raise _refuse(f"stop failed: claude stop exited {proc.returncode}")
         row = next((r for r in self._agents_rows_strict()
                     if r.get("sessionId") == sid), None)
@@ -285,12 +288,11 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         return sid
 
     def _ensure_stopped(self, rec, name):
-        """The id behind a record, stopped and confirmed; returns the id that
-        was stopped or is confirmed gone (None when there is none). Anything
-        not recorded stopped goes through _stop_record; a stopped record's id
-        may have outlived its stop - `claude agents` is the source of truth
-        (D-3193): a listed id outside FINISHED_STATES is stopped again, an
-        unlisted or finished one is gone for good."""
+        """The id behind a record, stopped and confirmed; returns the stopped
+        or confirmed-gone id (None when there is none). Not-recorded-stopped
+        goes through _stop_record; a stopped record's id may outlive its stop
+        - `claude agents` is the truth (D-3193): a listed live id is stopped
+        again, an unlisted or finished one is gone for good."""
         if _state(rec) != "stopped":
             return self._stop_record(rec, name)
         sid = rec.get("session_id")
@@ -331,8 +333,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             raise _refuse(f"unknown session: {name}")
         old_sid = rec.get("session_id")
         handoff_path = self._relaunch_handoff(rec, cfg, name, handoff)
-        # The stored launch spec is re-validated in full BEFORE the old session
-        # is stopped: a relaunch must never cost the user their session.
+        # The stored spec is re-validated BEFORE the stop: never lose the session.
         prompt_path = Path(rec.get("prompt_file") or "")
         if not str(rec.get("prompt_file") or "") or not prompt_path.is_file():
             raise _refuse(f"prompt_file is missing for session {name}: {rec.get('prompt_file')}")
@@ -349,18 +350,15 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         bg_argv, env = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv, prompt_arg)
-        # The old session is stopped and confirmed BEFORE the relaunch
-        # (D-3193): a failed stop refuses and nothing is launched.
+        # Stop + confirm the old session first (D-3193): failure refuses the relaunch.
         stopped_sid = self._ensure_stopped(rec, name)
         new_rec = dict(rec)
         new_rec["handoff"] = str(handoff_path) if handoff_path else None
-        # The relaunch starts through _start (D-3193): the write-ahead record
-        # and every outcome - running, unknown, stopped - are _start's to
-        # write; a failure propagates with the old session already stopped.
+        # The relaunch starts through _start (D-3193): its write-ahead record
+        # and every outcome are _start's to write; failure leaves the old gone.
         sid, warning = self._start(name, new_rec, bg_argv, env, cwd_path, prompt_arg,
                                    exclude=stopped_sid or old_sid)
-        # The ready marker is unlinked only after _start returned: a failed
-        # relaunch keeps it so a plain retry can relaunch (R-21).
+        # The ready marker is unlinked only after _start returned (R-21).
         try:
             self._marker_path(name).unlink(missing_ok=True)
         except (OSError, ValueError) as exc:
@@ -386,7 +384,9 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         for rec in self._all_records():
             sid = rec.get("session_id")
             agent = next((r for r in rows if (sid and r.get("sessionId") == sid)
-                          or (not sid and r.get("name") == rec.get("name"))), {})
+                          or (not sid and r.get("name") == rec.get("name")
+                              and r.get("kind") == "background"
+                              and str(r.get("state") or "") not in FINISHED_STATES)), {})
             tokens = self._context_tokens(rec.get("cwd"), sid)
             sessions.append({
                 "name": rec.get("name"), "id": sid, "cwd": rec.get("cwd"),
