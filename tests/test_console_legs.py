@@ -101,3 +101,9 @@ def test_console_not_served_on_linux():
     reason = host_skip_reason({'model': 'console-anthropic/claude-sonnet-5-5', 'harness': 'opencode'},
                               probe=lambda env: set())
     assert reason.startswith('not_served_on_host')
+
+
+def test_console_probe_unavailable_is_not_admitted():
+    from plangraph.routing_support.resolver import host_skip_reason
+    assert host_skip_reason({'model': 'console-anthropic/claude-sonnet-5-5', 'harness': 'opencode'},
+                            probe=lambda env: None).startswith('not_served_on_host')
