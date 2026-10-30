@@ -22,9 +22,10 @@ BASE = dict(model=MODEL, effort=EFFORT, permission_mode=MODE, prompt=PROMPT)
 class FakeRun:
     """The one injectable runner: records argv+kwargs, refuses shells."""
 
-    def __init__(self, stdout=UUID1, launch_rc=0, agents_rows=(), stop_rc=0):
+    def __init__(self, stdout=UUID1, launch_rc=0, agents_rows=(), stop_rc=0, agents_rc=0):
         self.stdout, self.launch_rc = stdout, launch_rc
         self.agents_rows, self.stop_rc = list(agents_rows), stop_rc
+        self.agents_rc = agents_rc
         self.calls = []
 
     def __call__(self, argv, **kw):
@@ -32,7 +33,7 @@ class FakeRun:
         assert kw.get("shell") in (None, False), "shell=True must never be used"
         self.calls.append((list(argv), kw))
         if self._is_agents(argv):
-            return types.SimpleNamespace(returncode=0, stdout=json.dumps(self.agents_rows), stderr="")
+            return types.SimpleNamespace(returncode=self.agents_rc, stdout=json.dumps(self.agents_rows), stderr="")
         if self._is_stop(argv):
             if self.stop_rc == 0:
                 self._finish_rows(argv[2] if len(argv) > 2 else None)

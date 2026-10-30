@@ -110,6 +110,8 @@ class _AgentsMixin:
         head = self._claude_head()
         try:
             proc = self._run(head + ["agents", "--json"], capture_output=True, text=True, timeout=STOP_TIMEOUT)
+            if proc.returncode != 0:
+                raise _ActionFailed(f"agents poll failed: exit {proc.returncode}")
             rows = json.loads(proc.stdout or "[]")
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             raise _ActionFailed(f"agents poll failed: {exc}") from exc
@@ -224,7 +226,10 @@ class _AgentsMixin:
                 continue
             usage = msg.get("usage")
             if isinstance(usage, dict):
-                total = sum(int(usage.get(key) or 0) for key in USAGE_KEYS)
+                # Only real numbers count: a non-numeric string or list in a
+                # usage field must never break list for every session (r9).
+                total = sum(v for v in (usage.get(key) for key in USAGE_KEYS)
+                            if isinstance(v, (int, float)) and not isinstance(v, bool))
         return total
 
 
