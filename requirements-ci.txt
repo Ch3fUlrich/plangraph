@@ -1,4 +1,7 @@
-pytest
+# pytest 9.2 reads nodeid from Node._id; pytest-xdist 3.8.0 still writes the
+# --dist loadgroup suffix to _nodeid, so groups are lost and the contract
+# files split across workers (test_zz_coverage). Lift once xdist catches up.
+pytest<9.2
 pytest-xdist
 pyyaml
 cryptography>=41.0.7

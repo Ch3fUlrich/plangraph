@@ -15,14 +15,16 @@ from dataclasses import dataclass
 from dataclasses import asdict
 import json
 import os
-import sqlite3
 from pathlib import Path
 import time
 
 from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 from plangraph.routing_errors import RouteError, SpawnRefused
 
+from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
+                         BenchRequired, benchmark_rows_from_db)
 from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg
+from .seats import _check_diff_ref, family_spellings, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
@@ -214,66 +216,6 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
     return ("park", None)
 
 
-class BenchmarkError(SpawnRefused):
-    """Benchmark policy or storage failure."""
-
-
-class BenchRequired(BenchmarkError):
-    """Strict benchmark policy refused one or more candidate legs."""
-
-    def __init__(self, message, legs=()):
-        super().__init__(message)
-        self.gaps = [leg for leg in legs if isinstance(leg, dict)]
-        self.legs = [leg['leg'] if isinstance(leg, dict) else leg for leg in legs]
-
-
-class BenchDataError(BenchmarkError):
-    """Benchmark storage could not be read; not missing model coverage."""
-
-
-# Table-specific aliases to the resolver's canonical columns. No fuzzy model aliases.
-BENCHMARK_COLUMNS = {
-    "catalog_benchmarks": {"model_id": "model_id"},
-    "model_benchmarks": {"model_id": "model_id", "intelligence": "aa_intelligence",
-                         "tok_per_s": "verified_tok_per_s"},
-}
-
-
-def benchmark_rows_from_db(path):
-    """Return (model-id rows, errors) without creating or modifying a database.
-
-    Prefer the catalog table when both supported tables exist. Duplicate model rows
-    are counted in ``benchmark_row_count``; the first row supplies ranking metrics.
-    """
-    try:
-        uri = Path(path).expanduser().resolve().as_uri() + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
-        try:
-            conn.row_factory = sqlite3.Row
-            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            table = next((t for t in BENCHMARK_COLUMNS if t in tables), None)
-            if table is None:
-                return {}, [f"{path}: missing benchmark table (catalog_benchmarks or model_benchmarks)"]
-            result = {}
-            for raw in conn.execute(f'SELECT * FROM "{table}"'):
-                row = dict(raw)
-                for original, canonical in BENCHMARK_COLUMNS[table].items():
-                    if original in row and canonical not in row:
-                        row[canonical] = row[original]
-                model = row.get("model_id")
-                if not isinstance(model, str) or not model:
-                    return {}, [f"{path}: {table} row missing model_id"]
-                if model in result:
-                    result[model]["benchmark_row_count"] += 1
-                else:
-                    result[model] = dict(row, benchmark_row_count=1)
-            return result, []
-        finally:
-            conn.close()
-    except (OSError, ValueError, sqlite3.Error) as exc:
-        return {}, [f"{path}: cannot read benchmark database: {exc}"]
-
-
 @dataclass(frozen=True)
 class SpawnPlan:
     legs: tuple[Leg, ...]
@@ -285,6 +227,7 @@ class SpawnPlan:
     gaps: tuple[dict, ...] = ()
     candidates: tuple[dict, ...] = ()
     writer_groups: tuple = ()
+    seat_coverage: tuple[dict, ...] = ()
 
     @property
     def first_leg(self) -> Leg | None:
@@ -294,16 +237,22 @@ class SpawnPlan:
         result = asdict(self)
         if not self.writer_groups:
             result.pop('writer_groups')
+        if not self.seat_coverage:
+            result.pop('seat_coverage')
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
 
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
-                legs=DEFAULT_LEGS, benchmark=None, strict=False) -> SpawnPlan:
+                legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
     The implement role ignores benchmark permutation (operator order D-2683).
     ``exclude_families`` excludes the specified family names from candidate legs.
+    ``policy`` (default :func:`load_route_policy`) skips banned/off families and
+    paused harnesses.  A review leg whose family is EVERY writer family is
+    excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
+    review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
@@ -324,6 +273,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             raise SpawnRefused(f'{field} has invalid value')
     if any(t not in RISK_TAGS for t in card.get('risk_tags', ())):
         raise SpawnRefused('risk_tags has invalid value')
+    if 'diff_ref' in card:
+        _check_diff_ref(card['diff_ref'])
+    if policy is None:
+        from .route_policy import load_route_policy
+        try:
+            policy = load_route_policy()
+        except ValueError as exc:
+            raise SpawnRefused(str(exc)) from None
     if role not in ("implement", "review", "orchestrate"):
         raise ValueError("role must be implement|review|orchestrate")
     from plangraph.routing_support.risk import evaluate_risk
@@ -359,7 +316,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
-    excluded = (set(writer_families) if role == "review" else set()) | set(exclude_families)
+    # Review writers are keeper families (fail closed on an unknown name).
+    writer_set = writer_parts(writer_families) if role == "review" else {w for w in writer_families if w}
+    # D-3084 per-part seats: only a family that is EVERY writer covers no part.
+    excluded = family_spellings((writer_set if role == "review" and len(writer_set) == 1 else set())
+                                | set(exclude_families), legs)
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and st["state"] != "limited" and "/" not in leg_obj.model:
@@ -376,11 +337,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # Route each leg through the same canonical eligibility rules to retain
     # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
-        reason = None
-        if leg.id in limited:
+        reason = policy.skip_reason(leg, role)
+        if reason:
+            pass
+        elif leg.id in limited:
             reason = "limited"
         elif leg.family in excluded:
             reason = "excluded_family"
+        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
+            reason = "inline_only_needs_diff"
         else:
             try:
                 route_card(card, legs=(leg,), role=role, exclude_families=excluded)
@@ -398,8 +363,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
+    policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff")}
     try:
-        route = route_card(card, legs=candidates, unavailable=limited,
+        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
@@ -422,16 +389,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 ordered[i] = leg
             if positions:
                 source = "benchmark"
-    seats = []
-    families = set(excluded)
+    seats, coverage, open_parts = [], (), []
     if role == "review":
-        for leg in ordered:
-            if leg.family not in families:
-                seats.append(leg)
-                families.add(leg.family)
-            if len(seats) == 2:
-                break
-    error = "two distinct review families unavailable" if role == "review" and len(seats) < 2 else None
+        high = ranking_risk in ("high", "critical") or bool(card.get('risk_tags'))
+        seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
+    error = None
+    if role == "review" and len(seats) < 2:
+        error = "two distinct review families unavailable"
+    elif open_parts:
+        error = "seat coverage unmet for writer parts: " + ", ".join(open_parts)
     if error:
         reasons.append(error)
     order = {leg.id: i for i, leg in enumerate(ordered)}
@@ -443,7 +409,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups)
+                     tuple(candidate_details), groups, coverage)
 
 
 def validate_model(model):

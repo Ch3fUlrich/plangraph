@@ -90,8 +90,9 @@ def _supervise():
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
-        if record['run_id'] in service.tasks:
-            await service.tasks[record['run_id']]
+        for run in record.get('seats') or [record]:
+            if run['run_id'] in service.tasks:
+                await service.tasks[run['run_id']]
         return 0
     return asyncio.run(run())
 
@@ -124,6 +125,8 @@ def main(argv=None):
             p.add_argument('--dry-run', action='store_true')
             p.add_argument('--wait', type=float, default=0)
             p.add_argument('--no-fallthrough', action='store_true')
+            p.add_argument('--seats', action='store_true',
+                           help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
     p = commands.add_parser('wait')
     p.add_argument('run_id')
@@ -158,7 +161,7 @@ def main(argv=None):
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
                 review_scope=args.review_scope,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
-                no_fallthrough=args.no_fallthrough, **options)
+                no_fallthrough=args.no_fallthrough, seats=args.seats, **options)
             # Validate before detaching so refusals are reported synchronously.
             from plangraph.settings import admit_review_scope
             try:

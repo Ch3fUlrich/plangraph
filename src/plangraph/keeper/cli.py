@@ -116,6 +116,8 @@ def _add_writes(sub):
     claim = _p(sub, "claim", help="claim a ready item")
     claim.add_argument("key")
     claim.add_argument("--lease", help="lease, e.g. 2h")
+    claim.add_argument("--force-stale", metavar="REASON",
+                       help="claim a stale item anyway (audited reason)")
 
     delegate = _p(sub, "delegate", help="delegate a claimed item")
     delegate.add_argument("key")

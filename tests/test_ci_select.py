@@ -20,7 +20,6 @@ main = ci_select.main
 
 def test_docs_only_change():
     res = select(["docs/a.md", "README.md", "CHANGELOG.md"])
-    assert res["scrub"] is True
     assert res["full"] is False
     assert res["pytest"] is False
     assert res["pytest-postgres"] is False
@@ -31,7 +30,6 @@ def test_docs_only_change():
 
 def test_rust_worker_change():
     res = select(["rust/worker/src/x.rs"])
-    assert res["scrub"] is True
     assert res["pytest"] is True
     assert res["pytest-postgres"] is True
     assert res["rust-worker"] is True
@@ -47,7 +45,6 @@ def test_rust_spikes_change():
     assert res["rust-worker"] is False
     assert res["pytest"] is True
     assert res["pytest-postgres"] is True
-    assert res["scrub"] is True
     assert res["full"] is False
 
 
@@ -58,7 +55,6 @@ def test_rust_core_change():
     assert res["rust-spike"] is False
     assert res["pytest"] is True
     assert res["pytest-postgres"] is True
-    assert res["scrub"] is True
     assert res["full"] is False
 
 
@@ -69,7 +65,6 @@ def test_rust_worker_core_change():
     assert res["rust-spike"] is False
     assert res["pytest"] is True
     assert res["pytest-postgres"] is True
-    assert res["scrub"] is True
     assert res["full"] is False
 
 
@@ -80,8 +75,59 @@ def test_src_change():
     assert res["rust"] is False
     assert res["rust-worker"] is False
     assert res["rust-spike"] is False
-    assert res["scrub"] is True
     assert res["full"] is False
+
+
+@pytest.mark.parametrize("paths", [
+    [], ["docs/x.md"], ["skills/a/SKILL.md"], [".github/workflows/tests.yml"],
+    ["src/m.py"], ["rust/worker/src/a.rs"], ["LICENSE"]])
+def test_always_jobs_are_never_a_selection(paths):
+    res = select(paths)
+    assert not set(ci_select.ALWAYS) & set(res)
+
+
+@pytest.mark.parametrize("job", ci_select.ALWAYS)
+@pytest.mark.parametrize("result", [None, "skipped", "failure"])
+def test_gate_requires_always_jobs_whatever_select_says(job, result):
+    """scrub and file-size run on every change: the gate refuses one that is
+    missing, skipped or red even when select's outputs name nothing at all."""
+    needs = {"select": {"result": "success", "outputs": {s: "false" for s in SUITES}}}
+    needs.update({j: {"result": "success"} for j in ci_select.ALWAYS})
+    if result is None:
+        del needs[job]
+    else:
+        needs[job] = {"result": result}
+    assert gate(needs) == ["%s: %s" % (job, result or "missing")]
+
+
+def test_workflow_gate_needs_every_always_job():
+    import yaml
+    wf = yaml.safe_load((MODULE_PATH.parents[1] / ".github" / "workflows" / "tests.yml").read_text())
+    needs = wf["jobs"]["ci-gate"]["needs"]
+    for job in ci_select.ALWAYS:
+        assert job in needs
+        assert "if" not in wf["jobs"][job] and "needs" not in wf["jobs"][job]
+    # the ratchet base per event: push -> the pushed-over sha (never the zero
+    # sha), PR -> origin/main, schedule/dispatch -> HEAD~1
+    base = [s for s in wf["jobs"]["file-size"]["steps"] if "env" in s][0]["env"]
+    assert base["FILESIZE_REQUIRE_BASE"] == (
+        "${{ github.event_name == 'push' && github.event.before != '" + "0" * 40
+        + "' && github.event.before || github.event_name == 'pull_request' "
+        "&& 'origin/main' || 'HEAD~1' }}")
+    assert wf["jobs"]["file-size"]["steps"][0]["with"]["fetch-depth"] == 0
+
+
+def test_skill_page_change_runs_pytest():
+    res = select(["skills/routing-registry/references/remove.md"])
+    assert res["pytest"] is True
+    assert res["pytest-postgres"] is False
+    assert res["rust"] is False
+    assert res["full"] is False
+
+
+def test_skill_non_page_change_is_unknown_full():
+    res = select(["skills/routing-registry/scripts/x.sh"])
+    assert res["full"] is True
 
 
 def test_ci_github_workflow_full():
@@ -129,7 +175,6 @@ def test_backslash_path_normalised():
 
 def test_rust_readme_docs_only():
     res = select(["rust/README.md"])
-    assert res["scrub"] is True
     assert res["full"] is False
     assert res["pytest"] is False
     assert res["pytest-postgres"] is False
@@ -143,7 +188,6 @@ def test_gate_all_selected_success():
         "select": {
             "result": "success",
             "outputs": {
-                "scrub": "true",
                 "pytest": "true",
                 "pytest-postgres": "true",
                 "rust": "true",
@@ -152,6 +196,7 @@ def test_gate_all_selected_success():
             },
         },
         "scrub": {"result": "success"},
+        "file-size": {"result": "success"},
         "pytest": {"result": "success"},
         "pytest-postgres": {"result": "success"},
         "rust": {"result": "success"},
@@ -165,9 +210,10 @@ def test_gate_selected_suite_skipped():
     needs = {
         "select": {
             "result": "success",
-            "outputs": {"scrub": "true", "pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"},
+            "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"},
         },
         "scrub": {"result": "skipped"},
+        "file-size": {"result": "success"},
     }
     assert gate(needs) == ["scrub: skipped"]
 
@@ -176,9 +222,10 @@ def test_gate_selected_suite_failure():
     needs = {
         "select": {
             "result": "success",
-            "outputs": {"scrub": "true", "pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"},
+            "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"},
         },
         "scrub": {"result": "failure"},
+        "file-size": {"result": "success"},
     }
     assert gate(needs) == ["scrub: failure"]
 
@@ -188,7 +235,6 @@ def test_gate_unselected_suite_skipped():
         "select": {
             "result": "success",
             "outputs": {
-                "scrub": "true",
                 "pytest": "false",
                 "pytest-postgres": "false",
                 "rust": "false",
@@ -197,6 +243,7 @@ def test_gate_unselected_suite_skipped():
             },
         },
         "scrub": {"result": "success"},
+        "file-size": {"result": "success"},
         "pytest": {"result": "skipped"},
         "pytest-postgres": {"result": "skipped"},
     }
@@ -222,6 +269,7 @@ def test_gate_missing_output_value_counts_as_selected():
             "outputs": {},
         },
         "scrub": {"result": "success"},
+        "file-size": {"result": "success"},
         "pytest": {"result": "failure"},
     }
     problems = gate(needs)
@@ -234,7 +282,6 @@ def test_gate_docs_only_selection_passes():
         "select": {
             "result": "success",
             "outputs": {
-                "scrub": "true",
                 "pytest": "false",
                 "pytest-postgres": "false",
                 "rust": "false",
@@ -243,6 +290,7 @@ def test_gate_docs_only_selection_passes():
             },
         },
         "scrub": {"result": "success"},
+        "file-size": {"result": "success"},
     }
     assert gate(needs) == []
 
@@ -252,7 +300,7 @@ def test_cli_select_files(capsys):
     assert ret == 0
     captured = capsys.readouterr()
     assert "pytest=false" in captured.out
-    assert "scrub=true" in captured.out
+    assert "scrub=" not in captured.out
     assert "full=false" in captured.out
 
 
@@ -264,7 +312,7 @@ def test_cli_select_github_output(monkeypatch, tmp_path):
     assert gh_out_file.exists()
     content = gh_out_file.read_text(encoding="utf-8")
     assert "pytest=false" in content
-    assert "scrub=true" in content
+    assert "scrub=" not in content
     assert "full=false" in content
 
 
@@ -288,8 +336,8 @@ def test_cli_gate_bad_json(capsys):
 
 def test_cli_gate_success(capsys):
     needs_json = (
-        '{"select": {"result": "success", "outputs": {"scrub": "true", "pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
-        '"scrub": {"result": "success"}}'
+        '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
+        '"scrub": {"result": "success"}, "file-size": {"result": "success"}}'
     )
     ret = main(["gate", "--needs", needs_json])
     assert ret == 0
@@ -299,8 +347,8 @@ def test_cli_gate_success(capsys):
 
 def test_cli_gate_problems(capsys):
     needs_json = (
-        '{"select": {"result": "success", "outputs": {"scrub": "true", "pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
-        '"scrub": {"result": "failure"}}'
+        '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
+        '"scrub": {"result": "failure"}, "file-size": {"result": "success"}}'
     )
     ret = main(["gate", "--needs", needs_json])
     assert ret == 1
@@ -327,4 +375,5 @@ def test_gate_cancelled_selected_suite_is_a_problem():
     outs = {s: "false" for s in SUITES}
     outs["pytest"] = "true"
     needs = {"select": {"result": "success", "outputs": outs}, "pytest": {"result": "cancelled"}}
+    needs.update({j: {"result": "success"} for j in ci_select.ALWAYS})
     assert gate(needs) == ["pytest: cancelled"]

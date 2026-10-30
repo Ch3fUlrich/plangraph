@@ -49,8 +49,14 @@ def test_seats_and_impossible_fence():
     assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
     assert all(l.family != "claude" for l in p.legs)
     assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
+    # D-3084 per-part: with six writer parts a qwen seat covers the five others
+    # and a deepseek seat covers the qwen part.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"))
+    assert [l.family for l in p.review_seats] == ["qwen", "deepseek"] and not p.error
+    # Impossible fence: every family but the single writer's is excluded.
+    p = plan_spawn(CARD, role="review", writer_families=("qwen",),
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo"))
     assert not p.review_seats and p.error
 
 
@@ -62,7 +68,7 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
-        "mimo-v2.6-flash"]
+        "mimo-v2.6-flash", "mimo-v2.6-pro"]
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
     assert load_legs(path) == DEFAULT_LEGS

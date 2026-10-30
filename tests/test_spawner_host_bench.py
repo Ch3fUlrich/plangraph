@@ -78,7 +78,7 @@ def route_json(tmp_path, capsys, *extra):
     from plangraph.spawner.cli import main as cli_main
     capsys.readouterr()  # drain earlier prints; only the route JSON is parsed
     assert cli_main(["--state", str(tmp_path / "state"), "route", "--card", json.dumps(CARD),
-                     "--role", "review", "--json", *extra]) == 0
+                     "--role", "review", "--writer-family", "claude", "--json", *extra]) == 0
     return json.loads(capsys.readouterr().out)
 
 
@@ -99,9 +99,10 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     bare = route_json(tmp_path, capsys)
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
+    # luna and mimo-pro are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
+        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash"]
 
 

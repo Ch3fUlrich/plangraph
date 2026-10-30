@@ -26,6 +26,7 @@ from .store_audit_meta import AuditMetaMixin
 from .store_bus_hosts import BusHostsMixin
 from .store_cards import CardsMixin
 from .store_close import CloseMixin
+from .store_context import ContextMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
 from .store_input import InputMixin
@@ -75,7 +76,8 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
-            WorkerMixin, OversightMixin, JevMixin, MessagesMixin, BusHostsMixin):
+            WorkerMixin, OversightMixin, JevMixin, MessagesMixin, BusHostsMixin,
+            ContextMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,

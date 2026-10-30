@@ -54,8 +54,8 @@ class ReadMixin:
         """D-953: ``mine`` = items owned by the caller; ``agent`` drops operator steps."""
         owner = principal.name if mine else owner
         return self._run(principal, "ready", None,
-                         lambda now: views.brief(self._all_items(), project=project, n=n,
-                                                 owner=owner, agent=bool(agent)))
+                         lambda now: self._ready_text(project=project, n=n,
+                                                   owner=owner, agent=bool(agent)))
 
     def show(self, principal, key, brief=False):
         if brief:
@@ -178,7 +178,7 @@ class ReadMixin:
         if rows:
             info["jev_shadow"] = [jev_report.row_view(r) for r in rows]
             info["jev_agreement"] = jev_report.agreement_report(rows)["overall"]
-        info.update(self._run_derived(key, item))
+        info.update(self._run_derived(key, item), **self._task_context(item, index))
         return info
 
     def _brief(self, key):
@@ -187,7 +187,7 @@ class ReadMixin:
         index = {it["key"]: it for it in self._all_items()}
         deps = [{"key": dep, "state": index.get(dep, {}).get("state")}
                 for dep in item.get("depends_on") or []]
-        return _build_brief(item, deps)
+        return self._brief_context(_build_brief(item, deps), item, index)
 
     # ---------------------------------------------------------- snapshot
     def snapshot(self, principal):
@@ -236,7 +236,6 @@ class ReadMixin:
                 **{name: item.get(name) for name in MODEL_FIELDS},
                 "choices": parse_choices(item.get("choices")),
                 "kg_refs": parse_kg_refs(item.get("kg_refs")),
-            "kg_refs": parse_kg_refs(item.get("kg_refs")),
                 "waits_on_operator": bool(item.get("operator"))
                 and item.get("state") not in ("done", "cancelled"),
                 "kind": item["kind"], "track": item["track"],

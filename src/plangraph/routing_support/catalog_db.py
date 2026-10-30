@@ -14,16 +14,9 @@ import sqlite3
 import sys
 from typing import Any, Sequence
 
-from .catalog_seed import (
-    SEED_BENCHMARKS,
-    SEED_CLIENTS,
-    SEED_MODELS,
-    SEED_PROVIDERS,
-    SEED_QUOTA_POOLS,
-    SEED_ROUTE_LEGS,
-    SEED_ROUTES,
-    TIER_RUNG,
-)
+from plangraph import registry_columns
+from .catalog_seed import (SEED_BENCHMARKS, SEED_CLIENTS, SEED_MODELS, SEED_PROVIDERS,
+                           SEED_QUOTA_POOLS, SEED_ROUTE_LEGS, SEED_ROUTES, TIER_RUNG)
 
 def default_db_path() -> Path:
     """Catalog DB path, resolved at call time so PLANGRAPH_CATALOG_DB wins (D3)."""
@@ -81,6 +74,7 @@ class CatalogDB:
         """Initialize schema and seed catalog tables idempotently."""
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
         self.conn.executescript(schema_sql)
+        registry_columns.migrate(self.conn)
 
         # 1. Quota pools
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)
@@ -103,6 +97,7 @@ class CatalogDB:
         # 7. Route legs
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
+        registry_columns.derive(self.conn)
         self.conn.commit()
 
     def _insert_records(self, table_name: str, records: list[dict[str, Any]]) -> int:
@@ -425,6 +420,7 @@ class CatalogDB:
             records = payload.get(payload_key, [])
             total_inserted += self._insert_records(table_name, records)
 
+        registry_columns.derive(self.conn)
         self.conn.commit()
         return total_inserted
 

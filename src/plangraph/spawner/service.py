@@ -3,7 +3,7 @@ from __future__ import annotations
 from plangraph.routing_errors import ParameterRefused
 
 import asyncio
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import hashlib
 import json
 import os
@@ -13,10 +13,11 @@ import time
 import uuid
 
 from .runner import SpawnerRunner
+from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 
 
-class SpawnService:
+class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
@@ -125,6 +126,9 @@ class SpawnService:
             if not family:
                 raise SpawnRefused('writer family unavailable')
             families.append(family)
+        if role == 'review' and not any(str(f or '').strip() for f in families):
+            # No writer named = no family excluded (D-1533): fail closed.
+            raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
 
     async def spawn(self, *args, **kwargs):
@@ -186,8 +190,8 @@ class SpawnService:
             child['ended'] = time.time()
             self._save(child)
 
-    def save_refusal(self, exc, role='implement'):
-        """Persist pre-service refusals using the same record contract."""
+    def save_refusal(self, exc, role='implement', **extra):
+        """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
                       started=time.time(), ended=time.time(),
@@ -195,7 +199,7 @@ class SpawnService:
                       exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
                       refusal=type(exc).__name__, error=str(exc),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
-                      evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [])
+                      evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
         try:
             self._save(record)
         except Exception as storage_error:
@@ -206,14 +210,23 @@ class SpawnService:
 
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
-                    dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
+                    dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
+                    seats=False, _plan=None):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import DEFAULT_LEGS
         if not card:
             raise ParameterRefused('spawn by card; card required')
-        if model is not None or leg is not None or not card:
+        if seats:
+            return await self._spawn_seats(card=card, prompt=prompt, role=role,
+                writer_families=writer_families, review_of=review_of, model=model, leg=leg,
+                dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough,
+                benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
+                override_reason=override_reason)
+        if _plan is not None:
+            plan = _plan
+        elif model is not None or leg is not None or not card:
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
             plan_spawn(card, role=role, legs=())
@@ -225,28 +238,40 @@ class SpawnService:
             target = model if model is not None else (chosen.model if chosen else None)
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
+            # Writer check before hand_picked: a refused review leaves no override audit line.
+            from plangraph.planner.seats import seat_family, writer_parts
+            reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
+            writers = writer_parts(writer_families) if role == 'review' else set()
+            if role == 'review' and not writers and not reviewed:
+                raise SpawnRefused('review needs a writer family (writer_families or review_of)')
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg
+                from plangraph.planner.legs import HARNESSES, TOOL_MODES
                 row = next((r for r in get_catalog_models() if r['id'] == target), None)
-                # Harness registration must be explicit, independently of transport.
-                harness = row.get('harness') if row else None
-                if (row is None or row.get('tier') not in ('trial', 'free', 'subscription', 'paid')
-                        or harness not in ('opencode', 'qodercli', 'agy')
-                        or type(row.get('context_tokens')) is not int or row['context_tokens'] <= 0):
-                    raise SpawnRefused('override model missing registry data')
+                # Harness is a catalog column (SPAWNER-REGISTRY-ROUTE), never inferred.
+                missing = ('catalog row' if row is None else
+                           'tier' if row.get('tier') not in ('trial', 'free', 'subscription', 'paid') else
+                           'harness' if row.get('harness') not in HARNESSES else
+                           'context_tokens' if type(row.get('context_tokens')) is not int
+                           or row['context_tokens'] <= 0 else
+                           'tool_mode' if row.get('tool_mode', 'tools') not in TOOL_MODES else None)
+                if missing:
+                    raise SpawnRefused('override model missing registry data: ' + missing)
                 context = row.get('context_tokens', 0)
                 from plangraph.planner.routing import WINDOW_TOKENS
                 windows = tuple(w for w, n in WINDOW_TOKENS.items() if n <= context)
-                chosen = Leg('override', row['tier'], harness, target,
+                chosen = Leg('override', row['tier'], row['harness'], target,
                              detect_model_family(target), windows, context,
-                             bool(row.get('trains_on_prompts', True)), roles=(role,))
-            if review_of and chosen.family == self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family'):
+                             bool(row.get('trains_on_prompts', True)), roles=(role,),
+                             tool_mode=row.get('tool_mode', 'tools'))
+            if reviewed and seat_family(chosen.family) == seat_family(reviewed):
                 raise SpawnRefused('excluded writer family')
-            if role == 'review' and chosen.family in writer_families:
+            # D-3084 per-part: a seat is excluded only when it covers no writer part.
+            if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
         else:
@@ -265,8 +290,19 @@ class SpawnService:
 
         async def execute():
             try:
+                launched = False
                 for chosen in plan.legs:
-                    job = await self.runner.spawn(prompt=prompt, model_or_combo=chosen.model,
+                    from .inline_diff import InlineDiffError
+                    try:
+                        leg_prompt = self._leg_prompt(prompt, card, role, chosen)
+                    except InlineDiffError as exc:
+                        record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
+                            skip_reason='inline_diff_failed: ' + str(exc),
+                            served_model='unwitnessed', served_family='unwitnessed',
+                            served_witness_reason='leg skipped before launch'))
+                        continue
+                    launched = True
+                    job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness)
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
@@ -302,6 +338,9 @@ class SpawnService:
                         if not dry_run:
                             await self._continue_writer(record, job.stdout)
                         break
+                if not launched:
+                    record.update(status='failed', exit_code=1, error='; '.join(
+                        a['skip_reason'] for a in record['attempts']) or 'no leg launched')
             except Exception as exc:
                 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):
