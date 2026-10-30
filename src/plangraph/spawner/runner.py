@@ -1137,7 +1137,7 @@ def spawn_service(*args, **kwargs):
                         reason = None
                         unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
                         if unavailable:
-                            job.status = 'failed'
+                            from plangraph.planner.host_models import runtime_unavailable; runtime_unavailable(chosen, self.state); job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
                             reason = redact(job.stderr.strip().splitlines()[0]) if job.stderr.strip() else ('provider_stop' if stop else f'harness exit code {job.exit_code}')

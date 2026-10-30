@@ -331,6 +331,8 @@ class SpawnService(SeatSpawnMixin):
                     from .env_redact import unavailable_reason
                     unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
                     if unavailable:
+                        from plangraph.planner.host_models import runtime_unavailable
+                        runtime_unavailable(chosen, self.state)
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
                     reason = unavailable or ('provider_stop' if stop else

@@ -44,8 +44,11 @@ def opencode_models():
 def console_host_skip(model, probe, env):
     """Console providers require positive host evidence, including on probe failure."""
     from plangraph.routing_support.resolver import host_probe_env
+    from .host_models import unavailable_models, state_dir
+    if model.lower().split('#', 1)[0] in unavailable_models(env=env):
+        return 'not_served_on_host: ' + model
     try:
-        models = probe(host_probe_env(env)) if probe else cached_models('opencode', opencode_models)
+        models = probe(host_probe_env(env)) if probe else cached_models('opencode', opencode_models, state=state_dir(env=env))
     except Exception:
         models = None
     return None if model in (models or ()) else 'not_served_on_host: ' + model
@@ -53,6 +56,7 @@ def console_host_skip(model, probe, env):
 
 def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
     from plangraph.routing_support.private_io import atomic_write_private
+    from .host_models import host_id
     state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE') or
                  Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph/spawn')
     path = state / ('model-list-' + source + '.json')
@@ -63,7 +67,7 @@ def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
         ttl = 600
     try:
         data = json.loads(path.read_text())
-        if 0 <= now - data['time'] < ttl:
+        if data.get('host') == host_id() and 0 <= now - data['time'] < ttl:
             return set(data['models'])
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -75,7 +79,7 @@ def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
         return set()
     try:
         state.mkdir(parents=True, exist_ok=True)
-        atomic_write_private(path, json.dumps({'time': now, 'models': sorted(models)}))
+        atomic_write_private(path, json.dumps({'host': host_id(), 'time': now, 'models': sorted(models)}))
     except OSError:
         pass
     return models
