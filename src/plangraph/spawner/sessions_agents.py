@@ -35,6 +35,10 @@ def transcript_path(cwd, session_id):
 class _ActionFailed(Exception):
     """Subprocess-level failure: audited, then reported as {"ok": False}."""
 
+    def __init__(self, msg="", session_id=None):
+        super().__init__(msg)
+        self.session_id = session_id
+
 
 class _AgentsMixin:
     """Launch/resolve internals of Sessions: argv is always a list, never a
@@ -111,6 +115,11 @@ class _AgentsMixin:
             raise _ActionFailed(f"agents poll failed: {exc}") from exc
         if not isinstance(rows, list):
             raise _ActionFailed(f"agents poll failed: JSON is not a list: {type(rows).__name__}")
+        if any(not isinstance(row, dict) for row in rows):
+            # A malformed row must fail closed, never read as absence: acting
+            # on a poll that cannot describe the agents list risks a duplicate
+            # launch or an unconfirmed stop (r5 seat).
+            raise _ActionFailed("agents poll failed: row is not an object")
         return rows
 
     def _resolve_id(self, name, stdout, exclude=None, launched_ms=None):
@@ -140,6 +149,8 @@ class _AgentsMixin:
                 for row in rows:
                     if row.get("name") != name or row.get("kind") != "background":
                         continue
+                    if str(row.get("state") or "") in FINISHED_STATES:
+                        continue  # a finished/stopped row is never the new id
                     sid = row.get("sessionId")
                     if not sid or sid == exclude:
                         continue
@@ -149,6 +160,8 @@ class _AgentsMixin:
             for row in rows:
                 if row.get("name") != name or row.get("kind") != "background":
                     continue
+                if str(row.get("state") or "") in FINISHED_STATES:
+                    continue  # a finished/stopped row is never the new id
                 sid = row.get("sessionId")
                 if not sid or sid == exclude:
                     continue
