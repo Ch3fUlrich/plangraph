@@ -30,9 +30,13 @@ REFERENCES = SKILL_DIR / "references"
 # otherwise; the skill's own structure is checked here unconditionally.
 _AUTOOS_ENV = os.environ.get("PLANGRAPH_AUTOOS_ROOT", "")
 AUTOOS = Path(_AUTOOS_ENV).resolve() if _AUTOOS_ENV else None
-if AUTOOS is not None and not (AUTOOS / "tools" / "registry.py").is_file():
-    raise RuntimeError("PLANGRAPH_AUTOOS_ROOT=%s is not an AutoOS checkout "
-                       "(no tools/registry.py)" % AUTOOS)
+_AUTOOS_NEEDS = ("tools/registry.py", "configuration/omniroute/apply.sh",
+                 "configuration/omniroute/apply.ps1")
+if AUTOOS is not None:
+    _absent = [p for p in _AUTOOS_NEEDS if not (AUTOOS / p).is_file()]
+    if _absent:
+        raise RuntimeError("PLANGRAPH_AUTOOS_ROOT=%s is not an AutoOS checkout "
+                           "(missing %s)" % (AUTOOS, ", ".join(_absent)))
 AUTOOS_ROOT = AUTOOS or ROOT
 needs_autoos = unittest.skipUnless(
     AUTOOS is not None,

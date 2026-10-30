@@ -12,6 +12,7 @@ Run directly:
 
     python3 tests/test_check_file_size.py
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -86,6 +87,25 @@ class RepoFixture(unittest.TestCase):
         out = run.stdout + run.stderr
         self.assertEqual(run.returncode, 1, "expected refusal, got %d:\n%s" % (run.returncode, out))
         self.assertIn(needle, out, "the refusal never named it:\n" + out)
+
+
+class RequiredBaseTests(RepoFixture):
+    """CI names its base: a checkout where it does not resolve must fail,
+    not ratchet against HEAD (the change under test)."""
+
+    def check_with_base(self, ref):
+        env = dict(os.environ, FILESIZE_REQUIRE_BASE=ref)
+        return subprocess.run([sys.executable, str(SCRIPT)], cwd=str(self.repo),
+                              capture_output=True, text=True, env=env)
+
+    def test_a_missing_required_base_fails(self):
+        self.assertFails(self.check_with_base("origin/main"), "does not resolve")
+
+    def test_a_present_required_base_passes(self):
+        self.file("small.py", 3)
+        self.commit("small")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertPasses(self.check_with_base("origin/main"))
 
 
 class LineLimitTests(RepoFixture):

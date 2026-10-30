@@ -53,6 +53,9 @@ EXCLUDED_SUFFIXES = (".lock", ".json", ".svg")
 EXCLUDED_NAME_PARTS = (".min.",)
 #: Where the "may shrink, never grow" ratchet reads its reference from.
 REFERENCE_REFS = ("origin/main", "HEAD")
+#: CI sets this to the base ref (origin/main): if it does not resolve, the
+#: gate fails rather than ratchet against HEAD, the change under test.
+REQUIRE_BASE_ENV = "FILESIZE_REQUIRE_BASE"
 #: Binary sniff: a NUL byte in this window marks binary content (git's own
 #: test). The gate counts lines of text, and a line count over an image or a
 #: packed blob is not a source-size signal.
@@ -275,6 +278,13 @@ def main(argv=None):
     allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
     counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
     measured, binaries = measure(root, allowed)
+    required = os.environ.get(REQUIRE_BASE_ENV, "")
+    if required and git(root, "rev-parse", "--verify", "--quiet",
+                        required + "^{commit}").returncode != 0:
+        print("check-file-size: %s=%s does not resolve - fetch the base "
+              "(actions/checkout fetch-depth: 0) so the baseline ratchets "
+              "against it, not against HEAD" % (REQUIRE_BASE_ENV, required))
+        return 1
     ref_counts, ref_errors, ref_origin = reference_baseline(root)
     if args.update_baseline:
         counts, lowered, created = proposed_baseline(

@@ -72,6 +72,8 @@ jobs:
       # .filesize-baseline entry, and that entry may only shrink. Lives in
       # the scrub job because ci_select selects scrub on every change.
       - name: File size gate
+        env:
+          FILESIZE_REQUIRE_BASE: origin/main
         run: python tools/check_file_size.py
 
   pytest:

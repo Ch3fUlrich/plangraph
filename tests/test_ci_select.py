@@ -84,6 +84,14 @@ def test_src_change():
     assert res["full"] is False
 
 
+@pytest.mark.parametrize("paths", [
+    [], ["docs/x.md"], ["skills/a/SKILL.md"], [".github/workflows/tests.yml"],
+    ["src/m.py"], ["rust/worker/src/a.rs"], ["LICENSE"]])
+def test_scrub_is_selected_on_every_change(paths):
+    # the scrub job also carries the file-size gate (tests.yml)
+    assert select(paths)["scrub"] is True
+
+
 def test_skill_page_change_runs_pytest():
     res = select(["skills/routing-registry/references/remove.md"])
     assert res["pytest"] is True
