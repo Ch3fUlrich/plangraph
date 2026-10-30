@@ -23,6 +23,10 @@ _SCRUB_KEYS = frozenset({"reason", "error", "warning", "card", "message", "argv"
 _NAME_LOCKS = {}
 _NAME_LOCKS_GUARD = threading.Lock()
 
+# Per-thread `_audit_argv` carrier (D-3193): each MCP action runs in its own
+# worker thread (asyncio.to_thread), so thread-local is per action.
+_AUDIT_TLS = threading.local()
+
 
 def _scrub_free(value):
     """Redact at every depth: this subtree is free text."""
@@ -110,6 +114,16 @@ class _StoreMixin:
             else:
                 outcome.warning = note
 
+    @property
+    def _audit_argv(self):
+        """Prompt-redacted argv for the action in flight, thread-local so
+        concurrent actions on one instance cannot audit each other's argv."""
+        return getattr(_AUDIT_TLS, "argv", None)
+
+    @_audit_argv.setter
+    def _audit_argv(self, value):
+        _AUDIT_TLS.argv = value
+
     def _action(self, action, name, fn, *, dry=False):
         """Run one action; every outcome - success, refusal, timeout, OSError,
         subprocess failure - leaves exactly one scrubbed audit JSON line (no
@@ -135,7 +149,8 @@ class _StoreMixin:
                        "session_id": getattr(exc, "session_id", None),
                        "error": reason}
             if not dry:
-                self._audit_guarded(action, name, False, reason, None, self._audit_argv, outcome)
+                self._audit_guarded(action, name, False, reason,
+                                    outcome["session_id"], self._audit_argv, outcome)
             return _scrub(outcome)
         except (OSError, subprocess.SubprocessError) as exc:
             reason = f"{type(exc).__name__}: {exc}"
@@ -144,7 +159,7 @@ class _StoreMixin:
                        "error": reason}
             if not dry:
                 self._audit_guarded(action, name, False, reason,
-                                    None, self._audit_argv, outcome)
+                                    outcome["session_id"], self._audit_argv, outcome)
             return _scrub(outcome)
         except Exception as exc:
             # Any other unexpected exception is an internal fault: it is
@@ -195,11 +210,14 @@ class _StoreMixin:
 
     def _name_lock(self, name):
         """The threading.Lock serializing actions on this name (created under
-        the module guard; stable per name)."""
-        lock = _NAME_LOCKS.get(name)
+        the module guard; stable per name). Names differing only in case
+        share one lock (their record paths collide on case-insensitive
+        filesystems, Windows included)."""
+        key = str(name).casefold()
+        lock = _NAME_LOCKS.get(key)
         if lock is None:
             with _NAME_LOCKS_GUARD:
-                lock = _NAME_LOCKS.setdefault(name, threading.Lock())
+                lock = _NAME_LOCKS.setdefault(key, threading.Lock())
         return lock
 
     def _find_record(self, name, session_id):
