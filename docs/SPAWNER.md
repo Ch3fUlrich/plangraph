@@ -739,6 +739,11 @@ config lists, unlisted `mcp_config`, anything but exactly one of `prompt`/`promp
 prompt or one starting with `-`, prompt/handoff outside `file_roots`, non-boolean `dry_run`/`force`,
 `stop` of a session without a resolved id, or `relaunch` without a ready marker unless `force=True`.
 
+An old id is checked against `claude agents --json` before `launch` replaces a stopped record or a
+relaunch proceeds: a poll that fails or returns garbage refuses the action (fail closed), and a
+listed id outside `finished`/`stopped` refuses `launch` with "use relaunch" - in `dry_run` too, as
+it only reads. Once the process has started, a record write failure still reports the started id.
+
 The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
 `~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `file_roots`, `models`,
 `efforts`, `permission_modes`, `mcp_configs`, `style_file`, `compact_window`, `ctx_cap_tokens`,

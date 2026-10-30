@@ -144,7 +144,8 @@ def test_argv_linux_is_list_no_shell(site):
     run2 = FakeRun(stdout="session " + UUID1)
     s2 = make(site, run2, config_path=cfg2)
     go(site, s2)
-    argv2, _ = run2.calls[0]
+    # the old-id gate polls agents first (round 4): pick the launch argv
+    argv2 = run2.launch_calls()[0]
     assert argv2[-3:] == ["--append-system-prompt", "be terse", PROMPT]
 
 
@@ -1805,3 +1806,135 @@ def test_audit_argv_redacts_style_text(site):
     assert argv[argv.index("--append-system-prompt") + 1] == "<17 chars>"
     res = go(site, s, name="beta", dry_run=True)
     assert all(style_text not in a for a in res["argv"])
+
+
+# ---- round 4: fail-closed agents polls and post-launch record writes ----
+
+
+def test_relaunch_already_stopped_poll_failure_refuses(site):
+    class BrokenPoll(FakeRun):
+        def __call__(self, argv, **kw):
+            if self._is_agents(argv) and self.poll_broken:
+                raise OSError("agents unavailable")
+            return super().__call__(argv, **kw)
+
+    run = BrokenPoll(stdout="session " + UUID1)
+    run.poll_broken = False
+    s = make(site, run)
+    rec_path, marker_path = _stopped(site, run, s)
+    run.poll_broken = True
+    res = s.relaunch("alpha")
+    assert res["ok"] is False  # fail closed: the old id could not be checked
+    assert len(run.launch_calls()) == 1  # nothing was relaunched
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "relaunch" and line["ok"] is False
+    assert "agents poll failed" in line["reason"]
+    rec = json.loads(rec_path.read_text())
+    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None
+    assert marker_path.exists()  # a retry can relaunch once polling works
+
+
+def test_relaunch_already_stopped_poll_garbage_refuses(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, marker_path = _stopped(site, run, s)
+    run.agents_rows = {"not": "a list"}  # garbage where rows should be
+    res = s.relaunch("alpha")
+    assert res["ok"] is False  # garbage is no answer: the relaunch is refused
+    assert len(run.launch_calls()) == 1  # nothing was relaunched
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "relaunch" and line["ok"] is False
+    assert "agents poll failed" in line["reason"]
+    rec = json.loads(rec_path.read_text())
+    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None
+    assert marker_path.exists()
+
+
+@pytest.mark.parametrize("dry", [False, True])
+def test_launch_refuses_when_stopped_old_id_still_listed(site, dry):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, marker_path = _stopped(site, run, s)
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+                        "kind": "background", "state": "working", "startedAt": 1_000_000}]
+    run.stdout = "session " + UUID2
+    with pytest.raises(ParameterRefused,
+                       match="old id .* still listed \\(working\\); use relaunch"):
+        go(site, s, dry_run=dry)  # checked in dry_run too: it only reads
+    assert len(run.launch_calls()) == 1  # no second session was started
+    rec = json.loads(rec_path.read_text())
+    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None  # record untouched
+    assert marker_path.exists()
+
+
+def test_launch_record_write_failure_reports_started_id(site, monkeypatch):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+
+    def dead(name, rec):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(s, "_write_record", dead)
+    res = go(site, s)
+    assert res["ok"] is False and res["session_id"] is None
+    assert len(run.launch_calls()) == 1  # Claude may be running: the id must survive
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "launch" and line["ok"] is False
+    assert f"session started (id {UUID1}) but record write failed" in line["reason"]
+
+
+def test_launch_marker_unlink_failure_reports_started_id(site, monkeypatch):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+
+    class Boom:
+        def unlink(self, missing_ok=False):
+            raise OSError("unlink refused")
+
+    monkeypatch.setattr(s, "_marker_path", lambda name: Boom())
+    res = go(site, s)
+    assert res["ok"] is False  # the session started: its id must reach the audit line
+    assert len(run.launch_calls()) == 1
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "launch" and line["ok"] is False
+    assert f"session started (id {UUID1}) but record write failed" in line["reason"]
+
+
+def test_relaunch_record_write_failure_reports_new_id(site, monkeypatch):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, marker_path = _ready(site, run, s)
+    run.stdout = "session " + UUID2
+    real = s._write_record
+
+    def flaky(name, rec):
+        if rec.get("session_id") == UUID2:  # only the NEW record's write fails
+            raise OSError("no space left on device")
+        return real(name, rec)
+
+    monkeypatch.setattr(s, "_write_record", flaky)
+    res = s.relaunch("alpha")
+    assert res["ok"] is False
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "relaunch" and line["ok"] is False
+    assert f"session started (id {UUID2}) but record write failed" in line["reason"]
+    _assert_old_record_kept(rec_path, marker_path, site)
+
+
+def test_launch_parameter_refused_after_start_writes_orphan_record(site):
+    exe = str(site.tmp_path / "claude.exe")
+    seen = {"n": 0}
+
+    def which(cmd):
+        seen["n"] += 1
+        return exe if seen["n"] == 1 else None  # resolution dies after argv is built
+
+    run = FakeRun(stdout="backgrounded, id pending")  # no UUID: _resolve_id polls
+    s = make(site, run, platform="win32", which=which)
+    with pytest.raises(ParameterRefused, match="claude not found"):
+        go(site, s)
+    assert any(a[0] == exe and a[1:2] == ["--bg"] for a, _ in run.calls)  # it started
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] is None and rec["stopped_ts"] is None  # the orphan is recorded
+    line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
+    assert line["action"] == "launch" and line["ok"] is False

@@ -558,16 +558,28 @@ class Sessions:
         return shown
 
     def _agents_rows(self):
-        # Head resolution refusals propagate out (ParameterRefused is not one
-        # of the swallowed errors): polling must never fall back to a bare
-        # "claude" on win32 (R-9).
+        # Lenient by design: _resolve_id polls repeatedly and list degrades to
+        # "no agent rows", so a poll failure must not abort the action.
+        try:
+            return self._agents_rows_strict()
+        except _ActionFailed:
+            return []
+
+    def _agents_rows_strict(self):
+        # Fail-closed poll for decisions that gate a launch or relaunch: when
+        # the poll cannot say whether an old id is still live, the action is
+        # refused, never passed (round 4). Head resolution refusals propagate
+        # out (ParameterRefused is not one of the swallowed errors): polling
+        # must never fall back to a bare "claude" on win32 (R-9).
         head = self._claude_head()
         try:
             proc = self._run(head + ["agents", "--json"], capture_output=True, text=True, timeout=STOP_TIMEOUT)
             rows = json.loads(proc.stdout or "[]")
-            return rows if isinstance(rows, list) else []
-        except (OSError, subprocess.SubprocessError, ValueError):
-            return []
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            raise _ActionFailed(f"agents poll failed: {exc}") from exc
+        if not isinstance(rows, list):
+            raise _ActionFailed(f"agents poll failed: JSON is not a list: {type(rows).__name__}")
+        return rows
 
     def _resolve_id(self, name, stdout, exclude=None, launched_ms=None):
         """Map a just-launched session to its real session id. A full UUID in
@@ -669,6 +681,17 @@ class Sessions:
         if existing is not None and existing.get("stopped_ts") is None:
             # A live record is only replaced through relaunch (R-19).
             raise _refuse(f"session {name} already has an active record; use relaunch")
+        if existing is not None and existing.get("session_id"):
+            # A stopped record's old id may have outlived its stop: a listed id
+            # outside a finished state means the old session is still running
+            # and a launch here would start a second one. Checked in dry_run
+            # too - it only reads (round 4).
+            old = existing.get("session_id")
+            row = next((r for r in self._agents_rows_strict()
+                        if r.get("sessionId") == old), None)
+            if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+                raise _refuse(f"session {name} old id {old} still listed "
+                              f"({row.get('state')}); use relaunch")
         if dry_run:
             # D-2918: a refusing dry run is still dry; a passing one writes
             # nothing either - planned argv, cwd and env keys only.
@@ -685,11 +708,13 @@ class Sessions:
                "launcher": launcher, "stopped_ts": None}
         try:
             sid, warning = self._run_launch(name, bg_argv, wt_argv, env, launcher, cwd_path, prompt_arg)
-        except (subprocess.TimeoutExpired, OSError):
-            # The launch failed AFTER the process may have started: the record
-            # is still written - session_id null, stopped_ts None - so list
-            # shows the possible orphan and relaunch force can replace it.
-            # The write is best effort: the launch failure stays the outcome.
+        except (subprocess.TimeoutExpired, OSError, ParameterRefused):
+            # The launch failed AFTER the process may have started (a
+            # ParameterRefused here is win32 head resolution inside the id
+            # poll): the record is still written - session_id null, stopped_ts
+            # None - so list shows the possible orphan and relaunch force can
+            # replace it. The write is best effort: the launch failure stays
+            # the outcome.
             rec["ts"] = self._now()
             try:
                 self._write_record(name, rec)
@@ -697,8 +722,13 @@ class Sessions:
                 pass
             raise
         rec.update({"session_id": sid, "job_id": sid[:8] if sid else None, "ts": self._now()})
-        self._write_record(name, rec)
-        self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
+        try:
+            self._write_record(name, rec)
+            self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
+        except (OSError, ValueError) as exc:
+            # The session is running: its id must survive the failure or the
+            # new session is untracked (round 4).
+            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)}
         if warning:
@@ -838,7 +868,7 @@ class Sessions:
             # outside a finished/stopped state is stopped first - a failed stop
             # refuses the relaunch, nothing is launched - while an unlisted id
             # is gone for good and proceeds untouched.
-            row = next((r for r in self._agents_rows()
+            row = next((r for r in self._agents_rows_strict()
                         if r.get("sessionId") == old_sid), None)
             if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
                 self._stop_record(rec, name)
@@ -850,7 +880,12 @@ class Sessions:
                             "stopped_ts": None, "ts": self._now(),
                             "handoff": str(handoff_path) if handoff_path else None,
                             "launcher": launcher})
-            self._write_record(name, new_rec)
+            try:
+                self._write_record(name, new_rec)
+            except (OSError, ValueError) as exc:
+                # The new session is running: its id must survive the failure
+                # or the session is untracked (round 4).
+                raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
         except BaseException:
             # ANY failure after the stop keeps the old record (with stopped_ts)
             # and the ready marker so a plain retry can relaunch; the marker is
@@ -862,7 +897,10 @@ class Sessions:
             except (OSError, ValueError):
                 pass  # the disk already holds the old record
             raise
-        self._marker_path(name).unlink(missing_ok=True)
+        try:
+            self._marker_path(name).unlink(missing_ok=True)
+        except (OSError, ValueError) as exc:
+            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)}
         warnings = []
