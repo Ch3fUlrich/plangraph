@@ -71,12 +71,8 @@ class SpawnService(SeatSpawnMixin):
             plan = record.get('plan') or {}
             for candidate in plan.get('skipped', []):
                 leg = candidate.get('leg')
-                if leg not in attempted:
-                    record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
-                        skip_reason=candidate.get('skip_reason') or candidate.get('reason'),
-                        served_model='unwitnessed', served_family='unwitnessed',
-                        served_witness_reason='leg skipped before launch'))
-                    attempted.add(leg)
+                if candidate not in record.setdefault('skipped', []):
+                    record['skipped'].append(candidate)
             for leg in plan.get('legs', []):
                 if leg['id'] not in attempted:
                     record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',

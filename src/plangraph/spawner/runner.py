@@ -1094,8 +1094,6 @@ def spawn_service(*args, **kwargs):
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
-                    record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
-                        skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
             self._save(record)
 
             if not plan.legs or plan.error:
@@ -1171,8 +1169,6 @@ def spawn_service(*args, **kwargs):
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)
-                                record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
-                                    skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
                         record['plan'] = current.to_dict()
                     else:
                         record.update(status='failed', exit_code=1, error='attempt iteration limit exceeded')
