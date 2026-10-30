@@ -144,3 +144,15 @@ def test_credit_tier_is_own_top_level_section():
     assert re.search(r'^# Credit tier \(D-3258\)$', docs, re.M)
     assert 'Install the package on each host, then use' in docs
     assert '`--state PATH` precedes the verb; otherwise' in docs
+
+
+def test_credits_human_table_by_default(tmp_path, capsys, monkeypatch):
+    import json
+    from plangraph.spawner.cli import main
+    monkeypatch.delenv('PLANGRAPH_ROUTE_POLICY', raising=False)
+    assert main(['--state', str(tmp_path), 'credits']) == 0
+    out = capsys.readouterr().out
+    with pytest.raises(ValueError):
+        json.loads(out)
+    for word in ('provider', 'expires', 'days_left', 'console-anthropic'):
+        assert word in out

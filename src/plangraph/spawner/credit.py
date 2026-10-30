@@ -150,6 +150,26 @@ def record_spend(state, record, leg, job, *, env=None, db_path=None):
         LOG.warning('credit source=unavailable reason=%s', reason)
 
 
+TABLE_COLUMNS = ('provider', 'expires', 'days_left', 'runs', 'cost_usd', 'tokens_input', 'tokens_output')
+
+
+def _cell(row, key):
+    value = row.get(key)
+    return 'n/a' if value is None else str(value)
+
+
+def credit_table(rows):
+    """Human-readable report; machine-readable output stays behind --json."""
+    widths = {key: len(key) for key in TABLE_COLUMNS}
+    for row in rows:
+        for key in TABLE_COLUMNS:
+            widths[key] = max(widths[key], len(_cell(row, key)))
+    lines = ['  '.join(key.ljust(widths[key]) for key in TABLE_COLUMNS)]
+    for row in rows:
+        lines.append('  '.join(_cell(row, key).ljust(widths[key]) for key in TABLE_COLUMNS))
+    return '\n'.join(lines)
+
+
 def credit_report(state, *, policy=None, today=None):
     from plangraph.planner.route_policy import load_route_policy
     policy = policy or load_route_policy()

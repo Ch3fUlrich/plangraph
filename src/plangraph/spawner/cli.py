@@ -145,8 +145,9 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
             raise
         if args.verb == 'credits':
-            from .credit import credit_report
-            print(json.dumps(credit_report(service.state), indent=2))
+            from .credit import credit_report, credit_table
+            rows = credit_report(service.state)
+            print(json.dumps(rows, indent=2) if args.json else credit_table(rows))
             return 0
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
