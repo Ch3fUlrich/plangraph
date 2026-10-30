@@ -271,7 +271,7 @@ class SpawnService(SeatSpawnMixin):
                 row = next((r for r in get_catalog_models() if r['id'] == target), None)
                 # Harness is a catalog column (SPAWNER-REGISTRY-ROUTE), never inferred.
                 missing = ('catalog row' if row is None else
-                           'tier' if row.get('tier') not in ('trial', 'free', 'subscription', 'paid') else
+                           'tier' if row.get('tier') not in ('credit', 'trial', 'free', 'subscription', 'paid') else
                            'harness' if row.get('harness') not in HARNESSES else
                            'context_tokens' if type(row.get('context_tokens')) is not int
                            or row['context_tokens'] <= 0 else

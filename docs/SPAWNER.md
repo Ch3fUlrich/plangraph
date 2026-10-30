@@ -2,9 +2,7 @@
 
 ## Spawn by card
 
-Install the package on each host, then use `python -m plangraph.spawner.cli`
-(or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
-or Temporal service is required for this slice.
+Install on each host; use `python -m plangraph.spawner.cli` (or `python tools/plangraph-spawn.py` from a checkout). No central keeper or Temporal service is required.
 
 ```bash
 python -m plangraph.spawner.cli route --card @card.json --role implement --json
@@ -14,10 +12,8 @@ python -m plangraph.spawner.cli ps
 python -m plangraph.spawner.cli result run-ID
 ```
 
-Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise
-`PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
-`--dry-run` plans without a child. Spawn returns a `wait_cmd`:
-`plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
+Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise `PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
+`--dry-run` plans without a child. Spawn returns a `wait_cmd`: `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
@@ -264,9 +260,9 @@ Role scaling amplifies intelligence gains above $I_{\min}$ for critical supervis
 
 Guarantees subscription and free pools are prioritized over paid per-token APIs:
 $$W_{\text{tier}}(M) = \begin{cases} (4 - \text{rung}(M)) \times 3.5 & \text{if } \text{rung}(M) \le 4 \\ -35.0 & \text{otherwise (unknown)} \end{cases}$$
-- `trial` (rung 0): $+14.0$
-- `free` (rung 1): $+10.5$
-- `credit` (rung 2): $+7.0$
+- `credit` (rung 0): $+14.0$
+- `trial` (rung 1): $+10.5$
+- `free` (rung 2): $+7.0$
 - `subscription` (rung 3): $+3.5$
 - `paid` (rung 4): $0.0$
 
@@ -726,3 +722,7 @@ on the keeper's atomic `(item, run_id, phase)` idempotency key.
 # Review policy
 
 See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.
+### Credit tier (D-3258)
+`console-sonnet-5.5` (implement/review), `console-opus-5.5` (review/orchestrate), and `console-haiku-5.5` (review) use prepaid credits. Credit precedes trial/free/subscription/paid; Sonnet leads writers, other roles sort by tier. Claude writers get non-Claude seats; host checks still apply.
+`route_policy.json` key `credit_tiers` maps provider prefixes to `expires` (YYYY-MM-DD) and optional `note`; unconfigured/expired credit is skipped as `credit_expired`. Console expiry: 2026-11-30 UTC. Attempts append private `<spawn state dir>/credit-spend.jsonl`; `python -m plangraph.spawner.cli credits --json` reports expiry, days left, runs, null-safe costs and tokens.
+Model admission (D-3259): explicit audited overrides admit catalog/registered models, gateway-listed `omniroute/<id>`, or host `opencode models` IDs. Private list cache TTL: `PLANGRAPH_MODEL_LIST_TTL_S` (600 seconds). Removals, inactive rows and MiMo policy still win; automatic routes are unchanged. Interim DECISIONS 2.4 exception: L1s may run opencode directly when the spawner cannot serve a model.

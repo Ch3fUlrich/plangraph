@@ -74,7 +74,7 @@ def test_catalog_registers_kimi_with_opencode_harness():
         row = rows[0]
         assert row["harness"] == "opencode" and row["family"] == "kimi"
         # The override admission (spawner/service.py) also needs these.
-        assert row["tier"] in ("trial", "free", "subscription", "paid")
+        assert row["tier"] in ("credit", "trial", "free", "subscription", "paid")
         assert type(row["context_tokens"]) is int and row["context_tokens"] > 0
         assert resolver.detect_model_family(model_id) == "kimi"
 

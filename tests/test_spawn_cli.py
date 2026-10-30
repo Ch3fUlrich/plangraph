@@ -15,6 +15,12 @@ import os
 @pytest.fixture(autouse=True)
 def _gateway_url(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
+    # Legacy quota/fallthrough assertions deliberately exercise non-credit routes.
+    from plangraph.planner import routing
+    original = routing.plan_spawn
+    monkeypatch.setattr(routing, 'plan_spawn', lambda *a, **kw:
+                        original(*a, **dict(kw, legs=tuple(l for l in kw.get('legs', routing.DEFAULT_LEGS)
+                                                          if l.tier != 'credit'))))
 
 @pytest.fixture(autouse=True)
 def fake_host_binaries(tmp_path, monkeypatch):

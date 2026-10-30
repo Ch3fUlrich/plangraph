@@ -625,7 +625,7 @@ def score_model(
       - review / reviewer: 1.2
 
     Tier weights (W_tier):
-      trial (0): +14.0, free (1): +10.5, credit (2): +7.0, subscription (3): +3.5, paid (4): 0.0, unknown: -35.0
+      credit (0): +14.0, trial (1): +10.5, free (2): +7.0, subscription (3): +3.5, paid (4): 0.0, unknown: -35.0
     """
     need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)

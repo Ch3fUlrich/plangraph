@@ -36,6 +36,16 @@ def session_spend(db_path, job_id):
         return unavailable
 
 
+def capture_spend(job, env):
+    try:
+        from plangraph.planner.legs import DEFAULT_LEGS
+        if any(l.tier == 'credit' and l.model == job.model_or_combo for l in DEFAULT_LEGS):
+            path = Path(env.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'opencode/opencode.db'
+            job.credit_spend = session_spend(path, job.job_id)
+    except Exception:
+        pass
+
+
 def record_spend(state, record, leg, job, *, env=None, db_path=None):
     """Accounting must never change the outcome of a run."""
     try:
@@ -45,7 +55,7 @@ def record_spend(state, record, leg, job, *, env=None, db_path=None):
         path = db_path or Path(env.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'opencode/opencode.db'
         entry = dict(run_id=record['run_id'], leg=leg.id, model=leg.model,
                      started=record.get('started'), ended=time.time(), status=job.status)
-        entry.update(session_spend(path, job.job_id))
+        entry.update(getattr(job, 'credit_spend', None) or session_spend(path, job.job_id))
         append_private(Path(state) / 'credit-spend.jsonl', json.dumps(entry) + '\n')
     except Exception:
         pass
