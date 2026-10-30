@@ -102,11 +102,49 @@ class RequiredBaseTests(RepoFixture):
     def test_a_missing_required_base_fails(self):
         self.assertFails(self.check_with_base("origin/main"), "does not resolve")
 
-    def test_a_present_required_base_passes(self):
+    def test_a_required_base_behind_head_passes(self):
         self.file("small.py", 3)
         self.commit("small")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.file("other.py", 3)
+        self.commit("other")
         self.assertPasses(self.check_with_base("origin/main"))
+
+    def test_a_required_base_that_is_head_fails(self):
+        """A push to main checks out the pushed tip as origin/main: naming it
+        as the base would compare the change with itself."""
+        self.file("small.py", 3)
+        self.commit("small")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertFails(self.check_with_base("origin/main"), "HEAD itself")
+
+    def test_the_required_base_is_the_only_reference(self):
+        """On a push the base is the pushed-over sha, not origin/main (which
+        then is the push itself): a baseline widened in the push fails."""
+        self.file("big.py", 450)
+        self.baseline("big.py 450\n")
+        self.git("add", "--", ".filesize-baseline")
+        self.commit("before")
+        before = self.git("rev-parse", "HEAD").stdout.strip()
+        self.file("big.py", 460)
+        self.baseline("big.py 460\n")
+        self.git("add", "--", ".filesize-baseline")
+        self.commit("widen")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assertPasses(self.check())  # origin/main == HEAD: blind
+        self.assertFails(self.check_with_base(before), "big.py")
+
+    def test_a_required_base_without_a_baseline_fails(self):
+        """A base that resolves but carries no baseline must not turn the
+        ratchet off while the tree carries one."""
+        self.file("small.py", 3)
+        self.commit("no baseline yet")
+        before = self.git("rev-parse", "HEAD").stdout.strip()
+        self.file("big.py", 450)
+        self.baseline("big.py 450\n")
+        self.git("add", "--", ".filesize-baseline")
+        self.commit("baseline")
+        self.assertFails(self.check_with_base(before), "carries no")
 
 
 class LineLimitTests(RepoFixture):

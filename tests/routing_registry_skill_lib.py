@@ -338,17 +338,11 @@ def _apply_sh_flags():
 def _apply_ps1_flags():
     """The flags apply.ps1's top-level param() block accepts."""
     text = (VENDORED["apply_ps1_param"] if VENDORED is not None
-            else APPLY_PS1.read_text(encoding="utf-8"))
-    try:
-        start = text.index("param(", text.index("[CmdletBinding()]")) \
-            + len("param(")
-    except ValueError:
-        return set()  # reshaped; the vacuity guard fails loudly
-    depth, i = 1, start
-    while depth:
-        depth += (text[i] == "(") - (text[i] == ")")
-        i += 1
-    return {"-" + n for n in re.findall(r"\]\$(\w+)", text[start:i - 1])}
+            else autoos_fixture.ps1_param(
+                APPLY_PS1.read_text(encoding="utf-8")))
+    # an empty block (reshaped script) gives set(): the vacuity guard fails
+    return {"-" + n for n in re.findall(r"\]\$(\w+)",
+                                        autoos_fixture.strip_ps1(text))}
 
 
 def _wrapped_repo_paths(text):

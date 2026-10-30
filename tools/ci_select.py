@@ -8,8 +8,10 @@ import os
 import subprocess
 import sys
 
+#: Jobs that run on every change: never selected, always required by the gate.
+ALWAYS: tuple[str, ...] = ("scrub", "file-size")
+
 SUITES: tuple[str, ...] = (
-    "scrub",
     "pytest",
     "pytest-postgres",
     "rust",
@@ -82,9 +84,8 @@ def select(paths: list[str]) -> dict[str, bool]:
         res["full"] = True
         return res
 
-    # 5. Otherwise (no full trigger) start with scrub=True ALWAYS
+    # 5. Otherwise (no full trigger) select by path (ALWAYS jobs need no selection)
     res = {s: False for s in SUITES}
-    res["scrub"] = True
     res["full"] = False
 
     for p in norm_paths:
@@ -127,9 +128,8 @@ def gate(needs: dict) -> list[str]:
         outputs = {}
 
     problems: list[str] = []
-    for suite in SUITES:
-        val = outputs.get(suite)
-        selected = val != "false"
+    for suite in ALWAYS + SUITES:
+        selected = suite in ALWAYS or outputs.get(suite) != "false"
         if not selected:
             continue
 

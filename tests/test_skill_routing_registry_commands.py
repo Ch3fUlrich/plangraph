@@ -24,6 +24,7 @@ Run directly:
 
     python3 tests/test_skill_routing_registry_commands.py
 """
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -169,6 +170,28 @@ class RoutingRegistrySkillTests(unittest.TestCase):
         self.assertIn("ide", fix["render_help"])
         named = {s for p in _skill_files() for s in _script_paths(p)}
         self.assertTrue(named and set(fix["script_paths"]) <= named)
+
+    def test_ps1_param_counts_only_code_parens(self):
+        """Nested parens, and parens or `]$name` inside strings and comments,
+        must neither cut nor stretch the param() block."""
+        src = ("<# help: param( [switch]$Fake ) #>\n[CmdletBinding()]\n"
+               "param(\n    [ValidateSet('a', 'b)')][string]$Mode = 'a',\n"
+               "    # a ) in a comment, ]$NotAFlag\n"
+               "    [string]$Note = \"it's (fine) `\" )\",\n"
+               "    [string]$Empty = \"\", [string]$Q = 'it''s )',\n"
+               "    [string]$Here = @'\n ) ]$NotHere\n'@,\n"
+               "    [switch]$DryRun\n)\nWrite-Host ')'\n[switch]$After\n")
+        block = autoos_fixture.ps1_param(src)
+        self.assertTrue(block.startswith("[CmdletBinding()]"), block)
+        self.assertTrue(block.endswith("$DryRun\n)"), block)
+        self.assertEqual(
+            set(re.findall(r"\]\$(\w+)", autoos_fixture.strip_ps1(block))),
+            {"Mode", "Note", "Empty", "Q", "Here", "DryRun"})
+        self.assertEqual(autoos_fixture.ps1_param("param($Unclosed"), "")
+        # CI reads the vendored block: it must be exactly what the parser cuts
+        fix = VENDORED or autoos_fixture.load()
+        self.assertEqual(autoos_fixture.ps1_param(fix["apply_ps1_param"]),
+                         fix["apply_ps1_param"])
 
     @unittest.skipUnless(AUTOOS is not None, "drift check needs "
                          "PLANGRAPH_AUTOOS_ROOT; CI uses the vendored copy")
