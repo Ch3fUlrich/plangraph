@@ -14,16 +14,9 @@ import sqlite3
 import sys
 from typing import Any, Sequence
 
-from .catalog_seed import (
-    SEED_BENCHMARKS,
-    SEED_CLIENTS,
-    SEED_MODELS,
-    SEED_PROVIDERS,
-    SEED_QUOTA_POOLS,
-    SEED_ROUTE_LEGS,
-    SEED_ROUTES,
-    TIER_RUNG,
-)
+from plangraph import registry_columns
+from .catalog_seed import (SEED_BENCHMARKS, SEED_CLIENTS, SEED_MODELS, SEED_PROVIDERS,
+                           SEED_QUOTA_POOLS, SEED_ROUTE_LEGS, SEED_ROUTES, TIER_RUNG)
 
 def default_db_path() -> Path:
     """Catalog DB path, resolved at call time so PLANGRAPH_CATALOG_DB wins (D3)."""
@@ -81,7 +74,7 @@ class CatalogDB:
         """Initialize schema and seed catalog tables idempotently."""
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
         self.conn.executescript(schema_sql)
-        self._migrate()
+        registry_columns.migrate(self.conn)
 
         # 1. Quota pools
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)
@@ -104,34 +97,8 @@ class CatalogDB:
         # 7. Route legs
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
-        self._derive_registry_columns()
+        registry_columns.derive(self.conn)
         self.conn.commit()
-
-    #: Columns added after the first schema; CREATE TABLE IF NOT EXISTS leaves an
-    #: existing table as it was, so an older catalog file gains them here.
-    _ADDED_COLUMNS = (
-        ("catalog_models", "harness",
-         "TEXT CHECK (harness IS NULL OR harness IN ('qodercli', 'opencode', 'agy'))"),
-        ("catalog_models", "tool_mode",
-         "TEXT NOT NULL DEFAULT 'tools' CHECK (tool_mode IN ('tools', 'inline-only'))"),
-    )
-
-    def _migrate(self) -> None:
-        for table, column, decl in self._ADDED_COLUMNS:
-            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
-            if column not in have:
-                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-
-    def _derive_registry_columns(self) -> None:
-        """Fill harness/tool_mode on rows that lack them (older or imported rows)."""
-        from plangraph.catalog_data import INLINE_ONLY_MODELS, PROVIDER_HARNESS
-        for provider, harness in PROVIDER_HARNESS.items():
-            if harness is not None:
-                self.conn.execute("UPDATE catalog_models SET harness = ? "
-                                  "WHERE provider_id = ? AND harness IS NULL", (harness, provider))
-        for model in sorted(INLINE_ONLY_MODELS):
-            self.conn.execute("UPDATE catalog_models SET tool_mode = 'inline-only' "
-                              "WHERE model_id = ?", (model,))
 
     def _insert_records(self, table_name: str, records: list[dict[str, Any]]) -> int:
         if not records:
@@ -453,7 +420,7 @@ class CatalogDB:
             records = payload.get(payload_key, [])
             total_inserted += self._insert_records(table_name, records)
 
-        self._derive_registry_columns()
+        registry_columns.derive(self.conn)
         self.conn.commit()
         return total_inserted
 

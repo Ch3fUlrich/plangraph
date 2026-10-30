@@ -242,7 +242,7 @@ def admission_models() -> set[str]:
 
 
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
-from plangraph.catalog_data import INLINE_ONLY_MODELS as _INLINE_ONLY
+from plangraph.registry_columns import INLINE_ONLY_MODELS as _INLINE_ONLY
 for _row in DEFAULT_FALLBACK_MODELS:
     _row['active'] = _row['id'] in _fallback_legs
     _row.setdefault('tool_mode', 'inline-only' if _row['id'] in _INLINE_ONLY else 'tools')
@@ -734,8 +734,7 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
         d["id"] = d["model_id"]
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
-    # Harness and tool mode are catalog columns (SPAWNER-REGISTRY-ROUTE), never
-    # inferred here from the id or the gateway transport.
+    # Harness and tool mode are catalog columns (SPAWNER-REGISTRY-ROUTE), never inferred.
     return d
 
 _catalog_failures = {}

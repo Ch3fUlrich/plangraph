@@ -5,9 +5,10 @@ spawner catalog and the review gateway. Imports nothing from plangraph.spawner.
 """
 
 from typing import Any
+from plangraph.registry_columns import tag_seed_rows
 
 # Canonical 22 Models from Artificial Analysis v4.3.2
-SEED_MODELS: list[dict[str, Any]] = [
+SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
     {
         "model_id": "agy/claude-opus-5-5-high",
         "provider_id": "agy",
@@ -554,36 +555,4 @@ SEED_MODELS: list[dict[str, Any]] = [
         "supports_vision": 0,
         "trains_on_prompts": 0,
     },
-]
-
-# Runner harness per provider (planner/legs.py HARNESSES, SPAWNER-REGISTRY-ROUTE
-# D-3198): the catalog id is passed to that harness as --model.  None = no runner
-# harness addresses these ids (agy/qodercli take their own native ids, which the
-# routed legs in planner/legs.py carry; cxa = Codex ACP; claude -p, gemini and
-# the direct deepseek API are not runner harnesses).  A new provider must be
-# registered here: the KeyError below is deliberate.
-PROVIDER_HARNESS: dict[str, Any] = {
-    "opencode-go": "opencode",
-    "mimo": "opencode",
-    "cx": "opencode",
-    "agy": None,
-    "qoder": None,
-    "cxa": None,
-    "claude": None,
-    "gemini": None,
-    "deepseek": None,
-}
-
-# Review legs that give no verdict in tool mode: the spawner inlines the diff
-# (D-3134, D-3173).
-INLINE_ONLY_MODELS = frozenset({
-    "omniroute/cx-gpt-6-luna",
-    "cxa/gpt-6-luna-high",
-    "mimo/mimo-v2.6-pro",
-})
-
-for _row in SEED_MODELS:
-    _row["harness"] = PROVIDER_HARNESS[_row["provider_id"]]
-    _row["tool_mode"] = "inline-only" if _row["model_id"] in INLINE_ONLY_MODELS else "tools"
-del _row
-
+])

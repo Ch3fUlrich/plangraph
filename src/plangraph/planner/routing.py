@@ -15,15 +15,16 @@ from dataclasses import dataclass
 from dataclasses import asdict
 import json
 import os
-import re
-import sqlite3
 from pathlib import Path
 import time
 
 from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 from plangraph.routing_errors import RouteError, SpawnRefused
 
+from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
+                         BenchRequired, benchmark_rows_from_db)
 from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg
+from .seats import _check_diff_ref, pick_seats  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
@@ -215,66 +216,6 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
     return ("park", None)
 
 
-class BenchmarkError(SpawnRefused):
-    """Benchmark policy or storage failure."""
-
-
-class BenchRequired(BenchmarkError):
-    """Strict benchmark policy refused one or more candidate legs."""
-
-    def __init__(self, message, legs=()):
-        super().__init__(message)
-        self.gaps = [leg for leg in legs if isinstance(leg, dict)]
-        self.legs = [leg['leg'] if isinstance(leg, dict) else leg for leg in legs]
-
-
-class BenchDataError(BenchmarkError):
-    """Benchmark storage could not be read; not missing model coverage."""
-
-
-# Table-specific aliases to the resolver's canonical columns. No fuzzy model aliases.
-BENCHMARK_COLUMNS = {
-    "catalog_benchmarks": {"model_id": "model_id"},
-    "model_benchmarks": {"model_id": "model_id", "intelligence": "aa_intelligence",
-                         "tok_per_s": "verified_tok_per_s"},
-}
-
-
-def benchmark_rows_from_db(path):
-    """Return (model-id rows, errors) without creating or modifying a database.
-
-    Prefer the catalog table when both supported tables exist. Duplicate model rows
-    are counted in ``benchmark_row_count``; the first row supplies ranking metrics.
-    """
-    try:
-        uri = Path(path).expanduser().resolve().as_uri() + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
-        try:
-            conn.row_factory = sqlite3.Row
-            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            table = next((t for t in BENCHMARK_COLUMNS if t in tables), None)
-            if table is None:
-                return {}, [f"{path}: missing benchmark table (catalog_benchmarks or model_benchmarks)"]
-            result = {}
-            for raw in conn.execute(f'SELECT * FROM "{table}"'):
-                row = dict(raw)
-                for original, canonical in BENCHMARK_COLUMNS[table].items():
-                    if original in row and canonical not in row:
-                        row[canonical] = row[original]
-                model = row.get("model_id")
-                if not isinstance(model, str) or not model:
-                    return {}, [f"{path}: {table} row missing model_id"]
-                if model in result:
-                    result[model]["benchmark_row_count"] += 1
-                else:
-                    result[model] = dict(row, benchmark_row_count=1)
-            return result, []
-        finally:
-            conn.close()
-    except (OSError, ValueError, sqlite3.Error) as exc:
-        return {}, [f"{path}: cannot read benchmark database: {exc}"]
-
-
 @dataclass(frozen=True)
 class SpawnPlan:
     legs: tuple[Leg, ...]
@@ -300,54 +241,6 @@ class SpawnPlan:
             result.pop('seat_coverage')
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
-
-
-#: A git revision the inline-diff path accepts: no option-looking or spaced refs.
-_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$")
-
-
-def _check_diff_ref(ref):
-    """``card["diff_ref"]`` = ``{"repo": <absolute path>, "base": <rev>, "head": <rev>}``."""
-    if (not isinstance(ref, Mapping) or set(ref) != {"repo", "base", "head"}
-            or not all(isinstance(ref[k], str) for k in ref)
-            or not os.path.isabs(ref["repo"])
-            or not _REF_RE.match(ref["base"]) or not _REF_RE.match(ref["head"])):
-        raise SpawnRefused('diff_ref must be {"repo": absolute path, "base": rev, "head": rev}')
-
-
-def _seat_family(family):
-    # The keeper counts every Claude seat as one family named anthropic.
-    return "anthropic" if family == "claude" else family
-
-
-def pick_seats(ordered, writer_families, *, high):
-    """Seats covering every writer part (DECISIONS 3.2, keeper ``coverage.uncovered``).
-
-    A part (writer family) is covered by ``need`` distinct seat families other
-    than its own (1 standard, 2 high); a high part also needs one non-Claude
-    family other than its own.  A seat may share a family with ANOTHER writer
-    (D-3084).  Seats are taken in route order, one per family, only while they
-    help cover an open part; at least two families are always picked.  Returns
-    ``(seats, coverage, open_parts)``.
-    """
-    from plangraph.keeper.coverage import uncovered
-    writers = sorted({_seat_family(w) for w in writer_families if w})
-    need = 2 if high else 1
-    seats, families = [], []
-    for leg in ordered:
-        fam = _seat_family(leg.family)
-        if fam in families or (writers and all(fam == w for w in writers)):
-            continue
-        open_parts = uncovered(writers, families, need=need, sensitive=high)
-        if len(families) >= 2 and not any(fam != w for w in open_parts):
-            continue
-        seats.append(leg)
-        families.append(fam)
-        if len(families) >= 2 and not uncovered(writers, families, need=need, sensitive=high):
-            break
-    coverage = tuple({"leg": leg.id, "covers": [w for w in writers if w != _seat_family(leg.family)]}
-                     for leg in seats)
-    return seats, coverage, uncovered(writers, families, need=need, sensitive=high)
 
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,

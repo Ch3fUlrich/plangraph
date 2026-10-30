@@ -2,14 +2,14 @@
 
 luna and mimo-pro (D-3134/D-3173) only answer when the change is in the prompt.
 The card names the change as ``diff_ref`` = ``{"repo", "base", "head"}``
-(validated by ``planner.routing._check_diff_ref``); the spawner runs ``git diff``
+(validated by ``planner.seats._check_diff_ref``); the spawner runs ``git diff``
 itself so no caller pastes diffs by hand.
 """
 from __future__ import annotations
 
 import subprocess
 
-from plangraph.planner.routing import _check_diff_ref
+from plangraph.planner.seats import _check_diff_ref
 from plangraph.routing_errors import SpawnRefused
 
 HEADER = "\n\n=== INLINE DIFF (base {base}, head {head}; this leg reads the change only from here) ===\n"

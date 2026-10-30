@@ -46,11 +46,11 @@ src/plangraph/live_follow.py 496
 src/plangraph/planner/jev_client.py 749
 src/plangraph/planner/jev_shadow.py 416
 src/plangraph/planner/readiness.py 442
-src/plangraph/planner/routing.py 504
-src/plangraph/routing_support/catalog_db.py 516
+src/plangraph/planner/routing.py 470
+src/plangraph/routing_support/catalog_db.py 512
 src/plangraph/routing_support/catalog_seed.py 1048
 src/plangraph/routing_support/resolver.py 1247
-src/plangraph/spawner/runner.py 1262
+src/plangraph/spawner/runner.py 1222
 src/plangraph/views.py 440
 tests/browser/assets/elk.bundled.js 6696
 tests/browser/test_repros.py 436
