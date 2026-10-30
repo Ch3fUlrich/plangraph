@@ -1,0 +1,3 @@
+# .filesize-allow - paths tools/check_file_size.py measures but does not judge.
+# Format: <path> <reason>. One entry per line; a reason is mandatory.
+CHANGELOG.md a ledger grows one line per merged change and never shrinks

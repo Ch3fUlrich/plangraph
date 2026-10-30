@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-push scrub gate (D-1751).
+"""Pre-push gate: public scrub (D-1751) + 400-line file size (AO-400LOC, D-3198).
 
 Runs the tools/split/scrub_check rules over the files changed in the commits being
 pushed (diff vs the remote sha; for a new branch, vs the merge-base with origin/main).
@@ -16,7 +16,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-SPLIT = Path(__file__).resolve().parent.parent / "split"
+TOOLS = Path(__file__).resolve().parent.parent
+SPLIT = TOOLS / "split"
+FILE_SIZE = TOOLS / "check_file_size.py"
 sys.path.insert(0, str(SPLIT))
 import scrub_check as sc  # noqa: E402
 
@@ -78,7 +80,20 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits):
                 hits.append(sc.Hit(rel, n, rule))
 
 
+def file_size_gate():
+    """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
+    r = subprocess.run([sys.executable, str(FILE_SIZE)], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write(r.stdout + r.stderr)
+        print("pre-push: file-size gate failed: push refused (split the file, "
+              "see CONTRIBUTING.md)", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main():
+    if file_size_gate():
+        return 1
     refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") or None
     if not words:

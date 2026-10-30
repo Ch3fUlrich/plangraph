@@ -84,6 +84,27 @@ def test_src_change():
     assert res["full"] is False
 
 
+@pytest.mark.parametrize("paths", [
+    [], ["docs/x.md"], ["skills/a/SKILL.md"], [".github/workflows/tests.yml"],
+    ["src/m.py"], ["rust/worker/src/a.rs"], ["LICENSE"]])
+def test_scrub_is_selected_on_every_change(paths):
+    assert select(paths)["scrub"] is True
+
+
+def test_skill_page_change_runs_pytest():
+    res = select(["skills/routing-registry/references/remove.md"])
+    assert res["pytest"] is True
+    assert res["pytest-postgres"] is False
+    assert res["rust"] is False
+    assert res["scrub"] is True
+    assert res["full"] is False
+
+
+def test_skill_non_page_change_is_unknown_full():
+    res = select(["skills/routing-registry/scripts/x.sh"])
+    assert res["full"] is True
+
+
 def test_ci_github_workflow_full():
     res = select([".github/workflows/tests.yml"])
     assert res["full"] is True
