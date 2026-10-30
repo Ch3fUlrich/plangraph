@@ -127,9 +127,10 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record['attempts']) == 8
+        assert record['attempts'] == []
+        assert len(record['skipped']) == 8
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
-                   for a in record['attempts'])
+                   for a in [dict(status='skipped', skip_reason=s['reason']) for s in record['skipped']])
         assert len(runner.jobs) == count
     asyncio.run(run())
 

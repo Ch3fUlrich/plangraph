@@ -289,7 +289,7 @@ def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None, extra=None
             def __delitem__(self, key):  # the OPENCODE_* drop is blocked too
                 if key not in freeze:
                     super().__delitem__(key)
-        return Frozen(real(base))
+        return Frozen({k: v for k, v in real(base).items() if k not in freeze or not k.startswith('OPENCODE_DISABLE_')})
 
     monkeypatch.setattr(opencode_overlay, 'overlay_env', overlay)
     return _run_leg(tmp_path, monkeypatch, seed, extra_env=extra)

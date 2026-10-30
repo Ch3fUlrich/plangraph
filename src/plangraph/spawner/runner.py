@@ -1176,7 +1176,7 @@ def spawn_service(*args, **kwargs):
                     if not any(a.get('status') != 'skipped' for a in record['attempts']):
                         record.update(status='failed', exit_code=1, error='; '.join(
                             a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')) or 'no leg launched')
-                    elif any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts']):
+                    elif any(any(m in str(a).lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts'] + record.get('skipped', [])):
                         record.update(status='failed', exit_code=1,
                             error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
                     elif record['attempts'] and all(l.id in tried for l in current.legs) and current.legs:

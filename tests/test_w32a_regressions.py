@@ -56,9 +56,8 @@ def test_missing_harness_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None))
     assert (result['status'], result['exit_code']) == ('failed', 1)
-    assert result['attempts'] == [dict(leg='agy', status='skipped', skip_reason=reason,
-        served_model='unwitnessed', served_family='unwitnessed',
-        served_witness_reason='no authenticated harness telemetry; skipped or unobserved leg')]
+    assert result['attempts'] == []
+    assert result['skipped'] == [{'leg': 'agy', 'reason': reason}]
     assert reason in result['error']
 
 
