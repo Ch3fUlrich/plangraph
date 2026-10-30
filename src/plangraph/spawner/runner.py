@@ -916,7 +916,8 @@ def spawn_service(*args, **kwargs):
             from .notify import KeeperSink
             self.keeper_sink = keeper_sink or KeeperSink()
             self._running_records = {}
-            self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
+            if hasattr(self.runner, '__dict__'):
+                self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
         def _save(self, record, *, retry=False):
             from .notify import completion_event, CommandSink, KeeperNotConfigured
@@ -1070,6 +1071,14 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
+                        from .leg_probe import before_launch
+                        probe_skip = await before_launch(self.runner, chosen, role, dry_run)
+                        if probe_skip:
+                            record['attempts'].append(dict(leg=asdict(chosen), status='skipped', skip_reason=probe_skip))
+                            self._save(record)
+                            if no_fallthrough:
+                                break
+                            continue
                         from .inline_diff import InlineDiffError
                         try:
                             leg_prompt = self._leg_prompt(prompt, card, role, chosen)

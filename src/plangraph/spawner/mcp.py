@@ -31,6 +31,10 @@ from plangraph.spawner.risk import evaluate_risk
 from plangraph.spawner.runner import JobInfo, SpawnerRunner
 
 TOOLS_METADATA = [
+    {'name': 'plangraph_agent_probe', 'description': 'Run bounded writer commit probes',
+     'inputSchema': {'type': 'object', 'properties': {
+         'leg': {'type': 'array', 'items': {'type': 'string'}},
+         'all_writers': {'type': 'boolean'}, 'timeout': {'type': 'number'}, 'json': {'type': 'boolean'}}}},
     {
         "name": "plangraph_agent_spawn",
         "description": "Spawn an agent task via OmniRoute ACP gateway or dry-run",
@@ -150,6 +154,10 @@ class MCPSpawnerServer:
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
         from .bench_entry import benchmark_options
+        if name == 'plangraph_agent_probe':
+            from .leg_probe import probe_many
+            return await probe_many(self.runner, arguments.get('leg', ()),
+                                    arguments.get('all_writers', False), arguments.get('timeout'))
         try:
             options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
         except Exception as exc:

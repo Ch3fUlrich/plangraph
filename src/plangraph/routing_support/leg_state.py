@@ -90,6 +90,24 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
+    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None):
+        if not leg or not caller or not reason:
+            raise LegStateError('requires leg, reason and caller')
+        now = time.time() if now is None else now
+        down_s = float(os.environ.get('PLANGRAPH_LEG_DOWN_S', 1800)) if down_s is None else down_s
+        with self._connect() as db:
+            db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
+                       (leg, None, None, 503, _redact(reason), down_s, now + down_s, now, caller, 'liveness-probe'))
+
+    def last_probe_ts(self, leg):
+        if not self.path.exists():
+            return None
+        try:
+            with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
+                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe')", (leg,)).fetchone()[0]
+        except sqlite3.Error:
+            return None
+
     def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
@@ -118,6 +136,8 @@ class LegStateStore:
         evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
         evidence["event_id"] = row["id"]
         reset = row["reset_at"]
+        if row['source'] == 'liveness-probe':
+            return {'state': 'down' if now < reset else 'reprobe', 'evidence': evidence}
         state = ("limited" if now < reset else "ok") if reset is not None else ("limited" if now < row["ts"] + REPROBE_MINUTES * 60 else "reprobe")
         return {"state": state, "evidence": evidence}
 
@@ -140,3 +160,11 @@ def record_harness_limit(leg, line, caller, now=None, account=None, combo=None):
 
 def leg_status(leg, now=None, account=None, combo=None):
     return _default_store().leg_status(leg, now, account, combo)
+
+
+def record_probe_fail(leg, reason, caller, now=None, down_s=None):
+    return _default_store().record_probe_fail(leg, reason, caller, now, down_s)
+
+
+def last_probe_ts(leg):
+    return _default_store().last_probe_ts(leg)
