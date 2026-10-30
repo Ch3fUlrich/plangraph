@@ -778,7 +778,11 @@ path containment, and with no marker it restarts bare rather than reusing the re
 The stored launch spec is re-validated before the old session is stopped (`claude stop`, never
 `rm`/`kill`), the previous session id is excluded when resolving the new one (UUID in launcher
 stdout, else short id, else the newest `background` row by name + startedAt near launch), and a
-post-stop launch failure keeps the record and marker for a retry.
+post-stop launch failure keeps the record and marker for a retry. When the record is already marked
+stopped but still carries a session id, the id is looked up in `claude agents --json` first: a listed
+row in any state but a finished/stopped one is `claude stop`ped before the relaunch - a failed stop
+refuses the relaunch and launches nothing - while an unlisted id (or one already finished/stopped)
+proceeds without a stop.
 
 `plangraph_session_list` reports `context_tokens` (latest assistant usage sum - input + cache read +
 cache creation - from the transcript under `~/.claude/projects/`, reading only the file's last

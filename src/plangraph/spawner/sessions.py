@@ -41,6 +41,10 @@ UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{
 SHORT_RE = re.compile(r"backgrounded\s*\W*([0-9a-fA-F]{8})\b")
 USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 TAIL_BYTES = 256 * 1024  # spec: only the transcript's last 256 KB is read
+# `claude agents --json` states that mean the old session is already over;
+# any other (or missing) state is live and must be stopped before a relaunch
+# replaces it - guessing wrong can only stop what should be stopped.
+FINISHED_STATES = frozenset({"finished", "stopped"})
 
 
 _SCRUB_KEYS = frozenset({"reason", "error", "warning", "card", "message", "argv"})
@@ -819,6 +823,16 @@ class Sessions:
         self._audit_argv = self._shown(bg_argv if launcher == "bg" else wt_argv, prompt_arg)
         if old_sid and rec.get("stopped_ts") is None:
             self._stop_record(rec, name)  # raises "stop failed" -> nothing is launched
+        elif old_sid:
+            # The record says stopped, but the session may have outlived its
+            # stop: `claude agents --json` is the source of truth. A listed id
+            # outside a finished/stopped state is stopped first - a failed stop
+            # refuses the relaunch, nothing is launched - while an unlisted id
+            # is gone for good and proceeds untouched.
+            row = next((r for r in self._agents_rows()
+                        if r.get("sessionId") == old_sid), None)
+            if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+                self._stop_record(rec, name)
         new_rec = dict(rec)
         try:
             sid, warning = self._run_launch(

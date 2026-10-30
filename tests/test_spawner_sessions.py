@@ -994,6 +994,81 @@ def _assert_old_record_kept(rec_path, marker_path, site):
     assert line["action"] == "relaunch" and line["ok"] is False
 
 
+def _stopped(site, run, s):
+    """Launch alpha, mark it ready, stop it: the record keeps its session id
+    with stopped_ts set - the state a retrying relaunch finds."""
+    rec_path, marker_path = _ready(site, run, s)
+    s.stop(name="alpha")
+    return rec_path, marker_path
+
+
+@pytest.mark.parametrize("state", ["running", "idle", None])
+def test_relaunch_already_stopped_live_row_is_stopped_first(site, state):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    _stopped(site, run, s)
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+                        "kind": "background", "state": state, "startedAt": 1_000_000}]
+    run.stdout = "session " + UUID2
+    res = s.relaunch("alpha")
+    assert res["ok"] is True and res["session_id"] == UUID2
+    kinds = [a[:2] for a, _ in run.calls]
+    # the old session is looked up in claude agents and stopped BEFORE the relaunch
+    assert kinds == [["claude", "--bg"], ["claude", "stop"], ["claude", "agents"],
+                     ["claude", "stop"], ["claude", "--bg"]]
+    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
+        [["claude", "stop", UUID1], ["claude", "stop", UUID1]]  # exact argv, never rm/kill
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
+
+
+def test_relaunch_already_stopped_stop_failure_launches_nothing(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, marker_path = _stopped(site, run, s)
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+                        "kind": "background", "state": "running", "startedAt": 1_000_000}]
+    run.stop_rc = 1
+    with pytest.raises(ParameterRefused, match="stop failed"):
+        s.relaunch("alpha")
+    assert len(run.launch_calls()) == 1  # nothing was relaunched
+    rec = json.loads(rec_path.read_text())
+    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None
+    assert marker_path.exists()  # a retry can relaunch
+
+
+def test_relaunch_already_stopped_unlisted_id_proceeds_without_stop(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    _stopped(site, run, s)
+    run.agents_rows = [{"id": "r", "sessionId": UUID3, "name": "alpha",
+                        "kind": "background", "state": "running", "startedAt": 1_000_000}]
+    run.stdout = "session " + UUID2
+    res = s.relaunch("alpha")
+    assert res["ok"] is True and res["session_id"] == UUID2
+    stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+    assert stops == [["claude", "stop", UUID1]]  # only the earlier user stop
+    assert any(a[:3] == ["claude", "agents", "--json"] for a, _ in run.calls)  # id was looked up
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
+
+
+@pytest.mark.parametrize("state", ["finished", "stopped"])
+def test_relaunch_already_stopped_finished_row_proceeds_without_stop(site, state):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    _stopped(site, run, s)
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+                        "kind": "background", "state": state, "startedAt": 1_000_000}]
+    run.stdout = "session " + UUID2
+    res = s.relaunch("alpha")
+    assert res["ok"] is True and res["session_id"] == UUID2
+    stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+    assert stops == [["claude", "stop", UUID1]]  # already over: no second stop
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
+
+
 def test_relaunch_timeout_keeps_record_and_marker(site):
     class TimeoutRun(FakeRun):
         def __call__(self, argv, **kw):
