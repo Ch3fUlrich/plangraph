@@ -1048,7 +1048,10 @@ def test_relaunch_launch_failure_after_stop_keeps_record(site):
     res = s.relaunch("alpha")
     assert res["ok"] is False and res["session_id"] is None
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
-    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None  # record kept, stopped
+    # _start's outcome record stands (D-3193): stopped after the failed start,
+    # session_id null - the pre-relaunch record is no longer restored
+    assert rec["state"] == "stopped" and rec["stopped_ts"] is not None
+    assert rec["session_id"] is None
     assert (site.state / "sessions" / "alpha.ready.json").exists()  # a retry can relaunch
     lines = [json.loads(l) for l in (site.state / "sessions" / "audit.log").read_text().splitlines()]
     assert lines[-1]["action"] == "relaunch" and lines[-1]["ok"] is False
@@ -1066,9 +1069,13 @@ def _ready(site, run, s):
     return (site.state / "sessions" / "alpha.json"), (site.state / "sessions" / "alpha.ready.json")
 
 
-def _assert_old_record_kept(rec_path, marker_path, site):
+def _assert_relaunch_failure_kept(rec_path, marker_path, site, state):
+    """A failed relaunch leaves _start's own outcome record on disk (D-3193:
+    the pre-slice restore of the pre-relaunch record is cut) and keeps the
+    ready marker so a plain retry can relaunch."""
     rec = json.loads(rec_path.read_text())
-    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is not None
+    assert rec["state"] == state and rec["session_id"] is None
+    assert (rec["stopped_ts"] is not None) == (state == "stopped")
     assert marker_path.exists()  # a retry can relaunch
     line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
     assert line["action"] == "relaunch" and line["ok"] is False
@@ -1166,7 +1173,7 @@ def test_relaunch_timeout_keeps_record_and_marker(site):
     run.broken = True
     with pytest.raises(subprocess.TimeoutExpired):
         s.relaunch("alpha")
-    _assert_old_record_kept(rec_path, marker_path, site)
+    _assert_relaunch_failure_kept(rec_path, marker_path, site, "unknown")
 
 
 def test_relaunch_oserror_keeps_record_and_marker(site):
@@ -1184,7 +1191,7 @@ def test_relaunch_oserror_keeps_record_and_marker(site):
     run.broken = True
     res = s.relaunch("alpha")
     assert res["ok"] is False
-    _assert_old_record_kept(rec_path, marker_path, site)
+    _assert_relaunch_failure_kept(rec_path, marker_path, site, "unknown")
 
 
 def test_relaunch_record_write_failure_keeps_record_and_marker(site, monkeypatch):
@@ -1202,7 +1209,7 @@ def test_relaunch_record_write_failure_keeps_record_and_marker(site, monkeypatch
     monkeypatch.setattr(s, "_write_record", flaky)
     res = s.relaunch("alpha")
     assert res["ok"] is False
-    _assert_old_record_kept(rec_path, marker_path, site)
+    _assert_relaunch_failure_kept(rec_path, marker_path, site, "launching")
 
 
 def test_audit_caller_is_principal_or_user(site, monkeypatch):
@@ -1863,7 +1870,7 @@ def test_relaunch_record_write_failure_reports_new_id(site, monkeypatch):
     line = json.loads((site.state / "sessions" / "audit.log").read_text().splitlines()[-1])
     assert line["action"] == "relaunch" and line["ok"] is False
     assert f"session started (id {UUID2}) but record write failed" in line["reason"]
-    _assert_old_record_kept(rec_path, marker_path, site)
+    _assert_relaunch_failure_kept(rec_path, marker_path, site, "launching")
 
 
 def test_launch_parameter_refused_after_start_writes_orphan_record(site):
@@ -1979,3 +1986,85 @@ def test_list_state_prefers_agents_row(site):
     go(site, s)
     listed = [r for r in s.list()["sessions"] if r["name"] == "alpha"][0]
     assert listed["state"] == "working"  # the live row wins over the record
+
+
+# ---- slice 3b-ii: relaunch launches through _start (D-3193) ----
+
+
+def test_relaunch_unknown_record_null_id_stops_by_name_then_launches(site):
+    run = FakeRun(stdout="done\n")
+    s = make(site, run, resolve_budget=0.0)
+    res = go(site, s)
+    assert res["ok"] is True and res["session_id"] is None and "warning" in res
+    rec_path = site.state / "sessions" / "alpha.json"
+    assert json.loads(rec_path.read_text())["state"] == "unknown"
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf))
+    run.agents_rows = [{"id": "x", "sessionId": UUID2, "name": "alpha",
+                        "kind": "background", "startedAt": 1_000_000}]
+    run.stdout = "session " + UUID1
+    res = s.relaunch("alpha")
+    assert res["ok"] is True and res["session_id"] == UUID1
+    stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
+    assert stops == [["claude", "stop", UUID2]]  # null id resolved by name, then stopped
+    assert len(run.launch_calls()) == 2
+    rec = json.loads(rec_path.read_text())
+    assert rec["state"] == "running" and rec["session_id"] == UUID1 and rec["stopped_ts"] is None
+    assert not (site.state / "sessions" / "alpha.ready.json").exists()
+
+
+def test_relaunch_stop_not_confirmed_refuses_and_never_sees_bg_argv(site):
+    class UnconfirmedRun(FakeRun):
+        def _finish_rows(self, sid):
+            pass  # the row outlives the stop: the confirmation poll must see it live
+
+    run = UnconfirmedRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    s.mark_ready("alpha", str(hf))
+    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+                        "kind": "background", "state": "running", "startedAt": 1_000_000}]
+    run.stdout = "session " + UUID2
+    with pytest.raises(ParameterRefused, match="stop not confirmed"):
+        s.relaunch("alpha")
+    assert [a[:2] for a, _ in run.calls] == \
+        [["claude", "--bg"], ["claude", "stop"], ["claude", "agents"]]
+    assert len(run.launch_calls()) == 1  # the relaunch never handed the run a --bg argv
+    rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
+    assert rec["session_id"] == UUID1 and rec["stopped_ts"] is None  # fail closed: unchanged
+    assert (site.state / "sessions" / "alpha.ready.json").exists()
+
+
+def test_relaunch_launch_failure_record_state_follows_start(site):
+    class FailRun(FakeRun):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.fail_mode = None
+
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["claude", "--bg"] and self.fail_mode == "timeout":
+                raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+            return super().__call__(argv, **kw)
+
+    run = FailRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, marker_path = _ready(site, run, s)
+    run.stdout = "session " + UUID2
+
+    run.fail_mode = "timeout"  # the process may have started: "unknown" per _start
+    with pytest.raises(subprocess.TimeoutExpired):
+        s.relaunch("alpha")
+    rec = json.loads(rec_path.read_text())
+    assert rec["state"] == "unknown" and rec["stopped_ts"] is None
+    assert marker_path.exists()  # marker kept: a retry can relaunch
+
+    run.fail_mode = None
+    run.launch_rc = 1  # claude exits non-zero: "stopped" per _start
+    res = s.relaunch("alpha")
+    assert res["ok"] is False and res["session_id"] is None
+    rec = json.loads(rec_path.read_text())
+    assert rec["state"] == "stopped" and rec["stopped_ts"] is not None
+    assert marker_path.exists()

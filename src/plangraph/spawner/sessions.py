@@ -862,45 +862,29 @@ class Sessions:
         bg_argv, env = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv, prompt_arg)
-        if rec.get("stopped_ts") is None:
-            # A record without a session id is left to _stop_record (D-3193):
-            # it resolves a null id by name first. Raises "stop failed"
-            # -> nothing is launched.
+        # The old session is stopped BEFORE the relaunch (D-3193): anything not
+        # recorded as stopped is stopped and confirmed by _stop_record (a null
+        # id is resolved by name there); a stopped record's id may have
+        # outlived its stop - `claude agents --json` is the source of truth and
+        # a listed id outside a finished/stopped state is stopped first, a
+        # failed stop refuses the relaunch and nothing is launched, while an
+        # unlisted id is gone for good and proceeds untouched.
+        if _state(rec) != "stopped":
             self._stop_record(rec, name)
         elif old_sid:
-            # The record says stopped, but the session may have outlived its
-            # stop: `claude agents --json` is the source of truth. A listed id
-            # outside a finished/stopped state is stopped first - a failed stop
-            # refuses the relaunch, nothing is launched - while an unlisted id
-            # is gone for good and proceeds untouched.
             row = next((r for r in self._agents_rows_strict()
                         if r.get("sessionId") == old_sid), None)
             if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
                 self._stop_record(rec, name)
         new_rec = dict(rec)
-        try:
-            sid, warning = self._run_launch(
-                name, bg_argv, env, cwd_path, prompt_arg, exclude=old_sid)
-            new_rec.update({"session_id": sid, "job_id": sid[:8] if sid else None,
-                            "stopped_ts": None, "ts": self._now(),
-                            "handoff": str(handoff_path) if handoff_path else None})
-            try:
-                self._write_record(name, new_rec)
-            except (OSError, ValueError) as exc:
-                # The new session is running: its id must survive the failure
-                # or the session is untracked (round 4).
-                raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}") from exc
-        except BaseException:
-            # ANY failure after the stop keeps the old record (with stopped_ts)
-            # and the ready marker so a plain retry can relaunch; the marker is
-            # removed only after the new record is written (R-21).
-            if rec.get("stopped_ts") is None:
-                rec["stopped_ts"] = self._now()
-            try:
-                self._write_record(name, rec)
-            except (OSError, ValueError):
-                pass  # the disk already holds the old record
-            raise
+        new_rec["handoff"] = str(handoff_path) if handoff_path else None
+        # The relaunch starts through _start (D-3193): the write-ahead record
+        # and every outcome - running, unknown, stopped - are _start's to
+        # write; a failure propagates with the old session already stopped.
+        sid, warning = self._start(name, new_rec, bg_argv, env, cwd_path, prompt_arg,
+                                   exclude=old_sid)
+        # The ready marker is unlinked only after _start returned: a failed
+        # relaunch keeps it so a plain retry can relaunch (R-21).
         try:
             self._marker_path(name).unlink(missing_ok=True)
         except (OSError, ValueError) as exc:
