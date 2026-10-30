@@ -105,6 +105,9 @@ TOOLS_METADATA = [
 
 # D-3244: the schema names the field route refuses without, so callers send it.
 CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': {
+    'stall_min': {'type': 'number', 'exclusiveMinimum': 0},
+    'first_edit_min': {'type': 'number', 'exclusiveMinimum': 0},
+    'max_min': {'type': 'number', 'exclusiveMinimum': 0},
     'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
     'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}
 for _tool in TOOLS_METADATA:

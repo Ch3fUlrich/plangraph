@@ -1,7 +1,6 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
 from plangraph.routing_errors import ParameterRefused
-
 import asyncio
 from dataclasses import asdict
 import hashlib
@@ -15,11 +14,7 @@ import uuid
 from .runner import SpawnerRunner
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
-
-
 OUTPUT_KEEP = 65536   # bytes of stdout a run record keeps
-
-
 def keep_output(text, limit=OUTPUT_KEEP):
     """Whole ``text`` up to ``limit`` bytes; beyond it the head (verdict) and the tail, marked."""
     data = text.encode()
@@ -28,8 +23,6 @@ def keep_output(text, limit=OUTPUT_KEEP):
     head = limit // 4
     return (data[:head].decode('utf-8', errors='ignore') + '\n[... output truncated ...]\n'
             + data[-(limit - head):].decode('utf-8', errors='ignore'))
-
-
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -309,6 +302,8 @@ class SpawnService(SeatSpawnMixin):
 
         async def execute():
             try:
+                from .run_watchdog import prepare_run, terminal_record
+                limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
                     from .inline_diff import InlineDiffError
@@ -322,7 +317,9 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness)
+                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log)
+                    if hasattr(self, '_running_records'):
+                        self._running_records[job.job_id] = record
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
@@ -332,6 +329,8 @@ class SpawnService(SeatSpawnMixin):
                     if task:
                         await asyncio.shield(task)
                     stop = self.runner.provider_responses.get(job.job_id)
+                    if terminal_record(record, job):
+                        break
                     from .env_redact import unavailable_reason
                     unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
                     if unavailable:
@@ -372,6 +371,7 @@ class SpawnService(SeatSpawnMixin):
                     record.update(status='failed', exit_code=1, error=str(exc))
             finally:
                 record['ended'] = time.time()
+                getattr(self, '_running_records', {}).pop(record.get('job_id'), None)
                 self._save(record)
 
         task = asyncio.create_task(execute())

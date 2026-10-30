@@ -123,6 +123,7 @@ class JobInfo:
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
+    last_activity_ts: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -288,6 +289,7 @@ class SpawnerRunner:
     def __init__(self, default_cwd: str | None = None, *, process_factory=None, tree_killer=None):
         self.default_cwd = default_cwd or os.getcwd()
         self.jobs: dict[str, JobInfo] = {}
+        self.on_sample = None
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self.process_factory = process_factory or asyncio.create_subprocess_exec
@@ -368,6 +370,7 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
+        watchdog=None, live_log=None,
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
@@ -544,6 +547,10 @@ class SpawnerRunner:
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
+            from .run_watchdog import thresholds, edit_signature
+            job._watchdog_limits = watchdog or thresholds()
+            job._live_log = live_log
+            job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
             if tools_event:
                 job.events.append(tools_event)
 
@@ -710,33 +717,11 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
-            payload = self._stdin_payloads.get(job_id)
-
-            async def _comm(input_data):
-                if input_data is not None:
-                    try:
-                        return await proc.communicate(input=input_data)
-                    except TypeError:
-                        pass
-                return await proc.communicate()
-
-            timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
-            if timeout:
-                try:
-                    seconds = float(timeout)
-                    if not math.isfinite(seconds) or seconds <= 0:
-                        raise ValueError('invalid run timeout')
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(_comm(payload), seconds)
-                except (asyncio.TimeoutError, ValueError):
-                    await self._reap_process(job_id, proc)
-                    stdout_bytes, stderr_bytes = await proc.communicate()
-                    self.jobs[job_id].events.append({'event': 'run_timeout'})
-                    self.jobs[job_id].exit_code = 124
-            else:
-                stdout_bytes, stderr_bytes = await _comm(payload)
+            from .run_watchdog import collect
+            stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].exit_code == 124 else proc.returncode
+            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].status in ('stalled', 'timeout') else proc.returncode
 
             job = self.jobs[job_id]
             # Only the fork's exact stderr transport envelope is evidence.
@@ -766,7 +751,8 @@ class SpawnerRunner:
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
-            job.status = "completed" if exit_code == 0 else "failed"
+            if job.status not in ('stalled', 'timeout'):
+                job.status = "completed" if exit_code == 0 else "failed"
             from .opencode_isolation import fail_unchanged_writer
             await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
@@ -796,10 +782,10 @@ class SpawnerRunner:
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
             if job_id in self.jobs:
-                if self.jobs[job_id].status != "failed":
+                if self.jobs[job_id].status not in ('failed', 'stalled', 'timeout'):
                     self.jobs[job_id].status = "cancelled"
+                    self.jobs[job_id].exit_code = 1
                 self.jobs[job_id].end_time = time.time()
-                self.jobs[job_id].exit_code = 1
         except Exception as exc:
             job = self.jobs[job_id]
             job.status = 'failed'
@@ -969,11 +955,14 @@ def spawn_service(*args, **kwargs):
             self.completion_sink = completion_sink or FileInbox(self.state)
             from .notify import KeeperSink
             self.keeper_sink = keeper_sink or KeeperSink()
+            self._running_records = {}
+            self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
         def _save(self, record, *, retry=False):
             from .notify import completion_event, CommandSink, KeeperNotConfigured
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
+                record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
                 for stream in ('stdout', 'stderr'):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
@@ -1064,6 +1053,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
+            from .run_watchdog import thresholds
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1112,6 +1102,9 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
+                    limits = thresholds(card)
+                    live_log = str(self._path(run_id).parent / 'live.log')
+                    record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
@@ -1125,7 +1118,8 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness)
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log)
+                        self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
                                       writer_family=chosen.family,
@@ -1135,6 +1129,10 @@ def spawn_service(*args, **kwargs):
                         if task:
                             await asyncio.shield(task)
                         stop = self.runner.provider_responses.get(job.job_id)
+                        if job.status in ('stalled', 'timeout'):
+                            record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
+                                watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')), events=job.events)
+                            return
                         reason = None
                         unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
                         if unavailable:
@@ -1199,6 +1197,7 @@ def spawn_service(*args, **kwargs):
                     if record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
+                    self._running_records.pop(record.get('job_id'), None)
                     self._save(record)
 
             task = asyncio.create_task(execute())
