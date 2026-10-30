@@ -16,7 +16,7 @@ def gateway_models():
     env = dict(os.environ)
     base = effective_gateway_base_url(env)
     if not base:
-        return set()
+        raise OSError('gateway unreachable: no base URL')
     add_host_keys(env, 'omniroute/models', needs_gateway=True)
     url = base.rstrip('/')
     url += '/models' if url.endswith('/v1') else '/v1/models'
@@ -28,16 +28,20 @@ def gateway_models():
 def opencode_models():
     exe = shutil.which('opencode')
     if not exe:
-        return set()
+        raise OSError('opencode unreachable: executable missing')
     if os.name == 'nt' and Path(exe).suffix.lower() in ('.cmd', '.bat'):
         sibling = Path(exe).parent / 'node_modules/@opencode/cli/bin/opencode.exe'
         if sibling.is_file():
             exe = str(sibling)
-    result = subprocess.run([exe, 'models'], capture_output=True, text=True, timeout=20, check=True)
-    return {line.strip() for line in result.stdout.splitlines() if '/' in line.strip() and ' ' not in line.strip()}
+    result = subprocess.run([exe, 'models'], capture_output=True, text=True,
+                            encoding='utf-8', errors='replace', timeout=20, check=True)
+    import re
+    lines = [re.sub(r'\x1b\[[0-9;]*m', '', line).strip() for line in result.stdout.splitlines()]
+    return {line.split()[0] for line in lines if line and
+            re.fullmatch(r'[\w./:#-]+', line.split()[0])}
 
 
-def cached_models(source, loader, *, state=None, clock=time.time):
+def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
     from plangraph.routing_support.private_io import atomic_write_private
     state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE') or
                  Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph/spawn')
@@ -55,8 +59,10 @@ def cached_models(source, loader, *, state=None, clock=time.time):
         pass
     try:
         models = set(loader())
-    except Exception:
-        models = set()
+    except Exception as exc:
+        if strict:
+            raise OSError(source + ' unreachable') from exc
+        return set()
     try:
         state.mkdir(parents=True, exist_ok=True)
         atomic_write_private(path, json.dumps({'time': now, 'models': sorted(models)}))
@@ -65,7 +71,7 @@ def cached_models(source, loader, *, state=None, clock=time.time):
     return models
 
 
-def validate_model(model, *, gateway_list=None, opencode_list=None):
+def validate_model(model, *, gateway_list=None, opencode_list=None, state=None):
     from plangraph.routing_support.resolver import get_catalog_models, catalog_row_admitted, OPERATOR_REMOVED_MODELS
     from plangraph.mimo_policy import check_mimo_path
     from .legs import DEFAULT_LEGS
@@ -74,16 +80,27 @@ def validate_model(model, *, gateway_list=None, opencode_list=None):
     check_mimo_path(model)
     rows = get_catalog_models()
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
+    unreachable = []
+    def lookup(source, explicit, loader):
+        try:
+            if explicit is not None:
+                return set(explicit() if callable(explicit) else explicit)
+            return cached_models(source, loader, state=state, strict=True)
+        except Exception:
+            unreachable.append(source)
+            return set()
     if model not in inactive | OPERATOR_REMOVED_MODELS:
         if model in {row['id'] for row in rows if catalog_row_admitted(row)} | {leg.model for leg in DEFAULT_LEGS}:
             return model
         if model.startswith('omniroute/'):
-            listed = safe_list(gateway_list) if gateway_list else cached_models('gateway', gateway_models)
+            listed = lookup('gateway', gateway_list, gateway_models)
             if model.partition('/')[2] in listed:
                 return model
-        listed = safe_list(opencode_list) if opencode_list else cached_models('opencode', opencode_models)
-        if '/' in model and model in listed:
+        listed = lookup('opencode', opencode_list, opencode_models)
+        if model in listed:
             return model
+    if unreachable:
+        raise SpawnRefused('could not verify model: ' + ', '.join(unreachable) + ' unreachable: ' + model)
     raise SpawnRefused('unknown model (not in catalog, gateway list or opencode models): ' + model)
 
 

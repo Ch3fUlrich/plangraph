@@ -36,6 +36,20 @@ def test_cache_ttl_and_unavailable(tmp_path, monkeypatch):
     def fail():
         raise OSError('unreachable')
     assert cached_models('bad', fail, state=tmp_path, clock=lambda: 100) == set()
+    assert not (tmp_path / 'model-list-bad.json').exists()
+
+
+def test_unreachable_is_not_unknown(tmp_path):
+    from plangraph.planner.model_admission import validate_model
+    def fail():
+        raise OSError('offline')
+    with pytest.raises(SpawnRefused, match='unreachable'):
+        validate_model('omniroute/new', gateway_list=fail, opencode_list=lambda: set())
+
+
+def test_providerless_host_model():
+    from plangraph.planner.model_admission import validate_model
+    assert validate_model('future-local', opencode_list=lambda: {'future-local'}) == 'future-local'
 
 
 def test_removed_never_looks_up():
