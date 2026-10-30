@@ -121,3 +121,15 @@ def test_opencode_go_qwen_never_a_seat(tmp_path, monkeypatch):
                                   model='opencode-go/qwen3.8-flash', writer_families=['claude'],
                                   override_reason='operator selection', dry_run=True))
     assert not (tmp_path / 'spawn-overrides.jsonl').exists()
+
+
+def test_mcp_card_schema_names_estimate_tokens():
+    # D-3244: live callers sent cards without estimate_tokens and got a bare 'card required'.
+    from plangraph.spawner.mcp import TOOLS_METADATA
+    from plangraph.planner.routing import SpawnRefused, plan_spawn
+    schemas = {t['name']: t['inputSchema']['properties']['card'] for t in TOOLS_METADATA
+               if 'card' in t['inputSchema']['properties']}
+    assert {'plangraph_agent_spawn', 'plangraph_agent_route'} <= set(schemas)
+    assert all(s['required'] == ['estimate_tokens'] for s in schemas.values())
+    with pytest.raises(SpawnRefused, match='missing estimate_tokens'):
+        plan_spawn({'risk': 'high'}, role='review', writer_families=['claude'])

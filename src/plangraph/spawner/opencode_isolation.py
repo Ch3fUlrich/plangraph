@@ -57,6 +57,8 @@ UNCHECKED = {'event': 'writer_change_unchecked', 'reason': 'cwd shared with a li
 def record_baseline(job, work_dir, live_jobs=()):
     """Hash the tree before a writer starts. A cwd shared with another live writer leaves
     both unchecked (a whole-tree hash cannot tell their changes apart) and says so."""
+    if job.role not in WRITER_ROLES:
+        return
     sharers = [o for o in live_jobs if o.role in WRITER_ROLES and o.cwd == job.cwd
                and o.status == 'running' and o.job_id != job.job_id]
     if sharers:

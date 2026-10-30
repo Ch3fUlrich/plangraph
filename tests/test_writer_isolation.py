@@ -125,6 +125,8 @@ def test_writers_sharing_a_cwd_are_both_left_unchecked(tmp_path):
     assert a.events[0]['event'] == 'writer_baseline'
     record_baseline(b, work, [a, b, seat])
     assert UNCHECKED in a.events and UNCHECKED in b.events and not seat.events
+    record_baseline(seat, work, [a, b, seat])   # r3 seat (mimo-pro): a review seat marks nobody
+    assert a.events.count(UNCHECKED) == 1 and not seat.events
     a.status = 'completed'
     fail_unchanged_writer(a, work)
     assert a.status == 'completed'
@@ -143,14 +145,16 @@ def test_unchanged_check_ignores_non_writer_roles(tmp_path):
 @pytest.mark.parametrize('env', [{'HOME': '/srv/u', 'XDG_CONFIG_HOME': '/srv/u/.config'},
                                  {'USERPROFILE': r'D:\profiles\u', 'APPDATA': r'D:\profiles\u\AppData\Roaming'}])
 def test_config_layers_close_independent_of_platform_home(env):
-    # r2 seat (mimo-pro): the closed layers do not depend on HOME/XDG (POSIX) or USERPROFILE (Windows).
+    # r2 seat (mimo-pro): the closed layers do not read HOME/XDG (POSIX) or USERPROFILE (Windows).
+    # Env-shape only: a real Windows global-layer run stays an operator check (docstring).
     import shutil
-    from plangraph.spawner.opencode_isolation import close_config_layers
+    from plangraph.spawner.opencode_isolation import CLOSED_LAYERS, close_config_layers
     child = dict(env)
     oc_dir = close_config_layers(child)
     try:
         assert child['OPENCODE_CONFIG_DIR'] == oc_dir and Path(child['OPENCODE_CONFIG']).parent == Path(oc_dir)
         assert all(not oc_dir.startswith(v) for v in env.values())
         assert json.loads(Path(child['OPENCODE_CONFIG']).read_text()) == {}
+        assert all(child[k] == v for k, v in CLOSED_LAYERS.items())
     finally:
         shutil.rmtree(oc_dir)
