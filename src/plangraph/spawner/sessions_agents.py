@@ -56,7 +56,7 @@ class _AgentsMixin:
         resolved = self._which("claude")
         if not resolved:
             raise _refuse("claude not found on PATH; refusing shim-less Windows launch")
-        if not str(resolved).endswith(".exe"):
+        if not str(resolved).lower().endswith(".exe"):
             raise _refuse(f"claude must resolve to an .exe, not a shim: {resolved}")
         return [str(resolved)]
 

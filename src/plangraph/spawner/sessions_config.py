@@ -22,6 +22,8 @@ SESSION_CONFIG_KEYS = frozenset({
     "style_text", "compact_window", "ctx_cap_tokens",
 })
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_WIN_DEVICES = frozenset({"con", "prn", "aux", "nul"})
+_WIN_PORTS_RE = re.compile(r"(?:com|lpt)[1-9]\Z")
 
 
 def _refuse(message):
@@ -168,7 +170,31 @@ class _ConfigMixin:
             # <name>.ready.json is the ready-marker file name: a session name
             # with that suffix would collide with its own marker.
             raise _refuse("name must not end with .ready")
+        base = name.split(".")[0].casefold()
+        if base in _WIN_DEVICES or _WIN_PORTS_RE.fullmatch(base):
+            # Windows resolves con/aux/nul/com1.. to devices regardless of the
+            # extension and the case: the record path would not be a file.
+            raise _refuse(f"name is a reserved device name: {name}")
+        clash = self._case_clash(name)
+        if clash is not None:
+            raise _refuse(f"name clashes with existing session {clash} (case-insensitive)")
         return name
+
+    def _case_clash(self, name):
+        """Existing record file whose stem differs from ``name`` only by case:
+        on a case-insensitive filesystem a launch under that name would
+        overwrite the live session's record (r6 seat finding). The clashing
+        file's stem, or None. A glob failure means no clash (fail-closed
+        elsewhere; here an unreadable directory must not veto every name)."""
+        try:
+            stems = [p.stem for p in self._sessions.glob("*.json")
+                     if not p.name.endswith(".ready.json")]
+        except OSError:
+            return None
+        for stem in stems:
+            if stem != name and stem.casefold() == name.casefold():
+                return stem
+        return None
 
     def _check_cwd(self, cwd, cfg):
         if not isinstance(cwd, str) or not cwd:
