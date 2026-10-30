@@ -2,7 +2,9 @@
 
 ## Spawn by card
 
-Install on each host; use `python -m plangraph.spawner.cli` (or `python tools/plangraph-spawn.py` from a checkout). No central keeper or Temporal service is required.
+Install the package on each host, then use `python -m plangraph.spawner.cli`
+(or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
+or Temporal service is required for this slice.
 
 ```bash
 python -m plangraph.spawner.cli route --card @card.json --role implement --json
@@ -12,8 +14,10 @@ python -m plangraph.spawner.cli ps
 python -m plangraph.spawner.cli result run-ID
 ```
 
-Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise `PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
-`--dry-run` plans without a child. Spawn returns a `wait_cmd`: `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
+Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise
+`PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
+`--dry-run` plans without a child. Spawn returns a `wait_cmd`:
+`plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
@@ -623,13 +627,11 @@ The Pro provider limits follow the catalog seed (1,000,000 context and 65,536
 output); Flash follows the catalog seed's 1,000,000 context limit. The unused OmniRoute
 model registry is omitted while its transport configuration remains available.
 # Routing hardening
-
 Mimo IDs are case-sensitive: only `mimo/mimo-v2.6-flash` and
 `mimo/mimo-v2.6-pro` are accepted. Mixed-case variants are refused.
 SQLite files are created privately before connecting. On Windows, mode bits do
 not establish a private ACL; operators must secure the state directory ACL.
 # Round-five failure contracts
-
 Spawn refusals, including CLI/MCP preflight failures, persist private run records
 with an exit code. Codes are 1 for execution/I/O failure, 2 for card/policy
 refusal, 3 for benchmark policy/data failure, 4 for exhausted provider legs (status
@@ -641,16 +643,15 @@ State queries do not initialize empty SQLite files. AST fanout that cannot read
 or parse a Python file is unknown (`not_measured`), conservatively treated as
 fanout 13 for sizing. Routing exclusion reasons are typed metadata, not parsed
 exception messages. JSON-RPC requests must explicitly include `jsonrpc: "2.0"`.
-Every model admission requires exact membership in the resolver catalog or
-registered DEFAULT_LEGS. Case-insensitive Mimo detection chooses error text only;
-it is not an admission gate. Unknown IDs, including glued and homoglyph variants,
-are typed `SpawnRefused` failures.
+Every model admission requires a catalog/DEFAULT_LEGS entry, a gateway-listed
+`omniroute/<id>`, or a host `opencode models` listing (D-3259). Case-insensitive
+Mimo detection chooses error text only; it is not an admission gate. Unknown IDs,
+including glued and homoglyph variants, are typed `SpawnRefused` failures.
 
 For source checkouts, add the repository's `tools` directory to PATH to expose
 the executable `plangraph-spawn` entry point (or use
 `python -m plangraph.spawner.cli`).
 # Completion delivery contract
-
 Completion events carry `idempotency_key = run_id + ':' + status`. Delivery is
 retryable: a delivered-marker write can fail after a successful sink call.
 Each sink MUST durably deduplicate that key per recipient before exposing an
@@ -659,7 +660,6 @@ its inbox lock. Command bridges must implement the same contract at the remote
 sink; a successful command exit alone cannot guarantee exactly-once effects.
 `test_marker_failure_sink_exactly_once` pins marker-failure replay behavior.
 # Fixer writers and remaining gaps
-
 Cards may carry `findings`, each with `text` and optional `files`. The pure
 `split_findings` helper, also exposed through `plan_spawn.writer_groups`, merges
 connected file ownership before balancing components into roughly ten-finding
@@ -680,7 +680,6 @@ nonzero exit codes, review runs, and continuation-limit refusals record their
 reason in `continuation_reason`. Dry runs never continue. Live execution proof
 belongs to L2/L1; unit tests use synthetic processes.
 # Live completion delivery identity
-
 The spawner's keeper completion sink posts `phase=finished` to
 `POST /v1/record_run`. Set `PG_URL` to the keeper API base URL and
 `PG_TOKEN_FILE` to a file containing a **spawner-role** bearer token. Set
@@ -719,10 +718,11 @@ The writer must not run this against the live keeper; build-L1 owns live proof.
 The local marker follows acknowledgement: writing it before sending would lose
 events on crash. Exactly-once visibility across marker failure instead relies
 on the keeper's atomic `(item, run_id, phase)` idempotency key.
+# Credit tier (D-3258)
+
+`console-sonnet-5.5` (implement/review), `console-opus-5.5` (review/orchestrate), and `console-haiku-5.5` (review) use prepaid credits. Credit precedes trial/free/subscription/paid; Sonnet leads writers, other roles sort by tier. Claude writers get non-Claude seats; host checks still apply.
+`route_policy.json` key `credit_tiers` maps provider prefixes to `expires` (YYYY-MM-DD) and optional `note`; unconfigured/expired credit is skipped as `credit_expired`. `expires` is the credit's last usable day (UTC): the console tier runs through 2026-11-30 and is gated from 2026-12-01. Attempts append private `<spawn state dir>/credit-spend.jsonl`; `python -m plangraph.spawner.cli credits` prints a human table of expiry, days left, runs and null-safe costs/tokens, and only `--json` emits machine-readable JSON.
+Model admission (D-3259): explicit audited overrides admit catalog/registered models, gateway-listed `omniroute/<id>`, or host `opencode models` IDs. Private list cache TTL: `PLANGRAPH_MODEL_LIST_TTL_S` (600 seconds). Removals, inactive rows and MiMo policy still win; automatic routes are unchanged. Interim DECISIONS 2.4 exception: L1s may run opencode directly when the spawner cannot serve a model.
 # Review policy
 
 See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.
-### Credit tier (D-3258)
-`console-sonnet-5.5` (implement/review), `console-opus-5.5` (review/orchestrate), and `console-haiku-5.5` (review) use prepaid credits. Credit precedes trial/free/subscription/paid; Sonnet leads writers, other roles sort by tier. Claude writers get non-Claude seats; host checks still apply.
-`route_policy.json` key `credit_tiers` maps provider prefixes to `expires` (YYYY-MM-DD) and optional `note`; unconfigured/expired credit is skipped as `credit_expired`. Console expiry: 2026-11-30 UTC. Attempts append private `<spawn state dir>/credit-spend.jsonl`; `python -m plangraph.spawner.cli credits --json` reports expiry, days left, runs, null-safe costs and tokens.
-Model admission (D-3259): explicit audited overrides admit catalog/registered models, gateway-listed `omniroute/<id>`, or host `opencode models` IDs. Private list cache TTL: `PLANGRAPH_MODEL_LIST_TTL_S` (600 seconds). Removals, inactive rows and MiMo policy still win; automatic routes are unchanged. Interim DECISIONS 2.4 exception: L1s may run opencode directly when the spawner cannot serve a model.

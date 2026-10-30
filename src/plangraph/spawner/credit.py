@@ -153,7 +153,8 @@ def record_spend(state, record, leg, job, *, env=None, db_path=None):
 def credit_report(state, *, policy=None, today=None):
     from plangraph.planner.route_policy import load_route_policy
     policy = policy or load_route_policy()
-    today = today or datetime.now(timezone.utc).date()
+    # The same frozen today the policy gates credit with, never a second clock.
+    today = today or policy.today
     try:
         entries, malformed = read_entries(Path(state) / 'credit-spend.jsonl')
     except OSError as exc:

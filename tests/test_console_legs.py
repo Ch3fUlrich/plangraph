@@ -107,3 +107,40 @@ def test_console_probe_unavailable_is_not_admitted():
     from plangraph.routing_support.resolver import host_skip_reason
     assert host_skip_reason({'model': 'console-anthropic/claude-sonnet-5-5', 'harness': 'opencode'},
                             probe=lambda env: None).startswith('not_served_on_host')
+
+
+def test_credit_expiry_boundary_pinned():
+    leg = next(l for l in DEFAULT_LEGS if l.tier == 'credit')
+    config = {'console-anthropic': {'expires': '2026-11-30'}}
+    verdicts = ((date(2026, 11, 29), None), (date(2026, 11, 30), None),
+                (date(2026, 12, 1), 'credit_expired'))
+    for day, expect in verdicts:
+        assert RoutePolicy(credit_tiers=config, today=day).skip_reason(leg, 'implement') == expect
+
+
+def test_credit_report_uses_policy_today(tmp_path):
+    from plangraph.spawner.credit import credit_report
+    policy = RoutePolicy(credit_tiers={'console-anthropic': {'expires': '2026-11-30'}},
+                         today=date(2026, 11, 29))
+    assert credit_report(tmp_path, policy=policy)[0]['days_left'] == 1
+
+
+def test_expiry_documented_as_last_usable_day():
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    policy = json.loads((root / 'src/plangraph/planner/route_policy.json').read_text(encoding='utf-8'))
+    entry = policy['credit_tiers']['console-anthropic']
+    assert 'last usable day' in entry.get('note', '').lower()
+    docs = (root / 'docs/SPAWNER.md').read_text(encoding='utf-8')
+    assert 'last usable day' in docs.lower()
+
+
+def test_credit_tier_is_own_top_level_section():
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    docs = (root / 'docs/SPAWNER.md').read_text(encoding='utf-8')
+    assert re.search(r'^# Credit tier \(D-3258\)$', docs, re.M)
+    assert 'Install the package on each host, then use' in docs
+    assert '`--state PATH` precedes the verb; otherwise' in docs
