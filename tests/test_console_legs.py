@@ -26,6 +26,18 @@ def test_credit_expiry():
     assert RoutePolicy().skip_reason(leg, 'implement') == 'credit_expired'
 
 
+@pytest.mark.parametrize('entry', [{}, {'expires': 'nov'}, {'expires': None}])
+def test_in_process_invalid_credit_expiry(entry):
+    leg = next(l for l in DEFAULT_LEGS if l.tier == 'credit')
+    assert RoutePolicy(credit_tiers={'console-anthropic': entry}).skip_reason(leg, 'implement') == 'credit_expired'
+
+
+def test_credit_last_usable_day():
+    leg = next(l for l in DEFAULT_LEGS if l.tier == 'credit')
+    policy = RoutePolicy(credit_tiers={'console-anthropic': {'expires': '2026-11-30'}}, today=date(2026, 11, 30))
+    assert policy.skip_reason(leg, 'implement') is None
+
+
 def test_spend_store_and_missing(tmp_path):
     import json
     import sqlite3
@@ -52,7 +64,7 @@ def test_spend_store_and_missing(tmp_path):
 def test_credits_cli(tmp_path, capsys, monkeypatch):
     import json
     from plangraph.spawner.cli import main
-    monkeypatch.delenv('PLANGRAPH_ROUTE_POLICY')
+    monkeypatch.delenv('PLANGRAPH_ROUTE_POLICY', raising=False)
     assert main(['--state', str(tmp_path), 'credits', '--json']) == 0
     assert json.loads(capsys.readouterr().out)[0]['provider'] == 'console-anthropic'
 

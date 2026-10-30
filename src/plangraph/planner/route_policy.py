@@ -33,7 +33,7 @@ class RoutePolicy:
     off_families: tuple[str, ...] = ()
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     credit_tiers: Mapping[str, dict] = field(default_factory=dict)
-    today: date | None = None
+    today: date = field(default_factory=lambda: datetime.now(timezone.utc).date())
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -43,7 +43,11 @@ class RoutePolicy:
     def skip_reason(self, leg, role: str) -> str | None:
         if leg.tier == 'credit':
             entry = self.credit_tiers.get(leg.model.partition('/')[0])
-            if not entry or date.fromisoformat(entry['expires']) < (self.today or datetime.now(timezone.utc).date()):
+            try:
+                expires = date.fromisoformat(entry['expires'])
+            except (KeyError, TypeError, ValueError):
+                return 'credit_expired'
+            if expires < self.today:
                 return 'credit_expired'
         # Keeper families too: "zhipu" bans glm legs, "deepseek" every deepseek spelling.
         from .seats import seat_family
