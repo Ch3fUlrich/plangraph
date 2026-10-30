@@ -259,11 +259,13 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
-            if review_of and chosen.family == self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family'):
+            from plangraph.planner.seats import seat_family, writer_parts
+            reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
+            if reviewed and seat_family(chosen.family) == seat_family(reviewed):
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
-            writers = {w for w in writer_families if w}
-            if role == 'review' and writers and writers <= {chosen.family}:
+            writers = writer_parts(writer_families) if role == 'review' else set()
+            if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
         else:

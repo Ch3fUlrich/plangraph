@@ -36,12 +36,14 @@ class SeatSpawnMixin:
                            benchmark=options.pop('benchmark'), require_bench=options.pop('require_bench'))
         if plan.error:
             raise SpawnRefused(plan.error)
-        seat_families = {s.family for s in plan.review_seats}
+        from plangraph.planner.seats import seat_family
+        # Keeper families: gpt/openai and claude/anthropic are one family each.
+        seat_families = {seat_family(s.family) for s in plan.review_seats}
         spares = []
         for spare in plan.legs:
-            if spare.family not in seat_families:
+            if seat_family(spare.family) not in seat_families:
                 spares.append(spare)
-                seat_families.add(spare.family)   # one spare per family
+                seat_families.add(seat_family(spare.family))   # one spare per family
         n = len(plan.review_seats)
         group = 'seats-' + uuid.uuid4().hex
         coverage = {c['leg']: c for c in plan.seat_coverage}
@@ -58,11 +60,12 @@ class SeatSpawnMixin:
         runs = [self.save_refusal(r, role, seat_leg=seat.id, plan={'seat_coverage': [own[i]]})
                 if isinstance(r, Exception) else r
                 for i, (seat, r) in enumerate(zip(plan.review_seats, runs))]
+        records = [r for r in runs if not isinstance(r, BaseException)]
+        envelope = {'seat_group': group, 'seats': records, 'seat_coverage': list(plan.seat_coverage)}
+        self._save_seat_group(envelope)   # before any re-raise: launched seats keep their group
         for r in runs:
             if isinstance(r, BaseException):
                 raise r
-        envelope = {'seat_group': group, 'seats': runs, 'seat_coverage': list(plan.seat_coverage)}
-        self._save_seat_group(envelope)
         return envelope
 
     def _save_seat_group(self, envelope):

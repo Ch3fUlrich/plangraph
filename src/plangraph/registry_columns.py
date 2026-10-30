@@ -41,7 +41,7 @@ ADDED_COLUMNS = (
     ("catalog_models", "harness",
      "TEXT CHECK (harness IS NULL OR harness IN ('qodercli', 'opencode', 'agy'))"),
     ("catalog_models", "tool_mode",
-     "TEXT NOT NULL DEFAULT 'tools' CHECK (tool_mode IN ('tools', 'inline-only'))"),
+     "TEXT CHECK (tool_mode IS NULL OR tool_mode IN ('tools', 'inline-only'))"),
 )
 
 
@@ -60,11 +60,15 @@ def migrate(conn: sqlite3.Connection) -> None:
 
 
 def derive(conn: sqlite3.Connection) -> None:
-    """Fill harness/tool_mode on rows that lack them (older or imported rows)."""
+    """Fill harness/tool_mode on rows that lack them (older or imported rows).
+
+    Only NULL cells are filled: a value set in the catalog (an operator edit) stays.
+    """
     for provider, harness in PROVIDER_HARNESS.items():
         if harness is not None:
             conn.execute("UPDATE catalog_models SET harness = ? "
                          "WHERE provider_id = ? AND harness IS NULL", (harness, provider))
     for model in sorted(INLINE_ONLY_MODELS):
         conn.execute("UPDATE catalog_models SET tool_mode = 'inline-only' "
-                     "WHERE model_id = ?", (model,))
+                     "WHERE model_id = ? AND tool_mode IS NULL", (model,))
+    conn.execute("UPDATE catalog_models SET tool_mode = 'tools' WHERE tool_mode IS NULL")

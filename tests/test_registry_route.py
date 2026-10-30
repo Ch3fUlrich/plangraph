@@ -192,8 +192,9 @@ def test_seat_may_share_family_with_another_writer_part():
     assert plan.error is None
     assert set(_families(plan)) == {"qwen", "gpt"}
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
-    assert plan.seat_coverage == ({"leg": "qodercli-qwen3.8-flash", "covers": ["gpt"]},
-                                  {"leg": "cx-gpt-6-luna", "covers": ["qwen"]})
+    # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
+    assert plan.seat_coverage == ({"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]},
+                                  {"leg": "cx-gpt-6-luna", "covers": ["alibaba"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():

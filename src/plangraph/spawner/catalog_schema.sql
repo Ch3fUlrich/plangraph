@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS catalog_models (
     -- Runner harness that serves this id (planner/legs.py HARNESSES); NULL = none.
     harness TEXT CHECK (harness IS NULL OR harness IN ('qodercli', 'opencode', 'agy')),
     -- Review input: own tools, or a diff the spawner inlines (D-3134/D-3173).
-    tool_mode TEXT NOT NULL DEFAULT 'tools' CHECK (tool_mode IN ('tools', 'inline-only'))
+    tool_mode TEXT CHECK (tool_mode IS NULL OR tool_mode IN ('tools', 'inline-only'))
 );
 
 CREATE TABLE IF NOT EXISTS catalog_benchmarks (

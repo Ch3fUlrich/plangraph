@@ -113,7 +113,15 @@ def test_writer_spelled_anthropic_excludes_claude_legs():
 @pytest.mark.parametrize("card", [CARD, RCARD], ids=["no-diff", "diff"])
 def test_live_policy_every_writer_family_routes_or_names_why(card):
     # Each family a writer can have gets seats, or one named refusal (never a crash).
+    # A family the keeper cannot resolve (writer_key) refuses, fail closed, like the keeper.
+    from plangraph.review.family import FamilyError, writer_key
     for fam in sorted({leg.family for leg in DEFAULT_LEGS if "implement" in leg.roles}):
+        try:
+            writer_key(fam)
+        except FamilyError:
+            with pytest.raises(SpawnRefused, match="unknown writer family"):
+                plan_spawn(card, role="review", writer_families=(fam,))
+            continue
         plan = plan_spawn(card, role="review", writer_families=(fam,))
         assert plan.error is None or plan.error.startswith(
             ("two distinct review families unavailable", "seat coverage unmet")), (fam, plan.error)
@@ -233,3 +241,76 @@ def test_all_legs_inline_failed_reports_reasons(tmp_path, monkeypatch):
     record = svc.result(record["run_id"])
     assert record["status"] == "failed" and "inline_diff_failed" in record["error"]
     assert runner.calls == []
+
+
+# --- 7. round-2 seat findings (luna run-a0f16445, qwen run-e7758d82) -----------
+
+def _leg(leg_id):
+    return next(l for l in DEFAULT_LEGS if l.id == leg_id)
+
+
+def test_spares_use_keeper_families(tmp_path, monkeypatch):
+    # luna HIGH: gpt and openai legs are one keeper family; a gpt seat's family is no spare.
+    svc = _service(tmp_path / "state", monkeypatch)
+    luna, qwen, oss, mimo = map(_leg, ("cx-gpt-6-luna", "qodercli-qwen3.8-flash",
+                                       "ovh-gpt-oss-120b", "mimo-v2.6-flash"))
+    base = plan_spawn(HIGH, role="review", writer_families=("claude",))
+    plan = replace(base, legs=(luna, qwen, oss, mimo), review_seats=(luna, qwen), error=None)
+    monkeypatch.setattr(svc, "_route", lambda *a, **k: plan)
+    out = asyncio.run(svc.spawn(card=HIGH, prompt="r", role="review", writer_families=("claude",),
+                                seats=True, dry_run=True))
+    legs = [leg["id"] for run in out["seats"] for leg in run["plan"]["legs"]]
+    assert "ovh-gpt-oss-120b" not in legs and legs.count("mimo-v2.6-flash") == 1
+
+
+@pytest.mark.parametrize("writer", ["alibaba", " OpenAI ", "anthropic", "QWEN"])
+def test_keeper_writer_names_exclude_their_legs(writer):
+    # qwen MED/LOW: keeper family names and case/space variants map to leg families.
+    from plangraph.review.family import writer_key
+    canon = writer_key(writer)
+    plan = plan_spawn(HIGH, role="review", writer_families=(writer,))
+    assert plan.review_seats and canon not in {writer_key(l.family) for l in plan.review_seats}
+    assert all(c["covers"] == [canon] for c in plan.seat_coverage)
+
+
+def test_policy_families_match_keeper_names():
+    # Pattern sweep of the qwen MED: a policy may name the keeper family.
+    glm = _leg("opencode-glm-5.3-flash-free")
+    assert RoutePolicy(banned_families=("zhipu",)).skip_reason(glm, "review") == "banned_family"
+    assert RoutePolicy(off_families=("ZhiPu",)).skip_reason(glm, "review") == "off_family"
+    assert RoutePolicy(off_families=("glm",)).skip_reason(_leg("mimo-v2.6-flash"), "review") is None
+
+
+def test_unknown_writer_family_is_refused():
+    with pytest.raises(SpawnRefused, match="unknown writer family"):
+        plan_spawn(HIGH, role="review", writer_families=("nosuchfamily",))
+
+
+def test_derive_keeps_an_operator_tool_mode():
+    # qwen LOW: derive() fills only rows that lack tool_mode; an explicit value stays.
+    from plangraph import registry_columns
+    db = _seeded()
+    db.conn.execute("UPDATE catalog_models SET tool_mode='tools' WHERE model_id='omniroute/cx-gpt-6-luna'")
+    registry_columns.derive(db.conn)
+    assert _row(db, "omniroute/cx-gpt-6-luna")["tool_mode"] == "tools"
+
+
+def test_base_exception_seat_still_saves_the_group(tmp_path, monkeypatch):
+    # qwen LOW: a seat raising a BaseException re-raises only after the group file is written.
+    from plangraph.spawner.service import SpawnService
+
+    class Stop(BaseException):
+        pass
+    svc = _service(tmp_path / "state", monkeypatch)
+    original = SpawnService._spawn
+
+    async def flaky(self, *a, _plan=None, **kw):
+        if _plan is not None and _plan.legs[0].family == "qwen":
+            raise Stop()
+        return await original(self, *a, _plan=_plan, **kw)
+    monkeypatch.setattr(SpawnService, "_spawn", flaky)
+    with pytest.raises(Stop):
+        asyncio.run(svc.spawn(card=RCARD | HIGH, prompt="r", role="review", writer_families=("claude",),
+                              seats=True, dry_run=True))
+    (saved,) = [json.loads(p.read_text()) for p in (tmp_path / "state" / "seat-groups").iterdir()]
+    assert len(saved["runs"]) == 1

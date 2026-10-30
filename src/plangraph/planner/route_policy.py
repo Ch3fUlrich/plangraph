@@ -38,9 +38,15 @@ class RoutePolicy:
         return allowed is None or role in allowed
 
     def skip_reason(self, leg, role: str) -> str | None:
-        if leg.family in self.banned_families:
+        # Keeper families too: "zhipu" bans glm legs, "deepseek" every deepseek spelling.
+        from .seats import seat_family
+
+        def listed(families):
+            return bool({leg.family, seat_family(leg.family)}
+                        & ({seat_family(f) for f in families} | set(families)))
+        if listed(self.banned_families):
             return "banned_family"
-        if leg.family in self.off_families:
+        if listed(self.off_families):
             return "off_family"
         if not self.allows(leg.harness, role):
             return "paused_harness"

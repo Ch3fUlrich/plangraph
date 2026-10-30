@@ -24,7 +24,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
 from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg
-from .seats import _check_diff_ref, pick_seats  # noqa: F401
+from .seats import _check_diff_ref, family_spellings, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
@@ -316,11 +316,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
-    writer_set = {w for w in writer_families if w}
+    # Review writers are keeper families (fail closed on an unknown name).
+    writer_set = writer_parts(writer_families) if role == "review" else {w for w in writer_families if w}
     # D-3084 per-part seats: only a family that is EVERY writer covers no part.
-    excluded = (writer_set if role == "review" and len(writer_set) == 1 else set()) | set(exclude_families)
-    if excluded & {"claude", "anthropic"}:
-        excluded |= {"claude", "anthropic"}   # one family, two spellings
+    excluded = family_spellings((writer_set if role == "review" and len(writer_set) == 1 else set())
+                                | set(exclude_families), legs)
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and st["state"] != "limited" and "/" not in leg_obj.model:
