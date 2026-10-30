@@ -5,7 +5,7 @@ Five MCP tools drive real Claude Code sessions: `plangraph_session_launch`, `pla
 are argv lists, never shell strings.
 
 Everything invalid is refused with `ParameterRefused` before anything runs: name outside
-`[a-z0-9][a-z0-9-]{0,63}`, cwd outside `cwd_roots`, model/effort/permission_mode missing from the
+`[A-Za-z0-9][A-Za-z0-9._-]{0,63}` or ending in `.ready`, cwd outside `cwd_roots`, model/effort/permission_mode missing from the
 config lists, unlisted `mcp_config`, anything but exactly one of `prompt`/`prompt_file`, a blank
 prompt or one starting with `-`, prompt/handoff outside `cwd_roots`, non-boolean `dry_run`,
 `stop` of a session without a resolved id, or `relaunch` with neither a ready marker nor a `handoff`.
@@ -14,6 +14,7 @@ An old id is checked against `claude agents --json` before `launch` replaces a s
 relaunch proceeds: a poll that fails or returns garbage refuses the action (fail closed), and a
 listed id outside `finished`/`stopped` refuses `launch` with "use relaunch" - in `dry_run` too, as
 it only reads. Once the process has started, a record write failure still reports the started id.
+A failure result carries a scrubbed `error` and the started `session_id` when known.
 
 The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
 `~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `models`, `efforts`,
@@ -41,17 +42,21 @@ runs; entries get no further per-file checks.
 
 State lives under `<spawner state>/sessions/`: a `<name>.json` record per session, `<name>.prompt.txt`
 (0600), the `<name>.ready.json` marker (handoff, card), and `audit.log` - one scrubbed JSON line per
-action with the argv (prompt length only); a dry run writes nothing and leaves no audit line. Prompts,
-records and audit text pass the env redactor. The record carries a `state`: `launching` (with the
+action with the argv (prompt length only); a dry run writes nothing and leaves no audit line. The
+prompt file is stored byte-exact for relaunch; the env redactor applies to audit lines, records and
+results. The record carries a `state`: `launching` (with the
 redacted argv and `launched_ms`) is written before the process starts, ending `running` on a resolved
 id, `stopped` on a non-zero exit, `unknown` after a timeout, OSError or unresolved id - `session_id` null, `stopped_ts` unset, so `plangraph_session_list` shows the possible orphan and
 `plangraph_session_relaunch` can replace it. A successful launch removes a stale
 `<name>.ready.json`. Every audit write is guarded: when `audit.log` cannot be written the action's
-own outcome stands and the caller is warned with a `warning` field instead.
+own outcome stands and the caller is warned with a `warning` field instead. `stop` on a stopped
+record re-checks `claude agents --json` and stops a still-live id. Concurrent actions on one name
+are serialised by a per-name lock.
 
 `plangraph_session_mark_ready` writes the marker. Relaunch uses the `handoff` argument, else the
-marker's handoff; with neither, the relaunch is refused. The freshness check (handoff newer than the
-record) and path containment always apply, and the record's old handoff is never reused.
+marker's handoff; with neither, the relaunch is refused. The freshness check (handoff mtime strictly
+newer than the last successful launch, `launched_ts`) and path containment always apply, and the
+record's old handoff is never reused.
 The stored launch spec is re-validated before the old session is stopped (`claude stop`, never
 `rm`/`kill`), the previous session id is excluded when resolving the new one (UUID in launcher
 stdout, else a short id on a `background` row of the same name, else the newest `background` row by

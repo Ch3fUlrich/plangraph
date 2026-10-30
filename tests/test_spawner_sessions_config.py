@@ -17,7 +17,7 @@ def test_config_requires_existing_real_files(site):
     bad = site.tmp_path / "sessions-bad.json"
     write_config(bad, json.dumps({**cfg, "mcp_configs": [str(site.tmp_path / "ghost-mcp.json")]}))
     s = make(site, FakeRun(), config_path=bad)
-    with pytest.raises(ParameterRefused, match="config"):
+    with pytest.raises(ParameterRefused, match="mcp_configs entry is not a regular file"):
         go(site, s)  # every configured entry must resolve to an existing regular file
     gone = site.tmp_path / "gone.json"
     write_config(gone, "{}")
@@ -29,29 +29,29 @@ def test_config_requires_existing_real_files(site):
         go(site, s2, mcp_config=str(gone))  # requested entry checked again at launch time
     cfg3 = site.tmp_path / "sessions-dir.json"
     write_config(cfg3, json.dumps({**cfg, "mcp_configs": [str(site.tmp_path)]}))
-    with pytest.raises(ParameterRefused, match="config"):
+    with pytest.raises(ParameterRefused, match="mcp_configs entry is not a regular file"):
         go(site, make(site, FakeRun(), config_path=cfg3))  # a directory is not a regular file
 
 
 def test_config_refuses_root_roots_and_bad_scalars(site):
     cfg = json.loads(site.cfg.read_text())
 
-    def refused(over, match="config"):
+    def refused(over, match):
         bad = site.tmp_path / "sessions-bad.json"
         write_config(bad, json.dumps({**cfg, **over}))
         with pytest.raises(ParameterRefused, match=match):
             go(site, make(site, FakeRun(), config_path=bad))
 
-    refused({"cwd_roots": ["/"]})  # a filesystem root would allow any cwd
-    refused({"cwd_roots": [str(site.mcp)]})  # a file is not a directory
-    refused({"cwd_roots": [str(site.tmp_path / "ghost-dir")]})  # must exist
-    refused({"file_roots": ["/"]})
-    refused({"style_file": "style.txt"})  # relative style file refused
-    refused({"style_file": str(site.tmp_path / "ghost-style.txt")})
-    refused({"compact_window": "33x"})
-    refused({"compact_window": 330000})
-    refused({"ctx_cap_tokens": 0})
-    refused({"ctx_cap_tokens": "300000"})
+    refused({"cwd_roots": ["/"]}, "must not be a filesystem root")  # a filesystem root would allow any cwd
+    refused({"cwd_roots": [str(site.mcp)]}, "entry is not an existing directory")  # a file is not a directory
+    refused({"cwd_roots": [str(site.tmp_path / "ghost-dir")]}, "entry is not an existing directory")  # must exist
+    refused({"file_roots": ["/"]}, "unknown")  # removed keys are refused only as unknown keys
+    refused({"style_file": "style.txt"}, "unknown")
+    refused({"style_file": str(site.tmp_path / "ghost-style.txt")}, "unknown")
+    refused({"compact_window": "33x"}, "compact_window must be a digit string")
+    refused({"compact_window": 330000}, "compact_window must be a digit string")
+    refused({"ctx_cap_tokens": 0}, "ctx_cap_tokens must be a positive int")
+    refused({"ctx_cap_tokens": "300000"}, "ctx_cap_tokens must be a positive int")
     run = FakeRun()
     s = make(site, run)
     with pytest.raises(ParameterRefused, match="dry_run"):
@@ -64,16 +64,16 @@ def test_config_trust_refuses_loose_permissions(site, monkeypatch):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     site.cfg.chmod(0o666)  # world-writable config: not ours to trust
-    with pytest.raises(ParameterRefused, match="config"):
+    with pytest.raises(ParameterRefused, match="mode must be 0600 or stricter"):
         go(site, s)
     site.cfg.chmod(0o664)  # group-writable refused too
-    with pytest.raises(ParameterRefused, match="config"):
+    with pytest.raises(ParameterRefused, match="mode must be 0600 or stricter"):
         go(site, s)
     site.cfg.chmod(0o600)
     go(site, s)  # owner-only config launches fine
     st = site.cfg.stat()
     monkeypatch.setattr(os, "getuid", lambda: st.st_uid + 1)  # foreign owner refused
-    with pytest.raises(ParameterRefused, match="config"):
+    with pytest.raises(ParameterRefused, match="not owned by the current user"):
         go(site, s, name="beta")
 
 
@@ -190,20 +190,20 @@ def test_config_and_style_are_read_from_the_checked_fd(site, monkeypatch):
 def test_config_rejects_unknown_keys_and_bad_scalar_types(site):
     cfg = json.loads(site.cfg.read_text())
 
-    def refused(over, match="config"):
+    def refused(over, match):
         bad = site.tmp_path / "sessions-bad.json"
         write_config(bad, json.dumps({**cfg, **over}))
         with pytest.raises(ParameterRefused, match=match):
             go(site, make(site, FakeRun(), config_path=bad))
 
-    refused({"extra": 1}, match="unknown")  # an unknown top-level key refuses every action
-    refused({"style_file": None})           # a present key must carry its type - null is not a value
-    refused({"style_file": 5})
-    refused({"compact_window": None})
-    refused({"compact_window": []})
-    refused({"ctx_cap_tokens": None})
-    refused({"ctx_cap_tokens": True})       # a bool is not a positive int
-    refused({"ctx_cap_tokens": 1.5})
-    refused({"windows_launcher": None})
-    refused({"windows_launcher": "cmd"})    # the wt launcher is cut: the key is refused outright
-    refused({"windows_launcher": 1})
+    refused({"extra": 1}, "unknown")  # an unknown top-level key refuses every action
+    refused({"style_file": None}, "unknown")  # removed keys are refused only as unknown keys
+    refused({"style_file": 5}, "unknown")
+    refused({"compact_window": None}, "compact_window must be a digit string")  # a present key must carry its type - null is not a value
+    refused({"compact_window": []}, "compact_window must be a digit string")
+    refused({"ctx_cap_tokens": None}, "ctx_cap_tokens must be a positive int")
+    refused({"ctx_cap_tokens": True}, "ctx_cap_tokens must be a positive int")  # a bool is not a positive int
+    refused({"ctx_cap_tokens": 1.5}, "ctx_cap_tokens must be a positive int")
+    refused({"windows_launcher": None}, "unknown")  # the wt launcher is cut: the key is refused outright
+    refused({"windows_launcher": "cmd"}, "unknown")
+    refused({"windows_launcher": 1}, "unknown")
