@@ -16,6 +16,23 @@ from email.utils import parsedate_to_datetime
 
 REPROBE_MINUTES = 10
 
+#: Probe/harness evidence is leg-level: a probe session cannot attribute its
+#: outcome to a card's account/combo. Rows written without those dimensions
+#: stay visible to every reader of the leg, while provider responses keep the
+#: exact-tuple scope ("omitted dimensions are not wildcards").
+_SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
+
+
+def _down_seconds(down_s):
+    """Validated PLANGRAPH_LEG_DOWN_S; an invalid value falls back, never raises."""
+    if down_s is not None:
+        return down_s
+    try:
+        value = float(os.environ.get('PLANGRAPH_LEG_DOWN_S', 1800))
+    except (TypeError, ValueError):
+        return 1800
+    return value if math.isfinite(value) and value >= 0 else 1800
+
 
 class LegStateError(ValueError):
     """Not a provider limit response."""
@@ -90,16 +107,27 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
-    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None):
+    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         now = time.time() if now is None else now
-        down_s = float(os.environ.get('PLANGRAPH_LEG_DOWN_S', 1800)) if down_s is None else down_s
+        down_s = _down_seconds(down_s)
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
-                       (leg, None, None, 503, _redact(reason), down_s, now + down_s, now, caller, 'liveness-probe'))
+                       (leg, account, combo, 503, _redact(reason), down_s, now + down_s, now, caller, 'liveness-probe'))
 
     def last_probe_ts(self, leg):
+        """Successful probe evidence only: a failed probe is not fresh evidence."""
+        if not self.path.exists():
+            return None
+        try:
+            with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
+                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source='provider-probe'", (leg,)).fetchone()[0]
+        except sqlite3.Error:
+            return None
+
+    def last_probe_attempt_ts(self, leg):
+        """The newest probe attempt (pass or fail); single-flight reuse only."""
         if not self.path.exists():
             return None
         try:
@@ -128,18 +156,47 @@ class LegStateStore:
         try:
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
-                row = db.execute("SELECT * FROM leg_events WHERE leg_key=? AND account IS ? AND combo IS ? AND ts<=? ORDER BY ts DESC,id DESC LIMIT 1", (leg, account, combo, now)).fetchone()
+                rows = db.execute(
+                    "SELECT * FROM leg_events WHERE leg_key=? AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
+                    (leg, account, combo, now))
+                row = rows.fetchone()
+                if row is None or row["status"] == 200:
+                    return {"state": "ok", "evidence": None}
+                evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
+                evidence["event_id"] = row["id"]
+                if row['source'] == 'liveness-probe':
+                    # Two consecutive probe failures before down (M11): one
+                    # failure is a reprobe hint, never proof the leg is gone.
+                    streak = 1
+                    for older in rows:
+                        if older['source'] == 'liveness-probe' and older['status'] == 503:
+                            streak += 1
+                        else:
+                            break
+                    reset = row["reset_at"]
+                    down = streak >= 2 and reset is not None and now < reset
+                    return {'state': 'down' if down else 'reprobe', 'evidence': evidence}
+                reset = row["reset_at"]
+                state = (("limited" if now < reset else "ok") if reset is not None
+                         else ("limited" if now < row["ts"] + REPROBE_MINUTES * 60 else "reprobe"))
+                return {"state": state, "evidence": evidence}
         except (sqlite3.Error, OSError):
             return {"state": "ok", "evidence": None}
-        if row is None or row["status"] == 200:
-            return {"state": "ok", "evidence": None}
-        evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
-        evidence["event_id"] = row["id"]
-        reset = row["reset_at"]
-        if row['source'] == 'liveness-probe':
-            return {'state': 'down' if now < reset else 'reprobe', 'evidence': evidence}
-        state = ("limited" if now < reset else "ok") if reset is not None else ("limited" if now < row["ts"] + REPROBE_MINUTES * 60 else "reprobe")
-        return {"state": state, "evidence": evidence}
+
+    def last_probe_outcome(self, leg):
+        """Newest probe attempt as a reusable single-flight outcome, else None."""
+        if not self.path.exists():
+            return None
+        try:
+            with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
+                db.row_factory = sqlite3.Row
+                row = db.execute("SELECT source, body_excerpt, ts FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe') ORDER BY ts DESC,id DESC LIMIT 1", (leg,)).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        ok = row['source'] == 'provider-probe'
+        return dict(ok=ok, reason='' if ok else (row['body_excerpt'] or 'probe failed'), ts=row['ts'])
 
 
 def _default_store():
@@ -162,9 +219,13 @@ def leg_status(leg, now=None, account=None, combo=None):
     return _default_store().leg_status(leg, now, account, combo)
 
 
-def record_probe_fail(leg, reason, caller, now=None, down_s=None):
-    return _default_store().record_probe_fail(leg, reason, caller, now, down_s)
+def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None):
+    return _default_store().record_probe_fail(leg, reason, caller, now, down_s, account, combo)
 
 
 def last_probe_ts(leg):
     return _default_store().last_probe_ts(leg)
+
+
+def last_probe_outcome(leg):
+    return _default_store().last_probe_outcome(leg)

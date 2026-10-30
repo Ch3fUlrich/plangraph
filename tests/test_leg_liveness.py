@@ -14,13 +14,16 @@ def test_down_expiry_and_recovery(tmp_path):
     assert store.last_probe_ts('agy/model') is None
     store.record_probe_fail('agy/model', 'timeout', 'leg-probe', now=100, down_s=20)
     state = store.leg_status('agy/model', now=110)
-    assert state['state'] == 'down'
+    assert state['state'] == 'reprobe'  # one failure never proves the leg is down
     assert state['evidence']['body_excerpt'] == 'timeout'
-    assert store.last_probe_ts('agy/model') == 100
-    assert store.leg_status('agy/model', now=120)['state'] == 'reprobe'
-    store.record_probe_pass('agy/model', 'leg-probe', now=121)
-    assert store.leg_status('agy/model', now=121)['state'] == 'ok'
-    assert store.last_probe_ts('agy/model') == 121
+    assert store.last_probe_ts('agy/model') is None  # failures are not fresh evidence
+    assert store.last_probe_attempt_ts('agy/model') == 100
+    store.record_probe_fail('agy/model', 'timeout', 'leg-probe', now=111, down_s=20)
+    assert store.leg_status('agy/model', now=115)['state'] == 'down'
+    assert store.leg_status('agy/model', now=140)['state'] == 'reprobe'
+    store.record_probe_pass('agy/model', 'leg-probe', now=141)
+    assert store.leg_status('agy/model', now=141)['state'] == 'ok'
+    assert store.last_probe_ts('agy/model') == 141
 
 
 def test_probe_module():
@@ -47,9 +50,11 @@ def test_commit_probe_and_timeout(monkeypatch, success):
     result = asyncio.run(probe(runner, leg, timeout_s=3 if success else .3))
     assert result['ok'] is success
     assert result['reason'] == ('' if success else 'timeout')
-    assert leg_state.leg_status(key(leg))['state'] == ('ok' if success else 'down')
+    assert leg_state.leg_status(key(leg))['state'] == ('ok' if success else 'reprobe')
     assert roots and not Path(roots[0]).exists()
     if not success:
+        leg_state.record_probe_fail(key(leg), 'timeout', 'leg-probe')  # second consecutive failure
+        assert leg_state.leg_status(key(leg))['state'] == 'down'
         from plangraph.planner.routing import plan_spawn
         plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(leg,))
         assert not plan.legs
