@@ -28,6 +28,9 @@ def test_quota_state_and_compound_reset(tmp_path, monkeypatch):
     assert store.leg_status('agy/other', now=1000)['evidence']['reset_at'] == 8500
     assert first_reason('\x1b[0m\n\nactual error') == 'actual error'
     assert harness_limit_line(0, '', QUOTA) is None
+    # Agent prose on stdout never marks a leg; an error-shaped stdout line does.
+    assert harness_limit_line(1, 'I added the rate limit parser; quota reached handling', '') is None
+    assert harness_limit_line(1, 'error: ' + QUOTA, '') == 'error: ' + QUOTA
 
 
 def test_writer_identity_commits_with_host_committer(tmp_path):

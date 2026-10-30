@@ -27,7 +27,11 @@ def first_reason(text):
 def harness_limit_line(exit_code, stdout, stderr):
     if exit_code in (None, 0):
         return None
-    for line in normalize(stderr + '\n' + stdout).splitlines():
+    # stdout is agent prose: only its error-shaped lines count, like unavailable_reason.
+    lines = normalize(stderr).splitlines() + [
+        line for line in normalize(stdout).splitlines()
+        if re.match(r'\s*(error:|HTTP \d{3}:)', line, re.I)]
+    for line in lines:
         if re.search(r'quota reached|quota exceeded|usage limit|rate limit|resets in|too many requests', line, re.I):
             return line.strip()
     return None
