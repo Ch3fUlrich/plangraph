@@ -45,7 +45,9 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
 _keeper_unconfigured_last_warned = None
 
 
-from .env_redact import unavailable_reason
+from .env_redact import first_reason
+from .exit_outcome import fallthrough_reason, terminal_reason
+from .git_guard import writer_launch
 
 
 def redact(value):
@@ -812,55 +814,13 @@ class SpawnerRunner:
             getattr(self, '_reaped_jobs', set()).discard(job_id)
 
     @staticmethod
-    def _init_git_config_guard(work_dir: str | Path | None) -> tuple[Path, bytes, str] | None:
-        if not work_dir:
-            return None
-        try:
-            proc = subprocess.run(
-                ["git", "-C", str(work_dir), "rev-parse", "--git-common-dir"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                return None
-            raw_common = proc.stdout.strip()
-            if not raw_common:
-                return None
-            common_dir = (Path(work_dir) / raw_common).resolve()
-            config_path = common_dir / "config"
-            if not config_path.is_file():
-                return None
-            orig_bytes = config_path.read_bytes()
-            orig_hash = hashlib.sha256(orig_bytes).hexdigest()
-            return (config_path, orig_bytes, orig_hash)
-        except (OSError, UnicodeDecodeError):
-            return None
+    def _init_git_config_guard(work_dir):
+        from .git_guard import init_guard
+        return init_guard(work_dir)
 
-    def _check_git_config_guard(self, job_id: str) -> None:
-        guard = self._git_guards.get(job_id)
-        if not guard:
-            return
-        config_path, orig_bytes, orig_hash = guard
-        try:
-            curr_bytes = config_path.read_bytes() if config_path.is_file() else None
-        except OSError:
-            curr_bytes = None
-        curr_hash = hashlib.sha256(curr_bytes).hexdigest() if curr_bytes is not None else None
-        if curr_hash != orig_hash:
-            try:
-                if orig_bytes is not None:
-                    config_path.write_bytes(orig_bytes)
-                else:
-                    config_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            if job_id in self.jobs:
-                job = self.jobs[job_id]
-                job.events.append({"event": "git_config_mutated"})
-                job.status = "failed"
-                if not job.exit_code or job.exit_code == 0:
-                    job.exit_code = 1
+    def _check_git_config_guard(self, job_id):
+        from .git_guard import check_guard
+        check_guard(self._git_guards.get(job_id), self.jobs.get(job_id))
 
     async def status(self, job_id: str | None = None) -> Any:
         """Query status of a specific job or all jobs."""
@@ -967,8 +927,8 @@ def spawn_service(*args, **kwargs):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = (redact(job.stderr.strip().splitlines()[0])
-                            if job.stderr.strip() else f'harness exit code {job.exit_code}')
+                        attempt['skip_reason'] = (redact(first_reason(job.stderr))
+                            if first_reason(job.stderr) else f'harness exit code {job.exit_code}')
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -1117,8 +1077,9 @@ def spawn_service(*args, **kwargs):
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
+                        leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log)
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
                         self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
@@ -1134,12 +1095,12 @@ def spawn_service(*args, **kwargs):
                                 watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')), events=job.events)
                             return
                         reason = None
-                        unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+                        unavailable = fallthrough_reason(self, chosen, job, record)
                         if unavailable:
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(job.stderr.strip().splitlines()[0]) if job.stderr.strip() else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+                            reason = redact(first_reason(job.stderr)) if first_reason(job.stderr) else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
@@ -1197,6 +1158,7 @@ def spawn_service(*args, **kwargs):
                     if record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
+                    terminal_reason(record)
                     self._running_records.pop(record.get('job_id'), None)
                     self._save(record)
 

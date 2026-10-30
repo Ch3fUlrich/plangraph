@@ -12,7 +12,7 @@ record probe passes. This callback must never be fed agent stdout, prompt text,
 exit-code guesses, or arbitrary MCP arguments. The current subprocess gateway
 does not expose HTTP responses to the parent, so its stdout monitor deliberately
 does not infer limits; a gateway adapter must deliver actual responses through
-the callback. A child failure alone cannot suppress a leg.
+the callback. A harness quota line (D-3257) or a failed liveness probe marks the leg limited/down with reason + time.
 
 The exact `(provider/model, account, combo)` tuple defines scope; omitted
 dimensions are not wildcards. Retry-After seconds/date, x-ratelimit-reset epoch

@@ -16,12 +16,27 @@ def _is_numeric(value):
     return re.fullmatch(r'[+-]?\d+', value) is not None
 
 
+def normalize(text):
+    return re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))', '', text).replace('\r\n', '\n').replace('\r', '\n')
+
+
+def first_reason(text):
+    return next((line.strip() for line in normalize(text).splitlines() if line.strip()), '')
+
+
+def harness_limit_line(exit_code, stdout, stderr):
+    if exit_code in (None, 0):
+        return None
+    for line in normalize(stderr + '\n' + stdout).splitlines():
+        if re.search(r'quota reached|quota exceeded|usage limit|rate limit|resets in|too many requests', line, re.I):
+            return line.strip()
+    return None
+
+
 def unavailable_reason(exit_code, stdout, stderr):
     """Failed harness evidence, in stderr-first order; never task prose on success."""
     if exit_code == 0:
         return None
-    def normalize(text):
-        return re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))', '', text).replace('\r\n', '\n').replace('\r', '\n')
     stdout, stderr = normalize(stdout), normalize(stderr)
     markers = ('model unavailable', 'not served', 'unknown model', 'not_served_on_host')
     def marked(value):

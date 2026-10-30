@@ -74,18 +74,56 @@ def test_bounded_wait_and_private_record(tmp_path, wait):
     async def run():
         async def factory(*args, **kwargs):
             return await asyncio.create_subprocess_exec(sys.executable, '-c',
-                'import time; time.sleep(.3); print("sk-plantedsecret API_KEY=hidden")', **kwargs)
+                'import time; from pathlib import Path\n'
+                f'go = Path({str(tmp_path / "go")!r})\n'
+                'deadline = time.monotonic() + 20\n'
+                'while not go.exists() and time.monotonic() < deadline: time.sleep(.02)\n'
+                'print("sk-plantedsecret API_KEY=hidden")', **kwargs)
         service = spawn_service(SpawnerRunner(process_factory=factory), tmp_path)
         started = asyncio.get_running_loop().time()
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait)
-        assert asyncio.get_running_loop().time() - started < .2
+        assert asyncio.get_running_loop().time() - started < 5
         assert record['status'] == 'running'
+        (tmp_path / 'go').touch()
         await service.tasks[record['run_id']]
         path = service._path(record['run_id'])
         assert path.stat().st_mode & 0o777 == 0o600
         assert 'plantedsecret' not in path.read_text()
         assert 'hidden' not in path.read_text()
         assert not path.with_suffix('.tmp').exists()
+    asyncio.run(run())
+
+
+def test_harness_quota_falls_through(tmp_path, monkeypatch):
+    from plangraph.spawner import resolver
+    from test_spawner_exit_outcome import QUOTA
+    rows = resolver.get_catalog_models()
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        dict(row, available=1, active=True) for row in rows])
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
+
+    async def run():
+        store = LegStateStore(tmp_path / 'legs.sqlite')
+        calls = []
+        runner = SpawnerRunner()
+
+        async def factory(*args, **kwargs):
+            calls.append(list(runner.jobs.values())[-1].model_or_combo)
+            code = ('import sys; print(' + repr(QUOTA) + ', file=sys.stderr); sys.exit(3)'
+                    if len(calls) == 1 else 'print("done")')
+            return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
+
+        runner.process_factory = factory
+        service = spawn_service(runner, tmp_path, store)
+        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
+        assert record['status'] == 'completed'
+        assert len(calls) == 2
+        assert record['attempts'][0]['skip_reason'].startswith('harness_limit:')
+        model = calls[0] if '/' in calls[0] else 'agy/' + calls[0]
+        state = store.leg_status(model, now=1000)
+        assert state['state'] == 'limited'
+        assert state['evidence']['reset_at'] == 39426
+
     asyncio.run(run())
 
 

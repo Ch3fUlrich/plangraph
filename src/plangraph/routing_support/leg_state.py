@@ -46,9 +46,10 @@ def _reset(headers, body, now):
                     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
                 except (ValueError, TypeError, AttributeError):
                     pass
-    match = re.search(r"resets?\s+in\s+(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b", body, re.I)
+    match = re.search(r"resets?\s+in\s+((?:\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\s*)+)", body, re.I)
     if match:
-        return now + float(match[1]) * {"s": 1, "m": 60, "h": 3600}[match[2][0].lower()]
+        return now + sum(float(n) * {"s": 1, "m": 60, "h": 3600}[unit[0].lower()]
+                         for n, unit in re.findall(r'(\d+(?:\.\d+)?)\s*([a-z]+)', match[1], re.I))
     return None
 
 
@@ -89,6 +90,16 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
+    def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None):
+        if not leg or not caller or not line.strip():
+            raise LegStateError('requires leg, quota line and caller')
+        now = time.time() if now is None else now
+        reset = _reset({}, line, now)
+        with self._connect() as db:
+            db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
+                       (leg, account, combo, 429, _redact(line),
+                        None if reset is None else reset - now, reset, now, caller, 'harness-stderr'))
+
     def leg_status(self, leg, now=None, account=None, combo=None):
         now = time.time() if now is None else now
         if not self.path.exists():
@@ -121,6 +132,10 @@ def record_provider_response(leg, status, body, headers, caller, now=None, accou
 
 def record_probe_pass(leg, caller, now=None, account=None, combo=None):
     return _default_store().record_probe_pass(leg, caller, now, account, combo)
+
+
+def record_harness_limit(leg, line, caller, now=None, account=None, combo=None):
+    return _default_store().record_harness_limit(leg, line, caller, now, account, combo)
 
 
 def leg_status(leg, now=None, account=None, combo=None):
