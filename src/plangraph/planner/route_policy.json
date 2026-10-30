@@ -1,0 +1,9 @@
+{
+  "_source": "OPERATOR D-3198 (glm off), D-2744/D-3084 (no deepseek, kimi never a seat), D-3072 + D-3198 (qodercli paused, qwen3.8-flash allowed as seat), DECISIONS 3.2 (agy seats off until the harness returns text)",
+  "banned_families": ["kimi", "deepseek"],
+  "off_families": ["glm"],
+  "paused_harnesses": {
+    "qodercli": {"allowed_roles": ["review"]},
+    "agy": {"allowed_roles": ["implement", "orchestrate"]}
+  }
+}

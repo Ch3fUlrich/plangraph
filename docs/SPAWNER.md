@@ -50,7 +50,7 @@ the later Temporal implementation (also covers FLEET-STATUS-HOOK).
 Writing run roles (implement/fix) guard shared .git/config against in-place mutations (e.g. core.autocrlf), restoring original bytes and failing the run if changed.
 `--model`/`--leg` require `--override-reason` of at least ten characters,
 audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
-The Mimo path fence still applies to overrides.
+The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
 MCP tools `plangraph_agent_route`, `spawn`, `ps`, `result`, `status`, `cancel`
 (all with the `plangraph_agent_` prefix) share these records. Spawn requires

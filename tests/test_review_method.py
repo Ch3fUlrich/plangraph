@@ -150,7 +150,7 @@ def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
         asyncio.run(server.call_tool('plangraph_agent_spawn', {
             'card': {'key': 'demo:C', 'estimate_tokens': 1000},
             'prompt': 'review task',
-            'role': 'review',
+            'role': 'review', 'writer_families': ['claude'],
             'review_scope': 'per-fixer',
             'model_or_combo': 'mimo/mimo-v2.6-flash',
             'override_reason': 'explicit test override',
@@ -160,7 +160,7 @@ def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
     res = asyncio.run(server.call_tool('plangraph_agent_spawn', {
         'card': {'key': 'demo:C', 'estimate_tokens': 1000},
         'prompt': 'review task',
-        'role': 'review',
+        'role': 'review', 'writer_families': ['claude'],
         'review_scope': 'batch',
         'model_or_combo': 'mimo/mimo-v2.6-flash',
         'override_reason': 'explicit test override',

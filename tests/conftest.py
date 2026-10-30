@@ -22,6 +22,14 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+_NEUTRAL_POLICY = '{"banned_families": [], "off_families": [], "paused_harnesses": {}}'
+# Module-level route plans (computed at collection) see the same neutral route
+# policy as the per-test fixture below.
+_policy_dir = tempfile.mkdtemp(prefix="pg-route-policy-")
+atexit.register(shutil.rmtree, _policy_dir, True)
+Path(_policy_dir, "route-policy.json").write_text(_NEUTRAL_POLICY)
+os.environ["PLANGRAPH_ROUTE_POLICY"] = str(Path(_policy_dir, "route-policy.json"))
+
 
 def _use_tmpfs_tempdir() -> None:
     # The suite is fsync-bound (SQLite commits); tmpfs avoids slow-disk stalls.
@@ -78,6 +86,11 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    # Route mechanics tests run under a neutral route policy; the operator's
+    # live lists (planner/route_policy.json) are pinned in test_registry_route.py.
+    neutral = state / 'route-policy.json'
+    neutral.write_text(_NEUTRAL_POLICY)
+    monkeypatch.setenv('PLANGRAPH_ROUTE_POLICY', str(neutral))
     # Credential scrubbing below also removes GIT_CONFIG_KEY_*; do not leave
     # an inherited count pointing at missing key/value pairs in subprocesses.
     for name in list(os.environ):

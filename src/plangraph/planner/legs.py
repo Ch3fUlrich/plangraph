@@ -21,12 +21,16 @@ from pathlib import Path
 from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
-__all__ = ["TIERS", "HARNESSES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "load_legs", "with_measured"]
+__all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "load_legs", "with_measured"]
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
 #: Harness names a leg may run under.
 HARNESSES = ("qodercli", "opencode", "agy")
+#: How a review leg reads the change: with its own tools, or only from a diff the
+#: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
+#: in tool mode).
+TOOL_MODES = ("tools", "inline-only")
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,7 @@ class Leg:
     claude_family: bool = False
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
+    tool_mode: str = "tools"
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -100,11 +105,13 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",)),
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
+        tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
-        "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement", "orchestrate")),
+        "mimo", ("128k", "256k", "1m"), 200000, False,
+        roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
     _legacy["agy-sonnet-5.5"],
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
@@ -123,7 +130,7 @@ WRITER_ORDER: tuple[str, ...] = (
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
              "max_request_tokens", "trains_on_data")
-_STR_FIELDS = ("id", "tier", "harness", "model", "family", "note")
+_STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode")
 
 
 def _is_int(value) -> bool:
@@ -157,6 +164,8 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tier: {raw['tier']!r} not in {TIERS}")
     if isinstance(raw.get("harness"), str) and raw["harness"] not in HARNESSES:
         problems.append(f"{where}.harness: {raw['harness']!r} not in {HARNESSES}")
+    if isinstance(raw.get("tool_mode"), str) and raw["tool_mode"] not in TOOL_MODES:
+        problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     roles = raw.get("roles", ("orchestrate",))
     if (not isinstance(roles, (list, tuple)) or not roles

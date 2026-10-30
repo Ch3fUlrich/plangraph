@@ -242,8 +242,10 @@ def admission_models() -> set[str]:
 
 
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
+from plangraph.registry_columns import INLINE_ONLY_MODELS as _INLINE_ONLY
 for _row in DEFAULT_FALLBACK_MODELS:
     _row['active'] = _row['id'] in _fallback_legs
+    _row.setdefault('tool_mode', 'inline-only' if _row['id'] in _INLINE_ONLY else 'tools')
     if not _row['active']:
         _row['available'] = 0
 for _leg in DEFAULT_LEGS:
@@ -253,7 +255,7 @@ for _leg in DEFAULT_LEGS:
             id=_model, family=_leg.family, harness=_leg.harness,
             tier=_leg.tier, available=int(_model in _fallback_legs),
             active=_model in _fallback_legs,
-            context_window=_leg.max_request_tokens,
+            context_window=_leg.max_request_tokens, tool_mode=_leg.tool_mode,
             aa_intelligence=0.0, combos=[]))
 
 _DEFAULT_CATALOG_DB: Any = None
@@ -732,9 +734,7 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
         d["id"] = d["model_id"]
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
-    # Explicit harness registration, not an inference from gateway transport.
-    if d.get('id') in ('mimo/mimo-v2.6-pro', 'omniroute/cx-gpt-6-luna', 'opencode-go/kimi-k3.1-pro', 'opencode-go/kimi-k3'):
-        d.setdefault('harness', 'opencode')
+    # Harness and tool mode are catalog columns (SPAWNER-REGISTRY-ROUTE), never inferred.
     return d
 
 _catalog_failures = {}
