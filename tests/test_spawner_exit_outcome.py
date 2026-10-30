@@ -33,7 +33,7 @@ def test_quota_state_and_compound_reset(tmp_path, monkeypatch):
     assert harness_limit_line(1, 'error: ' + QUOTA, '') == 'error: ' + QUOTA
 
 
-def test_writer_identity_commits_with_host_committer(tmp_path):
+def test_writer_identity_commits_with_writer_committer(tmp_path):
     subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
     for key, value in [('user.name', 'Host'), ('user.email', 'host@example.com')]:
         subprocess.run(['git', '-C', str(tmp_path), 'config', key, value], check=True)
@@ -48,6 +48,8 @@ def test_writer_identity_commits_with_host_committer(tmp_path):
         assert process.returncode == 0
 
     asyncio.run(fake_writer())
-    identity = subprocess.check_output(['git', 'log', '-1', '--format=%an|%ae|%cn'], cwd=tmp_path).decode().strip()
-    assert identity == 'agy/model (plangraph writer)|run-123@writer.plangraph.invalid|Host'
+    identity = subprocess.check_output(
+        ['git', 'log', '-1', '--format=%an|%ae|%cn|%ce'], cwd=tmp_path).decode().strip()
+    assert identity == ('agy/model (plangraph writer)|run-123@writer.plangraph.invalid'
+                        '|agy/model (plangraph writer)|run-123@writer.plangraph.invalid')
     assert writer_launch('review', 'review', 'agy/model', 'run-123') == ('review', {})
