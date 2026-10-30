@@ -7,8 +7,10 @@ are argv lists, never shell strings.
 Everything invalid is refused with `ParameterRefused` before anything runs: name outside
 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` or ending in `.ready`, cwd outside `cwd_roots`, model/effort/permission_mode missing from the
 config lists, unlisted `mcp_config`, anything but exactly one of `prompt`/`prompt_file`, a blank
-prompt or one starting with `-`, prompt/handoff outside `cwd_roots`, non-boolean `dry_run`,
-`stop` of a session without a resolved id, or `relaunch` with neither a ready marker nor a `handoff`.
+prompt or one starting with `-`, prompt/handoff outside `cwd_roots`, non-boolean `dry_run`, a name
+that is a Windows device name (con, prn, aux, nul, com1-9, lpt1-9) or that differs only in case from
+an existing session, `stop` of an unknown session, or `relaunch` with neither a ready marker nor a
+`handoff`.
 
 An old id is checked against `claude agents --json` before `launch` replaces a stopped record or a
 relaunch proceeds: a poll that fails or returns garbage refuses the action (fail closed), and a
@@ -50,12 +52,17 @@ id, `stopped` on a non-zero exit, `unknown` after a timeout, OSError or unresolv
 `plangraph_session_relaunch` can replace it. A successful launch removes a stale
 `<name>.ready.json`. Every audit write is guarded: when `audit.log` cannot be written the action's
 own outcome stands and the caller is warned with a `warning` field instead. `stop` on a stopped
-record re-checks `claude agents --json` and stops a still-live id. Concurrent actions on one name
-are serialised by a per-name lock.
+record re-checks `claude agents --json` and stops a still-live id. Before `claude stop` the strict
+`claude agents` poll runs: an id that is absent or already `finished` is marked stopped without
+calling `claude stop` at all, and a null-id record's id is resolved by name ignoring finished rows.
+Concurrent actions on one name are serialised by a per-name lock covering `launch`, `relaunch`,
+`stop` (an id-only stop locks the name its record file carries) and `mark_ready`; names that differ
+only in case share one lock.
 
 `plangraph_session_mark_ready` writes the marker. Relaunch uses the `handoff` argument, else the
 marker's handoff; with neither, the relaunch is refused. The freshness check (handoff mtime strictly
-newer than the last successful launch, `launched_ts`) and path containment always apply, and the
+newer than the last successful launch, `launched_ts` - stamped only by a launch that resolved an
+id) and path containment always apply, and the
 record's old handoff is never reused.
 The stored launch spec is re-validated before the old session is stopped (`claude stop`, never
 `rm`/`kill`), the previous session id is excluded when resolving the new one (UUID in launcher
