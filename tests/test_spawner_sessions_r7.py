@@ -17,7 +17,7 @@ import json
 import pytest
 
 from plangraph.routing_errors import ParameterRefused
-from sessions_support import UUID1, UUID2, FakeRun, go, make
+from sessions_support import UUID1, UUID2, FakeRun, go, make, write_config
 from sessions_support import site  # noqa: F401
 
 
@@ -154,3 +154,48 @@ def test_audit_runtime_error_never_replaces_launch_outcome(site, monkeypatch):
     res = go(site, s)
     assert res["ok"] is True and res["session_id"] == UUID1  # the launch stands
     assert "audit" in res.get("warning", "") and "RuntimeError" in res["warning"]
+
+
+def test_config_compact_window_refuses_non_ascii_digits(site):
+    # Sonnet LOW: str.isdigit() accepts non-ASCII digits such as "²" or "٣";
+    # the value goes into CLAUDE_CODE_AUTO_COMPACT_WINDOW, so compact_window
+    # must be an ASCII digit string.
+    cfg = json.loads(site.cfg.read_text())
+
+    def refused(value):
+        bad = site.tmp_path / "sessions-nonascii.json"
+        write_config(bad, json.dumps({**cfg, "compact_window": value}))
+        with pytest.raises(ParameterRefused, match="compact_window must be a digit string"):
+            go(site, make(site, FakeRun(), config_path=bad))
+
+    refused("\u00b2")  # SUPERSCRIPT TWO passes str.isdigit()
+    refused("\u0663")  # ARABIC-INDIC DIGIT THREE passes str.isdigit()
+    ok = site.tmp_path / "sessions-ascii.json"
+    write_config(ok, json.dumps({**cfg, "compact_window": "200000"}))
+    res = go(site, make(site, FakeRun(), config_path=ok))
+    assert res["ok"] is True  # plain ASCII digits accepted
+
+
+def test_context_tokens_ignores_non_assistant_usage(site):
+    # qwen LOW: the last usage-bearing line won regardless of its role - a
+    # trailing non-assistant entry with a usage dict stole the context size.
+    # A line's usage counts only when its type or message.role is "assistant".
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    tdir = site.home / ".claude" / "projects" / "".join(
+        ch if ch.isalnum() else "-" for ch in str(site.proj.resolve()))
+    tdir.mkdir(parents=True)
+
+    def line(role, n):
+        return json.dumps({"type": role, "message": {"role": role, "usage": {
+            "input_tokens": n, "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0}}})
+
+    by_role = json.dumps({"message": {"role": "assistant", "usage": {
+        "input_tokens": 250, "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0}}})
+    (tdir / f"{UUID1}.jsonl").write_text(
+        line("assistant", 100) + "\n" + by_role + "\n" + line("user", 900) + "\n")
+    row = s.list()["sessions"][0]
+    assert row["context_tokens"] == 250  # last assistant entry, not the trailing user line

@@ -215,7 +215,14 @@ class _AgentsMixin:
                 obj = json.loads(line)
             except ValueError:
                 continue
-            usage = (obj.get("message") or {}).get("usage") if isinstance(obj, dict) else None
+            if not isinstance(obj, dict):
+                continue
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+            # Only assistant entries describe the live context: a later
+            # user/tool line carrying a usage dict must not win (qwen LOW).
+            if obj.get("type") != "assistant" and msg.get("role") != "assistant":
+                continue
+            usage = msg.get("usage")
             if isinstance(usage, dict):
                 total = sum(int(usage.get(key) or 0) for key in USAGE_KEYS)
         return total

@@ -121,7 +121,7 @@ class _ConfigMixin:
                 raise _refuse("config style_text must be a non-empty string")
         if "compact_window" in cfg:
             window = cfg["compact_window"]
-            if not isinstance(window, str) or not window.isdigit():
+            if not isinstance(window, str) or not (window.isascii() and window.isdigit()):
                 raise _refuse("config compact_window must be a digit string")
         if "ctx_cap_tokens" in cfg:
             cap = cfg["ctx_cap_tokens"]
