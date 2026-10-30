@@ -123,13 +123,18 @@ def test_opencode_go_qwen_never_a_seat(tmp_path, monkeypatch):
     assert not (tmp_path / 'spawn-overrides.jsonl').exists()
 
 
-def test_mcp_card_schema_names_estimate_tokens():
+def test_mcp_card_schema_names_estimate_tokens(tmp_path):
     # D-3244: live callers sent cards without estimate_tokens and got a bare 'card required'.
     from plangraph.spawner.mcp import TOOLS_METADATA
     from plangraph.planner.routing import SpawnRefused, plan_spawn
     schemas = {t['name']: t['inputSchema']['properties']['card'] for t in TOOLS_METADATA
                if 'card' in t['inputSchema']['properties']}
-    assert {'plangraph_agent_spawn', 'plangraph_agent_route'} <= set(schemas)
-    assert all(s['required'] == ['estimate_tokens'] for s in schemas.values())
+    assert schemas['plangraph_agent_spawn']['required'] == schemas['plangraph_agent_route']['required'] == ['estimate_tokens']
+    assert schemas['plangraph_agent_spawn'] is not schemas['plangraph_agent_route']   # r4 seat: own copies
+    assert schemas['plangraph_agent_ps'] == schemas['plangraph_agent_result'] == {'type': 'object'}   # read verbs untouched
+    from plangraph.spawner.service import SpawnService   # spawn path refuses the same card at runtime (I2)
+    import asyncio
+    with pytest.raises(SpawnRefused, match='missing estimate_tokens'):
+        asyncio.run(SpawnService(state=tmp_path).spawn(card={'risk': 'normal'}, prompt='x', dry_run=True))
     with pytest.raises(SpawnRefused, match='missing estimate_tokens'):
         plan_spawn({'risk': 'high'}, role='review', writer_families=['claude'])
