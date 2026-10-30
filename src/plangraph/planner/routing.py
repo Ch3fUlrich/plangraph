@@ -382,7 +382,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                          if ordered[i].model in rows or ordered[i].id in rows]
             missing = [ordered[i] for i in tier_positions if i not in positions]
             measured = [dict(rows.get(ordered[i].model, rows.get(ordered[i].id)),
-                             model_id=ordered[i].id, tier=tier, available=1, active=True) for i in positions]
+                             id=ordered[i].model, model_id=ordered[i].id,
+                             tier=tier, available=1, active=True) for i in positions]
             ranked = rank_candidates(measured, role=role, risk=ranking_risk, need_tokens=card["estimate_tokens"])
             by_id = {ordered[i].id: ordered[i] for i in positions}
             for i, leg in zip(tier_positions, [by_id[row["model_id"]] for row in ranked] + missing):

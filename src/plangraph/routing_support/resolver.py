@@ -26,17 +26,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from plangraph.routing_support.credit_gate import catalog_credit_skip_reason
 from plangraph.routing_support.leg_state import leg_status
 from plangraph.routing_support.catalog_seed import TIER_RUNG
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
 from plangraph.routing_support.clients import build_routing_envelope_headers
-from plangraph.routing_support.risk import (
-    RISK_BETA_EXCESS,
-    RISK_GAMMA_COST,
-    RISK_MIN_INTELLIGENCE,
-    RISK_TARGET_INTELLIGENCE,
-    evaluate_risk,
-)
+from plangraph.routing_support.risk import (RISK_BETA_EXCESS, RISK_GAMMA_COST,
+    RISK_MIN_INTELLIGENCE, RISK_TARGET_INTELLIGENCE, evaluate_risk)
 
 # Role multiplier for intelligence gain above I_min
 ROLE_ALPHA: dict[str, float] = {
@@ -579,7 +575,8 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
     # Ranking historical catalog seats is not a new-spawn admission decision.
-    if not catalog_row_admitted(model):
+    # Credit catalog rows take the same expiry gate as credit legs (D-3264).
+    if not catalog_row_admitted(model) or catalog_credit_skip_reason(model):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -684,7 +681,7 @@ def rank_candidates(
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
-        if not catalog_row_admitted(c):
+        if not catalog_row_admitted(c) or catalog_credit_skip_reason(c):
             continue
         d = dict(c)
         score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)

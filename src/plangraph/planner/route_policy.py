@@ -41,14 +41,12 @@ class RoutePolicy:
         return allowed is None or role in allowed
 
     def skip_reason(self, leg, role: str) -> str | None:
-        if leg.tier == 'credit':
-            entry = self.credit_tiers.get(leg.model.partition('/')[0])
-            try:
-                expires = date.fromisoformat(entry['expires'])
-            except (KeyError, TypeError, ValueError):
-                return 'credit_expired'
-            if expires < self.today:
-                return 'credit_expired'
+        # Shared expiry gate: the same verdict a credit catalog row gets.
+        from plangraph.routing_support.credit_gate import credit_expiry_skip
+
+        gate = credit_expiry_skip(leg.model, leg.tier, self.credit_tiers, self.today)
+        if gate:
+            return gate
         # Keeper families too: "zhipu" bans glm legs, "deepseek" every deepseek spelling.
         from .seats import seat_family
 
