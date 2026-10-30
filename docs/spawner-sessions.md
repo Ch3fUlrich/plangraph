@@ -22,7 +22,8 @@ The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
 `~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `models`, `efforts`,
 `permission_modes`, `mcp_configs`, `style_text`, `compact_window`, `ctx_cap_tokens`. It fails
 closed - an unknown key (including the removed `style_file`, `file_roots` and `windows_launcher`),
-bad scalar or missing file refuses every action and there is no default model. A present key must
+bad scalar or missing file refuses every action except `stop`: every action but `stop` loads and
+checks the config, and `stop` alone runs without it. There is no default model. A present key must
 carry its type and may not be `null`: `style_text` a non-empty string, `compact_window` a digit
 string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
 `compact_window` to `330000`.
@@ -31,7 +32,10 @@ string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults t
 account are trusted - they can already run `claude` themselves - so same-account file swaps are out
 of scope. The config is the trust anchor: on POSIX it must be a regular file (not a symlink) owned
 by the current user with mode 0600 or stricter (no group/other bits), opened once with `O_NOFOLLOW`
-and read from that fd. Windows applies no POSIX checks.
+and read from that fd. Windows applies no POSIX checks. The per-name locks serialise actions inside
+ONE spawner MCP process (module-level `threading.Lock`s, no cross-process exclusion); one spawner
+process per host is assumed - two spawner processes on one host would not be serialised against
+each other.
 
 The config read is fail-closed on POSIX: a platform without `O_NOFOLLOW` refuses the config
 outright, `os.open` with `O_NOFOLLOW` refuses symlinks and any open failure ("not a readable
@@ -52,9 +56,19 @@ id, `stopped` on a non-zero exit, `unknown` after a timeout, OSError or unresolv
 `plangraph_session_relaunch` can replace it. A successful launch removes a stale
 `<name>.ready.json`. Every audit write is guarded: when `audit.log` cannot be written the action's
 own outcome stands and the caller is warned with a `warning` field instead. `stop` on a stopped
-record re-checks `claude agents --json` and stops a still-live id. Before `claude stop` the strict
-`claude agents` poll runs: an id that is absent or already `finished` is marked stopped without
-calling `claude stop` at all, and a null-id record's id is resolved by name ignoring finished rows.
+record re-checks `claude agents --json` and stops a still-live id. The stop rule: the strict
+`claude agents` poll runs first, and an id is sent `claude stop <id>` once unless the poll lists it
+`finished` - a listed finished id is marked stopped without any `claude stop`, while an unlisted id
+is still stopped, absence being no proof it ended. The stop is confirmed by a second strict poll;
+a failed `claude stop` counts as already ended only when the id was unlisted before and stays
+unlisted, every other failure refuses. A null-id record's id is resolved by name - the newest
+non-finished `background` row started within 5 s of launch, ignoring finished rows - and when no
+row falls in that window the record is marked stopped without a `claude stop`: residual risk, a
+record without an id whose session has not registered in `claude agents` within 5 s of launch is
+marked stopped by `stop` or `relaunch` even though the session may still be starting.
+`claude agents --json` and `claude stop` run in the spawner server's own cwd (the session's `cwd`
+applies only to the launch); the launch smoke checks that `claude agents` lists sessions started in
+other cwds.
 Concurrent actions on one name are serialised by a per-name lock covering `launch`, `relaunch`,
 `stop` (an id-only stop locks the name its record file carries) and `mark_ready`; names that differ
 only in case share one lock.
@@ -80,6 +94,4 @@ cache creation - from the transcript under `~/.claude/projects/`, reading only t
 
 On Windows every `claude` invocation - the launch, `claude stop` and the `claude agents` poll -
 must run the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
-refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`; the detached
-`wt.exe` window path (exposing name + startedAt only, so the id comes from `claude agents`) still
-exists in the launcher code, but no config key selects it any more.
+refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`.
