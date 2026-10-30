@@ -154,9 +154,12 @@ class Sessions:
         except OSError:
             raise _refuse(f"{what} is not a readable regular file: {path}")
         try:
-            st = os.fstat(fd)
+            self._trust_stat(os.fstat(fd), path, what, directory=directory)
         finally:
             os.close(fd)
+
+    def _trust_stat(self, st, path, what, *, directory=False):
+        """The fstat side of the trust checks: kind, owner, mode (R-24)."""
         kind_ok = stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)
         if not kind_ok:
             raise _refuse(f"{what} is not a regular file: {path}")
@@ -164,6 +167,33 @@ class Sessions:
             raise _refuse(f"{what} is not owned by the current user: {path}")
         if st.st_mode & 0o022:
             raise _refuse(f"{what} is group/world-writable: {path}")
+
+    def _read_trusted(self, path, what, *, nofollow=False):
+        """Open once, run the trust checks on the descriptor and read the
+        content from that same fd (R-24): the bytes obeyed are the bytes that
+        passed the checks - never re-open the path by name afterwards."""
+        flags = os.O_RDONLY
+        if nofollow and hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(str(path), flags)
+        except OSError:
+            raise _refuse(f"{what} is not a readable regular file: {path}")
+        try:
+            if self._platform != "win32":
+                self._trust_stat(os.fstat(fd), path, what)
+            chunks = []
+            while True:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    raise _refuse(f"{what} is not a readable regular file: {path}")
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
 
     def _load_config(self):
         path = self._config_file()
@@ -178,10 +208,14 @@ class Sessions:
             if os.path.islink(path):
                 raise _refuse(f"sessions config must not be a symlink: {path}")
             self._trust(path.parent, "sessions config directory", directory=True)
-            self._trust(path, "sessions config", nofollow=True)
+        # The JSON is read from the descriptor the trust checks ran on, never
+        # re-opened by name after they passed (R-24). The read sits outside
+        # the parse guard: ParameterRefused is a ValueError and must not be
+        # re-read as "not valid JSON".
+        raw = self._read_trusted(path, "sessions config", nofollow=True)
         try:
-            cfg = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            cfg = json.loads(raw)
+        except ValueError:
             raise _refuse(f"sessions config is not valid JSON: {path}")
         if not isinstance(cfg, dict):
             raise _refuse(f"sessions config must be a JSON object: {path}")
@@ -189,6 +223,9 @@ class Sessions:
         return cfg
 
     def _check_config(self, cfg):
+        unknown = sorted(set(cfg) - SESSION_CONFIG_KEYS)
+        if unknown:
+            raise _refuse(f"config has unknown keys: {unknown}")
         roots = self._root_list(cfg, "cwd_roots")
         if not roots:
             raise _refuse("config cwd_roots must be a non-empty list of directories")
@@ -208,22 +245,46 @@ class Sessions:
             # swap the file after the check (the sub-dir finding).
             self._trust(entry.parent, "config mcp_configs entry directory", directory=True)
             self._trust(entry, "config mcp_configs entry")
-        if cfg.get("style_file") is not None:
-            style = cfg["style_file"]
-            if not isinstance(style, str) or not Path(style).is_absolute() or not Path(style).is_file():
-                raise _refuse(f"config style_file must be an absolute readable file: {style}")
-            self._trust(Path(style).parent, "config style_file directory", directory=True)
-            self._trust(Path(style), "config style_file")
-        if cfg.get("compact_window") is not None:
+        # Scalars: a present key must carry its type - a null is not a value.
+        self._style_arg(cfg)
+        if "compact_window" in cfg:
             window = cfg["compact_window"]
             if not isinstance(window, str) or not window.isdigit():
                 raise _refuse("config compact_window must be a digit string")
-        if cfg.get("ctx_cap_tokens") is not None:
+        if "ctx_cap_tokens" in cfg:
             cap = cfg["ctx_cap_tokens"]
             if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
                 raise _refuse("config ctx_cap_tokens must be a positive int")
-        if cfg.get("windows_launcher") not in (None, "bg", "wt"):
+        if "windows_launcher" in cfg and cfg["windows_launcher"] not in ("bg", "wt"):
             raise _refuse("config windows_launcher must be 'bg' or 'wt'")
+
+    def _style_arg(self, cfg):
+        """style_file: resolves inside cwd_roots/file_roots, is a regular file
+        that is not a symlink (lstat) and passes the owner/mode trust checks
+        (R-24). Ancestor directories beyond the immediate parent are covered
+        by the documented same-user limit, not checked here."""
+        if "style_file" not in cfg:
+            return None
+        style = cfg["style_file"]
+        if not isinstance(style, str):
+            raise _refuse(f"config style_file must be a string: {style!r}")
+        if not Path(style).is_absolute():
+            raise _refuse(f"config style_file must be an absolute readable file: {style}")
+        raw = Path(style)
+        try:
+            mode = os.lstat(raw).st_mode
+        except OSError:
+            raise _refuse(f"config style_file must be an absolute readable file: {style}")
+        if stat.S_ISLNK(mode):
+            raise _refuse(f"config style_file must not be a symlink: {style}")
+        path = raw.resolve()
+        if not self._inside(path, self._file_roots(cfg)):
+            raise _refuse(f"config style_file is outside the configured roots: {style}")
+        if not path.is_file():
+            raise _refuse(f"config style_file must be an absolute readable file: {style}")
+        self._trust(path.parent, "config style_file directory", directory=True)
+        self._trust(path, "config style_file")
+        return path
 
     def _root_list(self, cfg, key):
         raw_list = cfg.get(key)
@@ -314,10 +375,11 @@ class Sessions:
         return text
 
     def _style_text(self, cfg):
-        style = cfg.get("style_file")
-        if not style:
+        path = self._style_arg(cfg)
+        if path is None:
             return None
-        return Path(style).read_text(encoding="utf-8").strip()
+        # The text is read from the descriptor the checks ran on (R-24).
+        return self._read_trusted(path, "config style_file", nofollow=True).decode("utf-8").strip()
 
     def _handoff_arg(self, handoff, cfg):
         if not isinstance(handoff, str) or not handoff:

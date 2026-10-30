@@ -1604,3 +1604,81 @@ def test_unexpected_outcome_survives_audit_write_failure(site, monkeypatch):
         go(site, s)
     assert "RuntimeError" in str(exc.value) and "backend exploded" in str(exc.value)
     assert "audit" in exc.value.warning  # the refusal stands; the caller is warned
+
+
+def test_style_file_stays_inside_roots_and_refuses_symlinks(site, tmp_path_factory):
+    stray = tmp_path_factory.mktemp("stray-style")
+    outside = stray / "style.txt"
+    outside.write_text("be terse\n")
+    outside.chmod(0o600)
+    cfg = json.loads(site.cfg.read_text())
+    out_cfg = site.tmp_path / "sessions-style-out.json"
+    write_config(out_cfg, json.dumps({**cfg, "style_file": str(outside)}))
+    with pytest.raises(ParameterRefused, match="style_file"):
+        go(site, make(site, FakeRun(), config_path=out_cfg))  # style_file must resolve inside cwd_roots/file_roots
+    real = site.tmp_path / "style.txt"
+    real.write_text("be terse\n")
+    real.chmod(0o600)
+    alias = site.tmp_path / "style-alias.txt"
+    alias.symlink_to(real)
+    sym_cfg = site.tmp_path / "sessions-style-sym.json"
+    write_config(sym_cfg, json.dumps({**cfg, "style_file": str(alias)}))
+    with pytest.raises(ParameterRefused, match="symlink"):
+        go(site, make(site, FakeRun(), config_path=sym_cfg))  # the configured style path itself must be the real file
+    ok_cfg = site.tmp_path / "sessions-style-ok.json"
+    write_config(ok_cfg, json.dumps({**cfg, "style_file": str(real)}))
+    run = FakeRun(stdout="session " + UUID1)
+    res = go(site, make(site, run, config_path=ok_cfg))
+    assert res["ok"] is True
+    argv, _ = run.calls[0]
+    assert argv[-3:] == ["--append-system-prompt", "be terse", PROMPT]
+
+
+def test_config_and_style_are_read_from_the_checked_fd(site, monkeypatch):
+    import io
+    style = site.tmp_path / "style.txt"
+    style.write_text("be terse\n")
+    style.chmod(0o600)
+    cfg2 = site.tmp_path / "sessions-fd.json"
+    write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_file": str(style)}))
+    forbidden = {str(cfg2.resolve()), str(style.resolve())}
+    real_open, real_io_open = open, io.open
+
+    def guard(fn):
+        def wrapped(file, *args, **kwargs):
+            # A by-name open of the config or the style file is exactly the
+            # finding: the checked fd is the only fd its bytes may come from.
+            if isinstance(file, (str, Path)) and str(Path(file).resolve()) in forbidden:
+                raise AssertionError("config and style_file must be read from the checked fd")
+            return fn(file, *args, **kwargs)
+        return wrapped
+
+    monkeypatch.setattr("builtins.open", guard(real_open))
+    monkeypatch.setattr(io, "open", guard(real_io_open))
+    run = FakeRun(stdout="session " + UUID1)
+    res = go(site, make(site, run, config_path=cfg2))
+    assert res["ok"] is True
+    argv, _ = run.calls[0]
+    assert argv[-3:] == ["--append-system-prompt", "be terse", PROMPT]
+
+
+def test_config_rejects_unknown_keys_and_bad_scalar_types(site):
+    cfg = json.loads(site.cfg.read_text())
+
+    def refused(over, match="config"):
+        bad = site.tmp_path / "sessions-bad.json"
+        write_config(bad, json.dumps({**cfg, **over}))
+        with pytest.raises(ParameterRefused, match=match):
+            go(site, make(site, FakeRun(), config_path=bad))
+
+    refused({"extra": 1}, match="unknown")  # an unknown top-level key refuses every action
+    refused({"style_file": None})           # a present key must carry its type - null is not a value
+    refused({"style_file": 5})
+    refused({"compact_window": None})
+    refused({"compact_window": []})
+    refused({"ctx_cap_tokens": None})
+    refused({"ctx_cap_tokens": True})       # a bool is not a positive int
+    refused({"ctx_cap_tokens": 1.5})
+    refused({"windows_launcher": None})
+    refused({"windows_launcher": "cmd"})    # only "bg" or "wt"
+    refused({"windows_launcher": 1})

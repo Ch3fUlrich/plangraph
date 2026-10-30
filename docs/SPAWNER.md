@@ -743,17 +743,24 @@ The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
 `~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `file_roots`, `models`,
 `efforts`, `permission_modes`, `mcp_configs`, `style_file`, `compact_window`, `ctx_cap_tokens`,
 `windows_launcher`. It fails closed - an unknown key, bad scalar or missing file refuses every
-action and there is no default model. When unset, `ctx_cap_tokens` defaults to 300000 and
+action and there is no default model. A present key must carry its type and may not be `null`:
+`style_file` a string path, `windows_launcher` only `bg` or `wt`, `compact_window` a digit string,
+`ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
 `compact_window` to `330000`.
 
 On POSIX (skipped on Windows) every file the config makes us obey must be ours alone: the config
 itself must not be a symlink and must be a regular file owned by the current user and not
 group/world-writable; the same ownership and mode checks apply to its directory, to every
-`mcp_configs` entry and to `style_file`, plus the directory each of those lives in. Checks fstat
-the opened file, never the path, and a symlink alias to an allowed file is fine because the
-resolved path is what is compared. These checks prove the files are owned by the invoking user
-account and writable by nobody else - they cannot defend against that same account or root
-rewriting them, and on Windows they are not applied at all.
+`mcp_configs` entry and to `style_file`, plus the directory each of those lives in (only that
+immediate parent; deeper ancestors are covered by the same-account limit below). Checks fstat
+the opened file, never the path, and a symlink alias to an allowed `mcp_config` is fine because the
+resolved path is what is compared. `style_file` is stricter: it must resolve inside
+`cwd_roots`/`file_roots` and must not be a symlink itself - the configured path is lstat'ed. The
+config and `style_file` are read through the descriptor their checks ran on, so the bytes obeyed
+are the bytes that passed the checks and a path swapped after a check cannot substitute content.
+These checks prove the files are owned by the invoking user account and writable by nobody else -
+they cannot defend against that same account or root rewriting them, and on Windows they are not
+applied at all.
 
 State lives under `<spawner state>/sessions/`: a `<name>.json` record per session, `<name>.prompt.txt`
 (0600), the `<name>.ready.json` marker (handoff, card), and `audit.log` - one scrubbed JSON line per
