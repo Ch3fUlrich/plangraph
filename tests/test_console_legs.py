@@ -45,9 +45,9 @@ def test_spend_store_and_missing(tmp_path):
     from plangraph.spawner.credit import record_spend, credit_report
     db = tmp_path / 'opencode.db'
     with sqlite3.connect(db) as conn:
-        conn.execute('CREATE TABLE session_v2 (id TEXT, title TEXT)')
+        conn.execute('CREATE TABLE session_v2 (id TEXT, title TEXT, time_created INTEGER)')
         conn.execute('CREATE TABLE session_message (session_id TEXT, type TEXT, data TEXT)')
-        conn.execute("INSERT INTO session_v2 VALUES ('s', 'plangraph-j')")
+        conn.execute("INSERT INTO session_v2 VALUES ('s', 'plangraph-j', 1000)")
         conn.execute('INSERT INTO session_message VALUES (?, ?, ?)',
                      ('s', 'assistant', json.dumps({'cost': 1.25, 'tokens': {'input': 20, 'output': 3}})))
     leg = next(l for l in DEFAULT_LEGS if l.tier == 'credit')

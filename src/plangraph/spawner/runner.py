@@ -813,7 +813,7 @@ class SpawnerRunner:
             except Exception:
                 pass
             self._check_git_config_guard(job_id)
-            from .credit import capture_spend; capture_spend(self.jobs.get(job_id), self._child_envs.get(job_id, os.environ))
+            from .credit import capture_spend; capture_spend(self.jobs[job_id], self._child_envs.get(job_id, os.environ))
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
