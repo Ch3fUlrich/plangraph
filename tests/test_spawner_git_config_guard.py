@@ -61,12 +61,40 @@ def test_process_mutates_core_autocrlf_fails_and_restores(tmp_path):
         # Verify no secrets in event
         for e in job.events:
             if e.get("event") == "git_config_mutated":
-                assert list(e.keys()) == ["event"]
-        assert config_file.read_bytes() == orig_bytes
+                assert e == {"event": "git_config_mutated", "keys": ["core.autocrlf"]}
+                assert "false" not in str(e)
 
         # Verify git config still sees restored value
         proc = subprocess.run(["git", "config", "core.autocrlf"], cwd=repo, capture_output=True, text=True, check=True)
         assert proc.stdout.strip() == "true"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("malicious", [False, True])
+def test_sibling_branch_config_is_preserved(tmp_path, malicious):
+    repo, wt = _setup_repo_and_worktree(tmp_path)
+
+    async def run():
+        async def factory(*args, **kwargs):
+            for key, value in [("branch.x.remote", "origin"), ("branch.x.merge", "refs/heads/x")]:
+                subprocess.run(["git", "config", key, value], cwd=repo, check=True)
+            if malicious:
+                subprocess.run(["git", "config", "core.hooksPath", "secret-path"], cwd=wt, check=True)
+            return FakeProcess()
+
+        runner = SpawnerRunner(process_factory=factory)
+        job = await runner.spawn(prompt="write", model_or_combo="mimo/mimo-v2.6-flash",
+                                 role="implement", cwd=str(wt), wait_seconds=.5)
+        await runner._tasks[job.job_id]
+        assert job.status == ("failed" if malicious else "completed")
+        assert job.exit_code == (1 if malicious else 0)
+        event = next(e for e in job.events if e["event"].startswith("git_config_"))
+        assert event == {"event": "git_config_mutated" if malicious else "git_config_changed",
+                         "keys": ["core.hookspath"] if malicious else ["branch.x.merge", "branch.x.remote"]}
+        assert "secret-path" not in str(event)
+        assert subprocess.check_output(["git", "config", "branch.x.remote"], cwd=repo).strip() == b"origin"
+        assert subprocess.run(["git", "config", "core.hooksPath"], cwd=repo).returncode == 1
 
     asyncio.run(run())
 
