@@ -84,6 +84,15 @@ def test_src_change():
     assert res["full"] is False
 
 
+def test_skill_page_change_runs_pytest():
+    res = select(["skills/routing-registry/references/remove.md"])
+    assert res["pytest"] is True
+    assert res["pytest-postgres"] is False
+    assert res["rust"] is False
+    assert res["scrub"] is True
+    assert res["full"] is False
+
+
 def test_ci_github_workflow_full():
     res = select([".github/workflows/tests.yml"])
     assert res["full"] is True

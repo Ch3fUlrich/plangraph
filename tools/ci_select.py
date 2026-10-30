@@ -23,6 +23,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "tools/",
     "vendor/",
     "rust/",
+    "skills/",
 )
 
 
@@ -88,6 +89,10 @@ def select(paths: list[str]) -> dict[str, bool]:
     res["full"] = False
 
     for p in norm_paths:
+        if p.startswith("skills/"):
+            # skill pages are guarded by tests/test_skill_*.py
+            res["pytest"] = True
+            continue
         if _is_docs_class(p):
             continue
         if any(p.startswith(prefix) for prefix in ("src/", "tests/", "tools/", "vendor/")):

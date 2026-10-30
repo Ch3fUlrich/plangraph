@@ -25,6 +25,15 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
 Work that covers two plan items is two lanes.
 
+## File size
+
+A tracked source, test, script or doc file stays at or under 400 lines; over 400, split it
+by responsibility before adding more. `python3 tools/check_file_size.py` enforces this in CI
+and in the pre-push hook. Files that were larger when the gate landed are listed in
+`.filesize-baseline`: such a file may shrink, never grow, and the baseline itself only
+shrinks (`--update-baseline` lowers counts, never adds). Data and vendored files are not
+counted; a deliberate exemption goes in `.filesize-allow` with a reason.
+
 ## Commits
 
 Every commit message ends with one trailer paragraph — no blank lines inside it:

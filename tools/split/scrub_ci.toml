@@ -1650,3 +1650,27 @@ path = "rust/worker/tests/fixtures/pre_reobserve_cap_park.json"
 rule = "high-entropy"
 value_sha256 = "fc5dfd9cd8ac2cd14bd1e7beaa4e83c343c47b1f6ed94f7726872bde6a33c7d5"
 why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "skills/mcp-servers-setup/references/graphify.md"
+rule = "credential-shape"
+value_sha256 = "fc67a1bb67c9a623c2e88496200c02127fd31f5f87619ced09d5b8b57d706518"
+why = "relative path to the graphify launcher in a skill doc, not a credential"
+
+[[scrub.allow_value]]
+path = "skills/mcp-servers-setup/references/playwright.md"
+rule = "credential-shape"
+value_sha256 = "4f93b07a2074bcf2a57473c1f134200ae995bf51f37a1e74f57b46c2ec0c668c"
+why = "relative path to the lazy Playwright MCP proxy script in a skill doc, not a credential"
+
+[[scrub.allow_value]]
+path = "skills/mcp-servers-setup/references/playwright.md"
+rule = "high-entropy"
+value_sha256 = "37652498a8c71e7de8769bbe695d88b6f9275193f962674283e3144f9cdc0a44"
+why = "env var name and test value (idle seconds) in a skill doc, not a secret"
+
+[[scrub.allow_value]]
+path = "skills/mcp-servers-setup/references/playwright.md"
+rule = "hostname"
+value_sha256 = "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+why = "Docker's documented built-in host alias, not a site hostname"
