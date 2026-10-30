@@ -1396,7 +1396,7 @@ def test_unexpected_exception_is_audited_and_refused(site, monkeypatch):
 
 
 def test_audit_write_failure_after_success_warns(site, monkeypatch):
-    import plangraph.spawner.sessions as mod
+    mod = sys.modules[Sessions._audit.__module__]
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
 
@@ -1684,7 +1684,7 @@ def test_successful_launch_unlinks_stale_ready_marker(site):
 
 
 def test_refusal_outcome_survives_audit_write_failure(site, monkeypatch):
-    import plangraph.spawner.sessions as mod
+    mod = sys.modules[Sessions._audit.__module__]
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
 
@@ -1698,7 +1698,7 @@ def test_refusal_outcome_survives_audit_write_failure(site, monkeypatch):
 
 
 def test_timeout_outcome_survives_audit_write_failure(site, monkeypatch):
-    import plangraph.spawner.sessions as mod
+    mod = sys.modules[Sessions._audit.__module__]
     class TimeoutRun(FakeRun):
         def __call__(self, argv, **kw):
             if argv[:2] == ["claude", "--bg"]:
@@ -1717,7 +1717,7 @@ def test_timeout_outcome_survives_audit_write_failure(site, monkeypatch):
 
 
 def test_action_failed_outcome_survives_audit_write_failure(site, monkeypatch):
-    import plangraph.spawner.sessions as mod
+    mod = sys.modules[Sessions._audit.__module__]
     run = FakeRun(stdout="session " + UUID1, launch_rc=1)
     s = make(site, run)
 
@@ -1731,7 +1731,7 @@ def test_action_failed_outcome_survives_audit_write_failure(site, monkeypatch):
 
 
 def test_run_oserror_outcome_survives_audit_write_failure(site, monkeypatch):
-    import plangraph.spawner.sessions as mod
+    mod = sys.modules[Sessions._audit.__module__]
     class OsErrRun(FakeRun):
         def __call__(self, argv, **kw):
             if argv[:2] == ["claude", "--bg"]:
@@ -1750,7 +1750,7 @@ def test_run_oserror_outcome_survives_audit_write_failure(site, monkeypatch):
 
 
 def test_unexpected_outcome_survives_audit_write_failure(site, monkeypatch):
-    import plangraph.spawner.sessions as mod
+    mod = sys.modules[Sessions._audit.__module__]
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
 
