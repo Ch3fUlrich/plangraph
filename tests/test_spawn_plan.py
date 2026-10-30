@@ -82,7 +82,7 @@ def test_benchmark_within_tier_only():
     assert p.first_leg.family == "gemini"
     assert p.legs[-1].tier == "paid" and p.p_source == "operator-order"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons
-    p_rev = plan_spawn(CARD, role="review", benchmark=rows)
+    p_rev = plan_spawn(CARD, role="review", writer_families=("claude",), benchmark=rows)
     assert p_rev.p_source == "benchmark"
 
 

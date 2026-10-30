@@ -14,6 +14,14 @@ retired predecessor skill (removed 2026-10-26; its tier-order rule is kept
 in substance in [tier-order](references/tier-order.md)). Code, tests and apply
 scripts reference this skill; they do not restate it.
 
+**Picking a model for a run: ask `route`.** The AutoOS checkout is read-only
+(D-3209): never pick a writer or seat from its registry, resolver or combos.
+Ask the plangraph spawner (MCP `plangraph_agent_route`, or
+`python -m plangraph.spawner.cli route --role <implement|review> --card '<json>'`;
+a review also needs `--writer-family <family>`, else it refuses) and spawn what
+it returns (`spawn --seats` for every review seat). This skill only covers
+changing the registry, not choosing from it.
+
 ## Files (details: [file map](references/file-map.md))
 
 | Path | Role |

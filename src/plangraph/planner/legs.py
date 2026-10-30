@@ -31,6 +31,9 @@ HARNESSES = ("qodercli", "opencode", "agy")
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
 TOOL_MODES = ("tools", "inline-only")
+#: Models that never sit as a review seat, routed or hand-picked (D-3225:
+#: opencode-go/qwen3.8-flash via OmniRoute returned empty content 6/6, ~289 s).
+NO_VERDICT_SEATS = frozenset({"opencode-go/qwen3.8-flash"})
 
 
 @dataclass(frozen=True)

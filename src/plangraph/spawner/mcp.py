@@ -12,6 +12,7 @@ from __future__ import annotations
 from plangraph.routing_errors import ParameterRefused
 
 import asyncio
+import copy
 import json
 import sys
 from typing import Any, Mapping
@@ -102,6 +103,10 @@ TOOLS_METADATA = [
 ]
 
 
+# D-3244: the schema names the field route refuses without, so callers send it.
+CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': {
+    'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
+    'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}
 for _tool in TOOLS_METADATA:
     if _tool['name'] in ('plangraph_agent_status', 'plangraph_agent_cancel'):
         _tool['inputSchema']['properties']['run_id'] = {'type': 'string'}
@@ -109,7 +114,7 @@ for _tool in TOOLS_METADATA:
     if _tool['name'] == 'plangraph_agent_spawn':
         _tool['inputSchema']['required'] = ['prompt', 'card']
         _tool['inputSchema']['properties'].update({
-            'card': {'type': 'object'}, 'override_reason': {'type': 'string'},
+            'card': copy.deepcopy(CARD_SCHEMA), 'override_reason': {'type': 'string'},
             'writer_families': {'type': 'array', 'items': {'type': 'string'}},
             'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'},
@@ -120,7 +125,7 @@ for _verb in ('route', 'ps', 'result'):
     TOOLS_METADATA.append({'name': 'plangraph_agent_' + _verb,
         'description': 'Card-based agent ' + _verb,
         'inputSchema': {'type': 'object', 'properties': {
-            'card': {'type': 'object'}, 'role': {'type': 'string'},
+            'card': copy.deepcopy(CARD_SCHEMA) if _verb == 'route' else {'type': 'object'}, 'role': {'type': 'string'},
             'run_id': {'type': 'string'}, 'writer_families': {'type': 'array', 'items': {'type': 'string'}}},
             'required': ['card'] if _verb == 'route' else (['run_id'] if _verb == 'result' else [])}})
 
