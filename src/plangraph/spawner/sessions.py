@@ -568,8 +568,10 @@ class Sessions:
         """Map a just-launched session to its real session id. A full UUID in
         the launcher's own stdout wins outright (unless it is the excluded,
         replaced id); otherwise `claude agents` is polled every 0.5 s until the
-        resolve budget expires: the short id matches a row `id` or a `sessionId`
-        prefix, else the newest `background` row by name + startedAt near the
+        resolve budget expires: the short id matches a `background` row of the
+        launched name by `id` or `sessionId` prefix (a short id alone is not
+        authority: name and kind must already identify the launched session's
+        own row), else the newest `background` row by name + startedAt near the
         launch (launched_ms is taken before the process starts, R-18). The
         previous session id is excluded from every lookup - full UUID, short id
         and fallback alike - so a relaunch can never resolve to the session it
@@ -587,6 +589,8 @@ class Sessions:
             if short:
                 token = short.group(1)
                 for row in rows:
+                    if row.get("name") != name or row.get("kind") != "background":
+                        continue
                     sid = row.get("sessionId")
                     if not sid or sid == exclude:
                         continue

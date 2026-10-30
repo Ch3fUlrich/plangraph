@@ -1281,10 +1281,36 @@ def test_excluded_id_rejected_for_full_uuid_short_and_fallback(site):
 
 def test_short_id_matches_row_id_or_session_id_prefix(site):
     row = {"id": "other", "sessionId": SHORT + "-1234-1234-1234-123456789abc",
-           "name": "wrong", "kind": "foreground", "startedAt": 0}
+           "name": "alpha", "kind": "background", "startedAt": 0}
     run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[row])
     res = go(site, make(site, run))
     assert res["session_id"] == row["sessionId"]  # sessionId prefix matches the short id
+
+
+def test_short_id_match_requires_launched_name_and_background_kind(site):
+    # a short id may claim only the launched name's own background row: a
+    # wrong name, a wrong kind and the excluded id are all rejected
+    run = FakeRun(stdout="backgrounded · " + SHORT + " · alpha", agents_rows=[
+        {"id": SHORT, "sessionId": UUID2, "name": "beta", "kind": "background", "startedAt": 0}])
+    res = go(site, make(site, run))
+    assert res["session_id"] is None  # the row name is not the launched name
+    run2 = FakeRun(stdout="backgrounded · " + SHORT + " · beta", agents_rows=[
+        {"id": SHORT, "sessionId": UUID2, "name": "beta", "kind": "foreground", "startedAt": 0}])
+    res2 = go(site, make(site, run2), name="beta", prompt="do beta")
+    assert res2["session_id"] is None  # only kind background may be claimed
+    run3 = FakeRun(stdout="backgrounded · " + SHORT + " · gamma", agents_rows=[
+        {"id": SHORT, "sessionId": UUID2, "name": "gamma", "kind": "background", "startedAt": 0}])
+    res3 = go(site, make(site, run3), name="gamma", prompt="do gamma")
+    assert res3["session_id"] == UUID2  # name + kind match: the short id resolves
+    run4 = FakeRun(stdout="session " + UUID1)
+    s4 = make(site, run4)
+    go(site, s4, name="delta", prompt="do delta")  # delta at UUID1
+    run4.agents_rows = [
+        {"id": SHORT, "sessionId": UUID1, "name": "delta", "kind": "background", "startedAt": 0},
+        {"id": "g", "sessionId": UUID3, "name": "delta", "kind": "background", "startedAt": 2_000_000}]
+    run4.stdout = "backgrounded · " + SHORT + " · delta"
+    res4 = s4.relaunch("delta", force=True)
+    assert res4["session_id"] == UUID3  # the excluded id stays rejected despite name + kind
 
 
 def test_unexpected_exception_is_audited_and_refused(site, monkeypatch):
