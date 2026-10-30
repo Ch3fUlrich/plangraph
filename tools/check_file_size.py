@@ -53,8 +53,9 @@ EXCLUDED_SUFFIXES = (".lock", ".json", ".svg")
 EXCLUDED_NAME_PARTS = (".min.",)
 #: Where the "may shrink, never grow" ratchet reads its reference from.
 REFERENCE_REFS = ("origin/main", "HEAD")
-#: CI sets this to the base ref (origin/main): if it does not resolve, the
-#: gate fails rather than ratchet against HEAD, the change under test.
+#: CI sets this to the base of the change (origin/main on a PR, the pushed-over
+#: sha on a push): it is then the only reference, and the gate fails if it
+#: does not resolve or is HEAD itself, the change under test.
 REQUIRE_BASE_ENV = "FILESIZE_REQUIRE_BASE"
 #: Binary sniff: a NUL byte in this window marks binary content (git's own
 #: test). The gate counts lines of text, and a line count over an image or a
@@ -157,7 +158,7 @@ def read_baseline(path):
         return parse_baseline(handle.read(), BASELINE_NAME)
 
 
-def reference_baseline(root):
+def reference_baseline(root, refs=REFERENCE_REFS):
     """``(counts, errors, origin)`` the ratchet compares against.
 
     ``origin/main`` first - a lane is not allowed to grow the baseline relative
@@ -165,7 +166,7 @@ def reference_baseline(root):
     (a fresh checkout, the first commit of this very file). No reference at
     all means nothing to ratchet against; the per-file limits still hold.
     """
-    for ref in REFERENCE_REFS:
+    for ref in refs:
         run = git(root, "show", "%s:%s" % (ref, BASELINE_NAME))
         if run.returncode == 0:
             counts, errors = parse_baseline(run.stdout,
@@ -279,13 +280,20 @@ def main(argv=None):
     counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
     measured, binaries = measure(root, allowed)
     required = os.environ.get(REQUIRE_BASE_ENV, "")
-    if required and git(root, "rev-parse", "--verify", "--quiet",
-                        required + "^{commit}").returncode != 0:
-        print("check-file-size: %s=%s does not resolve - fetch the base "
-              "(actions/checkout fetch-depth: 0) so the baseline ratchets "
-              "against it, not against HEAD" % (REQUIRE_BASE_ENV, required))
-        return 1
-    ref_counts, ref_errors, ref_origin = reference_baseline(root)
+    if required:
+        base = git(root, "rev-parse", "--verify", "--quiet",
+                   required + "^{commit}")
+        if base.returncode != 0:
+            print("check-file-size: %s=%s does not resolve - fetch the base "
+                  "(actions/checkout fetch-depth: 0) so the baseline ratchets "
+                  "against it, not against HEAD" % (REQUIRE_BASE_ENV, required))
+            return 1
+        if base.stdout.strip() == git(root, "rev-parse", "HEAD").stdout.strip():
+            print("check-file-size: %s=%s is HEAD itself - the ratchet would "
+                  "compare the change with itself" % (REQUIRE_BASE_ENV, required))
+            return 1
+    ref_counts, ref_errors, ref_origin = reference_baseline(
+        root, (required,) if required else REFERENCE_REFS)
     if args.update_baseline:
         counts, lowered, created = proposed_baseline(
             counts, measured, os.path.exists(full_path(root, BASELINE_NAME)))

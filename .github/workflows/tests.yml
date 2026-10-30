@@ -26,7 +26,6 @@ jobs:
   select:
     runs-on: ubuntu-24.04
     outputs:
-      scrub: ${{ steps.sel.outputs.scrub }}
       pytest: ${{ steps.sel.outputs.pytest }}
       pytest-postgres: ${{ steps.sel.outputs.pytest-postgres }}
       rust: ${{ steps.sel.outputs.rust }}
@@ -50,10 +49,8 @@ jobs:
           fi
 
   # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
-  # the private word list never enters CI; output is path:line:rule only.
+  # the private word list never enters CI; output is path:line:rule only. Runs on every change.
   scrub:
-    needs: select
-    if: needs.select.outputs.scrub == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -66,14 +63,15 @@ jobs:
         run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
 
   # AO-400LOC (D-3198): a file over 400 lines needs a .filesize-baseline entry
-  # that may only shrink vs origin/main (full fetch). Own job, never selected.
+  # that only shrinks vs the base: PR origin/main, push the pushed-over sha, else HEAD~1.
   file-size:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
-      - env: {FILESIZE_REQUIRE_BASE: origin/main}
+      - env:
+          FILESIZE_REQUIRE_BASE: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && 'origin/main' || 'HEAD~1' }}
         run: python3 tools/check_file_size.py
 
   pytest:
@@ -360,7 +358,7 @@ jobs:
   ci-gate:
     name: ci-gate
     runs-on: ubuntu-24.04
-    needs: [select, scrub, pytest, pytest-postgres, rust, rust-worker, rust-spike]
+    needs: [select, scrub, file-size, pytest, pytest-postgres, rust, rust-worker, rust-spike]
     if: ${{ always() }}
     steps:
       - uses: actions/checkout@v4

@@ -18,6 +18,11 @@ def test_every_route_in_the_contract_was_called(request, kp):
     _loadgroup = request.config.getoption("loadgroup", False)
     if hasattr(request.config, "workerinput") and _dist != "loadgroup" and not _loadgroup:
         pytest.skip("contract coverage needs --dist loadgroup under xdist")
+    if hasattr(request.config, "workerinput"):
+        assert request.node.nodeid.endswith("@contract"), (
+            "xdist dropped the @contract group suffix (pytest/pytest-xdist "
+            "mismatch, see requirements-ci.txt): the contract files ran on "
+            "several workers, so CALLED is one worker's share")
     here = Path(__file__).parent
     wanted = {p.name for p in here.glob("test_*.py")}
     ran = {Path(str(item.fspath)).name for item in request.session.items}

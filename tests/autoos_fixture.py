@@ -31,18 +31,66 @@ def sh_argloop(text):
     return m.group(0) if m else ""
 
 
+def _ps1_code(text):
+    """Per character of PowerShell `text`: True if it is code, False inside a
+    '...'/"..." string or a # / <# #> comment (so their parens never count)."""
+    code, i, n = [True] * len(text), 0, len(text)
+    while i < n:
+        c, end = text[i], None
+        if text.startswith("<#", i):
+            end = text.find("#>", i + 2)
+            end = n if end < 0 else end + 2
+        elif c == "#":
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+        elif c in "'\"":
+            j = i + 1
+            while j < n:
+                if c == '"' and text[j] == "`":
+                    j += 2
+                    continue
+                if text[j] == c:
+                    if text.startswith(c * 2, j):  # '' / "" is an escape
+                        j += 2
+                        continue
+                    break
+                j += 1
+            end = min(j + 1, n)
+        if end is None:
+            i += 1
+            continue
+        code[i:end] = [False] * (end - i)
+        i = end
+    return code
+
+
+def _code_find(text, code, needle, start=0):
+    i = text.find(needle, start)
+    while i >= 0 and not code[i]:
+        i = text.find(needle, i + 1)
+    return i
+
+
+def strip_ps1(text):
+    """`text` with strings and comments blanked (newlines kept)."""
+    return "".join(c if ok or c == "\n" else " "
+                   for c, ok in zip(text, _ps1_code(text)))
+
+
 def ps1_param(text):
-    """apply.ps1 from [CmdletBinding()] through its param() close, verbatim."""
-    try:
-        head = text.index("[CmdletBinding()]")
-        i = text.index("param(", head) + len("param(")
-    except ValueError:
+    """apply.ps1 from [CmdletBinding()] through its param() close, verbatim;
+    parens inside strings and comments do not count ('' if reshaped)."""
+    code = _ps1_code(text)
+    head = _code_find(text, code, "[CmdletBinding()]")
+    i = _code_find(text, code, "param(", head) if head >= 0 else -1
+    if i < 0:
         return ""
-    depth = 1
+    depth, i = 1, i + len("param(")
     while depth and i < len(text):
-        depth += (text[i] == "(") - (text[i] == ")")
+        if code[i]:
+            depth += (text[i] == "(") - (text[i] == ")")
         i += 1
-    return text[head:i]
+    return text[head:i] if depth == 0 else ""
 
 
 def render_help(autoos, *args):

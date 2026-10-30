@@ -32,7 +32,8 @@ by responsibility before adding more. `python3 tools/check_file_size.py` enforce
 and in the pre-push hook. Files that were larger when the gate landed are listed in
 `.filesize-baseline`: such a file may shrink, never grow, and the baseline itself only
 shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers
-counts, and CI refuses an entry added or raised against `origin/main`. Data and vendored
+counts, and CI refuses an entry added or raised against the change's base (`origin/main`
+on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
 
