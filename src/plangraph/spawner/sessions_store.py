@@ -10,12 +10,18 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 from plangraph.routing_errors import ParameterRefused
 from plangraph.routing_support.private_io import atomic_write_private, append_private
 
 
 _SCRUB_KEYS = frozenset({"reason", "error", "warning", "card", "message", "argv"})
+
+# Per-name action locks (created lazily under the guard): callers come in
+# SESSION-SPAWN-MCP slice 4.
+_NAME_LOCKS = {}
+_NAME_LOCKS_GUARD = threading.Lock()
 
 
 def _scrub_free(value):
@@ -119,17 +125,26 @@ class _StoreMixin:
             raise
         except subprocess.TimeoutExpired as exc:
             outcome = subprocess.TimeoutExpired(_scrub(exc.cmd), exc.timeout)
-            self._audit_guarded(action, name, False, f"timeout after {exc.timeout}s",
-                                None, self._audit_argv, outcome)
+            if not dry:
+                self._audit_guarded(action, name, False, f"timeout after {exc.timeout}s",
+                                    None, self._audit_argv, outcome)
             raise outcome from None
         except _ActionFailed as exc:
-            outcome = {"ok": False, "name": name, "session_id": None}
-            self._audit_guarded(action, name, False, str(exc), None, self._audit_argv, outcome)
+            reason = str(exc)
+            outcome = {"ok": False, "name": name,
+                       "session_id": getattr(exc, "session_id", None),
+                       "error": reason}
+            if not dry:
+                self._audit_guarded(action, name, False, reason, None, self._audit_argv, outcome)
             return _scrub(outcome)
         except (OSError, subprocess.SubprocessError) as exc:
-            outcome = {"ok": False, "name": name, "session_id": None}
-            self._audit_guarded(action, name, False, f"{type(exc).__name__}: {exc}",
-                                None, self._audit_argv, outcome)
+            reason = f"{type(exc).__name__}: {exc}"
+            outcome = {"ok": False, "name": name,
+                       "session_id": getattr(exc, "session_id", None),
+                       "error": reason}
+            if not dry:
+                self._audit_guarded(action, name, False, reason,
+                                    None, self._audit_argv, outcome)
             return _scrub(outcome)
         except Exception as exc:
             # Any other unexpected exception is an internal fault: it is
@@ -178,13 +193,26 @@ class _StoreMixin:
                 out.append(rec)
         return out
 
+    def _name_lock(self, name):
+        """The threading.Lock serializing actions on this name (created under
+        the module guard; stable per name)."""
+        lock = _NAME_LOCKS.get(name)
+        if lock is None:
+            with _NAME_LOCKS_GUARD:
+                lock = _NAME_LOCKS.setdefault(name, threading.Lock())
+        return lock
+
     def _find_record(self, name, session_id):
         if name:
             try:
                 rec = json.loads(self._record_path(name).read_text(encoding="utf-8"))
-                return rec if isinstance(rec, dict) else None
             except (OSError, ValueError):
                 return None
+            # Case-insensitive file systems resolve "Alpha.json" to alpha.json:
+            # a record is returned only under the name it really carries.
+            if isinstance(rec, dict) and rec.get("name") == name:
+                return rec
+            return None
         for rec in self._all_records():
             if session_id and rec.get("session_id") == session_id:
                 return rec

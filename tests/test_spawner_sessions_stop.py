@@ -144,10 +144,13 @@ def test_stop_writes_record_only_to_validated_name_path(site):
     rec = json.loads(rec_path.read_text())
     rec["name"] = "beta"  # a lying record must not redirect the write
     rec_path.write_text(json.dumps(rec))
-    assert s.stop(name="alpha")["ok"] is True
+    # r5 slice 2: a record whose name field does not match the lookup name is
+    # never returned - the lying record refuses the stop outright (fail closed)
+    with pytest.raises(ParameterRefused, match="unknown session"):
+        s.stop(name="alpha")
     out = json.loads(rec_path.read_text())
-    assert out["stopped_ts"] is not None
-    assert not (site.state / "sessions" / "beta.json").exists()
+    assert out["stopped_ts"] is None  # nothing was stopped or written back
+    assert not (site.state / "sessions" / "beta.json").exists()  # never a content-derived path
 
 
 def test_exit_failure_record_state_stopped(site):
