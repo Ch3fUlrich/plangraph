@@ -111,7 +111,7 @@ def test_override_without_catalog_harness_is_refused(tmp_path, monkeypatch):
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
     with pytest.raises(SpawnRefused, match="override model missing registry data: harness"):
-        asyncio.run(svc.spawn(card=CARD, prompt="task", role="review",
+        asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
                               model="claude/claude-haiku-4-5",
                               override_reason="registry route test", dry_run=True))
 

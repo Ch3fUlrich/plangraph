@@ -238,6 +238,12 @@ class SpawnService(SeatSpawnMixin):
             target = model if model is not None else (chosen.model if chosen else None)
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
+            # Writer check before hand_picked: a refused review leaves no override audit line.
+            from plangraph.planner.seats import seat_family, writer_parts
+            reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
+            writers = writer_parts(writer_families) if role == 'review' else set()
+            if role == 'review' and not writers and not reviewed:
+                raise SpawnRefused('review needs a writer family (writer_families or review_of)')
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
@@ -262,14 +268,9 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
-            from plangraph.planner.seats import seat_family, writer_parts
-            reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
             if reviewed and seat_family(chosen.family) == seat_family(reviewed):
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
-            writers = writer_parts(writer_families) if role == 'review' else set()
-            if role == 'review' and not writers and not reviewed:
-                raise SpawnRefused('review needs a writer family (writer_families or review_of)')
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())

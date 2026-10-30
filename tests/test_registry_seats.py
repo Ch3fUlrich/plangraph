@@ -290,10 +290,12 @@ def test_unknown_writer_family_is_refused():
 def test_review_without_writer_family_is_refused(tmp_path, monkeypatch, model):
     # Round-3 qwen MED: no writer named = no family excluded; refuse, fail closed.
     svc = _service(tmp_path / "state", monkeypatch)
-    with pytest.raises(SpawnRefused, match="writer family"):
+    with pytest.raises(SpawnRefused, match="review needs a writer family"):
         asyncio.run(svc.spawn(card=RCARD | HIGH, prompt="r", role="review", model=model,
                               override_reason="registry seat test" if model else None, dry_run=True))
-    with pytest.raises(SpawnRefused, match="writer family"):
+    # Round-4 qwen LOW: the refusal comes before the override audit line.
+    assert not (tmp_path / "state" / "spawn-overrides.jsonl").exists()
+    with pytest.raises(SpawnRefused, match="review needs a writer family"):
         svc.route(RCARD | HIGH, role="review")
 
 
