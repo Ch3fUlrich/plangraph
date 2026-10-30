@@ -413,10 +413,13 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                      tuple(candidate_details), groups, coverage)
 
 
-def validate_model(model):
-    """Admit catalog, registered, gateway or host-listed explicit models."""
+def validate_model(model, *, state=None):
+    """Admit catalog, registered, gateway or host-listed explicit models.
+
+    ``state`` pins the model-list cache directory (the CLI's ``--state``).
+    """
     from .model_admission import validate_model as admit
-    return admit(model)
+    return admit(model, state=state)
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

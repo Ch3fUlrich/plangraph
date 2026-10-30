@@ -154,7 +154,7 @@ def main(argv=None):
             if args.model is not None:
                 from plangraph.planner.routing import validate_model
                 try:
-                    validate_model(args.model)
+                    validate_model(args.model, state=service.state)
                 except Exception as exc:
                     service.save_refusal(exc, args.role)
                     raise

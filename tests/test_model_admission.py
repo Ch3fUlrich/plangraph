@@ -150,3 +150,16 @@ def test_explicit_empty_lists_never_probe(monkeypatch):
     monkeypatch.setattr('plangraph.planner.model_admission.gateway_models', forbidden)
     with pytest.raises(SpawnRefused, match='unknown model'):
         validate_model('omniroute/absent', gateway_list=[], opencode_list=[])
+
+
+def test_cli_state_feeds_model_list_cache(tmp_path, monkeypatch):
+    from pathlib import Path
+    from plangraph.spawner.cli import main
+    calls = []
+    def fake_validate(model, **kwargs):
+        calls.append((model, kwargs))
+        return model
+    monkeypatch.setattr('plangraph.planner.routing.validate_model', fake_validate)
+    assert main(['--state', str(tmp_path), 'spawn', '--model', 'omniroute/x', 'prompt']) == 2
+    assert calls, 'CLI must validate explicit --model'
+    assert Path(calls[0][1].get('state', '')) == tmp_path
