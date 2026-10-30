@@ -585,7 +585,7 @@ class SpawnerRunner:
                 if guard is not None:
                     self._git_guards[job_id] = guard
                 from .opencode_isolation import record_baseline
-                record_baseline(job, work_dir)   # D-3236: a writer that changes nothing fails
+                await asyncio.to_thread(record_baseline, job, work_dir)   # D-3236: no change = failed
             try:
                 proc = await self.process_factory(
                     resolved_exe,

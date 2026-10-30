@@ -24,7 +24,8 @@ def _fake_supervisor(envelope, seen):
     return Supervisor
 
 
-@pytest.mark.parametrize('statuses, code', [(['running', 'refused'], 0), (['refused', 'refused'], 1)])
+@pytest.mark.parametrize('statuses, code', [(['running', 'refused'], 0), (['refused', 'refused'], 1),
+                                            (['failed', 'refused'], 1)])
 def test_cli_spawn_seats_prints_group(tmp_path, monkeypatch, capsys, statuses, code):
     # Live proof on main 7062cc54: `spawn --seats` exited 1 printing "'status'" (cli.py read
     # result['status'] on the seat-group envelope).

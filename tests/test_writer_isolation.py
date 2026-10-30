@@ -93,6 +93,17 @@ def test_writer_with_a_change_or_commit_completes(tmp_path, monkeypatch, act):
 
 
 @pytest.mark.writer_change_check
+def test_writer_in_a_repo_without_commits_is_still_checked(tmp_path, monkeypatch):
+    # Seat finding (qwen run-5ce67bc0): an unborn HEAD made tree_state None and the gate a no-op.
+    work = tmp_path / 'work'
+    subprocess.run(['git', 'init', '-q', str(work)], check=True)
+    job, _ = _run_writer(tmp_path, monkeypatch, work)
+    assert job.status == 'failed' and {'event': 'writer_no_changes'} in job.events
+    job, _ = _run_writer(tmp_path, monkeypatch, work, act=lambda w: (w / 'new.txt').write_text('x'))
+    assert job.status == 'completed'
+
+
+@pytest.mark.writer_change_check
 def test_review_seat_is_not_held_to_a_change(tmp_path, monkeypatch):
     work = _git_repo(tmp_path / 'work')
     job, _ = _run_writer(tmp_path, monkeypatch, work, role='review')

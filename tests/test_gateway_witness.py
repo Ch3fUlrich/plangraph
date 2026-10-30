@@ -23,8 +23,8 @@ class _Runner:
         self.calls.append(model)
 
 
-def _job():
-    return SimpleNamespace(served_model=None, served_family=None, served_witness_reason=None,
+def _job(model='omniroute/cx-gpt-6-luna'):
+    return SimpleNamespace(model_or_combo=model, served_model=None, served_family=None, served_witness_reason=None,
                            witness_kind=None, events=[])
 
 
@@ -37,8 +37,25 @@ def _env(job_id):
 def test_tag_session_sets_header_on_omniroute_provider_only():
     cfg = {'provider': {'omniroute': {}, 'mimo': {}}}
     gw.tag_session(cfg, 'job-1')
+    # Provider-level headers carry the envelope headers to the gateway (build_child_env).
+    assert cfg['provider']['omniroute']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
     assert cfg['provider']['omniroute']['options']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
-    assert 'options' not in cfg['provider']['mimo']
+    assert 'options' not in cfg['provider']['mimo'] and 'headers' not in cfg['provider']['mimo']
+
+
+def test_witness_skips_a_leg_not_served_by_the_gateway():
+    # Seat finding (qwen run-5ce67bc0): every config holds an omniroute block, so a mimo leg was probed.
+    runner, job = _Runner('job-1'), _job('mimo/mimo-v2.6-pro')
+    gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
+    assert not job.events and not runner.calls
+
+
+def test_witness_names_ambiguous_rows():
+    runner, job = _Runner('job-1'), _job()
+    rows = [{'sessionTag': 'plangraph-job-1', 'status': 200, 'model': m, 'provider': 'cx'} for m in ('a', 'b')]
+    gw.witness(runner, 'job-1', job, _env('job-1'), delay=0, fetch=lambda tag, env: rows)
+    assert job.events == [{'event': 'gateway_witness_unavailable',
+                           'reason': 'ambiguous: call log rows name 2 served models'}]
 
 
 def test_served_from_rows_matches_tag_ok_status_and_one_model():
@@ -127,3 +144,4 @@ def test_child_env_never_carries_the_call_log_token(monkeypatch):
     from plangraph.routing_support.clients import build_child_env
     monkeypatch.setenv(gw.TOKEN_ENV, 'tok')
     assert gw.TOKEN_ENV not in build_child_env()
+    assert gw.TOKEN_ENV not in build_child_env({gw.TOKEN_ENV: 'tok'})   # extra_env cannot re-add it

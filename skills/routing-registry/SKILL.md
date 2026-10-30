@@ -17,8 +17,9 @@ scripts reference this skill; they do not restate it.
 **Picking a model for a run: ask `route`.** The AutoOS checkout is read-only
 (D-3209): never pick a writer or seat from its registry, resolver or combos.
 Ask the plangraph spawner — `python -m plangraph.spawner.cli route --role
-<implement|review> --card '<json>'` (MCP `plangraph_agent_route`) — and spawn
-what it returns (`spawn --seats` for every review seat). This skill only covers
+implement --card '<json>'`, for review add `--writer-family <family>` (a review
+without one refuses) (MCP `plangraph_agent_route`) — and spawn what it returns
+(`spawn --seats` for every review seat). This skill only covers
 changing the registry, not choosing from it.
 
 ## Files (details: [file map](references/file-map.md))

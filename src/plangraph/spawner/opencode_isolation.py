@@ -31,13 +31,17 @@ def close_config_layers(child_env):
 
 
 def tree_state(work_dir):
-    """Hash of HEAD plus the full porcelain status; None outside a git work tree."""
-    def git(*args):
+    """Hash of HEAD plus the full porcelain status; None outside a git work tree.
+
+    An unborn HEAD (fresh repo) hashes as ``unborn``: the status still counts.
+    """
+    def git(*args, check=True):
         return subprocess.run(['git', '-C', str(work_dir), *args], capture_output=True,
-                              timeout=30, check=True).stdout
+                              timeout=30, check=check)
     try:
-        return hashlib.sha256(git('rev-parse', 'HEAD') + b'\0' +
-                              git('status', '--porcelain=v1', '-uall')).hexdigest()
+        status = git('status', '--porcelain=v1', '-uall').stdout
+        head = git('rev-parse', '--verify', '-q', 'HEAD', check=False)
+        return hashlib.sha256((head.stdout if head.returncode == 0 else b'unborn') + b'\0' + status).hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
 

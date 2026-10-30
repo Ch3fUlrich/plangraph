@@ -28,13 +28,19 @@ def session_tag(job_id):
 
 
 def tag_session(cfg, job_id):
-    """Add the session header to every ``omniroute`` provider block in an opencode config."""
+    """Add the session header to every ``omniroute`` provider block in an opencode config.
+
+    It goes into the provider-level ``headers`` map, where build_child_env puts the
+    envelope headers that reach the gateway, and into ``options.headers``.
+    """
     for key in ('provider', 'providers'):
         block = (cfg.get(key) or {}).get('omniroute') if isinstance(cfg.get(key), dict) else None
         if isinstance(block, dict):
             options = block.setdefault('options', {})
-            if isinstance(options, dict):
-                options.setdefault('headers', {})[SESSION_HEADER] = session_tag(job_id)
+            for target in (block, options if isinstance(options, dict) else {}):
+                headers = target.setdefault('headers', {})
+                if isinstance(headers, dict):
+                    headers[SESSION_HEADER] = session_tag(job_id)
 
 
 def tagged(config_content, job_id):
@@ -44,6 +50,12 @@ def tagged(config_content, job_id):
 
 def served_from_rows(rows, tag):
     """The one model the gateway served for ``tag``; None when absent or ambiguous."""
+    served = served_models(rows, tag)
+    return served.pop() if len(served) == 1 else None
+
+
+def served_models(rows, tag):
+    """Every model the gateway served (2xx rows) for ``tag``, as ``provider/model``."""
     served = set()
     for row in rows if isinstance(rows, list) else ():
         if not isinstance(row, dict) or row.get('sessionTag') != tag:
@@ -56,7 +68,7 @@ def served_from_rows(rows, tag):
         if ok and model:
             provider = str(row.get('provider') or '').strip()
             served.add(model if '/' in model or not provider else f'{provider}/{model}')
-    return served.pop() if len(served) == 1 else None
+    return served
 
 
 def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=os.environ):
@@ -84,16 +96,24 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=os
 def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     """Record the gateway-served model on ``job`` through the runner's adapter check."""
     fetch = fetch or fetch_rows
+    # Only a leg served through the gateway can have rows: build_child_env adds an
+    # omniroute block to every config, so the tag alone does not mean a gateway leg.
+    if not str(getattr(job, 'model_or_combo', '') or '').startswith('omniroute/'):
+        return
     if job.served_model not in (None, '', 'unwitnessed') or not tagged(env.get('OPENCODE_CONFIG_CONTENT'), job_id):
         return
     tag = session_tag(job_id)
     reason = 'no call log row for the session tag'
     for attempt in range(attempts):   # the gateway may write the row after the response
         try:
-            model = served_from_rows(fetch(tag, env), tag)
+            served = served_models(fetch(tag, env), tag)
         except LookupError as exc:
             reason = str(exc)
             break
+        if len(served) > 1:
+            reason = 'ambiguous: call log rows name %d served models' % len(served)
+            break
+        model = served.pop() if served else None
         if model:
             try:
                 runner.served_witness(job_id, model, adapter_token=runner._adapter_tokens.get(job_id))

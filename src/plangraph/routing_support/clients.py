@@ -165,7 +165,6 @@ def build_child_env(
     preventing the Windows opencode serve port-in-use crash (D-2090 BUG-B).
     """
     env = dict(os.environ)
-    env.pop("PLANGRAPH_GATEWAY_LOG_TOKEN", None)  # spawner-only call-log credential (gateway_witness)
 
     if os.name == "nt":
         critical_windows_vars = (
@@ -230,6 +229,7 @@ def build_child_env(
 
     if extra_env:
         env.update(extra_env)
+    env.pop("PLANGRAPH_GATEWAY_LOG_TOKEN", None)  # spawner-only call-log credential, extra_env included
 
     return env
 
