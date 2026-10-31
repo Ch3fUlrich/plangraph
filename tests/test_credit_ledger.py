@@ -44,7 +44,7 @@ def test_platform_paths(monkeypatch):
     monkeypatch.setattr(credit.sys, 'platform', 'win32')
     assert str(credit.opencode_db_path({'LOCALAPPDATA': '/local'})) == '/local/opencode/opencode.db'
     monkeypatch.setattr(credit.sys, 'platform', 'darwin')
-    assert str(credit.opencode_db_path({'HOME': '/home/u'})) == '/home/u/Library/Application Support/opencode/opencode.db'
+    assert str(credit.opencode_db_path({'HOME': '/Users/user'})) == '/Users/user/Library/Application Support/opencode/opencode.db'
 
 
 def test_retry_and_diagnostic(monkeypatch):
