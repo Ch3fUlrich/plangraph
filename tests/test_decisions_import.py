@@ -239,17 +239,15 @@ def test_bold_before_and_after_number_forms(tmp_path):
     assert rc == 0
     assert err == ""
     items = items_by_id(load(path))
-    assert {"RULE-0-2", "RULE-0-2A", "RULE-0-2B", "RULE-0-1",
+    # bare group heading 0.2 (no tag, no D-id) is dropped, its sub-rules stay
+    assert {"RULE-0-2A", "RULE-0-2B", "RULE-0-1",
             "RULE-1-1", "RULE-1-2"} == set(items)
-    assert items["RULE-0-2"]["title"] == "RULE 0.2: GROUP TITLE IN BOLD"
     assert items["RULE-0-2A"]["title"] == "RULE 0.2a: Sub rule."
     assert items["RULE-0-2B"]["title"] == "RULE 0.2b: Another sub rule."
     assert items["RULE-0-1"]["title"] == "RULE 0.1: AFTER NUMBER."
     assert items["RULE-1-1"]["title"] == \
         "RULE 1.1: Plain rule with a first sentence."
     assert items["RULE-1-2"]["title"] == "RULE 1.2: " + PLAIN[:60]
-    desc = items["RULE-0-2"]["description"]
-    assert desc.startswith("**GROUP TITLE IN BOLD** (trailing note text).")
 
 
 def test_title_fallback_caps():
