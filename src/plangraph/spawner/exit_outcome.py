@@ -5,14 +5,18 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
-TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'no_verdict', 'cancelled')
+TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
 
 
 def fallthrough_reason(service, chosen, job, record):
     from . import leg_state
     from .leg_probe import key as leg_key
-    if getattr(job, 'status', None) == 'timeout' and record.get('role') == 'review':
-        return 'timeout'   # D-3427: seat cap hit, fall through to the next leg
+    if record.get('role') == 'review':
+        # D-3427/D-2913: a hung (cap or stall) or verdictless seat falls through to the next leg.
+        if getattr(job, 'status', None) in ('timeout', 'stalled'):
+            return job.status
+        if {'event': 'no_verdict'} in (getattr(job, 'events', None) or ()):
+            return 'no_verdict'
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
     if line:
         target = service.leg_reader
@@ -54,8 +58,9 @@ def terminal_reason(record):
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
     """
     events = record.get('events') or ()
-    special = next((e['event'] for e in events
-                    if e.get('event') in ('git_config_mutated', 'writer_no_changes', 'no_verdict')), None)
+    # no_verdict counts only when the run ENDED failed: a later seat may have passed.
+    guards = ('git_config_mutated', 'writer_no_changes') + (('no_verdict',) if record.get('status') == 'failed' else ())
+    special = next((e['event'] for e in events if e.get('event') in guards), None)
     if special is not None:
         record['reason'] = special
         return
@@ -80,7 +85,7 @@ def terminal_reason(record):
         return
     if record.get('exit_code') not in (None, 0):
         record['reason'] = (reason or record.get('error')
-                            or ('timeout' if (record.get('attempts') or [{}])[-1].get('skip_reason') == 'timeout' else None)
+                            or ((record.get('attempts') or [{}])[-1].get('skip_reason') if (record.get('attempts') or [{}])[-1].get('skip_reason') in ('timeout', 'stalled') else None)
                             or first_reason(record.get('stderr_tail', ''))
                             or f"harness exit {record['exit_code']}")
 
@@ -110,7 +115,7 @@ def orphaned(record, now):
 def enforce_verdict(role, job):
     """A review seat's verdict is its stdout (D-3226): no VERDICT line = failed/no_verdict."""
     if (role == 'review' and job.status == 'completed'
-            and not re.search(r'^\s*VERDICT:\s*(PASS|FAIL)', job.stdout or '', re.M)):
+            and not re.search(r'^\s*VERDICT:\s*(PASS|FAIL)\s*$', job.stdout or '', re.M)):
         job.status = 'failed'
         job.exit_code = 1
         job.events = getattr(job, 'events', None) or []
