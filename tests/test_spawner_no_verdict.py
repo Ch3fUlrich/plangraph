@@ -40,7 +40,7 @@ def test_review_without_verdict_fails_no_verdict(tmp_path):
     assert record['status'] == 'failed' and record['exit_code'] == 1
     assert record['reason'] == 'no_verdict'
     assert {'event': 'no_verdict'} in record['events']
-    assert record['error'].startswith('no_verdict: ')
+    assert record['error'] == 'no_verdict'
 
 
 def test_review_with_verdict_pass_stays_completed(tmp_path):
