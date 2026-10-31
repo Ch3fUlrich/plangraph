@@ -152,7 +152,7 @@ def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
             'prompt': 'review task',
             'role': 'review', 'writer_families': ['claude'],
             'review_scope': 'per-fixer',
-            'model_or_combo': 'omniroute/cx-gpt-6-luna',
+            'model_or_combo': 'Qwen3.8-Flash',
             'override_reason': 'explicit test override',
             'dry_run': True
         }))
@@ -162,7 +162,7 @@ def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
         'prompt': 'review task',
         'role': 'review', 'writer_families': ['claude'],
         'review_scope': 'batch',
-        'model_or_combo': 'omniroute/cx-gpt-6-luna',
+        'model_or_combo': 'Qwen3.8-Flash',
         'override_reason': 'explicit test override',
         'dry_run': True
     }))
