@@ -29,6 +29,7 @@ from plangraph.spawner.resolver import (
 )
 from plangraph.spawner.risk import evaluate_risk
 from plangraph.spawner.runner import JobInfo, SpawnerRunner
+from plangraph.spawner.session_tools import SESSION_TOOLS, _session_arg_errors, dispatch_session_tool
 
 TOOLS_METADATA = [
     {'name': 'plangraph_agent_probe', 'description': 'Run bounded writer commit probes',
@@ -128,6 +129,9 @@ for _tool in TOOLS_METADATA:
             'seats': {'type': 'boolean', 'description': 'role review: spawn every seat route picks (per writer part); inline-only legs get card.diff_ref inlined'}})
         _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
+TOOLS_METADATA.extend(SESSION_TOOLS)
+
+
 for _verb in ('route', 'ps', 'result'):
     TOOLS_METADATA.append({'name': 'plangraph_agent_' + _verb,
         'description': 'Card-based agent ' + _verb,
@@ -146,13 +150,29 @@ for _tool in TOOLS_METADATA:
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
-    def __init__(self, runner: SpawnerRunner | None = None, *, state=None):
+    def __init__(self, runner: SpawnerRunner | None = None, *, state=None,
+                 session_run=None, session_sleep=None):
         self.runner = runner or SpawnerRunner()
+        self._session_run = session_run
+        self._session_sleep = session_sleep
         from .runner import spawn_service
         self.service = spawn_service(self.runner, state=state)
 
+    def _sessions(self):
+        """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
+        import os
+        from .sessions import Sessions
+        return Sessions(state_root=self.service.state, run=self._session_run,
+                        config_path=os.environ.get('PLANGRAPH_SESSIONS_CONFIG'),
+                        sleep=self._session_sleep)
+
+    async def _session_tool(self, name, arguments):
+        return await dispatch_session_tool(self, name, arguments)
+
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
+        if isinstance(name, str) and name.startswith('plangraph_session_'):
+            return await self._session_tool(name, arguments)
         from .bench_entry import benchmark_options
         if name == 'plangraph_agent_probe':
             from .leg_probe import probe_many

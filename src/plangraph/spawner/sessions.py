@@ -1,0 +1,400 @@
+"""Claude Code session launching for plangraph plan handoff (SESSION-SPAWN-MCP).
+
+Launches background Claude Code agents that bootstrap a plan from a
+``handoff.md`` produced by a writer. ``SessionManager._spawner_session`` and the
+``spawner/mcp.py`` session tools drive the same ``Sessions`` class; config is
+data loaded from a JSON file - no shell command string is ever built from it
+(D-2873). Every outcome is one audited JSON line and nothing escapes untracked.
+
+The config is the trust anchor (docs/SPAWNER.md, "Threat model"): on POSIX it
+is opened once with ``O_NOFOLLOW`` and read from that fd, and must be a regular
+file owned by the current user with mode 0600 or stricter. Other processes of
+the same OS account are trusted - they can already run ``claude`` themselves.
+
+Windows note: ``claude`` is an npm shim (``claude.cmd`` / ``claude.ps1``) on
+Windows and a shim would let cmd.exe parse the prompt, so the Windows path
+resolves ``claude`` to its real ``.exe`` (``shutil.which``) and refuses shims.
+Windows uses the same detached ``claude --bg`` path (D-3193 probe); the cwd
+must already be trusted in Claude Code.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from plangraph.routing_errors import ParameterRefused
+from plangraph.routing_support.private_io import atomic_write_private, append_private
+
+from .sessions_store import _SCRUB_KEYS, _StoreMixin, _scrub, _scrub_free, _scrub_keep, _state
+
+__all__ = ["SESSION_CONFIG_KEYS", "Sessions", "transcript_path"]
+
+
+# Config parsing and fail-closed argument checks live in sessions_config
+# (SESSION-SPAWN-MCP slice 1/4). This import sits here - below _scrub,
+# above class Sessions - on purpose: sessions_config ends by binding _scrub
+# from this module, so both import orders resolve only in this arrangement.
+from plangraph.spawner.sessions_config import (
+    NAME_RE, SESSION_CONFIG_KEYS, _ConfigMixin, _refuse,
+)
+
+# Launch/resolve internals live in sessions_agents (SESSION-SPAWN-MCP slice
+# 2/4) and are re-exported here because callers and tests take these names
+# from this module; the import sits below the sessions_config import for the
+# cross-import-order reason documented above.
+from plangraph.spawner.sessions_agents import (
+    DETACHED, FINISHED_STATES, LAUNCH_TIMEOUT, SHORT_RE, STOP_TIMEOUT,
+    TAIL_BYTES, USAGE_KEYS, UUID_RE, SID_RE, _ActionFailed, _AgentsMixin,
+    transcript_path,
+)
+
+
+class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
+    """Launch / stop / relaunch Claude Code sessions.
+
+    One injectable runner carries every subprocess call (argv list, never a
+    shell string). Constructor: ``state_root`` (session state directory),
+    ``config_path`` (else $PLANGRAPH_SESSIONS_CONFIG), ``run``
+    (injectable), ``now`` (clock), ``platform``, ``resolve_budget`` (seconds to
+    keep polling ``claude agents`` for the new session's row, 0.5 s apart),
+    ``which`` (exe resolver, consulted on win32 only), ``sleep`` (poll wait).
+    """
+
+    def __init__(self, state_root=None, *, config_path=None, run=None,
+                 now=None, platform=None, resolve_budget=15.0, which=None, sleep=None):
+        self._run = run if run is not None else subprocess.run
+        self._now = now if now is not None else time.time
+        self._platform = platform if platform is not None else sys.platform
+        self._which = which if which is not None else shutil.which
+        self._sleep = sleep if sleep is not None else time.sleep
+        self._resolve_budget = float(resolve_budget)
+        self._config_path = config_path or os.environ.get("PLANGRAPH_SESSIONS_CONFIG")
+        if state_root is None:
+            state_root = os.environ.get("PLANGRAPH_SPAWN_STATE") or str(
+                Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "plangraph")
+        self._state = Path(state_root)
+        self._sessions = self._state / "sessions"
+
+    def _start(self, name, rec, argv, env, cwd_path, prompt_arg, exclude=None):
+        """Write-ahead launch (D-3193): the record is written with state
+        "launching", the redacted argv and the pre-start launched_ms BEFORE the
+        process starts, so every later outcome is a state update on a record
+        that already exists. rc 0 + id -> "running" (+ session_id, job_id);
+        rc 0 + no id -> "unknown", ok result with warning; rc != 0 ->
+        "stopped" + stopped_ts and _ActionFailed; TimeoutExpired / OSError /
+        ParameterRefused from the run or the id poll -> "unknown" written and
+        the original exception re-raised. The marker is unlinked only after
+        the "running"/"unknown" write. Returns (session_id, warning)."""
+        launched_ms = self._now() * 1000.0  # before the start: rows near it count
+        # The write-ahead keeps any existing launched_ts: only SUCCESSFUL launches stamp it.
+        rec.update({"state": "launching", "session_id": None, "job_id": None,
+                    "stopped_ts": None, "ts": self._now(),
+                    "launched_ms": launched_ms, "argv": self._shown(argv, prompt_arg)})
+        # The write-ahead record must land before the process starts: if it
+        # cannot, no process is started at all.
+        self._write_record(name, rec)
+        try:
+            sid, warning = self._run_launch(name, argv, env, cwd_path, prompt_arg,
+                                            exclude=exclude, launched_ms=launched_ms)
+        except _ActionFailed:
+            # claude exited non-zero: nothing is live, the run failed outright.
+            rec.update({"state": "stopped", "stopped_ts": self._now()})
+            try:
+                self._write_record(name, rec)
+            except (OSError, ValueError):
+                pass  # the launch failure stays the outcome
+            raise
+        except (subprocess.TimeoutExpired, OSError, ParameterRefused):
+            # The process may have started: state "unknown" records the
+            # possible orphan (session_id null, stopped_ts unset) so list
+            # shows it and relaunch can replace it. The write is best
+            # effort: the launch failure stays the outcome.
+            rec["state"] = "unknown"
+            try:
+                self._write_record(name, rec)
+            except (OSError, ValueError):
+                pass
+            raise
+        rec.update({"state": "running" if sid else "unknown",
+                    "session_id": sid, "job_id": sid[:8] if sid else None,
+                    "ts": self._now()})
+        if sid:  # launched_ts stamps a RESOLVED launch only (r6)
+            rec["launched_ts"] = self._now()
+        try:
+            self._write_record(name, rec)
+            self._marker_path(name).unlink(missing_ok=True)  # a stale marker never outlives a launch
+        except (OSError, ValueError) as exc:
+            # The session is running: its id must survive the failure or the
+            # new session is untracked (round 4).
+            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}",
+                                session_id=sid) from exc
+        return sid, warning
+
+    # ---- actions -------------------------------------------------------
+
+    def launch(self, *, name, cwd, model, effort, permission_mode, mcp_config,
+               prompt=None, prompt_file=None, handoff=None, parent=None, dry_run=False):
+        with self._name_lock(str(name)):
+            return self._action("launch", name, lambda: self._launch_inner(
+                name, cwd, model, effort, permission_mode, mcp_config,
+                prompt, prompt_file, handoff, parent, dry_run), dry=dry_run is True)
+
+    def _launch_inner(self, name, cwd, model, effort, permission_mode, mcp_config,
+                      prompt, prompt_file, handoff, parent, dry_run):
+        if not isinstance(dry_run, bool):
+            raise _refuse("dry_run must be a real boolean")
+        if parent is not None and (not isinstance(parent, str) or not parent):
+            raise _refuse("parent must be a non-empty string")
+        cfg = self._load_config()
+        name = self._check_name(name)
+        cwd_path = self._check_cwd(cwd, cfg)
+        model = self._check_choice(model, cfg.get("models"), "model")
+        effort = self._check_choice(effort, cfg.get("efforts"), "effort")
+        mode = self._check_choice(permission_mode, cfg.get("permission_modes"), "permission_mode")
+        mcp_path = self._check_mcp(mcp_config, cfg)
+        text = self._prompt_text(prompt, prompt_file, cfg)
+        handoff_path = self._handoff_arg(handoff, cfg) if handoff is not None else None
+        prompt_arg = (f"Restart from handoff {handoff_path}.\n\n" + text) if handoff_path else text
+        style = self._style_text(cfg)
+        bg_argv, env = self._build_argv(
+            name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
+        self._audit_argv = self._shown(bg_argv, prompt_arg)
+        existing = self._find_record(name, None)
+        if existing is not None:
+            state = _state(existing)
+            if state in ("launching", "running", "unknown"):
+                # A live - or possibly live ("unknown": the process may have
+                # started) - record is only replaced through relaunch (R-19).
+                raise _refuse(f"session {name} has a {state} record; stop or relaunch it")
+            if existing.get("session_id"):
+                # A stopped record's old id may have outlived its stop: a listed id
+                # outside a finished state means the old session is still running
+                # and a launch here would start a second one. Checked in dry_run
+                # too - it only reads (round 4).
+                old = existing.get("session_id")
+                row = next((r for r in self._agents_rows_strict()
+                            if r.get("sessionId") == old), None)
+                if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+                    raise _refuse(f"session {name} old id {old} still listed "
+                                  f"({row.get('state')}); use relaunch")
+        if dry_run:
+            # D-2918: a refusing dry run is still dry; a passing one writes
+            # nothing either - planned argv, cwd and env keys only.
+            return {"argv": self._shown(bg_argv, prompt_arg), "cwd": str(cwd_path),
+                    "env_keys": sorted(k for k in ("FLEET_SESSION_NAME", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"))}
+        prompt_path = self._sessions / f"{name}.prompt.txt"
+        atomic_write_private(prompt_path, text)  # before the session starts (R-19)
+        rec = {"name": name, "cwd": str(cwd_path), "model": model, "effort": effort,
+               "mcp": str(mcp_path), "prompt_file": str(prompt_path),
+               "handoff": str(handoff_path) if handoff_path else None,
+               "parent": parent, "children": [], "ts": None,
+               "session_id": None, "job_id": None,
+               "permission_mode": mode, "platform": self._platform,
+               "stopped_ts": None}
+        sid, warning = self._start(name, rec, bg_argv, env, cwd_path, prompt_arg)
+        result = {"ok": True, "name": name, "session_id": sid,
+                  "_audit_argv": self._shown(bg_argv, prompt_arg)}
+        if warning:
+            result["warning"] = warning
+        return result
+
+    def stop(self, name=None, session_id=None):
+        # Lock the resolved record name (r6); _stop_inner re-reads under it.
+        key = name
+        if not name and session_id:
+            try:
+                _, key = self._find_record_by_id(session_id)
+            except (ParameterRefused, OSError):
+                key = None
+        with self._name_lock(str(key or session_id or "")):
+            return self._action("stop", name or session_id or "", lambda: self._stop_inner(name, session_id))
+
+    def _stop_inner(self, name, session_id):
+        if not name and not session_id:
+            raise _refuse("stop needs a name or id")
+        if name:
+            name = self._check_name(name)
+            rec = self._find_record(name, session_id)
+            if rec is not None and session_id and rec.get("session_id") != session_id:
+                raise _refuse(f"session_id does not match session {name}")
+        else:
+            rec, name = self._find_record_by_id(session_id)
+        if rec is None:
+            raise _refuse(f"unknown session: {name or session_id}")
+        # _ensure_stopped confirms the id is really gone (D-3193); a record
+        # with no session id is not refused - _stop_record resolves or clears.
+        sid = self._ensure_stopped(rec, name)
+        return {"ok": True, "name": name, "session_id": sid}
+
+    def _stop_record(self, rec, name):
+        """claude stop <id> - the one and only stop mechanism, never rm/kill.
+        One strict `claude agents` pre-poll (r7) resolves a null record id
+        (newest non-finished background row of this name within 5 s of launch)
+        and pre-checks it: a listed finished id is gone - stopped without
+        claude; anything else attempts claude stop ONCE (r8). rc 0 is then
+        confirmed by a second strict poll (D-3193); rc 1 refuses "stop failed"
+        unless the id is unlisted before AND after - it had already ended."""
+        sid = rec.get("session_id")
+        if sid is not None and not (isinstance(sid, str) and SID_RE.fullmatch(sid)):
+            raise _ActionFailed("stop refused: bad session id")  # before any poll/argv
+        rows = self._agents_rows_strict()  # pre-poll: resolve + pre-check
+        if not sid:
+            cutoff = float(rec.get("launched_ms") or 0) - 5000.0
+            best = None
+            for row in rows:
+                if row.get("name") != name or row.get("kind") != "background":
+                    continue
+                if str(row.get("state") or "") in FINISHED_STATES:
+                    continue
+                row_sid = row.get("sessionId")
+                if not row_sid:
+                    continue
+                started = row.get("startedAt") or 0
+                if started < cutoff:
+                    continue
+                if best is None or started >= (best.get("startedAt") or 0):
+                    best = row
+            sid = (best or {}).get("sessionId")
+            if not sid:  # nothing resolved: no row to stop, the record ends here
+                self._write_record(name, {**rec, "state": "stopped", "stopped_ts": self._now()})
+                return None
+        row = next((r for r in rows if r.get("sessionId") == sid), None)
+        if row is not None and str(row.get("state") or "") in FINISHED_STATES:
+            # Listed and finished (r7): recovered without claude stop.
+            self._write_record(name, {**rec, "state": "stopped",
+                                      "stopped_ts": self._now(), "session_id": sid})
+            return sid
+        proc = self._run(self._claude_head() + ["stop", sid],
+                         capture_output=True, text=True, timeout=STOP_TIMEOUT)
+        if proc.returncode != 0:
+            if row is None and not any(r.get("sessionId") == sid
+                                       for r in self._agents_rows_strict()):
+                # Unlisted before and after: the session had already ended.
+                self._write_record(name, {**rec, "state": "stopped",
+                                          "stopped_ts": self._now(), "session_id": sid})
+                return sid
+            raise _refuse(f"stop failed: claude stop exited {proc.returncode}")
+        row = next((r for r in self._agents_rows_strict()
+                    if r.get("sessionId") == sid), None)
+        if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+            raise _refuse(f"stop not confirmed: {sid} still {row.get('state')}")
+        self._write_record(name, {**rec, "state": "stopped",
+                                  "stopped_ts": self._now(), "session_id": sid})
+        return sid
+
+    def _ensure_stopped(self, rec, name):
+        """The id behind a record, stopped and confirmed; returns the stopped
+        or confirmed-gone id (None when there is none). Not-recorded-stopped
+        goes through _stop_record; a stopped record's id may outlive its stop
+        - `claude agents` is the truth (D-3193): a listed live id is stopped
+        again, an unlisted or finished one is gone for good."""
+        if _state(rec) != "stopped":
+            return self._stop_record(rec, name)
+        sid = rec.get("session_id")
+        if sid:
+            row = next((r for r in self._agents_rows_strict()
+                        if r.get("sessionId") == sid), None)
+            if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
+                return self._stop_record(rec, name)
+        return sid
+
+    def mark_ready(self, name, handoff, card=None):
+        with self._name_lock(str(name)):  # serializes with launch/relaunch
+            return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
+
+    def _mark_ready_inner(self, name, handoff, card):
+        if card is not None and not isinstance(card, str):
+            raise _refuse("card must be a string")
+        cfg = self._load_config()
+        # The handoff is checked first: a bad handoff is the caller's error to
+        # see, whatever the session state is.
+        handoff_path = self._handoff_arg(handoff, cfg)
+        self._check_name(name)
+        if self._find_record(name, None) is None:
+            raise _refuse(f"unknown session: {name}")
+        marker = {"handoff": str(handoff_path), "card": card, "ts": self._now()}
+        atomic_write_private(self._marker_path(name), json.dumps(_scrub(marker)) + "\n")
+        return {"ok": True, "name": name, "handoff": str(handoff_path)}
+
+    def relaunch(self, name, handoff=None):
+        with self._name_lock(str(name)):
+            return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
+
+    def _relaunch_inner(self, name, handoff):
+        cfg = self._load_config()
+        name = self._check_name(name)
+        rec = self._find_record(name, None)
+        if rec is None:
+            raise _refuse(f"unknown session: {name}")
+        old_sid = rec.get("session_id")
+        handoff_path = self._relaunch_handoff(rec, cfg, name, handoff)
+        # The stored spec is re-validated BEFORE the stop: never lose the session.
+        prompt_path = Path(rec.get("prompt_file") or "")
+        if not str(rec.get("prompt_file") or "") or not prompt_path.is_file():
+            raise _refuse(f"prompt_file is missing for session {name}: {rec.get('prompt_file')}")
+        text = prompt_path.read_text(encoding="utf-8")
+        if text.startswith("-"):
+            raise _refuse("prompt must not start with '-'")
+        cwd_path = self._check_cwd(rec.get("cwd"), cfg)
+        model = self._check_choice(rec.get("model"), cfg.get("models"), "model")
+        effort = self._check_choice(rec.get("effort"), cfg.get("efforts"), "effort")
+        mode = self._check_choice(rec.get("permission_mode"), cfg.get("permission_modes"), "permission_mode")
+        mcp_path = self._check_mcp(rec.get("mcp"), cfg)
+        prompt_arg = (f"Restart from handoff {handoff_path}.\n\n" + text) if handoff_path else text
+        style = self._style_text(cfg)
+        bg_argv, env = self._build_argv(
+            name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
+        self._audit_argv = self._shown(bg_argv, prompt_arg)
+        # Stop + confirm the old session first (D-3193): failure refuses the relaunch.
+        stopped_sid = self._ensure_stopped(rec, name)
+        new_rec = dict(rec)
+        new_rec["handoff"] = str(handoff_path) if handoff_path else None
+        # The relaunch starts through _start (D-3193): its write-ahead record
+        # and every outcome are _start's to write; failure leaves the old gone.
+        sid, warning = self._start(name, new_rec, bg_argv, env, cwd_path, prompt_arg,
+                                   exclude=stopped_sid or old_sid)
+        # The ready marker is unlinked only after _start returned (R-21).
+        try:
+            self._marker_path(name).unlink(missing_ok=True)
+        except (OSError, ValueError) as exc:
+            raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}",
+                                session_id=sid) from exc
+        result = {"ok": True, "name": name, "session_id": sid,
+                  "_audit_argv": self._shown(bg_argv, prompt_arg)}
+        warnings = []
+        if warning:
+            warnings.append(warning)
+        if warnings:
+            result["warning"] = "; ".join(warnings)
+        return result
+
+    def list(self):
+        return self._action("list", "", self._list_inner)
+
+    def _list_inner(self):
+        cfg = self._load_config()
+        cap = cfg.get("ctx_cap_tokens") or 300000
+        rows = self._agents_rows()
+        sessions = []
+        for rec in self._all_records():
+            sid = rec.get("session_id")
+            agent = next((r for r in rows if (sid and r.get("sessionId") == sid)
+                          or (not sid and r.get("name") == rec.get("name")
+                              and r.get("kind") == "background"
+                              and str(r.get("state") or "") not in FINISHED_STATES)), {})
+            tokens = self._context_tokens(rec.get("cwd"), sid)
+            sessions.append({
+                "name": rec.get("name"), "id": sid, "cwd": rec.get("cwd"),
+                "context_tokens": tokens, "context_pct": min(1.0, tokens / cap),
+                "state": agent.get("state") or _state(rec),
+                "ready": (isinstance(rec.get("name"), str)
+                          and bool(NAME_RE.fullmatch(rec["name"]))
+                          and self._marker_path(rec["name"]).is_file()),
+            })
+        return {"sessions": sessions}
