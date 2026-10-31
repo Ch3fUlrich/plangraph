@@ -12,6 +12,7 @@ from plangraph.spawner.leg_state import LegStateStore
 import pytest
 import sys
 import os
+from pathlib import Path
 
 
 
@@ -239,7 +240,8 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     for thread in threads:
         thread.join(3)
         assert not thread.is_alive()
-    assert spawn_service(state=tmp_path).result(record['run_id'])['status'] == 'completed'
+    final = spawn_service(state=tmp_path).result(record['run_id'])
+    assert final['status'] == 'completed', {k: final.get(k) for k in ('exit_code', 'reason', 'error', 'events')}
 
 
 def test_route_and_refusal(tmp_path, capsys):
@@ -381,9 +383,11 @@ def test_cli_wait_returns_after_the_dispatcher_died(tmp_path):
             run_id=run_id, status='running', started=time.time(), ended=None, attempts=[],
             job_id='j-' + run_id, pid=child.pid, supervisor_stderr_path=str(log)))
         started = time.monotonic()
+        src = str(Path(__file__).resolve().parents[1] / 'src')   # the CLI child imports this checkout
         out = subprocess.run([sys.executable, '-m', 'plangraph.spawner.cli', '--state',
                               str(tmp_path), 'wait', run_id],
-                             capture_output=True, text=True, timeout=8)
+                             capture_output=True, text=True, timeout=8,
+                             env={**os.environ, 'PYTHONPATH': os.pathsep.join(filter(None, [src, os.environ.get('PYTHONPATH')]))})
         assert time.monotonic() - started < 3
         final = json.loads(out.stdout)
         assert final['status'] != 'running' and final['ended'] is not None

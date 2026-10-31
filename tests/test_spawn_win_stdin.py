@@ -121,7 +121,7 @@ def test_hermetic_real_process_stdin_count(tmp_path, monkeypatch):
             wait_seconds=5.0,
         )
 
-        assert job.status == "completed"
+        assert job.status == "completed", (job.exit_code, job.events, job.stderr[-800:])
         assert job.exit_code == 0
         assert job.stdout == str(len(_sent(prompt).encode("utf-8")))
         for arg in job.command:
