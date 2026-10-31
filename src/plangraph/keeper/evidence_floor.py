@@ -6,17 +6,24 @@ and ``bases``: ``{repo_key: head_sha}`` for the primary key and, when the item
 has a track and a ``<project>/<track>`` repo is configured, for that track key
 too.  A commit that resolves to the track repo
 (:func:`plangraph.keeper.evidence_repo.repo_key`) is floored against that
-repo's own entry; a floor event predating ``bases`` (legacy, or the repo had
-no head) holds no track floor and the floor check is skipped for that repo
-only.  A malformed ``bases`` payload fails closed.
+repo's own entry; a floor event predating ``bases`` (legacy, or the repo was
+not configured) holds no track floor and the floor check is skipped for that
+repo only, while a recorded ``"unknown"`` entry (repo configured, head
+unusable) refuses.  A malformed ``bases`` payload fails closed.
 
 Resolution rules (:func:`check_floor`):
 
 * ``bind_floor_shas is None`` -- a context from before per-repo floors: the
-  single ``bind_floor_sha`` applies to every repo, exactly as before.
+  single ``bind_floor_sha`` applies to the primary and track keys, exactly as
+  before.
+* a key that is neither the item's project nor its one legitimate
+  ``<project>/<track>`` key -- refused (fail closed): a repo with no
+  ancestry floor for this item never gets the check skipped for it.
 * primary key -- ``bind_floor_sha``, unchanged, failing closed when unset.
 * track key -- ``bases[track_key]``; a missing entry means no floor for that
-  repo (the check is skipped); a malformed map or entry refuses.
+  repo (the check is skipped); the recorded literal ``"unknown"`` (a
+  configured repo with no usable head) refuses; a malformed map or entry
+  refuses.
 """
 from __future__ import annotations
 
@@ -30,6 +37,11 @@ __all__ = ["ref_head", "record_bases", "event_bases", "check_floor"]
 #: The refusal family of the ancestry-floor check (unchanged wording).
 _FLOOR_REFUSAL = (
     "no ancestry floor recorded for this item's last release/re-claim; refusing"
+)
+
+#: The refusal wording for a malformed ``bases`` payload (its own wording).
+_MALFORMED_REFUSAL = (
+    "malformed per-repo floor (bases) on the item's last release/re-claim; refusing"
 )
 
 #: Marker: the floor event's ``bases`` payload cannot be trusted.
@@ -76,28 +88,47 @@ def ref_head(git: Any, project: str) -> str | None:
         return None
 
 
+def _repo_configured(git: Any, key: str) -> bool:
+    """True when *git*'s ``repo_path`` is truthy for *key*: the repo exists.
+
+    An adapter failure cannot prove configuration, so it is not configured.
+    """
+    try:
+        repo_path_fn = getattr(git, "repo_path", None)
+        return callable(repo_path_fn) and bool(repo_path_fn(key))
+    except Exception:  # noqa: BLE001 - an adapter failure proves nothing
+        return False
+
+
 def record_bases(item: Any, git: Any) -> dict:
     """The ``bases`` map to record on a claim/release floor event.
 
     ``{repo_key: head_sha}`` for the primary key (the item's project) and,
     when the item has a track and a ``<project>/<track>`` repo is configured,
-    for that track key too.  A key whose head is unknown (or whose repo is not
-    configured) is skipped, so the map may be empty.  The store records the map
-    only when non-empty -- exactly like ``base``, so a payload with nothing new
-    to say stays byte-identical to a pre-change one.  Never raises.
+    for that track key too.  A key whose head is unknown is skipped -- except
+    the track key, whose configured-but-headless repo records the literal
+    ``"unknown"`` (so a head lookup failure never looks like "not
+    configured"); the primary key keeps today's behaviour and is omitted
+    (``base`` is absent too, and the primary path refuses on a missing base).
+    The store records the map only when non-empty -- exactly like ``base``, so
+    a payload with nothing new to say stays byte-identical to a pre-change
+    one.  Never raises.
     """
-    keys: list[str] = []
-    project = item.get("project") if isinstance(item, dict) else None
-    if isinstance(project, str) and _PROJECT_RE.fullmatch(project):
-        keys.append(project)
-        track = item.get("track")
-        if isinstance(track, str) and _TRACK_RE.fullmatch(track):
-            keys.append(f"{project}/{track}")
     bases: dict = {}
-    for key in keys:
+    project = item.get("project") if isinstance(item, dict) else None
+    if not (isinstance(project, str) and _PROJECT_RE.fullmatch(project)):
+        return bases
+    sha = ref_head(git, project)
+    if sha is not None:
+        bases[project] = sha
+    track = item.get("track")
+    if isinstance(track, str) and _TRACK_RE.fullmatch(track):
+        key = f"{project}/{track}"
         sha = ref_head(git, key)
         if sha is not None:
             bases[key] = sha
+        elif _repo_configured(git, key):
+            bases[key] = "unknown"  # configured, no usable head: say so
     return bases
 
 
@@ -110,8 +141,9 @@ def event_bases(payload: Any) -> Any:
 
     ``{}`` for a legacy event (recorded before per-repo floors) and the raw
     ``bases`` value otherwise; a malformed value (non-dict, or any entry that
-    is not a lowercase 40/64 hex sha) passes through as-is -- or as
-    ``_MALFORMED`` when it cannot -- so :func:`check_floor` fails closed on it.
+    is neither the literal ``"unknown"`` nor a lowercase 40/64 hex sha) passes
+    through as-is -- or as ``_MALFORMED`` when it cannot -- so
+    :func:`check_floor` fails closed on it.
     """
     if not isinstance(payload, dict):
         return _MALFORMED
@@ -122,20 +154,34 @@ def event_bases(payload: Any) -> Any:
 
 
 def _valid_bases(shas: Any) -> bool:
-    """True for a well-formed ``bases`` map: str keys mapping to shas."""
-    return isinstance(shas, dict) and all(
-        isinstance(key, str) and valid_commit_ref(value)
-        for key, value in shas.items()
-    )
+    """True for a well-formed ``bases`` map: str keys mapping to shas.
+
+    Each value must be a str that is either the literal ``"unknown"`` (a
+    configured repo whose head was unknown) or a lowercase 40/64-char hex sha.
+    """
+    if not isinstance(shas, dict):
+        return False
+    for key, value in shas.items():
+        if not isinstance(key, str):
+            return False
+        if value == "unknown":
+            continue
+        if not (isinstance(value, str) and value == value.lower()
+                and valid_commit_ref(value)):
+            return False
+    return True
 
 
 def check_floor(ctx: Any, repo: Any, commit: str, ref: dict,
                 project_key: Any, item: Any = None) -> Result | None:
     """Run the ancestry-floor check for the repo *commit* resolved to.
 
-    ``project_key`` is the ``repo_key`` result: the item's own project key is
-    floored by ``bind_floor_sha`` (unchanged), a ``<project>/<track>`` key by
-    that repo's entry in ``bind_floor_shas``.  Returns ``None`` when the
+    ``project_key`` is the ``repo_key`` result.  The ONE legitimate track key
+    is computed from the item (``f"{project}/{track}"``); ``project_key``
+    equal to the item's project takes the primary path (``bind_floor_sha``,
+    unchanged), equal to that track key the track path (``bases[track_key]``).
+    Any other ``project_key`` -- a foreign slashed key, a missing item, a
+    missing track -- is refused (fail closed).  Returns ``None`` when the
     verification should continue (the check passed, or no floor applies to
     this repo) and the refusal :class:`Result` otherwise.
     """
@@ -144,17 +190,31 @@ def check_floor(ctx: Any, repo: Any, commit: str, ref: dict,
     shas = getattr(ctx, "bind_floor_shas", None)
     floor = getattr(ctx, "bind_floor_sha", None)
     primary = item.get("project") if isinstance(item, dict) else None
+    track = item.get("track") if isinstance(item, dict) else None
     track_key = (
-        project_key if isinstance(project_key, str) and "/" in project_key
-        and project_key != primary else None
+        f"{primary}/{track}"
+        if isinstance(primary, str) and isinstance(track, str)
+        and _TRACK_RE.fullmatch(track) else None
     )
+    is_primary = isinstance(primary, str) and project_key == primary
+    is_track = track_key is not None and project_key == track_key
+    if not (is_primary or is_track):
+        return Result(
+            False,
+            f"commit resolves to repo {project_key} which has no ancestry floor"
+            " for this item; refusing",
+            ref,
+        )
     if shas is not None:
         if not _valid_bases(shas):
-            return Result(False, _FLOOR_REFUSAL, ref)  # malformed: fail closed
-        if track_key is not None:
+            return Result(False, _MALFORMED_REFUSAL, ref)  # malformed: fail closed
+        if is_track:
             if track_key not in shas:
                 return None  # no floor for that repo
-            floor = shas[track_key]
+            entry = shas[track_key]
+            if entry == "unknown":
+                return Result(False, _FLOOR_REFUSAL, ref)  # configured, no head
+            floor = entry
     if not isinstance(floor, str) or not valid_commit_ref(floor):
         return Result(False, _FLOOR_REFUSAL, ref)
     is_ancestor_fn = getattr(getattr(ctx, "git", None), "is_ancestor", None)
