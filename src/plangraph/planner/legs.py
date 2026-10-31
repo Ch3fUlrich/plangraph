@@ -104,13 +104,14 @@ DEFAULT_LEGS = (
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
 
-# D-2683 operator writer order
+# D-2683 operator writer order (free-first): the free tier leads, then
+# subscription.  agy-sonnet-5.5 is orchestrate-only and never a writer here.
 WRITER_ORDER: tuple[str, ...] = (
-    "agy-gemini-3.8-flash",
-    "mimo-v2.6-pro",
-    "openrouter-free",
     "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free",
+    "openrouter-free",
+    "agy-gemini-3.8-flash",
+    "mimo-v2.6-pro",
     "mimo-v2.6-flash",
     "cx-gpt-6.1-sol",
 )

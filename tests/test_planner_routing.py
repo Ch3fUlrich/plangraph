@@ -310,18 +310,17 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
 
 
 def test_writer_order_d2683_implement_first_seven():
-    # (a) implement plan for a public standard card (estimate_tokens 20000, no exclusions)
-    # lists exactly agy-gemini-3.8-flash, mimo-v2.6-pro, openrouter-free,
-    # opencode-deepseek-v4.1-flash-free, opencode-glm-5.3-flash-free, mimo-v2.6-flash,
+    # (a) implement plan, public standard card (20000 tokens, no exclusions): free tier first, then
+    # subscription: deepseek-free, glm-free, openrouter-free, agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash,
     # cx-gpt-6.1-sol as the first 7 leg ids in that order
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
     expected = [
-        "agy-gemini-3.8-flash",
-        "mimo-v2.6-pro",
-        "openrouter-free",
         "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free",
+        "openrouter-free",
+        "agy-gemini-3.8-flash",
+        "mimo-v2.6-pro",
         "mimo-v2.6-flash",
         "cx-gpt-6.1-sol",
     ]
@@ -329,14 +328,15 @@ def test_writer_order_d2683_implement_first_seven():
 
 
 def test_writer_order_d2683_unavailable_skipped():
-    # (b) a leg marked unavailable is skipped and the next in WRITER_ORDER leads
+    # (b) a leg marked unavailable is skipped and the free tier still leads
     c = {"estimate_tokens": 20000, "risk_tags": []}
     def mock_reader(model, **kwargs):
         if model == "gemini-3.8-flash":
             return {"state": "limited", "evidence": {"status": 429}}
         return {"state": "available", "evidence": None}
     plan = plan_spawn(c, role="implement", leg_reader=mock_reader)
-    assert plan.first_leg.id == "mimo-v2.6-pro"
+    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert "agy-gemini-3.8-flash" not in [leg.id for leg in plan.legs]
 
 
 def test_writer_order_d2683_review_order_unchanged():
@@ -352,16 +352,15 @@ def test_writer_order_d2683_writer_family_exclusion():
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
     assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
-    assert plan_imp.first_leg.id == "mimo-v2.6-pro"
+    assert "gemini" not in {leg.family for leg in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert plan_wf.first_leg.id == "agy-gemini-3.8-flash"
+    assert "agy-gemini-3.8-flash" in [leg.id for leg in plan_wf.legs]
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     # F1 new test: implement plan_spawn with benchmark rows that score cx-gpt-6.1-sol
-    # highest still returns legs in WRITER_ORDER (first leg agy-gemini-3.8-flash),
-    # and a limited leg is still skipped.
+    # highest still returns legs free-first, and a limited leg is still skipped.
     rows = {
         "omniroute/cx-gpt-6.1-sol": {"model_id": "omniroute/cx-gpt-6.1-sol", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
         "gemini-3.8-flash": {"model_id": "gemini-3.8-flash", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
@@ -374,7 +373,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
 
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader)
-    assert plan.first_leg.id == "agy-gemini-3.8-flash"
+    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
     from plangraph.planner.legs import WRITER_ORDER
@@ -418,7 +417,7 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     c_imp = {"estimate_tokens": 20000, "risk_tags": []}
     plan_imp = plan_spawn(c_imp, role="implement", leg_reader=agy_mock_reader)
     assert plan_imp.first_leg.id != "agy-gemini-3.8-flash"
-    assert plan_imp.first_leg.id == "mimo-v2.6-pro"
+    assert plan_imp.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     assert any(s["leg"] == "agy-gemini-3.8-flash" and s["reason"] == "limited" for s in plan_imp.skipped)
 
     # 2. next_leg_after_provider_stop:

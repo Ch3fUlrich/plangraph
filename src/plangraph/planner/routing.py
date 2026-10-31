@@ -113,7 +113,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                overflow: bool = False, role: str | None = None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
 
-    ``role`` falls back to ``card["role"]``; implement sorts by WRITER_ORDER.
+    ``role`` falls back to ``card["role"]``; implement sorts tier first, WRITER_ORDER inside it.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
@@ -171,7 +171,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                 w_idx = WRITER_ORDER.index(leg.id)
             except ValueError:
                 w_idx = len(WRITER_ORDER)
-            return (w_idx, tier_idx, pos)
+            return (tier_idx, w_idx, pos)
         eligible.sort(key=sort_key)
     else:
         eligible.sort(key=lambda t: (t[0], t[1]))
