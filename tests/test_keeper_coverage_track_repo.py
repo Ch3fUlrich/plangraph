@@ -350,7 +350,7 @@ def test_rogue_track_key_never_selects_repo(w, rogue_track):
     epoch = w.store.claim(w.p("claimant"), key, lease_s=7200)["epoch"]
     w.conn.execute(
         "INSERT INTO evidence (key, epoch, kind, ref, verified) "
-        "VALUES (?, ?, 'commit+ci', json(?), 1)",
+        "VALUES (?, ?, 'commit+ci', ?, 1)",
         (key, epoch, f'{{"commit": "{SHA_A}"}}'),
     )
     w.store.ctx = make_ctx(git=git)
