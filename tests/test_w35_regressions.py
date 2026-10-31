@@ -79,7 +79,7 @@ def test_cli_removed_model_refused(tmp_path, capsys, model, leg, flag):
     assert main(['--state', str(tmp_path), 'spawn', 'task', '--card',
                  '{"estimate_tokens": 1000}', flag, model if flag == '--model' else leg,
                  '--override-reason', 'operator regression check', '--dry-run', '--json']) == 2
-    assert 'unknown model: ' + model in capsys.readouterr().err
+    assert 'unknown model (not in catalog, gateway list or opencode models): ' + model in capsys.readouterr().err
 
 
 def test_linux_working_directory_unquoted(tmp_path):

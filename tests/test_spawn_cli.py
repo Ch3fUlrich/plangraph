@@ -15,6 +15,12 @@ import os
 @pytest.fixture(autouse=True)
 def _gateway_url(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
+    # Legacy quota/fallthrough assertions deliberately exercise non-credit routes.
+    from plangraph.planner import routing
+    original = routing.plan_spawn
+    monkeypatch.setattr(routing, 'plan_spawn', lambda *a, **kw:
+                        original(*a, **dict(kw, legs=tuple(l for l in kw.get('legs', routing.DEFAULT_LEGS)
+                                                          if l.tier != 'credit'))))
 
 @pytest.fixture(autouse=True)
 def fake_host_binaries(tmp_path, monkeypatch):
@@ -121,9 +127,10 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record['attempts']) == 8
-        assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
-                   for a in record['attempts'])
+        assert record['attempts'] == []
+        assert len(record['skipped']) == 8
+        assert all(s['reason'] == 'limited' and s.get('skip_reason') == 'limited'
+                   for s in record['skipped'])
         assert len(runner.jobs) == count
     asyncio.run(run())
 

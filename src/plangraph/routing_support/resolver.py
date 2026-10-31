@@ -26,17 +26,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from plangraph.routing_support.credit_gate import catalog_credit_skip_reason
 from plangraph.routing_support.leg_state import leg_status
 from plangraph.routing_support.catalog_seed import TIER_RUNG
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
 from plangraph.routing_support.clients import build_routing_envelope_headers
-from plangraph.routing_support.risk import (
-    RISK_BETA_EXCESS,
-    RISK_GAMMA_COST,
-    RISK_MIN_INTELLIGENCE,
-    RISK_TARGET_INTELLIGENCE,
-    evaluate_risk,
-)
+from plangraph.routing_support.risk import (RISK_BETA_EXCESS, RISK_GAMMA_COST,
+    RISK_MIN_INTELLIGENCE, RISK_TARGET_INTELLIGENCE, evaluate_risk)
 
 # Role multiplier for intelligence gain above I_min
 ROLE_ALPHA: dict[str, float] = {
@@ -532,15 +528,17 @@ def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli'):
         return None if shutil.which(harness) else 'harness_missing: ' + harness
-    if harness != 'opencode':
-        return None
+    if harness != 'opencode': return None
     model = row.get('model') or row.get('id') or row.get('model_id')
-    if not model or '/' not in model:
-        return None
-    child = host_probe_env(env)
+    if not model or '/' not in model: return None
+    from plangraph.planner.model_admission import console_host_skip; child = host_probe_env(env)
+    from plangraph.planner.host_models import is_gateway, unavailable_models
+    if model.lower().split('#', 1)[0] in unavailable_models(env=env): return 'not_served_on_host: ' + model
+    # D-3264: only console credit providers need an affirmative host listing.
+    if model.split('/', 1)[0].lower().startswith('console-') and not is_gateway(model, child):
+        return console_host_skip(model, probe, env)
     from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING
-    if child.get(OVERLAY_UNKNOWN):
-        return None
+    if child.get(OVERLAY_UNKNOWN): return None
     # Probe the config the launch will use: S1 renders the gateway providers per run.
     from .opencode_render import render_gateway_providers
     render_reason = render_gateway_providers(child, model)
@@ -579,7 +577,8 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
     # Ranking historical catalog seats is not a new-spawn admission decision.
-    if not catalog_row_admitted(model):
+    # Credit catalog rows take the same expiry gate as credit legs (D-3264).
+    if not catalog_row_admitted(model) or catalog_credit_skip_reason(model):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -625,7 +624,7 @@ def score_model(
       - review / reviewer: 1.2
 
     Tier weights (W_tier):
-      trial (0): +14.0, free (1): +10.5, credit (2): +7.0, subscription (3): +3.5, paid (4): 0.0, unknown: -35.0
+      credit (0): +14.0, trial (1): +10.5, free (2): +7.0, subscription (3): +3.5, paid (4): 0.0, unknown: -35.0
     """
     need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
@@ -684,7 +683,7 @@ def rank_candidates(
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
-        if not catalog_row_admitted(c):
+        if not catalog_row_admitted(c) or catalog_credit_skip_reason(c):
             continue
         d = dict(c)
         score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)

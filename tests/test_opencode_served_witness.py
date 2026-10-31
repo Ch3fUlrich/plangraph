@@ -263,18 +263,18 @@ def _empty_managed_dir(tmp_path, monkeypatch):
 def _deny_env(home):
     """The isolation env the review block hands the child (R1)."""
     (home / 'pg-empty.json').write_text('{}')
-    return {'HOME': str(home), 'XDG_CONFIG_HOME': str(home / 'config'),
-            'XDG_DATA_HOME': str(home), 'OPENCODE_CONFIG_DIR': str(home),
-            'OPENCODE_CONFIG': str(home / 'pg-empty.json'),
+    return {'HOME': str(home), 'XDG_CONFIG_HOME': str(home / 'config'), 'XDG_DATA_HOME': str(home),
+            'OPENCODE_CONFIG_DIR': str(home), 'OPENCODE_CONFIG': str(home / 'pg-empty.json'),
             'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUDE_CODE': '1',
             'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS': '1'}
 
 
 def _freeze_leg(tmp_path, monkeypatch, seed, freeze=(), bad_cfg=None, extra=None):
-    """A review leg whose review-block writes to `freeze` env keys are dropped
-    and whose config stays `bad_cfg`: one hardening condition removed in turn.
-    `extra` values are names under tmp_path (a relative path anchors there)."""
-    extra = dict(extra or {})
+    """A review leg whose review-block writes to `freeze` env keys are dropped and
+    whose config stays `bad_cfg` (one hardening condition removed in turn); the
+    caller's OPENCODE_DISABLE_* must never mask it. `extra` names are tmp-relative."""
+    extra = {'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUDE_CODE': '1',
+             'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS': '1', **dict(extra or {})}
     if bad_cfg is not None:
         extra['OPENCODE_CONFIG_CONTENT'] = bad_cfg
         freeze = set(freeze) | {'OPENCODE_CONFIG_CONTENT'}

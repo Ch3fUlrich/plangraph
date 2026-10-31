@@ -39,7 +39,8 @@ def test_host_readmission_after_provider_stop(tmp_path, monkeypatch, all_removed
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None))
     assert calls == ([a.model] if all_removed else [a.model, c.model])
     assert result['status'] == ('failed' if all_removed else 'completed')
-    assert any('not_served_on_host' in (a['skip_reason'] or '') for a in result['attempts'])
+    assert any('not_served_on_host' in a['reason'] for a in result['skipped'])
+    assert result['attempts'][0]['leg']['model'] == a.model
 
 
 @pytest.mark.parametrize('host', [True, False])

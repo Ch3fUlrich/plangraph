@@ -2,16 +2,16 @@
   "catalogs": 200,
   "fail_closed": {
     "critical/driver": {
-      "resolved": 199,
-      "unresolved": 1
+      "resolved": 195,
+      "unresolved": 5
     },
     "critical/implement": {
-      "resolved": 199,
-      "unresolved": 1
+      "resolved": 195,
+      "unresolved": 5
     },
     "critical/review": {
-      "resolved": 199,
-      "unresolved": 1
+      "resolved": 195,
+      "unresolved": 5
     },
     "high/driver": {
       "resolved": 200,
@@ -53,47 +53,47 @@
   "perturbations": {
     "cost_pm10pct": {
       "critical/driver": {
-        "flip_rate": 0.05,
+        "flip_rate": 0.02,
         "unresolved": 0
       },
       "critical/implement": {
-        "flip_rate": 0.04,
+        "flip_rate": 0.015,
         "unresolved": 0
       },
       "critical/review": {
-        "flip_rate": 0.055,
+        "flip_rate": 0.025,
         "unresolved": 0
       },
       "high/driver": {
-        "flip_rate": 0.045,
+        "flip_rate": 0.015,
         "unresolved": 0
       },
       "high/implement": {
-        "flip_rate": 0.055,
+        "flip_rate": 0.03,
         "unresolved": 0
       },
       "high/review": {
-        "flip_rate": 0.045,
+        "flip_rate": 0.025,
         "unresolved": 0
       },
       "low/driver": {
-        "flip_rate": 0.05,
+        "flip_rate": 0.02,
         "unresolved": 0
       },
       "low/implement": {
-        "flip_rate": 0.04,
+        "flip_rate": 0.03,
         "unresolved": 0
       },
       "low/review": {
-        "flip_rate": 0.05,
+        "flip_rate": 0.03,
         "unresolved": 0
       },
       "normal/driver": {
-        "flip_rate": 0.04,
+        "flip_rate": 0.03,
         "unresolved": 0
       },
       "normal/implement": {
-        "flip_rate": 0.05,
+        "flip_rate": 0.025,
         "unresolved": 0
       },
       "normal/review": {
@@ -107,47 +107,47 @@
         "unresolved": 0
       },
       "critical/implement": {
-        "flip_rate": 0.065,
-        "unresolved": 0
-      },
-      "critical/review": {
         "flip_rate": 0.06,
         "unresolved": 0
       },
-      "high/driver": {
-        "flip_rate": 0.03,
-        "unresolved": 0
-      },
-      "high/implement": {
-        "flip_rate": 0.04,
-        "unresolved": 0
-      },
-      "high/review": {
+      "critical/review": {
         "flip_rate": 0.055,
         "unresolved": 0
       },
-      "low/driver": {
-        "flip_rate": 0.015,
-        "unresolved": 0
-      },
-      "low/implement": {
-        "flip_rate": 0.015,
-        "unresolved": 0
-      },
-      "low/review": {
+      "high/driver": {
         "flip_rate": 0.045,
         "unresolved": 0
       },
-      "normal/driver": {
+      "high/implement": {
+        "flip_rate": 0.045,
+        "unresolved": 0
+      },
+      "high/review": {
+        "flip_rate": 0.06,
+        "unresolved": 0
+      },
+      "low/driver": {
         "flip_rate": 0.025,
         "unresolved": 0
       },
+      "low/implement": {
+        "flip_rate": 0.02,
+        "unresolved": 0
+      },
+      "low/review": {
+        "flip_rate": 0.025,
+        "unresolved": 0
+      },
+      "normal/driver": {
+        "flip_rate": 0.035,
+        "unresolved": 0
+      },
       "normal/implement": {
-        "flip_rate": 0.03,
+        "flip_rate": 0.035,
         "unresolved": 0
       },
       "normal/review": {
-        "flip_rate": 0.035,
+        "flip_rate": 0.03,
         "unresolved": 0
       }
     },
@@ -206,24 +206,24 @@
   "stability_seeds": {
     "intel_pm1_max_flip_rate": {
       "11": {
-        "critical": 0.055,
-        "high": 0.07
+        "critical": 0.06,
+        "high": 0.055
       },
       "20261022": {
         "critical": 0.065,
-        "high": 0.055
+        "high": 0.06
       },
       "22": {
-        "critical": 0.04,
-        "high": 0.045
+        "critical": 0.025,
+        "high": 0.04
       },
       "33": {
-        "critical": 0.07,
-        "high": 0.075
+        "critical": 0.08,
+        "high": 0.095
       },
       "44": {
-        "critical": 0.075,
-        "high": 0.06
+        "critical": 0.08,
+        "high": 0.055
       }
     },
     "seeds": [
@@ -236,7 +236,7 @@
   },
   "summary": {
     "max_flip_rate_by_perturbation": {
-      "cost_pm10pct": 0.055,
+      "cost_pm10pct": 0.04,
       "intel_pm1": 0.065,
       "speed_pm10pct": 0.0
     }

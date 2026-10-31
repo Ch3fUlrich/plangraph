@@ -56,13 +56,19 @@ def open_questions(w, key):
                           " WHERE key=? AND state='open'", (key,)).fetchall()
 
 
-def test_ready_card_moves_to_ready(w, repo):
+def test_ready_card_moves_to_ready_first_leg_console_credit(w, repo):
     (key,) = seed(w, [("A", [])])
     put(w, key)
     result = gate(w, repo, key)
     assert result.ready and result.acted and result.state == "ready"
     assert result.question_id is None and result.route_error is None
-    assert result.route.first_leg.harness == "qodercli"
+    assert result.route.first_leg.id == "console-sonnet-5.5"
+    # The name's claim is pinned in full (D-3259): the first leg is a
+    # credit-tier console seat, and it leads while other writers stay in the
+    # plan behind it -- not a lone candidate.
+    assert result.route.first_leg.tier == "credit"
+    assert result.route.first_leg.model == "console-anthropic/claude-sonnet-5-5"
+    assert any(leg.tier != "credit" for leg in result.route.legs[1:])
     assert state_of(w, key) == "ready"
     assert gate(w, repo, key).state == "ready"
     assert open_questions(w, key) == []
@@ -255,9 +261,17 @@ def test_pack_needs_a_window_class(w, repo):
     assert "FAILED x" in pack.text
 
 
-def test_route_for_card_prefers_qodercli(w):
+def test_route_for_card_prefers_console_credit_leg(w):
     (key,) = seed(w, [("A", [])])
     put(w, key, estimate_tokens=40000, risk_tags=[])
     route = service.route_for_card(w.store, w.p("router"), key)
-    assert route.first_leg.harness == "qodercli"
+    assert route.first_leg.id == "console-sonnet-5.5"
+    # "prefers" is the tier ladder, not one lucky id (D-3259): the credit tier
+    # leads it, the console seat leads its tier, and the lower tiers stay
+    # eligible behind it.
+    assert route.first_leg.tier == "credit"
+    assert route.first_leg.model == "console-anthropic/claude-sonnet-5-5"
+    assert [leg.id for leg in route.legs[1:3]] == ["console-opus-5.5", "console-haiku-5.5"]
+    assert route.legs[3].tier == "free"
+    assert len(route.legs) > 3
     assert route.window_class == "128k"

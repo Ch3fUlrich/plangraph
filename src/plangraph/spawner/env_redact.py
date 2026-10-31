@@ -27,6 +27,20 @@ def unavailable_reason(exit_code, stdout, stderr):
     def marked(value):
         return any(marker in value.lower() for marker in markers)
 
+    def error_shaped(line):
+        # D-3258: a marker is harness evidence only as a terminal reason or a
+        # "marker: detail" diagnosis. Pytest prose carrying a marker (an assert
+        # quoting one, a sentence mentioning one) is never a runtime denial.
+        low = line.lower()
+        for marker in markers:
+            at = low.find(marker)
+            while at != -1:
+                tail = low[at + len(marker):].strip()
+                if not tail or tail.startswith(':'):
+                    return True
+                at = low.find(marker, at + 1)
+        return False
+
     def error_message(value):
         if isinstance(value, dict):
             return any((key == 'error' and marked(json.dumps(item))) or error_message(item)
@@ -35,22 +49,26 @@ def unavailable_reason(exit_code, stdout, stderr):
             return any(error_message(item) for item in value)
         return False
 
-    for line in stderr.splitlines():
-        if marked(line):
-            return line
-    for line in stdout.splitlines():
+    def evidence(line):
         text = line.strip()
+        if error_shaped(line):
+            return True
         if not marked(text):
-            continue
+            return False
         if text.lower().startswith('error:') or re.match(r'^HTTP \d{3}:', text):
-            return line
+            return True
         try:
-            if error_message(json.loads(text)):
-                return line
+            return error_message(json.loads(text))
         except ValueError:
             # A diagnostic may be one line of a pretty-printed JSON error.
-            if re.match(r'^[{\[,]?\s*"error"\s*:', text) and marked(text.split(':', 1)[1]):
-                return line
+            return bool(re.match(r'^[{\[,]?\s*"error"\s*:', text) and marked(text.split(':', 1)[1]))
+
+    for line in stderr.splitlines():
+        if evidence(line):
+            return line
+    for line in stdout.splitlines():
+        if evidence(line):
+            return line
     return None
 
 

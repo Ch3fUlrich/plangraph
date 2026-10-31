@@ -21,9 +21,24 @@ def test_tier_first_and_swap():
     data = rows()
     plan = plan_spawn(CARD, role='implement', benchmark=data)
     assert plan.first_leg == WRITERS[4]
-    assert plan.legs[-1] == WRITERS[-1]
+    # D-3259: expectations are named here, never computed from the leg tables
+    # the router consumes.  The implement plan is the operator writer order --
+    # console credit legs lead WRITER_ORDER or are skipped (the credit gate
+    # skips one here) -- and the writer outside WRITER_ORDER, the paid deepseek
+    # leg, closes the plan.
+    by_id = {leg.id: leg for leg in DEFAULT_LEGS}
+    assert [leg.id for leg in plan.legs] == [
+        'agy-gemini-3.8-flash', 'mimo-v2.6-pro', 'openrouter-free',
+        'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free',
+        'mimo-v2.6-flash', 'cx-gpt-6.1-sol', 'deepseek']
+    assert plan.legs[-1].id == 'deepseek'
+    assert plan.legs[-1].tier == 'paid'
+    assert plan.legs[-1] == by_id['deepseek']
+    assert [(s['leg'], s['reason']) for s in plan.skipped] == [('console-sonnet-5.5', 'credit_expired')]
     data[WRITERS[4].model], data[WRITERS[6].model] = data[WRITERS[6].model], data[WRITERS[4].model]
-    assert plan_spawn(CARD, role='implement', benchmark=data).first_leg == WRITERS[4]
+    swapped = plan_spawn(CARD, role='implement', benchmark=data)
+    assert swapped.first_leg == WRITERS[4]
+    assert [leg.id for leg in swapped.legs] == [leg.id for leg in plan.legs]
 
 
 def test_candidate_json_and_limit():

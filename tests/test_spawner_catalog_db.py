@@ -146,11 +146,11 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
 
 
 def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
-    """Verify trial < free < credit < subscription < paid tier ladder sorting."""
+    """Verify credit < trial < free < subscription < paid tier ladder sorting."""
     assert TIER_RUNG == {
-        "trial": 0,
-        "free": 1,
-        "credit": 2,
+        "credit": 0,
+        "trial": 1,
+        "free": 2,
         "subscription": 3,
         "paid": 4,
     }
@@ -166,7 +166,7 @@ def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
     free_models = [m for m in all_models if m["tier"] == "free"]
     assert len(free_models) >= 2
     for m in free_models:
-        assert TIER_RUNG[m["tier"]] == 1
+        assert TIER_RUNG[m["tier"]] == 2
 
     # Subscription models come after free and before paid
     sub_models = [m for m in all_models if m["tier"] == "subscription"]

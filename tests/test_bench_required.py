@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -8,12 +9,20 @@ import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS, TIERS
 from plangraph.planner import routing
+from plangraph.planner.route_policy import RoutePolicy
+from plangraph.routing_support.resolver import plan_for_launch
 
 POLICY = tuple(l for l in DEFAULT_LEGS if set(l.roles) & {"implement", "review"})
+#: Unexpired credit policy plus a host listing serving the console-anthropic models,
+#: so the console credit legs are actually routed instead of skipped (slice G4).
+CREDIT_POLICY = RoutePolicy(credit_tiers={"console-anthropic": {"expires": "2026-11-30"}},
+                            today=date(2026, 11, 1))
+HOST_LISTING = frozenset(l.model for l in DEFAULT_LEGS)
 
 
 def plan(**kwargs):
     return routing.plan_spawn({"estimate_tokens": 1000}, role="implement",
+                              legs=tuple(l for l in DEFAULT_LEGS if l.tier != 'credit'),
                               leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
                               **kwargs)
 
@@ -36,6 +45,37 @@ def test_missing_ranked_last_in_tier(as_list):
         "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash", "cx-gpt-6.1-sol"]
     assert p.to_dict()["gaps"] == p.gaps
     assert not plan(benchmark=rows(WRITERS)).gaps
+
+
+def test_bench_winner_still_wins_with_credit_legs():
+    """Variant of the benchmark contract WITH the console credit legs present:
+    the measured winner still wins its tier, and every credit leg now owes the
+    same benchmark evidence as every other leg (no more silent passes)."""
+    def host_listing(env):
+        return HOST_LISTING
+    credit = tuple(l for l in DEFAULT_LEGS if l.tier == 'credit')
+    assert {l.id for l in credit} == {"console-sonnet-5.5", "console-opus-5.5", "console-haiku-5.5"}
+    reviewers = tuple(l for l in DEFAULT_LEGS if 'review' in l.roles)
+    measured = rows(tuple(l for l in reviewers if l.tier != 'credit'))
+    free_reviewers = [l for l in reviewers if l.tier == 'free']
+    winner = free_reviewers[-1]                      # operator order's underdog
+    measured[winner.model]['aa_intelligence'] = 999  # ... becomes the measured best
+
+    def review(legs, **kwargs):
+        return routing.plan_spawn({"estimate_tokens": 1000}, role="review",
+                                  writer_families=("gpt",), legs=legs, benchmark=measured,
+                                  leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
+                                  policy=CREDIT_POLICY, **kwargs)
+
+    with_credit = review(DEFAULT_LEGS)
+    assert {g["leg"] for g in with_credit.gaps} == {l.id for l in credit}
+    assert next(l for l in with_credit.legs if l.tier == 'free') == winner
+    launched = plan_for_launch(with_credit, probe=host_listing)
+    assert {l.id for l in launched.legs if l.tier == 'credit'} == {l.id for l in credit}
+    without_credit = review(tuple(l for l in DEFAULT_LEGS if l.tier != 'credit'))
+    assert next(l for l in without_credit.legs if l.tier == 'free') == winner
+    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*console-sonnet-5.5"):
+        review(DEFAULT_LEGS, strict=True)
 
 
 def test_absent_explicit_operator_order():

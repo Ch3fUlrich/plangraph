@@ -401,9 +401,9 @@ def test_health_reports_the_base_url_the_child_config_already_holds(monkeypatch)
 
 def test_resolver_tier_ladder_priority():
     """Verify 5-rung tier ladder strictly prioritizes subscription over paid."""
-    assert TIER_RUNG["trial"] == 0
-    assert TIER_RUNG["free"] == 1
-    assert TIER_RUNG["credit"] == 2
+    assert TIER_RUNG["credit"] == 0
+    assert TIER_RUNG["trial"] == 1
+    assert TIER_RUNG["free"] == 2
     assert TIER_RUNG["subscription"] == 3
     assert TIER_RUNG["paid"] == 4
 

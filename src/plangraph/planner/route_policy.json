@@ -1,5 +1,6 @@
 {
   "_source": "OPERATOR D-3198 (glm off), D-2744/D-3084 (no deepseek, kimi never a seat), D-3072 + D-3198 (qodercli paused, qwen3.8-flash allowed as seat), DECISIONS 3.2 (agy seats off until the harness returns text)",
+  "credit_tiers": {"console-anthropic": {"expires": "2026-11-30", "note": "D-3258 Console API credits, operator: use within ~1 month; expires is the credit's last usable day (UTC), the tier is gated from the next day"}},
   "banned_families": ["kimi", "deepseek"],
   "off_families": ["glm"],
   "paused_harnesses": {

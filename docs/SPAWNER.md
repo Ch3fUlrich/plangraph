@@ -264,9 +264,9 @@ Role scaling amplifies intelligence gains above $I_{\min}$ for critical supervis
 
 Guarantees subscription and free pools are prioritized over paid per-token APIs:
 $$W_{\text{tier}}(M) = \begin{cases} (4 - \text{rung}(M)) \times 3.5 & \text{if } \text{rung}(M) \le 4 \\ -35.0 & \text{otherwise (unknown)} \end{cases}$$
-- `trial` (rung 0): $+14.0$
-- `free` (rung 1): $+10.5$
-- `credit` (rung 2): $+7.0$
+- `credit` (rung 0): $+14.0$
+- `trial` (rung 1): $+10.5$
+- `free` (rung 2): $+7.0$
 - `subscription` (rung 3): $+3.5$
 - `paid` (rung 4): $0.0$
 
@@ -290,12 +290,10 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 
 ### Input Contract, Fail-Closed Rules and Sensitivity
 
-- Numeric inputs are validated before scoring. NaN, +inf, -inf, negative values, and None are rejected with ValueError; a missing intelligence value is rejected with ValueError. A missing or None `context_window`/`context_tokens` falls back to 128000 and a missing or None speed counts as 0 (unmeasured, tie-break only); a present but invalid context window or `price_cliff_tokens` raises ValueError.
-- Absent-field defaults (field missing, not None for required numerics): `cost_per_task_usd` 0.20 USD per task, `pool_burn_weight` 1.0, `context_window`/`context_tokens` 128000, speed 0 (unmeasured). `aa_intelligence` has no default and a missing value raises ValueError.
+- Numeric inputs are validated before scoring. NaN, +inf, -inf, negative values, and None are rejected with ValueError; a missing intelligence value is rejected with ValueError. A missing or None `context_window`/`context_tokens` falls back to 128000 and a missing or None speed counts as 0 (unmeasured, tie-break only); a present but invalid context window or `price_cliff_tokens` raises ValueError. Absent-field defaults (field missing, not None for required numerics): `cost_per_task_usd` 0.20 USD per task, `pool_burn_weight` 1.0, `context_window`/`context_tokens` 128000, speed 0 (unmeasured). `aa_intelligence` has no default and a missing value raises ValueError.
 - `need_tokens` must be a positive finite number (an int or integral float); bools, non-numeric values, NaN/inf, non-integral floats, and values <= 0 raise ValueError.
 - Unknown risk and unknown role values raise ValueError. The role `"drive"` is accepted and uses alpha 1.1 and trajectory factor 1.3.
-- For high and critical risk bands, a candidate below `I_min` fails closed. The only escape is `relax_floor=True` with a non-empty `relax_reason`; when applied, result keys `relaxed` and `relax_reason` are set. A blank reason is not accepted.
-- For low and normal risk bands a floor miss does not raise: the highest-intelligence candidates are kept and ranked, and `relaxed` stays false.
+- For high and critical risk bands, a candidate below `I_min` fails closed. The only escape is `relax_floor=True` with a non-empty `relax_reason`; when applied, result keys `relaxed` and `relax_reason` are set. A blank reason is not accepted. For low and normal risk bands a floor miss does not raise: the highest-intelligence candidates are kept and ranked, and `relaxed` stays false.
 - There is no hardcoded fallback model. If no candidate is eligible, both `resolve_review_plan` and `resolve_model_for_task` raise instead of returning a default.
 - Catalog fallback (W27/D-2637): during a DB read failure, registered offline legs remain eligible; operator deactivation cannot be enforced while the DB is unreadable. A `catalog_db_error` alert is emitted once per failure episode and rows carry `catalog_source=offline_fallback_db_error`.
 - Exclusions (family/author/gated/availability) are applied in every fallback path, including relaxed-floor paths.
@@ -304,9 +302,11 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 - Tie-breaking uses an epsilon band with absolute utility thresholds of 0.5 and 0.3 utility points.
 - Stability is measured by tools/spawner_sensitivity.py over several seeds (key `stability_seeds` in docs/spawner-sensitivity.json); high/critical beta_excess 0.6 and critical gamma_cost 4.0 keep the intelligence +-1 pick flip rate <= 0.10 on every listed seed; the flips that remain at critical are the cost of the hard risk-monotone envelope (critical's intelligence floor is the best lower-band pick, a hard filter), and the strict monotone guarantee (1e-9) is kept.
 - The committed sensitivity artifact is `docs/spawner-sensitivity.json`. Regenerate it with `python3 tools/spawner_sensitivity.py --out docs/spawner-sensitivity.json --catalogs 200`. Flip-rate numbers are read from that file; do not invent numbers — see the file.
+- The artifact's `fail_closed` block is a refusal count, not an error rate: per risk/role it records how many of the `catalogs` generated catalogs make a fail-closed resolve (`relax_floor=False`) refuse to name a model. The resolver raises instead of falling back — there is no hardcoded fallback model — so `unresolved` is the fail-closed contract working, and `resolved` + `unresolved` always equals `catalogs`.
+- Only `critical/*` refuses, and the three critical keys move together because the intelligence floor is role-independent: the high and critical floors (`I_min` 46.0 and 50.0) fail closed when a catalog's best candidate sits below them, and the sweep draws `aa_intelligence` in 38..60 over 6-12 rows per catalog, so a best-below-50 catalog is rare but real while a best-below-46 one is not at the committed seed. Low and normal floor misses never raise, so their counts are 0 by construction.
+- The counts are measured, never tuned: `test_sensitivity_json_reproducible` regenerates the file byte-for-byte from `tools/spawner_sensitivity.py`, so a number that moves between regenerations — the critical keys went from 1 to 5 when the resolve path changed under the same draws — reflects the code and the draws, never a hand edit.
 - The `cost_per_task_usd` field is the catalogued price in USD per task. Utility subtracts `cost_per_task_usd * gamma_cost` in utility points.
-- Absolute cost scale matters on purpose: a 10x price change may reorder near-ties inside the epsilon band because cost is real money. Outside the band the order follows utility at any cost scale (proved by `test_order_follows_utility_outside_epsilon_band_any_cost_scale`).
-- Speed-scale invariance (`test_speed_scale_invariance`) holds because speed is only a relative tie-break inside the band.
+- Absolute cost scale matters on purpose: a 10x price change may reorder near-ties inside the epsilon band because cost is real money. Outside the band the order follows utility at any cost scale (proved by `test_order_follows_utility_outside_epsilon_band_any_cost_scale`). Speed-scale invariance (`test_speed_scale_invariance`) holds because speed is only a relative tie-break inside the band.
 
 ---
 
@@ -316,9 +316,9 @@ Every model candidate is assigned a tier according to its billing and quota cons
 
 | Rung | Tier | Description | Examples |
 |---|---|---|---|
-| **0** | `trial` | Zero-cost evaluation tiers | Experimental free trial keys |
-| **1** | `free` | No marginal cost, daily replenished allowance | `agy/gemini-3.8-flash-tiered-high`, `qoder/qwen3.8-flash-next` |
-| **2** | `credit` | Pre-funded non-recurring promotional balance | Promotional API balances |
+| **0** | `credit` | Pre-funded non-recurring promotional balance | Promotional API balances |
+| **1** | `trial` | Zero-cost evaluation tiers | Experimental free trial keys |
+| **2** | `free` | No marginal cost, daily replenished allowance | `agy/gemini-3.8-flash-tiered-high`, `qoder/qwen3.8-flash-next` |
 | **3** | `subscription` | Fixed recurring subscription pools; strictly prioritized before paid APIs | `agy` (Claude/Gemini), `cxa` (Codex Luna), `mimo` (v2.6 pro/flash), `opencode-go`, `claude` |
 | **4** | `paid` | Pay-as-you-go per-token APIs; used strictly as last resort | `deepseek` direct API, `gemini` direct API |
 
@@ -499,27 +499,27 @@ reports — while `effective_gateway_base_url()` resolves the environment source
 
 On hosts without a root config (such as Windows workst), launch the spawner CLI with `PLANGRAPH_GATEWAY_URL=http://127.0.0.1:20128/v1` to point to the local gateway.
 
-A gateway-keyed model (provider `mimo`/`omniroute`) with no base URL from any source
-now fails closed on every platform — a Linux host with neither the root overlay nor a
-URL environment variable launches no process and the run fails with
+A gateway-keyed model (provider `mimo`/`omniroute`) with no base URL from any source now fails closed on every platform
+— a Linux host with neither the root overlay nor a URL environment variable launches no process and the run fails with
 `not_served_on_host: gateway_base_url_unresolved`, falling through to the next leg.
 
-A gateway breaker 503 / circuit-open counts as a failed run: it is never retried in a
-loop on the same leg and is not a provider stop (only 429/402 advance the leg state);
-the next writer picks the card up.
+A gateway breaker 503 / circuit-open counts as a failed run: it is never retried in a loop on the same leg and is not
+a provider stop (only 429/402 advance the leg state); the next writer picks the card up.
 
-`gateway_url()` also takes a config mapping and reads its `gateway_url` key, but no
-production caller passes one today: that argument exists for callers that do pass it
-(the tests exercise it).
+A failed run records a runtime denial as `host-unavailable-<host-id-hash>.json` in the spawn state dir
+when its evidence lines are error-shaped; pytest prose quoting a marker never
+records one. While a denial is live, later routes skip the model as `not_served_on_host: <model>`, and it expires after
+`PLANGRAPH_DENIED_TTL_S` seconds (default 3600). Delete the `host-unavailable-*.json` file to reset one before it expires.
 
-`build_child_env` merges into whatever `OPENCODE_CONFIG_CONTENT` already carries using
-`setdefault`, so a child config that already sets `settings.baseURL` keeps that value
-and no environment source displaces it. With no such key and neither environment
-variable set, `build_child_env` writes no `baseURL` into the child provider config (a
-caller that needs a value supplies its own), and `plangraph_agent_health` reports
-`gateway_default_url` as `""`. Both sides read the same one helper,
-`plangraph.spawner.clients.effective_child_base_url()`, so the reported URL always
-matches the effective one.
+`gateway_url()` also takes a config mapping and reads its `gateway_url` key, but no production caller passes one
+today: that argument exists for callers that do pass it (the tests exercise it).
+
+`build_child_env` merges into whatever `OPENCODE_CONFIG_CONTENT` already carries using `setdefault`, so a child
+config that already sets `settings.baseURL` keeps that value and no environment source displaces it. With no such
+key and neither environment variable set, `build_child_env` writes no `baseURL` into the child provider config (a
+caller that needs a value supplies its own), and `plangraph_agent_health` reports `gateway_default_url` as `""`.
+Both sides read the same one helper, `plangraph.spawner.clients.effective_child_base_url()`, so the reported URL
+always matches the effective one.
 
 ### SQLite Catalog DB CLI (`src/plangraph/spawner/catalog_db.py`)
 
@@ -627,13 +627,11 @@ The Pro provider limits follow the catalog seed (1,000,000 context and 65,536
 output); Flash follows the catalog seed's 1,000,000 context limit. The unused OmniRoute
 model registry is omitted while its transport configuration remains available.
 # Routing hardening
-
 Mimo IDs are case-sensitive: only `mimo/mimo-v2.6-flash` and
 `mimo/mimo-v2.6-pro` are accepted. Mixed-case variants are refused.
 SQLite files are created privately before connecting. On Windows, mode bits do
 not establish a private ACL; operators must secure the state directory ACL.
 # Round-five failure contracts
-
 Spawn refusals, including CLI/MCP preflight failures, persist private run records
 with an exit code. Codes are 1 for execution/I/O failure, 2 for card/policy
 refusal, 3 for benchmark policy/data failure, 4 for exhausted provider legs (status
@@ -645,16 +643,15 @@ State queries do not initialize empty SQLite files. AST fanout that cannot read
 or parse a Python file is unknown (`not_measured`), conservatively treated as
 fanout 13 for sizing. Routing exclusion reasons are typed metadata, not parsed
 exception messages. JSON-RPC requests must explicitly include `jsonrpc: "2.0"`.
-Every model admission requires exact membership in the resolver catalog or
-registered DEFAULT_LEGS. Case-insensitive Mimo detection chooses error text only;
-it is not an admission gate. Unknown IDs, including glued and homoglyph variants,
-are typed `SpawnRefused` failures.
+Every model admission requires a catalog/DEFAULT_LEGS entry, a gateway-listed
+`omniroute/<id>`, or a host `opencode models` listing (D-3259). Case-insensitive
+Mimo detection chooses error text only; it is not an admission gate. Unknown IDs,
+including glued and homoglyph variants, are typed `SpawnRefused` failures.
 
 For source checkouts, add the repository's `tools` directory to PATH to expose
 the executable `plangraph-spawn` entry point (or use
 `python -m plangraph.spawner.cli`).
 # Completion delivery contract
-
 Completion events carry `idempotency_key = run_id + ':' + status`. Delivery is
 retryable: a delivered-marker write can fail after a successful sink call.
 Each sink MUST durably deduplicate that key per recipient before exposing an
@@ -663,7 +660,6 @@ its inbox lock. Command bridges must implement the same contract at the remote
 sink; a successful command exit alone cannot guarantee exactly-once effects.
 `test_marker_failure_sink_exactly_once` pins marker-failure replay behavior.
 # Fixer writers and remaining gaps
-
 Cards may carry `findings`, each with `text` and optional `files`. The pure
 `split_findings` helper, also exposed through `plan_spawn.writer_groups`, merges
 connected file ownership before balancing components into roughly ten-finding
@@ -684,7 +680,6 @@ nonzero exit codes, review runs, and continuation-limit refusals record their
 reason in `continuation_reason`. Dry runs never continue. Live execution proof
 belongs to L2/L1; unit tests use synthetic processes.
 # Live completion delivery identity
-
 The spawner's keeper completion sink posts `phase=finished` to
 `POST /v1/record_run`. Set `PG_URL` to the keeper API base URL and
 `PG_TOKEN_FILE` to a file containing a **spawner-role** bearer token. Set
@@ -723,6 +718,11 @@ The writer must not run this against the live keeper; build-L1 owns live proof.
 The local marker follows acknowledgement: writing it before sending would lose
 events on crash. Exactly-once visibility across marker failure instead relies
 on the keeper's atomic `(item, run_id, phase)` idempotency key.
+# Credit tier (D-3258)
+
+`console-sonnet-5.5` (implement/review), `console-opus-5.5` (review/orchestrate), and `console-haiku-5.5` (review) use prepaid credits. Credit precedes trial/free/subscription/paid; Sonnet leads writers, other roles sort by tier. Claude writers get non-Claude seats; host checks still apply.
+`route_policy.json` key `credit_tiers` maps provider prefixes to `expires` (YYYY-MM-DD) and optional `note`; unconfigured/expired credit is skipped as `credit_expired`. `expires` is the credit's last usable day (UTC): the console tier runs through 2026-11-30 and is gated from 2026-12-01. Attempts append private `<spawn state dir>/credit-spend.jsonl`; `python -m plangraph.spawner.cli credits` prints a human table of expiry, days left, runs and null-safe costs/tokens, and only `--json` emits machine-readable JSON.
+Model admission (D-3259): explicit audited overrides admit catalog/registered models, gateway-listed `omniroute/<id>`, or host `opencode models` IDs. Private list cache TTL: `PLANGRAPH_MODEL_LIST_TTL_S` (600 seconds). Removals, inactive rows and MiMo policy still win; automatic routes are unchanged. Interim DECISIONS 2.4 exception: L1s may run opencode directly when the spawner cannot serve a model.
 # Review policy
 
 See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.

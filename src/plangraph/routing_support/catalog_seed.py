@@ -11,11 +11,11 @@ from typing import Any
 from plangraph.catalog_data import SEED_MODELS
 
 # 5-rung tier ladder ordering contract:
-# trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
+# credit (0) < trial (1) < free (2) < subscription (3) < paid (4)
 TIER_RUNG: dict[str, int] = {
-    "trial": 0,
-    "free": 1,
-    "credit": 2,
+    "credit": 0,
+    "trial": 1,
+    "free": 2,
     "subscription": 3,
     "paid": 4,
 }

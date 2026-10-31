@@ -353,7 +353,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 reason = next(iter(exc.exclusion_reasons), 'routing_error')
                 states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
         if reason:
-            skipped.append({"leg": leg.id, "reason": reason,
+            # W30 consumers read ``skip_reason``; ``reason`` stays canonical --
+            # the same pair ``plan_for_launch`` emits (D-3264: one skip shape).
+            skipped.append({"leg": leg.id, "reason": reason, "skip_reason": reason,
                             "evidence": states[leg.id]["evidence"]})
         row = rows.get(leg.model, rows.get(leg.id))
         detail = {"leg": leg.id, "tier": leg.tier,
@@ -364,7 +366,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
-        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat", "credit_expired")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role)
@@ -382,7 +384,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                          if ordered[i].model in rows or ordered[i].id in rows]
             missing = [ordered[i] for i in tier_positions if i not in positions]
             measured = [dict(rows.get(ordered[i].model, rows.get(ordered[i].id)),
-                             model_id=ordered[i].id, tier=tier, available=1, active=True) for i in positions]
+                             id=ordered[i].model, model_id=ordered[i].id,
+                             tier=tier, available=1, active=True) for i in positions]
             ranked = rank_candidates(measured, role=role, risk=ranking_risk, need_tokens=card["estimate_tokens"])
             by_id = {ordered[i].id: ordered[i] for i in positions}
             for i, leg in zip(tier_positions, [by_id[row["model_id"]] for row in ranked] + missing):
@@ -412,22 +415,13 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                      tuple(candidate_details), groups, coverage)
 
 
-def validate_model(model):
-    """The resolver catalog and registered legs are the exact admission door."""
-    from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
-                                           OPERATOR_REMOVED_MODELS)
-    from plangraph.mimo_policy import check_mimo_path
-    from .legs import DEFAULT_LEGS
-    if not isinstance(model, str) or not model:
-        raise SpawnRefused('model must be a nonempty string')
-    check_mimo_path(model)
-    rows = get_catalog_models()
-    inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
-    allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
-               {leg.model for leg in DEFAULT_LEGS}) - inactive - OPERATOR_REMOVED_MODELS
-    if model not in allowed:
-        raise SpawnRefused('unknown model: ' + str(model))
-    return model
+def validate_model(model, *, state=None):
+    """Admit catalog, registered, gateway or host-listed explicit models.
+
+    ``state`` pins the model-list cache directory (the CLI's ``--state``).
+    """
+    from .model_admission import validate_model as admit
+    return admit(model, state=state)
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

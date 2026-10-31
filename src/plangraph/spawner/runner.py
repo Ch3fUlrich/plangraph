@@ -123,6 +123,7 @@ class JobInfo:
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
+    leg_tier: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -368,8 +369,9 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
+        tier: str | None = None,
     ) -> JobInfo:
-        """Spawn a new agent job and track its state."""
+        """Spawn a new agent job and track its state (``tier`` is the chosen leg's tier)."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
@@ -438,6 +440,8 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
+            from .opencode_isolation import CLOSED_LAYERS
+            child_env = {k: v for k, v in child_env.items() if k not in CLOSED_LAYERS}  # deny witness: close_config_layers alone sets these
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
@@ -541,7 +545,7 @@ class SpawnerRunner:
                 risk=risk,
                 command=cmd,
                 dry_run=False,
-                cwd=work_dir,
+                cwd=work_dir, leg_tier=tier,
             )
             self.jobs[job_id] = job
             if tools_event:
@@ -801,11 +805,12 @@ class SpawnerRunner:
                 self.jobs[job_id].end_time = time.time()
                 self.jobs[job_id].exit_code = 1
         except Exception as exc:
-            job = self.jobs[job_id]
-            job.status = 'failed'
-            job.exit_code = 1
-            job.end_time = time.time()
-            job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
+            job = self.jobs.get(job_id)   # the cancel path may have dropped it
+            if job is not None:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.end_time = time.time()
+                job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
             try:
@@ -813,6 +818,10 @@ class SpawnerRunner:
             except Exception:
                 pass
             self._check_git_config_guard(job_id)
+            job = self.jobs.get(job_id)   # the cancel path may have dropped it
+            from .credit import capture_spend
+            await asyncio.to_thread(capture_spend, job, self._child_envs.get(job_id, os.environ),
+                                    tier=getattr(job, 'leg_tier', None))
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
@@ -1093,8 +1102,6 @@ def spawn_service(*args, **kwargs):
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
-                    record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
-                        skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
             self._save(record)
 
             if not plan.legs or plan.error:
@@ -1125,7 +1132,7 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness)
+                            role=role, dry_run=dry_run, client=chosen.harness, tier=chosen.tier)
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
                                       writer_family=chosen.family,
@@ -1138,7 +1145,7 @@ def spawn_service(*args, **kwargs):
                         reason = None
                         unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
                         if unavailable:
-                            job.status = 'failed'
+                            from plangraph.planner.host_models import runtime_unavailable; runtime_unavailable(chosen, self.state); job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
                             reason = redact(job.stderr.strip().splitlines()[0]) if job.stderr.strip() else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
@@ -1150,6 +1157,7 @@ def spawn_service(*args, **kwargs):
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
+                        from .credit import record_spend; await asyncio.to_thread(record_spend, self.state, record, chosen, job)
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
@@ -1169,18 +1177,16 @@ def spawn_service(*args, **kwargs):
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)
-                                record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
-                                    skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
                         record['plan'] = current.to_dict()
                     else:
                         record.update(status='failed', exit_code=1, error='attempt iteration limit exceeded')
                         return
                     if not any(a.get('status') != 'skipped' for a in record['attempts']):
-                        record.update(status='failed', exit_code=1, error='; '.join(
-                            a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')) or 'no leg launched')
-                    elif any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts']):
                         record.update(status='failed', exit_code=1,
-                            error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
+                            error=self._failure_reasons(record) or 'no leg launched')
+                    elif any(any(m in str(a).lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts'] + record.get('skipped', [])):
+                        record.update(status='failed', exit_code=1,
+                            error=self._failure_reasons(record) or 'harness failed')
                     elif record['attempts'] and all(l.id in tried for l in current.legs) and current.legs:
                         record.update(status='failed', exit_code=1,
                             error='router repeated exhausted legs')

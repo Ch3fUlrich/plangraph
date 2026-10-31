@@ -128,6 +128,7 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true',
                            help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
+    commands.add_parser('credits').add_argument('--json', action='store_true')
     p = commands.add_parser('wait')
     p.add_argument('run_id')
     p.add_argument('--timeout', type=float)
@@ -143,13 +144,18 @@ def main(argv=None):
             if args.verb in ('route', 'spawn'):
                 service.save_refusal(exc, args.role)
             raise
+        if args.verb == 'credits':
+            from .credit import credit_report, credit_table
+            rows = credit_report(service.state)
+            print(json.dumps(rows, indent=2) if args.json else credit_table(rows))
+            return 0
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
         elif args.verb == 'spawn':
             if args.model is not None:
                 from plangraph.planner.routing import validate_model
                 try:
-                    validate_model(args.model)
+                    validate_model(args.model, state=service.state)
                 except Exception as exc:
                     service.save_refusal(exc, args.role)
                     raise
