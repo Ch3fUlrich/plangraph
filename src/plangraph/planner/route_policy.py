@@ -33,7 +33,14 @@ class RoutePolicy:
     off_families: tuple[str, ...] = ()
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     credit_tiers: Mapping[str, dict] = field(default_factory=dict)
-    today: date = field(default_factory=lambda: datetime.now(timezone.utc).date())
+    #: Pinned evaluation day; ``None`` re-reads the day per call (D-3258) so a
+    #: cached policy in a long-lived process never freezes credit gating.
+    today: date | None = None
+
+    def current_today(self) -> date:
+        """The day credit gates judge against: pinned ``today`` wins, else the
+        day is re-evaluated on every call."""
+        return self.today or datetime.now(timezone.utc).date()
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -44,7 +51,7 @@ class RoutePolicy:
         # Shared expiry gate: the same verdict a credit catalog row gets.
         from plangraph.routing_support.credit_gate import credit_expiry_skip
 
-        gate = credit_expiry_skip(leg.model, leg.tier, self.credit_tiers, self.today)
+        gate = credit_expiry_skip(leg.model, leg.tier, self.credit_tiers, self.current_today())
         if gate:
             return gate
         # Keeper families too: "zhipu" bans glm legs, "deepseek" every deepseek spelling.

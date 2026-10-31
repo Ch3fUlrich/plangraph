@@ -243,8 +243,8 @@ def credit_table(rows):
 
 def _policy_today(policy):
     """The day the policy gates credit with; re-read per call (never frozen)."""
-    getter = getattr(policy, 'current_today', None)
-    return getter() if callable(getter) else policy.today
+    from plangraph.routing_support.credit_gate import policy_today
+    return policy_today(policy)
 
 
 def _expiry(config, today):

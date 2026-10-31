@@ -19,7 +19,7 @@ from datetime import date
 from typing import Any
 
 __all__ = ["GATED", "credit_expiry_skip", "catalog_credit_skip_reason",
-           "load_default_policy", "clear_policy_cache"]
+           "load_default_policy", "clear_policy_cache", "policy_today"]
 
 #: Skip reason for a credit entry without live credit (same spelling as legs).
 GATED = "credit_expired"
@@ -41,7 +41,11 @@ def credit_expiry_skip(model: str, tier: str,
 
 
 def load_default_policy():
-    """Cached ``load_route_policy``; ``None`` when the policy is unusable."""
+    """Cached ``load_route_policy``; ``None`` when the policy is unusable.
+
+    Caching freezes the file, never the day: gating re-evaluates ``today`` per
+    call (:meth:`RoutePolicy.current_today`).
+    """
     from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
 
     path = os.environ.get("PLANGRAPH_ROUTE_POLICY") or DEFAULT_POLICY_PATH
@@ -67,6 +71,15 @@ def clear_policy_cache() -> None:
     _policy_cache.clear()
 
 
+def policy_today(policy: Any) -> date:
+    """The day ``policy`` gates credit with; re-read per call, never frozen.
+
+    Duck-typed: a policy without ``current_today`` falls back to its ``today``.
+    """
+    getter = getattr(policy, "current_today", None)
+    return getter() if callable(getter) else policy.today
+
+
 def catalog_credit_skip_reason(row: Mapping[str, Any] | None,
                                policy: Any = None) -> str | None:
     """Expiry gate for a catalog row; the same contract as a credit leg.
@@ -82,4 +95,4 @@ def catalog_credit_skip_reason(row: Mapping[str, Any] | None,
         policy = load_default_policy()
         if policy is None:
             return GATED
-    return credit_expiry_skip(model, "credit", policy.credit_tiers, policy.today)
+    return credit_expiry_skip(model, "credit", policy.credit_tiers, policy_today(policy))
