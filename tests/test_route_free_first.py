@@ -57,3 +57,11 @@ def test_agy_skipped_while_out_of_quota():
     assert ids == FREE + ["mimo-v2.6-pro", "mimo-v2.6-flash", "cx-gpt-6.1-sol", "deepseek"]
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in plan.skipped}["agy-gemini-3.8-flash"] == "limited"
+
+
+def test_cli_route_review_free_first(tmp_path, capsys):
+    assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
+                 "--role", "review", "--writer-family", "claude", "--json"]) == 0
+    ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
+    assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]]
+    assert ids.index("agy-gemini-3.8-flash") > 2
