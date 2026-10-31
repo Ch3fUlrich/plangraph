@@ -12,7 +12,7 @@
 - 10-31T15:35Z D-3378 - SESSION-SPAWN-MCP parked: muse/north/orfree/gemini refused, luna run-f3d1a934 hung
 ## In flight
 - KEEPER-COVERAGE-TRACK-REPO NO GO D-3381 (CI 41214650407 pytest-postgres red) since 15:50Z next check on resume
-- SPAWNER-LEGS-OVH-DROP qwen seat J/seat-ovh-qwen.log since 15:42Z next check 16:10Z
+- SPAWNER-LEGS-OVH-DROP qwen run-3f4fc3ef VERDICT FAIL (read J/r-ovh-qwen.wait, fix round) since 15:55Z next check on resume
 - RIN-RULES-ITEMS fix writer s06fix1 J/gspawn-s06fix1.log since 15:30Z next check 16:00Z
 - GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check on its MERGE-READY
 ## Planned
