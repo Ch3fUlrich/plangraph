@@ -4,6 +4,7 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 def fallthrough_reason(service, chosen, job, record):
     from . import leg_state
+    from .leg_probe import key as leg_key
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
     if line:
         target = service.leg_reader
@@ -11,8 +12,9 @@ def fallthrough_reason(service, chosen, job, record):
             target = getattr(target, '__self__', None)
         if not hasattr(target, 'record_harness_limit'):
             target = leg_state
-        model = chosen.model if '/' in chosen.model else 'agy/' + chosen.model
-        target.record_harness_limit(model, line, 'spawner:harness')
+        # Q16/M8: one leg key shared with the probe path -- 'agy/<model>' only
+        # for an agy leg's bare model.
+        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness')
         record['reason'] = 'harness_limit'
         return 'harness_limit: ' + line
     return unavailable_reason(job.exit_code, job.stdout, job.stderr)
