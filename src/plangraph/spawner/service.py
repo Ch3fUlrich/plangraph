@@ -330,11 +330,11 @@ class SpawnService(SeatSpawnMixin):
                     stop = self.runner.provider_responses.get(job.job_id)
                     if terminal_record(record, job):
                         break
+                    enforce_verdict(role, job)
                     unavailable = fallthrough_reason(self, chosen, job, record)
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
-                    enforce_verdict(role, job)
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,

@@ -23,8 +23,8 @@ EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreada
 def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
         return False
-    if job.status == 'timeout' and record.get('role') == 'review':
-        return False   # D-3427: a hung seat is failed/timeout and falls through to the next leg
+    if record.get('role') == 'review':
+        return False   # D-3427: a hung seat (cap or stall) fails and falls through to the next leg
     record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
                   watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
                   events=job.events)
@@ -56,7 +56,7 @@ def thresholds(card=None, role=None):
         except ValueError:
             # M17: a bad env knob is refused before launch (exit 2), like a bad card.
             raise SpawnRefused('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
-        result['max_s'] = value
+        result['max_s'] = min(value, result['max_s']) if role == 'review' else value   # seat cap stays
         # An operator-set run timeout is a wall clock: the first-edit hold
         # never extends it (M5's hold 'does not extend the max deadline').
         result['hard_max'] = True
