@@ -1,4 +1,6 @@
 """Shared dispatch outcome policy for base and routed launches."""
+import re
+
 from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
@@ -100,3 +102,27 @@ def orphaned(record, now):
         return None   # no pid evidence: not proof the supervisor died
     return dict(record, status='failed', exit_code=1, ended=now, reason='orphaned',
                 error=f'orphaned: supervisor pid {pid} is gone')
+
+
+def enforce_verdict(role, job):
+    """A review seat's verdict is its stdout (D-3226): no VERDICT line = failed/no_verdict."""
+    if (role == 'review' and job.status == 'completed'
+            and not re.search(r'^\s*VERDICT:\s*(PASS|FAIL)', job.stdout or '', re.M)):
+        job.status = 'failed'
+        job.exit_code = 1
+        job.events = getattr(job, 'events', None) or []
+        job.events.append({'event': 'no_verdict'})
+        job.stderr = 'no_verdict: review run produced no VERDICT: PASS|FAIL line\n' + (job.stderr or '')
+
+
+def check_review_model(role, target):
+    """D-3225 refuse a no-verdict seat model; D-3422 warn on a review-unfit one."""
+    from plangraph.planner.legs import NO_VERDICT_SEATS, REVIEW_WARN_SEATS
+    from plangraph.planner.routing import SpawnRefused
+    if role != 'review':
+        return
+    if target in NO_VERDICT_SEATS:
+        raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
+    if target in REVIEW_WARN_SEATS:
+        import logging
+        logging.getLogger(__name__).warning('review-unfit seat model (D-3422): %s', target)
