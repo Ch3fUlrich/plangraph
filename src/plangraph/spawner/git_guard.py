@@ -21,8 +21,12 @@ import tempfile
 # pattern is matched against the lower-cased key; the original spelling is
 # kept for --unset-all since subsections are case-sensitive).
 DANGEROUS = re.compile(
-    r'core\.(?:hookspath|sshcommand|askpass|fsmonitor)'
-    r'|gpg\.program'
+    r'core\.(?:hookspath|sshcommand|askpass|fsmonitor|editor|pager|gitproxy|alternaterefscommand)'
+    r'|sequence\.editor|diff\.external'
+    r'|pager\..*|alias\..*|ssh\.variant'
+    r'|(?:diff|merge|filter|mergetool|difftool|remote)\..+\.(?:command|textconv|driver|cmd|clean|smudge|process|uploadpack|receivepack|proxy)'
+    r'|uploadpack\.packobjectshook|http\.proxy'
+    r'|gpg(?:\..+)?\.program'
     r'|credential\..*'
     r'|url\..+\.(?:push)?insteadof'
     r'|include(?:if)?\..*')
