@@ -16,6 +16,18 @@ def state_dir(state=None, env=None):
                 Path(env.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph/spawn')
 
 
+def ensure_private_dir(path):
+    """State holds host evidence: created 0o700 on first write (D-3258)."""
+    path = Path(path)
+    if not path.is_dir():
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+    return path
+
+
 def negative_path(state=None, env=None):
     suffix = hashlib.sha256(host_id().encode()).hexdigest()[:16]
     return state_dir(state, env) / ('host-unavailable-' + suffix + '.json')
@@ -33,7 +45,7 @@ def mark_unavailable(model, *, state=None):
     path = negative_path(state)
     models = unavailable_models(state)
     models.add(model.split('#', 1)[0].lower())
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(path.parent)
     atomic_write_private(path, json.dumps(sorted(models)))
     # Remove stale affirmative evidence as well as retaining the runtime denial.
     listing = state_dir(state) / 'model-list-opencode.json'

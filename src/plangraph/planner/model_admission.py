@@ -80,7 +80,8 @@ def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
             raise OSError(source + ' unreachable') from exc
         return set()
     try:
-        state.mkdir(parents=True, exist_ok=True)
+        from .host_models import ensure_private_dir
+        ensure_private_dir(state)
         atomic_write_private(path, json.dumps({'host': host_id(), 'time': now, 'models': sorted(models)}))
     except OSError:
         pass
