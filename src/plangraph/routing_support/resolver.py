@@ -504,7 +504,8 @@ def plan_for_launch(plan, *, dry_run=False, probe=None, env=None, state=None):
         options['env'] = env
     for leg in plan.legs:
         # state rides the row: admission reads the denial file the launch wrote (D-3259).
-        reason = host_skip_reason(dict(model=leg.model, harness=leg.harness, state=state), **options)
+        reason = host_skip_reason(dict(model=leg.model, harness=leg.harness, state=state),
+                                  **options)
         if reason:
             # W30 callers consume skip_reason; reason remains canonical like
             # the planner's pre-existing skipped entries.
