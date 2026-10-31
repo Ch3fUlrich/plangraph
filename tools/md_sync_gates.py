@@ -55,7 +55,7 @@ class GitGates:
         so the primary repo wins whenever it holds it.
         """
         primary = self._check(project, token)
-        if primary["full"] or not track:
+        if primary["full"] or not isinstance(track, str) or not _TRACK_RE.fullmatch(track):
             return primary
         key = f"{project}/{track}"
         if self.target(key)[0] is None:

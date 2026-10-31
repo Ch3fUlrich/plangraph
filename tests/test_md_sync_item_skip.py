@@ -116,3 +116,10 @@ def test_refused_key_parses_only_item_codes():
     assert md_sync._refused_key("op 3 legacy_state a:B: bad_state x\n") == "a:B"
     assert md_sync._refused_key("op 3 edit a:B: forbidden x\n") is None
     assert md_sync._refused_key("error: connection refused\n") is None
+
+
+def test_refusal_line_matches_apply_batch_format_with_and_without_message():
+    # apply_batch.py prints f"op {n} {name} {key}: {code} {message}"; message may be empty
+    assert md_sync._refused_key("op 2 edit p:A: validation bad field\n") == "p:A"
+    assert md_sync._refused_key("op 2 edit p:A: not_found \n") == "p:A"
+    assert md_sync._refused_key("op 2 edit p:A: forbidden no\n") is None

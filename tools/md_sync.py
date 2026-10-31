@@ -335,8 +335,8 @@ def main(argv=None, out=None, err=None):
 #: items one run may drop after a keeper refusal before it gives up (D-3395)
 MAX_ITEM_DROPS = 3
 # item-level codes only: forbidden/unavailable/locked still halt the run
-_REFUSAL_RE = re.compile(r"^op [0-9]+ [a-z_]+ (\S+): (?:validation|conflict|bad_state"
-                         r"|not_found|evidence_unverified|evidence_missing) ")
+_REFUSAL_RE = re.compile(r"^op [0-9]+ [a-z_-]+ (\S+): (?:validation|conflict|bad_state"
+                         r"|not_found|evidence_unverified|evidence_missing)(?:\s|$)")
 
 
 def _refused_key(log):
