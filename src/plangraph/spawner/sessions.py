@@ -50,7 +50,7 @@ from plangraph.spawner.sessions_config import (
 # cross-import-order reason documented above.
 from plangraph.spawner.sessions_agents import (
     DETACHED, FINISHED_STATES, LAUNCH_TIMEOUT, SHORT_RE, STOP_TIMEOUT,
-    TAIL_BYTES, USAGE_KEYS, UUID_RE, _ActionFailed, _AgentsMixin,
+    TAIL_BYTES, USAGE_KEYS, UUID_RE, SID_RE, _ActionFailed, _AgentsMixin,
     transcript_path,
 )
 
@@ -241,6 +241,8 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         confirmed by a second strict poll (D-3193); rc 1 refuses "stop failed"
         unless the id is unlisted before AND after - it had already ended."""
         sid = rec.get("session_id")
+        if sid is not None and not (isinstance(sid, str) and SID_RE.fullmatch(sid)):
+            raise _ActionFailed("stop refused: bad session id")  # before any poll/argv
         rows = self._agents_rows_strict()  # pre-poll: resolve + pre-check
         if not sid:
             cutoff = float(rec.get("launched_ms") or 0) - 5000.0
@@ -260,8 +262,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
                     best = row
             sid = (best or {}).get("sessionId")
             if not sid:  # nothing resolved: no row to stop, the record ends here
-                self._write_record(name, {**rec, "state": "stopped",
-                                          "stopped_ts": self._now()})
+                self._write_record(name, {**rec, "state": "stopped", "stopped_ts": self._now()})
                 return None
         row = next((r for r in rows if r.get("sessionId") == sid), None)
         if row is not None and str(row.get("state") or "") in FINISHED_STATES:

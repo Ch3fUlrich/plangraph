@@ -16,6 +16,9 @@ STOP_TIMEOUT = 30
 DETACHED = 0x8 | 0x200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 SHORT_RE = re.compile(r"backgrounded\s*\W*([0-9a-fA-F]{8})\b")
+# A session id is argv, never text: only a safe token (dash-free first char,
+# no whitespace) may ever reach `claude stop <id>` or a caller (qwen LOW).
+SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 TAIL_BYTES = 256 * 1024  # spec: only the transcript's last 256 KB is read
 # `claude agents --json` states that mean the old session is already over;
@@ -122,6 +125,14 @@ class _AgentsMixin:
             # on a poll that cannot describe the agents list risks a duplicate
             # launch or an unconfirmed stop (r5 seat).
             raise _ActionFailed("agents poll failed: row is not an object")
+        for row in rows:
+            sid = row.get("sessionId")
+            if sid is not None and not (isinstance(sid, str) and SID_RE.fullmatch(sid)):
+                # An id is argv, never text (qwen LOW): a dash-prefixed or
+                # whitespace id would become a flag in `claude stop <id>` and
+                # echo back to the caller. Anything but a safe token fails
+                # closed (r10).
+                raise _ActionFailed("agents poll failed: bad sessionId")
         return rows
 
     def _resolve_id(self, name, stdout, exclude=None, launched_ms=None):
@@ -226,10 +237,15 @@ class _AgentsMixin:
                 continue
             usage = msg.get("usage")
             if isinstance(usage, dict):
-                # Only real numbers count: a non-numeric string or list in a
-                # usage field must never break list for every session (r9).
-                total = sum(v for v in (usage.get(key) for key in USAGE_KEYS)
-                            if isinstance(v, (int, float)) and not isinstance(v, bool))
+                # Only non-negative ints count (r10): NaN, Infinity, negative
+                # and fractional values must never reach context_tokens (a
+                # NaN is also not valid JSON for MCP callers). A line whose
+                # usage holds no such value is skipped entirely so the last
+                # good reading survives - never a bogus 0 (qwen LOW).
+                vals = [v for v in (usage.get(key) for key in USAGE_KEYS)
+                        if isinstance(v, int) and not isinstance(v, bool) and v >= 0]
+                if vals:
+                    total = int(sum(vals))
         return total
 
 
