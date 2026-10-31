@@ -17,9 +17,9 @@
 1. RIN-CUTOVER-DATA S09 now: FREEZE-NOW to routing, runbook plangraph-data router/repoint/s09-router-continuity.md, plan routing-migration.md 5.3 S09
 2. LE-KEEPER-DROW-CLOSES evidence 20b4423a (full sha) + submit, seat verdict qwen run-fa9523d4/delta
 3. KEEPER-DCLOSE-TRACK-EVIDENCE (HIGH) after S09, then RIN-LEDGER-PREP closes via md-sync
-4. SPAWNER-ROUTE-FREE-FIRST; LE-* items prio 3 after phase 0 (D-3382)
+4. LE-SEAT-NO-VERDICT (new, D-3420: mimo legs emit tool-call text, never a verdict); SPAWNER-ROUTE-FREE-FIRST; LE-* items prio 3 after phase 0 (D-3382)
 ## Open
-- BLOCKED GATEWAY-LOG-TOKEN-MINT past r3 cap (D-2739) | default B round-4 writer all 5 blockers + A 2nd seat mimo-v2.6-flash override, needs routing D-id | deadline next gen
+- D-3420 GATEWAY-LOG-TOKEN-MINT: B round-4 writer run-f4c7cdeb running; A 2nd seat cx-gpt-6-luna 30-min cap, fallback deepseek-flash (D-3420 overrides the launch rule "no deepseek") | default wait for gwtok MERGE-READY | deadline none
 ## Traps
 - J=/home/s/.claude/jobs/4fceadcd/tmp (seat prompts, r-split*.wait); older J 6f592267 (wspawn.sh, seat-cov-leg.sh)
 - harness refuses git with vars/heredoc/loops in worktree-isolated sessions: plain single commands + Write/Edit
