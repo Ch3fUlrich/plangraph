@@ -65,3 +65,8 @@ def test_guard_outranks_earlier_no_verdict_and_last_attempt_decides():
                   attempts=[{'skip_reason': 'no_verdict'}, {'skip_reason': 'harness exit code 1'}])
     terminal_reason(record)
     assert record['reason'] != 'no_verdict'
+
+
+def test_review_card_cannot_lift_seat_cap():
+    from plangraph.spawner.run_watchdog import thresholds
+    assert thresholds({'max_min': 120}, 'review')['max_s'] == 30 * 60

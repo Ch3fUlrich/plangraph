@@ -45,6 +45,8 @@ def thresholds(card=None, role=None):
         value = card.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
+        if role == 'review' and key == 'max_min':
+            value = min(value, 30)   # seat cap is not liftable by a card (D-3427)
         result[key.replace('_min', '_s')] = value * 60
     result['hard_max'] = False   # table max_min may carry the first-edit hold (M5)
     timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
