@@ -84,7 +84,8 @@ def orphaned(record, now):
     """Q21/M14: a 'running' record whose supervisor process is gone ends 'failed', reason 'orphaned'."""
     import os
     path = record.get('supervisor_stderr_path')
-    if record.get('status') != 'running' or record.get('ended') is not None or not path:
+    # os.kill(pid, 0) is TerminateProcess on Windows: never probe there.
+    if record.get('status') != 'running' or record.get('ended') is not None or not path or os.name == 'nt':
         return None
     pid = None
     try:

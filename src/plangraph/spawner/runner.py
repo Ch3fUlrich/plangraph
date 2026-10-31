@@ -997,7 +997,8 @@ def spawn_service(*args, **kwargs):
             from . import leg_state
             reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
             original = self.leg_reader
-            self.leg_reader = lambda model, **kw: reader(model if '/' in model else 'agy/' + model, **kw)
+            from .leg_probe import read_status
+            self.leg_reader = lambda model, **kw: read_status(reader, model, **kw)
             try:
                 return super()._route(card, role, writer_families, review_of, **options)
             finally:
@@ -1092,6 +1093,10 @@ def spawn_service(*args, **kwargs):
                         task = self.runner._tasks.get(job.job_id)
                         if task:
                             await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
+                            if task.cancelled() and job.status not in ('stalled', 'timeout', 'cancelled'):
+                                job.status = 'cancelled'
+                            elif not task.cancelled() and task.exception() is not None:
+                                raise task.exception()
                         stop = self.runner.provider_responses.get(job.job_id)
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,

@@ -107,3 +107,28 @@ def test_guard_reasons_are_never_stomped():
                   events=[{'event': 'writer_no_changes'}], attempts=[])
     terminal_reason(record)
     assert record['reason'] == 'writer_no_changes'
+
+
+def test_routing_reads_a_bare_non_agy_leg_under_its_own_key(tmp_path):
+    """Q16 reader side: a qodercli harness limit booked under the bare model is
+    seen by the dispatch reader; an agy limit under 'agy/<model>' still is."""
+    from plangraph.spawner.leg_probe import read_status
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    store.record_harness_limit('Qwen3.8-Flash', QUOTA, 'test')
+    store.record_harness_limit('agy/gemini-3.8-flash', QUOTA, 'test')
+    assert read_status(store.leg_status, 'Qwen3.8-Flash')['state'] == 'limited'
+    assert read_status(store.leg_status, 'gemini-3.8-flash')['state'] == 'limited'
+    assert read_status(store.leg_status, 'other-model')['state'] == 'ok'
+
+
+def test_orphan_check_never_signals_on_windows(tmp_path, monkeypatch):
+    """os.kill(pid, 0) is TerminateProcess on Windows: the orphan check must not call it."""
+    from plangraph.spawner import exit_outcome
+    log = tmp_path / 'supervisor.stderr.log'
+    (tmp_path / 'supervisor.stderr.log.pid').write_text('12345')
+    calls = []
+    monkeypatch.setattr(os, 'kill', lambda *a: calls.append(a))
+    monkeypatch.setattr(os, 'name', 'nt')
+    record = {'status': 'running', 'ended': None, 'supervisor_stderr_path': str(log)}
+    assert exit_outcome.orphaned(record, 1.0) is None
+    assert calls == []

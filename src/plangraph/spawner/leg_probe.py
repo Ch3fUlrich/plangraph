@@ -36,6 +36,13 @@ def key(leg):
             else leg.model)
 
 
+def read_status(reader, model, **kw):
+    """Read a bare model under both keys: an agy leg books 'agy/<model>', others the bare model (Q16)."""
+    from plangraph.routing_support.liveness import unavailable
+    state = reader(model, **kw)
+    return state if '/' in model or unavailable(state) else reader('agy/' + model, **kw)
+
+
 def _store_for(runner):
     """The store the planner reads; probe results never land elsewhere (M19)."""
     store = getattr(runner, 'leg_reader', None)

@@ -59,7 +59,7 @@ def _prune_supervisor_logs(state):
         except FileNotFoundError:
             pass
     for modified, old in sorted(logs, reverse=True)[20:]:
-        if time.time() - modified <= 86400:
+        if time.time() - modified <= 86400 or os.name == 'nt':   # os.kill(pid, 0) terminates on Windows
             continue
         try:
             pid = int(Path(str(old) + '.pid').read_text())
