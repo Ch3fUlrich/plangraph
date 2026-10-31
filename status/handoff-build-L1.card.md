@@ -11,12 +11,12 @@
 - 10-31T15:00Z D-3373 - OPENCODE-MODELS-SYNC cancelled, OVH-DROP widened to 5 legs
 - 10-31T15:35Z D-3378 - SESSION-SPAWN-MCP parked: muse/north/orfree/gemini refused, luna run-f3d1a934 hung
 ## In flight
-- KEEPER-COVERAGE-TRACK-REPO GO-REQ for 4f31bf25 since 15:40Z next check on routing reply
+- KEEPER-COVERAGE-TRACK-REPO NO GO D-3381 (CI 41214650407 pytest-postgres red) since 15:50Z next check on resume
 - SPAWNER-LEGS-OVH-DROP qwen seat J/seat-ovh-qwen.log since 15:42Z next check 16:10Z
 - RIN-RULES-ITEMS fix writer s06fix1 J/gspawn-s06fix1.log since 15:30Z next check 16:00Z
 - GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check on its MERGE-READY
 ## Planned
-1. KEEPER-COVERAGE-TRACK-REPO on GO: merge, live sync D-825, evidence, verdicts, re-post RIN-BACKUP-HARVEST seats
+1. COVERAGE #264 4f31bf25 NO GO D-3381: pytest-postgres red, json() in test_rogue_track_key_never_selects_repo; test-only fix, no new seat, then GO-REQ; on GO: merge, live sync D-825, evidence, verdicts, re-post RIN-BACKUP-HARVEST seats
 2. SPAWNER-LEGS-OVH-DROP: seat PASS + PR #267 CI -> merge, evidence, submit, verdict
 3. RIN-RULES-ITEMS: verify s06fix1, PR, delta qwen seat, merge, regen batch op for RULE-0-2 -> prove -> GO-REQ
 4. SESSION-SPAWN-MCP D-3378 triggers on workst: glm after limit reset; fresh luna diff inline; KEEPER-SEAT-PER-PART
