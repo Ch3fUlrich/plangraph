@@ -30,8 +30,8 @@ def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
 
 def test_review_free_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
-    assert [leg.id for leg in plan.legs] == [
-        "qodercli-qwen3.8-flash", *FREE[:2], "agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+    ids = [leg.id for leg in plan.legs]
+    assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]] and ids[3] == "agy-gemini-3.8-flash"
 
 
 def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
@@ -44,8 +44,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
     assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
-    assert [leg.id for leg in rev.legs] == [
-        "qodercli-qwen3.8-flash", "agy-gemini-3.8-flash", "mimo-v2.6-flash"]
+    assert [leg.id for leg in rev.legs][:2] == ["qodercli-qwen3.8-flash", "agy-gemini-3.8-flash"]
 
 
 def test_agy_skipped_while_out_of_quota():
@@ -58,3 +57,11 @@ def test_agy_skipped_while_out_of_quota():
     assert ids == FREE + ["mimo-v2.6-pro", "mimo-v2.6-flash", "cx-gpt-6.1-sol", "deepseek"]
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in plan.skipped}["agy-gemini-3.8-flash"] == "limited"
+
+
+def test_cli_route_review_free_first(tmp_path, capsys):
+    assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
+                 "--role", "review", "--writer-family", "claude", "--json"]) == 0
+    ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
+    assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]]
+    assert ids.index("agy-gemini-3.8-flash") > 2

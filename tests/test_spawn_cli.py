@@ -155,7 +155,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         assert len(models) == 8, record
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert 'gemini' in models[0] and 'mimo' in models[1] and 'openrouter' in models[2]
+        assert models[0] == 'opencode/deepseek-v4.1-flash-free' and 'glm' in models[1] and 'openrouter' in models[2]
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')

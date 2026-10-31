@@ -352,10 +352,10 @@ def test_writer_order_d2683_writer_family_exclusion():
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
     assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
-    assert "gemini" not in {leg.family for leg in plan_imp.legs}
+    assert plan_imp.first_leg.id == "opencode-deepseek-v4.1-flash-free" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert "agy-gemini-3.8-flash" in [leg.id for leg in plan_wf.legs]
+    assert plan_wf.first_leg.id == "opencode-deepseek-v4.1-flash-free" and "agy-gemini-3.8-flash" in [l.id for l in plan_wf.legs]
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
