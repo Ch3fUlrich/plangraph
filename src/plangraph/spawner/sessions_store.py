@@ -134,8 +134,15 @@ class _StoreMixin:
         subprocess failure - leaves exactly one scrubbed audit JSON line (no
         line at all on a dry run, which stays side-effect free, D-2918).
         `self._audit_argv` is the prompt-redacted argv once one is built, so
-        failure audit lines carry it too (R-16)."""
+        failure audit lines carry it too (R-16). The carrier is cleared again
+        on exit, so no argv outlives its action on a reused thread."""
         self._audit_argv = None
+        try:
+            return self._action_run(action, name, fn, dry)
+        finally:
+            self._audit_argv = None
+
+    def _action_run(self, action, name, fn, dry):
         try:
             result = fn()
         except ParameterRefused as exc:

@@ -319,3 +319,14 @@ def test_unresolved_id_leaves_launched_ts_unset(site):
     rec = json.loads(rec_path.read_text())
     assert rec["state"] == "unknown"
     assert rec["launched_ts"] == 1500.0  # unchanged from before
+
+
+def test_audit_argv_cleared_after_action(site):
+    s = make(site)
+
+    def fn():
+        s._audit_argv = ["claude", "--bg"]
+        raise OSError("boom")
+
+    s._action("launch", "alpha", fn)
+    assert make(site)._audit_argv is None
