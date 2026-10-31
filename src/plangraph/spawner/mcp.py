@@ -12,6 +12,7 @@ from __future__ import annotations
 from plangraph.routing_errors import ParameterRefused
 
 import asyncio
+import copy
 import json
 import sys
 from typing import Any, Mapping
@@ -31,6 +32,10 @@ from plangraph.spawner.runner import JobInfo, SpawnerRunner
 from plangraph.spawner.session_tools import SESSION_TOOLS, _session_arg_errors
 
 TOOLS_METADATA = [
+    {'name': 'plangraph_agent_probe', 'description': 'Run bounded writer commit probes',
+     'inputSchema': {'type': 'object', 'properties': {
+         'leg': {'type': 'array', 'items': {'type': 'string'}},
+         'all_writers': {'type': 'boolean'}, 'timeout': {'type': 'number'}, 'json': {'type': 'boolean'}}}},
     {
         "name": "plangraph_agent_spawn",
         "description": "Spawn an agent task via OmniRoute ACP gateway or dry-run",
@@ -103,6 +108,13 @@ TOOLS_METADATA = [
 ]
 
 
+# D-3244: the schema names the field route refuses without, so callers send it.
+CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': {
+    'stall_min': {'type': 'number', 'exclusiveMinimum': 0},
+    'first_edit_min': {'type': 'number', 'exclusiveMinimum': 0},
+    'max_min': {'type': 'number', 'exclusiveMinimum': 0},
+    'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
+    'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}
 for _tool in TOOLS_METADATA:
     if _tool['name'] in ('plangraph_agent_status', 'plangraph_agent_cancel'):
         _tool['inputSchema']['properties']['run_id'] = {'type': 'string'}
@@ -110,7 +122,7 @@ for _tool in TOOLS_METADATA:
     if _tool['name'] == 'plangraph_agent_spawn':
         _tool['inputSchema']['required'] = ['prompt', 'card']
         _tool['inputSchema']['properties'].update({
-            'card': {'type': 'object'}, 'override_reason': {'type': 'string'},
+            'card': copy.deepcopy(CARD_SCHEMA), 'override_reason': {'type': 'string'},
             'writer_families': {'type': 'array', 'items': {'type': 'string'}},
             'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'},
@@ -124,7 +136,7 @@ for _verb in ('route', 'ps', 'result'):
     TOOLS_METADATA.append({'name': 'plangraph_agent_' + _verb,
         'description': 'Card-based agent ' + _verb,
         'inputSchema': {'type': 'object', 'properties': {
-            'card': {'type': 'object'}, 'role': {'type': 'string'},
+            'card': copy.deepcopy(CARD_SCHEMA) if _verb == 'route' else {'type': 'object'}, 'role': {'type': 'string'},
             'run_id': {'type': 'string'}, 'writer_families': {'type': 'array', 'items': {'type': 'string'}}},
             'required': ['card'] if _verb == 'route' else (['run_id'] if _verb == 'result' else [])}})
 
@@ -203,6 +215,13 @@ class MCPSpawnerServer:
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
         from .bench_entry import benchmark_options
+        if name == 'plangraph_agent_probe':
+            from .leg_probe import probe_many
+            try:
+                return await probe_many(self.runner, arguments.get('leg', ()),
+                                        arguments.get('all_writers', False), arguments.get('timeout'))
+            except ValueError as exc:
+                return {'status': 'refused', 'refusal': 'ParameterRefused', 'error': str(exc), 'exit_code': 2}
         try:
             options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
         except Exception as exc:

@@ -593,7 +593,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None,
+        client: str | None = None, watchdog=None, live_log=None,
     ) -> JobInfo:
         if dry_run:
             return await super().spawn(

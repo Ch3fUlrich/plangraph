@@ -82,7 +82,7 @@ def test_catalog_registers_kimi_with_opencode_harness():
 def test_kimi_harness_does_not_make_kimi_a_routed_leg():
     # Registration only admits a hand-picked seat; routing never offers kimi.
     for role in ("implement", "review"):
-        plan = plan_spawn(CARD, role=role)
+        plan = plan_spawn(CARD, role=role, writer_families=("claude",))
         for model_id in ("opencode-go/kimi-k3.1-pro", "opencode-go/kimi-k3"):
             assert model_id not in [leg.model for leg in plan.legs]
             assert model_id not in [leg.model for leg in plan.review_seats]

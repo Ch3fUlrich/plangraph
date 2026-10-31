@@ -71,6 +71,7 @@ _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served
 
 def pytest_configure(config):
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
+    config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
 
 
 @pytest.fixture
@@ -86,6 +87,7 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
     # Route mechanics tests run under a neutral route policy; the operator's
     # live lists (planner/route_policy.json) are pinned in test_registry_route.py.
     neutral = state / 'route-policy.json'
@@ -107,6 +109,11 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     # Admission renders gateway providers like launch (I6): a dead-port URL keeps
     # gateway legs admissible; no-URL tests delenv it themselves.
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')
+    # Fake writers exit 0 without touching the checkout they run in; the D-3236
+    # no-change check is exercised only by tests marked writer_change_check.
+    if 'writer_change_check' not in request.keywords:
+        from plangraph.spawner import opencode_isolation
+        monkeypatch.setattr(opencode_isolation, 'record_baseline', lambda job, work_dir, live_jobs=(): None)
     from plangraph.spawner import resolver
     probe = resolver.served_models
     probe.cache_clear()

@@ -159,3 +159,6 @@ e1b58b48621a28607ad3c6720214cd2440473aba
 e93f4bbdccf7534773bcf91dfd35250ebe2c7f13
 # D-2739 operator override, lane/decisions-keeper docs/design
 ffc9fd0574eabd0845fdf213468602edd7957559
+# D-3301 #257 lane/spawner-watchdog-v2 trailer failures (no history rewrite, D-3097)
+3b06582c890c3bc40a49a5f5757bbaaf5e7f3d98
+f01bf0649761970ed338abea54bf2957c6b54cfc

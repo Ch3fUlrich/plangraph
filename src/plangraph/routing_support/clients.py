@@ -229,6 +229,7 @@ def build_child_env(
 
     if extra_env:
         env.update(extra_env)
+    env.pop("PLANGRAPH_GATEWAY_LOG_TOKEN", None)  # spawner-only call-log credential, extra_env included
 
     return env
 

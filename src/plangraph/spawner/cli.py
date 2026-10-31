@@ -59,7 +59,7 @@ def _prune_supervisor_logs(state):
         except FileNotFoundError:
             pass
     for modified, old in sorted(logs, reverse=True)[20:]:
-        if time.time() - modified <= 86400:
+        if time.time() - modified <= 86400 or os.name == 'nt':   # os.kill(pid, 0) terminates on Windows
             continue
         try:
             pid = int(Path(str(old) + '.pid').read_text())
@@ -128,6 +128,11 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true',
                            help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
+    p = commands.add_parser('probe')
+    p.add_argument('--leg', action='append', default=[])
+    p.add_argument('--all-writers', action='store_true')
+    p.add_argument('--timeout', type=float)
+    p.add_argument('--json', action='store_true')
     p = commands.add_parser('wait')
     p.add_argument('run_id')
     p.add_argument('--timeout', type=float)
@@ -136,6 +141,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     service = SpawnService(state=args.state)
     try:
+        if args.verb == 'probe':
+            from .leg_probe import probe_many
+            result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            if args.json:
+                print(json.dumps(result))
+            else:
+                for row in result['probes']:
+                    print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
+            return 0 if result['ok'] else 1
         from .bench_entry import benchmark_options
         try:
             options = benchmark_options(args.require_bench, args.bench_db) if args.verb in ('route', 'spawn') else {}
@@ -172,11 +186,8 @@ def main(argv=None):
             if not args.model and not args.leg:
                 if not args.card:
                     raise ValueError('spawn by card; card required')
-                try:
-                    service.route(args.card, args.role, args.writer_family, args.review_of, **options)
-                except Exception as exc:
-                    service.save_refusal(exc, args.role)
-                    raise
+                # service.route saves the refusal record itself (one record per route error).
+                service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
@@ -318,9 +329,11 @@ raise SystemExit(code)
                                          ('\n' + tail if tail else ''))
                 result = json.loads(line)
                 deadline = time.monotonic() + max(0, args.wait)
-                while result['status'] == 'running' and time.monotonic() < deadline:
+                runs = result['seats'] if 'seats' in result else [result]   # --seats: group envelope
+                while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
                     time.sleep(min(.02, max(0, deadline - time.monotonic())))
-                    result = service.result(result['run_id'])
+                    runs[:] = [service.result(r['run_id']) if r.get('status') == 'running' else r for r in runs]
+                result = result if 'seats' in result else runs[0]
         elif args.verb == 'ps':
             result = service.ps()
         elif args.verb == 'cancel':
@@ -343,6 +356,9 @@ raise SystemExit(code)
                     seen.add(line)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
+            if 'seats' in result:
+                # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
+                return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
             if 'status' not in result:
                 return 2 if result.get('error') else 0
             code = result.get('exit_code')

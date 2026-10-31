@@ -32,6 +32,7 @@ from .evidence_ci import CIAdapter
 from .evidence_decisions import DecisionsAdapter
 from .evidence_forgejo import ForgejoStatusAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
+from .evidence_repo import repo_key
 from .evidence_runs import RunRecordAdapter
 from .evidence_semaphore import SemaphoreAdapter, SemaphoreError, positive_int
 from .item_fixes import ErrorRecordVerifier
@@ -42,7 +43,6 @@ from .evidence_types import (
     as_epoch,
     valid_commit_ref,
 )
-
 __all__ = [
     "CommitCiVerifier",
     "RunRecordVerifier",
@@ -318,7 +318,7 @@ class CommitCiVerifier:
                 "commit+ci requires a full lowercase commit sha (40 or 64 hex)", ref
             )
 
-        project = item.get("project")
+        project = repo_key(item or {}, ctx, commit)
         try:
             repo = ctx.git.repo_path(project) if ctx.git is not None else None
         except Exception:  # noqa: BLE001 - adapter failure is a verification failure

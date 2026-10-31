@@ -45,7 +45,10 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
 _keeper_unconfigured_last_warned = None
 
 
-from .env_redact import unavailable_reason
+from .env_redact import first_reason
+from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .git_guard import writer_launch
+from .proc_kill import kill_process_tree
 
 
 def redact(value):
@@ -123,6 +126,7 @@ class JobInfo:
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
+    last_activity_ts: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -288,6 +292,7 @@ class SpawnerRunner:
     def __init__(self, default_cwd: str | None = None, *, process_factory=None, tree_killer=None):
         self.default_cwd = default_cwd or os.getcwd()
         self.jobs: dict[str, JobInfo] = {}
+        self.on_sample = None
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self.process_factory = process_factory or asyncio.create_subprocess_exec
@@ -368,6 +373,7 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
+        watchdog=None, live_log=None,
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
@@ -449,22 +455,14 @@ class SpawnerRunner:
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
+            # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
+            # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
+            from .opencode_isolation import close_config_layers
+            oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
-                # D-2905 (1): a spawner-owned per-job store dir, created before
-                # launch and read only after child exit -- the shared store is
-                # child-writable and proves nothing about the served model.
-                import tempfile
-                oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')  # mode 0700
-                self._ocdata_dirs[job_id] = oc_dir
+                # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
+                # child exit -- the shared store is child-writable and proves nothing.
                 child_env['XDG_DATA_HOME'] = oc_dir
-                # D-2921 F1: close every other config layer -- no repo, user,
-                # Claude Code, MCP or plugin tool may re-enable anything.
-                child_env['OPENCODE_DISABLE_PROJECT_CONFIG'] = '1'
-                child_env['OPENCODE_DISABLE_CLAUDE_CODE'] = '1'
-                child_env['OPENCODE_CONFIG_DIR'] = oc_dir
-                empty_cfg = Path(oc_dir) / 'pg-empty.json'
-                empty_cfg.write_text('{}')
-                child_env['OPENCODE_CONFIG'] = str(empty_cfg)
                 # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
                 # config layer at all -- HOME and XDG_CONFIG_HOME live in the
                 # per-job dir and every caller-set OPENCODE_* override outside
@@ -473,7 +471,6 @@ class SpawnerRunner:
                 xdg_config = os.path.join(oc_dir, 'config')
                 os.mkdir(xdg_config, 0o700)
                 child_env['XDG_CONFIG_HOME'] = xdg_config
-                child_env['OPENCODE_DISABLE_CLAUDE_CODE_SKILLS'] = '1'
                 for name in [n for n in child_env
                              if str(n).startswith('OPENCODE_') and n not in _REVIEW_OPENCODE_ENV_ALLOW]:
                     del child_env[name]
@@ -484,8 +481,9 @@ class SpawnerRunner:
                     if not isinstance(cfg, dict):
                         raise ValueError('not an object')
                     cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
-                    cfg['mcp'] = {}   # D-2921 F1: drop every MCP server
-                    cfg['plugin'] = []  # D-2921 F1: drop every plugin
+                    cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
+                    from .gateway_witness import tag_session
+                    tag_session(cfg, job_id)   # D-3226: the gateway logs this run's sessionTag
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
@@ -552,6 +550,10 @@ class SpawnerRunner:
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
+            from .run_watchdog import thresholds, edit_signature
+            job._watchdog_limits = watchdog or thresholds()
+            job._live_log = live_log
+            job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
             if tools_event:
                 job.events.append(tools_event)
 
@@ -592,6 +594,8 @@ class SpawnerRunner:
                 guard = self._init_git_config_guard(work_dir)
                 if guard is not None:
                     self._git_guards[job_id] = guard
+                from .opencode_isolation import record_baseline
+                await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -716,33 +720,11 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
-            payload = self._stdin_payloads.get(job_id)
-
-            async def _comm(input_data):
-                if input_data is not None:
-                    try:
-                        return await proc.communicate(input=input_data)
-                    except TypeError:
-                        pass
-                return await proc.communicate()
-
-            timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
-            if timeout:
-                try:
-                    seconds = float(timeout)
-                    if not math.isfinite(seconds) or seconds <= 0:
-                        raise ValueError('invalid run timeout')
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(_comm(payload), seconds)
-                except (asyncio.TimeoutError, ValueError):
-                    await self._reap_process(job_id, proc)
-                    stdout_bytes, stderr_bytes = await proc.communicate()
-                    self.jobs[job_id].events.append({'event': 'run_timeout'})
-                    self.jobs[job_id].exit_code = 124
-            else:
-                stdout_bytes, stderr_bytes = await _comm(payload)
+            from .run_watchdog import collect
+            stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].exit_code == 124 else proc.returncode
+            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled') else proc.returncode
 
             job = self.jobs[job_id]
             # Only the fork's exact stderr transport envelope is evidence.
@@ -772,16 +754,15 @@ class SpawnerRunner:
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
-            job.status = "completed" if exit_code == 0 else "failed"
+            if job.status not in ('stalled', 'timeout', 'cancelled'):
+                job.status = "completed" if exit_code == 0 else "failed"
+            from .opencode_isolation import fail_unchanged_writer
+            await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
-            # D-2905 (2): the session store is request-side metadata written by
-            # a child that could forge it -- record kind
-            # 'request-side-opencode-store', never 'served'. Only a review
-            # leg's spawner-owned store is read (D-2905 (1)), only when the
-            # spawner found every tool denied, and only on exit 0.
-            if (job.command and job.command[0] == 'opencode' and job.role == 'review'
-                    and exit_code == 0):
-                oc_dir = self._ocdata_dirs.get(job_id)
+            # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
+            # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
+            if job.command and job.command[0] == 'opencode' and job.role == 'review':
+                oc_dir = self._ocdata_dirs.get(job_id) if exit_code == 0 else None
                 denied = _opencode_tools_denied(
                     env.get('OPENCODE_CONFIG_CONTENT') or '', env)
                 # R2: the store read may block up to its 2s sqlite timeout on a
@@ -795,17 +776,19 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
+                if denied:   # D-3226 response-side, any exit code: the gateway call log names the model
+                    from .gateway_witness import witness
+                    await asyncio.to_thread(witness, self, job_id, job, env)
 
-            # Free text is child-controlled, including plausible provider headers.
-            # Absence of an authenticated adapter witness must remain explicit.
+            # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
             if job_id in self.jobs:
-                if self.jobs[job_id].status != "failed":
+                if self.jobs[job_id].status not in ('failed', 'stalled', 'timeout'):
                     self.jobs[job_id].status = "cancelled"
+                    self.jobs[job_id].exit_code = 1
                 self.jobs[job_id].end_time = time.time()
-                self.jobs[job_id].exit_code = 1
         except Exception as exc:
             job = self.jobs[job_id]
             job.status = 'failed'
@@ -832,55 +815,13 @@ class SpawnerRunner:
             getattr(self, '_reaped_jobs', set()).discard(job_id)
 
     @staticmethod
-    def _init_git_config_guard(work_dir: str | Path | None) -> tuple[Path, bytes, str] | None:
-        if not work_dir:
-            return None
-        try:
-            proc = subprocess.run(
-                ["git", "-C", str(work_dir), "rev-parse", "--git-common-dir"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                return None
-            raw_common = proc.stdout.strip()
-            if not raw_common:
-                return None
-            common_dir = (Path(work_dir) / raw_common).resolve()
-            config_path = common_dir / "config"
-            if not config_path.is_file():
-                return None
-            orig_bytes = config_path.read_bytes()
-            orig_hash = hashlib.sha256(orig_bytes).hexdigest()
-            return (config_path, orig_bytes, orig_hash)
-        except (OSError, UnicodeDecodeError):
-            return None
+    def _init_git_config_guard(work_dir):
+        from .git_guard import init_guard
+        return init_guard(work_dir)
 
-    def _check_git_config_guard(self, job_id: str) -> None:
-        guard = self._git_guards.get(job_id)
-        if not guard:
-            return
-        config_path, orig_bytes, orig_hash = guard
-        try:
-            curr_bytes = config_path.read_bytes() if config_path.is_file() else None
-        except OSError:
-            curr_bytes = None
-        curr_hash = hashlib.sha256(curr_bytes).hexdigest() if curr_bytes is not None else None
-        if curr_hash != orig_hash:
-            try:
-                if orig_bytes is not None:
-                    config_path.write_bytes(orig_bytes)
-                else:
-                    config_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            if job_id in self.jobs:
-                job = self.jobs[job_id]
-                job.events.append({"event": "git_config_mutated"})
-                job.status = "failed"
-                if not job.exit_code or job.exit_code == 0:
-                    job.exit_code = 1
+    def _check_git_config_guard(self, job_id):
+        from .git_guard import check_guard
+        check_guard(self._git_guards.get(job_id), self.jobs.get(job_id))
 
     async def status(self, job_id: str | None = None) -> Any:
         """Query status of a specific job or all jobs."""
@@ -934,6 +875,7 @@ class SpawnerRunner:
         if job_id not in self.jobs:
             raise KeyError(f"Job {job_id} not found")
         job = self.jobs[job_id]
+        job.status, job.exit_code = "cancelled", 1   # Q14: before the reap, so the monitor keeps it
 
         proc = self._processes.get(job_id)
         if proc:
@@ -943,23 +885,10 @@ class SpawnerRunner:
         if task and not task.done():
             task.cancel()
 
-        job.status = "cancelled"
         self._nonces.pop(job_id, None)
         job.end_time = time.time()
-        self._check_git_config_guard(job_id)
+        self._check_git_config_guard(job_id)   # only a dangerous config mutation turns it 'failed'
         return {"job_id": job_id, "status": job.status}
-
-
-async def kill_process_tree(pid, *, platform=None, command_factory=None):
-    """Terminate the isolated POSIX group or Windows process tree."""
-    if (platform or os.name) == 'nt':
-        factory = command_factory or asyncio.create_subprocess_exec
-        proc = await factory('taskkill', '/PID', str(pid), '/T', '/F',
-                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
-    else:
-        import signal
-        os.killpg(pid, signal.SIGKILL)
 
 
 def spawn_service(*args, **kwargs):
@@ -975,17 +904,21 @@ def spawn_service(*args, **kwargs):
             self.completion_sink = completion_sink or FileInbox(self.state)
             from .notify import KeeperSink
             self.keeper_sink = keeper_sink or KeeperSink()
+            self._running_records = {}
+            if hasattr(self.runner, '__dict__'):
+                self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
         def _save(self, record, *, retry=False):
             from .notify import completion_event, CommandSink, KeeperNotConfigured
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
+                record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
                 for stream in ('stdout', 'stderr'):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = (redact(job.stderr.strip().splitlines()[0])
-                            if job.stderr.strip() else f'harness exit code {job.exit_code}')
+                        attempt['skip_reason'] = (redact(first_reason(job.stderr))
+                            if first_reason(job.stderr) else f'harness exit code {job.exit_code}')
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -1051,6 +984,11 @@ def spawn_service(*args, **kwargs):
                 record = self.result(run_id)
                 if record.get('ended') is not None and record['status'] != 'running':
                     return record
+                from .exit_outcome import orphaned
+                gone = orphaned(record, time.time())
+                if gone is not None:
+                    self._save(gone)
+                    return gone
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError('run wait timed out: ' + run_id)
                 await asyncio.sleep(.02)
@@ -1059,7 +997,8 @@ def spawn_service(*args, **kwargs):
             from . import leg_state
             reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
             original = self.leg_reader
-            self.leg_reader = lambda model, **kw: reader(model if '/' in model else 'agy/' + model, **kw)
+            from .leg_probe import read_status
+            self.leg_reader = lambda model, **kw: read_status(reader, model, **kw)
             try:
                 return super()._route(card, role, writer_families, review_of, **options)
             finally:
@@ -1070,6 +1009,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
+            from .run_watchdog import thresholds
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1118,11 +1058,22 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
+                    limits = thresholds(card)
+                    live_log = str(self._path(run_id).parent / 'live.log')
+                    record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
+                        from .leg_probe import before_launch
+                        probe_skip = await before_launch(self.runner, chosen, role, dry_run)
+                        if probe_skip:
+                            record['attempts'].append(dict(leg=asdict(chosen), status='skipped', skip_reason=probe_skip))
+                            self._save(record)
+                            if no_fallthrough:
+                                break
+                            continue
                         from .inline_diff import InlineDiffError
                         try:
                             leg_prompt = self._leg_prompt(prompt, card, role, chosen)
@@ -1130,8 +1081,10 @@ def spawn_service(*args, **kwargs):
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
+                        leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness)
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
+                        self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
                                       writer_family=chosen.family,
@@ -1139,15 +1092,25 @@ def spawn_service(*args, **kwargs):
                         self._save(record)
                         task = self.runner._tasks.get(job.job_id)
                         if task:
-                            await asyncio.shield(task)
+                            await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
+                            if task.cancelled() and job.status not in ('stalled', 'timeout', 'cancelled'):
+                                job.status = 'cancelled'
+                            elif not task.cancelled() and task.exception() is not None:
+                                raise task.exception()
                         stop = self.runner.provider_responses.get(job.job_id)
+                        if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
+                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                                served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
+                            record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                                watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None), events=job.events)
+                            return
                         reason = None
-                        unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+                        unavailable = fallthrough_reason(self, chosen, job, record)
                         if unavailable:
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(job.stderr.strip().splitlines()[0]) if job.stderr.strip() else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+                            reason = redact(first_reason(job.stderr)) if first_reason(job.stderr) else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
@@ -1205,6 +1168,8 @@ def spawn_service(*args, **kwargs):
                     if record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
+                    terminal_reason(record)
+                    release_attempts(self, record)
                     self._save(record)
 
             task = asyncio.create_task(execute())

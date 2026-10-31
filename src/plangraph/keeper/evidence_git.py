@@ -21,8 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
-
 __all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "valid_ref", "resolve_commit"]
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
@@ -580,7 +580,7 @@ class LegacyCommitVerifier:
         if not valid_commit_ref(commit):
             return Result(False, "commit requires a full lowercase commit sha"
                                  " (40 or 64 hex)", ref)
-        project = (item or {}).get("project")
+        project = repo_key(item or {}, ctx, commit)
         try:
             repo = ctx.git.repo_path(project) if ctx.git is not None else None
             if not repo:

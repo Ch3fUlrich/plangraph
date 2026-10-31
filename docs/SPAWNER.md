@@ -1,11 +1,8 @@
 # Plangraph Spawner & Model Routing Architecture
-
 ## Spawn by card
-
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
 or Temporal service is required for this slice.
-
 ```bash
 python -m plangraph.spawner.cli route --card @card.json --role implement --json
 python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
@@ -52,11 +49,11 @@ Writing run roles (implement/fix) guard shared .git/config against in-place muta
 audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
-MCP tools `plangraph_agent_route`, `spawn`, `ps`, `result`, `status`, `cancel`
-(all with the `plangraph_agent_` prefix) share these records. Spawn requires
+CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
+MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
 Result/status/cancel accept `run_id`; legacy job-id operations remain available.
-No CLI or MCP endpoint writes leg state. Gateway adapters call
+Only actual probe results write liveness state. Gateway adapters call
 `runner.provider_response` with actual captured responses.
 
 Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
@@ -67,11 +64,10 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-Writers start with `omniroute/cx-gpt-6.1-sol`, then agy Gemini, Mimo Flash,
-and direct DeepSeek. Review seats start with Qoder Qwen, free DeepSeek, free
-GLM, agy Gemini, then Mimo; Claude is not a default writer or review seat.
-Two review seats must have different families from every writer and each other;
-an impossible fence returns fewer seats and an explicit plan error, not a fallback.
+Writers follow `WRITER_ORDER` (D-2683, `planner/legs.py`): agy Gemini, Mimo Pro, OpenRouter free, Mimo Flash; `omniroute/cx-gpt-6.1-sol` last = writer fallback (D-3232); banned/off families are skipped for writers too.
+Review seats start with Qoder Qwen, then what the route policy leaves; a no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat; Claude is no default writer or seat. A review without a writer family refuses (D-1533).
+Leg notes ("after its Friday-evening reset") are static text: availability is the leg state (`limited` after a provider stop), not a schedule.
+Two review seats must differ in family from every writer and each other; an impossible fence returns fewer seats and an explicit plan error, not a fallback.
 
 An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
 row), or sequence of rows with `model_id`, ranks measured legs only inside their
@@ -85,7 +81,7 @@ say `benchmark data absent` (the legacy `no benchmark p` reason remains compatib
 `SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
 production CLI's `--require-bench`.
 
-Operator rules and `route_card` tier order come first; U_core only permutes within a tier.
+Operator rules and `route_card` tier order come first; U_core only permutes within a tier, and only for review/orchestrate: implement keeps the writer order (D-2683), so a writer route shows `u_core` without applying it.
 CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
 Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
 
@@ -637,7 +633,8 @@ not establish a private ACL; operators must secure the state directory ACL.
 
 Spawn refusals, including CLI/MCP preflight failures, persist private run records
 with an exit code. Codes are 1 for execution/I/O failure, 2 for card/policy
-refusal, 3 for benchmark policy/data failure, and 4 for exhausted provider legs.
+refusal, 3 for benchmark policy/data failure, 4 for exhausted provider legs (status
+`limited`), 5 for a writer that changed nothing (`failed`, `writer_no_changes`, D-3236).
 If storage itself fails, the original refusal is retained and the persistence
 failure is logged. Explicit override leg IDs are preserved even for shared models.
 
@@ -726,3 +723,7 @@ on the keeper's atomic `(item, run_id, phase)` idempotency key.
 See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.
 ## Claude Code sessions
 See [spawner-sessions.md](spawner-sessions.md).
+
+# Watchdog
+
+Runs sample file signatures/git HEAD (edits), non-header output (activity), and process-tree CPU (post-edit only). Card `stall_min`, `first_edit_min`, `max_min` default to 20/45/90 minutes. Pre-edit, no activity or exceeding first-edit age stalls; post-edit, all signals must stop progressing. Maximum age wins. Status `stalled` exits 6; `timeout` exits 124; `writer_no_changes` exits 5. Events `watchdog_stalled`/`watchdog_timeout` carry rules and diagnostics. Private `runs/<run_id>/live.log` is capped at 2 MB; status exposes live tails and `last_activity_ts`. `PLANGRAPH_SPAWN_RUN_TIMEOUT` replaces the default maximum (seconds), but explicit card `max_min` wins. `PLANGRAPH_SPAWN_WATCHDOG_INTERVAL` overrides sampling seconds.
