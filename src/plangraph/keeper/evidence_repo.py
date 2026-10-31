@@ -22,6 +22,26 @@ _PROJECT_RE = re.compile(r"[A-Za-z0-9._-]+")
 _TRACK_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 
+def track_key(item: Any) -> str | None:
+    """Return ``<project>/<track>`` when both match the safe regexes, else None.
+
+    Returns None if *item* is not a dict or if either field is missing, not a string,
+    or does not match its regex. Never raises.
+    """
+    if not isinstance(item, dict):
+        return None
+    try:
+        project = item.get("project")
+        track = item.get("track")
+        if not isinstance(project, str) or not _PROJECT_RE.fullmatch(project):
+            return None
+        if not isinstance(track, str) or not _TRACK_RE.fullmatch(track):
+            return None
+        return f"{project}/{track}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def repo_key(item: dict, ctx: Any, commit: str) -> str | None:
     """Return ``<project>/<track>`` when only the track repo holds ``commit``.
 
