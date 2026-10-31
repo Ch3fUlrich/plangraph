@@ -499,27 +499,27 @@ reports — while `effective_gateway_base_url()` resolves the environment source
 
 On hosts without a root config (such as Windows workst), launch the spawner CLI with `PLANGRAPH_GATEWAY_URL=http://127.0.0.1:20128/v1` to point to the local gateway.
 
-A gateway-keyed model (provider `mimo`/`omniroute`) with no base URL from any source
-now fails closed on every platform — a Linux host with neither the root overlay nor a
-URL environment variable launches no process and the run fails with
+A gateway-keyed model (provider `mimo`/`omniroute`) with no base URL from any source now fails closed on every platform
+— a Linux host with neither the root overlay nor a URL environment variable launches no process and the run fails with
 `not_served_on_host: gateway_base_url_unresolved`, falling through to the next leg.
 
-A gateway breaker 503 / circuit-open counts as a failed run: it is never retried in a
-loop on the same leg and is not a provider stop (only 429/402 advance the leg state);
-the next writer picks the card up.
+A gateway breaker 503 / circuit-open counts as a failed run: it is never retried in a loop on the same leg and is not
+a provider stop (only 429/402 advance the leg state); the next writer picks the card up.
 
-`gateway_url()` also takes a config mapping and reads its `gateway_url` key, but no
-production caller passes one today: that argument exists for callers that do pass it
-(the tests exercise it).
+A failed run records a runtime denial as `host-unavailable-<host-id-hash>.json` in the spawn state dir (the `--state` dir
+governs both the write and the later reads) when its evidence lines are error-shaped; pytest prose quoting a marker never
+records one. While a denial is live, later routes skip the model as `not_served_on_host: <model>`, and it expires after
+`PLANGRAPH_DENIED_TTL_S` seconds (default 3600). Delete the `host-unavailable-*.json` file to reset one before it expires.
 
-`build_child_env` merges into whatever `OPENCODE_CONFIG_CONTENT` already carries using
-`setdefault`, so a child config that already sets `settings.baseURL` keeps that value
-and no environment source displaces it. With no such key and neither environment
-variable set, `build_child_env` writes no `baseURL` into the child provider config (a
-caller that needs a value supplies its own), and `plangraph_agent_health` reports
-`gateway_default_url` as `""`. Both sides read the same one helper,
-`plangraph.spawner.clients.effective_child_base_url()`, so the reported URL always
-matches the effective one.
+`gateway_url()` also takes a config mapping and reads its `gateway_url` key, but no production caller passes one
+today: that argument exists for callers that do pass it (the tests exercise it).
+
+`build_child_env` merges into whatever `OPENCODE_CONFIG_CONTENT` already carries using `setdefault`, so a child
+config that already sets `settings.baseURL` keeps that value and no environment source displaces it. With no such
+key and neither environment variable set, `build_child_env` writes no `baseURL` into the child provider config (a
+caller that needs a value supplies its own), and `plangraph_agent_health` reports `gateway_default_url` as `""`.
+Both sides read the same one helper, `plangraph.spawner.clients.effective_child_base_url()`, so the reported URL
+always matches the effective one.
 
 ### SQLite Catalog DB CLI (`src/plangraph/spawner/catalog_db.py`)
 

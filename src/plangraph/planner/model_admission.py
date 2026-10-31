@@ -43,6 +43,19 @@ def opencode_models():
     return models
 
 
+def listing_serves(model, listing):
+    """Gateway-path listing match: case-insensitive and #variant-aware (D-3264).
+
+    A bare request matches any listed variant of its base; a ``#variant``
+    request matches that variant, or the bare base when no variant is listed.
+    """
+    base = str(model).lower().split('#', 1)[0]
+    lowered = {str(m).lower() for m in listing}
+    variants = {m for m in lowered if m.startswith(base + '#')}
+    return (base in {m.split('#', 1)[0] for m in lowered}
+            and ('#' not in model or not variants or str(model).lower() in variants))
+
+
 def console_host_skip(model, probe, env, state=None):
     """Console providers require positive host evidence, including on probe failure."""
     from plangraph.routing_support.resolver import host_probe_env
@@ -53,7 +66,12 @@ def console_host_skip(model, probe, env, state=None):
         models = probe(host_probe_env(env)) if probe else cached_models('opencode', opencode_models, state=state_dir(state, env))
     except Exception:
         models = None
-    return None if model in (models or ()) else 'not_served_on_host: ' + model
+    served = models is not None and listing_serves(model, models)
+    return None if served else 'not_served_on_host: ' + model
+
+
+_FAILED_LOADS = {}
+_FAILURE_BACKOFF_S = 30.0
 
 
 def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
@@ -73,12 +91,20 @@ def cached_models(source, loader, *, state=None, clock=time.time, strict=False):
             return set(data['models'])
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    # A failing loader backs off instead of re-running per leg (D-3264).
+    failed_at = _FAILED_LOADS.get((source, str(path)))
+    if failed_at is not None and 0 <= now - failed_at < _FAILURE_BACKOFF_S:
+        if strict:
+            raise OSError(source + ' unreachable')
+        return set()
     try:
         models = set(loader())
     except Exception as exc:
+        _FAILED_LOADS[(source, str(path))] = now
         if strict:
             raise OSError(source + ' unreachable') from exc
         return set()
+    _FAILED_LOADS.pop((source, str(path)), None)
     try:
         from .host_models import ensure_private_dir
         ensure_private_dir(state)
@@ -114,7 +140,7 @@ def validate_model(model, *, gateway_list=None, opencode_list=None, state=None):
             if model.partition('/')[2] in listed:
                 return model
         listed = lookup('opencode', opencode_list, opencode_models)
-        if model in listed:
+        if listing_serves(model, listed):
             return model
     if unreachable:
         raise SpawnRefused('could not verify model: ' + ', '.join(unreachable) + ' unreachable: ' + model)
