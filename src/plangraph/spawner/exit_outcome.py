@@ -85,25 +85,6 @@ def terminal_reason(record):
                             or f"harness exit {record['exit_code']}")
 
 
-async def stop_orphan_group(record):
-    """An orphaned run's isolated group (pgid = leg pid) is killed, never a recycled pid's."""
-    import os
-    from .proc_kill import group_alive, kill_process_tree
-    pid = record.get('pid')
-    if os.name == 'nt' or not isinstance(pid, int) or pid <= 1 or not group_alive(pid):
-        return
-    try:   # a live leader must have started before the run's last seen activity
-        ticks = int(open(f'/proc/{pid}/stat').read().rsplit(')', 1)[1].split()[19])
-        btime = next(int(line.split()[1]) for line in open('/proc/stat') if line.startswith('btime'))
-        if btime + ticks / os.sysconf('SC_CLK_TCK') > (record.get('last_activity_ts') or 0) + 1:
-            return
-    except FileNotFoundError:
-        pass   # leader gone: the live group still holds the pgid, so it was not recycled
-    except (OSError, ValueError, StopIteration, IndexError):
-        return
-    await kill_process_tree(pid)
-
-
 def orphaned(record, now):
     """Q21/M14: a 'running' record whose supervisor process is gone ends 'failed', reason 'orphaned'."""
     import os

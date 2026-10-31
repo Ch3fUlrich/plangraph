@@ -987,8 +987,6 @@ def spawn_service(*args, **kwargs):
                 from .exit_outcome import orphaned
                 gone = orphaned(record, time.time())
                 if gone is not None:
-                    from .exit_outcome import stop_orphan_group
-                    await stop_orphan_group(gone)
                     self._save(gone)
                     return gone
                 if deadline is not None and time.monotonic() >= deadline:
