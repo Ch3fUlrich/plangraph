@@ -17,9 +17,19 @@ import pytest
 
 from evidence_fakes import FakeDecisions, FakeGit, make_ctx
 from keeper_seat_helpers import (
-    DECISION, MERGE_SHA, PHASE_SHA, SHA_A, SHA_B, RaisingGit, _cov,
-    git_with, merge_git, to_review_merge, to_review_with_commits,
-    verdict_events, w, writer,  # noqa: F401 - the review world fixture
+    DECISION,
+    PHASE_SHA,
+    SHA_A,
+    SHA_B,
+    RaisingGit,
+    _cov,
+    git_with,
+    merge_git,
+    to_review_merge,
+    to_review_with_commits,
+    verdict_events,
+    w,  # noqa: F401 - the review world fixture
+    writer,
 )
 from keeper_util import seed, to_in_review
 from plangraph.keeper import auth
@@ -87,9 +97,16 @@ def test_delegate_cannot_override_verified_writer(w):
 
 
 @pytest.mark.parametrize("proof,paths,code", [
-    (True, ["CHANGELOG.md"], None), (True, ["src/example.py"], None),
-    (False, ["CHANGELOG.md"], "same_family"), (None, ["CHANGELOG.md"], "same_family"),
-    (None, None, "same_family"), ("error", ["CHANGELOG.md"], "writer_unknown"),
+    (True, ["CHANGELOG.md"], None),
+    # The proof ALONE decides: a contradicting changed_paths is not consulted.
+    (True, ["src/example.py"], None),
+    # ...and it vetoes an all-CHANGELOG changed_paths just the same.
+    (False, ["CHANGELOG.md"], "same_family"),
+    # An adapter without the proof counts the hand, whatever changed_paths says.
+    (None, ["CHANGELOG.md"], "same_family"),
+    (None, None, "same_family"),
+    # A proof that cannot be read still fails closed.
+    ("error", ["CHANGELOG.md"], "writer_unknown"),
 ])
 def test_hand_edit_paths_determine_writer_exemption(w, proof, paths, code):
     """``changelog_only_edit`` is the ONE source of truth for the exemption."""
@@ -141,18 +158,23 @@ def test_hand_edit_leaf_identity_is_not_merge_identity(monkeypatch):
     assert git._writer_trailer("repo", SHA_A)["_writer_commit"] == SHA_A
 
 
-# -- 1. mixed-writer HIGH item: every writer family must be covered ---------
+# --------------------------------------------------------------------------
+# 1. mixed-writer HIGH item: every writer family must be covered
+# --------------------------------------------------------------------------
+
 def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     covered, refused = seed(
         w, [("A", []), ("B", [])],
         evidence_kinds=("commit+ci",), review_tier="high")
-    mixed = {SHA_A: writer("mimo-v2 run1"), SHA_B: writer("deepseek-r1 run2")}
+    mixed = {SHA_A: writer("mimo-v2 run1"),       # xiaomi
+             SHA_B: writer("deepseek-r1 run2")}   # deepseek
     to_review_with_commits(w, covered, mixed)
     to_review_with_commits(w, refused, mixed)
 
     assert w.store.verdict(w.p("rAlibaba"), covered, True, "one")["state"] == "in_review"
     result = w.store.verdict(w.p("rAnthropic1"), covered, True, "two")
-    assert result["state"] == "done" and result["reviews_passed"] == 2
+    assert result["state"] == "done"
+    assert result["reviews_passed"] == 2
 
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
     round_no = w.store._item(refused)["round"]
@@ -160,13 +182,18 @@ def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
         w.store.verdict(w.p("rXiaomi"), refused, True, "two")
     # rXiaomi is one of the commit writers: D-2458 refuses the ACCEPT seat at
     # the family gate, before the closing coverage gate ever runs.
-    assert exc.value.code == "same_family" and "xiaomi" in exc.value.msg
+    assert exc.value.code == "same_family"
+    assert "xiaomi" in exc.value.msg
     item = w.store._item(refused)
-    assert item["state"] == "in_review" and item["round"] == round_no
+    assert item["state"] == "in_review"
+    assert item["round"] == round_no
     assert len(verdict_events(w, refused)) == 1
 
 
-# -- 2. two Claude seats are ONE family, even with a D-217 waiver ------------
+# --------------------------------------------------------------------------
+# 2. two Claude seats are ONE family, even with a D-217 waiver
+# --------------------------------------------------------------------------
+
 def test_two_claude_seats_are_one_family(w):
     plain, waived = seed(
         w, [("A", []), ("B", [])],
@@ -175,6 +202,7 @@ def test_two_claude_seats_are_one_family(w):
     to_review_with_commits(w, plain, trailers)
     to_review_with_commits(w, waived, trailers)
 
+    # Without a waiver the existing second-family gate refuses first.
     assert w.store.verdict(w.p("rAnthropic1"), plain, True, "one")["state"] == "in_review"
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rAnthropic2"), plain, True, "two")
@@ -182,22 +210,32 @@ def test_two_claude_seats_are_one_family(w):
     assert w.store._item(plain)["state"] == "in_review"
 
     # The waiver opens that gate; coverage still sees a single family.
-    w.store.ctx = make_ctx(git=git_with(trailers), decisions=FakeDecisions(waiving={(DECISION, waived)}))
+    w.store.ctx = make_ctx(
+        git=git_with(trailers),
+        decisions=FakeDecisions(waiving={(DECISION, waived)}))
     w.store.waive_second_family(w.p("router"), waived, DECISION)
     assert w.store._item(waived)["review_waiver"] == DECISION
     assert w.store.verdict(w.p("rAnthropic1"), waived, True, "one")["state"] == "in_review"
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rAnthropic2"), waived, True, "two")
-    assert exc.value.code == "coverage" and "xiaomi" in exc.value.msg
-    assert w.store._item(waived)["state"] == "in_review" and len(verdict_events(w, waived)) == 1
+    assert exc.value.code == "coverage"
+    assert "xiaomi" in exc.value.msg
+    assert w.store._item(waived)["state"] == "in_review"
+    assert len(verdict_events(w, waived)) == 1
 
 
-# -- 3. a sensitive (HIGH) item can never close on Claude seats alone --------
+# --------------------------------------------------------------------------
+# 3. a sensitive (HIGH) item can never close on Claude seats alone
+# --------------------------------------------------------------------------
+
 def test_sensitive_high_cannot_close_with_claude_seats_only(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",), review_tier="high")
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
+                  review_tier="high")
     trailers = {SHA_A: writer("mimo-v2 run1")}
     to_review_with_commits(w, key, trailers)
-    w.store.ctx = make_ctx(git=git_with(trailers), decisions=FakeDecisions(waiving={(DECISION, key)}))
+    w.store.ctx = make_ctx(
+        git=git_with(trailers),
+        decisions=FakeDecisions(waiving={(DECISION, key)}))
     w.store.waive_second_family(w.p("router"), key, DECISION)
 
     assert w.store.verdict(w.p("rAnthropic1"), key, True, "one")["state"] == "in_review"
@@ -210,9 +248,14 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     assert len(verdict_events(w, key)) == 1
 
 
-# -- 4. standard item: one seat covers the sole writer, not a mixed pair -----
+# --------------------------------------------------------------------------
+# 4. standard item: one seat covers the sole writer, not a mixed pair
+# --------------------------------------------------------------------------
+
 @pytest.mark.parametrize("seat,done,blamed", [
-    ("rGoogle", True, None), ("rAnthropic1", False, "anthropic"), ("rXiaomi", False, "xiaomi"),
+    ("rGoogle", True, None),
+    ("rAnthropic1", False, "anthropic"),
+    ("rXiaomi", False, "xiaomi"),
 ])
 def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
@@ -234,7 +277,10 @@ def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed)
     assert verdict_events(w, key) == []
 
 
-# -- 5. standard item: Claude may review a single non-Claude writer ----------
+# --------------------------------------------------------------------------
+# 5. standard item: Claude may review a single non-Claude writer
+# --------------------------------------------------------------------------
+
 def test_standard_single_writer_claude_seat_is_allowed(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer("deepseek-r1 run1")})
@@ -243,54 +289,77 @@ def test_standard_single_writer_claude_seat_is_allowed(w):
     assert result["reviews_passed"] == 1
 
 
-# -- 6. fail closed when a writer family cannot be resolved -----------------
-@pytest.mark.parametrize("case", ["missing_writer", "unknown_model", "trailers_error"])
+# --------------------------------------------------------------------------
+# 6. fail closed when a writer family cannot be resolved
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("case", ["missing_writer", "unknown_model",
+                                  "trailers_error"])
 def test_unresolvable_writer_family_refuses_the_closing_verdict(w, case):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     if case == "missing_writer":
-        trailers, git = {SHA_A: {}}, None
+        trailers = {SHA_A: {}}
+        git = None
     elif case == "unknown_model":
-        trailers, git = {SHA_A: writer("frob-9 run1")}, None
+        trailers = {SHA_A: writer("frob-9 run1")}
+        git = None
     else:
-        trailers, git = {SHA_A: writer("mimo-v2 run1")}, RaisingGit()
+        trailers = {SHA_A: writer("mimo-v2 run1")}
+        git = RaisingGit()
     to_review_with_commits(w, key, trailers, git=git)
 
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rGoogle"), key, True, "would close")
     assert exc.value.code == "writer_unknown"
-    assert w.store._item(key)["state"] == "in_review" and verdict_events(w, key) == []
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
 
 
 @pytest.mark.parametrize("trailer,family", [
-    ("mimo-v2 run-qwen3-max", "xiaomi"), ("deepseek-r1 run-claude", "deepseek"),
+    ("mimo-v2 run-qwen3-max", "xiaomi"),
+    ("deepseek-r1 run-claude", "deepseek"),
 ])
 def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
     """The run id may name another family; only ``<model-id>`` decides."""
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer(trailer)})
-    assert set(_cov().writer_families(w.store, w.store._item(key), w.store.ctx)) == {family}
+    assert set(_cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx)) == {family}
     assert w.store.verdict(w.p("rAnthropic1"), key, True, "covered")["state"] == "done"
 
 
-# -- 7. decision-only evidence has no commit writers: behaviour unchanged ---
+# --------------------------------------------------------------------------
+# 7. decision-only evidence has no commit writers: behaviour unchanged
+# --------------------------------------------------------------------------
+
 def test_decision_only_item_has_no_commit_writers_and_still_closes(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
     w.store.ctx = make_ctx(git=FakeGit())
     to_in_review(w, key, who="claimant")
-    assert set(_cov().writer_families(w.store, w.store._item(key), w.store.ctx)) == set()
+    families = _cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx)
+    assert set(families) == set()
     assert w.store.verdict(w.p("rGoogle"), key, True, "no commits")["state"] == "done"
 
 
-# -- 8. ok=False is a change request, never a coverage refusal --------------
+# --------------------------------------------------------------------------
+# 8. ok=False is a change request, never a coverage refusal
+# --------------------------------------------------------------------------
+
 def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")})
+
     result = w.store.verdict(w.p("rXiaomi"), key, False, "needs work")
-    assert result["state"] == "claimed" and w.store._item(key)["state"] == "claimed"
+    assert result["state"] == "claimed"
+    assert w.store._item(key)["state"] == "claimed"
     assert verdict_events(w, key) == []
 
 
-# -- 9. only the CLOSING high verdict is checked; a refusal appends nothing --
+# --------------------------------------------------------------------------
+# 9. only the CLOSING high verdict is checked; a refusal appends nothing
+# --------------------------------------------------------------------------
+
 def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
                   review_tier="high")
@@ -298,7 +367,8 @@ def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     round_no = w.store._item(key)["round"]
 
     first = w.store.verdict(w.p("rAlibaba"), key, True, "first")
-    assert first["state"] == "in_review" and len(verdict_events(w, key)) == 1
+    assert first["state"] == "in_review"
+    assert len(verdict_events(w, key)) == 1
 
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), key, True, "second")
@@ -306,34 +376,44 @@ def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     # (D-2458); the refusal still appends nothing.
     assert exc.value.code == "same_family"
     item = w.store._item(key)
-    assert item["state"] == "in_review" and item["round"] == round_no
+    assert item["state"] == "in_review"
+    assert item["round"] == round_no
     assert len(verdict_events(w, key)) == 1
 
     # Atomic: the refused seat left no trace, so a covering family closes.
     result = w.store.verdict(w.p("rGoogle"), key, True, "covering family")
-    assert result["state"] == "done" and result["reviews_passed"] == 2
+    assert result["state"] == "done"
+    assert result["reviews_passed"] == 2
     assert len(verdict_events(w, key)) == 2
 
 
-# -- 10. pure function: table plus parity with tools/seat_verdict.coverage --
+# --------------------------------------------------------------------------
+# 10. the pure function: table plus parity with tools/seat_verdict.coverage
+# --------------------------------------------------------------------------
+
 @pytest.mark.parametrize("writers,seats,need,sensitive,want", [
     (["xiaomi"], ["anthropic", "anthropic"], 2, False, ["xiaomi"]),
     (["xiaomi"], ["anthropic", "alibaba"], 2, False, []),
-    (["xiaomi"], ["anthropic"], 1, False, []), (["xiaomi"], ["anthropic"], 1, True, ["xiaomi"]),
+    (["xiaomi"], ["anthropic"], 1, False, []),
+    (["xiaomi"], ["anthropic"], 1, True, ["xiaomi"]),
     (["xiaomi"], ["anthropic", "alibaba"], 1, True, []),
     (["xiaomi", "alibaba"], ["alibaba", "google"], 2, False, ["alibaba"]),
     (["xiaomi", "deepseek"], ["alibaba", "anthropic"], 2, True, []),
-    (["xiaomi"], ["xiaomi"], 1, False, ["xiaomi"]), ([], ["anthropic"], 2, True, []),
+    (["xiaomi"], ["xiaomi"], 1, False, ["xiaomi"]),
+    ([], ["anthropic"], 2, True, []),
     ([" Xiaomi "], [" ANTHROPIC ", "alibaba"], 2, False, []),
 ])
 def test_uncovered_table(writers, seats, need, sensitive, want):
-    assert _cov().uncovered(writers, seats, need=need, sensitive=sensitive) == want
+    assert _cov().uncovered(writers, seats, need=need,
+                            sensitive=sensitive) == want
 
 
 def test_uncovered_matches_the_client_coverage_grid():
-    writer_sets = [[], ["xiaomi"], ["deepseek"], ["xiaomi", "deepseek"], ["anthropic"]]
-    seat_sets = [[], ["anthropic"], ["anthropic", "anthropic"], ["alibaba"], ["xiaomi"],
-                 ["anthropic", "alibaba"], ["anthropic", "xiaomi"], ["deepseek", "anthropic"],
+    writer_sets = [[], ["xiaomi"], ["deepseek"], ["xiaomi", "deepseek"],
+                   ["anthropic"]]
+    seat_sets = [[], ["anthropic"], ["anthropic", "anthropic"], ["alibaba"],
+                 ["xiaomi"], ["anthropic", "alibaba"],
+                 ["anthropic", "xiaomi"], ["deepseek", "anthropic"],
                  ["alibaba", "google"], ["google", "google"]]
     for writers, seats, need in product(writer_sets, seat_sets, (1, 2)):
         for sensitive in (False, True):
@@ -342,7 +422,10 @@ def test_uncovered_matches_the_client_coverage_grid():
                 writers, seats, need=need, sensitive=sensitive)
 
 
-# -- 11. one family table: the keeper imports plangraph.review.family's -----
+# --------------------------------------------------------------------------
+# 11. one family table: the keeper imports plangraph.review.family's
+# --------------------------------------------------------------------------
+
 def test_coverage_reuses_the_review_family_table():
     import inspect
 
@@ -356,7 +439,10 @@ def test_coverage_reuses_the_review_family_table():
         assert cov.model_family is review_family.model_family
 
 
-# -- ADDENDUM: the evidence commit is the PR MERGE commit (12-14) -----------
+# --------------------------------------------------------------------------
+# ADDENDUM: the evidence commit is the PR MERGE commit (12-14) ...
+# --------------------------------------------------------------------------
+
 def test_merge_evidence_takes_the_writers_from_the_branch_commits(w):
     covered, refused = seed(
         w, [("A", []), ("B", [])],
@@ -397,7 +483,10 @@ def test_merge_without_a_qualifying_writer_fails_closed(w, branch_trailers):
     assert verdict_events(w, key) == []
 
 
-# -- 14. a Hand-Edit branch commit (no Writer) is a Claude hand: anthropic --
+# --------------------------------------------------------------------------
+# 14. a Hand-Edit branch commit (no Writer) is a Claude hand: anthropic
+# --------------------------------------------------------------------------
+
 def test_hand_edit_branch_commit_counts_as_anthropic(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_merge(w, key, merge_git([{"Hand-Edit": "D-2240"}]))
@@ -417,7 +506,10 @@ def test_hand_edit_branch_commit_counts_as_anthropic(w):
     assert w.store.verdict(w.p("rGoogle"), key, True, "other family")["state"] == "done"
 
 
-# -- 16. (D-2308) PHASE merge: only the leaf branch commits name writers ----
+# --------------------------------------------------------------------------
+# 16. (D-2308) PHASE merge: only the leaf branch commits name writers
+# --------------------------------------------------------------------------
+
 def test_phase_merge_uses_the_flattened_leaf_trailers(w):
     covered, refused = seed(
         w, [("A", []), ("B", [])],
@@ -443,94 +535,3 @@ def test_phase_merge_uses_the_flattened_leaf_trailers(w):
     assert "xiaomi" in exc.value.msg
     assert w.store._item(refused)["state"] == "in_review"
     assert len(verdict_events(w, refused)) == 1
-
-
-# --------------------------------------------------------------------------
-# 17. (D-3360) track-repo commit+ci evidence resolves writer in track repo
-# --------------------------------------------------------------------------
-
-class TrackFakeGit(FakeGit):
-    """FakeGit extended so repo_path("<project>/<track>") returns a track repo
-
-    and commits can live in only one repo.
-    """
-
-    def __init__(self, *a, track_repo="/repos/demo-track", track_commits=(),
-                 raising_repos=(), raising_on_call=None, **kw):
-        super().__init__(*a, **kw)
-        self.track_repo, self.track_commits = track_repo, set(track_commits or ())
-        self.raising_repos = set(raising_repos or ())
-        self.raising_on_call = dict(raising_on_call or {})
-        self._key_calls: dict[str, int] = {}
-
-    def repo_path(self, project):
-        self.repo_path_calls.append(project)
-        self._key_calls[project] = n = self._key_calls.get(project, 0) + 1
-        if project in self.raising_repos or self.raising_on_call.get(project) == n:
-            raise RuntimeError(f"repo_path error for {project}")
-        return self.track_repo if "/" in project else super().repo_path(project)
-
-    def commit_exists(self, repo, sha):
-        return sha in self.track_commits if repo == self.track_repo else (sha not in self.track_commits and self.exists)
-
-    def trailers(self, repo, sha):
-        return {} if (repo == self.track_repo) != (sha in self.track_commits) else super().trailers(repo, sha)
-
-    def writer_trailers(self, repo, sha):
-        return [] if (repo == self.track_repo) != (sha in self.track_commits) else super().writer_trailers(repo, sha)
-
-
-def test_track_repo_merge_commit_hand_edit_is_anthropic(w):
-    (key,) = seed(w, [("A", [])], track="data", evidence_kinds=("commit+ci",))
-    git = TrackFakeGit(trailers_by_sha={MERGE_SHA: {"Plan-Item": "demo:A"}},
-                       branch_trailers_by_sha={MERGE_SHA: [{"Hand-Edit": "D-3360"}]},
-                       track_commits={MERGE_SHA})
-    to_review_merge(w, key, git, sha=MERGE_SHA)
-    assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == ["anthropic"]
-    with pytest.raises(Refused) as exc:
-        w.store.verdict(w.p("rAnthropic1"), key, True, "hand edit")
-    assert exc.value.code == "same_family" and "anthropic" in exc.value.msg
-    assert w.store.verdict(w.p("rGoogle"), key, True, "covering")["state"] == "done"
-
-
-def test_track_repo_writer_trailer_resolves_family(w):
-    (key,) = seed(w, [("A", [])], track="data", evidence_kinds=("commit+ci",))
-    git = TrackFakeGit(trailers_by_sha={SHA_A: writer("mimo-v2.6-pro run-47db")}, track_commits={SHA_A})
-    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2.6-pro run-47db")}, git=git)
-    assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == ["xiaomi"]
-    with pytest.raises(Refused) as exc:
-        w.store.verdict(w.p("rXiaomi"), key, True, "same")
-    assert exc.value.code == "same_family" and "xiaomi" in exc.value.msg
-    assert w.store.verdict(w.p("rAnthropic1"), key, True, "covering")["state"] == "done"
-
-
-def test_primary_repo_row_unchanged(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
-    git = TrackFakeGit(trailers_by_sha={SHA_A: writer("mimo-v2 run1")}, track_commits=set())
-    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")}, git=git)
-    assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == ["xiaomi"]
-    assert w.store.verdict(w.p("rAnthropic1"), key, True, "covering")["state"] == "done"
-
-
-def test_track_repo_unregistered_and_commit_not_in_primary_refuses(w):
-    (key,) = seed(w, [("A", [])], track="data", evidence_kinds=("commit+ci",))
-    reg = TrackFakeGit(trailers_by_sha={SHA_A: writer("mimo-v2.6-pro run1")}, track_commits={SHA_A})
-    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2.6-pro run1")}, git=reg)
-    w.store.ctx = make_ctx(git=TrackFakeGit(track_repo=None, track_commits={SHA_A}))
-    with pytest.raises(Refused) as exc:
-        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
-    assert exc.value.code == "writer_unknown"
-
-
-def test_track_repo_path_raising_refuses_writer_unknown(w):
-    (key,) = seed(w, [("A", [])], track="data", evidence_kinds=("commit+ci",))
-    reg = TrackFakeGit(trailers_by_sha={SHA_A: writer("mimo-v2.6-pro run1")}, track_commits={SHA_A})
-    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2.6-pro run1")}, git=reg)
-    w.store.ctx = make_ctx(git=TrackFakeGit(track_commits={SHA_A}, raising_repos={"demo/data"}))
-    with pytest.raises(Refused) as exc:
-        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
-    assert exc.value.code == "writer_unknown"
-    w.store.ctx = make_ctx(git=TrackFakeGit(track_commits={SHA_A}, raising_on_call={"demo/data": 2}))
-    with pytest.raises(Refused) as exc:
-        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
-    assert exc.value.code == "writer_unknown" and "demo/data" in exc.value.msg
