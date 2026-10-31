@@ -123,6 +123,7 @@ class JobInfo:
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
+    leg_tier: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -368,8 +369,9 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
+        tier: str | None = None,
     ) -> JobInfo:
-        """Spawn a new agent job and track its state."""
+        """Spawn a new agent job and track its state (``tier`` is the chosen leg's tier)."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
@@ -541,7 +543,7 @@ class SpawnerRunner:
                 risk=risk,
                 command=cmd,
                 dry_run=False,
-                cwd=work_dir,
+                cwd=work_dir, leg_tier=tier,
             )
             self.jobs[job_id] = job
             if tools_event:
@@ -801,11 +803,12 @@ class SpawnerRunner:
                 self.jobs[job_id].end_time = time.time()
                 self.jobs[job_id].exit_code = 1
         except Exception as exc:
-            job = self.jobs[job_id]
-            job.status = 'failed'
-            job.exit_code = 1
-            job.end_time = time.time()
-            job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
+            job = self.jobs.get(job_id)   # the cancel path may have dropped it
+            if job is not None:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.end_time = time.time()
+                job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
             try:
@@ -813,7 +816,10 @@ class SpawnerRunner:
             except Exception:
                 pass
             self._check_git_config_guard(job_id)
-            from .credit import capture_spend; capture_spend(self.jobs[job_id], self._child_envs.get(job_id, os.environ))
+            job = self.jobs.get(job_id)   # the cancel path may have dropped it
+            from .credit import capture_spend
+            await asyncio.to_thread(capture_spend, job, self._child_envs.get(job_id, os.environ),
+                                    tier=getattr(job, 'leg_tier', None))
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
@@ -1124,7 +1130,7 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness)
+                            role=role, dry_run=dry_run, client=chosen.harness, tier=chosen.tier)
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
                                       writer_family=chosen.family,
@@ -1149,7 +1155,7 @@ def spawn_service(*args, **kwargs):
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
-                        from .credit import record_spend; record_spend(self.state, record, chosen, job)
+                        from .credit import record_spend; await asyncio.to_thread(record_spend, self.state, record, chosen, job)
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,

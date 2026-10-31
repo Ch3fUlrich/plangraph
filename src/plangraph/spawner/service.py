@@ -318,7 +318,7 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness)
+                        role=role, dry_run=dry_run, client=chosen.harness, tier=chosen.tier)
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)

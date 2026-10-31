@@ -21,11 +21,13 @@ SAVE_READ_ATTEMPTS = 3
 
 
 def atomic_write_private(path, text):
+    """Write ``text`` (str or bytes) atomically with private permissions."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, name = tempfile.mkstemp(prefix='.' + path.name + '-', dir=path.parent)
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        binary = isinstance(text, bytes)
+        with os.fdopen(fd, 'wb' if binary else 'w', **({} if binary else {'encoding': 'utf-8'})) as stream:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())

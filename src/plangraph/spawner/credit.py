@@ -1,6 +1,7 @@
 """Private, best-effort console accounting; failures remain visible."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone, date
 import json
@@ -8,6 +9,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import time
@@ -74,36 +76,94 @@ def session_spend(db_path, job_id, *, started=None):
                 return unavailable(f'{type(exc).__name__}: {exc}')
 
 
-def capture_spend(job, env):
-    # Capture before isolated child data is removed. Tier belongs to the chosen
-    # leg, not DEFAULT_LEGS or a model-name guess; record_spend applies it later.
+def capture_spend(job, env, *, tier=None):
+    """Best-effort spend capture before isolated child data is removed.
+
+    Only credit-tier legs read the store (the tier belongs to the chosen leg,
+    never DEFAULT_LEGS or a model-name guess).  Capture can neither fail nor
+    block a run: any failure lands on the job as ``unavailable`` evidence and
+    no exception escapes.
+    """
+    if str(tier or '').lower() != 'credit':
+        return
     if job is None:
         LOG.warning('credit source=unavailable reason=missing job during capture')
         return
-    job.credit_spend = session_spend(opencode_db_path(env), job.job_id,
-                                     started=getattr(job, 'start_time', None))
+    try:
+        job.credit_spend = session_spend(opencode_db_path(env), job.job_id,
+                                         started=getattr(job, 'start_time', None))
+    except Exception as exc:
+        job.credit_spend = unavailable(f'{type(exc).__name__}: {exc}')
+        LOG.warning('credit source=unavailable reason=%s', exc)
 
 
 def read_entries(path):
-    entries, malformed = {}, 0
+    """Ledger rows keyed by run_id plus every torn/invalid line kept verbatim.
+
+    Malformed lines are returned as their original bytes so a rewrite can
+    never destroy the evidence it could not parse (only a count survives).
+    """
+    entries, malformed = {}, []
     try:
-        lines = path.read_text().splitlines()
+        raw = Path(path).read_bytes()
     except FileNotFoundError:
         return entries, malformed
-    for line in lines:
+    for line in raw.splitlines():
         try:
             entry = json.loads(line)
             if not isinstance(entry, dict) or not isinstance(entry.get('run_id'), str):
                 raise ValueError('missing run_id')
             entries[entry['run_id']] = entry
         except (ValueError, TypeError):
-            malformed += 1
+            malformed.append(line)
     return entries, malformed
+
+
+#: A lock older than this was left by a crashed writer, never a live one.
+LOCK_STALE_SECONDS = 300
+
+
+def ledger_lock_path(path):
+    """The ledger's lock directory: outside the ledger's own basename family
+    (``path.with_suffix('.lock')`` collides with the ledger's suffix handling)."""
+    path = Path(path)
+    return path.parent / (path.name + '.lock.d')
+
+
+def _owner_alive(pid):
+    if os.name == 'nt':
+        return True   # no safe liveness probe on Windows: age alone reclaims
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _lock_is_stale(lock):
+    """True for a crashed writer's lock: too old, or its recorded pid is gone."""
+    try:
+        age = time.time() - os.path.getmtime(lock)
+    except OSError:
+        return True
+    if age > LOCK_STALE_SECONDS:
+        return True
+    try:
+        pid = int((Path(lock) / 'owner.pid').read_text())
+    except (OSError, ValueError):
+        return False   # no owner recorded and young: still a live writer
+    return not _owner_alive(pid)
 
 
 @contextmanager
 def ledger_lock(path):
-    lock = path.with_suffix('.lock')
+    """Serialize ledger writes.
+
+    A crashed writer's stale lock is reclaimed (never spins); a genuinely busy
+    ledger raises ``TimeoutError`` so the caller records the spend as
+    ``unavailable`` instead of silently dropping it.
+    """
+    lock = ledger_lock_path(path)
     for attempt in range(201):
         try:
             lock.mkdir(mode=0o700)
@@ -111,11 +171,18 @@ def ledger_lock(path):
         except FileExistsError:
             if attempt == 200:
                 raise TimeoutError('credit ledger lock busy')
+            if _lock_is_stale(lock):
+                shutil.rmtree(lock, ignore_errors=True)
+                continue   # reclaimed: retry now, no busy-wait spin
             time.sleep(.01)
     try:
+        try:
+            (lock / 'owner.pid').write_text(str(os.getpid()))
+        except OSError:
+            pass
         yield
     finally:
-        lock.rmdir()
+        shutil.rmtree(lock, ignore_errors=True)
 
 
 def record_spend(state, record, leg, job, *, env=None, db_path=None):
@@ -141,16 +208,20 @@ def record_spend(state, record, leg, job, *, env=None, db_path=None):
             if any(s.get('source') == 'unavailable' for s in attempts.values()):
                 entry.update(source='unavailable', reason='; '.join(s.get('reason', 'unknown') for s in attempts.values() if s.get('source') == 'unavailable'))
             entries[entry['run_id']] = entry
-            # Preserve evidence of torn/invalid lines across subsequent writes.
-            text = ''.join(json.dumps(e) + '\n' for e in entries.values()) + 'invalid\n' * malformed
-            atomic_write_private(path, text)
+            # Torn/invalid lines are rewritten verbatim: a rewrite preserves
+            # the evidence it could not parse, never a placeholder.
+            data = b''.join(line + b'\n' for line in malformed)
+            data += ''.join(json.dumps(e) + '\n' for e in entries.values()).encode('utf-8')
+            atomic_write_private(path, data)
     except Exception as exc:
         reason = f'{type(exc).__name__}: {exc}'
         record['credit_spend'] = unavailable(reason)
         LOG.warning('credit source=unavailable reason=%s', reason)
 
 
-TABLE_COLUMNS = ('provider', 'expires', 'days_left', 'runs', 'cost_usd', 'tokens_input', 'tokens_output')
+TABLE_COLUMNS = ('provider', 'expires', 'days_left', 'runs',
+                 'unknown_runs', 'unavailable_runs', 'malformed_lines',
+                 'cost_usd', 'tokens_input', 'tokens_output')
 
 
 def _cell(row, key):
@@ -170,23 +241,41 @@ def credit_table(rows):
     return '\n'.join(lines)
 
 
+def _policy_today(policy):
+    """The day the policy gates credit with; re-read per call (never frozen)."""
+    getter = getattr(policy, 'current_today', None)
+    return getter() if callable(getter) else policy.today
+
+
+def _expiry(config, today):
+    """``(expires, days_left, reason)``; a missing/unparsable ``expires`` gates
+    as ``credit_expired`` exactly like the shared gate -- a report never raises
+    on the degenerate policy entries the gate fail-closes on."""
+    from plangraph.routing_support.credit_gate import GATED
+    try:
+        expires = date.fromisoformat(config['expires'])
+    except (KeyError, TypeError, ValueError):
+        return (config.get('expires') if isinstance(config, Mapping) else None, None, GATED)
+    return config['expires'], (expires - today).days, GATED if expires < today else None
+
+
 def credit_report(state, *, policy=None, today=None):
     from plangraph.planner.route_policy import load_route_policy
     policy = policy or load_route_policy()
-    # The same frozen today the policy gates credit with, never a second clock.
-    today = today or policy.today
+    # The same day the policy gates credit with, never a second clock.
+    today = today or _policy_today(policy)
     try:
         entries, malformed = read_entries(Path(state) / 'credit-spend.jsonl')
     except OSError as exc:
         LOG.warning('credit source=unavailable reason=%s', exc)
-        entries, malformed = {}, 1
+        entries, malformed = {}, []
     rows = []
     for provider, config in policy.credit_tiers.items():
         runs = [e for e in entries.values() if str(e.get('model', '')).partition('/')[0] == provider]
-        rows.append(dict(provider=provider, expires=config['expires'],
-                         days_left=(date.fromisoformat(config['expires']) - today).days,
+        expires, days_left, reason = _expiry(config, today)
+        rows.append(dict(provider=provider, expires=expires, days_left=days_left, reason=reason,
                          runs=len(runs), unknown_runs=sum(e.get('cost_usd') is None or e.get('source') == 'unavailable' for e in runs),
                          unavailable_runs=sum(e.get('source') == 'unavailable' for e in runs),
-                         malformed_lines=malformed,
+                         malformed_lines=len(malformed),
                          **{key: sum(e.get(key) or 0 for e in runs) for key in KEYS}))
     return rows
