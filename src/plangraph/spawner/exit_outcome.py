@@ -11,6 +11,8 @@ TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'no_verdict', 'ca
 def fallthrough_reason(service, chosen, job, record):
     from . import leg_state
     from .leg_probe import key as leg_key
+    if getattr(job, 'status', None) == 'timeout' and record.get('role') == 'review':
+        return 'timeout'   # D-3427: seat cap hit, fall through to the next leg
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
     if line:
         target = service.leg_reader
@@ -78,6 +80,7 @@ def terminal_reason(record):
         return
     if record.get('exit_code') not in (None, 0):
         record['reason'] = (reason or record.get('error')
+                            or ('timeout' if (record.get('attempts') or [{}])[-1].get('skip_reason') == 'timeout' else None)
                             or first_reason(record.get('stderr_tail', ''))
                             or f"harness exit {record['exit_code']}")
 
