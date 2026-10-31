@@ -54,3 +54,14 @@ def test_no_verdict_falls_through_and_later_pass_is_clean():
     record = dict(status='completed', exit_code=0, events=[{'event': 'no_verdict'}], attempts=[])
     terminal_reason(record)
     assert record.get('reason') != 'no_verdict'
+
+
+def test_guard_outranks_earlier_no_verdict_and_last_attempt_decides():
+    record = dict(status='failed', exit_code=1, events=[{'event': 'no_verdict'}, {'event': 'writer_no_changes'}],
+                  attempts=[{'skip_reason': 'no_verdict'}, {'skip_reason': 'harness exit code 1'}])
+    terminal_reason(record)
+    assert record['reason'] == 'writer_no_changes'
+    record = dict(status='failed', exit_code=1, events=[{'event': 'no_verdict'}],
+                  attempts=[{'skip_reason': 'no_verdict'}, {'skip_reason': 'harness exit code 1'}])
+    terminal_reason(record)
+    assert record['reason'] != 'no_verdict'
