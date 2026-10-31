@@ -593,7 +593,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None,
+        client: str | None = None, tier: str | None = None,
     ) -> JobInfo:
         if dry_run:
             return await super().spawn(
@@ -607,7 +607,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
                 extra_env=extra_env,
                 gateway=gateway,
                 gateway_online=gateway_online,
-                wait_seconds=wait_seconds,
+                wait_seconds=wait_seconds, tier=tier,
             )
 
         job_id = f"job-{uuid.uuid4().hex[:8]}"
