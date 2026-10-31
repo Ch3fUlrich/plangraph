@@ -11,12 +11,6 @@ TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
 def fallthrough_reason(service, chosen, job, record):
     from . import leg_state
     from .leg_probe import key as leg_key
-    if record.get('role') == 'review':
-        # D-3427/D-2913: a hung (cap or stall) or verdictless seat falls through to the next leg.
-        if getattr(job, 'status', None) in ('timeout', 'stalled'):
-            return job.status
-        if {'event': 'no_verdict'} in (getattr(job, 'events', None) or ()):
-            return 'no_verdict'
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
     if line:
         target = service.leg_reader
@@ -31,6 +25,12 @@ def fallthrough_reason(service, chosen, job, record):
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
         return 'harness_limit: ' + line
+    if record.get('role') == 'review':
+        # D-3427/D-2913: a hung (cap or stall) or verdictless seat falls through to the next leg.
+        if getattr(job, 'status', None) in ('timeout', 'stalled'):
+            return job.status
+        if {'event': 'no_verdict'} in (getattr(job, 'events', None) or ()):
+            return 'no_verdict'
     return unavailable_reason(job.exit_code, job.stdout, job.stderr)
 
 
@@ -59,8 +59,11 @@ def terminal_reason(record):
     """
     events = record.get('events') or ()
     # no_verdict counts only when the run ENDED failed: a later seat may have passed.
-    guards = ('git_config_mutated', 'writer_no_changes') + (('no_verdict',) if record.get('status') == 'failed' else ())
-    special = next((e['event'] for e in events if e.get('event') in guards), None)
+    # Guards keep precedence over it, and it counts only if the LAST attempt gave none.
+    last = (record.get('attempts') or [{}])[-1].get('skip_reason')
+    guards = ('git_config_mutated', 'writer_no_changes') + (('no_verdict',) if record.get('status') == 'failed' and last == 'no_verdict' else ())
+    names = {e.get('event') for e in events}
+    special = next((g for g in guards if g in names), None)
     if special is not None:
         record['reason'] = special
         return
