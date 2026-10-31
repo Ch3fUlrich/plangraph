@@ -19,7 +19,7 @@
 3. KEEPER-DCLOSE-TRACK-EVIDENCE (HIGH) after S09, then RIN-LEDGER-PREP closes via md-sync
 4. LE-SEAT-NO-VERDICT (new, D-3420: mimo legs emit tool-call text, never a verdict); SPAWNER-ROUTE-FREE-FIRST; LE-* items prio 3 after phase 0 (D-3382)
 ## Open
-- D-3420 GATEWAY-LOG-TOKEN-MINT: B r4 c9697bb6 FAILED (2 tests + qwen NO-GO) -> BLOCKED to routing, default park B at 4fc1bfb8 + split B1/B2; A 2nd seat cx-gpt-6-luna 30-min cap, fallback deepseek-flash (D-3420 overrides the launch rule "no deepseek") | default wait for gwtok MERGE-READY | deadline none
+- D-3422 GATEWAY-LOG-TOKEN-MINT: B scoped FINAL r5 (seats qwen+luna; NO-GO parks B at 4fc1bfb8; F-1 isolation = operator step); A merges after luna seat + judge GO | default wait for gwtok MERGE-READY | deadline none
 ## Traps
 - J=/home/s/.claude/jobs/4fceadcd/tmp (seat prompts, r-split*.wait); older J 6f592267 (wspawn.sh, seat-cov-leg.sh)
 - harness refuses git with vars/heredoc/loops in worktree-isolated sessions: plain single commands + Write/Edit
