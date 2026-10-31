@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from ..review.family import model_family
 from .errors import Refused
-from .evidence_repo import _PROJECT_RE, _TRACK_RE, repo_key
+from .evidence_repo import repo_key, track_key
 
 __all__ = ["uncovered", "writer_families"]
 
@@ -60,25 +60,23 @@ def writer_families(store, item, ctx):
     commit cannot be resolved to a family.  An item with no commit evidence
     (e.g. decision-only) has no commit writers and returns ``[]``.
     """
-    if not isinstance(item, dict) or not isinstance(item.get("project"), str) or not item.get("project"):
+    if not isinstance(item, dict):
         raise Refused("writer_unknown", "cannot resolve project repository")
-    rows = [e for e in store._evidence(item.get("key"))
-            if e["epoch"] == item.get("epoch") and e["verified"]
+    if item.get("key") is None or item.get("epoch") is None:
+        raise Refused("writer_unknown", "item lacks key/epoch")
+    rows = [e for e in store._evidence(item["key"])
+            if e["epoch"] == item["epoch"] and e["verified"]
             and e["kind"] == "commit+ci"
             and (e.get("ref") or {}).get("commit")]
     if not rows:
         return []
+    project = item.get("project")
+    if not isinstance(project, str) or not project:
+        raise Refused("writer_unknown", "item project missing or not a string")
     git = getattr(ctx, "git", None)
     if git is None:
         raise Refused("writer_unknown", "no git adapter for commit evidence")
-    project = item["project"]
-    track = item.get("track")
-    valid_track = (
-        bool(_PROJECT_RE.fullmatch(project))
-        and isinstance(track, str)
-        and bool(_TRACK_RE.fullmatch(track))
-    )
-    track_key = f"{project}/{track}" if valid_track else None
+    item_track_key = track_key(item)
     families = []
     for row in rows:
         commit = row["ref"]["commit"]
@@ -86,21 +84,21 @@ def writer_families(store, item, ctx):
         if not isinstance(key, str) or not key:
             raise Refused("writer_unknown",
                           f"no repo registered for project {project!r}")
+        suffix = (
+            f" (resolved to primary {project!r}; track {item_track_key!r} not used)"
+            if item_track_key is not None and key == project
+            else ""
+        )
         try:
             repo = git.repo_path(key)
         except Exception as exc:  # noqa: BLE001 - fail closed
-            msg = ("cannot resolve project repository"
+            msg = (f"cannot resolve project repository{suffix}"
                    if key == project
                    else f"cannot resolve repository for {key!r}")
             raise Refused("writer_unknown", msg) from exc
         if not repo:
             raise Refused("writer_unknown",
-                          f"no repo registered for project {key!r}")
-        suffix = (
-            f" (resolved to primary {project!r}; track {track_key!r} does not hold it)"
-            if valid_track and key == project
-            else ""
-        )
+                          f"no repo registered for project {key!r}{suffix}")
         try:
             trailers = git.writer_trailers(repo, commit)
         except Exception as exc:  # noqa: BLE001 - fail closed on any git error

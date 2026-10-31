@@ -16,6 +16,7 @@ from keeper_seat_helpers import (
 )
 from keeper_util import seed
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.evidence_repo import track_key
 
 
 class TrackFakeGit(FakeGit):
@@ -132,6 +133,8 @@ def test_track_repo_unregistered_and_commit_not_in_primary_refuses(w):
     with pytest.raises(Refused) as exc:
         _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
     assert exc.value.code == "writer_unknown"
+    assert "demo/data" in exc.value.msg
+    assert "(resolved to primary 'demo'; track 'demo/data' not used)" in exc.value.msg
 
 
 def test_track_repo_path_raising_refuses_writer_unknown(w):
@@ -177,7 +180,7 @@ def test_commit_in_neither_repo_refuses_naming_track_key(w):
         _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
     assert exc.value.code == "writer_unknown"
     assert "demo/data" in exc.value.msg
-    assert "(resolved to primary 'demo'; track 'demo/data' does not hold it)" in exc.value.msg
+    assert "(resolved to primary 'demo'; track 'demo/data' not used)" in exc.value.msg
 
 
 def test_refusals_with_track_name_track_key_for_all_writer_unknown_forms(w):
@@ -193,7 +196,7 @@ def test_refusals_with_track_name_track_key_for_all_writer_unknown_forms(w):
         _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
     assert exc.value.code == "writer_unknown"
     assert "cannot read writer trailers for" in exc.value.msg
-    assert "(resolved to primary 'demo'; track 'demo/data' does not hold it)" in exc.value.msg
+    assert "(resolved to primary 'demo'; track 'demo/data' not used)" in exc.value.msg
 
     # 2. Neither Writer nor Hand-Edit
     empty_trailer_git = TrackFakeGit(
@@ -205,7 +208,7 @@ def test_refusals_with_track_name_track_key_for_all_writer_unknown_forms(w):
         _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
     assert exc.value.code == "writer_unknown"
     assert "has neither Writer nor Hand-Edit" in exc.value.msg
-    assert "(resolved to primary 'demo'; track 'demo/data' does not hold it)" in exc.value.msg
+    assert "(resolved to primary 'demo'; track 'demo/data' not used)" in exc.value.msg
 
 
 def test_git_adapter_without_commit_exists_pinned(w):
@@ -226,23 +229,78 @@ def test_git_adapter_without_commit_exists_pinned(w):
         _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
     assert exc.value.code == "writer_unknown"
     assert "demo/data" in exc.value.msg
-    assert "(resolved to primary 'demo'; track 'demo/data' does not hold it)" in exc.value.msg
+    assert "(resolved to primary 'demo'; track 'demo/data' not used)" in exc.value.msg
 
 
-@pytest.mark.parametrize("bad_item", [
-    None,
-    ["not", "a", "dict"],
-    {},
-    {"track": "data"},
-    {"project": None, "track": "data"},
-    {"project": 123, "track": "data"},
-    {"project": "", "track": "data"},
-])
+@pytest.mark.parametrize("bad_item", [None, ["not", "a", "dict"], "not-a-dict", 123])
 def test_non_dict_item_or_missing_project_refuses(w, bad_item):
     with pytest.raises(Refused) as exc:
         _cov().writer_families(w.store, bad_item, w.store.ctx)
     assert exc.value.code == "writer_unknown"
     assert exc.value.msg == "cannot resolve project repository"
+
+
+@pytest.mark.parametrize("bad_item", [
+    {"project": "demo", "epoch": 1},
+    {"project": "demo", "key": "k"},
+    {"project": "demo", "key": None, "epoch": 1},
+    {"project": "demo", "key": "k", "epoch": None},
+    {}, {"track": "data"},
+])
+def test_item_lacking_key_or_epoch_refuses(w, bad_item):
+    with pytest.raises(Refused) as exc:
+        _cov().writer_families(w.store, bad_item, w.store.ctx)
+    assert exc.value.code == "writer_unknown"
+    assert exc.value.msg == "item lacks key/epoch"
+
+
+def test_decision_only_item_without_project_returns_empty(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    item = dict(w.store._item(key))
+    item.pop("project", None)
+    assert _cov().writer_families(w.store, item, w.store.ctx) == []
+
+
+@pytest.mark.parametrize("bad_project", [None, 123, "", ["demo"]])
+def test_item_with_commit_rows_and_no_project_refuses_naming_project(w, bad_project):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")})
+    item = dict(w.store._item(key))
+    if bad_project is None:
+        item.pop("project", None)
+    else:
+        item["project"] = bad_project
+    with pytest.raises(Refused) as exc:
+        _cov().writer_families(w.store, item, w.store.ctx)
+    assert exc.value.code == "writer_unknown"
+    assert exc.value.msg == "item project missing or not a string"
+    assert "project" in exc.value.msg
+
+
+def test_track_item_repo_path_raising_on_primary_names_track_key(w):
+    (key,) = seed(w, [("A", [])], track="data", evidence_kinds=("commit+ci",))
+    reg = TrackFakeGit(track_commits={SHA_A}, trailers_by_sha={SHA_A: writer("mimo-v2 run1")})
+    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")}, git=reg)
+    git = TrackFakeGit(track_commits={SHA_A}, raising_repos={"demo"})
+    w.store.ctx = make_ctx(git=git)
+    with pytest.raises(Refused) as exc:
+        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+    assert exc.value.code == "writer_unknown"
+    assert "demo/data" in exc.value.msg
+    assert "cannot resolve project repository (resolved to primary 'demo'; track 'demo/data' not used)" in exc.value.msg
+
+
+def test_track_item_repo_path_returning_none_on_primary_names_track_key(w):
+    (key,) = seed(w, [("A", [])], track="data", evidence_kinds=("commit+ci",))
+    reg = TrackFakeGit(track_commits={SHA_A}, trailers_by_sha={SHA_A: writer("mimo-v2 run1")})
+    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")}, git=reg)
+    git = TrackFakeGit(repo=None, track_commits=set())
+    w.store.ctx = make_ctx(git=git)
+    with pytest.raises(Refused) as exc:
+        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+    assert exc.value.code == "writer_unknown"
+    assert "demo/data" in exc.value.msg
+    assert "no repo registered for project 'demo' (resolved to primary 'demo'; track 'demo/data' not used)" in exc.value.msg
 
 
 def test_mixed_rows_primary_and_track_both_families_returned(w):
@@ -256,7 +314,7 @@ def test_mixed_rows_primary_and_track_both_families_returned(w):
 
 
 def test_primary_path_messages_pinned(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    (key,) = seed(w, [("A", [])], track=None, evidence_kinds=("commit+ci",))
     git_good = FakeGit(trailers_by_sha={SHA_A: writer("mimo-v2 run1")})
     to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")}, git=git_good)
 
@@ -301,3 +359,29 @@ def test_rogue_track_key_never_selects_repo(w, rogue_track):
     assert exc.value.code == "writer_unknown"
     assert f"demo/{rogue_track}" not in git.repo_path_calls
     assert exc.value.msg == f"commit {SHA_A} names no writer"
+
+
+@pytest.mark.parametrize("item,expected", [
+    (None, None), ("not a dict", None), (123, None), ([], None), ({}, None),
+    ({"project": "demo"}, None), ({"track": "data"}, None),
+    ({"project": None, "track": "data"}, None), ({"project": "demo", "track": None}, None),
+    ({"project": 123, "track": "data"}, None), ({"project": "demo", "track": 123}, None),
+    ({"project": "", "track": "data"}, None), ({"project": "demo", "track": ""}, None),
+    ({"project": "demo/bad", "track": "data"}, None),
+    ({"project": "demo", "track": "data/bad"}, None),
+    ({"project": "demo", "track": "a" * 65}, None),
+    ({"project": "demo", "track": "data"}, "demo/data"),
+    ({"project": "proj-1.0_x", "track": "track-2.1_y"}, "proj-1.0_x/track-2.1_y"),
+    ({"project": "demo", "track": "a" * 64}, f"demo/{'a' * 64}"),
+])
+def test_track_key_helper(item, expected):
+    assert track_key(item) == expected
+
+
+def test_track_key_never_raises_on_broken_mapping():
+    class ThrowingMapping(dict):
+        def get(self, k, default=None):
+            raise RuntimeError("broken")
+
+    assert track_key(ThrowingMapping()) is None
+
