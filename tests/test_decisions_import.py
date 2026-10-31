@@ -362,3 +362,9 @@ def test_bold_opens_on_rule_line_closes_on_continuation(tmp_path):
     assert item["title"] == "RULE 1.1: TITLE CLOSES HERE."
     assert "**" not in item["title"]
     assert item["description"].startswith("**TITLE CLOSES HERE.** Body text.")
+
+
+def test_group_heading_is_reported_not_silent(tmp_path):
+    rc, out, _err, _path = run(FORMS, tmp_path, "--report")
+    assert rc == 0
+    assert "group headings dropped: 0.2" in out

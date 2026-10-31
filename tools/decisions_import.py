@@ -8,8 +8,9 @@ that start at column 0 with an optional ``**``, a number such as ``3.2`` or
 bold phrase without the number.  With no bold phrase the title is the first
 sentence (max 120 chars); a rule with no title at all falls back to the first
 60 chars of its text and is never an error.  A rule's text may continue on the
-following non-blank lines until the next rule line, heading or blank line.
-Group rules (``0.2`` followed by ``0.2a``..``0.2h``) are separate rules.  Tags
+following lines (blank lines included) until the next rule line or heading.
+A bare group heading (``0.2`` with no tag and no D-id, followed by
+``0.2a``..``0.2h``) is not an item; it is listed in --report.  Tags
 appear as backtick groups (``[keep]``, ``[gate: path/verb]``, ``[gate-todo
 GT3]``, ``[temporary]``; a tag may name a second class after ``;``); ``D-<digits>``
 ids are collected; references (the words rule, rules, DECISIONS, see, per or the
@@ -22,8 +23,8 @@ rules file's path relative to the --out file's directory (os.path.relpath) and
 ``source_sha256`` is the sha256 hex of the source file bytes; each op is
 ``{op: create, item: [ {...} ]}``.  Reference cycles are broken by dropping the
 edge that closes each cycle (reported); unknown references are reported, never
-edged.  Exits 1 on duplicate ids, unreadable/non-UTF-8 source, or no
-rules found.  ``--report`` prints parse counts
+edged.  Exits 1 on duplicate ids, unreadable/non-UTF-8 source, no rules found
+or an unwritable --out; argparse errors exit 2.  ``--report`` prints parse counts
 including the rule-line count per section.
 """
 import argparse
@@ -56,8 +57,9 @@ class BuildError(Exception):
 class RuleList(list):
     """List of rules preserving parse metadata like dropped_lines."""
 
-    def __init__(self, items=(), dropped_lines=None):
+    def __init__(self, items=(), dropped_lines=None, group_headings=()):
         super().__init__(items)
+        self.group_headings = list(group_headings)
         self.dropped_lines = list(dropped_lines or [])
 
 
@@ -119,9 +121,10 @@ def parse_rules(text):
         rule["refs"] = find_refs(body)
     # a bare group heading (no tag, no D-id) over lettered sub-rules is not a rule
     subs = {r["number"][:-1].lower() for r in rules if r["number"][-1].isalpha()}
-    rules = [r for r in rules
-             if not (r["number"].lower() in subs and not r["tags"] and not r["dids"])]
-    return RuleList(rules, dropped_lines=dropped_lines)
+    groups = [r["number"] for r in rules
+              if r["number"].lower() in subs and not r["tags"] and not r["dids"]]
+    rules = [r for r in rules if r["number"] not in groups]
+    return RuleList(rules, dropped_lines=dropped_lines, group_headings=groups)
 
 
 def tag_class(tag):
@@ -277,6 +280,8 @@ def write_report(out, rules, batch, dropped, unknown, dropped_lines=None):
     label = "line" if len(dropped_lines) == 1 else "lines"
     sample = f" ({label} {first5})" if first5 else ""
     out.write(f"dropped lines: {len(dropped_lines)}{sample}\n")
+    out.write("group headings dropped: "
+              + (", ".join(getattr(rules, "group_headings", [])) or "none") + "\n")
 
 
 def main(argv=None, out=None, err=None):
