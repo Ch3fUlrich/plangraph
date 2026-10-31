@@ -1,32 +1,32 @@
-# L1 card · build-L1-0023 · 2026-10-31T15:45Z
+# L1 card · build-L1-0026 · 2026-10-31T17:00Z
 ## Goal
-- Land COVERAGE-TRACK-REPO (HIGH), SPAWNER-LEGS-OVH-DROP, RIN-RULES-ITEMS seat fix; SESSION-SPAWN-MCP parked D-3378
+- Phase 0 critical path: RIN-CUTOVER-DATA (S09) via L2 rin-0027, then GATEWAY-LOG-TOKEN-MINT MERGE-READY; SESSION-SPAWN-MCP parked D-3378
 ## Keeper
-- claimed: KEEPER-COVERAGE-TRACK-REPO (claimed, since 13:37Z), SPAWNER-LEGS-OVH-DROP (claimed, since 14:45Z), GATEWAY-LOG-TOKEN-MINT (claimed, since 13:40Z)
-- ready next: RIN-RULES-ITEMS (in_review), SESSION-SPAWN-MCP (in_review, parked), RIN-BACKUP-HARVEST (in_review)
+- claimed: GATEWAY-LOG-TOKEN-MINT (claimed, since 13:40Z, L2 gwtok-0022), RIN-LEDGER-PREP (claimed, since 16:20Z, router closing D-3388)
+- ready next: RIN-HOME-LIFT (L2 rin-0027), RIN-CUTOVER-DATA (after HOME-LIFT)
 ## Done
-- 10-31T14:43Z plangraph:RIN-RULES-ITEMS c638e607 PR #266 main CI 41211466420 green, submitted
-- 10-31T14:46Z D-3372 - keeper ci workst-gen added, backup keeper.json.bak-pre-d3372, restart OK
-- 10-31T15:00Z D-3374 - RIN S06 batch 8d074ad proved 107/107, applied by router
-- 10-31T15:00Z D-3373 - OPENCODE-MODELS-SYNC cancelled, OVH-DROP widened to 5 legs
-- 10-31T15:35Z D-3378 - SESSION-SPAWN-MCP parked: muse/north/orfree/gemini refused, luna run-f3d1a934 hung
+- 10-31T16:25Z D-3385 c4a5db7 S07b 6 operator_task items applied, merged plangraph-data 3e9be86
+- 10-31T16:40Z RIN-LEDGER-PREP 3e9be86 qwen run-f71f68cf VERDICT PASS, router close D-3388
+- 10-31T16:45Z KEEPER-COVERAGE-TRACK-REPO b30804a2 main CI 41216596168 green, live-sync-zc keeper live, qwen PASS posted, close D-3390
+- 10-31T16:50Z RIN-BACKUP-HARVEST - qwen seat re-post ok, state done
+- 10-31T16:55Z RIN-RULES-ITEMS d38d39ab PR #268 qwen run-2a4af9d6 PASS; RULE-0-2 batch D-3391 merged data d8fa185
+- 10-31T17:00Z SPAWNER-LEGS-OVH-DROP bdefddb7 PR #267 main CI 41216717738 green, qwen run-5fd920ef PASS, done
 ## In flight
-- KEEPER-COVERAGE-TRACK-REPO NO GO D-3381 (CI 41214650407 pytest-postgres red) since 15:50Z next check on resume
-- SPAWNER-LEGS-OVH-DROP qwen run-3f4fc3ef VERDICT FAIL (read J/r-ovh-qwen.wait, fix round) since 15:55Z next check on resume
-- RIN-RULES-ITEMS fix writer run-fae2dfbb wait rc=6, NO commit on rin-s06-fix: read result, respawn (brief J/brief-s06fix-1.md) since 16:00Z next check on resume
+- RIN-HOME-LIFT build-L2-rin-0027 (D-3387) since 16:30Z next check on its MERGE-READY
 - GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check on its MERGE-READY
+- RIN-RULES-ITEMS router D-row close after main CI 41217434395 since 17:00Z next check 17:30Z
 ## Planned
-1. COVERAGE #264 4f31bf25 NO GO D-3381: pytest-postgres red, json() in test_rogue_track_key_never_selects_repo; test-only fix, no new seat, then GO-REQ; on GO: merge, live sync D-825, evidence, verdicts, re-post RIN-BACKUP-HARVEST seats
-2. SPAWNER-LEGS-OVH-DROP: seat PASS + PR #267 CI -> merge, evidence, submit, verdict
-3. RIN-RULES-ITEMS: verify s06fix1, PR, delta qwen seat, merge, regen batch op for RULE-0-2 -> prove -> GO-REQ
-4. SESSION-SPAWN-MCP D-3378 triggers on workst: glm after limit reset; fresh luna diff inline; KEEPER-SEAT-PER-PART
+1. RIN-HOME-LIFT MERGE-READY -> merge plangraph-data, then RIN-CUTOVER-DATA live S09 GO-REQ (HIGH, judge)
+2. GATEWAY-LOG-TOKEN-MINT MERGE-READY -> seats check, GO-REQ (HIGH), merge, D-825 live
+3. SESSION-SPAWN-MCP D-3378 triggers (glm after reset; luna inline; KEEPER-SEAT-PER-PART)
+4. LE-* items prio 3 after phase 0 (D-3382)
 ## Open
-- BLOCKED RIN-RULES-ITEMS old qwen seat has no VERDICT line | default fresh seat (done, FAIL -> fix round) | deadline 17:30Z
+- none
 ## Traps
-- J=/home/s/.claude/jobs/be3841c5/tmp (mkseat.py, seat-g.sh inline, seat-diff*.sh diff_ref, gspawn.sh, credscan.py, cg-main.py)
-- build-L1 CLI in live-d03f4117 + build-L1.token; merged item claim needs --force-stale "<D-id>"
-- agy ignores diff_ref (inline diff); spawner refuses writer-family seats: never mask --writer-family
-- never squash Writer + Hand-Edit commits; Plan-Item in LAST merge paragraph; seat_verdict needs VERDICT: line
-- coding.vm max 4 runs (D-2706 7.1); SESSION-SPAWN seats on workst
+- J=/home/s/.claude/jobs/2f5d0308/tmp (seat-g.sh, prove-rr.py); mkseat.py + gspawn.sh in /home/s/.claude/jobs/be3841c5/tmp
+- keeper CLI from live-b30804a2; evidence --commit needs full 40-hex sha; merged-item claim needs --force-stale with a router D-id (ask first)
+- seat prompts must demand first line VERDICT: PASS|FAIL; seat_verdict needs last-paragraph Writer/Hand-Edit trailers
+- run check_file_size before every push (incident D-3386); merge in separate worktree, Plan-Item in last paragraph
+- never switch the shared plangraph-data checkout branch: use worktrees under plangraph-worktrees/
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-52 block, line 2)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-53 block, line 2)
