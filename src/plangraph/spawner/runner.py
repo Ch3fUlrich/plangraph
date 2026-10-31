@@ -1180,11 +1180,11 @@ def spawn_service(*args, **kwargs):
                         record.update(status='failed', exit_code=1, error='attempt iteration limit exceeded')
                         return
                     if not any(a.get('status') != 'skipped' for a in record['attempts']):
-                        record.update(status='failed', exit_code=1, error='; '.join(
-                            a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')) or 'no leg launched')
+                        record.update(status='failed', exit_code=1,
+                            error=self._failure_reasons(record) or 'no leg launched')
                     elif any(any(m in str(a).lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts'] + record.get('skipped', [])):
                         record.update(status='failed', exit_code=1,
-                            error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
+                            error=self._failure_reasons(record) or 'harness failed')
                     elif record['attempts'] and all(l.id in tried for l in current.legs) and current.legs:
                         record.update(status='failed', exit_code=1,
                             error='router repeated exhausted legs')

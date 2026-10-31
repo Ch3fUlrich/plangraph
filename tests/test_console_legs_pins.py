@@ -205,7 +205,10 @@ def test_credit_gate_re_evaluates_today_on_every_call(tmp_path, monkeypatch):
 def test_plan_skip_records_carry_skip_reason_for_w30_consumers():
     """W30 consumers read ``skip_reason``; every plan skip record spells it."""
     plan = plan_spawn(CARD, role="implement", leg_reader=_ok,
-                      policy=RoutePolicy(banned_families=("kimi",),
+                      # The production ban pair (kimi, deepseek); DEFAULT_LEGS
+                      # carries deepseek legs (kimi has none), so the ban yields
+                      # the skip records this pin reads.
+                      policy=RoutePolicy(banned_families=("kimi", "deepseek"),
                                          credit_tiers={"console-anthropic": {"expires": "2026-11-30"}}))
     skipped = plan.to_dict()["skipped"]
     assert skipped, "the banned family must produce skip records"

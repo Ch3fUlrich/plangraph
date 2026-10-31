@@ -83,7 +83,7 @@ def test_routing_expiry_and_seats():
     args['policy'] = RoutePolicy(credit_tiers=config, today=date(2026, 12, 1))
     plan = plan_spawn({'estimate_tokens': 100}, role='implement', **args)
     assert plan.first_leg.id == 'agy-gemini-3.8-flash'
-    assert {'leg': 'console-sonnet-5.5', 'reason': 'credit_expired', 'evidence': {}} in plan.skipped
+    assert {'leg': 'console-sonnet-5.5', 'reason': 'credit_expired', 'skip_reason': 'credit_expired', 'evidence': {}} in plan.skipped
 
 
 @pytest.mark.parametrize('entry', [{'expires': 'bad'}, {'expires': '2026-11-30', 'extra': 1}, {'note': 'missing date'}])

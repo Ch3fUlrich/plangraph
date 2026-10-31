@@ -50,6 +50,11 @@ class SpawnService(SeatSpawnMixin):
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
+    def _failure_reasons(self, record):
+        """Every skip reason a failed run can name: attempts AND skipped (D-3258/D-3264)."""
+        return '; '.join(str(p) for p in [a.get('skip_reason') for a in record.get('attempts', []) if a.get('skip_reason')]
+                         + [s.get('skip_reason') or s.get('reason', '') for s in record.get('skipped', [])] if p)
+
     def _save(self, record):
         from .private_io import atomic_write_private
         from .runner import redact
@@ -70,7 +75,6 @@ class SpawnService(SeatSpawnMixin):
                          for a in record.get('attempts', [])}
             plan = record.get('plan') or {}
             for candidate in plan.get('skipped', []):
-                leg = candidate.get('leg')
                 if candidate not in record.setdefault('skipped', []):
                     record['skipped'].append(candidate)
             for leg in plan.get('legs', []):
@@ -99,8 +103,7 @@ class SpawnService(SeatSpawnMixin):
         if record.get('status') == 'failed':
             if not record.get('exit_code'):
                 record['exit_code'] = 1
-            record['error'] = record.get('error') or '; '.join(
-                a.get('skip_reason') or 'harness failed' for a in record.get('attempts', [])) or 'harness failed'
+            record['error'] = record.get('error') or self._failure_reasons(record) or 'harness failed'
         if record.get('error'):
             record['error'] = '; '.join(p[:300] for p in clean(record['error']).split('; '))[:2000]
         if 'stderr_tail' in record:
@@ -356,8 +359,7 @@ class SpawnService(SeatSpawnMixin):
                             await self._continue_writer(record, job.stdout)
                         break
                 if not launched:
-                    record.update(status='failed', exit_code=1, error='; '.join(
-                        a['skip_reason'] for a in record['attempts']) or 'no leg launched')
+                    record.update(status='failed', exit_code=1, error=self._failure_reasons(record) or 'no leg launched')
             except Exception as exc:
                 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):

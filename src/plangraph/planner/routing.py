@@ -353,7 +353,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 reason = next(iter(exc.exclusion_reasons), 'routing_error')
                 states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
         if reason:
-            skipped.append({"leg": leg.id, "reason": reason,
+            # W30 consumers read ``skip_reason``; ``reason`` stays canonical --
+            # the same pair ``plan_for_launch`` emits (D-3264: one skip shape).
+            skipped.append({"leg": leg.id, "reason": reason, "skip_reason": reason,
                             "evidence": states[leg.id]["evidence"]})
         row = rows.get(leg.model, rows.get(leg.id))
         detail = {"leg": leg.id, "tier": leg.tier,
