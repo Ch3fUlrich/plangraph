@@ -171,3 +171,11 @@ def test_spawner_docs_tier_table_matches_code():
         bonus = score_model(_row(tier=tier, model=f"agy/{tier}")) - score_model(
             _row(tier="paid", model="agy/paid"))
         assert float(weight) == pytest.approx(bonus), f"{tier}: weight drifts from score_model"
+    # The prose "5-Rung Tier Priority Order" table must not contradict TIER_RUNG
+    # either: a reader copying rungs from it must get the code's order.
+    section = text.split("## 4. 5-Rung Tier Priority Order", 1)[1].split("###", 1)[0]
+    table = re.findall(r"^\|\s*\*?\*?(\d)\*?\*?\s*\|\s*`([a-z]+)`", section, re.M)
+    assert len(table) == 5, "SPAWNER.md must show the 5-rung priority table"
+    assert {tier for _, tier in table} == set(TIER_RUNG)
+    for rung, tier in table:
+        assert int(rung) == TIER_RUNG[tier], f"{tier}: priority table rung drifts from TIER_RUNG"
