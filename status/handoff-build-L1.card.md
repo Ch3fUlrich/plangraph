@@ -1,30 +1,30 @@
-# L1 card · build-L1-0030 · 2026-10-31T18:50Z
+# L1 card · build-L1-0035 · 2026-10-31T20:56Z
 ## Goal
-- Phase 0 critical path: S09 RIN-CUTOVER-DATA live window under FINAL GO D-3418 (not started), then S10; GATEWAY-LOG-TOKEN-MINT MERGE-READY
+- Finish S09 RIN-CUTOVER-DATA window (mid-window now), then S10; GATEWAY-LOG-TOKEN-MINT MERGE-READY
 ## Keeper
-- claimed: RIN-CUTOVER-DATA (open, GO D-3418), LE-KEEPER-DROW-CLOSES (claimed, merged+live, evidence+submit pending), RIN-LEDGER-PREP (in_review, close refused), GATEWAY-LOG-TOKEN-MINT (claimed, L2 gwtok-0022)
-- ready next: SPAWNER-ROUTE-FREE-FIRST (b00905a1, D-3409, after S09), KEEPER-DCLOSE-TRACK-EVIDENCE (created, owner build-L1)
+- RIN-CUTOVER-DATA claimed build-L1 epoch 1 (window running; evidence 8939b7c pending)
+- LE-KEEPER-DROW-CLOSES done; RIN-LEDGER-PREP in_review until KEEPER-DCLOSE lands
+- LE-WRITER-SECRET-SANDBOX (HIGH, owner build-L1) delegated to build-L2-spawner-0036 lane 3
 ## Done
-- 10-31T18:05Z RIN-CUTOVER-DATA c43dedb2 plangraph-data PR#2 continuity runbook, qwen run-5b196875 PASS
-- 10-31T18:38Z LE-KEEPER-DROW-CLOSES 20b4423a PR#269, suite 8508 passed, qwen delta PASS, main CI 41229711729 green
-- 10-31T18:40Z RIN-CUTOVER-DATA 7f02df72 plangraph-data PR#4 pane move, writer mimo-flash run-30e56415, qwen run-06889000 PASS
-- 10-31T18:41Z RIN-HOME-LIFT - md-sync live at 20b4423a closed it by D-3404 (status applied=True ops 8)
-- 10-31T18:45Z D-3418 - S09 FINAL GO received; conds 1,2,3,5 met
+- 10-31T20:2xZ RIN-CUTOVER-DATA 6d0bca6 data PR#5 lift-ledgers (qwen delta run-cd27cdc4 PASS, GO D-3429)
+- 10-31T20:48Z RIN-CUTOVER-DATA 8939b7c final data lift + ledgers pushed; cutover.sh, drop-ins, repath done
+- 10-31T20:5xZ router moved to wG:p1 cwd plangraph-data/router (script lines 58-62 after exit-confirm dialog)
+- 10-31T20:4xZ D-3428 DSN redaction in run-d822c129 logs, count 0
 ## In flight
-- GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 BLOCKED 18:55Z (B r3 cap NO-GO 5 blockers; A 2nd seat missing) forwarded to routing, next check on its D-id
-- none beyond gwtok (KEEPER-DCLOSE-TRACK-EVIDENCE created by routing 18:52Z, RIN-LEDGER-PREP depends on it)
+- S09 BLOCKER: md-sync fails "fetch routing: rc=128" (compat dir has no .git) -> GO/ruling needed
+- build-L2-spawner-0036: LE-SEAT-NO-VERDICT, SPAWNER-ROUTE-FREE-FIRST, LE-WRITER-SECRET-SANDBOX
+- build-L2-gwtok-0022: Part A 2nd seat (D-3427), Part B r5 8d706f97
 ## Planned
-1. RIN-CUTOVER-DATA S09 now: FREEZE-NOW to routing, runbook plangraph-data router/repoint/s09-router-continuity.md, plan routing-migration.md 5.3 S09
-2. LE-KEEPER-DROW-CLOSES evidence 20b4423a (full sha) + submit, seat verdict qwen run-fa9523d4/delta
-3. KEEPER-DCLOSE-TRACK-EVIDENCE (HIGH) after S09, then RIN-LEDGER-PREP closes via md-sync
-4. LE-SEAT-NO-VERDICT (new, D-3420: mimo legs emit tool-call text, never a verdict); SPAWNER-ROUTE-FREE-FIRST; LE-* items prio 3 after phase 0 (D-3382)
+1. md-sync fix (default: symlink routing/.git -> routing.archived/.git, or keeper.json repos.routing.path + restart under GO), rerun md-sync, acceptance list, evidence + submit, DONE S09
+2. KEEPER-DCLOSE writer J/brief-dclose-2.md on qwen/mimo-flash (free legs down), seats 2 families, GO-REQ
+3. LE-WATCHDOG-CLEAR-VERIFY (now in plangraph-data/router/bin/ctx-watchdog)
+4. keeper restart after operator OS-KEEPER-PG-ROTATE (D-3428)
 ## Open
-- D-3422 GATEWAY-LOG-TOKEN-MINT: B scoped FINAL r5 (seats qwen+luna; NO-GO parks B at 4fc1bfb8; F-1 isolation = operator step); A merges after luna seat + judge GO | default wait for gwtok MERGE-READY | deadline none
+- md-sync routing fetch ruling | options b symlink .git*, a keeper.json+restart GO, c rollback.sh | asked in handoff msg
 ## Traps
-- J=/home/s/.claude/jobs/4fceadcd/tmp (seat prompts, r-split*.wait); older J 6f592267 (wspawn.sh, seat-cov-leg.sh)
-- harness refuses git with vars/heredoc/loops in worktree-isolated sessions: plain single commands + Write/Edit
-- D-3409: spawner route still puts agy first; always pass --leg, free legs first; no Claude writers (D-3408 incident)
-- md-sync rollback: rm z9-md-sync-20b4423a.conf, restore backups/z9-md-sync-8f7f1c55.conf.bak-d3413, daemon-reload
-- glm free limit hit; luna times out; gemini/agy quota out; openrouter/free unavailable at 18:3xZ
+- J=/home/s/.claude/jobs/4e49c8f0/tmp (wspawn.sh, wspawn-pub.sh, seat.sh)
+- rollback: plangraph-data/router/shim/rollback.sh --scratch /home/s/code; units ~/.config/systemd/user.pre-routing-in; launch: repath --rollback
+- pane move deviation: hand-ran script lines after dialog: report to routing
+- writers must never read /proc, env, keeper config/DB (D-3428)
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-55 block, line 2)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-56 block, line 2)
