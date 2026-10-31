@@ -42,12 +42,14 @@ def test_route_never_returns_removed_leg_ids(tmp_path, role):
     writer_families = ("anthropic",) if role == "review" else ()
 
     plan = svc.route(card, role=role, writer_families=writer_families)
+    assert plan.legs and not getattr(plan, "error", None)
     assert plan.first_leg.id not in REMOVED_LEG_IDS
     assert not ({l.id for l in plan.legs} & REMOVED_LEG_IDS)
     if getattr(plan, "review_seats", None):
         assert not ({l.id for l in plan.review_seats} & REMOVED_LEG_IDS)
 
     direct = plan_spawn(card, role=role, writer_families=writer_families)
+    assert direct.legs and not getattr(direct, "error", None)
     assert direct.first_leg.id not in REMOVED_LEG_IDS
     assert not ({l.id for l in direct.legs} & REMOVED_LEG_IDS)
     if getattr(direct, "review_seats", None):
@@ -59,6 +61,7 @@ def test_route_review_across_writer_families_never_returns_removed_leg_ids(tmp_p
     svc = SpawnService(state=tmp_path / "state")
     card = {"estimate_tokens": 1000}
     plan = svc.route(card, role="review", writer_families=(writer,))
+    assert plan.legs and not getattr(plan, "error", None)
     assert plan.first_leg.id not in REMOVED_LEG_IDS
     assert not ({l.id for l in plan.legs} & REMOVED_LEG_IDS)
     if getattr(plan, "review_seats", None):
@@ -70,6 +73,7 @@ def test_route_implement_across_token_scales_never_returns_removed_leg_ids(tmp_p
     svc = SpawnService(state=tmp_path / "state")
     card = {"estimate_tokens": tokens}
     plan = svc.route(card, role="implement")
+    assert plan.legs and not getattr(plan, "error", None)
     assert plan.first_leg.id not in REMOVED_LEG_IDS
     assert not ({l.id for l in plan.legs} & REMOVED_LEG_IDS)
 

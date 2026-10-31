@@ -162,10 +162,13 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
 
 
 def test_over_leg_max_request_drops_leg():
-    r = route_card(card(estimate_tokens=95000, window_class="256k"))
-    assert "opencode-glm-5.3-flash-free" not in ids(r)
-    r2 = route_card(card(estimate_tokens=95000))  # picks 256k; 90k legs lack 256k anyway
+    # 256k legs with max_request_tokens 100000 (qwen, deepseek) drop at 110000
+    r = route_card(card(estimate_tokens=110000, window_class="256k"))
+    assert ids(r) and "qodercli-qwen3.8-flash" not in ids(r) and "deepseek" not in ids(r)
+    assert "excluded 2 legs: max_request_tokens" in r.reasons
+    r2 = route_card(card(estimate_tokens=110000))  # picks 256k
     assert r2.window_class == "256k"
+    assert "excluded 2 legs: max_request_tokens" in r2.reasons
     legs = with_measured(DEFAULT_LEGS, {"opencode-glm-5.3-flash-free": 50000,
                                         "openrouter-free": 50000})
     r3 = route_card(card(estimate_tokens=60000), legs=legs)
