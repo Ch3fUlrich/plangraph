@@ -342,7 +342,7 @@ class SpawnService(SeatSpawnMixin):
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,
-                        stdout_tail=job.stdout, stderr_tail=job.stderr, events=list(getattr(job, 'events', []))))
+                        stdout_tail=job.stdout, stderr_tail=job.stderr))
                     if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                         record['chosen_leg'] = asdict(chosen)
                     record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,

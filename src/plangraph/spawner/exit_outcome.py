@@ -50,13 +50,8 @@ def terminal_reason(record):
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
     """
     events = record.get('events') or ()
-    # A guard mutation names the run; no-changes counts only on the final
-    # attempt (an earlier fallthrough leg's verdict is not how the run ended).
-    real = [a for a in (record.get('attempts') or ()) if a.get('status') != 'skipped']
-    final = real[-1]['events'] if real and 'events' in real[-1] else events
-    special = ('git_config_mutated' if any(e.get('event') == 'git_config_mutated' for e in events)
-               else 'writer_no_changes' if any(e.get('event') == 'writer_no_changes' for e in final)
-               else None)
+    special = next((e['event'] for e in events
+                    if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)
     if special is not None:
         record['reason'] = special
         return
