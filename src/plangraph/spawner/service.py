@@ -259,6 +259,9 @@ class SpawnService(SeatSpawnMixin):
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             import logging
+            from plangraph.planner.legs import REVIEW_WARN_SEATS
+            if role == 'review' and target in REVIEW_WARN_SEATS:
+                logging.getLogger(__name__).warning('review-unfit seat model (D-3422): %s', target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
