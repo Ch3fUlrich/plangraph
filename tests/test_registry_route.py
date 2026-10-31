@@ -161,7 +161,7 @@ def test_route_skips_paused_harness_per_role():
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
-    assert writer.first_leg.id == "agy-gemini-3.8-flash"
+    assert writer.first_leg.id == "openrouter-free"
 
 
 def test_explicit_policy_argument_wins():

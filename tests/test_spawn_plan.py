@@ -15,11 +15,11 @@ CARD = {"estimate_tokens": 1000}
 def test_writer_live_limit_reset_and_scope(tmp_path):
     store = LegStateStore(tmp_path / "state.sqlite")
     p = plan_spawn(CARD, role="implement", leg_reader=store, now=100)
-    assert p.first_leg.model == "gemini-3.8-flash"
+    assert p.first_leg.model == "opencode/deepseek-v4.1-flash-free"
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
-    assert nxt.id == "mimo-v2.6-pro"
+    assert nxt.id == "opencode-glm-5.3-flash-free"
     limited = plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=101)
     assert limited.first_leg == nxt
     assert limited.skipped[0]["evidence"]["status"] == 429
@@ -79,7 +79,7 @@ def test_benchmark_within_tier_only():
     rows = {l.model: {"aa_intelligence": 40 + i * 10, "cost_per_task_usd": 0,
                       "pool_burn_weight": 0} for i, l in enumerate(writer)}
     p = plan_spawn(CARD, role="implement", benchmark=rows)
-    assert p.first_leg.family == "gemini"
+    assert p.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     assert p.legs[-1].tier == "paid" and p.p_source == "operator-order"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons
     p_rev = plan_spawn(CARD, role="review", writer_families=("claude",), benchmark=rows)
