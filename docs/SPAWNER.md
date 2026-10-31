@@ -723,7 +723,6 @@ on the keeper's atomic `(item, run_id, phase)` idempotency key.
 See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.
 ## Claude Code sessions
 See [spawner-sessions.md](spawner-sessions.md).
-
 # Watchdog
 
 Runs sample file signatures/git HEAD (edits), non-header output (activity), and process-tree CPU (post-edit only). Card `stall_min`, `first_edit_min`, `max_min` default to 20/45/90 minutes. Pre-edit, no activity or exceeding first-edit age stalls; post-edit, all signals must stop progressing. Maximum age wins. Status `stalled` exits 6; `timeout` exits 124; `writer_no_changes` exits 5. Events `watchdog_stalled`/`watchdog_timeout` carry rules and diagnostics. Private `runs/<run_id>/live.log` is capped at 2 MB; status exposes live tails and `last_activity_ts`. `PLANGRAPH_SPAWN_RUN_TIMEOUT` replaces the default maximum (seconds), but explicit card `max_min` wins. `PLANGRAPH_SPAWN_WATCHDOG_INTERVAL` overrides sampling seconds.

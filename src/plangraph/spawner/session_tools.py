@@ -10,6 +10,10 @@ these names from ``mcp`` and get them through the import (D-3193 point
 """
 from __future__ import annotations
 
+import asyncio
+
+from plangraph.routing_errors import ParameterRefused
+
 # SESSION-SPAWN-MCP: Claude Code session lifecycle (docs/spawner-sessions.md).
 SESSION_TOOLS = [
     {'name': 'plangraph_session_launch', 'description': 'Launch a background Claude Code session',
@@ -67,3 +71,48 @@ def _session_arg_errors(schema, args):
         if not ok:
             return f"argument {key} must be {expected}"
     return None
+
+
+async def dispatch_session_tool(server, name, arguments):
+    """Dispatch only the five declared session tools (R-7). The MCP
+    boundary validates arguments against the tool's schema first
+    (_session_arg_errors, D-3193 point 6): undeclared keys, missing
+    required keys and wrong JSON types become audited refusals - never a
+    KeyError, TypeError or a coerced value (dry_run="yes"). Deeper checks
+    stay inside Sessions' _action, so they are audited too (R-25)."""
+    schema = {t['name']: t for t in SESSION_TOOLS}.get(name)
+    if schema is None:
+        raise ValueError(f"unknown session tool: {name}")
+    args = {} if arguments is None else arguments
+    error = _session_arg_errors(schema, args)
+    if error:
+        raw_name = args.get('name') if isinstance(args, dict) else None
+        try:
+            server._sessions().audit_refusal(
+                name[len('plangraph_session_'):],
+                raw_name if isinstance(raw_name, str) else '', error)
+        except OSError:
+            pass  # audit is best effort: the refusal below is the outcome
+        raise ParameterRefused(error)
+    args = dict(args)
+    sessions = server._sessions()
+    if name == 'plangraph_session_launch':
+        return await asyncio.to_thread(sessions.launch,
+            name=args.get('name'), cwd=args.get('cwd'), model=args.get('model'),
+            effort=args.get('effort'), mcp_config=args.get('mcp_config'),
+            permission_mode=args.get('permission_mode'), prompt=args.get('prompt'),
+            prompt_file=args.get('prompt_file'), handoff=args.get('handoff'),
+            parent=args.get('parent'),
+            dry_run=args['dry_run'] if 'dry_run' in args else False)
+    if name == 'plangraph_session_stop':
+        return await asyncio.to_thread(sessions.stop, name=args.get('name'),
+                                       session_id=args.get('id'))
+    if name == 'plangraph_session_relaunch':
+        return await asyncio.to_thread(sessions.relaunch, args.get('name'),
+                                       args.get('handoff'))
+    if name == 'plangraph_session_mark_ready':
+        return await asyncio.to_thread(sessions.mark_ready, args.get('name'),
+                                       args.get('handoff'), args.get('card'))
+    if name == 'plangraph_session_list':
+        return await asyncio.to_thread(sessions.list)
+    raise ValueError(f"unknown session tool: {name}")
