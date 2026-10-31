@@ -1,32 +1,30 @@
-# L1 card · build-L1-0026 · 2026-10-31T17:00Z
+# L1 card · build-L1-0028 · 2026-10-31T17:45Z
 ## Goal
-- Phase 0 critical path: RIN-CUTOVER-DATA (S09) via L2 rin-0027, then GATEWAY-LOG-TOKEN-MINT MERGE-READY; SESSION-SPAWN-MCP parked D-3378
+- Phase 0 critical path: md-sync split lane live -> RIN-HOME-LIFT + RIN-LEDGER-PREP close by D-row -> S09 cutover under judge GO; then GATEWAY-LOG-TOKEN-MINT MERGE-READY
 ## Keeper
-- claimed: GATEWAY-LOG-TOKEN-MINT (claimed, since 13:40Z, L2 gwtok-0022), RIN-LEDGER-PREP (claimed, since 16:20Z, router closing D-3388)
-- ready next: RIN-HOME-LIFT (L2 rin-0027), RIN-CUTOVER-DATA (after HOME-LIFT)
+- claimed: RIN-HOME-LIFT (in_review, since 17:40Z, D-row close D-3404), RIN-LEDGER-PREP (in_review, D-row close D-3393), GATEWAY-LOG-TOKEN-MINT (claimed, L2 gwtok-0022)
+- ready next: RIN-CUTOVER-DATA (after HOME-LIFT done + GO), LE-KEEPER-DROW-CLOSES split lane
 ## Done
-- 10-31T16:25Z D-3385 c4a5db7 S07b 6 operator_task items applied, merged plangraph-data 3e9be86
-- 10-31T16:40Z RIN-LEDGER-PREP 3e9be86 qwen run-f71f68cf VERDICT PASS, router close D-3388
-- 10-31T16:45Z KEEPER-COVERAGE-TRACK-REPO b30804a2 main CI 41216596168 green, live-sync-zc keeper live, qwen PASS posted, close D-3390
-- 10-31T16:50Z RIN-BACKUP-HARVEST - qwen seat re-post ok, state done
-- 10-31T16:55Z RIN-RULES-ITEMS d38d39ab PR #268 qwen run-2a4af9d6 PASS; RULE-0-2 batch D-3391 merged data d8fa185
-- 10-31T17:00Z SPAWNER-LEGS-OVH-DROP bdefddb7 PR #267 main CI 41216717738 green, qwen run-5fd920ef PASS, done
+- 10-31T17:05Z D-3395 - md-sync re-armed: dry run 5 ops refused 0, timer+path active, apply error None
+- 10-31T17:35Z KEEPER-COVERAGE-TRACK-REPO b30804a2 state done, qwen run-4d064251 + mimo-pro run-326d696e PASS, waiver D-3397
+- 10-31T17:40Z RIN-HOME-LIFT 421d0bf6 plangraph-data PR#1 merged, evidence verified (ci none), submitted in_review
+- 10-31T17:44Z RIN-CUTOVER-DATA - S09 GO-REQ sent to routing (sha 421d0bf6)
 ## In flight
-- RIN-HOME-LIFT build-L2-rin-0027 (D-3387) since 16:30Z next check on its MERGE-READY
+- LE-KEEPER-DROW-CLOSES writer mimo-pro run-1a11f24f since 17:30Z next check on its completion
 - GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check on its MERGE-READY
-- RIN-RULES-ITEMS router D-row close after main CI 41217434395 since 17:00Z next check 17:30Z
+- RIN-CUTOVER-DATA judge GO-REQ since 17:44Z next check on routing reply
 ## Planned
-1. RIN-HOME-LIFT MERGE-READY -> merge plangraph-data, then RIN-CUTOVER-DATA live S09 GO-REQ (HIGH, judge)
-2. GATEWAY-LOG-TOKEN-MINT MERGE-READY -> seats check, GO-REQ (HIGH), merge, D-825 live
-3. SESSION-SPAWN-MCP D-3378 triggers (glm after reset; luna inline; KEEPER-SEAT-PER-PART)
+1. split lane: verify writer, full suite, push, PR, qwen seat, MERGE-READY, GO, merge, redeploy md-sync (repoint drop-in, dry run first)
+2. after md-sync live: confirm HOME-LIFT + LEDGER-PREP done via D-rows; then S09 live under GO
+3. GATEWAY-LOG-TOKEN-MINT MERGE-READY -> seats, GO-REQ (HIGH), merge, D-825 live
 4. LE-* items prio 3 after phase 0 (D-3382)
 ## Open
 - none
 ## Traps
-- J=/home/s/.claude/jobs/2f5d0308/tmp (seat-g.sh, prove-rr.py); mkseat.py + gspawn.sh in /home/s/.claude/jobs/be3841c5/tmp
-- keeper CLI from live-b30804a2; evidence --commit needs full 40-hex sha; merged-item claim needs --force-stale with a router D-id (ask first)
-- seat prompts must demand first line VERDICT: PASS|FAIL; seat_verdict needs last-paragraph Writer/Hand-Edit trailers
-- run check_file_size before every push (incident D-3386); merge in separate worktree, Plan-Item in last paragraph
-- never switch the shared plangraph-data checkout branch: use worktrees under plangraph-worktrees/
+- J=/home/s/.claude/jobs/6f592267/tmp (seat-cov-leg.sh, wspawn.sh, mkseat_inline.py); older J 2f5d0308 + be3841c5 (mkseat.py)
+- harness refuses git with vars/heredoc/loops in this session: plain single commands + Write/Edit only
+- reference commit cbfcc0e9 (branch ref/mdsync-split-cbfcc0e9) stays LOCAL, never push (D-3401)
+- hand-edit CI cap is 50 lines (ci_commit_gate HAND_EDIT_MAX_LINES); attribution trailers all in ONE last paragraph
+- glm free limit hit; luna times out; muse opencode-go unavailable; gemini quota out
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-53 block, line 2)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-54 block, line 2)
