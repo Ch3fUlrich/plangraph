@@ -13,7 +13,7 @@
 ## In flight
 - KEEPER-COVERAGE-TRACK-REPO NO GO D-3381 (CI 41214650407 pytest-postgres red) since 15:50Z next check on resume
 - SPAWNER-LEGS-OVH-DROP qwen run-3f4fc3ef VERDICT FAIL (read J/r-ovh-qwen.wait, fix round) since 15:55Z next check on resume
-- RIN-RULES-ITEMS fix writer s06fix1 finished (J/gspawn-s06fix1.log), verify lane rin-s06-fix since 16:00Z next check on resume
+- RIN-RULES-ITEMS fix writer run-fae2dfbb wait rc=6, NO commit on rin-s06-fix: read result, respawn (brief J/brief-s06fix-1.md) since 16:00Z next check on resume
 - GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check on its MERGE-READY
 ## Planned
 1. COVERAGE #264 4f31bf25 NO GO D-3381: pytest-postgres red, json() in test_rogue_track_key_never_selects_repo; test-only fix, no new seat, then GO-REQ; on GO: merge, live sync D-825, evidence, verdicts, re-post RIN-BACKUP-HARVEST seats
