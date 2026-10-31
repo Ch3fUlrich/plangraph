@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from ..review.family import model_family
 from .errors import Refused
+from .evidence_repo import repo_key
 
 __all__ = ["uncovered", "writer_families"]
 
@@ -68,16 +69,23 @@ def writer_families(store, item, ctx):
     git = getattr(ctx, "git", None)
     if git is None:
         raise Refused("writer_unknown", "no git adapter for commit evidence")
-    try:
-        repo = git.repo_path(item["project"])
-    except Exception as exc:  # noqa: BLE001 - fail closed
-        raise Refused("writer_unknown", "cannot resolve project repository") from exc
-    if not repo:
-        raise Refused("writer_unknown",
-                      f"no repo registered for project {item['project']!r}")
     families = []
     for row in rows:
         commit = row["ref"]["commit"]
+        key = repo_key(item, ctx, commit)
+        if not isinstance(key, str) or not key:
+            raise Refused("writer_unknown",
+                          f"no repo registered for project {key!r}")
+        try:
+            repo = git.repo_path(key)
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            msg = ("cannot resolve project repository"
+                   if key == item.get("project")
+                   else f"cannot resolve repository for {key!r}")
+            raise Refused("writer_unknown", msg) from exc
+        if not repo:
+            raise Refused("writer_unknown",
+                          f"no repo registered for project {key!r}")
         try:
             trailers = git.writer_trailers(repo, commit)
         except Exception as exc:  # noqa: BLE001 - fail closed on any git error
