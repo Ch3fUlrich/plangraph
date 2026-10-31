@@ -117,6 +117,10 @@ def parse_rules(text):
                         for part in group.split(";") if part.strip()]
         rule["dids"] = sorted(set(DID_RE.findall(body)), key=lambda d: int(d[2:]))
         rule["refs"] = find_refs(body)
+    # a bare group heading (no tag, no D-id) over lettered sub-rules is not a rule
+    subs = {r["number"][:-1].lower() for r in rules if r["number"][-1].isalpha()}
+    rules = [r for r in rules
+             if not (r["number"].lower() in subs and not r["tags"] and not r["dids"])]
     return RuleList(rules, dropped_lines=dropped_lines)
 
 
