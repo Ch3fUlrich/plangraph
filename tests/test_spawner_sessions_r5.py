@@ -164,7 +164,7 @@ def test_stop_of_stopped_record_with_live_id_stops_again(site):
     res = s.stop(name="alpha")  # the stopped record's id is still live
     assert res["ok"] is True and res["session_id"] == UUID1
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1], ["claude", "stop", UUID1]]
+    assert stops == [["claude", "stop", UUID1[:8]], ["claude", "stop", UUID1[:8]]]
 
 
 def test_relaunch_resolved_old_id_is_never_the_new_id(site):
@@ -191,7 +191,7 @@ def test_relaunch_resolved_old_id_is_never_the_new_id(site):
     assert res["ok"] is True
     assert res["session_id"] == UUID1  # never the replaced UUID2
     assert json.loads(rec_path.read_text())["session_id"] == UUID1
-    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID2]
+    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID2[:8]]
 
 
 def test_failed_relaunch_retry_with_same_handoff_ok(site):

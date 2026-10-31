@@ -52,11 +52,14 @@ class FakeRun:
 
     def _finish_rows(self, sid):
         """Answer the confirmation `claude agents` poll a stop triggers: a
-        successful `claude stop <sid>` ends that session's row, so the poll
-        right after the stop must see the id gone or in a finished state
-        (D-3193). Tests modelling an unconfirmed stop override this."""
+        successful `claude stop <short id>` ends that session's row (the stop
+        argv carries the row's short job id or sessionId[:8], never the full
+        sessionId), so the poll right after the stop must see the id gone or
+        in a finished state (D-3193). Tests modelling an unconfirmed stop
+        override this."""
         for row in self.agents_rows:
-            if row.get("sessionId") == sid:
+            if sid and (row.get("sessionId") == sid or row.get("id") == sid
+                        or str(row.get("sessionId") or "").startswith(str(sid))):
                 row["state"] = "finished"
 
     def launch_calls(self):

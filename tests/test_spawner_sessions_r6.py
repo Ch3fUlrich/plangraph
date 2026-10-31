@@ -164,7 +164,7 @@ def test_stop_blocked_by_name_lock(site):
         lock.release()
     t.join(5)
     assert not t.is_alive() and out["res"]["ok"] is True
-    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID1]
+    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID1[:8]]
 
 
 def test_stop_by_id_blocked_by_record_name_lock(site):
@@ -193,7 +193,7 @@ def test_stop_by_id_blocked_by_record_name_lock(site):
     t.join(5)
     assert not t.is_alive() and out["res"]["ok"] is True
     assert out["res"]["name"] == "alpha"
-    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID1]
+    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID1[:8]]
 
 
 def test_mark_ready_blocked_by_name_lock(site):
@@ -236,7 +236,7 @@ def test_stop_absent_row_marks_stopped_without_claude_stop(site):
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
-        [["claude", "stop", UUID1]]  # attempted once on the unlisted id
+        [["claude", "stop", UUID1[:8]]]  # attempted once on the unlisted id
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["state"] == "stopped" and rec["session_id"] == UUID1
     assert rec["stopped_ts"] is not None
@@ -290,7 +290,7 @@ def test_stop_live_row_still_calls_claude_stop_then_confirms(site):
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
-        [["claude", "stop", UUID1]]  # exact argv, never rm/kill
+        [["claude", "stop", UUID1[:8]]]  # short job id, never rm/kill
     assert [a[:2] for a, _ in run.calls] == \
         [["claude", "agents"], ["claude", "stop"], ["claude", "agents"]]
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())

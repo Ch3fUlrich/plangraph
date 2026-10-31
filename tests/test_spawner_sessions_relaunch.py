@@ -133,7 +133,7 @@ def test_relaunch_already_stopped_live_row_is_stopped_first(site, state):
                      ["claude", "agents"], ["claude", "agents"], ["claude", "agents"],
                      ["claude", "stop"], ["claude", "agents"], ["claude", "--bg"]]
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
-        [["claude", "stop", UUID1], ["claude", "stop", UUID1]]  # exact argv, never rm/kill
+        [["claude", "stop", UUID1[:8]], ["claude", "stop", UUID1[:8]]]  # short job id, never rm/kill
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
 
@@ -166,7 +166,7 @@ def test_relaunch_already_stopped_unlisted_id_proceeds_without_stop(site):
     res = s.relaunch("alpha")
     assert res["ok"] is True and res["session_id"] == UUID2
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1]]  # only the earlier user stop
+    assert stops == [["claude", "stop", UUID1[:8]]]  # only the earlier user stop
     assert any(a[:3] == ["claude", "agents", "--json"] for a, _ in run.calls)  # id was looked up
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
@@ -186,7 +186,7 @@ def test_relaunch_already_stopped_finished_row_proceeds_without_stop(site, state
     res = s.relaunch("alpha")
     assert res["ok"] is True and res["session_id"] == UUID2
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1]]  # already over: no second stop
+    assert stops == [["claude", "stop", UUID1[:8]]]  # already over: no second stop
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
 
@@ -321,7 +321,7 @@ def test_relaunch_unknown_record_null_id_stops_by_name_then_launches(site):
     res = s.relaunch("alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID2]]  # null id resolved by name, then stopped
+    assert stops == [["claude", "stop", UUID2[:8]]]  # null id resolved by name, then stopped
     assert len(run.launch_calls()) == 2
     rec = json.loads(rec_path.read_text())
     assert rec["state"] == "running" and rec["session_id"] == UUID1 and rec["stopped_ts"] is None

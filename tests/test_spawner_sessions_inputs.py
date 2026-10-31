@@ -103,7 +103,7 @@ def test_stop_confirmation_still_live_refuses_keeps_record(site):
     before = (site.state / "sessions" / "alpha.json").read_text()
     with pytest.raises(ParameterRefused, match="stop not confirmed"):
         s.stop(name="alpha")
-    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [["claude", "stop", UUID1]]
+    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [["claude", "stop", UUID1[:8]]]
     assert (site.state / "sessions" / "alpha.json").read_text() == before  # record unchanged
 
 

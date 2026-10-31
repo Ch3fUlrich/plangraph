@@ -20,9 +20,9 @@ def test_stop_calls_claude_stop_never_rm(site):
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     stop_calls = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stop_calls == [["claude", "stop", UUID1]]  # exact argv, never rm/kill
+    assert stop_calls == [["claude", "stop", UUID1[:8]]]  # short job id, never rm/kill
     # the stop is one subprocess call plus the confirmation agents poll
-    assert run.calls[-2][0] == ["claude", "stop", UUID1]
+    assert run.calls[-2][0] == ["claude", "stop", UUID1[:8]]
     assert run.calls[-1][0][:3] == ["claude", "agents", "--json"]  # the confirmation
     # r7: the earlier launch + the pre-stop poll + the stop + its confirmation
     assert len(run.calls) == 4
@@ -89,7 +89,7 @@ def test_stop_null_id_finds_id_by_name_and_stops(site):
     ]
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
-    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [["claude", "stop", UUID1]]
+    assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [["claude", "stop", UUID1[:8]]]
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["state"] == "stopped" and rec["session_id"] == UUID1
     assert rec["stopped_ts"] is not None
@@ -121,7 +121,7 @@ def test_stop_argv_is_never_rm_or_kill(site):
         assert not {"rm", "kill", "killall", "pkill"} & set(argv)
         assert "-9" not in argv
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1]]  # claude stop is the only stop mechanism
+    assert stops == [["claude", "stop", UUID1[:8]]]  # claude stop is the only stop mechanism
 
 
 def test_win32_stop_argv_uses_resolved_exe(site):
@@ -134,7 +134,7 @@ def test_win32_stop_argv_uses_resolved_exe(site):
     res = s.stop(name="alpha")
     assert res["ok"] is True
     stops = [a for a, _ in run.calls if a[1:2] == ["stop"]]
-    assert stops == [[exe, "stop", UUID1]]  # the resolved .exe, never bare "claude"
+    assert stops == [[exe, "stop", UUID1[:8]]]  # the resolved .exe, never bare "claude"
 
 
 def test_stop_rejects_name_id_mismatch(site):

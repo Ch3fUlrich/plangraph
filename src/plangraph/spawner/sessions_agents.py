@@ -22,9 +22,11 @@ SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 TAIL_BYTES = 256 * 1024  # spec: only the transcript's last 256 KB is read
 # `claude agents --json` states that mean the old session is already over;
-# any other (or missing) state is live and must be stopped before a relaunch
+# live `claude agents --json --all` reports the terminal states "done" and
+# "failed" (with "working"/"blocked" live) - all four spellings count. Any
+# other (or missing) state is live and must be stopped before a relaunch
 # replaces it - guessing wrong can only stop what should be stopped.
-FINISHED_STATES = frozenset({"finished", "stopped"})
+FINISHED_STATES = frozenset({"finished", "stopped", "done", "failed"})
 
 
 def transcript_path(cwd, session_id):
@@ -50,6 +52,16 @@ class _AgentsMixin:
     self._which, self._platform, self._resolve_budget)."""
 
     # ---- subprocess argv construction (D-2873) -------------------------
+
+    @staticmethod
+    def _stop_token(row, sid):
+        """The one token `claude stop` accepts: the 8-char short job id, never
+        the full sessionId (which exits 1 "No job matching"). The matching
+        `claude agents` row's own "id" is that job id when it is a prefix of
+        the sessionId; else the first 8 chars of the id (D-3343). Every other
+        check stays keyed on the full sessionId."""
+        rid = str((row or {}).get("id") or "")
+        return rid if rid and str(sid).startswith(rid) else str(sid)[:8]
 
     def _claude_head(self):
         if self._platform != "win32":
