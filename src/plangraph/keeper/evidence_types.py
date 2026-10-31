@@ -50,8 +50,11 @@ class Context:
     the moment the item was claimed. The floor is the ref head sha ("base")
     recorded at the item's latest release or latest claim by a different
     principal; ``bind_floor_required=False`` only when no such event exists
-    (first claim). ``merge_principals`` lists allowed merge-commit committer
-    emails (empty permits any committer).
+    (first claim). ``bind_floor_shas`` maps repo key -> that repo's head at the
+    same instant (the floor event's ``bases``, D-3335): ``None`` for a context
+    from before per-repo floors (``bind_floor_sha`` then applies to every repo),
+    ``{}`` when the floor event predates them. ``merge_principals`` lists
+    allowed merge-commit committer emails (empty permits any committer).
     """
 
     git: Any = None
@@ -63,6 +66,7 @@ class Context:
     claim_time: float | None = None
     merge_principals: tuple[str, ...] = ()
     bind_floor_sha: str | None = None
+    bind_floor_shas: dict | None = None
     bind_floor_required: bool = True
     skew: float = DEFAULT_SKEW_S
 

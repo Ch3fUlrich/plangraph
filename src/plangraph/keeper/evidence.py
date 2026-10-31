@@ -30,6 +30,7 @@ from typing import Any
 
 from .evidence_ci import CIAdapter
 from .evidence_decisions import DecisionsAdapter
+from .evidence_floor import check_floor
 from .evidence_forgejo import ForgejoStatusAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_repo import repo_key
@@ -386,29 +387,11 @@ class CommitCiVerifier:
                     ref,
                 )
 
-        required = getattr(ctx, "bind_floor_required", True)
-        if required:
-            floor = getattr(ctx, "bind_floor_sha", None)
-            if not isinstance(floor, str) or not valid_commit_ref(floor):
-                return _fail(
-                    "no ancestry floor recorded for this item's last release/re-claim; refusing",
-                    ref,
-                )
-            is_ancestor_fn = getattr(ctx.git, "is_ancestor", None)
-            if is_ancestor_fn is None:
-                return _fail("git adapter cannot check ancestry floor; failing closed", ref)
-            try:
-                is_floor_anc = is_ancestor_fn(repo, floor, commit)
-            except Exception as exc:  # noqa: BLE001
-                return _fail(
-                    f"git error checking the ancestry floor ({type(exc).__name__})",
-                    ref,
-                )
-            if not is_floor_anc:
-                return _fail(
-                    f"commit {commit} does not descend from the item's last release/re-claim ({floor[:12]})",
-                    ref,
-                )
+        # The ancestry floor for the repo the commit resolved to: bind_floor_sha
+        # for the primary key, bases[track_key] for a track repo (D-3335).
+        refusal = check_floor(ctx, repo, commit, ref, project, item)
+        if refusal is not None:
+            return refusal
 
         try:
             ci_mode = ctx.ci.mode(project) if ctx.ci is not None else None
