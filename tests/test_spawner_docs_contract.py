@@ -143,6 +143,23 @@ def test_fail_closed_sweep_exercised() -> None:
     )
 
 
+def test_fail_closed_unresolved_rationale_documented() -> None:
+    # D-3264: the fail_closed block's critical keys moved from 1 to 5 across
+    # regenerations with no prose explaining the counts. The rationale belongs
+    # with the other fail-closed rules in SPAWNER.md; this pin keeps it there.
+    text = (ROOT / "docs" / "SPAWNER.md").read_text(encoding="utf-8")
+    for term in (
+        "fail_closed",
+        "relax_floor=False",
+        "refusal count",
+        "38..60",
+        "6-12 rows",
+        "from 1 to 5",
+        "test_sensitivity_json_reproducible",
+    ):
+        assert term in text
+
+
 def test_stability_seeds_meet_threshold() -> None:
     data = json.loads(
         (ROOT / "docs" / "spawner-sensitivity.json").read_text(encoding="utf-8")
