@@ -102,8 +102,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     # luna and mimo-pro are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash",
-        "mimo-v2.6-flash"]
+        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash"]
 
 
 def test_unmapped_leg_no_p(tmp_path, capsys):
