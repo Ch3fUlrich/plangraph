@@ -179,7 +179,7 @@ def test_one_seat_refusal_keeps_the_other_seat(tmp_path, monkeypatch):
 def _dispatch(tmp_path, monkeypatch, runner):
     from plangraph.spawner.mcp import MCPSpawnerServer
 
-    async def admit_all(plan, dry_run=False, **kw):
+    async def admit_all(plan, dry_run=False):
         return plan
     monkeypatch.setattr(resolver, "plan_for_launch_async", admit_all)
     return MCPSpawnerServer(runner, state=tmp_path / "state")

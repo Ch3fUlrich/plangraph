@@ -479,7 +479,7 @@ async def served_models_async(config, *, env=None, clock=time.monotonic):
     return await asyncio.to_thread(_served_models_real, config, env=env, clock=clock)
 
 
-async def host_skip_reason_async(row, *, env=None, state=None):
+async def host_skip_reason_async(row, *, env=None):
     child = host_probe_env(env)
     models = None
     if row.get('harness') == 'opencode':
@@ -488,10 +488,10 @@ async def host_skip_reason_async(row, *, env=None, state=None):
         probe_env, model = dict(child), row.get('model') or row.get('id') or row.get('model_id') or ''
         if '/' not in model or not render_gateway_providers(probe_env, model):
             models = await served_models_async(probe_env.get('OPENCODE_CONFIG_CONTENT', '{}'), env=probe_env)
-    return host_skip_reason(row, env=child, probe=lambda env: models, state=state)
+    return host_skip_reason(row, env=child, probe=lambda env: models)
 
 
-def plan_for_launch(plan, *, dry_run=False, probe=None, env=None, state=None):
+def plan_for_launch(plan, *, dry_run=False, probe=None, env=None):
     """Apply host admission at the shared real-launch boundary, never offline."""
     if dry_run:
         return plan
@@ -503,8 +503,7 @@ def plan_for_launch(plan, *, dry_run=False, probe=None, env=None, state=None):
     if env is not None:
         options['env'] = env
     for leg in plan.legs:
-        # state rides the row: admission reads the denial file the launch wrote (D-3259).
-        reason = host_skip_reason(dict(model=leg.model, harness=leg.harness, state=state),
+        reason = host_skip_reason(dict(model=leg.model, harness=leg.harness),
                                   **options)
         if reason:
             # W30 callers consume skip_reason; reason remains canonical like
@@ -515,9 +514,9 @@ def plan_for_launch(plan, *, dry_run=False, probe=None, env=None, state=None):
     return replace(plan, legs=tuple(admitted), skipped=tuple(skipped))
 
 
-async def plan_for_launch_async(plan, *, dry_run=False, probe=None, env=None, state=None):
+async def plan_for_launch_async(plan, *, dry_run=False, probe=None, env=None):
     # W32A runner: await this boundary; the synchronous API remains for CLI use.
-    return await asyncio.to_thread(plan_for_launch, plan, dry_run=dry_run, probe=probe, env=env, state=state)
+    return await asyncio.to_thread(plan_for_launch, plan, dry_run=dry_run, probe=probe, env=env)
 
 
 def admitted_by_render(model):
@@ -525,20 +524,19 @@ def admitted_by_render(model):
     return str(model or '').split('#', 1)[0] in ACCEPTED_MIMO_IDS
 
 
-def host_skip_reason(row, *, probe=None, env=None, state=None):
+def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli'):
         return None if shutil.which(harness) else 'harness_missing: ' + harness
     if harness != 'opencode': return None
     model = row.get('model') or row.get('id') or row.get('model_id')
-    from plangraph.planner.model_admission import console_host_skip; child = host_probe_env(env)
-    from plangraph.planner.host_models import is_gateway, unavailable_models; state = state or row.get('state')
-    # Negative evidence gates first, providerless models included (D-3259).
-    if model and model.lower().split('#', 1)[0] in unavailable_models(state=state, env=env): return 'not_served_on_host: ' + model
     if not model or '/' not in model: return None
+    from plangraph.planner.model_admission import console_host_skip; child = host_probe_env(env)
+    from plangraph.planner.host_models import is_gateway, unavailable_models
+    if model.lower().split('#', 1)[0] in unavailable_models(env=env): return 'not_served_on_host: ' + model
     # D-3264: only console credit providers need an affirmative host listing.
     if model.split('/', 1)[0].lower().startswith('console-') and not is_gateway(model, child):
-        return console_host_skip(model, probe, env, state=state)
+        return console_host_skip(model, probe, env)
     from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING
     if child.get(OVERLAY_UNKNOWN): return None
     # Probe the config the launch will use: S1 renders the gateway providers per run.
