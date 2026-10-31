@@ -252,15 +252,15 @@ def _leg(leg_id):
 def test_spares_use_keeper_families(tmp_path, monkeypatch):
     # luna HIGH: gpt and openai legs are one keeper family; a gpt seat's family is no spare.
     svc = _service(tmp_path / "state", monkeypatch)
-    luna, qwen, oss, mimo = map(_leg, ("cx-gpt-6-luna", "qodercli-qwen3.8-flash",
-                                       "ovh-gpt-oss-120b", "mimo-v2.6-flash"))
+    luna, qwen, mimo = map(_leg, ("cx-gpt-6-luna", "qodercli-qwen3.8-flash", "mimo-v2.6-flash"))
+    oss = replace(luna, id="openai-spare", family="openai")
     base = plan_spawn(HIGH, role="review", writer_families=("claude",))
     plan = replace(base, legs=(luna, qwen, oss, mimo), review_seats=(luna, qwen), error=None)
     monkeypatch.setattr(svc, "_route", lambda *a, **k: plan)
     out = asyncio.run(svc.spawn(card=HIGH, prompt="r", role="review", writer_families=("claude",),
                                 seats=True, dry_run=True))
     legs = [leg["id"] for run in out["seats"] for leg in run["plan"]["legs"]]
-    assert "ovh-gpt-oss-120b" not in legs and legs.count("mimo-v2.6-flash") == 1
+    assert "openai-spare" not in legs and legs.count("mimo-v2.6-flash") == 1
 
 
 @pytest.mark.parametrize("writer", ["alibaba", " OpenAI ", "anthropic", "QWEN"])

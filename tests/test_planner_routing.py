@@ -13,8 +13,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-    "opencode-glm-5.3-flash-free", "opencode-zen-free", "or-north-mini-code-free",
-    "or-laguna-s-2.1-free", "or-nemotron-3-super-free", "ovh-gpt-oss-120b",
+    "opencode-glm-5.3-flash-free",
     "openrouter-free",
     "cx-gpt-6.1-sol", "cx-gpt-6-luna", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro",
     "agy-sonnet-5.5", "deepseek",
@@ -140,7 +139,7 @@ def test_small_estimate_goes_128k_qodercli_first():
 def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
-    assert ids(r) == ["qodercli-qwen3.8-flash", "or-nemotron-3-super-free",
+    assert ids(r) == ["qodercli-qwen3.8-flash",
                       "cx-gpt-6.1-sol", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
                       "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
@@ -149,30 +148,31 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
 def test_card_window_class_is_respected():
     r = route_card(card(window_class="256k", estimate_tokens=1000))
     assert r.window_class == "256k"
-    assert "opencode-zen-free" not in ids(r)
+    assert "opencode-glm-5.3-flash-free" not in ids(r)
 
 
 def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 7 legs: trains_on_data" in r.reasons
+        assert "excluded 3 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
 
 
 def test_over_leg_max_request_drops_leg():
-    r = route_card(card(estimate_tokens=95000, window_class="256k"))
-    assert "or-north-mini-code-free" not in ids(r)
-    r2 = route_card(card(estimate_tokens=95000))  # picks 256k; 90k legs lack 256k anyway
+    r = route_card(card(estimate_tokens=110000, window_class="256k"))  # qwen/deepseek max 100k
+    assert ids(r) and not {"qodercli-qwen3.8-flash", "deepseek"} & set(ids(r))
+    r2 = route_card(card(estimate_tokens=110000))  # picks 256k
     assert r2.window_class == "256k"
-    legs = with_measured(DEFAULT_LEGS, {"or-north-mini-code-free": 50000,
-                                        "ovh-gpt-oss-120b": 50000})
+    assert all("excluded 2 legs: max_request_tokens" in x.reasons for x in (r, r2))
+    legs = with_measured(DEFAULT_LEGS, {"opencode-glm-5.3-flash-free": 50000,
+                                        "openrouter-free": 50000})
     r3 = route_card(card(estimate_tokens=60000), legs=legs)
     assert r3.window_class == "128k"
     assert ids(r3) == [i for i in D25_IDS
-                       if i not in ("or-north-mini-code-free", "ovh-gpt-oss-120b")]
+                       if i not in ("opencode-glm-5.3-flash-free", "openrouter-free")]
     assert "excluded 2 legs: max_request_tokens" in r3.reasons
 
 
