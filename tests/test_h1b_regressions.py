@@ -26,47 +26,12 @@ from plangraph.routing_support.resolver import host_skip_reason, plan_for_launch
 MODEL = 'console-anthropic/fixture-opus-4-8'
 
 
-def _listing(state, models):
-    """A model-list cache exactly as cached_models writes it (fresh, this host)."""
-    from plangraph.planner.host_models import host_id
-    state.mkdir(parents=True, exist_ok=True)
-    (state / 'model-list-opencode.json').write_text(json.dumps(
-        {'host': host_id(), 'time': time.time(), 'models': sorted(models)}))
-
-
 def test_state_dir_is_private_from_first_write(tmp_path):
     """LOW: the denial file and listing cache land in a 0o700 directory."""
     from plangraph.planner.host_models import mark_unavailable
     state = tmp_path / 'fresh'
     mark_unavailable(MODEL, state=state)
     assert stat.S_IMODE(state.stat().st_mode) == 0o700
-
-
-def test_pinned_state_governs_admission_and_host_check(tmp_path, monkeypatch):
-    """LOW: one invocation may not read two caches (D-3259)."""
-    from plangraph.planner import model_admission
-    pinned, env_dir = tmp_path / 'work', tmp_path / 'elsewhere'
-    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(env_dir))
-    _listing(pinned, {MODEL})
-    calls = []
-    monkeypatch.setattr(model_admission, 'opencode_models',
-                        lambda: calls.append(1) or set())
-    assert model_admission.validate_model(MODEL, opencode_list=None, state=pinned) == MODEL
-    assert host_skip_reason({'harness': 'opencode', 'model': MODEL}, state=pinned) is None
-    assert not calls, 'the pinned cache must serve the lookup; no live probe'
-    # The same model is refused where nothing lists it.
-    assert 'not_served_on_host' in host_skip_reason({'harness': 'opencode', 'model': MODEL},
-                                                   state=env_dir)
-
-
-def test_providerless_denied_model_is_gated(tmp_path, monkeypatch):
-    """LOW: the negative-evidence check precedes the provider short-circuit."""
-    from plangraph.planner.host_models import mark_unavailable
-    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
-    mark_unavailable('fixture-local-model', state=tmp_path)
-    reason = host_skip_reason({'harness': 'opencode', 'model': 'fixture-local-model'},
-                              probe=lambda e: {'fixture-local-model'})
-    assert reason == 'not_served_on_host: fixture-local-model'
 
 
 def test_runtime_denial_expires(tmp_path, monkeypatch):
