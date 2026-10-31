@@ -11,7 +11,7 @@
 - 10-31T18:41Z RIN-HOME-LIFT - md-sync live at 20b4423a closed it by D-3404 (status applied=True ops 8)
 - 10-31T18:45Z D-3418 - S09 FINAL GO received; conds 1,2,3,5 met
 ## In flight
-- GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check 19:30Z
+- GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 BLOCKED 18:55Z (B r3 cap NO-GO 5 blockers; A 2nd seat missing) forwarded to routing, next check on its D-id
 - none beyond gwtok (KEEPER-DCLOSE-TRACK-EVIDENCE created by routing 18:52Z, RIN-LEDGER-PREP depends on it)
 ## Planned
 1. RIN-CUTOVER-DATA S09 now: FREEZE-NOW to routing, runbook plangraph-data router/repoint/s09-router-continuity.md, plan routing-migration.md 5.3 S09
@@ -19,7 +19,7 @@
 3. KEEPER-DCLOSE-TRACK-EVIDENCE (HIGH) after S09, then RIN-LEDGER-PREP closes via md-sync
 4. SPAWNER-ROUTE-FREE-FIRST; LE-* items prio 3 after phase 0 (D-3382)
 ## Open
-- none
+- BLOCKED GATEWAY-LOG-TOKEN-MINT past r3 cap (D-2739) | default B round-4 writer all 5 blockers + A 2nd seat mimo-v2.6-flash override, needs routing D-id | deadline next gen
 ## Traps
 - J=/home/s/.claude/jobs/4fceadcd/tmp (seat prompts, r-split*.wait); older J 6f592267 (wspawn.sh, seat-cov-leg.sh)
 - harness refuses git with vars/heredoc/loops in worktree-isolated sessions: plain single commands + Write/Edit
