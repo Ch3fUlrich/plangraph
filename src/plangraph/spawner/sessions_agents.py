@@ -57,11 +57,21 @@ class _AgentsMixin:
     def _stop_token(row, sid):
         """The one token `claude stop` accepts: the 8-char short job id, never
         the full sessionId (which exits 1 "No job matching"). The matching
-        `claude agents` row's own "id" is that job id when it is a prefix of
-        the sessionId; else the first 8 chars of the id (D-3343). Every other
-        check stays keyed on the full sessionId."""
+        `claude agents` row's own "id" is that job id only when it is exactly
+        the 8-char prefix of the sessionId (len 8 and sid.startswith(id)); any
+        other row id - a truncated "8"/"87" or another job's id - is not a
+        guessable stop target and refuses "unresolved job id" instead of
+        guessing sid[:8]. sid[:8] is used only when the row is None or has no
+        "id" at all; a blank/None sid refuses before any argv is built
+        (D-3343). Every other check stays keyed on the full sessionId."""
+        if not sid or not str(sid).strip():
+            raise _refuse(f"unresolved job id for {sid}")
         rid = str((row or {}).get("id") or "")
-        return rid if rid and str(sid).startswith(rid) else str(sid)[:8]
+        if not rid:
+            return str(sid)[:8]
+        if len(rid) == 8 and str(sid).startswith(rid):
+            return rid
+        raise _refuse(f"unresolved job id for {sid}")
 
     def _claude_head(self):
         if self._platform != "win32":

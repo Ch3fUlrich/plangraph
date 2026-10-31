@@ -69,7 +69,7 @@ def test_stop_rc1_on_listed_id_refuses_and_keeps_record(site):
     # qwen MED: the rc still gates - a listed id whose `claude stop` exits 1
     # is refused with the unchanged text and the record is left untouched.
     run = FakeRun(stop_rc=1, agents_rows=[
-        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
          "state": "running", "startedAt": 1_000_000}])
     s = make(site, run)
     sess = _running_record(site)

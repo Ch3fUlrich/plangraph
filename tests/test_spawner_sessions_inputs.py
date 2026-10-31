@@ -290,7 +290,7 @@ def test_relaunch_stop_not_confirmed_refuses_and_never_sees_bg_argv(site):
     hf = site.tmp_path / "handoff.md"
     hf.write_text("carry on")
     s.mark_ready("alpha", str(hf))
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",
                         "kind": "background", "state": "running", "startedAt": 1_000_000}]
     run.stdout = "session " + UUID2
     with pytest.raises(ParameterRefused, match="stop not confirmed"):

@@ -13,7 +13,7 @@ def test_stop_calls_claude_stop_never_rm(site):
     # r7 adapt: the fake rows carry the live row a real stop sees - with no
     # row the poll-first check marks stopped without calling claude stop.
     run = FakeRun(stdout="session " + UUID1, agents_rows=[
-        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
          "state": "running", "startedAt": 1_000_000}])
     s = make(site, run, now=lambda: 2000.0)
     go(site, s)
@@ -84,7 +84,7 @@ def test_stop_null_id_finds_id_by_name_and_stops(site):
          "startedAt": 1_000_000},  # wrong kind
         {"id": "o", "sessionId": UUID2, "name": "alpha", "kind": "background",
          "startedAt": 996_000},  # in window but older
-        {"id": "f", "sessionId": UUID1, "name": "alpha", "kind": "background",
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
          "startedAt": 1_000_000},  # newest in-window background row
     ]
     res = s.stop(name="alpha")
@@ -112,7 +112,7 @@ def test_stop_already_stopped_runs_no_subprocess(site):
 
 def test_stop_argv_is_never_rm_or_kill(site):
     run = FakeRun(stdout="session " + UUID1, agents_rows=[  # r7 adapt: live row
-        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
          "state": "running", "startedAt": 1_000_000}])
     s = make(site, run)
     go(site, s)
@@ -127,7 +127,7 @@ def test_stop_argv_is_never_rm_or_kill(site):
 def test_win32_stop_argv_uses_resolved_exe(site):
     exe = str(site.tmp_path / "claude.exe")
     run = FakeRun(stdout="session " + UUID1, agents_rows=[  # r7 adapt: live row
-        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
          "state": "running", "startedAt": 1_000_000}])
     s = make(site, run, platform="win32", which=lambda _: exe)
     go(site, s)

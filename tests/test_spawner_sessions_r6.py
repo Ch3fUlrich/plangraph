@@ -144,7 +144,7 @@ def test_stop_blocked_by_name_lock(site):
     run = FakeRun()
     s = make(site, run)
     _running_record(site)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",  # r7 adapt
                         "kind": "background", "state": "running",
                         "startedAt": 1_000_000}]
     lock = s._name_lock("alpha")
@@ -173,7 +173,7 @@ def test_stop_by_id_blocked_by_record_name_lock(site):
     run = FakeRun()
     s = make(site, run)
     _running_record(site)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",  # r7 adapt
                         "kind": "background", "state": "running",
                         "startedAt": 1_000_000}]
     lock = s._name_lock("alpha")
@@ -285,7 +285,7 @@ def test_stop_live_row_still_calls_claude_stop_then_confirms(site):
     s = make(site, run)
     _running_record(site)
     run.agents_rows = [
-        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
          "state": "running", "startedAt": 1_000_000}]
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
