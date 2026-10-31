@@ -1091,7 +1091,7 @@ def spawn_service(*args, **kwargs):
                         self._save(record)
                         task = self.runner._tasks.get(job.job_id)
                         if task:
-                            await asyncio.shield(task)
+                            await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
                         stop = self.runner.provider_responses.get(job.job_id)
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,

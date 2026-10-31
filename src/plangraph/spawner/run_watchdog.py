@@ -337,6 +337,10 @@ async def collect(runner, job_id, proc):
                         task.cancel()
                     await asyncio.gather(*readers, return_exceptions=True)
                     drain.cancel()
+                if not gone.done():
+                    # Pipes can reach EOF before the exit status is reaped; the
+                    # monitor reads proc.returncode next, so let it land (bounded).
+                    await asyncio.wait([gone], timeout=READER_GRACE_S)
                 gone.cancel()
                 return tuple(''.join(captured[n]).encode('utf-8') for n in ('stdout', 'stderr'))
             finally:
