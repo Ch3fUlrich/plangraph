@@ -724,7 +724,7 @@ class SpawnerRunner:
             stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].status in ('stalled', 'timeout') else proc.returncode
+            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled') else proc.returncode
 
             job = self.jobs[job_id]
             # Only the fork's exact stderr transport envelope is evidence.
@@ -754,7 +754,7 @@ class SpawnerRunner:
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
-            if job.status not in ('stalled', 'timeout'):
+            if job.status not in ('stalled', 'timeout', 'cancelled'):
                 job.status = "completed" if exit_code == 0 else "failed"
             from .opencode_isolation import fail_unchanged_writer
             await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
@@ -875,6 +875,7 @@ class SpawnerRunner:
         if job_id not in self.jobs:
             raise KeyError(f"Job {job_id} not found")
         job = self.jobs[job_id]
+        job.status, job.exit_code = "cancelled", 1   # Q14: before the reap, so the monitor keeps it
 
         proc = self._processes.get(job_id)
         if proc:
@@ -884,10 +885,9 @@ class SpawnerRunner:
         if task and not task.done():
             task.cancel()
 
-        job.status = "cancelled"
         self._nonces.pop(job_id, None)
         job.end_time = time.time()
-        self._check_git_config_guard(job_id)
+        self._check_git_config_guard(job_id)   # only a dangerous config mutation turns it 'failed'
         return {"job_id": job_id, "status": job.status}
 
 
@@ -984,6 +984,11 @@ def spawn_service(*args, **kwargs):
                 record = self.result(run_id)
                 if record.get('ended') is not None and record['status'] != 'running':
                     return record
+                from .exit_outcome import orphaned
+                gone = orphaned(record, time.time())
+                if gone is not None:
+                    self._save(gone)
+                    return gone
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError('run wait timed out: ' + run_id)
                 await asyncio.sleep(.02)
@@ -1088,9 +1093,11 @@ def spawn_service(*args, **kwargs):
                         if task:
                             await asyncio.shield(task)
                         stop = self.runner.provider_responses.get(job.job_id)
-                        if job.status in ('stalled', 'timeout'):
-                            record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
-                                watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')), events=job.events)
+                        if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
+                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                                served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
+                            record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                                watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None), events=job.events)
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)

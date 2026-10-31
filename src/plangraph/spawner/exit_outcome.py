@@ -78,3 +78,24 @@ def terminal_reason(record):
         record['reason'] = (reason or record.get('error')
                             or first_reason(record.get('stderr_tail', ''))
                             or f"harness exit {record['exit_code']}")
+
+
+def orphaned(record, now):
+    """Q21/M14: a 'running' record whose supervisor process is gone ends 'failed', reason 'orphaned'."""
+    import os
+    path = record.get('supervisor_stderr_path')
+    if record.get('status') != 'running' or record.get('ended') is not None or not path:
+        return None
+    pid = None
+    try:
+        pid = int(open(str(path) + '.pid').read())
+        os.kill(pid, 0)
+        return None
+    except PermissionError:
+        return None   # alive, owned by another user
+    except (OSError, ValueError):
+        pass
+    if not os.path.exists(str(path) + '.pid'):
+        return None   # no pid evidence: not proof the supervisor died
+    return dict(record, status='failed', exit_code=1, ended=now, reason='orphaned',
+                error=f'orphaned: supervisor pid {pid} is gone')

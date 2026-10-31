@@ -107,11 +107,17 @@ def test_cancelled_run_stays_cancelled_and_never_falls_through(tmp_path, monkeyp
                 await asyncio.sleep(0.05)   # the monitor settles inside the reap window
 
         runner._reap_process = settle
+        leg2 = list(runner.jobs)[-1]
+        for _ in range(200):   # the leg-2 save may land after leg 2 launched
+            if service.result(record['run_id']).get('job_id') == leg2:
+                break
+            await asyncio.sleep(0.05)
         job_id = service.result(record['run_id'])['job_id']
+        assert job_id == leg2
         await asyncio.wait_for(runner.cancel(job_id), 10)
         await asyncio.wait_for(service.tasks[record['run_id']], 10)
         final = service.result(record['run_id'])
-        assert final['status'] == 'cancelled', final
+        assert final['status'] == 'cancelled', {k: final.get(k) for k in ('status', 'reason', 'exit_code', 'error', 'events')}
         assert final['reason'] == 'cancelled', final
         assert len(runner.jobs) == 2, sorted(runner.jobs)   # no leg launched after the cancel
     asyncio.run(run())
