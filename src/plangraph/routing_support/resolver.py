@@ -534,7 +534,9 @@ def host_skip_reason(row, *, probe=None, env=None):
     from plangraph.planner.model_admission import console_host_skip; child = host_probe_env(env)
     from plangraph.planner.host_models import is_gateway, unavailable_models
     if model.lower().split('#', 1)[0] in unavailable_models(env=env): return 'not_served_on_host: ' + model
-    if not is_gateway(model, child): return console_host_skip(model, probe, env)
+    # D-3264: only console credit providers need an affirmative host listing.
+    if model.split('/', 1)[0].lower().startswith('console-') and not is_gateway(model, child):
+        return console_host_skip(model, probe, env)
     from .opencode_overlay import OVERLAY_UNKNOWN, OVERLAY_ROOT_MISSING
     if child.get(OVERLAY_UNKNOWN): return None
     # Probe the config the launch will use: S1 renders the gateway providers per run.

@@ -119,5 +119,7 @@ def test_success_accounts_for_untried_and_policy_skipped_legs(tmp_path, monkeypa
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None))
     attempts = {a['leg']['id'] if isinstance(a['leg'], dict) else a['leg']: a for a in result['attempts']}
     assert attempts[legs[1].id]['skip_reason'] == 'earlier_leg_succeeded'
-    assert attempts['policy-leg']['skip_reason'] == 'limited'
+    # Pre-launch policy skips are accounted in record['skipped'], not attempts (round-1 finding A).
+    assert 'policy-leg' not in attempts
+    assert [s['reason'] for s in result['skipped'] if s['leg'] == 'policy-leg'] == ['limited']
     assert all(a['served_model'] and a['served_family'] for a in attempts.values())
