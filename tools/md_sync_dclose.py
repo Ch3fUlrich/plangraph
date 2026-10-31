@@ -44,8 +44,8 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from plangraph.keeper import credential_guard  # noqa: E402
-from plangraph.keeper.evidence_git import GitAdapter, resolve_commit  # noqa: E402
 from plangraph.keeper.note_fold import NOTE_CAP  # noqa: E402
+from md_sync_gates import GitGates, names_seats, track_of  # noqa: E402,F401
 
 DECISION_ROW_RE = re.compile(r"^\| D-([0-9]+) \|")
 _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
@@ -166,47 +166,6 @@ def finalize(dinfo):
         info["max_dnum"] = nums[-1] if nums else None
 
 
-class GitGates:
-    """Read-only git checks over the keeper config's repos (fail closed)."""
-
-    def __init__(self, repos):
-        self._repos = repos or {}
-        self._git = GitAdapter()
-
-    def target(self, project):
-        """(repo_path|None, ref) for project (both repos shapes)."""
-        entry = self._repos.get(project)
-        if isinstance(entry, dict):
-            path = entry.get("path")
-            path = str(path) if isinstance(path, str) and path else None
-            ref = entry.get("ref") or "main"
-        elif isinstance(entry, str) and entry:
-            path, ref = entry, "main"
-        else:
-            path, ref = None, "main"
-        if not (isinstance(ref, str) and ref):
-            ref = "main"
-        return path, ref
-
-    def check(self, project, token):
-        """{'repo', 'ref', 'full', 'merged'}; never raises.
-        The configured ref decides, exactly; a config ref of 'main' or 'origin/main'
-        is used as configured, with no fallback to the other.
-        """
-        repo_path, ref = self.target(project)
-        full = None
-        merged = False
-        if repo_path:
-            full = resolve_commit(repo_path, token)
-            if full:
-                try:
-                    merged = bool(self._git.is_ancestor(repo_path, full, ref))
-                except Exception:  # noqa: BLE001 - fail closed on any git error
-                    merged = False
-        return {"repo": project if repo_path else None, "ref": ref,
-                "full": full, "merged": merged, "path": repo_path}
-
-
 def _decision_ids(item):
     out = set()
     for row in item.get("evidence") or []:
@@ -291,6 +250,13 @@ def _plan_key(plan, key, item, info, gates):
                               "text": (f"conflicting Closes shas for {key} "
                                        f"in {conflict_d}; skipped")})
         return
+    clause = names_seats(item) if item.get("review_tier") != "none" else None
+    if clause:
+        # D-3395: the keeper refuses tier 'none' here; close via seat verdicts.
+        plan.skipped.append((key.split(":", 1)[1],
+                             f"blocked: done_criteria name {clause}; "
+                             "closes via seat verdicts"))
+        return
     new_note = _models_note(plan, key, item, info) if state == "open" else None
     kinds = item.get("evidence_kinds") or []
     has_sha = info.get("sha") is not None
@@ -345,7 +311,7 @@ def _plan_sha(plan, key, item, info, gates, new_note):
     project = item.get("project") or key.split(":", 1)[0]
     token = info["sha"]
     sha8 = token[:8]
-    check = gates.check(project, token)
+    check = gates.check(project, token, track_of(item))
     if check["merged"]:
         target_kinds = ["decision", "commit"]
         tier_done = (item.get("review_tier") == "none"

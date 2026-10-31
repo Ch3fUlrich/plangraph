@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -306,16 +307,22 @@ def main(argv=None, out=None, err=None):
         if not opts.apply or not plan.ops:
             return stop(rc, None)
         answers_path = os.path.realpath(opts.answers)
-        record = []
-        if opts.batch_out:
-            path = write_batch(opts.batch_out, opts.principal, answers_path, digest, plan.ops)
-            code = _apply(path, opts, _Tee(out, record), _Tee(err, record))
-        else:
-            with tempfile.TemporaryDirectory() as tmp:
-                path = write_batch(os.path.join(tmp, "md-sync.yaml"), opts.principal,
-                                   answers_path, digest, plan.ops)
-                code = _apply(path, opts, _Tee(out, record), _Tee(err, record))
-        log = "".join(record)
+        for _drop in range(MAX_ITEM_DROPS + 1):
+            record = []
+            code = _write_and_apply(opts, answers_path, digest, plan.ops,
+                                    _Tee(out, record), _Tee(err, record))
+            log = "".join(record)
+            key = _refused_key(log) if code != 0 else None
+            if key is None or _drop == MAX_ITEM_DROPS:
+                break
+            # D-3395: the atomic batch applied nothing; skip only that item.
+            plan.ops = [op for op in plan.ops if apply_batch.op_key(op) != key]
+            plan.refused.append((key, _apply_error(log)))
+            status["refused"] = len(plan.refused)
+            out.write(f"refused {key}: skipped, re-applying the rest\n")
+            if not plan.ops:
+                code = 0
+                break
         if code != 0 and attempt == 0 and _is_pin_mismatch(log):
             out.write("pin mismatch: source changed between read and apply; "
                       "retrying once after 5s\n")
@@ -323,6 +330,32 @@ def main(argv=None, out=None, err=None):
             continue
         status["applied"] = code == 0
         return stop(code or rc, None if code == 0 else _apply_error(log))
+
+
+#: items one run may drop after a keeper refusal before it gives up (D-3395)
+MAX_ITEM_DROPS = 3
+# item-level codes only: forbidden/unavailable/locked still halt the run
+_REFUSAL_RE = re.compile(r"^op [0-9]+ [a-z_-]+ (\S+): (?:validation|conflict|bad_state"
+                         r"|not_found|evidence_unverified|evidence_missing)(?:\s|$)")
+
+
+def _refused_key(log):
+    """The item key of apply_batch's per-op keeper refusal line, else None."""
+    for text in log.splitlines():
+        match = _REFUSAL_RE.match(text.strip())
+        if match:
+            return match.group(1)
+    return None
+
+
+def _write_and_apply(opts, answers_path, digest, ops, out, err):
+    if opts.batch_out:
+        path = write_batch(opts.batch_out, opts.principal, answers_path, digest, ops)
+        return _apply(path, opts, out, err)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_batch(os.path.join(tmp, "md-sync.yaml"), opts.principal,
+                           answers_path, digest, ops)
+        return _apply(path, opts, out, err)
 
 
 def _apply(path, opts, out, err):
