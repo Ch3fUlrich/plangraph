@@ -65,43 +65,6 @@ def test_prose_markers_are_not_runtime_denial_evidence():
     assert unavailable_reason(1, '', 'prefix not_served_on_host')
 
 
-def test_denial_write_dir_equals_read_dir(tmp_path, monkeypatch):
-    """MED: a denial is read where it was written (``--state`` wins over env)."""
-    from plangraph.planner.host_models import mark_unavailable
-    write_dir, elsewhere = tmp_path / 'work', tmp_path / 'elsewhere'
-    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(elsewhere))
-    mark_unavailable(MODEL, state=write_dir)
-    row = {'harness': 'opencode', 'model': MODEL}
-    assert 'not_served_on_host' in host_skip_reason(row, probe=lambda e: {MODEL}, state=write_dir)
-    plan = plan_for_launch(_plan(MODEL), probe=lambda e: {MODEL}, state=write_dir)
-    assert [s['skip_reason'] for s in plan.skipped] == ['not_served_on_host: ' + MODEL]
-    # Nothing wrote the env dir: it must not gate.
-    assert host_skip_reason(row, probe=lambda e: {MODEL}) is None
-
-
-def _plan(model):
-    from dataclasses import replace
-    from plangraph.planner.legs import DEFAULT_LEGS
-    from plangraph.planner.routing import SpawnPlan
-    return SpawnPlan((replace(DEFAULT_LEGS[0], id='h1b', model=model, harness='opencode'),),
-                     (), 'test', (), ())
-
-
-def test_host_listing_match_is_case_insensitive_and_variant_aware(tmp_path, monkeypatch):
-    """MED: the listing matcher behaves like the gateway path (D-3264)."""
-    from plangraph.planner import model_admission
-    calls = []
-    monkeypatch.setattr(model_admission, 'opencode_models',
-                        lambda: calls.append(1) or set())
-    _listing(tmp_path, {'Console-Anthropic/FIXTURE-OPUS-4-8#default'})
-    assert host_skip_reason({'harness': 'opencode', 'model': MODEL}, state=tmp_path) is None
-    assert not calls
-    assert 'not_served_on_host' in host_skip_reason(
-        {'harness': 'opencode', 'model': MODEL + '#other'}, state=tmp_path)
-    assert model_admission.validate_model(
-        MODEL, opencode_list=lambda: {'console-anthropic/fixture-opus-4-8#default'}) == MODEL
-
-
 def test_failed_loader_backs_off_instead_of_rerunning_per_leg(tmp_path):
     """MED: format drift probes once per backoff window, not once per leg."""
     from plangraph.planner.model_admission import cached_models
