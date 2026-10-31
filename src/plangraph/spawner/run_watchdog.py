@@ -23,6 +23,8 @@ EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreada
 def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
         return False
+    if record.get('role') == 'review':
+        return False   # D-3427: a hung seat (cap or stall) fails and falls through to the next leg
     record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
                   watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
                   events=job.events)
@@ -31,14 +33,15 @@ def terminal_record(record, job):
 
 def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
-    return thresholds(card), record['live_log']
+    return thresholds(card, record.get('role')), record['live_log']
 
 
-def thresholds(card=None):
+def thresholds(card=None, role=None):
     from plangraph.planner.routing import SpawnRefused
     card = card or {}
     result = {}
-    for key, default in [('stall_min', 20), ('first_edit_min', 45), ('max_min', 90)]:
+    # D-3427: a review seat is capped at 30 min (luna's cap), writers keep 90.
+    for key, default in [('stall_min', 20), ('first_edit_min', 45), ('max_min', 30 if role == 'review' else 90)]:
         value = card.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
@@ -53,7 +56,7 @@ def thresholds(card=None):
         except ValueError:
             # M17: a bad env knob is refused before launch (exit 2), like a bad card.
             raise SpawnRefused('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
-        result['max_s'] = value
+        result['max_s'] = min(value, result['max_s']) if role == 'review' else value   # seat cap stays
         # An operator-set run timeout is a wall clock: the first-edit hold
         # never extends it (M5's hold 'does not extend the max deadline').
         result['hard_max'] = True

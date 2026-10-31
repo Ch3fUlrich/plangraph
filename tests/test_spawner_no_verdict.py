@@ -40,7 +40,7 @@ def test_review_without_verdict_fails_no_verdict(tmp_path):
     assert record['status'] == 'failed' and record['exit_code'] == 1
     assert record['reason'] == 'no_verdict'
     assert {'event': 'no_verdict'} in record['events']
-    assert record['error'].startswith('no_verdict: ')
+    assert record['error'] == 'no_verdict'
 
 
 def test_review_with_verdict_pass_stays_completed(tmp_path):
@@ -67,7 +67,7 @@ def test_route_skips_mimo_for_review(monkeypatch):
     from plangraph.planner import routing
     from plangraph.planner.legs import Leg
     monkeypatch.setattr(routing, 'validate_model', lambda model: None)
-    for model in ('mimo/mimo-v2.6-flash', 'mimo/mimo-v2.6-pro'):
+    for model in ('mimo/mimo-v2.6-flash',):
         assert model in NO_VERDICT_SEATS
         seat = Leg('nv', 'subscription', 'opencode', model, 'mimo', ('128k',), 200000, False,
                    roles=('review',))
@@ -76,3 +76,11 @@ def test_route_skips_mimo_for_review(monkeypatch):
         assert not plan.legs
         assert plan.skipped[0]['reason'] == 'no_verdict_seat'
 
+
+def test_review_leg_on_mimo_pro_warns(tmp_path, caplog):
+    with caplog.at_level('WARNING'):
+        asyncio.run(SpawnService(state=tmp_path).spawn(
+            card=CARD, prompt='x', role='review', leg='mimo-v2.6-pro',
+            writer_families=['claude'], override_reason='review-unfit warn test',
+            dry_run=True))
+    assert 'review-unfit seat model' in caplog.text

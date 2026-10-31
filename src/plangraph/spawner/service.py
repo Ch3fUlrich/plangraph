@@ -1,7 +1,7 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .exit_outcome import enforce_verdict, check_review_model, fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from plangraph.routing_errors import ParameterRefused
 import asyncio
@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import socket
 import time
 import uuid
@@ -255,10 +254,7 @@ class SpawnService(SeatSpawnMixin):
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-            from plangraph.planner.legs import NO_VERDICT_SEATS
-            if role == 'review' and target in NO_VERDICT_SEATS:
-                raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
-            import logging
+            check_review_model(role, target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
@@ -334,19 +330,11 @@ class SpawnService(SeatSpawnMixin):
                     stop = self.runner.provider_responses.get(job.job_id)
                     if terminal_record(record, job):
                         break
+                    enforce_verdict(role, job)
                     unavailable = fallthrough_reason(self, chosen, job, record)
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
-                    # A review seat's verdict is its stdout (D-3226): a review run
-                    # that ends without one is failed/no_verdict, never 'completed'.
-                    if (role == 'review' and job.status == 'completed'
-                            and not re.search(r'^\s*VERDICT:\s*(PASS|FAIL)', job.stdout or '', re.M)):
-                        job.status = 'failed'
-                        job.exit_code = 1
-                        job.events = getattr(job, 'events', None) or []
-                        job.events.append({'event': 'no_verdict'})
-                        job.stderr = 'no_verdict: review run produced no VERDICT: PASS|FAIL line\n' + (job.stderr or '')
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
