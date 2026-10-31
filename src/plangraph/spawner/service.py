@@ -1,7 +1,7 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, terminal_reason
+from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from plangraph.routing_errors import ParameterRefused
 import asyncio
@@ -371,7 +371,7 @@ class SpawnService(SeatSpawnMixin):
             finally:
                 record['ended'] = time.time()
                 terminal_reason(record)
-                getattr(self, '_running_records', {}).pop(record.get('job_id'), None)
+                release_attempts(self, record)
                 self._save(record)
 
         task = asyncio.create_task(execute())

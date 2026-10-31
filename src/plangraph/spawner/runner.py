@@ -46,7 +46,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, terminal_reason
+from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import kill_process_tree
 
@@ -1157,7 +1157,7 @@ def spawn_service(*args, **kwargs):
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
                     terminal_reason(record)
-                    self._running_records.pop(record.get('job_id'), None)
+                    release_attempts(self, record)
                     self._save(record)
 
             task = asyncio.create_task(execute())

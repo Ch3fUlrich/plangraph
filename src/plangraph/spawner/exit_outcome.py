@@ -26,6 +26,22 @@ def fallthrough_reason(service, chosen, job, record):
     return unavailable_reason(job.exit_code, job.stdout, job.stderr)
 
 
+def release_attempts(service, record):
+    """Q13/M8: a run releases every attempt's job when it ends.
+
+    The per-run registry is keyed by job id; popping only the record's last
+    ``job_id`` leaked earlier fallthrough attempts -- every sample kept
+    re-saving a stale record and a finished monitor task stayed registered,
+    so a later cancel hit the wrong task.  Every job registered to this
+    record is released from the registry and the runner's monitor table.
+    """
+    running = getattr(service, '_running_records', None) or {}
+    tasks = getattr(getattr(service, 'runner', None), '_tasks', None) or {}
+    for job_id in [jid for jid, owner in list(running.items()) if owner is record]:
+        running.pop(job_id, None)
+        tasks.pop(job_id, None)
+
+
 def terminal_reason(record):
     """Q8/M15: the run's reason describes how the run ENDED.
 
