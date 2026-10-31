@@ -49,20 +49,7 @@ from .env_redact import first_reason
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import kill_process_tree
-
-
-def redact(value):
-    """Scrub credential-shaped strings recursively before persistence or display."""
-    if isinstance(value, dict):
-        return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(r'(?i)(key|authorization|token|secret)', k)
-                    else redact(v)) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [redact(v) for v in value]
-    if isinstance(value, str):
-        value = re.sub(r'sk-[\w-]+', '[REDACTED]', value)
-        value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
-        return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
-    return value
+from .stream_redact import redact, scrub_secrets
 
 
 def _is_nt() -> bool:
@@ -457,7 +444,7 @@ class SpawnerRunner:
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
-            from .opencode_isolation import close_config_layers
+            from .opencode_isolation import WRITER_ROLES, close_config_layers
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
@@ -489,6 +476,9 @@ class SpawnerRunner:
                     pass  # unparseable config cannot be proven denied below
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+            elif role in WRITER_ROLES:
+                from .writer_sandbox import apply_writer_sandbox
+                apply_writer_sandbox(child_env)
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -750,8 +740,8 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            job.stdout = redact(redact_env_values(stdout_text, env))
-            job.stderr = redact(redact_env_values(stderr_text, env))
+            job.stdout = redact(scrub_secrets(redact_env_values(stdout_text, env)))
+            job.stderr = redact(scrub_secrets(redact_env_values(stderr_text, env)))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
