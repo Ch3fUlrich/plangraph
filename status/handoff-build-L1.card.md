@@ -1,30 +1,30 @@
-# L1 card · build-L1-0028 · 2026-10-31T17:45Z
+# L1 card · build-L1-0030 · 2026-10-31T18:50Z
 ## Goal
-- Phase 0 critical path: md-sync split lane live -> RIN-HOME-LIFT + RIN-LEDGER-PREP close by D-row -> S09 cutover under judge GO; then GATEWAY-LOG-TOKEN-MINT MERGE-READY
+- Phase 0 critical path: S09 RIN-CUTOVER-DATA live window under FINAL GO D-3418 (not started), then S10; GATEWAY-LOG-TOKEN-MINT MERGE-READY
 ## Keeper
-- claimed: RIN-HOME-LIFT (in_review, since 17:40Z, D-row close D-3404), RIN-LEDGER-PREP (in_review, D-row close D-3393), GATEWAY-LOG-TOKEN-MINT (claimed, L2 gwtok-0022)
-- ready next: RIN-CUTOVER-DATA (after HOME-LIFT done + GO), LE-KEEPER-DROW-CLOSES split lane
+- claimed: RIN-CUTOVER-DATA (open, GO D-3418), LE-KEEPER-DROW-CLOSES (claimed, merged+live, evidence+submit pending), RIN-LEDGER-PREP (in_review, close refused), GATEWAY-LOG-TOKEN-MINT (claimed, L2 gwtok-0022)
+- ready next: SPAWNER-ROUTE-FREE-FIRST (b00905a1, D-3409, after S09), KEEPER-DCLOSE-TRACK-EVIDENCE (created, owner build-L1)
 ## Done
-- 10-31T17:05Z D-3395 - md-sync re-armed: dry run 5 ops refused 0, timer+path active, apply error None
-- 10-31T17:35Z KEEPER-COVERAGE-TRACK-REPO b30804a2 state done, qwen run-4d064251 + mimo-pro run-326d696e PASS, waiver D-3397
-- 10-31T17:40Z RIN-HOME-LIFT 421d0bf6 plangraph-data PR#1 merged, evidence verified (ci none), submitted in_review
-- 10-31T17:44Z RIN-CUTOVER-DATA - S09 GO-REQ sent to routing (sha 421d0bf6)
+- 10-31T18:05Z RIN-CUTOVER-DATA c43dedb2 plangraph-data PR#2 continuity runbook, qwen run-5b196875 PASS
+- 10-31T18:38Z LE-KEEPER-DROW-CLOSES 20b4423a PR#269, suite 8508 passed, qwen delta PASS, main CI 41229711729 green
+- 10-31T18:40Z RIN-CUTOVER-DATA 7f02df72 plangraph-data PR#4 pane move, writer mimo-flash run-30e56415, qwen run-06889000 PASS
+- 10-31T18:41Z RIN-HOME-LIFT - md-sync live at 20b4423a closed it by D-3404 (status applied=True ops 8)
+- 10-31T18:45Z D-3418 - S09 FINAL GO received; conds 1,2,3,5 met
 ## In flight
-- LE-KEEPER-DROW-CLOSES writer mimo-pro run-1a11f24f since 17:30Z next check on its completion
-- GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check on its MERGE-READY
-- RIN-CUTOVER-DATA judge GO-REQ since 17:44Z next check on routing reply
+- GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:20Z next check 19:30Z
+- none beyond gwtok (KEEPER-DCLOSE-TRACK-EVIDENCE created by routing 18:52Z, RIN-LEDGER-PREP depends on it)
 ## Planned
-1. split lane: verify writer, full suite, push, PR, qwen seat, MERGE-READY, GO, merge, redeploy md-sync (repoint drop-in, dry run first)
-2. after md-sync live: confirm HOME-LIFT + LEDGER-PREP done via D-rows; then S09 live under GO
-3. GATEWAY-LOG-TOKEN-MINT MERGE-READY -> seats, GO-REQ (HIGH), merge, D-825 live
-4. LE-* items prio 3 after phase 0 (D-3382)
+1. RIN-CUTOVER-DATA S09 now: FREEZE-NOW to routing, runbook plangraph-data router/repoint/s09-router-continuity.md, plan routing-migration.md 5.3 S09
+2. LE-KEEPER-DROW-CLOSES evidence 20b4423a (full sha) + submit, seat verdict qwen run-fa9523d4/delta
+3. KEEPER-DCLOSE-TRACK-EVIDENCE (HIGH) after S09, then RIN-LEDGER-PREP closes via md-sync
+4. SPAWNER-ROUTE-FREE-FIRST; LE-* items prio 3 after phase 0 (D-3382)
 ## Open
-- D-3405 S09 CONDITIONAL GO, before freeze: (1) re-rehearse at 421d0bf6 (rehearse.sh + repath dry run + stage-dropins --verify) into a new file naming the sha; (2) RIN-HOME-LIFT done; (3) add router-continuity step: new ROUTER_HOME, where router CLAUDE.md/.claude/skills/hooks/HANDOFF.md resolve, relaunch by fleet-launch/watchdog (never operator); router gets FREEZE-NOW, hands off, idles; (4) send checklist + rehearsal path to routing -> final GO | default wait | deadline none
+- none
 ## Traps
-- J=/home/s/.claude/jobs/6f592267/tmp (seat-cov-leg.sh, wspawn.sh, mkseat_inline.py); older J 2f5d0308 + be3841c5 (mkseat.py)
-- harness refuses git with vars/heredoc/loops in this session: plain single commands + Write/Edit only
-- reference commit cbfcc0e9 (branch ref/mdsync-split-cbfcc0e9) stays LOCAL, never push (D-3401)
-- hand-edit CI cap is 50 lines (ci_commit_gate HAND_EDIT_MAX_LINES); attribution trailers all in ONE last paragraph
-- glm free limit hit; luna times out; muse opencode-go unavailable; gemini quota out
+- J=/home/s/.claude/jobs/4fceadcd/tmp (seat prompts, r-split*.wait); older J 6f592267 (wspawn.sh, seat-cov-leg.sh)
+- harness refuses git with vars/heredoc/loops in worktree-isolated sessions: plain single commands + Write/Edit
+- D-3409: spawner route still puts agy first; always pass --leg, free legs first; no Claude writers (D-3408 incident)
+- md-sync rollback: rm z9-md-sync-20b4423a.conf, restore backups/z9-md-sync-8f7f1c55.conf.bak-d3413, daemon-reload
+- glm free limit hit; luna times out; gemini/agy quota out; openrouter/free unavailable at 18:3xZ
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-54 block, line 2)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-55 block, line 2)
