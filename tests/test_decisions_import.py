@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,7 +114,8 @@ def test_parsing_counts(tmp_path):
     rc, out, _err, path = run(FIXTURE, tmp_path, "--report")
     assert rc == 0
     for line in ("rules 7", "items 7", "d-ids 6", "edges 9",
-                 "dropped cycle edges: none", "unknown refs: none"):
+                 "dropped cycle edges: none", "unknown refs: none",
+                 "dropped lines: 0"):
         assert line in out
     assert len(load(path)["ops"]) == 7
 
@@ -325,3 +327,40 @@ def test_determinism_two_runs(tmp_path):
         assert rc == 0
         blobs.append(out_file.read_bytes())
     assert blobs[0] == blobs[1]
+
+
+def test_verify_text_dag_mismatch():
+    rule = {"number": "1.1", "description": "T\nDepends on: RULE-1-2",
+            "depends_on": ["plangraph:RULE-1-3"]}
+    with pytest.raises(ValueError, match="Depends on line"):
+        decisions_import.verify_text_dag([rule])
+
+
+def test_continuation_paragraph_after_blank_line(tmp_path):
+    text = ("## 1. S\n\n1.1 **First rule.** Paragraph 1.\n\n"
+            "Paragraph 2 see 1.2 (D-101) `[gate: test]`\n\n1.2 **Second.** Text.\n")
+    rc, _out, _err, path = run(text, tmp_path)
+    assert rc == 0
+    item = items_by_id(load(path))["RULE-1-1"]
+    assert "Paragraph 2 see 1.2" in item["description"]
+    assert "D-101" in item["description"]
+    assert "Tags: gate: test;" in item["description"]
+    assert item["depends_on"] == ["plangraph:RULE-1-2"]
+    assert item["priority"] == 5
+
+
+def test_dropped_lines_counted_and_reported(tmp_path):
+    text = "Drop 1\nDrop 2\n\n## 1. S\n\nDrop 6\nDrop 7\nDrop 8\nDrop 9\n\n1.1 **R.** T\n"
+    rc, out, _err, _path = run(text, tmp_path, "--report")
+    assert rc == 0
+    assert "dropped lines: 6 (lines 1, 2, 6, 7, 8)" in out
+
+
+def test_bold_opens_on_rule_line_closes_on_continuation(tmp_path):
+    text = "## 1. S\n\n**1.1 TITLE\nCLOSES HERE.** Body text. `[keep]`\n"
+    rc, _out, _err, path = run(text, tmp_path)
+    assert rc == 0
+    item = items_by_id(load(path))["RULE-1-1"]
+    assert item["title"] == "RULE 1.1: TITLE CLOSES HERE."
+    assert "**" not in item["title"]
+    assert item["description"].startswith("**TITLE CLOSES HERE.** Body text.")

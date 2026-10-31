@@ -22,7 +22,8 @@ rules file's path relative to the --out file's directory (os.path.relpath) and
 ``source_sha256`` is the sha256 hex of the source file bytes; each op is
 ``{op: create, item: [ {...} ]}``.  Reference cycles are broken by dropping the
 edge that closes each cycle (reported); unknown references are reported, never
-edged.  Exits 1 only on duplicate item ids.  ``--report`` prints parse counts
+edged.  Exits 1 on duplicate ids, unreadable/non-UTF-8 source, or no
+rules found.  ``--report`` prints parse counts
 including the rule-line count per section.
 """
 import argparse
@@ -50,6 +51,14 @@ REF_LIST_RE = re.compile(
 
 class BuildError(Exception):
     """A source problem that stops the batch from being written."""
+
+
+class RuleList(list):
+    """List of rules preserving parse metadata like dropped_lines."""
+
+    def __init__(self, items=(), dropped_lines=None):
+        super().__init__(items)
+        self.dropped_lines = list(dropped_lines or [])
 
 
 def find_refs(text):
@@ -81,23 +90,25 @@ def parse_rules(text):
     rules = []
     current = None
     section = "(none)"
-    for raw in text.splitlines():
+    dropped_lines = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         if HEADING_RE.match(raw):
             section = raw.lstrip("#").strip()
             current = None
             continue
         if not raw.strip():
-            current = None
             continue
         match = RULE_RE.match(raw)
         if match:
             stars, number, rest = match.group(1), match.group(2), match.group(3) or ""
-            if stars and "**" in rest:
+            if stars:
                 rest = stars + rest  # keep the bold span that wraps the number
             current = {"number": number, "parts": [rest], "section": section}
             rules.append(current)
         elif current is not None:
             current["parts"].append(raw)
+        else:
+            dropped_lines.append(lineno)
     for rule in rules:
         body = " ".join(" ".join(rule.pop("parts")).split())
         rule["text"] = body
@@ -106,7 +117,7 @@ def parse_rules(text):
                         for part in group.split(";") if part.strip()]
         rule["dids"] = sorted(set(DID_RE.findall(body)), key=lambda d: int(d[2:]))
         rule["refs"] = find_refs(body)
-    return rules
+    return RuleList(rules, dropped_lines=dropped_lines)
 
 
 def tag_class(tag):
@@ -156,17 +167,20 @@ def drop_cycle_edges(adj, order):
     return dropped
 
 
-def verify_text_dag(rules, prefix):
-    """Assert each description 'Depends on:' line equals its depends_on list."""
-    number_of = {rule["id"]: rule["number"].lower() for rule in rules}
-    id_re = re.compile(re.escape(prefix) + r"-\d+-\d+[A-Z]?")
-    for rule in rules:
-        tail = rule["description"].rsplit("Depends on: ", 1)[1]
-        text_side = {number_of.get(tok, tok) for tok in id_re.findall(tail)}
-        dag_side = {number_of[key.split(":", 1)[1]] for key in rule["depends_on"]}
-        assert text_side == dag_side, (
-            f"rule {rule['number']}: Depends on line {sorted(text_side)} "
-            f"!= depends_on {sorted(dag_side)}")
+def verify_text_dag(rules, prefix=None):
+    """Compare description 'Depends on:' text against item depends_on edges."""
+    for entry in rules:
+        rule = entry["item"][0] if isinstance(entry, dict) and "item" in entry else entry
+        desc = rule.get("description", "")
+        tail = desc.rsplit("Depends on:", 1)[1].strip() if "Depends on:" in desc else ""
+        text_deps = set(tail.splitlines()[0].split()) if tail else set()
+        dag_deps = {edge.split(":", 1)[1] if ":" in edge else edge
+                    for edge in rule.get("depends_on", [])}
+        if text_deps != dag_deps:
+            ident = rule.get("number") or rule.get("id") or "?"
+            raise ValueError(
+                f"rule {ident}: Depends on line {sorted(text_deps)} "
+                f"!= depends_on {sorted(dag_deps)}")
 
 
 def build(rules, opts):
@@ -233,7 +247,7 @@ def build(rules, opts):
     return batch, dropped, unknown
 
 
-def write_report(out, rules, batch, dropped, unknown):
+def write_report(out, rules, batch, dropped, unknown, dropped_lines=None):
     """Parse counts, rule lines per section, dropped cycles, unknown refs."""
     edges = sum(len(op["item"][0]["depends_on"]) for op in batch["ops"])
     dids = {did for rule in rules for did in rule["dids"]}
@@ -241,6 +255,8 @@ def write_report(out, rules, batch, dropped, unknown):
     for rule in rules:
         name = rule.get("section") or "(none)"
         sections[name] = sections.get(name, 0) + 1
+    if dropped_lines is None:
+        dropped_lines = getattr(rules, "dropped_lines", [])
     out.write(f"rules {len(rules)}\n")
     out.write(f"items {len(batch['ops'])}\n")
     out.write(f"d-ids {len(dids)}\n")
@@ -253,6 +269,10 @@ def write_report(out, rules, batch, dropped, unknown):
     out.write("unknown refs: "
               + (", ".join(f"{src}->{tgt}" for src, tgt in unknown) or "none")
               + "\n")
+    first5 = ", ".join(str(n) for n in dropped_lines[:5])
+    label = "line" if len(dropped_lines) == 1 else "lines"
+    sample = f" ({label} {first5})" if first5 else ""
+    out.write(f"dropped lines: {len(dropped_lines)}{sample}\n")
 
 
 def main(argv=None, out=None, err=None):
