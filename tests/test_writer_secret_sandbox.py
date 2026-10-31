@@ -117,8 +117,8 @@ def test_writer_permission_config_denies_paths(tmp_path, monkeypatch):
         perm = cfg["permission"]
 
         for tool in ("read", "bash"):
-            assert perm[tool]["/proc/*/environ"] == "deny"
-            assert perm[tool]["~/.config/plangraph*"] == "deny"
+            assert perm[tool]["*/proc/*/environ*"] == "deny"
+            assert perm[tool]["*/.config/plangraph*"] == "deny"
             assert perm[tool]["*keeper.db*"] == "deny"
 
         assert perm["external_directory"] == "deny"
@@ -128,8 +128,8 @@ def test_writer_permission_config_denies_paths(tmp_path, monkeypatch):
     merged = merge_writer_permissions(existing)
     assert merged["read"]["*.md"] == "allow"
     assert merged["bash"]["git*"] == "allow"
-    assert merged["read"]["/proc/*/environ"] == "deny"
-    assert merged["bash"]["/proc/*/environ"] == "deny"
+    assert merged["read"]["*/proc/*/environ*"] == "deny"
+    assert merged["bash"]["*/proc/*/environ*"] == "deny"
 
 
 def test_review_role_config_unchanged(tmp_path, monkeypatch):

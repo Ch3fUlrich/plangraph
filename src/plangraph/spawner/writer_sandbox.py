@@ -3,22 +3,15 @@ from __future__ import annotations
 
 import json
 
+# Leading '*' so the same pattern matches a bash command line (`cat /proc/1/environ`)
+# and a read path alike.
 WRITER_DENY_PATTERNS = (
-    "/proc/*/environ",
-    "/proc/*/environ*",
-    "/proc/*/cmdline",
-    "/proc/*/cmdline*",
-    "/proc/*/mem",
-    "/proc/*/mem*",
-    "~/.config/plangraph*",
+    "*/proc/*/environ*",
+    "*/proc/*/cmdline*",
+    "*/proc/*/mem*",
     "*/.config/plangraph*",
-    "~/.local/state/plangraph*keeper.db*",
-    "*/.local/state/plangraph*keeper.db*",
-    "~/.local/state/plangraph*/*.sqlite*",
-    "*/.local/state/plangraph*/*.sqlite*",
+    "*/.local/state/plangraph*",
     "*keeper.db*",
-    "*.sqlite*",
-    "*.sqlite",
 )
 
 
