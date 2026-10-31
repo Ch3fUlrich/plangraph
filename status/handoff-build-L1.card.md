@@ -6,10 +6,10 @@
 - LE-KEEPER-DROW-CLOSES done; RIN-LEDGER-PREP in_review until KEEPER-DCLOSE lands
 - LE-WRITER-SECRET-SANDBOX (HIGH, owner build-L1) delegated to build-L2-spawner-0036 lane 3
 ## Done
-- 10-31T20:2xZ RIN-CUTOVER-DATA 6d0bca6 data PR#5 lift-ledgers (qwen delta run-cd27cdc4 PASS, GO D-3429)
+- 10-31T20:25Z RIN-CUTOVER-DATA 6d0bca6 data PR#5 lift-ledgers (qwen delta run-cd27cdc4 PASS, GO D-3429)
 - 10-31T20:48Z RIN-CUTOVER-DATA 8939b7c final data lift + ledgers pushed; cutover.sh, drop-ins, repath done
-- 10-31T20:5xZ router moved to wG:p1 cwd plangraph-data/router (script lines 58-62 after exit-confirm dialog)
-- 10-31T20:4xZ D-3428 - redaction of run-d822c129 logs, DSN count 0
+- 10-31T20:55Z - router moved to wG:p1 cwd plangraph-data/router (script lines 58-62 after exit-confirm dialog)
+- 10-31T20:45Z - D-3428 redaction of run-d822c129 logs, DSN count 0
 ## In flight
 - S09 BLOCKER: md-sync fails "fetch routing: rc=128" (compat dir has no .git) -> GO/ruling needed
 - build-L2-spawner-0036: LE-SEAT-NO-VERDICT, SPAWNER-ROUTE-FREE-FIRST, LE-WRITER-SECRET-SANDBOX
