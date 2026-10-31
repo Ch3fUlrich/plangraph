@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from . import auth, events
 from .errors import Refused
+from .evidence_floor import record_bases
 from .phase_merge import merge_subject
 from .schema import STATES
 
@@ -174,6 +175,9 @@ class VerbsMixin:
             base = self._ref_head(item["project"])
             if base is not None:
                 payload["base"] = base
+            bases = record_bases(item, self._adapter("git"))
+            if bases:  # recorded only with a head, like base: legacy payloads
+                payload["bases"] = bases      # stay byte-identical (D-3335)
             self._append(principal, key, "claimed", payload, now)
             self.conn.execute(
                 "UPDATE items SET state='claimed', epoch=?, round=0,"
@@ -263,6 +267,7 @@ class VerbsMixin:
             raise Refused("forbidden", "only the claimant or router may release")
         self._epoch_ok(item, epoch)
         base = self._ref_head(item["project"])
+        bases = record_bases(item, self._adapter("git"))
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
@@ -274,6 +279,8 @@ class VerbsMixin:
                 raise Refused("forbidden",
                               "only the claimant or router may release")
             payload = {"base": base} if base is not None else {}
+            if bases:  # recorded only with a head, like base: legacy payloads
+                payload["bases"] = bases      # stay byte-identical (D-3335)
             self._append(principal, key, "released", payload, now)
             cursor = self.conn.execute(
                 "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"

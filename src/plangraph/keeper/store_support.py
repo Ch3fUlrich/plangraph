@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from .. import views
 from . import events
 from .errors import Refused
+from .evidence_floor import event_bases, ref_head
 from .evidence_types import Context, valid_commit_ref
 from .item_fixes import ErrorRecordVerifier, check_error_ref
 
@@ -62,12 +63,13 @@ class SupportMixin:
         The injected ``ctx`` supplies the adapters; the store always overrides
         ``now`` and derives ``claim_time`` from the item's latest ``claimed``
         event, so the real verifiers compare a commit against the actual claim
-        instant rather than a caller-supplied one.  ``bind_floor_sha`` and
-        ``bind_floor_required`` supply the ancestry floor for trailer-bound
-        commits (see :meth:`_bind_floor`).  ``merge_principals`` passes through
-        the trusted merge actor principals from ``ctx``.
+        instant rather than a caller-supplied one.  ``bind_floor_sha``,
+        ``bind_floor_shas`` and ``bind_floor_required`` supply the ancestry
+        floor for trailer-bound commits (see :meth:`_bind_floor`).
+        ``merge_principals`` passes through the trusted merge actor principals
+        from ``ctx``.
         """
-        floor_sha, floor_required = self._bind_floor(item)
+        floor_sha, floor_required, floor_bases = self._bind_floor(item)
         raw_principals = self._adapter("merge_principals")
         if raw_principals is None:
             merge_principals: tuple[str, ...] = ()
@@ -90,6 +92,7 @@ class SupportMixin:
             now=now,
             claim_time=self._claim_time(item),
             bind_floor_sha=floor_sha,
+            bind_floor_shas=floor_bases,
             bind_floor_required=floor_required,
             merge_principals=merge_principals,
         )
@@ -105,29 +108,7 @@ class SupportMixin:
 
     def _ref_head(self, project: str) -> str | None:
         """Best-effort head SHA of *project*'s target ref, or ``None``."""
-        try:
-            git = self._adapter("git")
-            if git is None:
-                return None
-            head_sha_fn = getattr(git, "head_sha", None)
-            if not callable(head_sha_fn):
-                return None
-            repo_path_fn = getattr(git, "repo_path", None)
-            if not callable(repo_path_fn):
-                return None
-            repo = repo_path_fn(project)
-            if not repo:
-                return None
-            repo_ref_fn = getattr(git, "repo_ref", None)
-            ref = repo_ref_fn(project) if callable(repo_ref_fn) else "main"
-            if not ref:
-                ref = "main"
-            sha = head_sha_fn(repo, ref)
-            if isinstance(sha, str) and valid_commit_ref(sha) and sha == sha.lower():
-                return sha
-            return None
-        except Exception:
-            return None
+        return ref_head(self._adapter("git"), project)
 
     def _claim_time(self, item):
         """The epoch of the item's current claim, or ``None`` if never claimed."""
@@ -139,14 +120,16 @@ class SupportMixin:
         parsed = parse_iso(row["ts"])
         return parsed.timestamp() if parsed is not None else None
 
-    def _bind_floor(self, item: dict) -> tuple[str | None, bool]:
-        """The floor commit SHA and requirement flag for *item*.
+    def _bind_floor(self, item: dict) -> tuple[str | None, bool, object]:
+        """The floor commit SHA, requirement flag and per-repo bases for *item*.
 
-        Returns ``(floor_sha, required)``.  A first claim has no floor event
-        and returns ``(None, False)``.  When a floor event exists (a prior
-        release or claim by another principal), its recorded ``base`` commit
-        is returned as ``(base, True)``, or ``(None, True)`` if unrecorded
-        or invalid (failing closed).
+        Returns ``(floor_sha, required, bases)``.  A first claim has no floor
+        event and returns ``(None, False, {})``.  When a floor event exists (a
+        prior release or claim by another principal), its recorded ``base``
+        commit is returned as ``(base, True, bases)``, or ``(None, True,
+        bases)`` if unrecorded or invalid (failing closed).  ``bases`` is the
+        event's per-repo head map: ``{}`` for a legacy event, the raw value
+        when it is malformed so resolution fails closed (D-3335).
         """
         claimant = item.get("claimed_by") or ""
         row = self.conn.execute(
@@ -156,12 +139,13 @@ class SupportMixin:
             (item["key"], claimant),
         ).fetchone()
         if row is None:
-            return (None, False)
+            return (None, False, {})
         payload = _json_dict(row["payload"])
+        bases = event_bases(payload)
         base = payload.get("base") if isinstance(payload, dict) else None
         if isinstance(base, str) and valid_commit_ref(base) and base == base.lower():
-            return (base, True)
-        return (None, True)
+            return (base, True, bases)
+        return (None, True, bases)
 
     def verify_chain(self):
         return events.verify_chain(self.conn)
