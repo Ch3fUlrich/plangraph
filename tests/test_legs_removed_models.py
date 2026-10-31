@@ -72,3 +72,12 @@ def test_route_implement_across_token_scales_never_returns_removed_leg_ids(tmp_p
     plan = svc.route(card, role="implement")
     assert plan.first_leg.id not in REMOVED_LEG_IDS
     assert not ({l.id for l in plan.legs} & REMOVED_LEG_IDS)
+
+
+def test_catalog_seed_routes_disjoint_from_operator_removed_models():
+    # D-3373: every catalog route leg avoids the operator-removed models.
+    from plangraph.routing_support.catalog_seed import SEED_ROUTE_LEGS
+    from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS
+    assert SEED_ROUTE_LEGS
+    used = {row["model_id"] for row in SEED_ROUTE_LEGS}
+    assert not (used & set(OPERATOR_REMOVED_MODELS))
