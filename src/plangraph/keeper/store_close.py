@@ -42,6 +42,7 @@ import os
 import re
 
 from .errors import Refused
+from .evidence_repo import repo_key
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -251,29 +252,33 @@ class CloseMixin:
         if not commit_rows:
             raise Refused("evidence_unverified", "no commit evidence")
         ctx = self._ctx(item, now)
-        target_ref = (ctx.git.repo_ref(item.get("project"))
-                      if ctx.git is not None and hasattr(ctx.git, "repo_ref")
-                      else "main")
         project = item.get("project")
-        try:
-            repo = (ctx.git.repo_path(project)
-                    if ctx.git is not None and hasattr(ctx.git, "repo_path")
-                    else None)
-        except Exception:
-            repo = None
         verified_any = False
         verified_shas = []
         last_sha = None
+        last_rkey = project
         for row in commit_rows:
             ref = row.get("ref") or {}
             sha = ref.get("sha") or ref.get("commit")
+            rkey = project
             if sha:
                 last_sha = sha
+                # A fallback commit lives in the track repo: resolve it (and
+                # name its ref in the refusal) through the same track-keyed
+                # rule the verifiers use, never through the primary repo alone.
+                rkey = repo_key(item, ctx, sha)
+                last_rkey = rkey
             result = self._verify_evidence(item, "commit", ref, now)
             if result.ok:
                 verified_any = True
                 if sha:
                     full_sha = None
+                    try:
+                        repo = (ctx.git.repo_path(rkey)
+                                if ctx.git is not None and hasattr(ctx.git, "repo_path")
+                                else None)
+                    except Exception:
+                        repo = None
                     if ctx.git is not None and hasattr(ctx.git, "resolve_commit") and repo:
                         try:
                             full_sha = ctx.git.resolve_commit(repo, sha)
@@ -281,6 +286,9 @@ class CloseMixin:
                             full_sha = None
                     if full_sha:
                         verified_shas.append(full_sha)
+        target_ref = (ctx.git.repo_ref(last_rkey)
+                      if ctx.git is not None and hasattr(ctx.git, "repo_ref")
+                      else "main")
         if not verified_any:
             sha_label = f" {last_sha}" if last_sha else ""
             raise Refused("evidence_unverified",
