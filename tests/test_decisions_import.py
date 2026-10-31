@@ -42,33 +42,10 @@ and continues here with extra words.
 2.3 **Sixth rule.** Plain text without refs (D-105, D-100) `[keep]`
 """
 
-CYCLE = """## 1. Cycle section
-
-1.1 **First rule.** See 1.2. `[keep]`
-
-1.2 **Second rule.** See 1.1. `[keep]`
-"""
-
-UNKNOWN = """## 1. Ref section
-
-1.1 **Odd rule.** See 9.9 and rule 1.2. `[keep]`
-
-1.2 **Even rule.** Plain text. `[keep]`
-"""
-
-DUP = """## 1. Dup section
-
-1.1 **One rule.** Text here. `[keep]`
-
-1.1 **Two rule.** Text here. `[keep]`
-"""
-
-NOTITLE = """## 1. Title section
-
-1.1 **Good rule.** Text here. `[keep]`
-
-1.2 Missing bold title here. `[keep]`
-"""
+CYCLE = "## 1. Cycle section\n\n1.1 **First rule.** See 1.2. `[keep]`\n\n1.2 **Second rule.** See 1.1. `[keep]`\n"
+UNKNOWN = "## 1. Ref section\n\n1.1 **Odd rule.** See 9.9 and rule 1.2. `[keep]`\n\n1.2 **Even rule.** Plain text. `[keep]`\n"
+DUP = "## 1. Dup section\n\n1.1 **One rule.** Text here. `[keep]`\n\n1.1 **Two rule.** Text here. `[keep]`\n"
+NOTITLE = "## 1. Title section\n\n1.1 **Good rule.** Text here. `[keep]`\n\n1.2 Missing bold title here. `[keep]`\n"
 
 NOSEMI = "x " * 80 + "tail"
 LONGSENT = "w " * 80 + "tail."
@@ -88,6 +65,10 @@ FORMS = f"""## 1. Forms section
 1.1 Plain rule with a first sentence. More words follow here.
 
 1.2 {PLAIN}
+
+**1.3** Title of three. Body text.
+
+1.4** Title of four.** Body text.
 """
 
 
@@ -114,8 +95,7 @@ def test_parsing_counts(tmp_path):
     rc, out, _err, path = run(FIXTURE, tmp_path, "--report")
     assert rc == 0
     for line in ("rules 7", "items 7", "d-ids 6", "edges 9",
-                 "dropped cycle edges: none", "unknown refs: none",
-                 "dropped lines: 0"):
+                 "dropped cycle edges: none", "unknown refs: none", "dropped lines: 0"):
         assert line in out
     assert len(load(path)["ops"]) == 7
 
@@ -160,8 +140,7 @@ def test_edges_from_rules_slash_list(tmp_path):
     rc, _out, _err, path = run(FIXTURE, tmp_path)
     assert rc == 0
     items = items_by_id(load(path))
-    assert items["RULE-1-3"]["depends_on"] == ["plangraph:RULE-1-1",
-                                               "plangraph:RULE-1-2"]
+    assert items["RULE-1-3"]["depends_on"] == ["plangraph:RULE-1-1", "plangraph:RULE-1-2"]
     assert "plangraph:RULE-0-2A" in items["RULE-2-2"]["depends_on"]
     assert "plangraph:RULE-2-1" in items["RULE-2-2"]["depends_on"]
 
@@ -187,13 +166,14 @@ def test_unknown_reference_reported(tmp_path):
 
 
 def test_cycle_drops_exactly_one_edge(tmp_path):
-    rc, out, _err, path = run(CYCLE, tmp_path, "--report")
+    rc, out, err, path = run(CYCLE, tmp_path, "--report")
     assert rc == 0
-    assert "dropped cycle edges: 1.2->1.1" in out
+    assert "dropped cycle edges: 1.1->1.2" in out
+    assert "dropped cycle edges: 1.1->1.2" in err
     assert out.count("->") == 1
     items = items_by_id(load(path))
-    assert items["RULE-1-1"]["depends_on"] == ["plangraph:RULE-1-2"]
-    assert items["RULE-1-2"]["depends_on"] == []
+    assert items["RULE-1-1"]["depends_on"] == []
+    assert items["RULE-1-2"]["depends_on"] == ["plangraph:RULE-1-1"]
 
 
 def test_continuation_lines(tmp_path):
@@ -229,7 +209,7 @@ def test_duplicate_id_exit_1(tmp_path):
 def test_rule_without_title_not_an_error(tmp_path):
     rc, _out, err, path = run(NOTITLE, tmp_path)
     assert rc == 0
-    assert err == ""
+    assert "error:" not in err and "dropped lines: 0" in err
     items = items_by_id(load(path))
     assert items["RULE-1-2"]["title"] == "RULE 1.2: Missing bold title here."
 
@@ -237,17 +217,18 @@ def test_rule_without_title_not_an_error(tmp_path):
 def test_bold_before_and_after_number_forms(tmp_path):
     rc, _out, err, path = run(FORMS, tmp_path)
     assert rc == 0
-    assert err == ""
+    assert "error:" not in err and "group headings dropped: 0.2" in err
     items = items_by_id(load(path))
     # bare group heading 0.2 (no tag, no D-id) is dropped, its sub-rules stay
     assert {"RULE-0-2A", "RULE-0-2B", "RULE-0-1",
-            "RULE-1-1", "RULE-1-2"} == set(items)
+            "RULE-1-1", "RULE-1-2", "RULE-1-3", "RULE-1-4"} == set(items)
     assert items["RULE-0-2A"]["title"] == "RULE 0.2a: Sub rule."
     assert items["RULE-0-2B"]["title"] == "RULE 0.2b: Another sub rule."
     assert items["RULE-0-1"]["title"] == "RULE 0.1: AFTER NUMBER."
-    assert items["RULE-1-1"]["title"] == \
-        "RULE 1.1: Plain rule with a first sentence."
+    assert items["RULE-1-1"]["title"] == "RULE 1.1: Plain rule with a first sentence."
     assert items["RULE-1-2"]["title"] == "RULE 1.2: " + PLAIN[:60]
+    assert items["RULE-1-3"]["title"] == "RULE 1.3: Title of three."
+    assert items["RULE-1-4"]["title"] == "RULE 1.4: Title of four."
 
 
 def test_title_fallback_caps():
@@ -268,19 +249,14 @@ def test_output_yaml_shape_and_dids(tmp_path):
     src = tmp_path / "rules.md"
     assert data["source_sha256"] == hashlib.sha256(src.read_bytes()).hexdigest()
     for op in data["ops"]:
-        assert set(op) == {"op", "item"}
-        assert op["op"] == "create"
+        assert set(op) == {"op", "item"} and op["op"] == "create"
         assert isinstance(op["item"], list) and len(op["item"]) == 1
         item = op["item"][0]
-        assert set(item) == {"project", "id", "kind", "owner", "track",
-                             "priority", "review_tier", "evidence_kinds",
-                             "depends_on", "title", "description"}
-        assert item["project"] == "plangraph"
-        assert item["kind"] == "decision"
-        assert item["owner"] == "operator"
-        assert item["track"] == "ROUTING"
-        assert item["review_tier"] == "none"
-        assert item["evidence_kinds"] == ["decision"]
+        assert set(item) == {"project", "id", "kind", "owner", "track", "priority",
+                             "review_tier", "evidence_kinds", "depends_on", "title", "description"}
+        assert item["project"] == "plangraph" and item["kind"] == "decision"
+        assert item["owner"] == "operator" and item["track"] == "ROUTING"
+        assert item["review_tier"] == "none" and item["evidence_kinds"] == ["decision"]
         assert len(item["title"]) <= 120
     text = "".join(op["item"][0]["description"] for op in data["ops"])
     for did in sorted(set(re.findall(r"D-\d+", FIXTURE))):
@@ -297,8 +273,7 @@ def test_source_path_relative_to_out_dir(tmp_path):
     assert rc == 0
     data = load(out_file)
     assert data["source"] == os.path.join("..", "rules.md")
-    assert apply_batch.resolve_source(str(out_file), data["source"]) == \
-        os.path.realpath(tmp_path / "rules.md")
+    assert apply_batch.resolve_source(str(out_file), data["source"]) == os.path.realpath(tmp_path / "rules.md")
 
 
 def test_apply_batch_loads_and_validates(tmp_path):
@@ -307,8 +282,7 @@ def test_apply_batch_loads_and_validates(tmp_path):
     data = apply_batch.load_batch(str(path))
     assert set(data) == {"batch", "principal", "source", "source_sha256", "ops"}
     assert data["source"] == "rules.md"
-    assert data["source_sha256"] == \
-        hashlib.sha256((tmp_path / "rules.md").read_bytes()).hexdigest()
+    assert data["source_sha256"] == hashlib.sha256((tmp_path / "rules.md").read_bytes()).hexdigest()
     for op in data["ops"]:
         assert set(op) == {"op", "item"}
         apply_batch.validate_op(op)
@@ -368,3 +342,35 @@ def test_group_heading_is_reported_not_silent(tmp_path):
     rc, out, _err, _path = run(FORMS, tmp_path, "--report")
     assert rc == 0
     assert "group headings dropped: 0.2" in out
+
+
+def test_group_heading_with_sentence_kept(tmp_path):
+    text = "## 1. S\n\n**0.2 TITLE** (note). Sentence.\n\n0.2a **Sub.** Text.\n"
+    rc, _out, err, path = run(text, tmp_path)
+    assert rc == 0
+    items = items_by_id(load(path))
+    assert "RULE-0-2" in items
+    assert "Sentence." in items["RULE-0-2"]["description"]
+    assert "group headings dropped: none" in err
+
+
+def test_heading_only_bold_title_dropped(tmp_path):
+    text = "## 1. S\n\n**0.2 ONLY TITLE**\n\n0.2a **Sub.** Text.\n"
+    rc, _out, err, path = run(text, tmp_path)
+    assert rc == 0
+    assert "RULE-0-2" not in items_by_id(load(path))
+    assert "group headings dropped: 0.2" in err
+
+
+def test_summary_always_printed_to_stderr_without_report(tmp_path):
+    rc, out, err, _path = run(FIXTURE, tmp_path)
+    assert rc == 0 and out == ""
+    assert "dropped cycle edges: none\nunknown refs: none\ndropped lines: 0\ngroup headings dropped: none\n" == err
+
+
+def test_value_error_from_build_catches_and_exits_1(tmp_path, monkeypatch):
+    monkeypatch.setattr(decisions_import, "verify_text_dag",
+                        lambda rules, prefix=None: (_ for _ in ()).throw(ValueError("bad dag edge")))
+    rc, _out, err, _path = run(FIXTURE, tmp_path)
+    assert rc == 1
+    assert "error: bad dag edge\n" in err
