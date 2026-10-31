@@ -77,7 +77,7 @@ async def _run_phase(r):
             "workroot": str(r.workroot),
             "base_branch": "main",
             "max_parallel": 2,
-            "legs": [{"id": "opencode-zen-free", "tier": "free", "model": "some/model",
+            "legs": [{"id": "opencode-glm-5.3-flash-free", "tier": "free", "model": "some/model",
                       "harness": "opencode"}],
             "finish_poll_s": 1,
             "finish_max_polls": 10,
