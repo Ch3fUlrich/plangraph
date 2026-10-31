@@ -2,10 +2,14 @@ from plangraph.routing_support.resolver import host_skip_reason
 
 
 def test_non_gateway_requires_affirmative_listing():
-    row = {'harness': 'opencode', 'model': 'local-provider/model'}
+    # D-3264 (12ddfd48): only console credit providers need an affirmative listing.
+    row = {'harness': 'opencode', 'model': 'console-provider/model'}
     assert 'not_served_on_host' in host_skip_reason(row, probe=lambda env: None)
     assert 'not_served_on_host' in host_skip_reason(row, probe=lambda env: set())
     assert host_skip_reason(row, probe=lambda env: {row['model']}) is None
+    # Inverse: a non-console model with no listing evidence is still admitted.
+    other = {'harness': 'opencode', 'model': 'local-provider/model'}
+    assert host_skip_reason(other, probe=lambda env: None) is None
 
 
 def test_runtime_negative_overrides_listing(tmp_path, monkeypatch):
@@ -44,4 +48,4 @@ def test_probe_exception_is_not_admitted():
     def fail(env):
         raise OSError('offline')
     assert 'not_served_on_host' in host_skip_reason(
-        {'harness': 'opencode', 'model': 'another/model'}, probe=fail)
+        {'harness': 'opencode', 'model': 'console-another/model'}, probe=fail)
