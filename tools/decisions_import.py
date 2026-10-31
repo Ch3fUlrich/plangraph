@@ -35,7 +35,7 @@ import sys
 
 import yaml
 
-RULE_RE = re.compile(r"^(\*{0,2})(\d+\.\d+[A-Za-z]?)(?:[ \t]+(.*))?$")
+RULE_RE = re.compile(r"^(\*{0,2})(\d+\.\d+[A-Za-z]?)(\*{0,2})(?:[ \t]+(.*))?$")
 HEADING_RE = re.compile(r"^#{1,6}[ \t]")
 BOLD_RE = re.compile(r"\*\*([^*]+?)\*\*")
 SENTENCE_RE = re.compile(r"(.*?[.!?])(?:\s|$)")
@@ -102,9 +102,12 @@ def parse_rules(text):
             continue
         match = RULE_RE.match(raw)
         if match:
-            stars, number, rest = match.group(1), match.group(2), match.group(3) or ""
-            if stars:
+            stars, number, trail = match.group(1), match.group(2), match.group(3)
+            rest = match.group(4) or ""
+            if stars and not trail:
                 rest = stars + rest  # keep the bold span that wraps the number
+            elif trail and not stars:
+                rest = trail + rest
             current = {"number": number, "parts": [rest], "section": section}
             rules.append(current)
         elif current is not None:
@@ -112,18 +115,27 @@ def parse_rules(text):
         else:
             dropped_lines.append(lineno)
     for rule in rules:
-        body = " ".join(" ".join(rule.pop("parts")).split())
+        parts = rule.pop("parts")
+        body = " ".join(" ".join(parts).split())
         rule["text"] = body
         rule["title"] = title_of(body)
         rule["tags"] = [part.strip() for group in TAG_RE.findall(body)
                         for part in group.split(";") if part.strip()]
         rule["dids"] = sorted(set(DID_RE.findall(body)), key=lambda d: int(d[2:]))
         rule["refs"] = find_refs(body)
+        bold = BOLD_RE.search(body)
+        tail = body[bold.end():].strip() if bold else ""
+        rule["title_only"] = (
+            bool(bold) and len(parts) <= 1
+            and (not tail or bool(re.fullmatch(r"\([^)]*\)\.?", tail))))
     # a bare group heading (no tag, no D-id) over lettered sub-rules is not a rule
     subs = {r["number"][:-1].lower() for r in rules if r["number"][-1].isalpha()}
     groups = [r["number"] for r in rules
-              if r["number"].lower() in subs and not r["tags"] and not r["dids"]]
+              if r["number"].lower() in subs and not r["tags"] and not r["dids"]
+              and r.get("title_only")]
     rules = [r for r in rules if r["number"] not in groups]
+    for r in rules:
+        r.pop("title_only", None)
     return RuleList(rules, dropped_lines=dropped_lines, group_headings=groups)
 
 
@@ -151,8 +163,19 @@ def item_id(prefix, number):
 
 
 def drop_cycle_edges(adj, order):
-    """DFS in order; report every edge that closes a cycle (a back edge)."""
+    """DFS in order; report every edge that closes a cycle (a back edge).
+
+    Tie-break: for 2-cycles, deterministically drop the edge pointing forward
+    in document order (earlier rule depending on a later one).
+    """
+    pos = {node: i for i, node in enumerate(order)}
+    adj = {k: list(v) for k, v in adj.items()}
     dropped = []
+    for u in order:
+        for v in list(adj.get(u, [])):
+            if pos[u] < pos.get(v, -1) and u in adj.get(v, []):
+                dropped.append((u, v))
+                adj[u].remove(v)
     state = {}
     for start in order:
         if state.get(start):
@@ -254,6 +277,24 @@ def build(rules, opts):
     return batch, dropped, unknown
 
 
+def write_summary(err, rules, dropped, unknown, dropped_lines=None):
+    """Four-line summary: dropped cycle edges, unknown refs, dropped lines, group headings."""
+    if dropped_lines is None:
+        dropped_lines = getattr(rules, "dropped_lines", [])
+    err.write("dropped cycle edges: "
+              + (", ".join(f"{src}->{tgt}" for src, tgt in dropped) or "none")
+              + "\n")
+    err.write("unknown refs: "
+              + (", ".join(f"{src}->{tgt}" for src, tgt in unknown) or "none")
+              + "\n")
+    first5 = ", ".join(str(n) for n in dropped_lines[:5])
+    label = "line" if len(dropped_lines) == 1 else "lines"
+    sample = f" ({label} {first5})" if first5 else ""
+    err.write(f"dropped lines: {len(dropped_lines)}{sample}\n")
+    err.write("group headings dropped: "
+              + (", ".join(getattr(rules, "group_headings", [])) or "none") + "\n")
+
+
 def write_report(out, rules, batch, dropped, unknown, dropped_lines=None):
     """Parse counts, rule lines per section, dropped cycles, unknown refs."""
     edges = sum(len(op["item"][0]["depends_on"]) for op in batch["ops"])
@@ -262,26 +303,13 @@ def write_report(out, rules, batch, dropped, unknown, dropped_lines=None):
     for rule in rules:
         name = rule.get("section") or "(none)"
         sections[name] = sections.get(name, 0) + 1
-    if dropped_lines is None:
-        dropped_lines = getattr(rules, "dropped_lines", [])
     out.write(f"rules {len(rules)}\n")
     out.write(f"items {len(batch['ops'])}\n")
     out.write(f"d-ids {len(dids)}\n")
     out.write(f"edges {edges}\n")
     for name, count in sections.items():
         out.write(f"section {name}: {count} rules\n")
-    out.write("dropped cycle edges: "
-              + (", ".join(f"{src}->{tgt}" for src, tgt in dropped) or "none")
-              + "\n")
-    out.write("unknown refs: "
-              + (", ".join(f"{src}->{tgt}" for src, tgt in unknown) or "none")
-              + "\n")
-    first5 = ", ".join(str(n) for n in dropped_lines[:5])
-    label = "line" if len(dropped_lines) == 1 else "lines"
-    sample = f" ({label} {first5})" if first5 else ""
-    out.write(f"dropped lines: {len(dropped_lines)}{sample}\n")
-    out.write("group headings dropped: "
-              + (", ".join(getattr(rules, "group_headings", [])) or "none") + "\n")
+    write_summary(out, rules, dropped, unknown, dropped_lines=dropped_lines)
 
 
 def main(argv=None, out=None, err=None):
@@ -318,7 +346,7 @@ def main(argv=None, out=None, err=None):
         return 1
     try:
         batch, dropped, unknown = build(rules, opts)
-    except BuildError as exc:
+    except (BuildError, ValueError) as exc:
         err.write(f"error: {exc}\n")
         return 1
     data = yaml.safe_dump(batch, sort_keys=False, default_flow_style=False,
@@ -329,6 +357,7 @@ def main(argv=None, out=None, err=None):
     except OSError as exc:
         err.write(f"error: cannot write batch: {exc.__class__.__name__}\n")
         return 1
+    write_summary(err, rules, dropped, unknown)
     if opts.report:
         write_report(out, rules, batch, dropped, unknown)
     return 0
