@@ -23,13 +23,13 @@ from plangraph.routing_errors import ParameterRefused
 from sessions_support import FakeRun, make, go
 from sessions_support import site  # noqa: F401
 
-ROW_WORKING = {"id": "87dcc5e9", "cwd": "/home/s/code/plangraph", "kind": "background",
+ROW_WORKING = {"id": "87dcc5e9", "cwd": "/work/plangraph", "kind": "background",
                "startedAt": 1793445596000, "sessionId": "87dcc5e9-fae1-42a9-838e-9b834de20647",
                "name": "pg-session-smoke-b", "state": "working"}
-ROW_DONE = {"id": "abb0102e", "cwd": "/home/s/code/plangraph", "kind": "background",
+ROW_DONE = {"id": "abb0102e", "cwd": "/work/plangraph", "kind": "background",
             "startedAt": 1793445560144, "sessionId": "abb0102e-8df4-4311-ba1d-78ecb7bee5d3",
             "name": "pg-session-smoke", "state": "done"}
-ROW_FAILED = {"id": "c34d06f5", "cwd": "/home/s/code/plangraph", "kind": "background",
+ROW_FAILED = {"id": "c34d06f5", "cwd": "/work/plangraph", "kind": "background",
               "startedAt": 1793445496758, "sessionId": "c34d06f5-90f2-4865-8847-a84a8b010219",
               "name": "pg-session-smoke", "state": "failed"}
 
