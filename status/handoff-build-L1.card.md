@@ -1,30 +1,27 @@
-# L1 card · build-L1-0035 · 2026-10-31T20:56Z
+# L1 card · build-L1-0037 · 2026-10-31T22:30Z
 ## Goal
-- Finish S09 RIN-CUTOVER-DATA window (mid-window now), then S10; GATEWAY-LOG-TOKEN-MINT MERGE-READY
+- Close S09 RIN-CUTOVER-DATA (needs KEEPER-DCLOSE live), land LE-WATCHDOG-CLEAR-VERIFY; L2s gwtok + spawner
 ## Keeper
-- RIN-CUTOVER-DATA claimed build-L1 epoch 1 (window running; evidence 8939b7c pending)
-- LE-KEEPER-DROW-CLOSES done; RIN-LEDGER-PREP in_review until KEEPER-DCLOSE lands
-- LE-WRITER-SECRET-SANDBOX (HIGH, owner build-L1) delegated to build-L2-spawner-0036 lane 3
+- claimed: plangraph:RIN-CUTOVER-DATA (claimed, since 20:46Z), plangraph:KEEPER-DCLOSE-TRACK-EVIDENCE (claimed, since 21:00Z), plangraph:LE-WATCHDOG-CLEAR-VERIFY (claimed, since 21:00Z)
+- ready next: plangraph:LE-PANE-MOVE-EXIT-CONFIRM, plangraph:LE-FLEET-MSG-INVENTORY
 ## Done
-- 10-31T20:25Z RIN-CUTOVER-DATA 6d0bca6 data PR#5 lift-ledgers (qwen delta run-cd27cdc4 PASS, GO D-3429)
-- 10-31T20:48Z RIN-CUTOVER-DATA 8939b7c final data lift + ledgers pushed; cutover.sh, drop-ins, repath done
-- 10-31T20:55Z RIN-CUTOVER-DATA - router moved to wG:p1 cwd plangraph-data/router (script lines 58-62 after exit-confirm dialog)
-- 10-31T20:45Z KEEPER-DCLOSE-TRACK-EVIDENCE - D-3428 redaction of run-d822c129 logs, DSN count 0
+- 10-31T21:58Z D-3430 - keeper.json repoint + 1 keeper restart; md-sync 21:56Z error=null refused 1
+- 10-31T21:55Z SPAWNER-ROUTE-FREE-FIRST PR#272 merged e0623675, seat qwen run-23f5fd79 PASS, CI 7 green (D-3433)
+- 10-31T22:15Z RIN-CUTOVER-DATA - go-gate PASS, watchdog parity PASS, strict missing 0
 ## In flight
-- S09 BLOCKER: md-sync fails "fetch routing: rc=128" (compat dir has no .git) -> GO/ruling needed
-- build-L2-spawner-0036: LE-SEAT-NO-VERDICT, SPAWNER-ROUTE-FREE-FIRST, LE-WRITER-SECRET-SANDBOX
-- build-L2-gwtok-0022: Part A 2nd seat (D-3427), Part B r5 8d706f97
+- LE-WATCHDOG-CLEAR-VERIFY run-94280cc8 since 22:05Z next check 22:35Z (r2 committed c635d7a, PR plangraph-data#6)
+- GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:00Z next check 22:43Z
+- LE-SEAT-NO-VERDICT build-L2-spawner-0036 since 21:30Z next check 23:00Z
 ## Planned
-1. md-sync fix (default: symlink routing/.git -> routing.archived/.git, or keeper.json repos.routing.path + restart under GO), rerun md-sync, acceptance list, evidence + submit, DONE S09
-2. KEEPER-DCLOSE writer J/brief-dclose-2.md on qwen/mimo-flash (free legs down), seats 2 families, GO-REQ
-3. LE-WATCHDOG-CLEAR-VERIFY (now in plangraph-data/router/bin/ctx-watchdog)
-4. keeper restart after operator OS-KEEPER-PG-ROTATE (D-3428)
+1. RIN-CUTOVER-DATA send BLOCKED: DCLOSE slips past 23:30Z (D-3434)
+2. KEEPER-DCLOSE-TRACK-EVIDENCE new brief: stale-epoch evidence hypothesis, md-sync-side fix; design via routing
+3. LE-WATCHDOG-CLEAR-VERIFY verify c635d7a, delta qwen seat, MERGE-READY
 ## Open
-- md-sync routing fetch ruling | options b symlink .git*, a keeper.json+restart GO, c rollback.sh | asked in handoff msg
+- BLOCKED RIN-CUTOVER-DATA routerctl parity + throwaway D-row close | default router runs both | deadline 23:30Z
 ## Traps
-- J=/home/s/.claude/jobs/4e49c8f0/tmp (wspawn.sh, wspawn-pub.sh, seat.sh)
-- rollback: plangraph-data/router/shim/rollback.sh --scratch /home/s/code; units ~/.config/systemd/user.pre-routing-in; launch: repath --rollback
-- pane move deviation: hand-ran script lines after dialog: report to routing
+- routing unreachable by SendMessage/fleet_msg: write ~/.local/state/fleet/inbox/routing.jsonl; wake = herdr agent prompt wG:p1
+- never run routerctl status (writes router inbox offsets)
+- keeper evidence kind commit is router-only; claims on RIN-CUTOVER-DATA need CLI build-L1 token
 - writers must never read /proc, env, keeper config/DB (D-3428)
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-56 block, line 2)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-57 block, line 2)
