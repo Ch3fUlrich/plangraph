@@ -2,8 +2,9 @@
 base-path run registry, orphaned run group kill (seat run-e6d5c597 MEDs)."""
 import pytest
 
-from plangraph.spawner.exit_outcome import terminal_reason
+from plangraph.spawner.exit_outcome import release_attempts, terminal_reason
 from plangraph.spawner.git_guard import DANGEROUS
+from plangraph.spawner.service import SpawnService
 
 
 @pytest.mark.parametrize('key', ['core.editor', 'core.pager', 'pager.log', 'alias.co',
@@ -28,3 +29,13 @@ def test_no_changes_on_an_earlier_leg_is_not_the_runs_reason():
     record['attempts'][-1]['events'] = [{'event': 'writer_no_changes'}]
     terminal_reason(record)
     assert record['reason'] == 'writer_no_changes'
+
+
+def test_base_path_registry_is_released(tmp_path):
+    runner = type('R', (), {'_tasks': {}})()
+    service = SpawnService(runner=runner, state=tmp_path)
+    record = {}
+    service._running_records.update(a=record, b=record)
+    runner._tasks.update(a=1, b=2)
+    release_attempts(service, record)
+    assert service._running_records == {} and runner._tasks == {}

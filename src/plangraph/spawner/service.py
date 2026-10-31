@@ -28,7 +28,7 @@ class SpawnService(SeatSpawnMixin):
         self.leg_reader = leg_reader
         if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):  # probes write where the planner reads
             self.runner.leg_reader = leg_reader
-        self.tasks = {}
+        self.tasks, self._running_records = {}, {}   # run tasks; job id -> record (Q13/M8)
 
     def _path(self, run_id):
         if not isinstance(run_id, str) or not run_id.startswith('run-') or not run_id[4:].isalnum():
@@ -320,7 +320,7 @@ class SpawnService(SeatSpawnMixin):
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
-                    getattr(self, '_running_records', {})[job.job_id] = record
+                    self._running_records[job.job_id] = record
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
