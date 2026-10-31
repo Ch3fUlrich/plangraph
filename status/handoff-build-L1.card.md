@@ -19,7 +19,7 @@
 3. GATEWAY-LOG-TOKEN-MINT MERGE-READY -> seats, GO-REQ (HIGH), merge, D-825 live
 4. LE-* items prio 3 after phase 0 (D-3382)
 ## Open
-- none
+- D-3405 S09 CONDITIONAL GO, before freeze: (1) re-rehearse at 421d0bf6 (rehearse.sh + repath dry run + stage-dropins --verify) into a new file naming the sha; (2) RIN-HOME-LIFT done; (3) add router-continuity step: new ROUTER_HOME, where router CLAUDE.md/.claude/skills/hooks/HANDOFF.md resolve, relaunch by fleet-launch/watchdog (never operator); router gets FREEZE-NOW, hands off, idles; (4) send checklist + rehearsal path to routing -> final GO | default wait | deadline none
 ## Traps
 - J=/home/s/.claude/jobs/6f592267/tmp (seat-cov-leg.sh, wspawn.sh, mkseat_inline.py); older J 2f5d0308 + be3841c5 (mkseat.py)
 - harness refuses git with vars/heredoc/loops in this session: plain single commands + Write/Edit only
