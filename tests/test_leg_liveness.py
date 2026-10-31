@@ -26,9 +26,14 @@ def test_down_expiry_and_recovery(tmp_path):
     assert store.last_probe_ts('agy/model') == 141
 
 
-def test_probe_module():
-    from plangraph.spawner.leg_probe import probe
-    assert callable(probe)
+def test_probe_module_key_semantics():
+    """Q16/M8: probe and quota bookkeeping share one leg key -- 'agy/<model>' only
+    for an agy leg's bare model. Replaces the token `assert callable(probe)`."""
+    from plangraph.spawner.leg_probe import key
+    assert key(SimpleNamespace(harness='agy', model='gemini-3.8-flash')) == 'agy/gemini-3.8-flash'
+    assert key(SimpleNamespace(harness='agy', model='prov/model')) == 'prov/model'
+    assert key(SimpleNamespace(harness='qodercli', model='Qwen3.8-Flash')) == 'Qwen3.8-Flash'
+    assert key(SimpleNamespace(model='agy/model')) == 'agy/model'   # legacy rows stay stable
 
 
 @pytest.mark.parametrize('success', [True, False])

@@ -1,5 +1,8 @@
 import asyncio
 import json
+import subprocess
+import time
+import uuid
 
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
@@ -201,7 +204,9 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
                 async def run():
                     async def factory(*a, **kw):
                         return await asyncio.create_subprocess_exec(sys.executable, '-c',
-                            'import time; time.sleep(.4); print("done")', **kw)
+                            'import signal, time\n'
+                            'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'   # Q21/M14
+                            'time.sleep(.4); print("done")', **kw)
                     service = spawn_service(SpawnerRunner(process_factory=factory), payload.pop('state'))
                     record = await service.spawn(**payload)
                     result.append(record)
@@ -228,7 +233,7 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     started = time.monotonic()
     assert main(['--state', str(tmp_path), 'spawn', 'task', '--card',
                  '{"estimate_tokens":1000}', '--wait', wait]) == 0
-    assert time.monotonic() - started < .3
+    assert time.monotonic() - started < float(wait) + 1   # Q21/M14: within ~wait_seconds+1
     record = json.loads(capsys.readouterr().out)
     assert record['status'] == 'running'
     for thread in threads:
@@ -358,3 +363,30 @@ def test_override_and_unknown_review(tmp_path):
         with pytest.raises(ValueError):
             await service.spawn(model='omniroute/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
     asyncio.run(run())
+
+
+def test_cli_wait_returns_after_the_dispatcher_died(tmp_path):
+    """Q21/M14: `wait` must return once the supervisor that owned the run is
+    gone (its child may ignore SIGTERM and hold its group), not spin on 'running'."""
+    run_id = 'run-' + uuid.uuid4().hex
+    log = tmp_path / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
+    child = subprocess.Popen([sys.executable, '-c',
+        'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)'],
+        start_new_session=True)
+    try:
+        dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+        dead.wait()
+        (tmp_path / (log.name + '.pid')).write_text(str(dead.pid))
+        spawn_service(state=tmp_path)._save(dict(
+            run_id=run_id, status='running', started=time.time(), ended=None, attempts=[],
+            job_id='j-' + run_id, pid=child.pid, supervisor_stderr_path=str(log)))
+        started = time.monotonic()
+        out = subprocess.run([sys.executable, '-m', 'plangraph.spawner.cli', '--state',
+                              str(tmp_path), 'wait', run_id],
+                             capture_output=True, text=True, timeout=8)
+        assert time.monotonic() - started < 3
+        final = json.loads(out.stdout)
+        assert final['status'] != 'running' and final['ended'] is not None
+    finally:
+        child.kill()
+        child.wait()

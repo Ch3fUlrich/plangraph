@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from plangraph.spawner.env_redact import first_reason, harness_limit_line
 from plangraph.spawner.git_guard import writer_launch
-from plangraph.spawner.exit_outcome import fallthrough_reason
+from plangraph.spawner.exit_outcome import fallthrough_reason, terminal_reason
 from plangraph.routing_support.leg_state import LegStateStore
 
 
@@ -53,3 +53,57 @@ def test_writer_identity_commits_with_writer_committer(tmp_path):
     assert identity == ('agy/model (plangraph writer)|run-123@writer.plangraph.invalid'
                         '|agy/model (plangraph writer)|run-123@writer.plangraph.invalid')
     assert writer_launch('review', 'review', 'agy/model', 'run-123') == ('review', {})
+
+
+def test_quota_key_is_harness_aware(tmp_path):
+    """Q16/M8: a harness limit is booked under leg_probe.key semantics --
+    'agy/<model>' only for an agy leg's bare model."""
+    from plangraph.spawner.leg_probe import key
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    record = {}
+    reason = fallthrough_reason(SimpleNamespace(leg_reader=store),
+                                SimpleNamespace(model='Qwen3.8-Flash', harness='qodercli'),
+                                SimpleNamespace(exit_code=3, stdout='', stderr=QUOTA), record)
+    assert reason.startswith('harness_limit:')
+    assert record['reason'] == 'harness_limit'
+    assert key(SimpleNamespace(model='Qwen3.8-Flash', harness='qodercli')) == 'Qwen3.8-Flash'
+    assert store.leg_status('Qwen3.8-Flash')['state'] == 'limited'
+    assert store.leg_status('agy/Qwen3.8-Flash')['state'] == 'ok'
+    fallthrough_reason(SimpleNamespace(leg_reader=store),
+                       SimpleNamespace(model='gemini-3.8-flash', harness='agy'),
+                       SimpleNamespace(exit_code=3, stdout='', stderr=QUOTA), {})
+    assert store.leg_status('agy/gemini-3.8-flash')['state'] == 'limited'
+
+
+def test_terminal_reason_is_the_final_attempt_outcome():
+    """Q8/M15: the run's reason describes how the run ENDED. A 'harness_limit'
+    stamped by an earlier fallthrough leg never survives a later outcome."""
+    record = dict(exit_code=1, reason='harness_limit', events=[], attempts=[
+        dict(status='failed', skip_reason='harness_limit: ' + QUOTA),
+        dict(status='failed', skip_reason='provider_stop')])
+    terminal_reason(record)
+    assert record['reason'] == 'provider_stop'
+    record = dict(exit_code=1, reason='harness_limit', events=[], attempts=[
+        dict(status='failed', skip_reason='harness_limit: ' + QUOTA),
+        dict(status='timeout', skip_reason=None)])
+    terminal_reason(record)
+    assert record['reason'] == 'timeout'
+    # A run that ended ON the quota leg keeps 'harness_limit'.
+    record = dict(exit_code=4, reason='harness_limit', events=[],
+                  attempts=[dict(status='failed', skip_reason='harness_limit: ' + QUOTA)])
+    terminal_reason(record)
+    assert record['reason'] == 'harness_limit'
+
+
+def test_guard_reasons_are_never_stomped():
+    """M9/M15: git_config_mutated and writer_no_changes become the run's reason,
+    and no later fallthrough may stomp them with 'harness_limit'."""
+    for reason in ('git_config_mutated', 'writer_no_changes'):
+        record = {'reason': reason}
+        fallthrough_reason(SimpleNamespace(leg_reader=None), SimpleNamespace(model='agy/model'),
+                           SimpleNamespace(exit_code=3, stdout='', stderr=QUOTA), record)
+        assert record['reason'] == reason
+    record = dict(exit_code=5, reason='harness_limit',
+                  events=[{'event': 'writer_no_changes'}], attempts=[])
+    terminal_reason(record)
+    assert record['reason'] == 'writer_no_changes'
