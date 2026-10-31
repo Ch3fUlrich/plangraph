@@ -236,6 +236,42 @@ def test_mimo_pro_precedes_qwen_max_in_routes(memory_db: CatalogDB) -> None:
         ), f"cxa/gpt-6-luna-high must be active in {route_id}"
 
 
+def test_sonnet_medium_in_l2_worker_and_reviewer_routes() -> None:
+    """Verify init_and_seed on an in-memory CatalogDB places agy/claude-sonnet-5-5-medium and route positions have no gaps."""
+    db = CatalogDB(":memory:")
+    db.init_and_seed()
+    try:
+        l2_worker_legs = db.get_route_legs("l2-worker", active_only=True)
+        assert len(l2_worker_legs) >= 3
+        assert l2_worker_legs[2]["position"] == 3
+        assert l2_worker_legs[2]["model_id"] == "agy/claude-sonnet-5-5-medium"
+
+        l2_reviewer_legs = db.get_route_legs("l2-reviewer", active_only=True)
+        assert len(l2_reviewer_legs) >= 2
+        assert l2_reviewer_legs[1]["position"] == 2
+        assert l2_reviewer_legs[1]["model_id"] == "agy/claude-sonnet-5-5-medium"
+
+        routes = [
+            r[0]
+            for r in db.conn.execute(
+                "SELECT route_id FROM catalog_routes ORDER BY route_id ASC"
+            ).fetchall()
+        ]
+        for route_id in routes:
+            raw_legs = db.conn.execute(
+                "SELECT position FROM catalog_route_legs WHERE route_id = ? ORDER BY position ASC",
+                (route_id,),
+            ).fetchall()
+            raw_positions = [row[0] for row in raw_legs]
+            assert raw_positions == list(range(1, len(raw_positions) + 1))
+
+            active_legs = db.get_route_legs(route_id, active_only=True)
+            active_positions = [leg["position"] for leg in active_legs]
+            assert active_positions == list(range(1, len(active_positions) + 1))
+    finally:
+        db.close()
+
+
 def test_family_and_intelligence_filtering(memory_db: CatalogDB) -> None:
     """Verify family inclusion, exclusion, and intelligence threshold filters."""
     # Family filter
