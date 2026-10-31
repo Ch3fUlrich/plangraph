@@ -316,9 +316,9 @@ Every model candidate is assigned a tier according to its billing and quota cons
 
 | Rung | Tier | Description | Examples |
 |---|---|---|---|
-| **0** | `trial` | Zero-cost evaluation tiers | Experimental free trial keys |
-| **1** | `free` | No marginal cost, daily replenished allowance | `agy/gemini-3.8-flash-tiered-high`, `qoder/qwen3.8-flash-next` |
-| **2** | `credit` | Pre-funded non-recurring promotional balance | Promotional API balances |
+| **0** | `credit` | Pre-funded non-recurring promotional balance | Promotional API balances |
+| **1** | `trial` | Zero-cost evaluation tiers | Experimental free trial keys |
+| **2** | `free` | No marginal cost, daily replenished allowance | `agy/gemini-3.8-flash-tiered-high`, `qoder/qwen3.8-flash-next` |
 | **3** | `subscription` | Fixed recurring subscription pools; strictly prioritized before paid APIs | `agy` (Claude/Gemini), `cxa` (Codex Luna), `mimo` (v2.6 pro/flash), `opencode-go`, `claude` |
 | **4** | `paid` | Pay-as-you-go per-token APIs; used strictly as last resort | `deepseek` direct API, `gemini` direct API |
 
