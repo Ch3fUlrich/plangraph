@@ -3,7 +3,7 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
-TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
+TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'no_verdict', 'cancelled')
 
 
 def fallthrough_reason(service, chosen, job, record):
@@ -51,7 +51,7 @@ def terminal_reason(record):
     """
     events = record.get('events') or ()
     special = next((e['event'] for e in events
-                    if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)
+                    if e.get('event') in ('git_config_mutated', 'writer_no_changes', 'no_verdict')), None)
     if special is not None:
         record['reason'] = special
         return
