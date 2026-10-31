@@ -1,30 +1,30 @@
-# L1 card · build-L1 · 2026-10-31T12:50Z
+# L1 card · build-L1-0018 · 2026-10-31T13:33Z
 ## Goal
-- SESSION-SPAWN-MCP stop fix to GO + re-smoke; KEEPER-EVIDENCE-TRACK-FLOOR r3 to GO + live; then RIN-BACKUP-HARVEST submit
+- Close SESSION-SPAWN-MCP (DONE after main CI), merge RIN S06 #262, unblock RIN-BACKUP-HARVEST verdicts, start CATALOG-AGY-SONNET-L2 then GATEWAY-LOG-TOKEN-MINT
 ## Keeper
-- claimed: plangraph:KEEPER-EVIDENCE-TRACK-FLOOR (claimed, since 10:45Z), plangraph:RIN-BACKUP-HARVEST (claimed, since 10:28Z), plangraph:SESSION-SPAWN-MCP (in_review, since 11:18Z)
-- ready next: plangraph:RIN-CUTOVER-DATA
+- claimed: none (KEEPER-EVIDENCE-TRACK-FLOOR in_review since 13:31Z, RIN-BACKUP-HARVEST in_review since 13:32Z, SESSION-SPAWN-MCP in_review)
+- ready next: plangraph:KEEPER-COVERAGE-TRACK-REPO, plangraph:CATALOG-AGY-SONNET-L2 (after GO), plangraph:GATEWAY-LOG-TOKEN-MINT
 ## Done
-- 10-31T11:24Z SESSION-SPAWN-MCP - smoke FAIL (stop full-sid rc1, done/failed states), sent routing, D-3343 fix round
-- 10-31T11:55Z RIN-HOME-LIFT 328c8c6 S05 merged plangraph-data D-3344, S09 gate in RIN-CUTOVER-DATA, Sonnet run-bca47426 MEDs added
-- 10-31T12:20Z RIN-LEDGER-PREP 7b2f2b5 S07 batch fixed + proved (keeper World), applied D-3347 5/5
-- 10-31T12:30Z KEEPER-EVIDENCE-TRACK-FLOOR 44157392 r2 pushed PR #261, 3204 passed; delta seats FAIL (Sonnet run-50746efe, qwen run-f66d9bd0)
+- 10-31T12:55Z GATEWAY-LOG-TOKEN-MINT 3e4279f batch applied D-3354 (proof op 1 ok), merged plangraph-data
+- 10-31T13:20Z KEEPER-EVIDENCE-TRACK-FLOOR d03f4117 PR #261 GO D-3357, main CI 41205149773 green, LIVE-SYNC-12 drop-in zb, evidence 18b02fc0 verified, submitted
+- 10-31T13:28Z SESSION-SPAWN-MCP ae4274e6 PR #260 GO D-3359, PR CI 41205052261 green, live smoke launch 9651fbb1 + stop ok
+- 10-31T13:32Z RIN-BACKUP-HARVEST - evidence 8e2d350 verified, resubmitted (D-3358)
 ## In flight
-- SESSION-SPAWN-MCP ssf-2 run-c3c1820a since 12:00Z next check on resume (J/w-ssf-2.wait)
-- KEEPER-EVIDENCE-TRACK-FLOOR ketf-3 final round since 12:50Z next check on resume (J/gspawn-ketf-3.log)
-- RIN S06 f6be9139 at build-L2-rin-0016 since 12:40Z next check on MERGE-READY
+- SESSION-SPAWN-MCP main CI run 41205735057 since 13:29Z next check on resume
+- RIN S06 PR #262 2c557a30 at build-L2-rin-0016 since 13:30Z next check on resume
 ## Planned
-1. SESSION-SPAWN-MCP verify r2, push #260, delta seats qwen+Sonnet, GO-REQ, merge, re-smoke J/smoke.py, DONE
-2. KEEPER-EVIDENCE-TRACK-FLOOR verify r3, delta seats; PASS -> GO-REQ (HIGH, live sync D-825); MED -> replan to routing (cap)
-3. RIN-BACKUP-HARVEST after TRACK-FLOOR live: evidence 8e2d350, submit, 2 PASS seat dirs
-4. RIN S06 MERGE-READY: check 107 vs 105 reason, merge (plangraph-data recipe)
+1. SESSION-SPAWN-MCP: main CI 41205735057 green -> evidence 67f5b5d0 -> DONE routing
+2. RIN S06 #262: retarget base build-L1 -> main (gh api PATCH), CI, merge with Plan-Item in last trailer block, tell L2
+3. CATALOG-AGY-SONNET-L2: GO-REQ batch 421efe6 (plangraph-data branch batch/catalog-agy-sonnet-l2), then writer J/brief-cat-1.md on agy-gemini-3.8-flash
+4. KEEPER-COVERAGE-TRACK-REPO (HIGH, D-3360): coverage reads trailers in the evidence row repo; then re-post RIN seats
+5. GATEWAY-LOG-TOKEN-MINT: design + parts A/B per handoff gen-50 block
 ## Open
-- none
+- D-3360 RIN seat posts wait on KEEPER-COVERAGE-TRACK-REPO live | default claim it; if TRACK-FLOOR dep blocks, ask routing | deadline none
 ## Traps
-- J=/home/s/.claude/jobs/524da23a/tmp; writer commits carry literal "Writer: ... RUNID" line: drop by amend before push
-- diff --stat vs origin/main on old lanes shows fake deletions: use merge-base
-- seat.sh hardcodes --writer-family mimo; claims of RIN items are plangraph-L1-main (L2), not build-L1
-- apply_batch: top keys fixed, source=file+sha; tier none needs [decision]; operator_task needs under PH-OPERATOR
-- gh pr edit fails: use gh api PATCH; pytest: unset GIT_*; heavy suites under systemd-run MemoryMax=2G
+- J=/home/s/.claude/jobs/e8250861/tmp; old J 524da23a has cg.py, smoke.py, seat outputs
+- Plan-Item must sit in the LAST paragraph of a merge message (git trailer block), else evidence refused
+- never zsh ${(k)parameters...} in commands: safety-check denial; use env -u GIT_DIR -u GIT_WORK_TREE
+- keeper CLI with --force-stale lives in live tree .claude/worktrees/live-d03f4117 (build-L1 tree is older)
+- D-3355: spawner on agy legs only for writers/seats; no Agent subagents, no claude/* legs
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-49 block, line 2)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-50 block, line 2)
