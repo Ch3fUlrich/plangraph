@@ -33,7 +33,7 @@ async def main():
             override_reason='build-L1 cheap local harness notification smoke', wait_seconds=0)
         record = await service.wait(record['run_id'], timeout=30)
     if record['exit_code'] != 0:
-        raise RuntimeError('smoke child failed')
+        raise RuntimeError('smoke child failed: ' + json.dumps({k: record.get(k) for k in ('status', 'exit_code', 'reason', 'error', 'events')}, default=str)[:1500])
     marker = state / 'runs' / record['run_id'] / 'keeper.delivered'
     token = Path(os.environ['PG_TOKEN_FILE']).read_text().strip()
     query = urllib.parse.urlencode({'key': os.environ['PLANGRAPH_SPAWN_ITEM']})

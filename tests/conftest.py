@@ -87,6 +87,7 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
     # Route mechanics tests run under a neutral route policy; the operator's
     # live lists (planner/route_policy.json) are pinned in test_registry_route.py.
     neutral = state / 'route-policy.json'

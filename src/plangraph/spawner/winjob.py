@@ -58,5 +58,14 @@ class WinJobApi:
         if not self._k32.TerminateJobObject(ctypes.c_void_p(handle), 1):
             raise OSError('TerminateJobObject failed')
 
+    def cpu_seconds(self, handle):
+        class Accounting(ctypes.Structure):
+            _fields_ = [('times', ctypes.c_int64 * 4), ('counts', ctypes.c_uint32 * 4)]
+        info = Accounting()
+        if not self._k32.QueryInformationJobObject(ctypes.c_void_p(handle), 1,
+                ctypes.byref(info), ctypes.sizeof(info), None):
+            raise OSError('QueryInformationJobObject failed')
+        return (info.times[0] + info.times[1]) / 1e7
+
     def close(self, handle):
         self._k32.CloseHandle(ctypes.c_void_p(handle))

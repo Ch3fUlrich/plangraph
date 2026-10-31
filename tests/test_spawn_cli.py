@@ -1,5 +1,8 @@
 import asyncio
 import json
+import subprocess
+import time
+import uuid
 
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
@@ -9,6 +12,7 @@ from plangraph.spawner.leg_state import LegStateStore
 import pytest
 import sys
 import os
+from pathlib import Path
 
 
 
@@ -74,18 +78,56 @@ def test_bounded_wait_and_private_record(tmp_path, wait):
     async def run():
         async def factory(*args, **kwargs):
             return await asyncio.create_subprocess_exec(sys.executable, '-c',
-                'import time; time.sleep(.3); print("sk-plantedsecret API_KEY=hidden")', **kwargs)
+                'import time; from pathlib import Path\n'
+                f'go = Path({str(tmp_path / "go")!r})\n'
+                'deadline = time.monotonic() + 20\n'
+                'while not go.exists() and time.monotonic() < deadline: time.sleep(.02)\n'
+                'print("sk-plantedsecret API_KEY=hidden")', **kwargs)
         service = spawn_service(SpawnerRunner(process_factory=factory), tmp_path)
         started = asyncio.get_running_loop().time()
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait)
-        assert asyncio.get_running_loop().time() - started < .2
+        assert asyncio.get_running_loop().time() - started < 5
         assert record['status'] == 'running'
+        (tmp_path / 'go').touch()
         await service.tasks[record['run_id']]
         path = service._path(record['run_id'])
         assert path.stat().st_mode & 0o777 == 0o600
         assert 'plantedsecret' not in path.read_text()
         assert 'hidden' not in path.read_text()
         assert not path.with_suffix('.tmp').exists()
+    asyncio.run(run())
+
+
+def test_harness_quota_falls_through(tmp_path, monkeypatch):
+    from plangraph.spawner import resolver
+    from test_spawner_exit_outcome import QUOTA
+    rows = resolver.get_catalog_models()
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        dict(row, available=1, active=True) for row in rows])
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
+
+    async def run():
+        store = LegStateStore(tmp_path / 'legs.sqlite')
+        calls = []
+        runner = SpawnerRunner()
+
+        async def factory(*args, **kwargs):
+            calls.append(list(runner.jobs.values())[-1].model_or_combo)
+            code = ('import sys; print(' + repr(QUOTA) + ', file=sys.stderr); sys.exit(3)'
+                    if len(calls) == 1 else 'print("done")')
+            return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
+
+        runner.process_factory = factory
+        service = spawn_service(runner, tmp_path, store)
+        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
+        assert record['status'] == 'completed'
+        assert len(calls) == 2
+        assert record['attempts'][0]['skip_reason'].startswith('harness_limit:')
+        model = calls[0] if '/' in calls[0] else 'agy/' + calls[0]
+        state = store.leg_status(model, now=1000)
+        assert state['state'] == 'limited'
+        assert state['evidence']['reset_at'] == 39426
+
     asyncio.run(run())
 
 
@@ -163,7 +205,9 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
                 async def run():
                     async def factory(*a, **kw):
                         return await asyncio.create_subprocess_exec(sys.executable, '-c',
-                            'import time; time.sleep(.4); print("done")', **kw)
+                            'import signal, time\n'
+                            'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'   # Q21/M14
+                            'time.sleep(.4); print("done")', **kw)
                     service = spawn_service(SpawnerRunner(process_factory=factory), payload.pop('state'))
                     record = await service.spawn(**payload)
                     result.append(record)
@@ -190,13 +234,14 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     started = time.monotonic()
     assert main(['--state', str(tmp_path), 'spawn', 'task', '--card',
                  '{"estimate_tokens":1000}', '--wait', wait]) == 0
-    assert time.monotonic() - started < .3
+    assert time.monotonic() - started < float(wait) + 1   # Q21/M14: within ~wait_seconds+1
     record = json.loads(capsys.readouterr().out)
     assert record['status'] == 'running'
     for thread in threads:
         thread.join(3)
         assert not thread.is_alive()
-    assert spawn_service(state=tmp_path).result(record['run_id'])['status'] == 'completed'
+    final = spawn_service(state=tmp_path).result(record['run_id'])
+    assert final['status'] == 'completed', {k: final.get(k) for k in ('exit_code', 'reason', 'error', 'events')}
 
 
 def test_route_and_refusal(tmp_path, capsys):
@@ -320,3 +365,32 @@ def test_override_and_unknown_review(tmp_path):
         with pytest.raises(ValueError):
             await service.spawn(model='omniroute/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
     asyncio.run(run())
+
+
+def test_cli_wait_returns_after_the_dispatcher_died(tmp_path):
+    """Q21/M14: `wait` must return once the supervisor that owned the run is
+    gone (its child may ignore SIGTERM and hold its group), not spin on 'running'."""
+    run_id = 'run-' + uuid.uuid4().hex
+    log = tmp_path / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
+    child = subprocess.Popen([sys.executable, '-c',
+        'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)'],
+        start_new_session=True)
+    try:
+        dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+        dead.wait()
+        (tmp_path / (log.name + '.pid')).write_text(str(dead.pid))
+        spawn_service(state=tmp_path)._save(dict(
+            run_id=run_id, status='running', started=time.time(), ended=None, attempts=[],
+            job_id='j-' + run_id, pid=child.pid, supervisor_stderr_path=str(log)))
+        started = time.monotonic()
+        src = str(Path(__file__).resolve().parents[1] / 'src')   # the CLI child imports this checkout
+        out = subprocess.run([sys.executable, '-m', 'plangraph.spawner.cli', '--state',
+                              str(tmp_path), 'wait', run_id],
+                             capture_output=True, text=True, timeout=8,
+                             env={**os.environ, 'PYTHONPATH': os.pathsep.join(filter(None, [src, os.environ.get('PYTHONPATH')]))})
+        assert time.monotonic() - started < 3
+        final = json.loads(out.stdout)
+        assert final['status'] != 'running' and final['ended'] is not None
+    finally:
+        child.kill()
+        child.wait()

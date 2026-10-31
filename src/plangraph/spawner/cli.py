@@ -59,7 +59,7 @@ def _prune_supervisor_logs(state):
         except FileNotFoundError:
             pass
     for modified, old in sorted(logs, reverse=True)[20:]:
-        if time.time() - modified <= 86400:
+        if time.time() - modified <= 86400 or os.name == 'nt':   # os.kill(pid, 0) terminates on Windows
             continue
         try:
             pid = int(Path(str(old) + '.pid').read_text())
@@ -128,6 +128,11 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true',
                            help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
+    p = commands.add_parser('probe')
+    p.add_argument('--leg', action='append', default=[])
+    p.add_argument('--all-writers', action='store_true')
+    p.add_argument('--timeout', type=float)
+    p.add_argument('--json', action='store_true')
     p = commands.add_parser('wait')
     p.add_argument('run_id')
     p.add_argument('--timeout', type=float)
@@ -136,6 +141,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     service = SpawnService(state=args.state)
     try:
+        if args.verb == 'probe':
+            from .leg_probe import probe_many
+            result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
+            if args.json:
+                print(json.dumps(result))
+            else:
+                for row in result['probes']:
+                    print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
+            return 0 if result['ok'] else 1
         from .bench_entry import benchmark_options
         try:
             options = benchmark_options(args.require_bench, args.bench_db) if args.verb in ('route', 'spawn') else {}

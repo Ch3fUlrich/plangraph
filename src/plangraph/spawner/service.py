@@ -1,7 +1,9 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
+from .env_redact import first_reason
+from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .git_guard import writer_launch
 from plangraph.routing_errors import ParameterRefused
-
 import asyncio
 from dataclasses import asdict
 import hashlib
@@ -15,19 +17,7 @@ import uuid
 from .runner import SpawnerRunner
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
-
-
-OUTPUT_KEEP = 65536   # bytes of stdout a run record keeps
-
-
-def keep_output(text, limit=OUTPUT_KEEP):
-    """Whole ``text`` up to ``limit`` bytes; beyond it the head (verdict) and the tail, marked."""
-    data = text.encode()
-    if len(data) <= limit:
-        return text
-    head = limit // 4
-    return (data[:head].decode('utf-8', errors='ignore') + '\n[... output truncated ...]\n'
-            + data[-(limit - head):].decode('utf-8', errors='ignore'))
+from .output_keep import OUTPUT_KEEP, keep_output
 
 
 class SpawnService(SeatSpawnMixin):
@@ -36,7 +26,9 @@ class SpawnService(SeatSpawnMixin):
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
         self.leg_reader = leg_reader
-        self.tasks = {}
+        if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):  # probes write where the planner reads
+            self.runner.leg_reader = leg_reader
+        self.tasks, self._running_records = {}, {}   # run tasks; job id -> record (Q13/M8)
 
     def _path(self, run_id):
         if not isinstance(run_id, str) or not run_id.startswith('run-') or not run_id[4:].isalnum():
@@ -94,6 +86,8 @@ class SpawnService(SeatSpawnMixin):
                 return {k: v if k in IDENTIFIER_KEYS else clean(v) for k, v in value.items()}
             return value
         host = record.get('host')
+        if record.get('ended') is not None:
+            terminal_reason(record)
         record.update(clean(record))
         if host is not None:
             record['host'] = host   # top-level run host is an identifier (D-2960); nested 'host' keys stay redacted
@@ -309,6 +303,8 @@ class SpawnService(SeatSpawnMixin):
 
         async def execute():
             try:
+                from .run_watchdog import prepare_run, terminal_record
+                limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
                     from .inline_diff import InlineDiffError
@@ -321,8 +317,10 @@ class SpawnService(SeatSpawnMixin):
                             served_witness_reason='leg skipped before launch'))
                         continue
                     launched = True
+                    leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness)
+                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
+                    self._running_records[job.job_id] = record
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
@@ -332,13 +330,13 @@ class SpawnService(SeatSpawnMixin):
                     if task:
                         await asyncio.shield(task)
                     stop = self.runner.provider_responses.get(job.job_id)
-                    from .env_redact import unavailable_reason
-                    unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+                    if terminal_record(record, job):
+                        break
+                    unavailable = fallthrough_reason(self, chosen, job, record)
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
-                    reason = unavailable or ('provider_stop' if stop else
-                        (job.stderr.strip().splitlines()[0] if job.stderr.strip() else f'harness exit code {job.exit_code}')
+                    reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                         served_model=job.served_model, served_family=job.served_family,
@@ -372,6 +370,8 @@ class SpawnService(SeatSpawnMixin):
                     record.update(status='failed', exit_code=1, error=str(exc))
             finally:
                 record['ended'] = time.time()
+                terminal_reason(record)
+                release_attempts(self, record)
                 self._save(record)
 
         task = asyncio.create_task(execute())

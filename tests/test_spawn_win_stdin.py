@@ -121,7 +121,7 @@ def test_hermetic_real_process_stdin_count(tmp_path, monkeypatch):
             wait_seconds=5.0,
         )
 
-        assert job.status == "completed"
+        assert job.status == "completed", (job.exit_code, job.events, job.stderr[-800:])
         assert job.exit_code == 0
         assert job.stdout == str(len(_sent(prompt).encode("utf-8")))
         for arg in job.command:
@@ -250,7 +250,7 @@ def test_timeout_path_with_stdin_kills_and_records_124(monkeypatch):
         assert communicate_calls[0] == _sent(prompt).encode("utf-8")
         assert communicate_calls[1] is None
 
-        assert job.status == "failed"
+        assert job.status == "timeout"  # Watchdog exposes a distinct terminal status.
         assert job.exit_code == 124
         assert any(e.get("event") == "run_timeout" for e in job.events)
 

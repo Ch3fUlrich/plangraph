@@ -1,11 +1,8 @@
 # Plangraph Spawner & Model Routing Architecture
-
 ## Spawn by card
-
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
 or Temporal service is required for this slice.
-
 ```bash
 python -m plangraph.spawner.cli route --card @card.json --role implement --json
 python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
@@ -52,11 +49,11 @@ Writing run roles (implement/fix) guard shared .git/config against in-place muta
 audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
-MCP tools `plangraph_agent_route`, `spawn`, `ps`, `result`, `status`, `cancel`
-(all with the `plangraph_agent_` prefix) share these records. Spawn requires
+CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
+MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
 Result/status/cancel accept `run_id`; legacy job-id operations remain available.
-No CLI or MCP endpoint writes leg state. Gateway adapters call
+Only actual probe results write liveness state. Gateway adapters call
 `runner.provider_response` with actual captured responses.
 
 Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
@@ -726,3 +723,6 @@ on the keeper's atomic `(item, run_id, phase)` idempotency key.
 # Review policy
 
 See [Review method](REVIEW-METHOD.md) for file-backed policy and review-scope admission.
+# Watchdog
+
+Runs sample file signatures/git HEAD (edits), non-header output (activity), and process-tree CPU (post-edit only). Card `stall_min`, `first_edit_min`, `max_min` default to 20/45/90 minutes. Pre-edit, no activity or exceeding first-edit age stalls; post-edit, all signals must stop progressing. Maximum age wins. Status `stalled` exits 6; `timeout` exits 124; `writer_no_changes` exits 5. Events `watchdog_stalled`/`watchdog_timeout` carry rules and diagnostics. Private `runs/<run_id>/live.log` is capped at 2 MB; status exposes live tails and `last_activity_ts`. `PLANGRAPH_SPAWN_RUN_TIMEOUT` replaces the default maximum (seconds), but explicit card `max_min` wins. `PLANGRAPH_SPAWN_WATCHDOG_INTERVAL` overrides sampling seconds.

@@ -11,8 +11,8 @@ no I/O.
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
-from dataclasses import asdict
+from dataclasses import dataclass, asdict
+from plangraph.routing_support.liveness import unavailable
 import json
 import os
 from pathlib import Path
@@ -325,21 +325,21 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                                 | set(exclude_families), legs)
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
-        if leg_obj.harness == "agy" and st["state"] != "limited" and "/" not in leg_obj.model:
+        if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:
             alt = reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
-            if alt["state"] == "limited":
+            if unavailable(alt):
                 return alt
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
-    limited = {key for key, state in states.items() if state["state"] == "limited"}
+    limited = {key for key, state in states.items() if unavailable(state)}
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
     # Route each leg through the same canonical eligibility rules to retain
     # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
-        reason = policy.skip_reason(leg, role) or ("limited" if leg.id in limited else None)
+        reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason:
             pass
         elif leg.family in excluded:
@@ -461,10 +461,10 @@ def next_leg_after_provider_stop(plan, leg_id, status, body, headers, caller, *,
     start = list(by_id).index(leg_id) + 1
     for leg in plan.legs[start:]:
         st = state.leg_status(leg.model, now=now, account=account, combo=combo)
-        if leg.harness == "agy" and st["state"] != "limited" and "/" not in leg.model:
+        if leg.harness == "agy" and not unavailable(st) and "/" not in leg.model:
             alt = state.leg_status("agy/" + leg.model, now=now, account=account, combo=combo)
-            if alt["state"] == "limited":
+            if unavailable(alt):
                 continue
-        if st["state"] != "limited":
+        if not unavailable(st):
             return leg
     return None

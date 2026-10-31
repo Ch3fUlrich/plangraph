@@ -4,6 +4,9 @@ import re
 
 IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
 
+_QUOTA_MARKER = re.compile(r'quota reached|quota exceeded|usage limit|rate limit|resets in|too many requests', re.I)
+_ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
+
 
 def _is_numeric(value):
     """True for optionally signed decimal digits only: "-1", "+8080", "8080".
@@ -16,12 +19,34 @@ def _is_numeric(value):
     return re.fullmatch(r'[+-]?\d+', value) is not None
 
 
+def normalize(text):
+    return re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))', '', text).replace('\r\n', '\n').replace('\r', '\n')
+
+
+def first_reason(text):
+    return next((line.strip() for line in normalize(text).splitlines() if line.strip()), '')
+
+
+def harness_limit_line(exit_code, stdout, stderr):
+    if exit_code in (None, 0):
+        return None
+    # Quota evidence needs an error-shaped or start-anchored line (D-3257):
+    # a mid-line mention in prose, a traceback or a retry log never marks a
+    # leg. Agent prose on stdout only counts via its error-shaped lines.
+    def quota(line):
+        if _ERROR_SHAPED.match(line):
+            return _QUOTA_MARKER.search(line)
+        return _QUOTA_MARKER.match(line.strip())
+    lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
+        line for line in normalize(stdout).splitlines()
+        if _ERROR_SHAPED.match(line) and _QUOTA_MARKER.search(line)]
+    return lines[0].strip() if lines else None
+
+
 def unavailable_reason(exit_code, stdout, stderr):
     """Failed harness evidence, in stderr-first order; never task prose on success."""
     if exit_code == 0:
         return None
-    def normalize(text):
-        return re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))', '', text).replace('\r\n', '\n').replace('\r', '\n')
     stdout, stderr = normalize(stdout), normalize(stderr)
     markers = ('model unavailable', 'not served', 'unknown model', 'not_served_on_host')
     def marked(value):

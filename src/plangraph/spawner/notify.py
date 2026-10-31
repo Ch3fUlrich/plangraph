@@ -123,6 +123,8 @@ def completion_event(record, cwd):
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
         idempotency_key=record['run_id'] + ':' + record['status'],
         event='DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
+        reason=record.get('reason'),
+        **({'watchdog': record['watchdog']} if 'watchdog' in record else {}),
         parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
         item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM'),
         take_cmd=f'git cherry-pick {head}' if head else 'git log --oneline',
