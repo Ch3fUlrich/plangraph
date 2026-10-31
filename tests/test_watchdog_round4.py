@@ -1,8 +1,13 @@
 """D-3287 round 4 on PR #257: git guard shell keys, final-attempt reason,
 base-path run registry, orphaned run group kill (seat run-e6d5c597 MEDs)."""
+import asyncio
+import subprocess
+import sys
+import time
+
 import pytest
 
-from plangraph.spawner.exit_outcome import release_attempts, terminal_reason
+from plangraph.spawner.exit_outcome import release_attempts, stop_orphan_group, terminal_reason
 from plangraph.spawner.git_guard import DANGEROUS
 from plangraph.spawner.service import SpawnService
 
@@ -39,3 +44,16 @@ def test_base_path_registry_is_released(tmp_path):
     runner._tasks.update(a=1, b=2)
     release_attempts(service, record)
     assert service._running_records == {} and runner._tasks == {}
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='/proc start-time check')
+def test_orphaned_run_group_is_stopped_but_never_a_recycled_pid():
+    proc = subprocess.Popen(['sleep', '30'], start_new_session=True)
+    try:
+        asyncio.run(stop_orphan_group({'pid': proc.pid, 'last_activity_ts': time.time() - 100}))
+        assert proc.poll() is None   # started after the run's last activity: not the run's process
+        asyncio.run(stop_orphan_group({'pid': proc.pid, 'last_activity_ts': time.time()}))
+        assert proc.wait(timeout=3) == -9
+    finally:
+        proc.kill()
+        proc.wait()
