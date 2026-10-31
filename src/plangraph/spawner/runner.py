@@ -440,6 +440,8 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
+            from .opencode_isolation import CLOSED_LAYERS
+            child_env = {k: v for k, v in child_env.items() if k not in CLOSED_LAYERS}  # deny witness: close_config_layers alone sets these
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
