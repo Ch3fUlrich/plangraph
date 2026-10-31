@@ -43,14 +43,14 @@ def opencode_models():
     return models
 
 
-def console_host_skip(model, probe, env):
+def console_host_skip(model, probe, env, state=None):
     """Console providers require positive host evidence, including on probe failure."""
     from plangraph.routing_support.resolver import host_probe_env
     from .host_models import unavailable_models, state_dir
-    if model.lower().split('#', 1)[0] in unavailable_models(env=env):
+    if model.lower().split('#', 1)[0] in unavailable_models(state=state, env=env):
         return 'not_served_on_host: ' + model
     try:
-        models = probe(host_probe_env(env)) if probe else cached_models('opencode', opencode_models, state=state_dir(env=env))
+        models = probe(host_probe_env(env)) if probe else cached_models('opencode', opencode_models, state=state_dir(state, env))
     except Exception:
         models = None
     return None if model in (models or ()) else 'not_served_on_host: ' + model

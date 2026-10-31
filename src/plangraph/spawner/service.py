@@ -191,7 +191,7 @@ class SpawnService(SeatSpawnMixin):
         try:
             chosen = child['chosen_leg']
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
-                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'])
+                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'], state=self.state)
             child['job_id'] = job.job_id
             self._save(child)
             task = self.runner._tasks.get(job.job_id)
@@ -321,7 +321,7 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness, tier=chosen.tier)
+                        role=role, dry_run=dry_run, client=chosen.harness, tier=chosen.tier, state=self.state)
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)

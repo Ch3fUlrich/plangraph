@@ -369,11 +369,11 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
-        tier: str | None = None,
+        tier: str | None = None, state=None,
     ) -> JobInfo:
         """Spawn a new agent job and track its state (``tier`` is the chosen leg's tier)."""
         from plangraph.planner.routing import validate_model
-        validate_model(model_or_combo)
+        validate_model(model_or_combo, state=state)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
@@ -560,7 +560,7 @@ class SpawnerRunner:
                 return job
 
             from .resolver import host_skip_reason_async
-            unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
+            unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env, state=state)
             if unavailable:
                 job.status = 'failed'
                 job.exit_code = 1
@@ -1091,7 +1091,7 @@ def spawn_service(*args, **kwargs):
             plan = _plan if _plan is not None else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):
-                plan = await plan_for_launch_async(plan, dry_run=dry_run)
+                plan = await plan_for_launch_async(plan, dry_run=dry_run, state=self.state)
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
@@ -1132,7 +1132,7 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, tier=chosen.tier)
+                            role=role, dry_run=dry_run, client=chosen.harness, tier=chosen.tier, state=self.state)
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
                                       writer_family=chosen.family,
@@ -1173,7 +1173,7 @@ def spawn_service(*args, **kwargs):
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
-                            current = restrict(await plan_for_launch_async(current, dry_run=dry_run))
+                            current = restrict(await plan_for_launch_async(current, dry_run=dry_run, state=self.state))
                         for skipped in current.to_dict()['skipped']:
                             if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)
