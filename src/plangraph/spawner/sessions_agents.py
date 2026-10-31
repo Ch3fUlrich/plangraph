@@ -22,9 +22,11 @@ SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 USAGE_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 TAIL_BYTES = 256 * 1024  # spec: only the transcript's last 256 KB is read
 # `claude agents --json` states that mean the old session is already over;
-# any other (or missing) state is live and must be stopped before a relaunch
+# live `claude agents --json --all` reports the terminal states "done" and
+# "failed" (with "working"/"blocked" live) - all four spellings count. Any
+# other (or missing) state is live and must be stopped before a relaunch
 # replaces it - guessing wrong can only stop what should be stopped.
-FINISHED_STATES = frozenset({"finished", "stopped"})
+FINISHED_STATES = frozenset({"finished", "stopped", "done", "failed"})
 
 
 def transcript_path(cwd, session_id):
@@ -50,6 +52,26 @@ class _AgentsMixin:
     self._which, self._platform, self._resolve_budget)."""
 
     # ---- subprocess argv construction (D-2873) -------------------------
+
+    @staticmethod
+    def _stop_token(row, sid):
+        """The one token `claude stop` accepts: the 8-char short job id, never
+        the full sessionId (which exits 1 "No job matching"). The matching
+        `claude agents` row's own "id" is that job id only when it is exactly
+        the 8-char prefix of the sessionId (len 8 and sid.startswith(id)); any
+        other row id - a truncated "8"/"87" or another job's id - is not a
+        guessable stop target and refuses "unresolved job id" instead of
+        guessing sid[:8]. sid[:8] is used only when the row is None or has no
+        "id" at all; a blank/None sid refuses before any argv is built
+        (D-3343). Every other check stays keyed on the full sessionId."""
+        if not sid or not str(sid).strip():
+            raise _refuse(f"unresolved job id for {sid}")
+        rid = str((row or {}).get("id") or "")
+        if not rid:
+            return str(sid)[:8]
+        if len(rid) == 8 and str(sid).startswith(rid):
+            return rid
+        raise _refuse(f"unresolved job id for {sid}")
 
     def _claude_head(self):
         if self._platform != "win32":

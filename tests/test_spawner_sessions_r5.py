@@ -155,16 +155,16 @@ def test_stop_of_stopped_record_with_live_id_stops_again(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     go(site, s)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",  # r7 adapt
                         "kind": "background", "state": "running",
                         "startedAt": 1_000_000}]
     s.stop(name="alpha")
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",
                         "kind": "background", "state": "running", "startedAt": 1_000_000}]
     res = s.stop(name="alpha")  # the stopped record's id is still live
     assert res["ok"] is True and res["session_id"] == UUID1
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1], ["claude", "stop", UUID1]]
+    assert stops == [["claude", "stop", UUID1[:8]], ["claude", "stop", UUID1[:8]]]
 
 
 def test_relaunch_resolved_old_id_is_never_the_new_id(site):
@@ -185,13 +185,13 @@ def test_relaunch_resolved_old_id_is_never_the_new_id(site):
     run = SwapRun(stdout="done\n")
     s = make(site, run, resolve_budget=0.0)
     rec_path, _marker = _ready(site, run, s)
-    run.agents_rows = [{"id": "x", "sessionId": UUID2, "name": "alpha",
+    run.agents_rows = [{"id": UUID2[:8], "sessionId": UUID2, "name": "alpha",
                         "kind": "background", "state": "running", "startedAt": 1_005_000}]
     res = s.relaunch("alpha")
     assert res["ok"] is True
     assert res["session_id"] == UUID1  # never the replaced UUID2
     assert json.loads(rec_path.read_text())["session_id"] == UUID1
-    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID2]
+    assert [a[2] for a, _ in run.calls if a[:2] == ["claude", "stop"]] == [UUID2[:8]]
 
 
 def test_failed_relaunch_retry_with_same_handoff_ok(site):

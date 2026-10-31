@@ -233,7 +233,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         return {"ok": True, "name": name, "session_id": sid}
 
     def _stop_record(self, rec, name):
-        """claude stop <id> - the one and only stop mechanism, never rm/kill.
+        """claude stop <short job id> - the one and only stop mechanism, never rm/kill.
         One strict `claude agents` pre-poll (r7) resolves a null record id
         (newest non-finished background row of this name within 5 s of launch)
         and pre-checks it: a listed finished id is gone - stopped without
@@ -270,7 +270,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             self._write_record(name, {**rec, "state": "stopped",
                                       "stopped_ts": self._now(), "session_id": sid})
             return sid
-        proc = self._run(self._claude_head() + ["stop", sid],
+        proc = self._run(self._claude_head() + ["stop", self._stop_token(row, sid)],
                          capture_output=True, text=True, timeout=STOP_TIMEOUT)
         if proc.returncode != 0:
             if row is None and not any(r.get("sessionId") == sid

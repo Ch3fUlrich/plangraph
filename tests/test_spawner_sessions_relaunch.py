@@ -50,7 +50,7 @@ def test_relaunch_stop_failure_launches_nothing(site):
     hf = site.tmp_path / "handoff.md"
     hf.write_text("carry on")
     s.mark_ready("alpha", str(hf))
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",  # r7 adapt
                         "kind": "background", "state": "running",
                         "startedAt": 1_000_000}]
     run.stop_rc = 1
@@ -117,11 +117,11 @@ def test_relaunch_launch_failure_after_stop_keeps_record(site):
 def test_relaunch_already_stopped_live_row_is_stopped_first(site, state):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",  # r7 adapt
                         "kind": "background", "state": "running",
                         "startedAt": 1_000_000}]
     _stopped(site, run, s)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",
                         "kind": "background", "state": state, "startedAt": 1_000_000}]
     run.stdout = "session " + UUID2
     res = s.relaunch("alpha")
@@ -133,7 +133,7 @@ def test_relaunch_already_stopped_live_row_is_stopped_first(site, state):
                      ["claude", "agents"], ["claude", "agents"], ["claude", "agents"],
                      ["claude", "stop"], ["claude", "agents"], ["claude", "--bg"]]
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
-        [["claude", "stop", UUID1], ["claude", "stop", UUID1]]  # exact argv, never rm/kill
+        [["claude", "stop", UUID1[:8]], ["claude", "stop", UUID1[:8]]]  # short job id, never rm/kill
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
 
@@ -142,7 +142,7 @@ def test_relaunch_already_stopped_stop_failure_launches_nothing(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
     rec_path, marker_path = _stopped(site, run, s)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",
                         "kind": "background", "state": "running", "startedAt": 1_000_000}]
     run.stop_rc = 1
     with pytest.raises(ParameterRefused, match="stop failed"):
@@ -156,7 +156,7 @@ def test_relaunch_already_stopped_stop_failure_launches_nothing(site):
 def test_relaunch_already_stopped_unlisted_id_proceeds_without_stop(site):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",  # r7 adapt
                         "kind": "background", "state": "running",
                         "startedAt": 1_000_000}]
     _stopped(site, run, s)
@@ -166,7 +166,7 @@ def test_relaunch_already_stopped_unlisted_id_proceeds_without_stop(site):
     res = s.relaunch("alpha")
     assert res["ok"] is True and res["session_id"] == UUID2
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1]]  # only the earlier user stop
+    assert stops == [["claude", "stop", UUID1[:8]]]  # only the earlier user stop
     assert any(a[:3] == ["claude", "agents", "--json"] for a, _ in run.calls)  # id was looked up
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
@@ -176,17 +176,17 @@ def test_relaunch_already_stopped_unlisted_id_proceeds_without_stop(site):
 def test_relaunch_already_stopped_finished_row_proceeds_without_stop(site, state):
     run = FakeRun(stdout="session " + UUID1)
     s = make(site, run)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",  # r7 adapt
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",  # r7 adapt
                         "kind": "background", "state": "running",
                         "startedAt": 1_000_000}]
     _stopped(site, run, s)
-    run.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "alpha",
+    run.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "alpha",
                         "kind": "background", "state": state, "startedAt": 1_000_000}]
     run.stdout = "session " + UUID2
     res = s.relaunch("alpha")
     assert res["ok"] is True and res["session_id"] == UUID2
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1]]  # already over: no second stop
+    assert stops == [["claude", "stop", UUID1[:8]]]  # already over: no second stop
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["session_id"] == UUID2 and rec["stopped_ts"] is None
 
@@ -315,13 +315,13 @@ def test_relaunch_unknown_record_null_id_stops_by_name_then_launches(site):
     hf = site.tmp_path / "handoff.md"
     hf.write_text("carry on")
     s.mark_ready("alpha", str(hf))
-    run.agents_rows = [{"id": "x", "sessionId": UUID2, "name": "alpha",
+    run.agents_rows = [{"id": UUID2[:8], "sessionId": UUID2, "name": "alpha",
                         "kind": "background", "startedAt": 1_000_000}]
     run.stdout = "session " + UUID1
     res = s.relaunch("alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID2]]  # null id resolved by name, then stopped
+    assert stops == [["claude", "stop", UUID2[:8]]]  # null id resolved by name, then stopped
     assert len(run.launch_calls()) == 2
     rec = json.loads(rec_path.read_text())
     assert rec["state"] == "running" and rec["session_id"] == UUID1 and rec["stopped_ts"] is None

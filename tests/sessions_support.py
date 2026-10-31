@@ -17,6 +17,11 @@ MODEL, EFFORT, MODE = "mimo/mimo-v2.6-pro", "high", "bypassPermissions"
 PROMPT = "do the thing"
 DETACHED = 0x8 | 0x200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 BASE = dict(model=MODEL, effort=EFFORT, permission_mode=MODE, prompt=PROMPT)
+# The real `claude agents --json --all` row states: "working"/"blocked" are
+# live, "done"/"failed" terminal - plus the "finished"/"stopped" spellings
+# this fake writes and older fixture rows carry. Only a LIVE row can be
+# stopped (exact-string states, never case-folded).
+TERMINAL_STATES = frozenset({"done", "failed", "finished", "stopped"})
 
 
 class FakeRun:
@@ -35,9 +40,7 @@ class FakeRun:
         if self._is_agents(argv):
             return types.SimpleNamespace(returncode=self.agents_rc, stdout=json.dumps(self.agents_rows), stderr="")
         if self._is_stop(argv):
-            if self.stop_rc == 0:
-                self._finish_rows(argv[2] if len(argv) > 2 else None)
-            return types.SimpleNamespace(returncode=self.stop_rc, stdout="", stderr="")
+            return self._stop_result(argv[2] if len(argv) > 2 else "")
         return types.SimpleNamespace(returncode=self.launch_rc, stdout=self.stdout, stderr="")
 
     # Dispatch on the tail and accept both the bare name and the resolved
@@ -50,13 +53,44 @@ class FakeRun:
     def _is_stop(argv):
         return Path(argv[0]).name in ("claude", "claude.exe") and argv[1:2] == ["stop"]
 
-    def _finish_rows(self, sid):
-        """Answer the confirmation `claude agents` poll a stop triggers: a
-        successful `claude stop <sid>` ends that session's row, so the poll
-        right after the stop must see the id gone or in a finished state
-        (D-3193). Tests modelling an unconfirmed stop override this."""
+    def _stop_result(self, token):
+        """`claude stop <token>` as the measured CLI runs it (D-3343): only a
+        listed LIVE short job id stops - rc 0 "stopped <id>"; any other token,
+        the full sessionId included, exits 1 "No job matching '<token>'".
+        stop_rc forces a failure on a token the CLI would have accepted."""
+        row = self._live_row(token)
+        if row is None:
+            return types.SimpleNamespace(returncode=1, stdout="",
+                                         stderr=f"No job matching '{token}'")
+        if self.stop_rc != 0:
+            return types.SimpleNamespace(returncode=self.stop_rc, stdout="", stderr="")
+        self._finish_rows(token)
+        return types.SimpleNamespace(returncode=0, stdout=f"stopped {token}", stderr="")
+
+    @staticmethod
+    def _short_id(row):
+        """A row's 8-char short job id: its own "id", else sessionId[:8] -
+        the only token `claude stop` accepts for that row (D-3343)."""
+        return str(row.get("id") or str(row.get("sessionId") or "")[:8])
+
+    def _live_row(self, token):
+        """The row the real CLI stops for `token`: EXACT short-id equality on
+        a live row, never a prefix or full sessionId match."""
         for row in self.agents_rows:
-            if row.get("sessionId") == sid:
+            if (isinstance(row, dict) and token and self._short_id(row) == token
+                    and str(row.get("state") or "") not in TERMINAL_STATES):
+                return row
+        return None
+
+    def _finish_rows(self, token):
+        """Answer the confirmation `claude agents` poll a stop triggers: a
+        successful `claude stop <short id>` ends that session's row (rows are
+        indexed by their short job id and finished only on EXACT short-id
+        equality, never a sessionId prefix), so the poll right after the stop
+        must see the id gone or in a finished state (D-3193). Tests modelling
+        an unconfirmed stop override this."""
+        for row in self.agents_rows:
+            if isinstance(row, dict) and token and self._short_id(row) == token:
                 row["state"] = "finished"
 
     def launch_calls(self):

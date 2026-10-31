@@ -41,7 +41,7 @@ def test_stop_unlisted_id_attempts_claude_stop(site):
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
-        [["claude", "stop", UUID1]]  # exact argv, never rm/kill
+        [["claude", "stop", UUID1[:8]]]  # short job id, never rm/kill
     assert [a[:2] for a, _ in run.calls] == \
         [["claude", "agents"], ["claude", "stop"], ["claude", "agents"]]
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
@@ -59,7 +59,7 @@ def test_stop_unlisted_id_stop_rc1_still_recovers(site):
     res = s.stop(name="alpha")
     assert res["ok"] is True and res["session_id"] == UUID1
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
-        [["claude", "stop", UUID1]]  # attempted exactly once
+        [["claude", "stop", UUID1[:8]]]  # attempted exactly once
     rec = json.loads((site.state / "sessions" / "alpha.json").read_text())
     assert rec["state"] == "stopped" and rec["session_id"] == UUID1
     assert rec["stopped_ts"] is not None
@@ -69,7 +69,7 @@ def test_stop_rc1_on_listed_id_refuses_and_keeps_record(site):
     # qwen MED: the rc still gates - a listed id whose `claude stop` exits 1
     # is refused with the unchanged text and the record is left untouched.
     run = FakeRun(stop_rc=1, agents_rows=[
-        {"id": "r", "sessionId": UUID1, "name": "alpha", "kind": "background",
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "alpha", "kind": "background",
          "state": "running", "startedAt": 1_000_000}])
     s = make(site, run)
     sess = _running_record(site)
@@ -77,7 +77,7 @@ def test_stop_rc1_on_listed_id_refuses_and_keeps_record(site):
     with pytest.raises(ParameterRefused, match="stop failed"):
         s.stop(name="alpha")
     assert [a for a, _ in run.calls if a[:2] == ["claude", "stop"]] == \
-        [["claude", "stop", UUID1]]
+        [["claude", "stop", UUID1[:8]]]
     assert (sess / "alpha.json").read_text() == before  # record unchanged
 
 
@@ -96,7 +96,7 @@ def test_relaunch_stops_unlisted_old_id_before_bg(site):
     assert res["ok"] is True and res["name"] == "alpha"
     assert res["session_id"] == UUID2  # the name is kept for the new session
     stops = [a for a, _ in run.calls if a[:2] == ["claude", "stop"]]
-    assert stops == [["claude", "stop", UUID1]]  # old id stopped exactly once
+    assert stops == [["claude", "stop", UUID1[:8]]]  # old id stopped exactly once
     kinds = [a[:2] for a, _ in run.calls]
     bg = [i for i, k in enumerate(kinds) if k == ["claude", "--bg"]]
     assert len(bg) == 2 and kinds.index(["claude", "stop"]) < bg[1]

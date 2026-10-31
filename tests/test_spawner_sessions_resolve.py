@@ -57,7 +57,7 @@ def test_id_from_name_fallback_ignores_stale(site):
              "startedAt": 1_000_000 - 60_000}
     wrong_kind = {"id": "k", "sessionId": UUID3, "name": "alpha", "kind": "foreground",
                   "startedAt": 1_000_000}
-    fresh = {"id": "f", "sessionId": UUID2, "name": "alpha", "kind": "background",
+    fresh = {"id": UUID2[:8], "sessionId": UUID2, "name": "alpha", "kind": "background",
              "startedAt": 1_000_000}
     run = FakeRun(stdout="done\n", agents_rows=[stale, wrong_kind, fresh])
     s = make(site, run)
@@ -137,7 +137,7 @@ def test_resolve_short_id_miss_falls_back_and_excludes(site):
     hf.write_text("carry on")
     s2.mark_ready("beta", str(hf))
     run2.stdout = "done\n"
-    run2.agents_rows = [{"id": "x", "sessionId": UUID1, "name": "beta", "kind": "background",
+    run2.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "beta", "kind": "background",
                          "startedAt": 2_000_000}]
     res2 = s2.relaunch("beta")  # the marker's handoff carries the relaunch
     assert res2["session_id"] is None and "warning" in res2  # only the excluded row matched
@@ -197,10 +197,17 @@ def test_excluded_id_rejected_for_full_uuid_short_and_fallback(site):
                         "startedAt": 1_000_000}]
     res = s.relaunch("alpha", handoff=str(hf))
     assert res["session_id"] == UUID2  # the old full UUID in stdout is not the new id
-    # a short id row carrying the excluded sessionId is rejected too
-    run.agents_rows = [
-        {"id": SHORT, "sessionId": UUID2, "name": "alpha", "kind": "background", "startedAt": 1_000_000},
-        {"id": "g", "sessionId": UUID3, "name": "alpha", "kind": "background", "startedAt": 1_000_000}]
+    # a short id row carrying the excluded sessionId is rejected too: the
+    # stoppable row goes first (its own id is the short job id the stop needs,
+    # D-3343) and keeps the SHORT row alive behind it - that row matches the
+    # claimed short id, name and kind, yet carries the replaced sessionId and
+    # is never the new id
+    run.agents_rows = [{"id": UUID2[:8], "sessionId": UUID2, "name": "alpha", "kind": "background",
+                        "startedAt": 1_000_000},
+                       {"id": SHORT, "sessionId": UUID2, "name": "alpha", "kind": "background",
+                        "startedAt": 1_000_000},
+                       {"id": "g", "sessionId": UUID3, "name": "alpha", "kind": "background",
+                        "startedAt": 1_000_000}]
     run.stdout = "backgrounded · " + SHORT + " · alpha"
     res2 = s.relaunch("alpha", handoff=str(hf))
     assert res2["session_id"] == UUID3
@@ -233,6 +240,7 @@ def test_short_id_match_requires_launched_name_and_background_kind(site):
     s4 = make(site, run4)
     go(site, s4, name="delta", prompt="do delta")  # delta at UUID1
     run4.agents_rows = [
+        {"id": UUID1[:8], "sessionId": UUID1, "name": "delta", "kind": "background", "startedAt": 0},
         {"id": SHORT, "sessionId": UUID1, "name": "delta", "kind": "background", "startedAt": 0},
         {"id": "g", "sessionId": UUID3, "name": "delta", "kind": "background", "startedAt": 2_000_000}]
     run4.stdout = "backgrounded · " + SHORT + " · delta"

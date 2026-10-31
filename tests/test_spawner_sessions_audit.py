@@ -117,7 +117,7 @@ def test_timeout_expired_is_audited_failure(site):
     run2 = StopTimeout(stdout="session " + UUID1)
     s2 = make(site, run2)
     go(site, s2, name="beta", prompt="do beta")
-    run2.agents_rows = [{"id": "r", "sessionId": UUID1, "name": "beta",  # r7 adapt
+    run2.agents_rows = [{"id": UUID1[:8], "sessionId": UUID1, "name": "beta",  # r7 adapt
                          "kind": "background", "state": "running",
                          "startedAt": 1_000_000}]
     with pytest.raises(subprocess.TimeoutExpired):
