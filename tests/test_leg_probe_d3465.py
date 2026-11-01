@@ -172,6 +172,7 @@ def test_every_harness_client_is_launched_with_the_explicit_cwd(
 
     lane = tmp_path / 'lane'
     lane.mkdir()
+    monkeypatch.setenv('PWD', str(tmp_path))   # the caller's shell dir (D-3505)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 
     async def run():
@@ -185,3 +186,4 @@ def test_every_harness_client_is_launched_with_the_explicit_cwd(
     # fallback to the parent process cwd or a configured workspace
     assert Path(captured['argv'][0]).name == binary
     assert captured['kwargs']['cwd'] == str(lane)
+    assert captured['kwargs']['env']['PWD'] == str(lane)   # D-3505: never the caller's PWD

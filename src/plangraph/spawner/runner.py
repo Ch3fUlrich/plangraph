@@ -22,6 +22,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from os.path import abspath as _abspath  # tests stub runner.os (test_w36_regressions)
 from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.clients import (
@@ -432,6 +433,9 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        # D-3505: harnesses take their project dir from an inherited $PWD over the
+        # process cwd; a caller's PWD put probe commits into the caller's worktree.
+        child_env['PWD'] = _abspath(work_dir)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
@@ -908,6 +912,10 @@ def spawn_service(*args, **kwargs):
             if hasattr(self.runner, '__dict__'):
                 self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
 
+        async def cancel(self, run_id):   # D-3505: the leg loop of the supervisor stops on this marker
+            self._path(run_id).parent.exists() and self._path(run_id).with_name('cancelled').touch()
+            return await super().cancel(run_id)
+
         def _save(self, record, *, retry=False):
             from .notify import completion_event, CommandSink, KeeperNotConfigured
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
@@ -1097,6 +1105,8 @@ def spawn_service(*args, **kwargs):
                                 job.status = 'cancelled'
                             elif not task.cancelled() and task.exception() is not None:
                                 raise task.exception()
+                        if self._path(run_id).with_name('cancelled').exists():   # D-3505: a CLI cancel from
+                            job.status = 'cancelled'   # another process ends the run, never a fall-through leg
                         stop = self.runner.provider_responses.get(job.job_id)
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
