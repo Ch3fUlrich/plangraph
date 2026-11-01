@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from typing import Any, Callable, Optional
 
+TIMEOUT_MSG = "timeout"
+
 
 def default_runner(argv: list[str], timeout: float = 30.0) -> Any:
     """Default process runner using subprocess.run with argv list, no shell."""
@@ -50,6 +52,19 @@ def stop_session(
         stderr = getattr(proc, "stderr", "") or ""
         msg = stdout if stdout else stderr
         return int(rc), str(msg).strip()
+    except subprocess.TimeoutExpired:
+        return 1, TIMEOUT_MSG
     except Exception as exc:
         # Runner failure: logged with rc, no crash
         return 1, f"runner_error: {exc}"
+
+
+def failure_tag(rc: int, message: str) -> str:
+    """Short, content-free tag for a failed stop ('' on success), for the audit line."""
+    if rc == 0:
+        return ""
+    if message == TIMEOUT_MSG:
+        return "timeout"
+    if message.startswith("runner_error"):
+        return "runner_error"
+    return "nonzero_rc"

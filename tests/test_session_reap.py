@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 import pytest
 
 from plangraph.session_reap.scan import scan, SessionRecord
-from plangraph.session_reap.policy import decide, ReapConfig, DEFAULT_ALLOWLIST
-from plangraph.session_reap.act import stop_session
-from plangraph.session_reap.log import log_stop, DEFAULT_LOG_PATH
-from plangraph.session_reap.mark import mark_session, main as mark_main
-from plangraph.session_reap.__main__ import main as cli_main, reap
+from plangraph.session_reap.policy import decide
+from plangraph.session_reap.mark import main as mark_main
+from plangraph.session_reap.__main__ import reap
 
 
 @pytest.fixture
@@ -88,8 +85,7 @@ def test_working_idle_blocked_stopped_all_keep(frozen_now):
         updated_at=frozen_now - timedelta(hours=5),
         has_result=False,
     )
-    action, reason = decide(rec_working_idle, frozen_now)
-    assert action == "keep"
+    assert decide(rec_working_idle, frozen_now) == ("keep", "state_working")
 
     # blocked (waiting for human) -> keep
     rec_blocked = SessionRecord(
@@ -100,8 +96,7 @@ def test_working_idle_blocked_stopped_all_keep(frozen_now):
         updated_at=frozen_now - timedelta(hours=5),
         has_result=False,
     )
-    action, reason = decide(rec_blocked, frozen_now)
-    assert action == "keep"
+    assert decide(rec_blocked, frozen_now) == ("keep", "state_blocked")
 
     # stopped -> keep
     rec_stopped = SessionRecord(
@@ -112,8 +107,7 @@ def test_working_idle_blocked_stopped_all_keep(frozen_now):
         updated_at=frozen_now - timedelta(hours=5),
         has_result=False,
     )
-    action, reason = decide(rec_stopped, frozen_now)
-    assert action == "keep"
+    assert decide(rec_stopped, frozen_now) == ("keep", "state_stopped")
 
 
 def test_allowlisted_sessions_never_stopped(frozen_now):
@@ -152,8 +146,7 @@ def test_ttl_json_allow_stop_false_keeps(frozen_now):
         allow_stop=False,
         ttl_min=15,
     )
-    action, reason = decide(rec, frozen_now)
-    assert action == "keep"
+    assert decide(rec, frozen_now) == ("keep", "ttl_no_stop")
 
 
 def test_ttl_min_overrides_idle_min(frozen_now):
@@ -354,8 +347,9 @@ def test_runner_failure_logged_with_rc_no_crash(tmp_path, frozen_now):
 def test_mark_session_writes_ttl_json(tmp_path, monkeypatch):
     job_dir = tmp_path / "test_job_123"
     job_dir.mkdir()
+    (job_dir / "state.json").write_text("{}", encoding="utf-8")
 
-    # CLAUDE_JOB_DIR set to child or job_dir
+    # CLAUDE_JOB_DIR set to a child of the job dir (the job dir holds state.json)
     monkeypatch.setenv("CLAUDE_JOB_DIR", str(job_dir / "task_scratch"))
 
     # Test marking with ttl_min 20 and default allow_stop True

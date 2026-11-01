@@ -11,9 +11,12 @@ from typing import Optional, Sequence
 
 
 def resolve_session_dir(explicit_dir: Optional[Path] = None) -> Path:
-    """Resolve session directory from explicit_dir or CLAUDE_JOB_DIR parent.
+    """Resolve the session's own job directory.
 
-    Refuses if CLAUDE_JOB_DIR is unset.
+    An explicit dir is used as given. Otherwise CLAUDE_JOB_DIR is walked upward to
+    the nearest directory that holds state.json (CLAUDE_JOB_DIR may be the job dir
+    or a child of it). Refuses if the variable is unset or no ancestor has a
+    state.json, so a marker is never written outside a session's job dir.
     """
     if explicit_dir is not None:
         return Path(explicit_dir)
@@ -22,12 +25,11 @@ def resolve_session_dir(explicit_dir: Optional[Path] = None) -> Path:
     if not raw or not raw.strip():
         raise ValueError("CLAUDE_JOB_DIR environment variable is unset")
 
-    p = Path(raw)
-    # If p already has state.json, p is the session directory.
-    # Otherwise, per brief, dir is from env CLAUDE_JOB_DIR parent.
-    if (p / "state.json").is_file() and not (p.parent / "state.json").is_file():
-        return p
-    return p.parent
+    start = Path(raw)
+    for candidate in (start, *start.parents):
+        if (candidate / "state.json").is_file():
+            return candidate
+    raise ValueError(f"no state.json in CLAUDE_JOB_DIR ({start}) or any parent; refusing to write ttl.json")
 
 
 def mark_session(
@@ -36,6 +38,8 @@ def mark_session(
     job_dir: Optional[Path] = None,
 ) -> Path:
     """Write ttl.json to the session directory."""
+    if ttl_min < 1:
+        raise ValueError(f"--ttl-min must be >= 1, got {ttl_min}")
     target_dir = resolve_session_dir(job_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -50,7 +54,6 @@ def mark_session(
 
     return ttl_path
 
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="plangraph.session_reap.mark",
@@ -60,7 +63,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--ttl-min",
         type=int,
         required=True,
-        help="Session idle TTL in minutes.",
+        help="Minutes a finished session is kept before it may be stopped (>= 1); replaces the default grace/idle for this session.",
     )
     parser.add_argument(
         "--no-stop",
@@ -72,7 +75,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--dir",
         type=Path,
         default=None,
-        help="Explicit session directory (defaults to CLAUDE_JOB_DIR parent).",
+        help="Explicit session directory (defaults to the job dir found from CLAUDE_JOB_DIR).",
     )
 
     args = parser.parse_args(argv)
