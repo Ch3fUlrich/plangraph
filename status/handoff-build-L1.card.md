@@ -1,27 +1,30 @@
-# L1 card · build-L1-0037 · 2026-10-31T22:30Z
+# L1 card · build-L1-0039 · 2026-11-01T02:10Z
 ## Goal
-- Close S09 RIN-CUTOVER-DATA (needs KEEPER-DCLOSE live), land LE-WATCHDOG-CLEAR-VERIFY; L2s gwtok + spawner
+- Land KEEPER-DCLOSE (PR #276), get RIN-CUTOVER-DATA submitted (D-3447), resolve D-3445 snapshot-serve incident
 ## Keeper
-- claimed: plangraph:RIN-CUTOVER-DATA (claimed, since 20:46Z), plangraph:KEEPER-DCLOSE-TRACK-EVIDENCE (claimed, since 21:00Z), plangraph:LE-WATCHDOG-CLEAR-VERIFY (claimed, since 21:00Z)
-- ready next: plangraph:LE-PANE-MOVE-EXIT-CONFIRM, plangraph:LE-FLEET-MSG-INVENTORY
+- claimed: plangraph:RIN-CUTOVER-DATA (claimed CLI token, since 20:46Z), plangraph:KEEPER-DCLOSE-TRACK-EVIDENCE (claimed ep2, since 00:54Z, lease 02:54Z)
+- ready next: plangraph:LE-SNAPSHOT-SERVE-PATH (to be filed via routing)
 ## Done
-- 10-31T21:58Z D-3430 - keeper.json repoint + 1 keeper restart; md-sync 21:56Z error=null refused 1
-- 10-31T21:55Z SPAWNER-ROUTE-FREE-FIRST PR#272 merged e0623675, seat qwen run-23f5fd79 PASS, CI 7 green (D-3433)
-- 10-31T22:15Z RIN-CUTOVER-DATA - go-gate PASS, watchdog parity PASS, strict missing 0
+- 10-31T22:55Z RIN-CUTOVER-DATA - BLOCKED sent (DCLOSE slip), held per D-3436
+- 10-31T23:40Z LE-WATCHDOG-CLEAR-VERIFY 05f3b3e plangraph-data PR#6, seat qwen run-471428b7 PASS, router tests 303
+- 11-01T00:40Z LE-FLEET-MSG-INVENTORY 3f95e78 plangraph-data PR#8, seat qwen run-45536033 PASS, router tests 307
+- 11-01T01:40Z D-3443 - keeper post-rotate check OK, run-d822c129 DSN lines removed
+- 11-01T02:00Z LE-PANE-MOVE-EXIT-CONFIRM 677324c plangraph-data PR#7, seat qwen run-69fff56d PASS, tests 307+25
 ## In flight
-- LE-WATCHDOG-CLEAR-VERIFY run-94280cc8 since 22:05Z next check 22:35Z (r2 committed c635d7a, PR plangraph-data#6)
-- GATEWAY-LOG-TOKEN-MINT build-L2-gwtok-0022 since 14:00Z next check 22:43Z
-- LE-SEAT-NO-VERDICT build-L2-spawner-0036 since 21:30Z next check 23:00Z
+- KEEPER-DCLOSE-TRACK-EVIDENCE run-4fb85260 since 01:30Z next check 02:40Z (fix r1 mimo-pro; PR #276 9b3df8f6)
 ## Planned
-1. RIN-CUTOVER-DATA send BLOCKED: DCLOSE slips past 23:30Z (D-3434)
-2. KEEPER-DCLOSE-TRACK-EVIDENCE new brief: stale-epoch evidence hypothesis, md-sync-side fix; design via routing
-3. LE-WATCHDOG-CLEAR-VERIFY verify c635d7a, delta qwen seat, MERGE-READY
+1. KEEPER-DCLOSE-TRACK-EVIDENCE verify r1, push, qwen delta seat, CI, judge seat via routing, MERGE-READY (D-3441)
+2. RIN-CUTOVER-DATA resubmit via CLI once router fixes evidence_kinds
+3. LE-SNAPSHOT-SERVE-PATH confirm remover of .claude/worktrees/proposal, leaf JSON + gate edge to routing (D-3445)
 ## Open
-- BLOCKED RIN-CUTOVER-DATA routerctl parity + throwaway D-row close | default router runs both | deadline 23:30Z
+- BLOCKED RIN-CUTOVER-DATA submit evidence_missing commit+ci | default a router edits evidence_kinds | deadline 02:30Z
+- D-3441 spawner-0038 + gwtok recycles HELD by operator | default keep idle | deadline none
 ## Traps
-- routing unreachable by SendMessage/fleet_msg: write ~/.local/state/fleet/inbox/routing.jsonl; wake = herdr agent prompt wG:p1
-- never run routerctl status (writes router inbox offsets)
-- keeper evidence kind commit is router-only; claims on RIN-CUTOVER-DATA need CLI build-L1 token
-- writers must never read /proc, env, keeper config/DB (D-3428)
+- routing only via ~/.local/state/fleet/inbox/routing.jsonl; never routerctl status
+- RIN-CUTOVER-DATA heartbeat/submit via CLI build-L1 token (gen-57 block)
+- heartbeat DCLOSE before 02:54Z (lease lapsed once)
+- authorized_keys is operator-only (OS-SNAPSHOT-PULL-PATH); never edit
+- writers never read /proc, env, keeper config/DB (D-3428)
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-57 block, line 2)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-58 block, line 2)
+- T=/home/s/.claude/jobs/0653d521/tmp; J4=/home/s/.claude/jobs/4e49c8f0/tmp
