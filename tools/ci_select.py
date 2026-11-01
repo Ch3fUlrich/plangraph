@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 #: Jobs that run on every change: never selected, always required by the gate.
-ALWAYS: tuple[str, ...] = ("scrub", "file-size")
+ALWAYS: tuple[str, ...] = ("scrub", "file-size", "changelog-docs")
 
 SUITES: tuple[str, ...] = (
     "pytest",
@@ -49,6 +49,7 @@ def _is_docs_class(p: str) -> bool:
         p.endswith(".md")
         or p.startswith("docs/")
         or basename.startswith("CHANGELOG")
+        or basename == ".docs-map"
     )
 
 
