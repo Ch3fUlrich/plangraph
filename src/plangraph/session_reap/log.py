@@ -73,8 +73,9 @@ def stopped_updated_at(log_path: Union[str, Path]) -> dict[str, datetime]:
     """short_id -> updated_at of that id's last successful (rc 0) stop line in the log.
 
     A missing or unreadable file is empty; a malformed line, one without a parseable
-    offset-bearing `updated_at` (lines written before the field existed) or without an
-    integer rc is skipped. A stop that failed (rc != 0) never counts, so it is retried.
+    offset-bearing `updated_at` (lines written before the field existed; parse_iso_dt drops
+    non-strings and naive values), without an integer rc or whose action is not "stop" is
+    skipped. A stop that failed (rc != 0) never counts, so it is retried.
     """
     try:
         text = Path(log_path).expanduser().read_text(encoding="utf-8", errors="replace")
@@ -90,6 +91,8 @@ def stopped_updated_at(log_path: Union[str, Path]) -> dict[str, datetime]:
             continue
         short_id, rc = entry.get("short_id"), entry.get("rc")
         if not isinstance(short_id, str) or isinstance(rc, bool) or rc != 0:
+            continue
+        if entry.get("action") != "stop":
             continue
         updated = parse_iso_dt(entry.get("updated_at"))
         if updated is not None:

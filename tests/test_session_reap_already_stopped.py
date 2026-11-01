@@ -183,3 +183,16 @@ def test_updated_at_offset_spelling_does_not_matter(tmp_path):
     _prior(log, UPDATED.astimezone(timezone(timedelta(hours=2))).isoformat())
     rows = reap(jobs_dir=jobs, apply=False, log_path=log, now=NOW)
     assert _row(rows)["reason"] == "already_stopped"
+
+
+def test_non_string_naive_and_non_stop_lines_never_match(tmp_path):
+    jobs, log = tmp_path / "jobs", tmp_path / "log.jsonl"
+    _job(jobs)
+    good = UPDATED.isoformat()
+    lines = [{"action": "stop", "updated_at": v} for v in (123, [1], {"a": 1}, UPDATED.replace(tzinfo=None).isoformat())]
+    lines += [{"action": "keep", "updated_at": good}, {"updated_at": good}]
+    log.write_bytes("".join(json.dumps({"short_id": "j1", "rc": 0, **x}) + "\n" for x in lines).encode())
+    runner = _Runner()
+    rows = reap(jobs_dir=jobs, apply=True, runner=runner, log_path=log, now=NOW)
+    assert _row(rows)["action"] == "stop"
+    assert len(runner.calls) == 1
