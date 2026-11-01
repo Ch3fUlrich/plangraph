@@ -74,6 +74,7 @@ def test_deepseek_glm_skipped_for_implement_but_not_review():
     for leg_id in ("opencode-go-glm-5.2", "opencode-glm-5.3-flash-free"):
         assert policy.skip_reason(by_id[leg_id], "review") is None
         assert policy.skip_reason(by_id[leg_id], "implement") == "off_family"
+        assert policy.skip_reason(by_id[leg_id], "orchestrate") == "off_family"
 
 
 def test_lift_keeps_paused_and_no_verdict_checks():
