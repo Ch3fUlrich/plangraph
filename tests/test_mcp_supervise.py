@@ -11,11 +11,6 @@ import time
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-# The CLI runs in a child interpreter: src stays ahead of the ambient PYTHONPATH.
-_CLI_ENV = {**os.environ, "PYTHONPATH": os.pathsep.join(
-    [str(ROOT / "src")] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p])}
-
 from plangraph.mcp_supervise.config import ConfigError, load_config
 from plangraph.mcp_supervise.health import probe
 from plangraph.mcp_supervise.render import render_entries, render_json
@@ -24,41 +19,8 @@ from plangraph.mcp_supervise.supervisor import (
     kill_process_tree,
     run_supervisor,
 )
-
-FAKE_SERVER_SCRIPT = """
-import sys, json
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class Handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path == "/mcp":
-            length = int(self.headers.get("Content-Length", 0))
-            _ = self.rfile.read(length)
-            resp = json.dumps({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "serverInfo": {"name": "fake", "version": "1.0"}
-                }
-            }).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, *args):
-        pass
-
-port = int(sys.argv[1])
-server = HTTPServer(("127.0.0.1", port), Handler)
-server.serve_forever()
-"""
+from test_mcp_supervise_support import CLI_ENV as _CLI_ENV
+from test_mcp_supervise_support import FAKE_SERVER_SCRIPT, free_port
 
 
 class TestConfigValidation(unittest.TestCase):
@@ -181,7 +143,7 @@ class TestHealthProbe(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="mcp-test-probe-"))
         self.fake_script = self.tmp / "fake_srv.py"
         self.fake_script.write_text(FAKE_SERVER_SCRIPT, encoding="utf-8")
-        self.port = 9250
+        self.port = free_port()
         self.proc = subprocess.Popen(
             [sys.executable, str(self.fake_script), str(self.port)]
         )
@@ -203,7 +165,7 @@ class TestHealthProbe(unittest.TestCase):
             time.sleep(0.1)
         self.assertTrue(healthy)
         # Non-existent endpoint or port
-        self.assertFalse(probe("http://127.0.0.1:9251/mcp", timeout=0.5))
+        self.assertFalse(probe(f"http://127.0.0.1:{free_port()}/mcp", timeout=0.5))
 
 
 class TestSupervisorAndCheck(unittest.TestCase):
@@ -213,7 +175,8 @@ class TestSupervisorAndCheck(unittest.TestCase):
         self.fake_script.write_text(FAKE_SERVER_SCRIPT, encoding="utf-8")
         self.log_file = self.tmp / "test.log"
         self.state_dir = self.tmp / "state"
-        self.port = 9350
+        self.port = free_port()
+        self.port2 = free_port()
         self.secret = "SUPER_SECRET_TOKEN_DO_NOT_LOG"
 
     def tearDown(self):
@@ -290,8 +253,8 @@ class TestSupervisorAndCheck(unittest.TestCase):
             "servers": [
                 {
                     "name": "test-check",
-                    "port": self.port + 1,
-                    "cmd": [sys.executable, str(self.fake_script), str(self.port + 1)],
+                    "port": self.port2,
+                    "cmd": [sys.executable, str(self.fake_script), str(self.port2)],
                     "env": {},
                     "scope": "host",
                     "proxy": False,
@@ -328,7 +291,7 @@ class TestSupervisorAndCheck(unittest.TestCase):
         )
         sup_thread.start()
 
-        url = f"http://127.0.0.1:{self.port + 1}/mcp"
+        url = f"http://127.0.0.1:{self.port2}/mcp"
         for _ in range(50):
             if probe(url, timeout=0.5):
                 break

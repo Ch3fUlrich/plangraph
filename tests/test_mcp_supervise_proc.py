@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Process-level tests for plangraph.mcp_supervise: isolation, adoption, pid-file `check`."""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from plangraph.mcp_supervise import supervisor
+from plangraph.mcp_supervise.config import load_config
+from plangraph.mcp_supervise.procutil import pid_alive, read_pid_file, write_pid_file
+from plangraph.mcp_supervise.supervisor import kill_process_tree, run_supervisor
+from test_mcp_supervise_support import (
+    CLI_ENV,
+    FAKE_SERVER_SCRIPT,
+    free_port,
+    server_entry,
+    wait_healthy,
+)
+
+CLI = [sys.executable, "-m", "plangraph.mcp_supervise"]
+
+
+def _wait(pred, tries=100, delay=0.1):
+    for _ in range(tries):
+        if pred():
+            return True
+        time.sleep(delay)
+    return False
+
+
+class _Workdir(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="mcp-test-proc-"))
+        self.script = self.tmp / "fake_srv.py"
+        self.script.write_text(FAKE_SERVER_SCRIPT, encoding="utf-8")
+        self.log_file = self.tmp / "test.log"
+        self.state_dir = self.tmp / "state"
+        self.cleanup_procs = []
+        self.addCleanup(self._reap)
+
+    def _reap(self):
+        for p in self.cleanup_procs:
+            if p.poll() is None:
+                kill_process_tree(p.pid)
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                pass
+        for f in self.state_dir.glob("*.pid") if self.state_dir.exists() else []:
+            pid = read_pid_file(f)
+            if pid and pid_alive(pid):
+                kill_process_tree(pid)
+
+    def config(self, *entries) -> dict:
+        return {"log_file": str(self.log_file), "state_dir": str(self.state_dir),
+                "servers": list(entries)}
+
+    def config_path(self, raw: dict) -> Path:
+        p = self.tmp / "config.json"
+        p.write_text(json.dumps(raw), encoding="utf-8")
+        return p
+
+    def spawn_supervisor(self, raw: dict, **kw) -> subprocess.Popen:
+        proc = subprocess.Popen(
+            CLI + ["run", "--config", str(self.config_path(raw))],
+            env=CLI_ENV, start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+        self.cleanup_procs.append(proc)
+        return proc
+
+    def pid_of(self, name: str):
+        return read_pid_file(self.state_dir / f"{name}.pid")
+
+    def log_text(self) -> str:
+        return self.log_file.read_text(encoding="utf-8") if self.log_file.exists() else ""
+
+
+class TestChildIsolation(_Workdir):
+    def test_children_start_in_their_own_session(self):
+        cfg = load_config(self.config(server_entry("a", free_port(), self.script)))
+        sup = supervisor.Supervisor(cfg)
+        with mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            popen.return_value.pid = 4242
+            sup._start_child(sup.trackers["a"], reason="t")
+        self.assertIs(popen.call_args.kwargs.get("start_new_session"), True)
+        self.assertIs(popen.call_args.kwargs.get("shell"), False)
+
+    @unittest.skipIf(sys.platform == "win32", "process groups are POSIX only")
+    def test_killing_one_child_spares_supervisor_and_other_child(self):
+        pa, pb = free_port(), free_port()
+        sup = self.spawn_supervisor(self.config(
+            server_entry("a", pa, self.script), server_entry("b", pb, self.script)))
+        self.assertTrue(wait_healthy(pa) and wait_healthy(pb))
+        a_pid, b_pid = self.pid_of("a"), self.pid_of("b")
+
+        kill_process_tree(a_pid)
+
+        self.assertTrue(_wait(lambda: self.pid_of("a") not in (None, a_pid)
+                              and wait_healthy(pa, tries=1)))
+        self.assertIsNone(sup.poll(), "supervisor died with the killed child")
+        self.assertEqual(self.pid_of("b"), b_pid)
+        self.assertTrue(pid_alive(b_pid))
+        self.assertTrue(wait_healthy(pb, tries=1))
+
+
+class TestPidFile(unittest.TestCase):
+    def test_write_is_atomic_and_leaves_no_temp_file(self):
+        d = Path(tempfile.mkdtemp(prefix="mcp-test-pid-"))
+        write_pid_file(d, "x", 123)
+        write_pid_file(d, "x", 456)
+        self.assertEqual(read_pid_file(d / "x.pid"), 456)
+        self.assertEqual([p.name for p in d.iterdir()], ["x.pid"])
+        write_pid_file(d, "x", None)
+        self.assertEqual(list(d.iterdir()), [])
+
+    def test_read_rejects_garbage(self):
+        d = Path(tempfile.mkdtemp(prefix="mcp-test-pid-"))
+        (d / "x.pid").write_text("not-a-pid", encoding="utf-8")
+        self.assertIsNone(read_pid_file(d / "x.pid"))
+        self.assertIsNone(read_pid_file(d / "missing.pid"))
+
+    def test_pid_alive(self):
+        self.assertTrue(pid_alive(os.getpid()))
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        self.assertFalse(pid_alive(proc.pid))
+        self.assertFalse(pid_alive(0))
+
+
+class TestAdoption(_Workdir):
+    def test_existing_server_is_adopted_not_respawned(self):
+        port = free_port()
+        orphan = subprocess.Popen([sys.executable, str(self.script), str(port)])
+        self.cleanup_procs.append(orphan)
+        self.assertTrue(wait_healthy(port))
+        cfg = load_config(self.config(server_entry("a", port, self.script)))
+        stop = threading.Event()
+        t = threading.Thread(target=run_supervisor, args=(cfg, stop, 0.05), daemon=True)
+        t.start()
+        try:
+            self.assertTrue(_wait(lambda: "adopted_existing" in self.log_text()))
+            time.sleep(0.5)
+            self.assertNotIn("action=start", self.log_text())
+            self.assertIsNone(orphan.poll())
+
+            kill_process_tree(orphan.pid)
+            orphan.wait(timeout=5)
+            self.assertTrue(_wait(lambda: "action=start" in self.log_text(), tries=100))
+            self.assertTrue(wait_healthy(port))
+            new_pid = self.pid_of("a")
+            self.assertTrue(new_pid and new_pid != orphan.pid)
+        finally:
+            stop.set()
+            t.join(timeout=5)
+
+    def test_relaunched_supervisor_adopts_surviving_children(self):
+        port = free_port()
+        raw = self.config(server_entry("a", port, self.script))
+        first = self.spawn_supervisor(raw)
+        self.assertTrue(wait_healthy(port))
+        orphan_pid = self.pid_of("a")
+        first.kill()
+        first.wait(timeout=5)
+        self.assertTrue(pid_alive(orphan_pid), "child must outlive a supervisor crash")
+
+        second = self.spawn_supervisor(raw)
+        self.assertTrue(_wait(lambda: "adopted_existing" in self.log_text()))
+        time.sleep(1.0)
+        self.assertIsNone(second.poll(), "relaunched supervisor crash-looped on the bound port")
+
+        res = subprocess.run(
+            CLI + ["check", "--config", str(self.config_path(raw)), "--name", "a",
+                   "--timeout", "30"],
+            capture_output=True, text=True, env=CLI_ENV)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertFalse(pid_alive(orphan_pid), "check must kill the pid from the pid file")
+        self.assertNotEqual(self.pid_of("a"), orphan_pid)
+
+
+class TestCheckGuards(_Workdir):
+    def _check(self, raw, timeout="3"):
+        return subprocess.run(
+            CLI + ["check", "--config", str(self.config_path(raw)), "--name", "a",
+                   "--timeout", timeout],
+            capture_output=True, text=True, env=CLI_ENV)
+
+    def test_refuses_without_pid_file(self):
+        res = self._check(self.config(server_entry("a", free_port(), self.script)))
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("pid", (res.stdout + res.stderr).lower())
+
+    def test_refuses_dead_pid(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        write_pid_file(self.state_dir, "a", proc.pid)
+        res = self._check(self.config(server_entry("a", free_port(), self.script)))
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("not alive", res.stdout + res.stderr)
+
+    def test_healthy_server_with_unchanged_pid_is_not_a_pass(self):
+        port = free_port()
+        server = subprocess.Popen([sys.executable, str(self.script), str(port)])
+        decoy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.cleanup_procs += [server, decoy]
+        self.assertTrue(wait_healthy(port))
+        write_pid_file(self.state_dir, "a", decoy.pid)
+        res = self._check(self.config(server_entry("a", port, self.script)))
+        self.assertEqual(res.returncode, 1, "healthy but never restarted must fail")
+        self.assertNotEqual(decoy.poll(), None, "decoy (the pid-file pid) must have been killed")
+
+
+if __name__ == "__main__":
+    unittest.main()
