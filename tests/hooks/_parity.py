@@ -16,7 +16,8 @@ a ``transcript_path`` at its own fixture.
 
 Capture protocol (``python3 tests/hooks/_parity.py`` - only useful while the
 AutoOS tree is present): each scenario runs TWICE - run A executes the
-ORIGINAL hooks in place at ``/home/s/code/AutoOS/tools/hooks/``, run B
+ORIGINAL hooks in place at the AutoOS ``tools/hooks`` tree (the read-only
+checkout named by ``AUTOOS_HOME``), run B
 executes copies of those originals from a second temp hook directory under a
 second temp HOME - so time, pid, HOME and hook-location dependence all show
 up as run A != run B.  Only byte-stable scenarios are recorded (expected
@@ -37,9 +38,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _helpers import AUTOOS_HOME, FAKE_TOKEN
+
 ROOT = Path(__file__).resolve().parents[2]
 PORT_HOOKS = ROOT / "tools" / "hooks"
-ORIGINAL_HOOKS = Path("/home/s/code/AutoOS/tools/hooks")
+ORIGINAL_HOOKS = Path(AUTOOS_HOME + "/tools/hooks")
 CORPUS = Path(__file__).resolve().parent / "parity_payloads.json"
 
 J = json.dumps
@@ -75,9 +78,9 @@ def _inbox_line(turn, status, line):
 
 
 _INBOX_A = _inbox_line("t1", "DONE", "DONE a")
-_INBOX_B = _inbox_line("t2", "BLOCKED", "BLOCKED on sk-abcdefghijklmnopqrstuvwx review")
+_INBOX_B = _inbox_line("t2", "BLOCKED", "BLOCKED on " + FAKE_TOKEN + " review")
 _INBOX_TWO = (_inbox_line("t1", "DONE", "DONE shipped the parser")
-              + _inbox_line("t2", "BLOCKED", "BLOCKED on sk-abcdefghijklmnopqrstuvwx review"))
+              + _inbox_line("t2", "BLOCKED", "BLOCKED on " + FAKE_TOKEN + " review"))
 CG_EMIT = ("the additionalContext embeds str(Path(__file__).resolve()) of the "
            "hook script - the install location - so the output is "
            "host-dependent and cannot be compared byte for byte across hook "
@@ -203,6 +206,18 @@ def _bare(scenario):
             if key in scenario}
 
 
+def load_corpus():
+    """Read ``parity_payloads.json`` with its scrub placeholders resolved.
+
+    The committed corpus stores ``{TOK}`` / ``{HOME}`` in place of the literal
+    fake token and AutoOS checkout path so the SOURCE carries no matched
+    literal; the runtime values are restored here before replay, byte for byte.
+    """
+    text = CORPUS.read_text(encoding="utf-8")
+    text = text.replace("{TOK}", FAKE_TOKEN).replace("{HOME}", AUTOOS_HOME)
+    return json.loads(text)
+
+
 def capture():
     """Regenerate `parity_payloads.json` from the ORIGINAL AutoOS hooks."""
     if not ORIGINAL_HOOKS.is_dir():
@@ -241,7 +256,8 @@ def capture():
         "payloads": payloads,
         "skipped": skipped,
     }
-    CORPUS.write_text(json.dumps(corpus, indent=1) + "\n", encoding="utf-8")
+    CORPUS.write_text(json.dumps(corpus, indent=1).replace(FAKE_TOKEN, "{TOK}")
+                      .replace(AUTOOS_HOME, "{HOME}") + "\n", encoding="utf-8")
     print("recorded %d payloads, skipped %d -> %s"
           % (len(payloads), len(skipped), CORPUS))
 

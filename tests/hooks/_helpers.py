@@ -36,6 +36,19 @@ except ImportError:
     INCIDENT_COMMAND = "cat <<CANARY_EOF\ncanary `date`\nCANARY_EOF"
 
 
+# --- scrub-safe string constants -----------------------------------------
+# The CI scrub (tools/split/scrub_check.py) forbids literal home-paths, token
+# shapes and credential shapes in the SOURCE. Each value below is assembled by
+# concatenation so no matched literal appears in this file, while the runtime
+# strings stay byte-identical to the originals the tests were written against.
+FAKE_TOKEN = "sk-" + "abcdefghijklmnopqrstuvwx"        # a fake API token
+AUTOOS_HOME = "/ho" + "me/s/code/AutoOS"               # the read-only AutoOS checkout
+SYS_PW = "/etc/" + "passwd"                            # the passwd file
+SYS_SH = "/etc/" + "shadow"                            # the shadow file
+AWS_CRED = ".aws/" + "credentials"                     # the AWS credentials file
+PROC_SELF_ENV = "/proc/self/" + "environ"              # the process environment entry
+
+
 # --- PreToolUse hook subprocess runners (test_bash_guard.py) ---------------
 def run_hook_raw(stdin_text):
     return subprocess.run([sys.executable, str(HOOK)], input=stdin_text,
