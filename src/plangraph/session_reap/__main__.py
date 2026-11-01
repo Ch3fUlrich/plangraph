@@ -11,7 +11,7 @@ import sys
 from typing import Any, Callable, Optional, Sequence, Union
 
 from .act import failure_tag, stop_session
-from .log import log_stop, DEFAULT_LOG_PATH
+from .log import log_stop, stopped_updated_at, DEFAULT_LOG_PATH
 from .policy import decide, ReapConfig
 from .scan import SessionRecord, read_session, scan
 
@@ -94,6 +94,7 @@ def reap_report(
     current_time = _utc(now) if now else datetime.now(timezone.utc)
     cfg = load_config(config_path)
     scan_result = scan(jobs_dir)
+    already_stopped = stopped_updated_at(log_path)
 
     results: list[dict[str, Any]] = []
 
@@ -107,6 +108,10 @@ def reap_report(
             "tempo": rec.tempo,
             "age_min": round(age_min, 1),
         }
+
+        if action == "stop" and rec.updated_at is not None and already_stopped.get(rec.short_id) == rec.updated_at:
+            # `claude stop` leaves state.json unchanged; the log is the only memory of the stop.
+            action, reason = "keep", "already_stopped"
 
         if action == "stop" and apply:
             if not _still_stoppable(rec, current_time, cfg):
@@ -123,6 +128,7 @@ def reap_report(
                     action=action,
                     rc=rc,
                     log_path=log_path,
+                    updated_at=rec.updated_at,
                 )
                 row["rc"] = rc
 

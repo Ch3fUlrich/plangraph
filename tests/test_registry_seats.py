@@ -20,7 +20,7 @@ from plangraph.routing_support import resolver
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.catalog_data import SEED_MODELS
 
-from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _repo, _row, _seeded, _service, live_policy)  # noqa: F401
+from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _repo, _row, _seeded, _service, live_policy, pre_d3552_policy)  # noqa: F401
 
 
 # --- 5. inline-only legs get the diff ----------------------------------------
@@ -39,7 +39,8 @@ def test_bad_diff_ref_refused(ref):
         plan_spawn(dict(CARD, diff_ref=ref), role="review")
 
 
-def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch):
+def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_policy):
+    # Pinned to the pre-D-3552 policy (no review lift): luna is the inline-only seat.
     repo, base, head = _repo(tmp_path)
     card = dict(CARD, diff_ref={"repo": str(repo), "base": base, "head": head})
     svc = _service(tmp_path / "state", monkeypatch)
@@ -53,8 +54,9 @@ def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch):
     assert {r["chosen_leg"]["family"] for r in out["seats"]} == {"qwen", "gpt"}
 
 
-def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch):
+def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy):
     # The production path (runner.spawn_service DispatchService) via MCP.
+    # Pinned to the pre-D-3552 policy (no review lift): luna is the inline-only seat.
     from plangraph.spawner.mcp import MCPSpawnerServer
     repo, base, head = _repo(tmp_path)
     runner = _Runner()
@@ -73,7 +75,8 @@ def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch):
     assert all(c["covers"] == ["anthropic"] for c in out["seat_coverage"])
 
 
-def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch):
+def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_policy):
+    # Pinned to the pre-D-3552 policy (no review lift): luna is the inline-only seat.
     from plangraph.spawner.mcp import MCPSpawnerServer
     runner = _Runner()
     server = MCPSpawnerServer(runner, state=tmp_path / "state")

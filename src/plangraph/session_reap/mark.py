@@ -13,13 +13,16 @@ from typing import Optional, Sequence
 def resolve_session_dir(explicit_dir: Optional[Path] = None) -> Path:
     """Resolve the session's own job directory.
 
-    An explicit dir is used as given. Otherwise CLAUDE_JOB_DIR is walked upward to
-    the nearest directory that holds state.json (CLAUDE_JOB_DIR may be the job dir
-    or a child of it). Refuses if the variable is unset or no ancestor has a
+    An explicit dir must itself hold state.json. Otherwise CLAUDE_JOB_DIR is walked
+    upward to the nearest directory that holds state.json (CLAUDE_JOB_DIR may be the
+    job dir or a child of it). Refuses if the variable is unset or no directory has a
     state.json, so a marker is never written outside a session's job dir.
     """
     if explicit_dir is not None:
-        return Path(explicit_dir)
+        explicit = Path(explicit_dir)
+        if not (explicit / "state.json").is_file():
+            raise ValueError(f"no state.json in --dir ({explicit}); refusing to write ttl.json")
+        return explicit
 
     raw = os.environ.get("CLAUDE_JOB_DIR")
     if not raw or not raw.strip():
@@ -41,7 +44,6 @@ def mark_session(
     if ttl_min < 1:
         raise ValueError(f"--ttl-min must be >= 1, got {ttl_min}")
     target_dir = resolve_session_dir(job_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     ttl_path = target_dir / "ttl.json"
     data = {
@@ -75,7 +77,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--dir",
         type=Path,
         default=None,
-        help="Explicit session directory (defaults to the job dir found from CLAUDE_JOB_DIR).",
+        help="Explicit session directory; must contain state.json (defaults to the job dir found from CLAUDE_JOB_DIR).",
     )
 
     args = parser.parse_args(argv)

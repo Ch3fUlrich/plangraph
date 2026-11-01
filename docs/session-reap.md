@@ -7,15 +7,16 @@ Reaps idle and finished Claude Code background sessions residing in `~/.claude/j
 Decisions are evaluated per session (`state.json`), in this order. Every guard that keeps a session runs before the timing rules, and an input that cannot be trusted keeps the session (fail closed).
 1. **Name**: a missing, empty or non-string `name` is unknown and kept (reason `unknown_name`).
 2. **Allowlist**: names matching these globs are always kept (reason `allowlisted`): `*-L1-*`, `routing*`, `*judge*`, `*planner*`, `plangraph-oversight*`. Matching is case-insensitive on every platform. A `--config` allowlist **adds** patterns; it never replaces these defaults.
-3. **TTL marker**: if `ttl.json` exists next to `state.json`, `allow_stop: false` keeps the session. A marker that is unreadable, not an object, has `allow_stop` other than `true`/`false`/`0`/`1`, or has a non-numeric `ttl_min` keeps the session (reason `ttl_invalid`).
-4. **State guard**: only `state == "done"` can be stopped. `working` (even with tempo `idle`), `blocked` and `stopped` are always kept.
+3. **TTL marker**: if `ttl.json` exists next to `state.json`, `allow_stop: false` keeps the session. A marker that is unreadable, not an object, has `allow_stop` other than `true`/`false`/`0`/`1`, or has a `ttl_min` that is non-numeric or 0 or below keeps the session (reason `ttl_invalid`).
+4. **State guard**: a record whose `has_result` is not a real boolean is kept first, whatever its state (reason `result_invalid`); then only `state == "done"` can be stopped. `working` (even with tempo `idle`), `blocked` and `stopped` are always kept.
 5. **Timestamp**: needs a real `updatedAt` with an explicit UTC offset. Missing, naive, unparseable or future timestamps keep the session (`createdAt` is never used).
-6. **Thresholds**, never shorter than 1 minute:
+6. **Thresholds**, never shorter than 1 minute (a non-numeric `done_grace_min` or `idle_min` in the config keeps the session, reason `config_invalid`):
    - `ttl_min` from the marker, when set, applies to the session whether or not it has a result.
    - otherwise `done` with an output result: `done_grace_min` (default 2 min);
    - otherwise `done` without a result: `idle_min` (default 30 min).
 7. **Re-check before each stop**: `state.json` is read again immediately before `claude stop`. If it is no longer `done`, its `updatedAt` moved, or the policy no longer says stop, the session is skipped (reason `changed_since_scan`). A short window between that read and the stop remains.
-8. **Stop primitive**: `claude stop <id>` only, which keeps the conversation resumable. Processes are never killed by PID.
+8. **Already stopped**: `claude stop` leaves `state.json` unchanged (state stays `done`, `updatedAt` does not move), so the stop log is the only memory of a stop. Once per run the log is read (a missing file is empty; an unreadable or malformed line is skipped, never fatal). A session whose `updatedAt` equals the `updated_at` of that id's last `rc` 0 log line is kept (reason `already_stopped`): no `claude stop`, no new log line, in a dry run too. If `updatedAt` moved (resumed and finished again) it is stoppable again; a failed stop (`rc` non-zero) is retried; log lines without `updated_at` (older than this field), with a non-string or offset-less `updated_at`, or whose `action` is not `stop` never match. Assumptions: one log per host and one jobs tree per log (the default path is per-user, per-host; lines key on `short_id` only); runs do not overlap (the scheduled task must not start a second instance while one runs); the log is read whole each run and is not rotated (one line per real stop).
+9. **Stop primitive**: `claude stop <id>` only, which keeps the conversation resumable. Processes are never killed by PID.
 
 ## Session TTL Marker
 
@@ -25,7 +26,7 @@ python -m plangraph.session_reap.mark --ttl-min 45
 # Or to prevent automatic reaping:
 python -m plangraph.session_reap.mark --ttl-min 60 --no-stop
 ```
-This writes `ttl.json` (`{"ttl_min": N, "allow_stop": bool}`) into the session's own job dir: the nearest directory at or above `CLAUDE_JOB_DIR` that contains `state.json`. It refuses if the variable is unset or no such directory exists, and rejects `--ttl-min` below 1.
+This writes `ttl.json` (`{"ttl_min": N, "allow_stop": bool}`) into the session's own job dir: the nearest directory at or above `CLAUDE_JOB_DIR` that contains `state.json`. It refuses if the variable is unset or no such directory exists, and rejects `--ttl-min` below 1. An explicit `--dir` must itself contain `state.json`; it is never created.
 
 ## Running Once
 
@@ -40,7 +41,7 @@ Apply stops (executes `claude stop <id>` for eligible sessions):
 ```bash
 python -m plangraph.session_reap --apply
 ```
-Every stop attempt is appended to `~/.local/state/plangraph/session-reap.jsonl` with `ts`, `host`, `short_id`, `name`, `age_min`, `state`, `reason`, `action`, `rc`. A failed stop is logged with `rc` non-zero (a timeout or a runner exception is `rc` 1) and `reason` gains a suffix `;stop_failed:timeout`, `;stop_failed:runner_error` or `;stop_failed:nonzero_rc`.
+Every stop attempt is appended to `~/.local/state/plangraph/session-reap.jsonl` with `ts`, `host`, `short_id`, `name`, `age_min`, `state`, `reason`, `action`, `rc`, `updated_at` (the session's `updatedAt`, ISO 8601 with offset; step 8 matches on it). A failed stop is logged with `rc` non-zero (a timeout or a runner exception is `rc` 1) and `reason` gains a suffix `;stop_failed:timeout`, `;stop_failed:runner_error` or `;stop_failed:nonzero_rc`.
 
 ### Config file (`--config`)
 

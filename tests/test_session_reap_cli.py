@@ -116,6 +116,7 @@ def test_stop_session_runner_invocations(monkeypatch):
 def test_mark_session_with_explicit_dir(tmp_path):
     job_dir = tmp_path / "explicit_dir"
     job_dir.mkdir()
+    (job_dir / "state.json").write_text("{}", encoding="utf-8")
 
     ttl_file = mark_session(ttl_min=60, allow_stop=False, job_dir=job_dir)
     assert ttl_file == job_dir / "ttl.json"
