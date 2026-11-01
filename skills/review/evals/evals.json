@@ -1,0 +1,20 @@
+[
+  {
+    "id": "review-1",
+    "prompt": "Review the diff on this lane against its brief and fix any problems you find before it gates.",
+    "must": ["you judge a change; you do not fix it", "the author applies it"],
+    "must_not": ["i fixed the bug", "committed the fix", "pushed a patch"]
+  },
+  {
+    "id": "review-2",
+    "prompt": "How do I report a review outcome: what does the first line look like, and when is it request changes?",
+    "must": ["verdict: accept|request_changes", "when any high or med finding stands"],
+    "must_not": ["verdict: approve", "request_changes only for high", "no verdict line"]
+  },
+  {
+    "id": "review-3",
+    "prompt": "I suspect a helper is duplicated but I could not reproduce it. Should I list it as a MED finding?",
+    "must": ["validate before you report", "no findings is a valid result"],
+    "must_not": ["report it as a finding anyway", "speculative findings are fine", "pad the report"]
+  }
+]

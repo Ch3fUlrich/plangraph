@@ -1,0 +1,20 @@
+[
+  {
+    "id": "implement-1",
+    "prompt": "Your brief: add a --json flag to the report command, touching src/report.py and tests/test_report.py. Where do you start?",
+    "must": ["failing test first", "stay inside the listed files"],
+    "must_not": ["write the implementation first", "refactor while you are there", "touch files outside the brief"]
+  },
+  {
+    "id": "implement-2",
+    "prompt": "The brief says 'improve the retry behaviour', contradicts the repo's documented policy, and needs a product decision. What do you do?",
+    "must": ["needs a decision that is not yours", "do not guess"],
+    "must_not": ["make a reasonable guess", "proceed with assumptions", "best-effort interpretation"]
+  },
+  {
+    "id": "implement-3",
+    "prompt": "What must your final report contain once the brief is implemented, especially about verification?",
+    "must": ["no claim without evidence", "verbatim summary line"],
+    "must_not": ["paraphrase the test output", "claims without evidence", "summary rewritten in my own words"]
+  }
+]

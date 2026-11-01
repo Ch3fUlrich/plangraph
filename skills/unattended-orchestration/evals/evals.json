@@ -1,0 +1,20 @@
+[
+  {
+    "id": "unattended-orchestration-1",
+    "prompt": "I am running a multi-day migration unattended: several planned tasks, evidence attached at the end. How do I launch each worker run?",
+    "must": ["spawn by card through the plangraph spawner", "a card is the unit of work"],
+    "must_not": ["launch without a card", "hand-pick the model", "run it inline in my session"]
+  },
+  {
+    "id": "unattended-orchestration-2",
+    "prompt": "An L3 worker I launched stopped after producing no changes and its lane is stuck. What do I do with that child?",
+    "must": ["relaunch a quiet or capped child", "relaunch, never resume"],
+    "must_not": ["resume the child", "continue the stopped session", "reattach to the old run"]
+  },
+  {
+    "id": "unattended-orchestration-3",
+    "prompt": "Where do the binding rules for orchestrators, workers and reviewers actually live, and how do I change one?",
+    "must": ["card-class rules live in the role cards"],
+    "must_not": ["rules live in this file", "copy the rules into the prompt", "delete-class rules"]
+  }
+]
