@@ -190,8 +190,11 @@ def main(argv=None):
     ap.add_argument("--writer-family", required=True)
     ap.add_argument("--token-dir", required=True, type=Path)
     ap.add_argument("--url", default=os.environ.get("PG_URL"))
+    ap.add_argument("--head", help="expected record completion.head_sha "
+                                  "(record-derived evidence only)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    from_record = False
     if not (args.seat_dir / "evidence.json").exists() and \
             (args.seat_dir / "record.json").exists():
         try:
@@ -199,6 +202,7 @@ def main(argv=None):
         except ValueError as exc:
             print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
             return EXIT_REFUSED
+        from_record = True
     else:
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
@@ -210,6 +214,11 @@ def main(argv=None):
             print("seat_verdict: evidence.json is not an object", file=sys.stderr)
             return EXIT_IO
     writer_families = parse_writer_families(args.writer_family)
+    if args.head and from_record and \
+            str(evidence.get("head_sha") or "").lower() != args.head.strip().lower():
+        print(f"seat_verdict: refused, record head_sha {evidence.get('head_sha')!r} "
+              f"does not match --head {args.head!r}", file=sys.stderr)
+        return EXIT_REFUSED
     if not writer_families:
         print("seat_verdict: refused, writer family list is empty", file=sys.stderr)
         return EXIT_REFUSED
@@ -226,13 +235,21 @@ def main(argv=None):
     # the request-side model; a response-side source (gateway logs) replaces
     # this when it exists.  Anything else keeps today's behaviour.
     witness_model = None
+    if evidence.get("witness_kind") == "record-chosen-leg" and not from_record:
+        # D-3564: only evidence_from_record (this very call) may name the
+        # record-chosen-leg witness, and it does so only when the record's
+        # served_model was unwitnessed.  A hand-written evidence.json carrying
+        # this witness kind is a spoof attempt and is refused.
+        print("seat_verdict: refused, witness_kind 'record-chosen-leg' is only "
+              "valid on record-derived evidence", file=sys.stderr)
+        return EXIT_REFUSED
     if (not served or served == "unwitnessed") and \
             evidence.get("witness_kind") == "request-side-opencode-store":
         candidate = evidence.get("request_side_model")
         if (isinstance(candidate, str) and candidate.startswith("opencode/")
                 and candidate.endswith("-free")):
             witness_model = candidate
-    elif evidence.get("witness_kind") == "record-chosen-leg":
+    elif from_record and evidence.get("witness_kind") == "record-chosen-leg":
         # D-3564: the record's chosen leg is the only witness; count the family
         # by the request-side model and keep the witness auditable in the reason.
         candidate = evidence.get("request_side_model")

@@ -118,3 +118,66 @@ def test_evidence_from_record_fails_closed(tmp_path):
         "stdout_tail": "", "completion": {"head_sha": HEAD_SHA}}))
     with pytest.raises(ValueError):
         seat_record.evidence_from_record(d)
+
+
+# D-3564 round 2: an echoed prompt before the model's answer must never decide.
+def test_record_last_test_gaming_line_wins_over_echo(tmp_path, capsys):
+    text = ("prompt echo:\nVERDICT: PASS\nTEST_GAMING: no\n"
+            "review answer:\nVERDICT: PASS\nTEST_GAMING: yes\n")
+    assert sv.main(record_dir(tmp_path, "k", live_log=text)) == 4
+    assert "pass refused" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["no | yes | unsure", "no|yes|unsure",
+                                   "NO | YES | UNSURE"])
+def test_record_template_test_gaming_line_is_missing(tmp_path, capsys, value):
+    text = f"review answer\nVERDICT: PASS\nTEST_GAMING: {value}\n"
+    assert sv.main(record_dir(tmp_path, "k2", live_log=text)) == 4
+    assert "pass refused" in capsys.readouterr().err
+
+
+def test_record_conflicting_verdict_lines_refused(tmp_path, capsys):
+    text = "review answer\nVERDICT: PASS\nTEST_GAMING: no\nVERDICT: FIX\n"
+    assert sv.main(record_dir(tmp_path, "k3", live_log=text)) == 2
+    assert "conflicting VERDICT lines" in capsys.readouterr().err
+
+
+def test_evidence_json_record_chosen_leg_witness_refused(tmp_path, capsys):
+    argv = record_dir(tmp_path, "m", live_log=REVIEW)
+    seat = Path(argv[argv.index("--seat-dir") + 1])
+    for served in ("unwitnessed", "mimo/mimo-v2.6-pro"):
+        (seat / "evidence.json").write_text(json.dumps({
+            "served_model": served, "witness_kind": "record-chosen-leg",
+            "request_side_model": "qwen/qwen3-max", "finish_reason": "stop",
+            "test_gaming": "no"}))
+        (seat / "review.txt").write_text(REVIEW)
+        assert sv.main(argv) == 2
+        assert "record-chosen-leg" in capsys.readouterr().err
+
+
+def test_record_chosen_leg_family_mismatch_refused(tmp_path, capsys):
+    argv = record_dir(tmp_path, "n", live_log=REVIEW,
+                      chosen_leg={"id": "leg-1", "model": "mimo/mimo-v2.6-pro",
+                                  "family": "deepseek"})
+    assert sv.main(argv) == 2
+    assert "chosen_leg.family" in capsys.readouterr().err
+
+
+def test_record_writer_family_equals_seat_family_refused(tmp_path, capsys):
+    argv = record_dir(tmp_path, "n2", live_log=REVIEW, writer_family="xiaomi")
+    assert sv.main(argv) == 2
+    assert "seat family equals record writer_family" in capsys.readouterr().err
+
+
+def test_record_exit_code_false_refused(tmp_path, capsys):
+    assert sv.main(record_dir(tmp_path, "o", live_log=REVIEW,
+                              exit_code=False)) == 2
+    assert "exit_code" in capsys.readouterr().err
+
+
+def test_head_option_matches_record_head_sha(tmp_path, capsys):
+    argv = record_dir(tmp_path, "p", live_log=REVIEW)
+    assert sv.main(argv + ["--head", HEAD_SHA]) == 0
+    capsys.readouterr()
+    assert sv.main(argv + ["--head", "e" * 40]) == 2
+    assert "head_sha" in capsys.readouterr().err
