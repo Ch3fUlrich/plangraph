@@ -166,10 +166,15 @@ def finalize(dinfo):
         info["max_dnum"] = nums[-1] if nums else None
 
 
+def _current(item, row):
+    """A row counts only at the item's current epoch: keeper close ignores older rows (store_close)."""
+    return row.get("epoch") is None or item.get("epoch") is None or row["epoch"] == item["epoch"]
+
+
 def _decision_ids(item):
     out = set()
     for row in item.get("evidence") or []:
-        if row.get("kind") == "decision":
+        if row.get("kind") == "decision" and _current(item, row):
             ref = row.get("ref")
             out.add(ref.get("id") if isinstance(ref, dict) else ref)
     return out
@@ -178,7 +183,7 @@ def _decision_ids(item):
 def _commit_shas(item):
     out = set()
     for row in item.get("evidence") or []:
-        if row.get("kind") == "commit":
+        if row.get("kind") == "commit" and _current(item, row):
             ref = row.get("ref") or {}
             sha = ref.get("sha") or ref.get("commit")
             if isinstance(sha, str) and sha:
