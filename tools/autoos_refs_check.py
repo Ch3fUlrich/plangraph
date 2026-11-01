@@ -9,28 +9,79 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
-SECRET_KEYWORDS = (
-    "token",
-    "secret",
-    "credential",
-    ".env",
-    "id_rsa",
-    ".pem",
-    "password",
-    "key",
+# Word keywords are matched on token boundaries (the filename split on
+# non-alphanumerics), so "monkey" / "keyboard" do not match "key".
+SECRET_KEYWORDS = frozenset(
+    {
+        "token",
+        "secret",
+        "credential",
+        "credentials",
+        "password",
+        "passwd",
+        "apikey",
+        "api_key",
+        "id_rsa",
+        "id_ed25519",
+        "key",
+    }
 )
+
+SECRET_SUFFIXES = (".pem", ".key", ".p12", ".env")
+
+# Compound keywords that contain separators; matched against the filename
+# with its separators normalized to underscores.
+_COMPOUND_KEYWORDS = ("id_rsa", "id_ed25519", "api_key")
+
+_WORD_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+
+# "autoos" as a path component or word, any case: /AutoOS, AutoOS/,
+# autoos-litellm.service, %h/code/AutoOS.
+AUTOOS_RE = re.compile(r"(?<![A-Za-z0-9])autoos(?![A-Za-z0-9])", re.IGNORECASE)
+
+# Redaction of co-located secret values on matched lines.
+_JSON_SECRET_KEY_RE = re.compile(
+    r'("(?:token|key|password|secret|authorization)"\s*:\s*)'
+    r"(\"[^\"]*\"|'[^']*'|[^\s,}\]]+)",
+    re.IGNORECASE,
+)
+_BEARER_RE = re.compile(r"(Bearer\s+)\S+", re.IGNORECASE)
+_SK_RE = re.compile(r"\bsk-[A-Za-z0-9_\-]{4,}")
+
+MAX_LINE_CHARS = 160
 
 
 def looks_secret(path: Path) -> bool:
+    """True when the filename looks like a secret and must not be opened."""
     name = path.name.lower()
-    return any(kw in name for kw in SECRET_KEYWORDS)
+    if name.endswith(SECRET_SUFFIXES):
+        return True
+    tokens = [w for w in _WORD_SPLIT_RE.split(name) if w]
+    if set(tokens) & (SECRET_KEYWORDS - set(_COMPOUND_KEYWORDS)):
+        return True
+    for kw in _COMPOUND_KEYWORDS:
+        parts = kw.split("_")
+        width = len(parts)
+        if any(tokens[i : i + width] == parts for i in range(len(tokens) - width + 1)):
+            return True
+    return False
 
 
 def has_autoos(text: str) -> bool:
-    return "/AutoOS" in text or "AutoOS/" in text
+    """Case-insensitive match of 'autoos' as a path component or word."""
+    return bool(AUTOOS_RE.search(text))
+
+
+def redact(line: str) -> str:
+    """Redact secret values on a matched line and truncate it."""
+    line = _JSON_SECRET_KEY_RE.sub(r"\1<redacted>", line)
+    line = _BEARER_RE.sub(r"\1<redacted>", line)
+    line = _SK_RE.sub("<redacted>", line)
+    return line[:MAX_LINE_CHARS]
 
 
 def check_file(
@@ -59,7 +110,8 @@ def check_file(
                     f.seek(0)
                 for line in f:
                     if has_autoos(line):
-                        hits.append((kind, str(path), line.rstrip("\r\n").strip()))
+                        detail = redact(line.rstrip("\r\n").strip())
+                        hits.append((kind, str(path), detail))
         except OSError:
             pass
         return hits
@@ -84,8 +136,22 @@ def scan_claude_hooks(home: Path) -> list[tuple[str, str, str]]:
     return hits
 
 
+def scan_instruction_files(directory: Path) -> list[tuple[str, str, str]]:
+    """Scan instruction files (*.md, incl. AGENTS.md, CLAUDE.md) directly
+    under *directory*. Non-recursive: nothing inside skills/ is walked here.
+    """
+    hits: list[tuple[str, str, str]] = []
+    if not directory.is_dir():
+        return hits
+    for p in sorted(directory.iterdir()):
+        if p.name.lower().endswith(".md") and (p.is_file() or p.is_symlink()):
+            hits.extend(check_file(p, "instruction"))
+    return hits
+
+
 def scan_skills_and_opencode(home: Path) -> list[tuple[str, str, str]]:
     hits: list[tuple[str, str, str]] = []
+    hits.extend(scan_instruction_files(home / ".claude"))
 
     claude_skills = home / ".claude" / "skills"
     if claude_skills.is_symlink():
@@ -100,6 +166,7 @@ def scan_skills_and_opencode(home: Path) -> list[tuple[str, str, str]]:
 
     opencode_dir = home / ".config" / "opencode"
     if opencode_dir.is_dir():
+        hits.extend(scan_instruction_files(opencode_dir))
         for cfg_name in ("opencode.json", "opencode.jsonc"):
             cfg = opencode_dir / cfg_name
             if cfg.exists() or cfg.is_symlink():
@@ -190,6 +257,13 @@ def scan_router_bin(home: Path) -> list[tuple[str, str, str]]:
 
 
 def scan_repo_symlinks(repo: Path) -> list[tuple[str, str, str]]:
+    """Report tracked symlinks pointing at AutoOS.
+
+    Symlinks are enumerated with ``git ls-files -s`` (mode 120000) so only
+    repository-tracked links are inspected, never untracked scratch. A
+    symlink whose readlink raises OSError is reported as a 'broken-link'
+    note; notes do not change the exit code.
+    """
     hits: list[tuple[str, str, str]] = []
     if not repo.is_dir():
         return hits
@@ -215,10 +289,11 @@ def scan_repo_symlinks(repo: Path) -> list[tuple[str, str, str]]:
                 continue
             try:
                 target = os.readlink(p)
-                if has_autoos(target):
-                    hits.append(("repo-symlink", str(p), target))
             except OSError:
-                pass
+                hits.append(("repo-symlink", str(p), "broken-link"))
+                continue
+            if has_autoos(target):
+                hits.append(("repo-symlink", str(p), target))
     except OSError:
         pass
     return hits
@@ -260,7 +335,10 @@ def main(argv: list[str] | None = None) -> int:
     for kind, path, detail in hits:
         print(f"{kind}\t{path}\t{detail}")
 
-    return 1 if hits else 0
+    # 'broken-link' entries are informational notes and do not affect the
+    # exit code; every other hit does.
+    actionable = [h for h in hits if h[2] != "broken-link"]
+    return 1 if actionable else 0
 
 
 if __name__ == "__main__":

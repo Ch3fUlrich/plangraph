@@ -76,9 +76,11 @@ def test_fixture_home_hits(tmp_path: Path) -> None:
     assert "/home/x/code/AutoOS/tools/hooks/bash_guard.py" in out
     assert "/home/x/code/AutoOS/skills/guard_skill" in out
     assert "/home/x/code/AutoOS/bin/daemon" in out
+    # 'AutoOS' as a word is matched too (case-insensitive)
+    assert "Description=Test AutoOS Service" in out
 
     lines = [line for line in out.strip().splitlines() if line]
-    assert len(lines) == 4
+    assert len(lines) == 5
     for line in lines:
         parts = line.split("\t")
         assert len(parts) == 3, f"Line must have <kind>\\t<path>\\t<detail>: {line}"
@@ -215,3 +217,150 @@ def test_router_bin_and_mcp_configs(tmp_path: Path) -> None:
     assert 'exec /AutoOS/bin/real_tool "$@"' in details
     assert any('"command": "/AutoOS/mcp/srv"' in d for d in details)
     assert any('"server": "AutoOS/node_modules/srv"' in d for d in details)
+
+
+def test_instruction_files_scanned(tmp_path: Path) -> None:
+    home = tmp_path / "instr_home"
+    claude = home / ".claude"
+    (claude / "skills" / "s1").mkdir(parents=True)
+    opencode = home / ".config" / "opencode"
+    opencode.mkdir(parents=True)
+
+    (claude / "AGENTS.md").write_text("Root: /home/x/code/AutoOS\n", encoding="utf-8")
+    (claude / "CLAUDE.md").write_text("See /home/x/code/AutoOS/docs\n", encoding="utf-8")
+    (claude / "notes.md").write_text("unit autoos-litellm.service restarts\n", encoding="utf-8")
+    (opencode / "CLAUDE.md").write_text("%h/code/AutoOS\n", encoding="utf-8")
+    # Skill markdown is only reached by the skill walker, not the instruction walker.
+    (claude / "skills" / "s1" / "SKILL.md").write_text(
+        "/home/x/code/AutoOS/skills/x\n", encoding="utf-8"
+    )
+
+    hits = scan_all(home)
+    assert len(hits) == 5
+    by_kind: dict[str, list[str]] = {}
+    for kind, path_str, detail in hits:
+        by_kind.setdefault(kind, []).append(f"{path_str}\t{detail}")
+    assert sorted(by_kind) == ["instruction", "skill"]
+    assert len(by_kind["instruction"]) == 4
+    assert len(by_kind["skill"]) == 1
+    assert any("autoos-litellm.service" in d for d in by_kind["instruction"])
+
+
+def test_has_autoos_case_insensitive() -> None:
+    for text in (
+        "/home/x/code/AutoOS/tools",
+        "AUTOOS/x",
+        "autoos-litellm.service",
+        "x-autoos-litellm.timer",
+        "%h/code/autoos",
+        "/var/AutoOS/",
+    ):
+        assert has_autoos(text), text
+    for text in ("autoosx", "xautoos", "myautoostuff"):
+        assert not has_autoos(text), text
+
+
+def test_secret_names_token_boundaries(tmp_path: Path) -> None:
+    for name in ("monkey", "keyboard", "monkey_patch.sh", "keyword.txt", "keyboards.json"):
+        assert not looks_secret(tmp_path / name), name
+    for name in (
+        "api_key.json",
+        "apikey.txt",
+        "my_token.json",
+        "passwd",
+        "credentials.json",
+        "id_rsa",
+        "id_ed25519.pub",
+        "cert.pem",
+        "x.key",
+        "y.p12",
+        ".env",
+    ):
+        assert looks_secret(tmp_path / name), name
+
+
+def test_redaction_on_matching_line(tmp_path: Path) -> None:
+    home = tmp_path / "redact_home"
+    claude = home / ".claude"
+    (claude / "hooks").mkdir(parents=True)
+    (claude / "settings.json").write_text(
+        '{"hooks": {"PreToolUse": [{"command": "/home/x/code/AutoOS/h.py", '
+        '"token": "sk-live-SECRETVALUE1234", '
+        '"authorization": "Bearer abc.def.GHIJK"}]}}\n',
+        encoding="utf-8",
+    )
+    (claude / "hooks" / "hook.sh").write_text(
+        "#!/bin/sh\nexec /home/x/code/AutoOS/bin/run sk-live-ZZZZ9999 "
+        + "A" * 400
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--home", str(home)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    out = proc.stdout
+    for secret in ("SECRETVALUE1234", "abc.def.GHIJK", "ZZZZ9999"):
+        assert secret not in out, secret
+    assert out.count("<redacted>") >= 3
+    assert "/home/x/code/AutoOS/h.py" in out
+    for line in out.strip().splitlines():
+        parts = line.split("\t")
+        assert len(parts) == 3
+        assert len(parts[2]) <= 160
+
+
+def test_backups_and_jobs_excluded(tmp_path: Path) -> None:
+    home = tmp_path / "excl_home"
+    pg = home / ".local" / "share" / "plangraph"
+    (pg / "backups").mkdir(parents=True)
+    (pg / "backups" / "snap.json").write_text(
+        '{"cmd": "/home/x/code/AutoOS/bin"}\n', encoding="utf-8"
+    )
+    jobs = home / ".claude" / "jobs" / "j1"
+    jobs.mkdir(parents=True)
+    (jobs / ".mcp.json").write_text(
+        '{"server": "/home/x/code/AutoOS/srv"}\n', encoding="utf-8"
+    )
+
+    assert scan_all(home) == []
+
+
+def test_timer_unit_flagged(tmp_path: Path) -> None:
+    home = tmp_path / "timer_home"
+    user = home / ".config" / "systemd" / "user"
+    user.mkdir(parents=True)
+    (user / "autoos-litellm.timer").write_text(
+        "[Unit]\nDescription=Timer\n[Timer]\nExecStart=%h/code/AutoOS/bin/tick.sh\n",
+        encoding="utf-8",
+    )
+
+    hits = scan_all(home)
+    assert len(hits) == 1
+    kind, path_str, detail = hits[0]
+    assert kind == "systemd"
+    assert path_str.endswith("autoos-litellm.timer")
+    assert "%h/code/AutoOS/bin/tick.sh" in detail
+
+
+def test_clean_home_exit_code_zero(tmp_path: Path) -> None:
+    home = tmp_path / "spotless_home"
+    claude = home / ".claude"
+    claude.mkdir(parents=True)
+    opencode = home / ".config" / "opencode"
+    opencode.mkdir(parents=True)
+    (claude / "AGENTS.md").write_text("See /usr/share/docs\n", encoding="utf-8")
+    (claude / "CLAUDE.md").write_text("# Notes\nnothing here\n", encoding="utf-8")
+    (opencode / "AGENTS.md").write_text("clean\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--home", str(home)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+    assert scan_all(home) == []
