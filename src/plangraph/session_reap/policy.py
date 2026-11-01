@@ -17,6 +17,8 @@ from .scan import parse_iso_dt, parse_ttl_marker
 
 DEFAULT_ALLOWLIST = (
     "*-L1-*",
+    "*-L1",  # bare role name, e.g. build-L1 (D-3502)
+    "L1-*",  # e.g. L1-opus-extra (D-3502)
     "routing*",
     "*judge*",
     "*planner*",

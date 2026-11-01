@@ -345,7 +345,12 @@ def test_cancel_real_child(tmp_path):
             return await asyncio.create_subprocess_exec(sys.executable, '-c', 'import time; time.sleep(60)', **kwargs)
         runner = SpawnerRunner(process_factory=factory)
         service = SpawnService(runner, tmp_path)
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=0.05)
+        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=0)
+        for _ in range(500):  # D-3520: a fixed 0.05 s wait raced the child start on a loaded host
+            record = service.result(record['run_id'])
+            if record.get('job_id') in runner._processes:
+                break
+            await asyncio.sleep(0.01)
         assert 'job_id' in record, record
         process = runner._processes[record['job_id']]
         assert process.pid and process.returncode is None

@@ -67,6 +67,7 @@ def _lines(path):
 @pytest.mark.parametrize("name", [
     "work-l1-x", "Task-L1-Run", "ROUTING-dispatch", "Routing", "Judge-A", "my-JUDGE",
     "Auto-PLANNER", "PlanGraph-Oversight-1", "PLANGRAPH-OVERSIGHT",
+    "build-L1", "build-L1-0064", "L1-opus-extra",  # D-3502 reaper dry-run gaps
 ])
 def test_allowlist_matches_case_insensitively(name):
     action, reason = decide(_rec(name=name), NOW)
