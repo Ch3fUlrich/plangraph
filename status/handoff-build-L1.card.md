@@ -1,4 +1,4 @@
-# L1 card · build-L1-0064 · 2026-11-01T13:52Z
+# L1 card · build-L1-0067 · 2026-11-01T13:55Z
 ## Goal
 - D-3517 queue: RIN-* lanes via build-L2-rin-0066 (live steps mine); seats for hooks slices + RIN PRs when a non-mimo family returns; then SEAT-VERDICT-INLINE-RUNS (+D-3527), LESSONS L-R1..R3, lane_gates size gate
 ## Keeper
@@ -24,6 +24,7 @@
 3. pd#12 merged -> ff plangraph-data, journal check
 ## Open
 - Q-SEAT-2ND-FAMILY only mimo legs; paid seat = operator | default wait + hourly retry | deadline none
+- GO-REQ D-3507 keeper merge_commit_of is_merge shortcut refuses lane-merge PR heads (953b1e6d) | *a new item KEEPER-EVIDENCE-MERGE-HEAD HIGH | deadline 16:00Z (sent 13:55Z)
 - GO-REQ RIN-PATH-REPOINT done-scan rule/skill texts | default a edit 3 + allowlist 3 | deadline none
 ## Traps
 - routing only via ~/.local/state/fleet/inbox/routing.jsonl (J/send.py); never routerctl status
