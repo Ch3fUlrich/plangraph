@@ -92,12 +92,12 @@ def file_size_gate():
     return 0
 
 
-def changelog_docs_warn(base):
-    """tools/check_changelog_docs.py --warn-only: warn only, never refuse (D-653)."""
+def changelog_docs_warn(base, head):
+    """tools/check_changelog_docs.py --warn-only on base..head (the pushed sha): never refuses (D-653)."""
     if not CHANGELOG_DOCS.is_file():
         return
     r = subprocess.run(
-        [sys.executable, str(CHANGELOG_DOCS), "--base", base, "--warn-only"],
+        [sys.executable, str(CHANGELOG_DOCS), "--base", base, "--head", head, "--warn-only"],
         capture_output=True,
         text=True,
     )
@@ -135,7 +135,7 @@ def main():
         if local_sha == ZERO:  # branch deletion: nothing pushed to scan
             continue
         base = base_commit(remote_sha, local_sha)
-        changelog_docs_warn(base)
+        changelog_docs_warn(base, local_sha)
         for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():
             parts = line.split("\t")
             if len(parts) != 2 or parts[0].startswith("D"):
