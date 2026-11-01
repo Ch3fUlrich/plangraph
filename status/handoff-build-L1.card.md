@@ -15,7 +15,7 @@
 - 11-01T13:42Z RT-P4-SKILLS-REWRITE PR#306 merged 285fa157 seat run-93cb0d49 PASS
 - 11-01T13:50Z RT-P4-SKILLS-REWRITE PR#307 merged ab16d0cd seat run-8c9f5cc2 PASS
 ## In flight
-- ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 MERGE-READY since 13:48Z next check 14:30Z
+- ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 merge GO D-3536, classifier refused router merge = operator step OS-PD12-MERGE (do not merge) since 13:52Z next check 14:30Z
 - build-L2-rin-0066 PR#305, pd#11, pd#13 since 13:50Z next check 14:30Z
 - seat-leg probe bg baimic18i since 13:20Z next check 15:20Z
 ## Planned
