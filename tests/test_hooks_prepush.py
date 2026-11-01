@@ -267,3 +267,12 @@ def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():
     assert "--words" not in cmds[0], "CI runs public patterns only, no words list"
     assert "--rules" in cmds[0]
     assert scrub[0]["runs-on"] == jobs["pytest"]["runs-on"]
+
+
+def test_prepush_runs_changelog_docs_warn_only(repo):
+    r, base = repo
+    head = commit_file(r, "app/feature.py", "x = 42\n")
+    res = run_hook(r, [push_line("main", head, base)])
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "check-changelog-docs: ok" in out
