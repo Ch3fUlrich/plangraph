@@ -73,6 +73,8 @@ jobs:
       - env:
           FILESIZE_REQUIRE_BASE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || github.event_name == 'pull_request' && 'origin/main' || 'HEAD~1' }}
         run: python3 tools/check_file_size.py
+      - name: Skill lint
+        run: python3 tools/skill-rules.py all
 
   pytest:
     needs: select
