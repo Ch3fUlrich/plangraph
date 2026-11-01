@@ -320,6 +320,7 @@ class GitAdapter:
             tokens = lines_parents[0].split()
             is_merge = len(tokens) >= 3
 
+            m_sha: str | None = None
             if is_merge:
                 proc_rev = self._run(
                     repo,
@@ -332,21 +333,19 @@ class GitAdapter:
                         f"{sha}^..{ref}",
                     ],
                 )
-                if proc_rev.returncode != 0:
-                    return None
-                out_rev = (
-                    proc_rev.stdout
-                    if isinstance(proc_rev.stdout, str)
-                    else proc_rev.stdout.decode("utf-8", "replace")
-                )
-                rev_lines = [ln.strip().lower() for ln in out_rev.splitlines() if ln.strip()]
-                if not rev_lines:
-                    return None
-                first_line = rev_lines[0]
-                if not valid_commit_ref(first_line) or first_line != sha.lower():
-                    return None
-                m_sha = first_line
-            else:
+                if proc_rev.returncode == 0:
+                    out_rev = (
+                        proc_rev.stdout
+                        if isinstance(proc_rev.stdout, str)
+                        else proc_rev.stdout.decode("utf-8", "replace")
+                    )
+                    rev_lines = [ln.strip().lower() for ln in out_rev.splitlines() if ln.strip()]
+                    if rev_lines:
+                        first_line = rev_lines[0]
+                        if valid_commit_ref(first_line) and first_line == sha.lower():
+                            m_sha = first_line
+
+            if m_sha is None:
                 proc_fp = self._run(
                     repo,
                     [
