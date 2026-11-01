@@ -22,6 +22,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from os.path import abspath as _abspath  # tests stub runner.os (test_w36_regressions)
 from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.clients import (
@@ -434,7 +435,7 @@ class SpawnerRunner:
         child_env = build_child_env(extra_env, headers=envelope_headers)
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
-        child_env['PWD'] = os.path.abspath(work_dir)
+        child_env['PWD'] = _abspath(work_dir)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
