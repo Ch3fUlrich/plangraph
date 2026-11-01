@@ -43,7 +43,8 @@ FAMILIES = (
     (r"nemotron", "nvidia"),
 )
 KNOWN_FAMILIES = frozenset(family for _, family in FAMILIES)
-PASS_WORDS = frozenset({"pass", "approve"})
+# accept is pass (D-3544); whole words only, so "acceptable" stays unknown.
+PASS_WORDS = frozenset({"pass", "approve", "accept"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
 # [*_`]* before/after the word: markdown-bold labels like **MED**: or
@@ -54,9 +55,15 @@ _BLOCKING_LABEL = re.compile(
 _LOW_LABEL = re.compile(
     r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
-# first word, ended by end/space/punctuation and NOT followed by "|" or "/"
-# (that would be an echoed "pass | fix | halt" template, not a decision)
-_FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I)
+# word end: end/space/punctuation and NOT followed by "|" or "/" (that would
+# be an echoed "pass | fix | halt" template, not a decision)
+_WORD_END = r"(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])"
+# first word of the decision
+_FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
+# D-3544: the phrase "request changes" (any case, joined by space, "-" or "_")
+# is a fix; the same end guard keeps "request_changes / accept" a template
+# echo, and bare "request" stays unknown.
+_REQUEST_CHANGES = re.compile(r"request[\s_-]+changes" + _WORD_END, re.I)
 
 
 def model_family(model):
@@ -74,6 +81,7 @@ def parse_verdict(text):
 
     Only that line decides.  A template echo such as ``VERDICT: pass | fix`` or
     an unknown first word yields no verdict; earlier lines are never consulted.
+    ``REQUEST_CHANGES`` reads as fix and ``ACCEPT`` as pass.
     """
     lines = (text or "").splitlines()
     for idx in range(len(lines) - 1, -1, -1):
@@ -81,6 +89,8 @@ def parse_verdict(text):
         if not match:
             continue
         stripped = match.group(1).strip()
+        if _REQUEST_CHANGES.match(stripped):
+            return False, idx
         word_m = _FIRST_WORD.match(stripped)
         word = word_m.group(1).lower() if word_m else ""
         if word in PASS_WORDS:
@@ -112,7 +122,7 @@ def verdict_payload(key, ok, reason):
 
 def build_reason(evidence, ok, text, idx, covers=None, witness=None):
     head = (f"seat {evidence.get('served_model') or evidence.get('requested_model')}"
-            f" PASS corr {evidence.get('correlation_id')}"
+            f" {'PASS' if ok else 'FIX'} corr {evidence.get('correlation_id')}"
             f" prompt {str(evidence.get('prompt_sha256') or '')[:12]}")
     if witness:
         # D-2905 (2): keep the request-side witness kind auditable in the keeper record.
