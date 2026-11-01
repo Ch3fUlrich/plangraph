@@ -24,7 +24,7 @@ from plangraph.routing_support import resolver
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.catalog_data import SEED_MODELS
 
-from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _repo, _row, _seeded, _service, live_policy)  # noqa: F401
+from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _repo, _row, _seeded, _service, live_policy, pre_d3552_policy)  # noqa: F401
 
 
 # --- 1. harness/tool_mode are catalog data -----------------------------------
@@ -122,6 +122,9 @@ def test_default_policy_file():
     policy = load_route_policy()
     assert {"kimi", "deepseek"} <= set(policy.banned_families)
     assert "glm" in policy.off_families
+    # D-3552: deepseek/glm lifted for review seats only; kimi never (D-3084).
+    assert policy.review_allowed_families == ("deepseek", "glm")
+    assert "kimi" not in policy.review_allowed_families
     assert policy.allows("qodercli", "review") and not policy.allows("qodercli", "implement")
     assert not policy.allows("agy", "review") and policy.allows("agy", "implement")
 
@@ -144,14 +147,25 @@ def test_policy_env_path(tmp_path, monkeypatch):
     assert "deepseek" in [leg.family for leg in plan.legs]
 
 
-@pytest.mark.parametrize("role", ["review", "implement"])
+@pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
 def test_route_skips_banned_and_off_families(role):
     plan = plan_spawn(CARD, role=role, writer_families=("mimo",))
     families = {leg.family for leg in plan.legs}
-    assert not families & {"kimi", "deepseek", "glm"}
+    assert "kimi" not in families
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
-    assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
+    if role == "review":
+        # D-3552: deepseek/glm lift for review seats only; kimi never (D-3084).
+        assert {"deepseek", "glm"} <= families
+        return
+    # implement/orchestrate stay banned/off (D-3552).
+    assert not families & {"deepseek", "glm"}
+    policy = load_route_policy()
+    by_id = {leg.id: leg for leg in DEFAULT_LEGS}
+    for leg_id, reason in (("opencode-deepseek-v4.1-flash-free", "banned_family"),
+                           ("opencode-glm-5.3-flash-free", "off_family")):
+        assert policy.skip_reason(by_id[leg_id], role) == reason
+        if role == "implement":
+            assert reasons[leg_id] == reason
 
 
 def test_route_skips_paused_harness_per_role():
@@ -172,10 +186,18 @@ def test_explicit_policy_argument_wins():
 
 # --- 4. seats per writer part --------------------------------------------------
 
-def test_claude_written_high_gets_luna_and_qwen():
+def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
+    # Pinned to the pre-D-3552 policy: no review lift, so the seat set is
+    # luna/gpt (the D-3552 lift is covered in test_review_legs_d3552.py).
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
     assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "cx-gpt-6-luna"}
+
+
+def test_default_policy_seats_deepseek_for_review():
+    # D-3552: with the live policy a deepseek leg may be a review seat.
+    plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
+    assert "deepseek" in _families(plan)
 
 
 def test_seat_never_shares_family_with_a_single_writer():
@@ -184,9 +206,10 @@ def test_seat_never_shares_family_with_a_single_writer():
     assert any(s["leg"] == "cx-gpt-6-luna" and s["reason"] == "excluded_family" for s in plan.skipped)
 
 
-def test_seat_may_share_family_with_another_writer_part():
+def test_seat_may_share_family_with_another_writer_part(pre_d3552_policy):
     # D-3084: writers gpt + qwen; a qwen seat covers the gpt part, a gpt seat
     # covers the qwen part.  Every part is covered by a family other than it.
+    # Pinned to the pre-D-3552 policy (no review lift): the seat set is luna/gpt.
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
