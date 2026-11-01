@@ -46,8 +46,9 @@ def stop_session(
     try:
         proc = runner(argv, timeout=timeout)
         rc = getattr(proc, "returncode", None)
-        if rc is None:
-            rc = int(proc) if isinstance(proc, (int, float)) else 0
+        # An unverifiable result must never read as a clean stop.
+        if isinstance(rc, bool) or not isinstance(rc, int):
+            return 1, "runner_error: no integer returncode"
         stdout = getattr(proc, "stdout", "") or ""
         stderr = getattr(proc, "stderr", "") or ""
         msg = stdout if stdout else stderr
