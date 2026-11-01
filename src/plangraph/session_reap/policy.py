@@ -103,7 +103,7 @@ def decide(
     name = _get_val(record, "name", "")
     name = name.strip() if isinstance(name, str) else ""
     state = str(_get_val(record, "state", "") or "")
-    has_result = bool(_get_val(record, "has_result", False))
+    has_result = _get_val(record, "has_result", False)
     allow_stop = _get_val(record, "allow_stop", None)
     ttl_min = _get_val(record, "ttl_min", None)
     ttl_error = _get_val(record, "ttl_error", None)
@@ -134,6 +134,10 @@ def decide(
         ttl_min = _minutes(ttl_min)
         if ttl_min is None or ttl_min <= 0:
             return "keep", "ttl_invalid"
+
+    # A truthy string such as "false" would shorten the idle threshold to the grace one.
+    if not isinstance(has_result, bool):
+        return "keep", "result_invalid"
 
     # 4. Stop only if state == 'done'.
     if state != "done":

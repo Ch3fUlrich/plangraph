@@ -133,3 +133,14 @@ def test_non_positive_record_ttl_min_keeps_as_invalid(ttl):
 def test_positive_marker_ttl_min_is_unchanged():
     assert parse_ttl_marker({"ttl_min": 45, "allow_stop": True}) == (True, 45, None)
     assert parse_ttl_marker({"ttl_min": 0.5}) == (None, 0.5, None)
+
+
+# ---- policy: has_result is strict for untrusted dict records (seat r3 LOW) ----
+
+@pytest.mark.parametrize("value", ["false", "0", 1, 0, "", None, [], 1.0])
+def test_non_bool_has_result_keeps(value):
+    assert decide(_dict_rec(has_result=value), NOW) == ("keep", "result_invalid")
+
+
+def test_bool_has_result_still_decides():
+    assert decide(_dict_rec(has_result=False), NOW) == ("stop", "done_idle")
