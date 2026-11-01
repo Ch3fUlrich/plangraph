@@ -276,3 +276,16 @@ def test_prepush_runs_changelog_docs_warn_only(repo):
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
     assert "check-changelog-docs: ok" in out
+
+
+def test_prepush_checks_the_pushed_sha_not_head(repo):
+    r, base = repo
+    git(r, "checkout", "-q", "-b", "other")
+    pushed = commit_file(r, "app/feature.py", "x = 42\n")
+    git(r, "checkout", "-q", "main")
+    commit_file(r, "docs/n.md", "# n\n")
+    commit_file(r, "docs/m.md", "# m\n")
+    res = run_hook(r, [push_line("other", pushed, base)])
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "1 path(s)" in out and "changelog no" in out

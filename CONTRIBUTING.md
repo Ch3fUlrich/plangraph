@@ -39,7 +39,7 @@ files are not counted; a deliberate exemption goes in `.filesize-allow` with a r
 
 ## Changelog and documentation
 
-Every change touching non-documentation paths requires an entry in `CHANGELOG.md` under `## Unreleased` (rule D-653). A non-doc change may waive this only when a commit in the branch carries a `Changelog: skip (<reason>)` trailer with a non-empty reason (for typos or format-only edits). Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. `python3 tools/check_changelog_docs.py` verifies this in CI and runs with `--warn-only` in the pre-push hook.
+Every change touching non-documentation paths requires an entry in `CHANGELOG.md` under `## Unreleased` (rule D-653). The entry must be a new non-heading line under `## Unreleased`; deleting the file or editing whitespace does not count. A non-doc change may waive this only when every commit that touches non-doc paths carries its own `Changelog: skip (<reason>)` line in its trailer block (last paragraph; merge commits do not count), with a non-empty reason (for typos or format-only edits). Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
 
 ## Commits
 

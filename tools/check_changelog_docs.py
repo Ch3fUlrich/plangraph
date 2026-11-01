@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """check_changelog_docs.py - Changelog and docs gate (rule D-653).
 
-Guards that changes touching non-doc paths include a CHANGELOG.md hunk or a
-commit trailer 'Changelog: skip (<reason>)', and that changes to paths mapped
-in .docs-map touch at least one of their documentation files.
+Guards that changes touching non-doc paths add a line under '## Unreleased' in
+CHANGELOG.md, or that every commit touching non-doc paths carries its own
+'Changelog: skip (<reason>)' trailer (in the commit's trailer block, merge
+commits excluded), and that changes to paths mapped in .docs-map touch at
+least one of their documentation files. The range is <merge-base(base, head)>..head.
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import datetime
-import fnmatch
 import os
 import re
 import subprocess
@@ -20,6 +22,7 @@ TODAY_ENV = "CHANGELOG_DOCS_TODAY"
 SKIP_TRAILER_RE = re.compile(
     r"^\s*changelog\s*:\s*skip(?:\s*\((.*?)\))?\s*$", re.IGNORECASE
 )
+UNRELEASED_RE = re.compile(r"^##\s+\[?unreleased\]?\s*$", re.IGNORECASE)
 
 
 def git(root: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -99,10 +102,80 @@ def parse_docs_map(path: str) -> tuple[datetime.date | None, list[tuple[int, str
 
 
 def resolve_today(today_arg: str | None = None) -> datetime.date:
+    """Today, or the injected --today / $CHANGELOG_DOCS_TODAY; ValueError if malformed."""
     today_val = today_arg or os.environ.get(TODAY_ENV)
     if today_val:
         return datetime.date.fromisoformat(today_val.strip())
     return datetime.date.today()
+
+
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """'*' and '?' stay inside one path segment; '**' spans segments ('**/' may be empty)."""
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+            continue
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        out.append("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c))
+        i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def unreleased_lines(changelog: str) -> collections.Counter[str]:
+    """Non-blank, non-heading lines under '## Unreleased', stripped, as a multiset."""
+    found: collections.Counter[str] = collections.Counter()
+    inside = False
+    for raw in changelog.splitlines():
+        line = raw.strip()
+        if UNRELEASED_RE.match(line):
+            inside = True
+        elif raw.startswith("## "):
+            inside = False
+        elif inside and line and not line.startswith("#"):
+            found[line] += 1
+    return found
+
+
+def changelog_entry_added(root: str, merge_base: str, head: str) -> bool:
+    """True when head's '## Unreleased' holds a line the merge-base's does not."""
+    def read(rev: str) -> str:
+        run = git(root, "show", f"{rev}:CHANGELOG.md")
+        return run.stdout if run.returncode == 0 else ""
+
+    return bool(unreleased_lines(read(head)) - unreleased_lines(read(merge_base)))
+
+
+def commit_skips(root: str, sha: str) -> tuple[list[str], int]:
+    """(non-empty skip reasons, empty-skip count) from the commit's trailer block only."""
+    run = git(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
+    reasons: list[str] = []
+    empty = 0
+    for line in run.stdout.splitlines():
+        m = SKIP_TRAILER_RE.match(line)
+        if not m:
+            continue
+        if m.group(1) is not None and m.group(1).strip():
+            reasons.append(m.group(1).strip())
+        else:
+            empty += 1
+    return reasons, empty
+
+
+def commit_paths(root: str, sha: str) -> list[str]:
+    run = git(root, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--no-renames", sha)
+    return [p.strip().replace("\\", "/") for p in run.stdout.splitlines() if p.strip()]
+
+
+def bail(msg: str, warn_only: bool) -> int:
+    print(f"warning: {msg}" if warn_only else msg)
+    return 0 if warn_only else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Demote all errors to warnings and exit 0 (used by pre-push hook)",
     )
     ap.add_argument(
+        "--head",
+        help="Head commit or ref to check (default: HEAD); the pre-push hook passes the pushed sha",
+    )
+    ap.add_argument(
         "--today",
         help="Override current date (YYYY-MM-DD) for docs-map enforcement checks",
     )
@@ -128,37 +205,41 @@ def main(argv: list[str] | None = None) -> int:
         help="Git working tree root to check (defaults to cwd)",
     )
     args = ap.parse_args(argv)
+    warn_only = args.warn_only
+
+    try:
+        today = resolve_today(args.today)
+    except ValueError:
+        bad = args.today or os.environ.get(TODAY_ENV)
+        return bail(f"check-changelog-docs: malformed date '{bad}' (want YYYY-MM-DD)", warn_only)
 
     root = git_toplevel(args.cwd)
-    required = args.base or os.environ.get(BASE_ENV)
-    base_ref = required if required else "origin/main"
+    base_ref = args.base or os.environ.get(BASE_ENV) or "origin/main"
+    head_ref = args.head or "HEAD"
 
     base_check = git(root, "rev-parse", "--verify", "--quiet", base_ref + "^{commit}")
     if base_check.returncode != 0:
-        msg = f"check-changelog-docs: base {base_ref} does not resolve"
-        if args.warn_only:
-            print(f"warning: {msg}")
-            return 0
-        print(msg)
-        return 1
+        return bail(f"check-changelog-docs: base {base_ref} does not resolve", warn_only)
+    head_check = git(root, "rev-parse", "--verify", "--quiet", head_ref + "^{commit}")
+    if head_check.returncode != 0:
+        return bail(f"check-changelog-docs: head {head_ref} does not resolve", warn_only)
+    base_sha = base_check.stdout.strip()
+    head_sha = head_check.stdout.strip()
 
-    head_check = git(root, "rev-parse", "HEAD")
-    if base_check.stdout.strip() == head_check.stdout.strip():
-        msg = f"check-changelog-docs: base {base_ref} is HEAD itself - cannot diff against HEAD"
-        if args.warn_only:
-            print(f"warning: {msg}")
-            return 0
-        print(msg)
-        return 1
+    if base_sha == head_sha:
+        return bail(
+            f"check-changelog-docs: base {base_ref} is {head_ref} itself - cannot diff against {head_ref}",
+            warn_only,
+        )
 
-    diff_res = git(root, "diff", "--name-only", "--no-renames", f"{base_ref}...HEAD")
+    mb_res = git(root, "merge-base", base_sha, head_sha)
+    if mb_res.returncode != 0 or not mb_res.stdout.strip():
+        return bail(f"check-changelog-docs: no merge-base between {base_ref} and {head_ref}", warn_only)
+    merge_base = mb_res.stdout.strip().splitlines()[0]
+
+    diff_res = git(root, "diff", "--name-only", "--no-renames", merge_base, head_sha)
     if diff_res.returncode != 0:
-        msg = f"check-changelog-docs: git diff failed: {diff_res.stderr.strip()}"
-        if args.warn_only:
-            print(f"warning: {msg}")
-            return 0
-        print(msg)
-        return 1
+        return bail(f"check-changelog-docs: git diff failed: {diff_res.stderr.strip()}", warn_only)
 
     raw_paths = [
         p.strip().replace("\\", "/")
@@ -166,51 +247,41 @@ def main(argv: list[str] | None = None) -> int:
         if p.strip()
     ]
 
-    log_res = git(root, "log", "-z", "--format=%H%n%B", f"{base_ref}..HEAD")
-    commits: list[tuple[str, str]] = []
-    if log_res.returncode == 0 and log_res.stdout:
-        for rec in log_res.stdout.split("\0"):
-            if not rec.strip():
-                continue
-            sha, _, message = rec.partition("\n")
-            commits.append((sha.strip(), message))
-
-    valid_skips: list[tuple[str, str]] = []
-    empty_skips: list[str] = []
-    for sha, message in commits:
-        for line in message.splitlines():
-            m = SKIP_TRAILER_RE.match(line)
-            if m:
-                reason = m.group(1)
-                if reason is not None and reason.strip():
-                    valid_skips.append((sha[:8], reason.strip()))
-                    break
-                else:
-                    empty_skips.append(sha[:8])
-                    break
-
-    for sha, reason in valid_skips:
-        print(f"changelog: skip used by {sha} ({reason})")
+    revs = git(root, "rev-list", "--no-merges", "--reverse", f"{merge_base}..{head_sha}")
+    commits = revs.stdout.split() if revs.returncode == 0 else []
 
     problems: list[str] = []
     warnings: list[str] = []
-
-    for sha in empty_skips:
-        problems.append(f"commit {sha} has 'Changelog: skip' trailer with empty reason")
+    skipped: list[str] = []
+    uncovered: list[str] = []
+    for sha in commits:
+        reasons, empty = commit_skips(root, sha)
+        touches_non_doc = any(not is_doc_path(p) for p in commit_paths(root, sha))
+        if empty:
+            problems.append(f"commit {sha[:8]} has 'Changelog: skip' trailer with empty reason")
+        if not touches_non_doc:
+            continue
+        if reasons:
+            skipped.append(sha[:8])
+            print(f"changelog: skip used by {sha[:8]} ({reasons[0]})")
+        else:
+            uncovered.append(sha[:8])
 
     has_non_doc = any(not is_doc_path(p) for p in raw_paths)
-    changelog_in_diff = "CHANGELOG.md" in raw_paths
+    entry_added = changelog_entry_added(root, merge_base, head_sha)
 
-    if changelog_in_diff:
+    if entry_added:
         changelog_status = "yes"
-    elif valid_skips:
+    elif has_non_doc and skipped and not uncovered:
         changelog_status = "skip"
     else:
         changelog_status = "no"
 
-    if has_non_doc and not changelog_in_diff and not valid_skips:
+    if has_non_doc and changelog_status == "no":
+        which = f" (commits without their own skip: {', '.join(uncovered)})" if uncovered else ""
         problems.append(
-            "non-doc change requires CHANGELOG.md or 'Changelog: skip (<reason>)' commit trailer"
+            "non-doc change requires a line added under '## Unreleased' in CHANGELOG.md, "
+            f"or a 'Changelog: skip (<reason>)' trailer on every such commit{which}"
         )
 
     # Rule B: .docs-map
@@ -224,12 +295,12 @@ def main(argv: list[str] | None = None) -> int:
             problems.append(err)
             docs_map_errors += 1
 
-        today = resolve_today(args.today)
         is_enforced = (enforce_after is None) or (today >= enforce_after)
 
+        compiled = [(glob_to_regex(g), g, d) for _, g, d in rules]
         for path in raw_paths:
-            for lineno, glob_pat, target_docs in rules:
-                if fnmatch.fnmatch(path, glob_pat):
+            for rx, glob_pat, target_docs in compiled:
+                if rx.match(path):
                     if not any(d in raw_paths for d in target_docs):
                         docs_str = ", ".join(target_docs)
                         if is_enforced:
@@ -243,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
                                 f"warning: {path} matches '{glob_pat}' but none of its docs ({docs_str}) are in diff"
                             )
 
-    if args.warn_only:
+    if warn_only:
         for p in problems:
             print(f"warning: {p}")
         for w in warnings:
