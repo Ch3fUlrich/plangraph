@@ -1,8 +1,9 @@
-# L1 card · build-L1-0067 · 2026-11-01T13:55Z
+# L1 card · build-L1-0067 · 2026-11-01T14:34Z
 ## Goal
 - D-3517 queue: RIN-* lanes via build-L2-rin-0066 (live steps mine); seats for hooks slices + RIN PRs when a non-mimo family returns; then SEAT-VERDICT-INLINE-RUNS (+D-3527), LESSONS L-R1..R3, lane_gates size gate
 ## Keeper
 - claimed: LE-SPAWNER-PROBE-COMMIT (in_review), SPAWNER-LEG-CONSOLE-SONNET (in_review)
+- claimed 14:31Z: KEEPER-EVIDENCE-MERGE-HEAD epoch 1 (D-3538, HIGH), writer run-66508a85 in plangraph-worktrees/keeper-merge-head (lane/keeper-merge-head)
 - ready next: ROUTER-LAUNCH-OOM-SCOPE (PR pd#12 MERGE-READY), AUTOOS-HOOKS-INTERIM-S01..S14, SEAT-VERDICT-INLINE-RUNS
 ## Done
 - 11-01T12:05Z D-3502 PR#295 merged 217e669b seat run-6aee2407 PASS CI green
@@ -23,6 +24,9 @@
 2. RIN live steps after merges under router GO (batch apply, inbox_move)
 3. pd#12 merged -> ff plangraph-data, journal check
 ## Open
+- BLOCKED D-3537(b) SKILL-PHASE-BATCH-REVIEW verdict: seat run-4ee53cfd says 'VERDICT: REQUEST_CHANGES', seat_verdict parser no verdict | *a router posts ok=false | 15:30Z; seat dir /home/s/.claude/jobs/b87f0c9f/tmp/seatdir-sbr
+- #308 skills slice6 29cc101d needs non-mimo seat (card /home/s/.claude/jobs/5dd7fc7f/tmp/seatcard6.json + seatprompt7.md)
+- D-3538(2) batch edits forwarded to build-L2-rin-0066 14:33Z
 - Q-SEAT-2ND-FAMILY only mimo legs; paid seat = operator | default wait + hourly retry | deadline none
 - GO-REQ D-3507 keeper merge_commit_of is_merge shortcut refuses lane-merge PR heads (953b1e6d) | *a new item KEEPER-EVIDENCE-MERGE-HEAD HIGH | deadline 16:00Z (sent 13:55Z)
 - GO-REQ RIN-PATH-REPOINT done-scan rule/skill texts | default a edit 3 + allowlist 3 | deadline none
