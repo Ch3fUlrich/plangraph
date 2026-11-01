@@ -4,8 +4,8 @@ Short, high-signal facts an L3 (implementer, reviewer, researcher) needs in this
 Curated by L2s: add a line when an L3 lost time to something not written here, and
 drop a line that stopped being true. It is not yet injected into L3 briefs (planned);
 when it is, measure rework (review rounds, reverted commits) before and after.
-One fact per line, each with a pointer. Every backticked path is checked by
-`tests/test_skills_roles.py`.
+One fact per line, each with a pointer. Every backticked repo path (a token with a slash or a short
+file extension, no placeholders) is checked by `tests/test_skills_roles.py`.
 
 ## Run and test
 
