@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import ConfigError, load_config
 from .health import probe
-from .procutil import kill_process_tree, pid_alive, read_pid_file
+from .procutil import kill_process_tree, pid_alive, pid_matches, read_pid_file, read_pid_record
 from .render import render_json
 from .supervisor import run_supervisor
 
@@ -64,17 +64,25 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
     state_dir = Path(cfg.state_dir or "mcp-supervise.state").resolve()
     pid_file = state_dir / f"{target.name}.pid"
-    old_pid = read_pid_file(pid_file)
-    if old_pid is None:
+    record = read_pid_record(pid_file)
+    if record is None:
         print(f"No pid file for server '{target.name}' ({pid_file}): is the supervisor running?",
               file=sys.stderr)
         return 1
+    old_pid, old_start = record
     if not pid_alive(old_pid):
         print(f"Pid {old_pid} of server '{target.name}' is not alive (stale pid file)",
               file=sys.stderr)
         return 1
+    if not pid_matches(old_pid, old_start):
+        print(f"Pid {old_pid} of server '{target.name}' is alive but started at a different "
+              "time than the pid file recorded: the pid was recycled, refusing to kill it",
+              file=sys.stderr)
+        return 1
 
-    kill_process_tree(old_pid)
+    if not kill_process_tree(old_pid, log=lambda m: print(m, file=sys.stderr)):
+        print(f"Could not kill pid {old_pid} of server '{target.name}'", file=sys.stderr)
+        return 1
 
     # Healthy alone is not enough: the old process may still be answering, or an
     # orphan may be. Require the pid file to name a different, live process.
@@ -93,6 +101,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
     print(f"Server '{target.name}' did not become healthy with a new pid within "
           f"{args.timeout:g}s", file=sys.stderr)
     return 1
+
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(

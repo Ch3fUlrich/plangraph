@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 class ConfigError(ValueError):
     """Raised when configuration validation fails."""
+
+
+# The name becomes a file name (`<state_dir>/<name>.pid`): no separators, no `..`.
+SERVER_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 @dataclass
@@ -43,6 +48,11 @@ def _validate_server(raw: Any, index: int) -> ServerConfig:
     name = raw.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ConfigError(f"Server at index {index} must have a non-empty string 'name'")
+    if not SERVER_NAME_RE.fullmatch(name):
+        raise ConfigError(
+            f"Server name {name!r} must match [A-Za-z0-9][A-Za-z0-9._-]* "
+            "(it names the pid file)"
+        )
 
     port = raw.get("port")
     if not isinstance(port, int) or isinstance(port, bool):
@@ -61,6 +71,12 @@ def _validate_server(raw: Any, index: int) -> ServerConfig:
     project_dir = raw.get("project_dir")
     if project_dir is not None and not isinstance(project_dir, str):
         raise ConfigError(f"Server '{name}' project_dir must be a string or null")
+    # `scope` is enforced, not decoration: a project server runs in its own existing
+    # project directory (checked at spawn time), a host server has none.
+    if scope == "project" and not (project_dir and project_dir.strip()):
+        raise ConfigError(f"Server '{name}' has scope 'project' and needs a project_dir")
+    if scope == "host" and project_dir:
+        raise ConfigError(f"Server '{name}' has scope 'host' and must not set project_dir")
 
     cmd = raw.get("cmd")
     if not isinstance(cmd, list) or not cmd or not all(isinstance(c, str) and c for c in cmd):

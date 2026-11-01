@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Process-level tests for plangraph.mcp_supervise: isolation, adoption, pid-file `check`."""
 
-import json
 import os
 import subprocess
 import sys
@@ -17,82 +16,27 @@ from plangraph.mcp_supervise.config import load_config
 from plangraph.mcp_supervise.procutil import pid_alive, read_pid_file, write_pid_file
 from plangraph.mcp_supervise.supervisor import kill_process_tree, run_supervisor
 from test_mcp_supervise_support import (
+    CLI,
     CLI_ENV,
-    FAKE_SERVER_SCRIPT,
+    WorkdirCase,
     free_port,
     server_entry,
     wait_healthy,
+    wait_until as _wait,
 )
 
-CLI = [sys.executable, "-m", "plangraph.mcp_supervise"]
 
-
-def _wait(pred, tries=100, delay=0.1):
-    for _ in range(tries):
-        if pred():
-            return True
-        time.sleep(delay)
-    return False
-
-
-class _Workdir(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="mcp-test-proc-"))
-        self.script = self.tmp / "fake_srv.py"
-        self.script.write_text(FAKE_SERVER_SCRIPT, encoding="utf-8")
-        self.log_file = self.tmp / "test.log"
-        self.state_dir = self.tmp / "state"
-        self.cleanup_procs = []
-        self.addCleanup(self._reap)
-
-    def _reap(self):
-        for p in self.cleanup_procs:
-            if p.poll() is None:
-                kill_process_tree(p.pid)
-            try:
-                p.wait(timeout=5)
-            except Exception:
-                pass
-        for f in self.state_dir.glob("*.pid") if self.state_dir.exists() else []:
-            pid = read_pid_file(f)
-            if pid and pid_alive(pid):
-                kill_process_tree(pid)
-
-    def config(self, *entries) -> dict:
-        return {"log_file": str(self.log_file), "state_dir": str(self.state_dir),
-                "servers": list(entries)}
-
-    def config_path(self, raw: dict) -> Path:
-        p = self.tmp / "config.json"
-        p.write_text(json.dumps(raw), encoding="utf-8")
-        return p
-
-    def spawn_supervisor(self, raw: dict, **kw) -> subprocess.Popen:
-        proc = subprocess.Popen(
-            CLI + ["run", "--config", str(self.config_path(raw))],
-            env=CLI_ENV, start_new_session=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
-        self.cleanup_procs.append(proc)
-        return proc
-
-    def pid_of(self, name: str):
-        return read_pid_file(self.state_dir / f"{name}.pid")
-
-    def log_text(self) -> str:
-        return self.log_file.read_text(encoding="utf-8") if self.log_file.exists() else ""
-
-
-class TestChildIsolation(_Workdir):
+class TestChildIsolation(WorkdirCase):
     def test_children_start_in_their_own_session(self):
         cfg = load_config(self.config(server_entry("a", free_port(), self.script)))
         sup = supervisor.Supervisor(cfg)
-        with mock.patch.object(supervisor.subprocess, "Popen") as popen:
+        with mock.patch.object(supervisor.subprocess, "Popen") as popen, \
+                mock.patch.object(supervisor, "write_pid_file"):
             popen.return_value.pid = 4242
             sup._start_child(sup.trackers["a"], reason="t")
         self.assertIs(popen.call_args.kwargs.get("start_new_session"), True)
         self.assertIs(popen.call_args.kwargs.get("shell"), False)
 
-    @unittest.skipIf(sys.platform == "win32", "process groups are POSIX only")
     def test_killing_one_child_spares_supervisor_and_other_child(self):
         pa, pb = free_port(), free_port()
         sup = self.spawn_supervisor(self.config(
@@ -134,7 +78,7 @@ class TestPidFile(unittest.TestCase):
         self.assertFalse(pid_alive(0))
 
 
-class TestAdoption(_Workdir):
+class TestAdoption(WorkdirCase):
     def test_existing_server_is_adopted_not_respawned(self):
         port = free_port()
         orphan = subprocess.Popen([sys.executable, str(self.script), str(port)])
@@ -184,7 +128,7 @@ class TestAdoption(_Workdir):
         self.assertNotEqual(self.pid_of("a"), orphan_pid)
 
 
-class TestCheckGuards(_Workdir):
+class TestCheckGuards(WorkdirCase):
     def _check(self, raw, timeout="3"):
         return subprocess.run(
             CLI + ["check", "--config", str(self.config_path(raw)), "--name", "a",
