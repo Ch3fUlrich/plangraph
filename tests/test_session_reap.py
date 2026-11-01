@@ -306,7 +306,7 @@ def test_apply_calls_claude_stop_exactly_once_and_logs(tmp_path, frozen_now):
     entry = lines[0]
 
     # Required fields and nothing else
-    expected_fields = {"ts", "host", "short_id", "name", "age_min", "state", "reason", "action", "rc"}
+    expected_fields = {"ts", "host", "short_id", "name", "age_min", "state", "reason", "action", "rc", "updated_at"}
     assert set(entry.keys()) == expected_fields
     assert entry["short_id"] == "j1"
     assert entry["name"] == "done-task"

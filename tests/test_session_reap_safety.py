@@ -298,7 +298,7 @@ def test_timeout_is_visible_in_the_audit_line_without_crash(tmp_path):
     (entry,) = _lines(log)
     assert entry["rc"] == 1
     assert "timeout" in entry["reason"]
-    assert set(entry) == {"ts", "host", "short_id", "name", "age_min", "state", "reason", "action", "rc"}
+    assert set(entry) == {"ts", "host", "short_id", "name", "age_min", "state", "reason", "action", "rc", "updated_at"}
 
 
 def test_nonzero_rc_and_runner_error_are_tagged(tmp_path):

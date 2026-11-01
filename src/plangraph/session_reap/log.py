@@ -8,6 +8,8 @@ from pathlib import Path
 import socket
 from typing import Any, Optional, Union
 
+from .scan import parse_iso_dt
+
 DEFAULT_LOG_PATH = Path("~/.local/state/plangraph/session-reap.jsonl").expanduser()
 
 
@@ -22,11 +24,14 @@ def log_stop(
     log_path: Union[str, Path] = DEFAULT_LOG_PATH,
     host: Optional[str] = None,
     ts: Optional[str] = None,
+    updated_at: Union[datetime, str, None] = None,
 ) -> dict[str, Any]:
     """Append one JSON line per stopped session (or error) to log_path.
 
     Only the specified fields are recorded:
-    ts, host, short_id, name, age_min, state, reason, action, rc.
+    ts, host, short_id, name, age_min, state, reason, action, rc, updated_at.
+    `updated_at` is the session record's updatedAt (ISO 8601 with offset): `claude stop` leaves
+    state.json unchanged, so this is how a later run recognises a session it already stopped.
     No env values, no conversation text.
     """
     path = Path(log_path).expanduser()
@@ -54,6 +59,7 @@ def log_stop(
         "reason": str(reason),
         "action": str(action),
         "rc": int(rc),
+        "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else updated_at,
     }
 
     line = json.dumps(entry, sort_keys=False) + "\n"
@@ -61,3 +67,34 @@ def log_stop(
         f.write(line)
 
     return entry
+
+
+def stopped_updated_at(log_path: Union[str, Path]) -> dict[str, datetime]:
+    """short_id -> updated_at of that id's last successful (rc 0) stop line in the log.
+
+    A missing or unreadable file is empty; a malformed line, one without a parseable
+    offset-bearing `updated_at` (lines written before the field existed; parse_iso_dt drops
+    non-strings and naive values), without an integer rc or whose action is not "stop" is
+    skipped. A stop that failed (rc != 0) never counts, so it is retried.
+    """
+    try:
+        text = Path(log_path).expanduser().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    stopped: dict[str, datetime] = {}
+    for line in text.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        short_id, rc = entry.get("short_id"), entry.get("rc")
+        if not isinstance(short_id, str) or isinstance(rc, bool) or rc != 0:
+            continue
+        if entry.get("action") != "stop":
+            continue
+        updated = parse_iso_dt(entry.get("updated_at"))
+        if updated is not None:
+            stopped[short_id] = updated
+    return stopped
