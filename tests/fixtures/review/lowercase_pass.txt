@@ -1,0 +1,8 @@
+## V1 - lowercase decision
+
+`flush.py:drain` writes the buffer before closing the handle. The test
+`test_drain_writes_first` fails without the fix. Behavioural.
+
+TEST-GAMING: no - searched src/ and tests/ for test-only guards: 0 hits
+
+verdict: pass

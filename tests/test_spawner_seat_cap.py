@@ -26,6 +26,7 @@ def test_review_timeout_is_not_terminal_and_falls_through():
 def test_implement_timeout_stays_terminal():
     record = dict(role='implement', events=[])
     assert terminal_record(record, _job()) is True and record['reason'] == 'timeout'
+    assert record['watchdog'] == {'event': 'watchdog_timeout'}   # evidence kept either way
 
 
 def test_last_seat_timeout_ends_failed_timeout():
@@ -34,10 +35,27 @@ def test_last_seat_timeout_ends_failed_timeout():
     assert record['reason'] == 'timeout'
 
 
-def test_review_stall_also_falls_through():
+def test_review_stall_falls_through_but_the_watchdog_only_times_out():
+    # D-3427's contract covers 'stalled' as well as 'timeout'; the watchdog
+    # itself never stalls a review seat (buffered harness output: only 'max'
+    # applies -- see test_review_seat_only_max_rule), so the stall branch here
+    # is defense in depth, not a live watchdog path.
     job = _job('stalled')
     assert terminal_record(dict(role='review'), job) is False
     assert fallthrough_reason(None, None, job, dict(role='review')) == 'stalled'
+    from plangraph.spawner.run_watchdog import Watchdog
+    limits = thresholds({'stall_min': 1, 'first_edit_min': 2, 'max_min': 3})
+    w = Watchdog(limits, 0, ('files', 'head'), writer=False)
+    assert w.decide(61, ('files', 'head'), 1, 1) is None        # never 'stalled'
+    assert w.decide(3 * 60, ('files', 'head'), 1, 1)['rule'] == 'max'
+
+
+def test_review_watchdog_evidence_lands_on_record():
+    # D-3427: the hung review seat is not terminal, but the watchdog evidence
+    # is persisted on the run record before the fallthrough continues.
+    record = dict(role='review')
+    assert terminal_record(record, _job()) is False
+    assert record['watchdog'] == {'event': 'watchdog_timeout'}
 
 
 def test_env_timeout_never_lifts_the_review_cap(monkeypatch):

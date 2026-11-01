@@ -368,3 +368,38 @@ def test_review_seat_only_max_rule():
     w = Watchdog(limits, 0, ('files', 'head'), writer=False)
     assert w.decide(1500, ('files', 'head'), None, None) is None
     assert w.decide(90 * 60, ('files', 'head'), None, None)['rule'] == 'max'
+
+
+def test_job_limits_fallback_is_role_aware(monkeypatch):
+    # D-3427: without explicit limits a review job falls back to the 30-min
+    # seat cap, never the writer's 90 (runner.py and collect both use this).
+    from plangraph.spawner.runner import JobInfo
+    from plangraph.spawner.run_watchdog import job_limits
+    monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
+    assert job_limits(JobInfo('r', 'running', '', 'm', role='review'))['max_s'] == 30 * 60
+    assert job_limits(JobInfo('w', 'running', '', 'm'))['max_s'] == 90 * 60
+    job = JobInfo('x', 'running', '', 'm', role='review')
+    job._watchdog_limits = {'max_s': 5}
+    assert job_limits(job)['max_s'] == 5        # explicit limits win
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='real /proc process tree')
+def test_real_run_review_seat_times_out_and_evidence_persists(tmp_path, monkeypatch):
+    # D-3427 end to end through the real watchdog: a hung review seat is
+    # timeout at the cap, its event lands on the record as watchdog evidence,
+    # and terminal_record lets it fall through to the next leg.
+    from plangraph.spawner.run_watchdog import collect, terminal_record
+    monkeypatch.setenv('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL', '.1')
+    async def run():
+        runner, job = _job(tmp_path, {'stall_min': .005, 'first_edit_min': .015, 'max_min': .035})
+        job.role = 'review'
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'import time; time.sleep(60)',
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        await collect(runner, 'j', proc)
+        event = next(e for e in job.events if e['event'].startswith('watchdog_'))
+        assert event['rule'] == 'max'                  # the only rule a seat gets
+        assert job.status == 'timeout' and job.exit_code == 124
+        record = {'role': 'review'}
+        assert terminal_record(record, job) is False   # falls through to the next leg
+        assert record['watchdog'] == event             # evidence persisted first
+    asyncio.run(run())

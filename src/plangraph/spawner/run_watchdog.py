@@ -23,17 +23,28 @@ EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreada
 def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
         return False
+    watchdog = next((e for e in getattr(job, 'events', ()) if e['event'].startswith('watchdog_')), None)
     if record.get('role') == 'review':
-        return False   # D-3427: a hung seat (cap or stall) fails and falls through to the next leg
+        # D-3427: a hung seat (cap or stall) fails and falls through to the next
+        # leg -- but its watchdog evidence still lands on the record.
+        if watchdog is not None:
+            record['watchdog'] = watchdog
+        return False
     record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
-                  watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
-                  events=job.events)
+                  watchdog=watchdog, events=job.events)
     return True
 
 
 def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
     return thresholds(card, record.get('role')), record['live_log']
+
+
+def job_limits(job):
+    """The watchdog limits a job runs under: its explicit limits or the
+    role-aware ``thresholds()`` fallback (D-3427: a review job defaults to the
+    30-min seat cap, never the writer's 90)."""
+    return getattr(job, '_watchdog_limits', None) or thresholds(role=getattr(job, 'role', None))
 
 
 def thresholds(card=None, role=None):
@@ -272,7 +283,7 @@ async def collect(runner, job_id, proc):
     from .env_redact import redact_env_values
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
-    limits = getattr(job, '_watchdog_limits', None) or thresholds()
+    limits = job_limits(job)
     baseline = getattr(job, '_watchdog_baseline', None)
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
     captured = {'stdout': [], 'stderr': []}

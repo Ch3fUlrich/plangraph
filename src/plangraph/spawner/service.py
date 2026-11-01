@@ -316,6 +316,7 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
+                    check_review_model(role, chosen.model)   # D-3225/D-3422: routed seats too
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
                     self._running_records[job.job_id] = record
@@ -332,12 +333,13 @@ class SpawnService(SeatSpawnMixin):
                         break
                     enforce_verdict(role, job)
                     unavailable = fallthrough_reason(self, chosen, job, record)
+                    seat_status = job.status   # D-3427: a hung seat keeps 'timeout' in its attempt row
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
-                    record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                    record['attempts'].append(dict(leg=asdict(chosen), status=seat_status,
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,

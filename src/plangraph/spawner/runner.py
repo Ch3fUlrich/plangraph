@@ -46,7 +46,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .exit_outcome import check_review_model, enforce_verdict, fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import kill_process_tree
 
@@ -550,8 +550,8 @@ class SpawnerRunner:
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
-            from .run_watchdog import thresholds, edit_signature
-            job._watchdog_limits = watchdog or thresholds()
+            from .run_watchdog import job_limits, edit_signature
+            job._watchdog_limits = watchdog or job_limits(job)   # role-aware fallback (D-3427)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
             if tools_event:
@@ -1009,7 +1009,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import thresholds
+            from .run_watchdog import thresholds, terminal_record
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1058,7 +1058,7 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
-                    limits = thresholds(card)
+                    limits = thresholds(card, role)   # D-3427: the review seat cap travels the routed path
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
@@ -1082,6 +1082,7 @@ def spawn_service(*args, **kwargs):
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
+                        check_review_model(role, chosen.model)   # D-3225/D-3422: routed seats too
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
                         self._running_records[job.job_id] = record
@@ -1099,13 +1100,19 @@ def spawn_service(*args, **kwargs):
                                 raise task.exception()
                         stop = self.runner.provider_responses.get(job.job_id)
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
-                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
-                                served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
-                                watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None), events=job.events)
-                            return
+                            # D-3427: the one exception is a hung REVIEW seat (cap or
+                            # stall): it falls through to the next leg, keeping only the
+                            # watchdog evidence terminal_record leaves on the record.
+                            if job.status == 'cancelled' or terminal_record(record, job):
+                                record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                                    served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
+                                record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                                    watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None), events=job.events)
+                                return
+                        enforce_verdict(role, job)   # D-3226: no VERDICT line = failed/no_verdict
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)
+                        seat_status = job.status   # D-3427: a hung seat keeps 'timeout' in its attempt row
                         if unavailable:
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
@@ -1113,7 +1120,7 @@ def spawn_service(*args, **kwargs):
                             reason = redact(first_reason(job.stderr)) if first_reason(job.stderr) else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
                         if unavailable:
                             reason = redact(unavailable)
-                        record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                        record['attempts'].append(dict(leg=asdict(chosen), status=seat_status,
                             served_model=job.served_model, served_family=job.served_family,
                             served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
