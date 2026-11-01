@@ -32,7 +32,7 @@ def _make_repo(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _run_hook(repo: Path, head_sha: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
     stdin = f"refs/heads/main {head_sha} refs/heads/main {'0' * 40}\n"

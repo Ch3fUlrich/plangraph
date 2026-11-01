@@ -43,7 +43,7 @@ def test_writer_identity_commits_with_writer_committer(tmp_path):
     async def fake_writer():
         process = await asyncio.create_subprocess_exec(
             'git', 'commit', '--allow-empty', '-m', 'x', cwd=tmp_path,
-            env={**identity_env('Host', 'host@example.invalid'), **extra},
+            env={**identity_env('Host', 'host@example.com'), **extra},
             stdout=asyncio.subprocess.PIPE)
         await process.communicate()
         assert process.returncode == 0

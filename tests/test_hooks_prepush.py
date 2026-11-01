@@ -49,7 +49,7 @@ def value_rules(path, rule, *values):
 
 
 def git(cwd, *args):
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
     return subprocess.run(["git", *args], cwd=str(cwd), env=env, check=True,
                           capture_output=True, text=True).stdout
 
@@ -78,7 +78,7 @@ def commit_symlink(repo, rel, target):
 
 
 def run_hook(repo, lines, env_extra=None):
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
     env.update(env_extra or {})

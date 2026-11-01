@@ -1,10 +1,12 @@
 """Static guard: tests must never write user.name or user.email via git config.
 
 The scan is AST based over string-bearing nodes, after folding f-strings (a
-formatted part becomes ``{}``) and ``"a" + "b"`` concatenations, so the list
-form, the f-string form, the shell-string form and simple indirection are all
-seen.  It is best effort: a key built from a variable defined elsewhere
-escapes, which is why the allow-list is also kept to one marker, one file.
+formatted part becomes ``{}``) and ``"a" + b`` concatenations (a variable
+operand is ``{}``), so the list form, the f-string form, the shell-string form
+and keys built from variables are all seen.  A bare ``"user.email"`` constant
+in a scope that also says ``config`` counts too.  A file that does not parse is
+reported, never skipped.  It is still best effort (a key imported from another
+module escapes), which is why the allow-list is kept to one marker, one file.
 """
 from __future__ import annotations
 
@@ -17,7 +19,8 @@ ALLOW_MARKER = "# allow-local-identity: tests the pre-push refusal"
 ALLOWED_FILE = ROOT / "test_hooks_prepush_identity.py"
 
 CONFIG_WORD = re.compile(r"\bconfig\b")
-IDENTITY_KEY = re.compile(r"user\.(?:name|email|\{\})")
+IDENTITY_KEY = re.compile(r"user\.")
+EXACT_KEY = re.compile(r"user\.(?:name|email)?")
 LOCAL_IDENTITY_LINE = re.compile(r"--local\b.*user\.(?:name|email)")
 
 
@@ -28,12 +31,19 @@ class _Fold(ast.NodeTransformer):
         parts = [v.value if isinstance(v, ast.Constant) else "{}" for v in node.values]
         return ast.copy_location(ast.Constant("".join(map(str, parts))), node)
 
+    @staticmethod
+    def _text(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            return "{}"  # a variable part, same as an f-string field
+        return None
+
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
         self.generic_visit(node)
-        if (isinstance(node.op, ast.Add)
-                and isinstance(node.left, ast.Constant) and isinstance(node.left.value, str)
-                and isinstance(node.right, ast.Constant) and isinstance(node.right.value, str)):
-            return ast.copy_location(ast.Constant(node.left.value + node.right.value), node)
+        left, right = self._text(node.left), self._text(node.right)
+        if isinstance(node.op, ast.Add) and left is not None and right is not None:
+            return ast.copy_location(ast.Constant(left + right), node)
         return node
 
 
@@ -60,22 +70,51 @@ def _writes_identity(strings: list[str]) -> bool:
     return bool(CONFIG_WORD.search(joined) and IDENTITY_KEY.search(joined))
 
 
+def _scope_nodes(scope: ast.AST) -> list[ast.AST]:
+    """Nodes of one scope, not descending into nested functions or classes."""
+    out: list[ast.AST] = []
+    todo = list(ast.iter_child_nodes(scope))
+    while todo:
+        node = todo.pop()
+        out.append(node)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            todo.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _key_in_config_scope(tree: ast.AST, skip: set[int]) -> list[ast.Constant]:
+    """A bare ``"user.email"`` constant in a scope that also says ``config``.
+
+    Catches the key held in a variable and passed to ``git config`` later.
+    """
+    hits: list[ast.Constant] = []
+    scopes = [tree] + [n for n in ast.walk(tree) if isinstance(
+        n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda))]
+    for scope in scopes:
+        consts = [n for n in _scope_nodes(scope) if isinstance(n, ast.Constant)
+                  and isinstance(n.value, str) and id(n) not in skip]
+        if any(CONFIG_WORD.search(c.value) for c in consts):
+            hits += [c for c in consts if EXACT_KEY.fullmatch(c.value)]
+    return hits
+
+
 def find_violations(text: str, rel: str, *, allow_marker_file: bool = False) -> list[str]:
     """Violations in *text*; the marker excuses only a one-line ``--local`` write."""
     try:
         tree = _Fold().visit(ast.parse(text))
-    except SyntaxError:
-        return []
+    except SyntaxError as exc:  # fail closed: a file the guard cannot read is not clean
+        return [f"{rel}:{exc.lineno or 1}: unparseable, cannot be checked ({exc.msg})"]
     lines = text.splitlines()
     skip = _docstring_nodes(tree)
     found: dict[int, str] = {}
+    keyed = {id(n) for n in _key_in_config_scope(tree, skip)}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Call, ast.List, ast.Tuple, ast.Assign, ast.Constant)):
             continue
         if isinstance(node, ast.Constant) and (
                 not isinstance(node.value, str) or id(node) in skip):
             continue
-        if not _writes_identity(_strings(node, skip)):
+        if id(node) not in keyed and not _writes_identity(_strings(node, skip)):
             continue
         first = lines[node.lineno - 1]
         one_line = getattr(node, "end_lineno", node.lineno) == node.lineno
@@ -139,6 +178,11 @@ BAD = {
     "fstring_key": 'run(["git", "config", f"user.{key}", "v"])\n',
     "concat_key": 'run(["git", "config", "user." + "name", "v"])\n',
     "multiline": 'run([\n    "git",\n    "config",\n    f"user.name={x}",\n])\n',
+    "var_key": 'key = "user.email"\nrun(["git", "config", key, v])\n',
+    "var_concat_key": 'run(["git", "config", "user." + key, v])\n',
+    "var_concat_key_left": 'run(["git", "config", key + ".email", "user." + k2, v])\n',
+    "bare_prefix": 'p = "user."\nrun(["git", "config", p + name, v])\n',
+    "unparseable": 'run(["git", "config", "user.name"\n',
 }
 
 
