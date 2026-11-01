@@ -1,0 +1,36 @@
+{
+  "servers": [
+    {
+      "name": "plangraph-keeper",
+      "port": 8100,
+      "cmd": ["python", "-m", "plangraph.keeper"],
+      "env": {},
+      "scope": "host"
+    },
+    {
+      "name": "autoos-agent",
+      "port": 8101,
+      "cmd": ["python", "-m", "autoos.agent.mcp_server"],
+      "env": {},
+      "scope": "host"
+    },
+    {
+      "name": "serena-plangraph",
+      "port": 8102,
+      "cmd": ["uvx", "serena-mcp"],
+      "env": {},
+      "scope": "project",
+      "project_dir": "%USERPROFILE%/fleet/plangraph"
+    },
+    {
+      "name": "serena-autoos",
+      "port": 8103,
+      "cmd": ["uvx", "serena-mcp"],
+      "env": {},
+      "scope": "project",
+      "project_dir": "%USERPROFILE%/fleet/autoos"
+    }
+  ],
+  "log_file": "%USERPROFILE%/.plangraph/mcp-supervise.log",
+  "state_dir": "%USERPROFILE%/.plangraph/mcp-supervise.state"
+}
