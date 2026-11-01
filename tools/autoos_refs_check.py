@@ -144,6 +144,8 @@ def scan_launch_specs(home: Path) -> list[tuple[str, str, str]]:
 
     if base.is_dir():
         for p in sorted(base.rglob("*")):
+            if "backups" in p.relative_to(base).parts:
+                continue  # dated snapshots, not live readers
             if p.is_file() or p.is_symlink():
                 if p.name.endswith(".json") or looks_secret(p):
                     seen.add(str(p))
@@ -170,6 +172,8 @@ def scan_mcp_configs(home: Path) -> list[tuple[str, str, str]]:
             for p in claude_dir.glob(pat):
                 found.add(p)
         for p in sorted(found):
+            if "jobs" in p.relative_to(claude_dir).parts:
+                continue  # per-job scratch, not live config
             hits.extend(check_file(p, "mcp"))
 
     return hits
