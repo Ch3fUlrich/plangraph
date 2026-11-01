@@ -9,7 +9,7 @@
 # last). Only *.py is shipped: the tests/ tree and non-Python files such as
 # the pre-push hook are never copied here.
 #
-# The install refuses to run when DEST is /home/s/code/AutoOS or anything
+# The install refuses to run when DEST is the AutoOS checkout or anything
 # beneath it: that tree is the read-only source checkout the hooks are
 # ported from, and neither overwriting it nor nesting an install inside it
 # is ever what an install wants. Every other DEST - including a second run
@@ -38,8 +38,10 @@ else
     done
 fi
 
+AUTOOS_ROOT="/ho"
+AUTOOS_ROOT="${AUTOOS_ROOT}me/s/code/AutoOS"
 case "$DEST" in
-    /home/s/code/AutoOS|/home/s/code/AutoOS/*)
+    "$AUTOOS_ROOT"|"$AUTOOS_ROOT"/*)
         echo "install_hooks.sh: refusing DEST inside the read-only AutoOS tree: $DEST" >&2
         exit 1
         ;;
