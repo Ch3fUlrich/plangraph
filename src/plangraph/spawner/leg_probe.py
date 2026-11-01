@@ -17,6 +17,48 @@ PROMPT = 'Create a file ok.txt containing the single word ok, then git add it an
 #: turn probe infrastructure into a recorded leg failure.
 GIT_ISOLATION = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'}
 
+#: GIT_DIR and kin name the repo every ``git`` resolves regardless of the
+#: process cwd. Inherited from a caller inside a lane worktree or a git hook,
+#: they redirected the writer's ``git add/commit`` -- and the probe's own git
+#: calls -- into the CALLER's worktree (D-3465: probe commits in 3 lanes).
+#: GIT_ISOLATION only sets GIT_CONFIG_*; the redirection vars must be *removed*
+#: from the probe env, never inherited.
+GIT_REDIRECT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE',
+                     'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY')
+
+#: extra_env for the writer child: the same isolation as :func:`probe_env`,
+#: expressed as removals -- ``build_child_env`` drops a key whose extra_env
+#: value is None. Every harness child inherits this (D-3465).
+CHILD_ISOLATION = {**GIT_ISOLATION, **dict.fromkeys(GIT_REDIRECT_VARS)}
+
+
+def probe_env(base=None):
+    """Git env for the probe's own git calls: config isolation, no redirection (D-3465)."""
+    env = dict(os.environ if base is None else base, **GIT_ISOLATION)
+    for name in GIT_REDIRECT_VARS:
+        env.pop(name, None)
+    return env
+
+
+def caller_heads():
+    """HEAD of the caller's cwd repo (if any) under both git resolutions (D-3465).
+
+    ``'env'`` resolves the repo the caller's own git sees (its
+    GIT_DIR/GIT_WORK_TREE honoured); ``'cwd'`` resolves the repo found from the
+    process cwd alone. A leaked probe commit lands in one of the two; ``{}``
+    when the caller's cwd is not in a repo (git errors are swallowed: this is
+    a best-effort tripwire).
+    """
+    heads = {}
+    for label, env in (('env', dict(os.environ)), ('cwd', probe_env())):
+        try:
+            heads[label] = subprocess.check_output(
+                ['git', 'rev-parse', 'HEAD'], cwd=os.getcwd(), env=env,
+                stderr=subprocess.DEVNULL).decode().strip()
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    return heads
+
 
 def seconds(name, default, value=None):
     value = float(os.environ.get(name, default) if value is None else value)
@@ -67,18 +109,23 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     """One real commit task in a disposable repo.
 
     Probe infrastructure failures (git/gpg/hooks in the temp repo) are reported
-    with ``infra=True`` and never recorded as leg failures.
+    with ``infra=True`` and never recorded as leg failures.  After the run the
+    caller's cwd-repo HEAD must be unchanged: a moved HEAD means the writer
+    leaked out of the temp repo into the caller's repo (D-3465) and is
+    reported as ``ok=False`` with reason "probe leaked into caller repo" --
+    the caller's repo is never auto-reset.
     """
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s)
     state = store if store is not None else leg_state
     start = time.monotonic()
     deadline = start + timeout
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
+    caller_before = await asyncio.to_thread(caller_heads)
     job = None
     spawn_task = None
 
     def git(*args):
-        return subprocess.check_output(['git', '-C', root, *args], env=dict(os.environ, **GIT_ISOLATION),
+        return subprocess.check_output(['git', '-C', root, *args], env=probe_env(),
                                        stderr=subprocess.DEVNULL).decode().strip()
 
     try:
@@ -101,7 +148,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
         if ok is None:
             async def launch():
                 return await runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model,
-                                         client=leg.harness, cwd=root, extra_env=GIT_ISOLATION,
+                                         client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
                                          watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
                                                        max_s=timeout + 60, interval=1))
             spawn_task = asyncio.ensure_future(launch())
@@ -125,6 +172,12 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             else:
                 ok = changed and 'ok.txt' in files
                 reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
+        # Tripwire (D-3465): the writer must never touch the caller's repo.
+        caller_after = await asyncio.to_thread(caller_heads)
+        leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
+        if leaked:
+            # Report the leak; NEVER auto-reset the caller's repo here.
+            ok, reason, infra = False, 'probe leaked into caller repo', False
         if not infra:
             if ok:
                 state.record_probe_pass(key(leg), caller='leg-probe')
