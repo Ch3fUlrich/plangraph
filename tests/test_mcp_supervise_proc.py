@@ -189,6 +189,18 @@ class TestCheckGuards(WorkdirCase):
         sup.run()
         self.assertFalse((self.state_dir / f"{SUPERVISOR_PID_NAME}.pid").exists())
 
+    def test_a_run_that_raises_still_clears_its_heartbeat(self):
+        sup = supervisor.Supervisor(
+            load_config(self.config(server_entry("a", free_port(), self.script))),
+            poll_interval=0.05)
+        with mock.patch.object(sup, "_check_running", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                sup.run()
+        for tracker in sup.trackers.values():
+            if tracker.proc is not None:
+                self.cleanup_procs.append(tracker.proc)
+        self.assertFalse((self.state_dir / f"{SUPERVISOR_PID_NAME}.pid").exists())
+
     def test_refuses_without_pid_file(self):
         res = self._check(self.config(server_entry("a", free_port(), self.script)))
         self.assertEqual(res.returncode, 1)

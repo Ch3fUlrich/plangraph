@@ -59,18 +59,21 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
-def _recorded_pid(name: str, pid_file: Path) -> Tuple[Optional[int], Optional[str]]:
-    """(pid, None) when the pid file names the live server process, else (None, why not)."""
+def _recorded_pid(name: str, pid_file: Path) -> Tuple[Optional[int], Optional[str], bool]:
+    """(pid, None, _) when the pid file names the live server process, else
+    (None, why not, may_fall_back). Only a missing or dead record may fall back to the
+    port listener; a recycled pid is a refusal, as it says the record is not trustworthy."""
     record = read_pid_record(pid_file)
     if record is None:
-        return None, f"No pid file for server '{name}' ({pid_file}): is the supervisor running?"
+        return None, f"No pid file for server '{name}' ({pid_file}): is the supervisor running?", True
     pid, start = record
     if not pid_alive(pid):
-        return None, f"Pid {pid} of server '{name}' is not alive (stale pid file)"
+        return None, f"Pid {pid} of server '{name}' is not alive (stale pid file)", True
     if not pid_matches(pid, start):
         return None, (f"Pid {pid} of server '{name}' is alive but started at a different "
-                      "time than the pid file recorded: the pid was recycled, refusing to kill it")
-    return pid, None
+                      "time than the pid file recorded: the pid was recycled, refusing to kill "
+                      "it (pass --force to kill the process listening on the port instead)"), False
+    return pid, None, False
 
 
 def _supervisor_alive(state_dir: Path) -> bool:
@@ -92,11 +95,12 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
     state_dir = Path(cfg.state_dir or "mcp-supervise.state").resolve()
     pid_file = state_dir / f"{target.name}.pid"
-    old_pid, problem = _recorded_pid(target.name, pid_file)
+    old_pid, problem, may_fall_back = _recorded_pid(target.name, pid_file)
     if problem:
-        # An adopted server whose owner was unresolvable has no usable pid file: the
-        # process listening on its port is the server.
-        old_pid = listener_pid(target.host, target.port)
+        # An adopted server whose owner was unresolvable has a missing or dead pid
+        # record: the process listening on its port is the server. A recycled pid is
+        # a refusal unless --force.
+        old_pid = listener_pid(target.host, target.port) if may_fall_back or args.force else None
         if old_pid is None:
             print(problem, file=sys.stderr)
             return 1

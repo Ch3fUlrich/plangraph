@@ -104,6 +104,38 @@ class TestPidIdentity(WorkdirCase):
         self.assertIsNone(bystander.poll(), "an unrelated process was killed")
 
 
+class TestCheckRecycledPidWithListener(WorkdirCase):
+    def _check(self, port, *extra):
+        cfg = self.config(server_entry("a", port, self.script))
+        return subprocess.run(
+            CLI + ["check", "--config", str(self.config_path(cfg)), "--name", "a",
+                   "--timeout", "2", *extra],
+            capture_output=True, text=True, env=CLI_ENV)
+
+    def _recycled_record_and_listener(self):
+        port = free_port()
+        listener = self.spawn_orphan(port)
+        self.assertTrue(wait_healthy(port))
+        bystander = self.spawn_sleeper()
+        self.state_dir.mkdir()
+        (self.state_dir / "a.pid").write_text(f"{bystander.pid} 1", encoding="utf-8")
+        return port, listener, bystander
+
+    def test_a_recycled_pid_stays_a_refusal_even_with_a_listener_on_the_port(self):
+        port, listener, bystander = self._recycled_record_and_listener()
+        res = self._check(port)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("recycled", res.stdout + res.stderr)
+        self.assertIsNone(bystander.poll(), "an unrelated process was killed")
+        self.assertIsNone(listener.poll(), "the listener was killed past a refusal")
+
+    def test_force_lets_a_recycled_record_fall_back_to_the_listener_only(self):
+        port, listener, bystander = self._recycled_record_and_listener()
+        self._check(port, "--force")
+        self.assertTrue(wait_until(lambda: listener.poll() is not None))
+        self.assertIsNone(bystander.poll(), "an unrelated process was killed")
+
+
 class TestListenerPid(WorkdirCase):
     def test_finds_the_process_listening_on_a_port_and_nothing_else(self):
         port = free_port()

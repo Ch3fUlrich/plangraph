@@ -283,8 +283,15 @@ class Supervisor:
         self._schedule_restart(tracker, now)
 
     def run(self) -> None:
-        """Main supervisor loop."""
+        """Main supervisor loop. The heartbeat is cleared even if the loop raises, so
+        it never names a live process that has stopped supervising."""
         self._write_pid_file(SUPERVISOR_PID_NAME, os.getpid())
+        try:
+            self._run_loop()
+        finally:
+            self._write_pid_file(SUPERVISOR_PID_NAME, None)
+
+    def _run_loop(self) -> None:
         for tracker in self.trackers.values():
             self._start_child(tracker, reason="initial_start")
 
@@ -313,7 +320,6 @@ class Supervisor:
                     pass
                 self._log(tracker.server.name, pid, "exit", tracker.proc.returncode, "supervisor_shutdown")
                 self._write_pid_file(tracker.server.name, None)
-        self._write_pid_file(SUPERVISOR_PID_NAME, None)
 
 
 def run_supervisor(

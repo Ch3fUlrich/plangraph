@@ -8,7 +8,6 @@ workstation startup. It needs `uvx` and a one-time download of the pinned versio
 """
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -99,16 +98,15 @@ class TestRealPinnedProxy(WorkdirCase):
         self.assertEqual(len(lines), 1, "a probe must not start another stdio session")
         self.assertIn("utf8=1 mark=m1", lines[0], "--pass-environment lost the child env")
 
-        # Default --timeout (60 s): the brief's "healthy again <= 60 s" on the pinned path.
-        # setUpClass already ran the pinned uvx env once, so this times a warm restart.
+        # Exit 0 under the default --timeout (60 s) is the assertion: the brief's "healthy
+        # again <= 60 s". setUpClass already ran the pinned uvx env once, so this is a warm
+        # restart; a cold uvx resolution is not timed (too slow for CI).
         res = subprocess.run(
             CLI + ["check", "--config", str(self.config_path(self.config(dict(self.entry)))),
                    "--name", "real"],
             capture_output=True, text=True, env=CLI_ENV)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        elapsed = re.search(r"healthy in ([0-9.]+)s", res.stdout)
-        self.assertIsNotNone(elapsed, res.stdout)
-        self.assertLessEqual(float(elapsed.group(1)), 60.0)
+        self.assertRegex(res.stdout, r"healthy in [0-9.]+s")
         self.assertTrue(wait_healthy(self.port, tries=300))
 
     def test_without_pass_environment_the_server_loses_the_configured_env(self):
