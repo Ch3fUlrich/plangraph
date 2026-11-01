@@ -156,6 +156,7 @@ class TestDocs(unittest.TestCase):
         self.assertIn("2026-11-01", text)
         self.assertIn(f"mcp-proxy=={PIN}", text)
         self.assertIn("--project", text)
+        self.assertIn("test_mcp_supervise_proxy.py", text)
         self.assertLessEqual(len(text.splitlines()), 150)
 
 
