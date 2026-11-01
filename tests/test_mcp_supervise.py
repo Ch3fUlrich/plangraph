@@ -11,6 +11,11 @@ import time
 import unittest
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+# The CLI runs in a child interpreter: src stays ahead of the ambient PYTHONPATH.
+_CLI_ENV = {**os.environ, "PYTHONPATH": os.pathsep.join(
+    [str(ROOT / "src")] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p])}
+
 from plangraph.mcp_supervise.config import ConfigError, load_config
 from plangraph.mcp_supervise.health import probe
 from plangraph.mcp_supervise.render import render_entries, render_json
@@ -310,8 +315,11 @@ class TestSupervisorAndCheck(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            env=_CLI_ENV,
         )
         self.assertEqual(res.returncode, 1)
+        self.assertNotIn("ModuleNotFoundError", res.stderr)
+        self.assertIn("nonexistent", res.stdout + res.stderr)
 
         # Now start supervisor in thread
         stop_event = threading.Event()
@@ -341,6 +349,7 @@ class TestSupervisorAndCheck(unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
+                env=_CLI_ENV,
             )
             self.assertEqual(res.returncode, 0, f"Check failed: {res.stderr}")
             self.assertIn("healthy in", res.stdout.lower())
