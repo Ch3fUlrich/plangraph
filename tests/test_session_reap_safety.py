@@ -67,10 +67,16 @@ def _lines(path):
 @pytest.mark.parametrize("name", [
     "work-l1-x", "Task-L1-Run", "ROUTING-dispatch", "Routing", "Judge-A", "my-JUDGE",
     "Auto-PLANNER", "PlanGraph-Oversight-1", "PLANGRAPH-OVERSIGHT",
+    "build-L1", "build-L1-0064", "L1-opus-extra",  # D-3502 reaper dry-run gaps
 ])
 def test_allowlist_matches_case_insensitively(name):
     action, reason = decide(_rec(name=name), NOW)
     assert (action, reason) == ("keep", "allowlisted")
+
+
+@pytest.mark.parametrize("name", ["build-L2-0064", "worker-L2", "build-L3-x", "level1-x", "abc-l1x", "l10-x"])
+def test_l1_patterns_do_not_protect_other_levels(name):
+    assert decide(_rec(name=name), NOW) != ("keep", "allowlisted")
 
 
 def test_config_allowlist_extends_defaults_never_replaces_them():
