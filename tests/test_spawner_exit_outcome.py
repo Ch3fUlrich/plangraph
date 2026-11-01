@@ -3,6 +3,8 @@ import os
 import subprocess
 from types import SimpleNamespace
 
+from git_identity import identity_env
+
 from plangraph.spawner.env_redact import first_reason, harness_limit_line
 from plangraph.spawner.git_guard import writer_launch
 from plangraph.spawner.exit_outcome import fallthrough_reason, terminal_reason
@@ -41,7 +43,7 @@ def test_writer_identity_commits_with_writer_committer(tmp_path):
     async def fake_writer():
         process = await asyncio.create_subprocess_exec(
             'git', 'commit', '--allow-empty', '-m', 'x', cwd=tmp_path,
-            env={**os.environ, 'GIT_AUTHOR_NAME': 'Host', 'GIT_COMMITTER_NAME': 'Host', **extra},
+            env={**identity_env('Host', 'host@example.invalid'), **extra},
             stdout=asyncio.subprocess.PIPE)
         await process.communicate()
         assert process.returncode == 0

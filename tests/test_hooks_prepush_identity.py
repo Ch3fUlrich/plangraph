@@ -75,3 +75,51 @@ def test_prepush_passes_unset_identity(tmp_path: Path) -> None:
     repo, head = _make_repo(tmp_path)
     res = _run_hook(repo, head)
     assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_prepush_fails_closed_on_unreadable_local_config(tmp_path: Path) -> None:
+    repo, head = _make_repo(tmp_path)
+    (repo / ".git" / "config").write_text("[user\n\tname = x\n", encoding="utf-8")
+    res = _run_hook(repo, head)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "identity-check" in res.stderr
+    assert "fixture-identity" not in res.stderr
+
+
+def _real_python3() -> bool:
+    try:
+        return subprocess.run(["python3", "-c", "pass"], capture_output=True,
+                              timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+needs_python3 = pytest.mark.skipif(
+    not _real_python3(), reason="the hook's shebang needs a working python3 on PATH")
+
+
+def _real_push(repo: Path, remote: Path) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    env.pop("PLANGRAPH_SCRUB_WORDS", None)
+    env.pop("PLANGRAPH_SCRUB_RULES", None)
+    return subprocess.run(
+        ["git", "-C", str(repo), "-c", f"core.hooksPath={HOOK.parent.as_posix()}",
+         "push", str(remote), "main"],
+        capture_output=True, text=True, env=env, timeout=120)
+
+
+@needs_python3
+@pytest.mark.parametrize("fixture_identity,pushed", [(True, False), (False, True)])
+def test_real_git_push_runs_the_hook(tmp_path: Path, fixture_identity: bool, pushed: bool) -> None:
+    repo, _ = _make_repo(tmp_path)
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    if fixture_identity:
+        _set_local_identity(repo, name="test", email="test@example.invalid")
+    res = _real_push(repo, remote)
+    branches = subprocess.run(["git", "-C", str(remote), "branch", "--list", "main"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    assert bool(branches) is pushed, res.stdout + res.stderr
+    assert (res.returncode == 0) is pushed, res.stdout + res.stderr
+    if not pushed:
+        assert "fixture-identity" in res.stderr

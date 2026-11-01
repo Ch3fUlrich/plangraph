@@ -93,10 +93,15 @@ def file_size_gate():
 
 def check_fixture_identity():
     """Refuse pushes where the local repo config carries a fixture identity."""
-    email_p = git("config", "--local", "--get", "user.email")
-    name_p = git("config", "--local", "--get", "user.name")
-    email = email_p.stdout.decode("utf-8", "replace").strip() if email_p.returncode == 0 else ""
-    name = name_p.stdout.decode("utf-8", "replace").strip() if name_p.returncode == 0 else ""
+    values = []
+    for key in ("user.email", "user.name"):
+        p = git("config", "--local", "--get", key)
+        if p.returncode not in (0, 1):  # 1 = unset; anything else = unreadable: fail closed
+            print(f"pre-push: identity-check: push refused (git config --local failed, "
+                  f"rc={p.returncode})", file=sys.stderr)
+            return 1
+        values.append(p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else "")
+    email, name = values
     email_lower = email.lower()
     name_lower = name.lower()
     fixture_domains = ("@example.invalid", "@example.com", "@example.org")

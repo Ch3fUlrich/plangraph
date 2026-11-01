@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from git_identity import identity_args, identity_env
+from git_identity import identity_env
 from plangraph.keeper.evidence_git import GitAdapter
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None,
@@ -36,9 +36,9 @@ def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
 def _commit(repo: Path, subject: str, trailers: dict[str, str],
             *, email: str | None = None) -> str:
     """One ``--allow-empty`` commit; returns its sha."""
-    args = identity_args("Test Writer", email) if email else []
+    env = identity_env("Test Writer", email) if email else None
     body = "".join(f"{key}: {value}\n" for key, value in trailers.items())
-    _git(repo, *args, "commit", "--allow-empty", "-q", "-m", f"{subject}\n\n{body}")
+    _git(repo, "commit", "--allow-empty", "-q", "-m", f"{subject}\n\n{body}", env=env)
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -86,6 +86,14 @@ def test_non_merge_commit_returns_its_own_trailers(repo, adapter):
 
     assert adapter.writer_trailers(str(repo), sha) == [
         {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"}]
+
+
+def test_commit_helper_honours_a_distinct_author_email(repo):
+    _commit(repo, "one", {}, email="alice@example.invalid")
+    _commit(repo, "two", {})
+    got = _git(repo, "log", "--format=%ae|%ce").splitlines()
+    assert got == ["writer@example.invalid|writer@example.invalid",
+                   "alice@example.invalid|alice@example.invalid"]
 
 
 def test_merge_returns_the_branch_commits_only(repo, adapter):
