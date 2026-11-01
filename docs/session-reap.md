@@ -7,10 +7,10 @@ Reaps idle and finished Claude Code background sessions residing in `~/.claude/j
 Decisions are evaluated per session (`state.json`), in this order. Every guard that keeps a session runs before the timing rules, and an input that cannot be trusted keeps the session (fail closed).
 1. **Name**: a missing, empty or non-string `name` is unknown and kept (reason `unknown_name`).
 2. **Allowlist**: names matching these globs are always kept (reason `allowlisted`): `*-L1-*`, `routing*`, `*judge*`, `*planner*`, `plangraph-oversight*`. Matching is case-insensitive on every platform. A `--config` allowlist **adds** patterns; it never replaces these defaults.
-3. **TTL marker**: if `ttl.json` exists next to `state.json`, `allow_stop: false` keeps the session. A marker that is unreadable, not an object, has `allow_stop` other than `true`/`false`/`0`/`1`, or has a non-numeric `ttl_min` keeps the session (reason `ttl_invalid`).
+3. **TTL marker**: if `ttl.json` exists next to `state.json`, `allow_stop: false` keeps the session. A marker that is unreadable, not an object, has `allow_stop` other than `true`/`false`/`0`/`1`, or has a `ttl_min` that is non-numeric or 0 or below keeps the session (reason `ttl_invalid`).
 4. **State guard**: only `state == "done"` can be stopped. `working` (even with tempo `idle`), `blocked` and `stopped` are always kept.
 5. **Timestamp**: needs a real `updatedAt` with an explicit UTC offset. Missing, naive, unparseable or future timestamps keep the session (`createdAt` is never used).
-6. **Thresholds**, never shorter than 1 minute:
+6. **Thresholds**, never shorter than 1 minute (a non-numeric `done_grace_min` or `idle_min` in the config keeps the session, reason `config_invalid`):
    - `ttl_min` from the marker, when set, applies to the session whether or not it has a result.
    - otherwise `done` with an output result: `done_grace_min` (default 2 min);
    - otherwise `done` without a result: `idle_min` (default 30 min).
@@ -25,7 +25,7 @@ python -m plangraph.session_reap.mark --ttl-min 45
 # Or to prevent automatic reaping:
 python -m plangraph.session_reap.mark --ttl-min 60 --no-stop
 ```
-This writes `ttl.json` (`{"ttl_min": N, "allow_stop": bool}`) into the session's own job dir: the nearest directory at or above `CLAUDE_JOB_DIR` that contains `state.json`. It refuses if the variable is unset or no such directory exists, and rejects `--ttl-min` below 1.
+This writes `ttl.json` (`{"ttl_min": N, "allow_stop": bool}`) into the session's own job dir: the nearest directory at or above `CLAUDE_JOB_DIR` that contains `state.json`. It refuses if the variable is unset or no such directory exists, and rejects `--ttl-min` below 1. An explicit `--dir` must itself contain `state.json`; it is never created.
 
 ## Running Once
 
