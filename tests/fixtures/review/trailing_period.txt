@@ -1,0 +1,8 @@
+## V1 - punctuated decision
+
+`route.py:pick` filters skipped legs before the first-leg choice. The
+test `test_pick_skips` asserts the filtered order. Behavioural.
+
+TEST-GAMING: no - searched src/ and tests/ for test-only guards: 0 hits
+
+VERDICT: PASS.

@@ -34,7 +34,13 @@ _FIXTURE_NAMES = [
     "halt.txt",
     "echoed_template.txt",
     "prose_verdict.txt",
+    "lowercase_pass.txt",
+    "trailing_period.txt",
+    "fail_findings.txt",
+    "ansi_wrapped.txt",
 ]
+
+_ESC = chr(27)
 
 _INLINE_CORPUS = [
     "notes\nVERDICT: fix\nmore\n```\nVERDICT: pass\n```\n",
@@ -63,6 +69,8 @@ _INLINE_CORPUS = [
     "notes here\nverdict: fix - bad flush\n",
     "VERDICT: change the code",
     "VERDICT:",
+    "notes\n" + _ESC + "[1;32mVERDICT: PASS" + _ESC + "[0m\n",
+    _ESC + "[31mVERDICT: FAIL - 2 findings" + _ESC + "[0m\n",
 ]
 
 _CORPUS = list(_INLINE_CORPUS) + [
@@ -80,6 +88,10 @@ _CORPUS = list(_INLINE_CORPUS) + [
     ("halt.txt", "halt"),
     ("echoed_template.txt", None),
     ("prose_verdict.txt", "pass"),
+    ("lowercase_pass.txt", "pass"),
+    ("trailing_period.txt", "pass"),
+    ("fail_findings.txt", "fix"),
+    ("ansi_wrapped.txt", "pass"),
 ])
 def test_parse_verdict_fixtures(name, want):
     """Each recorded reply parses to its expected verdict."""
@@ -105,10 +117,11 @@ def test_parse_gaming_fixtures(name, want):
 def test_fixture_pass_allowed():
     """Pass needs verdict pass + stop + gaming no."""
     for name in ("ok_pass.txt", "bold_verdict.txt", "length_partial.txt",
-                 "fenced_verdict.txt", "prose_verdict.txt"):
+                 "fenced_verdict.txt", "prose_verdict.txt",
+                 "lowercase_pass.txt", "trailing_period.txt", "ansi_wrapped.txt"):
         assert v.judge(read(name), "stop").pass_allowed is True
     for name in ("no_without_zero_hits.txt", "fix_with_findings.txt",
-                 "halt.txt", "echoed_template.txt"):
+                 "halt.txt", "echoed_template.txt", "fail_findings.txt"):
         assert v.judge(read(name), "stop").pass_allowed is False
     assert v.judge(read("ok_pass.txt"), "length").pass_allowed is False
 
@@ -194,6 +207,13 @@ def test_halt_and_fix_map_to_false():
     assert to_bool(v.parse_verdict("VERDICT: pass")) is True
     assert sv.parse_verdict("VERDICT: halt")[0] is False
     assert sv.parse_verdict("VERDICT: fix")[0] is False
+
+
+def test_ansi_wrapped_verdict_parses():
+    """A harness colouring its stdout never hides the decision (D-3226)."""
+    wrapped = _ESC + "[1;32mVERDICT: PASS" + _ESC + "[0m"
+    assert v.parse_verdict(wrapped) == "pass"
+    assert sv.parse_verdict(wrapped)[0] is True
 
 
 LOW_SEVERITY_TABLE = [

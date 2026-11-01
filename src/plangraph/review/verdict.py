@@ -25,7 +25,10 @@ __all__ = [
 VERDICTS = ("pass", "fix", "halt")
 
 PASS_WORDS = frozenset({"pass", "approve"})
-FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+# "fail" family: a real seat's "VERDICT: FAIL - 2 findings" is a fix decision,
+# not an unparseable line (D-3226 spawner seats hand PASS/FAIL).
+FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject",
+                       "fail", "fails", "failed", "failing"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
 # [*_`]* before/after the word: markdown-bold labels like **MED**: or
 # _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
@@ -63,7 +66,9 @@ def _indent_columns(line: str) -> int:
 
 
 def _scan_verdict(text: str) -> tuple[str | None, bool]:
-    lines = (text or "").splitlines()
+    # A real harness wraps its reply in ANSI colour (D-3226 seats do); the
+    # decision is the text underneath, so strip per line and keep line indexes.
+    lines = [_ANSI_RE.sub("", line) for line in (text or "").splitlines()]
     for idx in range(len(lines) - 1, -1, -1):
         match = _VERDICT_LINE.match(lines[idx])
         if not match:

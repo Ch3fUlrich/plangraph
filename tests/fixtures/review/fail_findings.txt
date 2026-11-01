@@ -1,0 +1,9 @@
+## V1 - close path misses a flush
+
+`store.py:close` marks the item done before the buffer flush returns, so a
+crash between the two leaves a done item with missing rows. The added test
+covers only the happy path and does not fail without the fix.
+
+TEST-GAMING: no - searched src/ and tests/ for test-only guards: 0 hits
+
+VERDICT: FAIL - 2 findings

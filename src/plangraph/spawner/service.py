@@ -1,7 +1,7 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .exit_outcome import enforce_verdict, check_review_model, fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from plangraph.routing_errors import ParameterRefused
 import asyncio
@@ -254,9 +254,7 @@ class SpawnService(SeatSpawnMixin):
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-            from plangraph.planner.legs import NO_VERDICT_SEATS
-            if role == 'review' and target in NO_VERDICT_SEATS:
-                raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
+            check_review_model(role, target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
@@ -318,6 +316,7 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
+                    check_review_model(role, chosen.model)   # D-3225/D-3422: routed seats too
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
                     self._running_records[job.job_id] = record
@@ -332,13 +331,15 @@ class SpawnService(SeatSpawnMixin):
                     stop = self.runner.provider_responses.get(job.job_id)
                     if terminal_record(record, job):
                         break
+                    enforce_verdict(role, job)
                     unavailable = fallthrough_reason(self, chosen, job, record)
+                    seat_status = job.status   # D-3427: a hung seat keeps 'timeout' in its attempt row
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
-                    record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                    record['attempts'].append(dict(leg=asdict(chosen), status=seat_status,
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,

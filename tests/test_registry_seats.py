@@ -278,7 +278,7 @@ def test_policy_families_match_keeper_names():
     glm = _leg("opencode-glm-5.3-flash-free")
     assert RoutePolicy(banned_families=("zhipu",)).skip_reason(glm, "review") == "banned_family"
     assert RoutePolicy(off_families=("ZhiPu",)).skip_reason(glm, "review") == "off_family"
-    assert RoutePolicy(off_families=("glm",)).skip_reason(_leg("mimo-v2.6-flash"), "review") is None
+    assert RoutePolicy(off_families=("glm",)).skip_reason(_leg("mimo-v2.6-flash"), "review") == "no_verdict_seat"
 
 
 def test_unknown_writer_family_is_refused():

@@ -1,0 +1,9 @@
+## V1 - coloured harness output
+
+[36mchecking the flush fix[0m
+`store.py:close` flushes before marking done. The test
+`test_close_flushes_first` fails without the fix. Behavioural.
+
+TEST-GAMING: no - searched src/ and tests/ for test-only guards: 0 hits
+
+[1;32mVERDICT: PASS[0m

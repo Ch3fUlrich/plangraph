@@ -44,7 +44,10 @@ FAMILIES = (
 )
 KNOWN_FAMILIES = frozenset(family for _, family in FAMILIES)
 PASS_WORDS = frozenset({"pass", "approve"})
-FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+# "fail" family: a real seat's "VERDICT: FAIL - 2 findings" is a fix decision,
+# not an unparseable line (D-3226 spawner seats hand PASS/FAIL).
+FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject",
+                       "fail", "fails", "failed", "failing"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
 # [*_`]* before/after the word: markdown-bold labels like **MED**: or
 # _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
@@ -54,6 +57,7 @@ _BLOCKING_LABEL = re.compile(
 _LOW_LABEL = re.compile(
     r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # first word, ended by end/space/punctuation and NOT followed by "|" or "/"
 # (that would be an echoed "pass | fix | halt" template, not a decision)
 _FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I)
@@ -75,7 +79,9 @@ def parse_verdict(text):
     Only that line decides.  A template echo such as ``VERDICT: pass | fix`` or
     an unknown first word yields no verdict; earlier lines are never consulted.
     """
-    lines = (text or "").splitlines()
+    # A real harness wraps its reply in ANSI colour (D-3226 seats do); the
+    # decision is the text underneath, so strip per line and keep line indexes.
+    lines = [_ANSI_RE.sub("", line) for line in (text or "").splitlines()]
     for idx in range(len(lines) - 1, -1, -1):
         match = _VERDICT_LINE.match(lines[idx])
         if not match:

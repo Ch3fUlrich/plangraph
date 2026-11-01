@@ -23,6 +23,12 @@ def fallthrough_reason(service, chosen, job, record):
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
         return 'harness_limit: ' + line
+    if record.get('role') == 'review':
+        # D-3427/D-2913: a hung (cap or stall) or verdictless seat falls through to the next leg.
+        if getattr(job, 'status', None) in ('timeout', 'stalled'):
+            return job.status
+        if {'event': 'no_verdict'} in (getattr(job, 'events', None) or ()):
+            return 'no_verdict'
     return unavailable_reason(job.exit_code, job.stdout, job.stderr)
 
 
@@ -48,10 +54,16 @@ def terminal_reason(record):
     A 'harness_limit' stamped by an earlier fallthrough leg never survives a
     later attempt's outcome.  Guard evidence names the run (M9), and guard and
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
+    Synthetic ``status='skipped'`` rows never decide: the last REAL attempt does.
     """
     events = record.get('events') or ()
-    special = next((e['event'] for e in events
-                    if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)
+    # no_verdict counts only when the run ENDED failed: a later seat may have passed.
+    # Guards keep precedence over it, and it counts only if the LAST real attempt gave none.
+    real = [a for a in (record.get('attempts') or ()) if a.get('status') != 'skipped']
+    last = (real[-1] if real else {}).get('skip_reason')
+    guards = ('git_config_mutated', 'writer_no_changes') + (('no_verdict',) if record.get('status') == 'failed' and last == 'no_verdict' else ())
+    names = {e.get('event') for e in events}
+    special = next((g for g in guards if g in names), None)
     if special is not None:
         record['reason'] = special
         return
@@ -65,7 +77,6 @@ def terminal_reason(record):
             return
         # Q8: the final attempt's outcome wins over an earlier fallthrough; a
         # run that ended ON the quota leg keeps 'harness_limit'.
-        real = [a for a in (record.get('attempts') or ()) if a.get('status') != 'skipped']
         last = real[-1] if real else None
         if last is not None:
             if last.get('status') == 'timeout':
@@ -76,6 +87,7 @@ def terminal_reason(record):
         return
     if record.get('exit_code') not in (None, 0):
         record['reason'] = (reason or record.get('error')
+                            or (last if last in ('timeout', 'stalled') else None)
                             or first_reason(record.get('stderr_tail', ''))
                             or f"harness exit {record['exit_code']}")
 
@@ -100,3 +112,37 @@ def orphaned(record, now):
         return None   # no pid evidence: not proof the supervisor died
     return dict(record, status='failed', exit_code=1, ended=now, reason='orphaned',
                 error=f'orphaned: supervisor pid {pid} is gone')
+
+
+def enforce_verdict(role, job):
+    """A review seat's verdict is its stdout (D-3226): no VERDICT line = failed/no_verdict.
+
+    Parsing is the canonical ``review/verdict.parse_verdict`` (lowercase,
+    ``**bold**``, ``>``-quoted and trailing-prose verdicts count; the seat
+    contract ``review/tail.md`` hands out ``VERDICT: pass|fix|halt``), never a
+    local regex; a real harness wraps its stdout in ANSI, so the canonical
+    ``run_watchdog.ANSI`` strip comes first.
+    """
+    if role != 'review' or job.status != 'completed':
+        return
+    from plangraph.review.verdict import parse_verdict
+    from .run_watchdog import ANSI
+    if parse_verdict(ANSI.sub('', job.stdout or '')) is None:
+        job.status = 'failed'
+        job.exit_code = 1
+        job.events = getattr(job, 'events', None) or []
+        job.events.append({'event': 'no_verdict'})
+        job.stderr = 'no_verdict: review run produced no VERDICT line\n' + (job.stderr or '')
+
+
+def check_review_model(role, target):
+    """D-3225 refuse a no-verdict seat model; D-3422 warn on a review-unfit one."""
+    from plangraph.planner.legs import NO_VERDICT_SEATS, REVIEW_WARN_SEATS
+    from plangraph.planner.routing import SpawnRefused
+    if role != 'review':
+        return
+    if target in NO_VERDICT_SEATS:
+        raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
+    if target in REVIEW_WARN_SEATS:
+        import logging
+        logging.getLogger(__name__).warning('review-unfit seat model (D-3422): %s', target)
