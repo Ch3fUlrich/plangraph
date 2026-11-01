@@ -16,7 +16,7 @@
 - 11-01T13:50Z RT-P4-SKILLS-REWRITE PR#307 merged ab16d0cd seat run-8c9f5cc2 PASS
 ## In flight
 - ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 merge GO D-3536, classifier refused router merge = operator step OS-PD12-MERGE (do not merge) since 13:52Z next check 14:30Z
-- build-L2-rin-0066 PR#305, pd#11, pd#13 since 13:50Z next check 14:30Z
+- build-L2-rin-0066 DRAFT-READY 13:58Z, self-stops 14:28Z: #305 cc1e5bf4, pd#11 3a0fcf4, pd#13 32f6c63, pd#14 e1ba61f (ROUTING-REPOINT-AUTOOS s1); all mimo writers, unseated; live steps in its msg (inbox_move, rename_mcp_specs dry-run 14 then apply) after merge + router D-id; S13 needs md-sync flip live step
 - seat-leg probe bg baimic18i since 13:20Z next check 15:20Z
 ## Planned
 1. seats #297-#301, #305, pd#11, pd#13 when a non-mimo leg answers (J/waitleg.sh)
