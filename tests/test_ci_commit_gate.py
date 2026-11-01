@@ -287,7 +287,7 @@ def test_valid_writer_passes(repo: Path):
         "claude-opus-5-5 run-" + "ab" * 16 + "a",  # 33 hex
         "Claude-opus-5-5 run-" + "ab" * 16,  # model not lowercase
         "claude-opus-5-5 run-" + "AB" * 16,  # run hex not lowercase
-        "claude-opus-5-5\trun-" + "ab" * 16,  # tab instead of the space
+        "claude-opus-5-5\trun-" + "ab" * 16, "claude-sonnet-5-5 ses_",  # tab not space; opencode ses_ prefix without an id (D-3478)
     ],
 )
 def test_claude_family_writers_fail(repo: Path, writer: str):
@@ -300,7 +300,7 @@ def test_claude_family_writers_fail(repo: Path, writer: str):
     "writer",
     [
         "claude-sonnet-5-5 run-" + "ab" * 16,
-        "claude-opus-5-5 session_" + "Ab1" * 8,
+        "claude-opus-5-5 session_" + "Ab1" * 8, "claude-sonnet-5-5 ses_" + "3fA9" * 6,  # opencode console-anthropic leg (D-3478)
         "claude-haiku-4-5 123e4567-e89b-12d3-a456-426614174000 (D-2739 operator override: Opus writes, no L2)",
     ],
 )

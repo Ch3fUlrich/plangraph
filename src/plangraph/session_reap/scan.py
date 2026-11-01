@@ -43,7 +43,7 @@ def parse_ttl_marker(raw: Any) -> tuple[Optional[bool], Optional[float], Optiona
     """Strictly parse a ttl.json body into (allow_stop, ttl_min, error).
 
     allow_stop accepts only JSON true/false or the integers 0/1; ttl_min only a
-    finite JSON number. Anything else returns an error and allow_stop=False, so
+    finite positive JSON number. Anything else returns an error and allow_stop=False, so
     a garbled operator marker keeps the session instead of releasing it.
     """
     if not isinstance(raw, dict):
@@ -62,6 +62,8 @@ def parse_ttl_marker(raw: Any) -> tuple[Optional[bool], Optional[float], Optiona
         v = raw["ttl_min"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
             return False, None, "ttl_min is not a finite number"
+        if v <= 0:
+            return False, None, "ttl_min is not positive"
         ttl_min = v
     return allow_stop, ttl_min, None
 

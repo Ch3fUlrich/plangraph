@@ -143,7 +143,7 @@ CLIENTS: dict[str, Client] = {
 
 
 def build_child_env(
-    extra_env: Mapping[str, str] | None = None,
+    extra_env: Mapping[str, str | None] | None = None,
     headers: Mapping[str, str] | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
@@ -163,6 +163,10 @@ def build_child_env(
       - PATHEXT
       - TEMP (and TMP)
     preventing the Windows opencode serve port-in-use crash (D-2090 BUG-B).
+
+    An ``extra_env`` value of ``None`` *removes* the inherited variable instead
+    of setting it (D-3465): the probe must be able to strip caller git
+    redirection (GIT_DIR and kin) that a plain update cannot express.
     """
     env = dict(os.environ)
 
@@ -228,7 +232,11 @@ def build_child_env(
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(existing_cfg, sort_keys=True)
 
     if extra_env:
-        env.update(extra_env)
+        for key, value in extra_env.items():
+            if value is None:
+                env.pop(key, None)   # None removes the inherited variable (D-3465)
+            else:
+                env[key] = value
     env.pop("PLANGRAPH_GATEWAY_LOG_TOKEN", None)  # spawner-only call-log credential, extra_env included
 
     return env

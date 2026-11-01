@@ -127,6 +127,14 @@ python3 -m pytest -q tests/test_planner_*.py tests/test_split_make_public.py
 `test_planner_service.py` uses the keeper `World` fixture, so it follows `PG_KEEPER_BACKEND` and
 also runs in the Postgres CI job.
 
+## Orchestration caps
+
+Moved from the retired AutoOS `swarm-orchestration` config (RT-P4-SKILLS-REWRITE):
+- Fan-out: at most 10 seats per wave, default 3-5 by task complexity (R-orch-30).
+- Review loops: at most 3 rounds per item, then replan (`execution.max_review_loops`).
+- Risk thresholds for routing a card: low 0.30, medium 0.60, high 0.85.
+- Model tiers and review counts are not restated here: they live in the registry policy block.
+
 ## Not here
 
 - The planning-skill rewrite that emits cards.

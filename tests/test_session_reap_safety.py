@@ -67,10 +67,16 @@ def _lines(path):
 @pytest.mark.parametrize("name", [
     "work-l1-x", "Task-L1-Run", "ROUTING-dispatch", "Routing", "Judge-A", "my-JUDGE",
     "Auto-PLANNER", "PlanGraph-Oversight-1", "PLANGRAPH-OVERSIGHT",
+    "build-L1", "build-L1-0064", "L1-opus-extra",  # D-3502 reaper dry-run gaps
 ])
 def test_allowlist_matches_case_insensitively(name):
     action, reason = decide(_rec(name=name), NOW)
     assert (action, reason) == ("keep", "allowlisted")
+
+
+@pytest.mark.parametrize("name", ["build-L2-0064", "worker-L2", "build-L3-x", "level1-x", "abc-l1x", "l10-x"])
+def test_l1_patterns_do_not_protect_other_levels(name):
+    assert decide(_rec(name=name), NOW) != ("keep", "allowlisted")
 
 
 def test_config_allowlist_extends_defaults_never_replaces_them():
@@ -156,11 +162,11 @@ def test_ttl_dict_on_a_plain_record_is_parsed_strictly():
 # ---- ttl_min bounds and scope ----
 
 @pytest.mark.parametrize("ttl", [0, -5, -0.5])
-def test_non_positive_ttl_min_is_clamped_not_instant_reap(ttl):
+def test_non_positive_ttl_min_is_invalid_not_instant_reap(ttl):
     rec = _rec(has_result=False, updated_at=NOW - timedelta(seconds=30), ttl_min=ttl)
-    assert decide(rec, NOW)[0] == "keep"
+    assert decide(rec, NOW) == ("keep", "ttl_invalid")
     old = _rec(has_result=False, updated_at=NOW - timedelta(minutes=2), ttl_min=ttl)
-    assert decide(old, NOW) == ("stop", "done_idle")
+    assert decide(old, NOW) == ("keep", "ttl_invalid")
 
 
 def test_ttl_min_applies_to_sessions_with_a_result_too():
@@ -298,7 +304,7 @@ def test_timeout_is_visible_in_the_audit_line_without_crash(tmp_path):
     (entry,) = _lines(log)
     assert entry["rc"] == 1
     assert "timeout" in entry["reason"]
-    assert set(entry) == {"ts", "host", "short_id", "name", "age_min", "state", "reason", "action", "rc"}
+    assert set(entry) == {"ts", "host", "short_id", "name", "age_min", "state", "reason", "action", "rc", "updated_at"}
 
 
 def test_nonzero_rc_and_runner_error_are_tagged(tmp_path):

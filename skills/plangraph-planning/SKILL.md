@@ -12,8 +12,8 @@ A planning-and-delivery method for work too big for one agent. Every unit of wor
 the plan graph** (project, phase, task) and every task item carries an execution **card** the
 keeper gates and routes, so the human sees the same hierarchy the agents run. Companion skills:
 `coding-principles` (how code is written), `unattended-orchestration` (how layers are launched,
-relaunched and watched), `swarm-orchestration` (roles, wave caps, model tiers). **This skill does
-not restate their numbers**: thresholds, tiers and caps live in `swarm-orchestration`'s config;
+relaunched and watched). **This skill does
+not restate numbers**: model tiers and review counts live in the registry policy block, wave caps in `docs/PLANNER-KIT.md`;
 gate codes, leg order and the context pack live in `docs/PLANNER-KIT.md`; this file only says how
 the layers fit together.
 
