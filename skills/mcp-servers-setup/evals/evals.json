@@ -1,0 +1,20 @@
+[
+  {
+    "id": "mcp-servers-setup-1",
+    "prompt": "A new coding session just started on this repo. What is the always-first action for the MCP stack, and which tool call does it involve?",
+    "must": ["activate the serena mcp server", "mcp_serena_activate_project"],
+    "must_not": ["activation is optional", "skip serena", "begin by editing"]
+  },
+  {
+    "id": "mcp-servers-setup-2",
+    "prompt": "On the server host, running AutoOS's dev compose took the Omnigraph viewer down. Why, and which compose should run there?",
+    "must": ["local/dev", "clobbers the live viewer"],
+    "must_not": ["use the local/dev variant on the server", "both composes are interchangeable", "dev compose is safe everywhere"]
+  },
+  {
+    "id": "mcp-servers-setup-3",
+    "prompt": "We built a new image for one of the MCP servers. Where do we publish it?",
+    "must": ["the private container registry", "harbor"],
+    "must_not": ["docker hub", "a public registry", "ghcr.io"]
+  }
+]
