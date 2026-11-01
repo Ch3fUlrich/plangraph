@@ -23,7 +23,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
-from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg
+from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg, leg_active
 from .seats import _check_diff_ref, family_spellings, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
@@ -306,7 +306,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
     for candidate in legs:
         validate_model(candidate.model)
-    candidates = tuple(l for l in legs if role in l.roles)
+    candidates = tuple(l for l in legs if role in l.roles and leg_active(l))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
     gaps = tuple({"leg": l.id, "model": l.model, "reason": "no benchmark row"}

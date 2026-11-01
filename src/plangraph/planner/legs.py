@@ -14,14 +14,17 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
-__all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "load_legs", "with_measured"]
+__all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
+           "load_legs", "with_measured"]
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
@@ -52,6 +55,7 @@ class Leg:
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
+    expires: str = ""
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -91,10 +95,17 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
+        note="D-3355 rule 4.0: no Sol leg anywhere", expires="2026-10-31"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
+    Leg("opencode-console-sonnet-5.5", "subscription", "opencode",
+        "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
+        180000, False, claude_family=True,
+        note="console sonnet credits; listed by opencode models --standalone, not by the "
+             "background service list; writer only, never a seat",
+        roles=("implement",), expires="2026-11-30"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
@@ -113,13 +124,24 @@ WRITER_ORDER: tuple[str, ...] = (
     "agy-gemini-3.8-flash",
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
-    "cx-gpt-6.1-sol",
+    "opencode-console-sonnet-5.5",
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
              "max_request_tokens", "trains_on_data")
-_STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode")
+_STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode", "expires")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def leg_active(leg: Leg, today: date | datetime | None = None) -> bool:
+    """True while ``leg`` may be routed: no ``expires``, or not past its UTC end of day."""
+    if not leg.expires:
+        return True
+    current = today if today is not None else datetime.now(timezone.utc)
+    if isinstance(current, datetime):
+        current = current.date()
+    return current <= date.fromisoformat(leg.expires)
 
 
 def _is_int(value) -> bool:
@@ -149,6 +171,14 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     for key in ("id", "model", "family"):
         if isinstance(raw.get(key), str) and not raw[key]:
             problems.append(f"{where}.{key}: must not be empty")
+    expires = raw.get("expires")
+    if isinstance(expires, str) and expires:
+        try:
+            good = bool(_DATE_RE.match(expires)) and date.fromisoformat(expires)
+        except ValueError:
+            good = False
+        if not good:
+            problems.append(f"{where}.expires: must be empty or YYYY-MM-DD")
     if isinstance(raw.get("tier"), str) and raw["tier"] not in TIERS:
         problems.append(f"{where}.tier: {raw['tier']!r} not in {TIERS}")
     if isinstance(raw.get("harness"), str) and raw["harness"] not in HARNESSES:
