@@ -86,23 +86,6 @@ from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
-    # D-3552: opencode-go review seats, ahead of the free opencode review legs
-    # so seats prefer them; deepseek/glm lifted for review only (route_policy).
-    Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
-        "opencode-go/gemini-4-argon-contributor", "gemini", ("128k",), 100000,
-        False, roles=("review",)),
-    Leg("opencode-go-glm-5.2", "subscription", "opencode",
-        "opencode-go/glm-5.2-max", "glm", ("128k",), 100000, False,
-        roles=("review",)),
-    Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
-        "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
-        roles=("review",)),
-    Leg("opencode-go-muse-spark", "subscription", "opencode",
-        "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
-        False, roles=("review",)),
-    Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
-        "opencode-go/deepseek-v4-flash-max", "deepseek", ("128k",), 100000,
-        False, roles=("review",)),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
         roles=("review", "implement")),
@@ -129,6 +112,23 @@ DEFAULT_LEGS = (
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
     _legacy["agy-sonnet-5.5"],
+    # D-3552: opencode-go review seats, placed before the paid deepseek
+    # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
+    Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
+        "opencode-go/gemini-4-argon-contributor", "gemini", ("128k",), 100000,
+        False, roles=("review",)),
+    Leg("opencode-go-glm-5.2", "subscription", "opencode",
+        "opencode-go/glm-5.2-max", "glm", ("128k",), 100000, False,
+        roles=("review",)),
+    Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
+        "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
+        roles=("review",)),
+    Leg("opencode-go-muse-spark", "subscription", "opencode",
+        "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
+        False, roles=("review",)),
+    Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
+        "opencode-go/deepseek-v4-flash-max", "deepseek", ("128k",), 100000,
+        False, roles=("review",)),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
 
