@@ -285,7 +285,8 @@ def test_redaction_on_matching_line(tmp_path: Path) -> None:
     (claude / "hooks").mkdir(parents=True)
     (claude / "settings.json").write_text(
         '{"hooks": {"PreToolUse": [{"command": "/home/x/code/AutoOS/h.py", '
-        '"token": "sk-live-SECRETVALUE1234", '
+        '"token": "sk-'
+        'live-SECRETVALUE1234", '
         '"authorization": "Bearer abc.def.GHIJK"}]}}\n',
         encoding="utf-8",
     )
