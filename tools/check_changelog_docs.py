@@ -60,19 +60,12 @@ def is_doc_path(path: str) -> bool:
     return False
 
 
-def parse_docs_map(path: str) -> tuple[datetime.date | None, list[tuple[int, str, list[str]]], list[str]]:
-    """Parse .docs-map: (enforce_after_date, rules, parse_errors)."""
+def parse_docs_map(text: str, filename: str = ".docs-map") -> tuple[datetime.date | None, list[tuple[int, str, list[str]]], list[str]]:
+    """Parse .docs-map text: (enforce_after_date, rules, parse_errors)."""
     enforce_after: datetime.date | None = None
     rules: list[tuple[int, str, list[str]]] = []
     errors: list[str] = []
-    filename = os.path.basename(path)
-
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError as exc:
-        errors.append(f"{filename}: cannot read file: {exc}")
-        return None, rules, errors
+    lines = text.splitlines()
 
     for lineno, raw in enumerate(lines, start=1):
         line = raw.strip()
@@ -152,12 +145,31 @@ def changelog_entry_added(root: str, merge_base: str, head: str) -> bool:
     return bool(unreleased_lines(read(head)) - unreleased_lines(read(merge_base)))
 
 
+class GitFailure(Exception):
+    """A git call the gate depends on failed; the verdict cannot be trusted."""
+
+
+def git_checked(root: str, *args: str) -> str:
+    run = git(root, *args)
+    if run.returncode != 0:
+        raise GitFailure(f"git {' '.join(args[:2])} failed: {run.stderr.strip()}")
+    return run.stdout
+
+
+def read_docs_map(root: str, rev: str) -> str | None:
+    """.docs-map text at rev, or None when the file is absent there."""
+    listed = git_checked(root, "ls-tree", "--name-only", rev, "--", ".docs-map")
+    if not listed.strip():
+        return None
+    return git_checked(root, "show", f"{rev}:.docs-map")
+
+
 def commit_skips(root: str, sha: str) -> tuple[list[str], int]:
     """(non-empty skip reasons, empty-skip count) from the commit's trailer block only."""
-    run = git(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
+    out = git_checked(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
     reasons: list[str] = []
     empty = 0
-    for line in run.stdout.splitlines():
+    for line in out.splitlines():
         m = SKIP_TRAILER_RE.match(line)
         if not m:
             continue
@@ -169,8 +181,8 @@ def commit_skips(root: str, sha: str) -> tuple[list[str], int]:
 
 
 def commit_paths(root: str, sha: str) -> list[str]:
-    run = git(root, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--no-renames", sha)
-    return [p.strip().replace("\\", "/") for p in run.stdout.splitlines() if p.strip()]
+    out = git_checked(root, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--no-renames", sha)
+    return [p.strip().replace("\\", "/") for p in out.splitlines() if p.strip()]
 
 
 def bail(msg: str, warn_only: bool) -> int:
@@ -248,15 +260,20 @@ def main(argv: list[str] | None = None) -> int:
     ]
 
     revs = git(root, "rev-list", "--no-merges", "--reverse", f"{merge_base}..{head_sha}")
-    commits = revs.stdout.split() if revs.returncode == 0 else []
+    if revs.returncode != 0:
+        return bail(f"check-changelog-docs: git rev-list failed: {revs.stderr.strip()}", warn_only)
+    commits = revs.stdout.split()
 
     problems: list[str] = []
     warnings: list[str] = []
     skipped: list[str] = []
     uncovered: list[str] = []
     for sha in commits:
-        reasons, empty = commit_skips(root, sha)
-        touches_non_doc = any(not is_doc_path(p) for p in commit_paths(root, sha))
+        try:
+            reasons, empty = commit_skips(root, sha)
+            touches_non_doc = any(not is_doc_path(p) for p in commit_paths(root, sha))
+        except GitFailure as exc:
+            return bail(f"check-changelog-docs: {exc} (commit {sha[:8]})", warn_only)
         if empty:
             problems.append(f"commit {sha[:8]} has 'Changelog: skip' trailer with empty reason")
         if not touches_non_doc:
@@ -284,19 +301,35 @@ def main(argv: list[str] | None = None) -> int:
             f"or a 'Changelog: skip (<reason>)' trailer on every such commit{which}"
         )
 
-    # Rule B: .docs-map
-    docs_map_file = os.path.join(root, ".docs-map")
+    # Rule B: .docs-map, read from git at the merge-base and at head (never the
+    # working tree), so a commit in the range cannot disable its own enforcement.
     docs_map_warnings = 0
     docs_map_errors = 0
 
-    if os.path.isfile(docs_map_file):
-        enforce_after, rules, parse_errors = parse_docs_map(docs_map_file)
+    rules: list[tuple[int, str, list[str]]] = []
+    seen_rules: set[tuple[str, tuple[str, ...]]] = set()
+    enforce_dates: list[datetime.date | None] = []
+    for label, rev in (("merge-base", merge_base), ("head", head_sha)):
+        try:
+            map_text = read_docs_map(root, rev)
+        except GitFailure as exc:
+            return bail(f"check-changelog-docs: {exc} (.docs-map at {label} {rev[:8]})", warn_only)
+        if map_text is None:
+            continue
+        rev_date, rev_rules, parse_errors = parse_docs_map(map_text)
         for err in parse_errors:
-            problems.append(err)
+            problems.append(f"{err} (.docs-map at {label} {rev[:8]})")
             docs_map_errors += 1
+        enforce_dates.append(rev_date)
+        for rule in rev_rules:
+            key = (rule[1], tuple(rule[2]))
+            if key not in seen_rules:
+                seen_rules.add(key)
+                rules.append(rule)
 
+    if enforce_dates:
+        enforce_after = None if None in enforce_dates else min(d for d in enforce_dates if d is not None)
         is_enforced = (enforce_after is None) or (today >= enforce_after)
-
         compiled = [(glob_to_regex(g), g, d) for _, g, d in rules]
         for path in raw_paths:
             for rx, glob_pat, target_docs in compiled:
