@@ -1,4 +1,4 @@
-# L1 card · build-L1-0067 · 2026-11-01T16:40Z
+# L1 card · build-L1-0067 · 2026-11-01T17:35Z
 ## Goal
 - D-3517 queue: RIN-* lanes via build-L2-rin-0066 (live steps mine); seats for hooks slices + RIN PRs when a non-mimo family returns; then SEAT-VERDICT-INLINE-RUNS (+D-3527), LESSONS L-R1..R3, lane_gates size gate
 ## Keeper
@@ -6,8 +6,7 @@
 - claimed 14:31Z: KEEPER-EVIDENCE-MERGE-HEAD epoch 1 (D-3538, HIGH), PR #309 4a0b4293 draft CI green (writer mimo run-e06fc491, tests 64/3418 pass), needs 2 non-mimo seats + judge + keeper sync GO
 - ready next: ROUTER-LAUNCH-OOM-SCOPE (PR pd#12 MERGE-READY), AUTOOS-HOOKS-INTERIM-S01..S14, SEAT-VERDICT-INLINE-RUNS
 ## Done
-- 11-01T12:05Z D-3502 PR#295 merged 217e669b seat run-6aee2407 PASS CI green
-- 11-01T12:05Z RT-P4-SKILLS-REWRITE PR#296 merged f8bdf348 seat run-f66da3c0 PASS
+- 11-01T17:30Z D-3554 PR#312 merged 0b916d7b seat run-25f1d075 PASS CI green
 - 11-01T12:30Z RIN-CUTOVER-DATA - seat srin5 run-5711df74 PASS, verdict http 200, closed D-3531
 - 11-01T12:53Z D-3513 - keeper repos plangraph/AUTOOS, backup keeper.json.pre-d3513-20261101T1252Z
 - 11-01T13:00Z RT-P4-SKILLS-REWRITE PR#302 merged 298f9d15 seat run-40f91945 PASS
@@ -21,6 +20,7 @@
 - unseated PRs: #278 #297-#301 #308 #309 #310, pd#15 (S14 batch) #16 (inbox_move live) #17 (rename_mcp_specs live)
 - SEAT-VERDICT-REQUEST-CHANGES epoch 1 PR #311 dddb84ec draft (HIGH; 25 fail-first tests); after merge post SPBR run-18e3f402 ACCEPT via seat_verdict.py main() only (D-3550/D-3551), seat dir /home/s/.claude/jobs/b87f0c9f/tmp/seatdir-spbr4 (live.raw + record.json)
 ## Planned
+0. SPAWNER-REVIEW-LEGS-D3552 epoch 1 (HIGH, D-3552/D-3556/D-3558): slice1 writer run-315035e4 lane/review-legs-d3552 (opencode-go legs + review_allowed_families); slice2 OpenRouter :free via OmniRoute + sourced benchmark score; then re-seat all; then SEAT-VERDICT-FROM-RECORD (D-3564 p8)
 1. seats #297-#301, #305, pd#11, pd#13 when a non-mimo leg answers (J/waitleg.sh)
 2. RIN live steps after merges under router GO (batch apply, inbox_move)
 3. pd#12 merged -> ff plangraph-data, journal check
