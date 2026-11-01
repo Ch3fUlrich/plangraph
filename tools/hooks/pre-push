@@ -19,6 +19,7 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parent.parent
 SPLIT = TOOLS / "split"
 FILE_SIZE = TOOLS / "check_file_size.py"
+CHANGELOG_DOCS = TOOLS / "check_changelog_docs.py"
 sys.path.insert(0, str(SPLIT))
 import scrub_check as sc  # noqa: E402
 
@@ -91,6 +92,21 @@ def file_size_gate():
     return 0
 
 
+def changelog_docs_warn(base):
+    """tools/check_changelog_docs.py --warn-only: warn only, never refuse (D-653)."""
+    if not CHANGELOG_DOCS.is_file():
+        return
+    r = subprocess.run(
+        [sys.executable, str(CHANGELOG_DOCS), "--base", base, "--warn-only"],
+        capture_output=True,
+        text=True,
+    )
+    if r.stdout:
+        sys.stderr.write(r.stdout)
+    if r.stderr:
+        sys.stderr.write(r.stderr)
+
+
 def main():
     if file_size_gate():
         return 1
@@ -119,6 +135,7 @@ def main():
         if local_sha == ZERO:  # branch deletion: nothing pushed to scan
             continue
         base = base_commit(remote_sha, local_sha)
+        changelog_docs_warn(base)
         for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():
             parts = line.split("\t")
             if len(parts) != 2 or parts[0].startswith("D"):

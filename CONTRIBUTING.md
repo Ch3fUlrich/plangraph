@@ -37,6 +37,10 @@ on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
 
+## Changelog and documentation
+
+Every change touching non-documentation paths requires an entry in `CHANGELOG.md` under `## Unreleased` (rule D-653). A non-doc change may waive this only when a commit in the branch carries a `Changelog: skip (<reason>)` trailer with a non-empty reason (for typos or format-only edits). Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. `python3 tools/check_changelog_docs.py` verifies this in CI and runs with `--warn-only` in the pre-push hook.
+
 ## Commits
 
 Every commit message ends with one trailer paragraph — no blank lines inside it:
