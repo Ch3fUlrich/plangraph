@@ -179,3 +179,173 @@ def test_base_not_an_ancestor_uses_the_merge_base_range(test_repo):
     res = run_check(repo, tip)
     assert res.returncode == 0, res.stdout
     assert "1 path(s)" in res.stdout
+
+
+RULE = "src/foo/** -> docs/FOO.md"
+TODAY = ("--today", "2026-11-09")
+
+
+def _foo_change(repo):
+    commit_files(repo, {"src/foo/a.py": "x = 1\n", "CHANGELOG.md": "## Unreleased\n- x\n"}, "foo")
+
+
+def test_range_deleting_docs_map_still_enforces_the_base_rules(test_repo):
+    repo, _ = test_repo
+    base2 = docs_map_repo(repo, RULE)
+    assert git(repo, "rm", "-q", ".docs-map").returncode == 0
+    _foo_change(repo)
+    res = run_check(repo, base2, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
+
+
+def test_range_dropping_a_rule_still_enforces_it(test_repo):
+    repo, _ = test_repo
+    base2 = docs_map_repo(repo, RULE)
+    commit_files(repo, {".docs-map": "# enforce-after: 2026-11-08\nlib/** -> docs/LIB.md\n"}, "drop rule")
+    _foo_change(repo)
+    res = run_check(repo, base2, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
+
+
+def test_range_moving_enforce_after_later_still_enforces_from_the_base_date(test_repo):
+    repo, _ = test_repo
+    base2 = docs_map_repo(repo, RULE)
+    commit_files(repo, {".docs-map": f"# enforce-after: 2027-01-01\n{RULE}\n"}, "postpone")
+    _foo_change(repo)
+    res = run_check(repo, base2, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
+    before = run_check(repo, base2, "--today", "2026-11-07")
+    assert before.returncode == 0 and "docs-map 1 warning(s)/0 error(s)" in before.stdout
+
+
+def test_range_removing_enforce_after_line_enforces(test_repo):
+    repo, _ = test_repo
+    base2 = docs_map_repo(repo, RULE)
+    commit_files(repo, {".docs-map": f"{RULE}\n"}, "no date")
+    _foo_change(repo)
+    res = run_check(repo, base2, "--today", "2026-11-07")
+    assert res.returncode == 1, res.stdout
+
+
+def test_range_adding_a_rule_enforces_it(test_repo):
+    repo, base = test_repo
+    commit_files(
+        repo,
+        {".docs-map": f"# enforce-after: 2026-11-08\n{RULE}\n", "src/foo/a.py": "x = 1\n",
+         "CHANGELOG.md": "## Unreleased\n- x\n"},
+        "add rule and touch it",
+    )
+    res = run_check(repo, base, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
+
+
+def test_range_adding_a_second_rule_keeps_base_rule_and_enforces_new_one(test_repo):
+    repo, _ = test_repo
+    base2 = docs_map_repo(repo, RULE)
+    commit_files(
+        repo, {".docs-map": f"# enforce-after: 2026-11-08\n{RULE}\nlib/** -> docs/LIB.md\n"}, "add rule"
+    )
+    commit_files(repo, {"lib/y.py": "y = 1\n", "CHANGELOG.md": "## Unreleased\n- y\n"}, "lib")
+    res = run_check(repo, base2, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
+
+
+def test_uncommitted_docs_map_edit_does_not_change_the_result(test_repo):
+    repo, _ = test_repo
+    base2 = docs_map_repo(repo, RULE)
+    _foo_change(repo)
+    (repo / ".docs-map").write_text("# enforce-after: 2099-01-01\n", encoding="utf-8")
+    res = run_check(repo, base2, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
+    (repo / ".docs-map").unlink()
+    assert run_check(repo, base2, *TODAY).returncode == 1
+
+
+def test_uncommitted_docs_map_is_not_picked_up_either(test_repo):
+    repo, base = test_repo
+    _foo_change(repo)
+    (repo / ".docs-map").write_text(f"# enforce-after: 2026-11-08\n{RULE}\n", encoding="utf-8")
+    res = run_check(repo, base, *TODAY)
+    assert res.returncode == 0, res.stdout
+    assert "docs-map 0 warning(s)/0 error(s)" in res.stdout
+
+
+def test_docs_map_is_read_at_head_not_the_checked_out_tree(test_repo):
+    repo, base = test_repo
+    git(repo, "checkout", "-b", "other")
+    base2 = docs_map_repo(repo, RULE)
+    _foo_change(repo)
+    other = git(repo, "rev-parse", "HEAD").stdout.strip()
+    git(repo, "checkout", "main")
+    res = run_check(repo, base, "--head", other, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert "docs-map 0 warning(s)/1 error(s)" in res.stdout
+
+
+def test_parse_error_names_the_revision(test_repo):
+    repo, _ = test_repo
+    commit_files(repo, {".docs-map": "# enforce-after: 2026-11-08\nbroken rule\n"}, "bad map at base")
+    base2 = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_files(repo, {".docs-map": "# enforce-after: 2026-11-08\nalso broken\n"}, "bad map at head")
+    commit_files(repo, {"docs/a.md": "# a\n"}, "docs")
+    res = run_check(repo, base2, *TODAY)
+    assert res.returncode == 1, res.stdout
+    assert f"(.docs-map at merge-base {base2[:8]})" in res.stdout
+    assert "(.docs-map at head " in res.stdout
+
+
+def _load_module():
+    import importlib.util
+
+    from tests.changelog_docs_util import SCRIPT
+
+    spec = importlib.util.spec_from_file_location("check_changelog_docs_under_test", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _failing_runner(mod, failing_cmd):
+    real = mod.git
+
+    def fake(root, *args):
+        if args and args[0] == failing_cmd:
+            import subprocess
+
+            return subprocess.CompletedProcess(["git", *args], 128, "", "fatal: injected failure")
+        return real(root, *args)
+
+    return fake
+
+
+@pytest.mark.parametrize("failing_cmd", ["rev-list", "diff-tree", "log"])
+@pytest.mark.parametrize("warn_only", [False, True])
+def test_git_failure_in_commit_enumeration_fails_instead_of_passing(test_repo, monkeypatch, capsys, failing_cmd, warn_only):
+    repo, base = test_repo
+    commit_files(repo, {"src/a.py": "a = 1\n"}, "feature without changelog")
+    mod = _load_module()
+    monkeypatch.setattr(mod, "git", _failing_runner(mod, failing_cmd))
+    argv = ["--base", base, "--cwd", str(repo)] + (["--warn-only"] if warn_only else [])
+    code = mod.main(argv)
+    out = capsys.readouterr().out
+    assert "injected failure" in out
+    assert "check-changelog-docs: ok" not in out
+    assert code == (0 if warn_only else 1)
+
+
+def test_git_failure_reading_docs_map_fails(test_repo, monkeypatch, capsys):
+    repo, _ = test_repo
+    base2 = docs_map_repo(repo, RULE)
+    _foo_change(repo)
+    mod = _load_module()
+    monkeypatch.setattr(mod, "git", _failing_runner(mod, "ls-tree"))
+    code = mod.main(["--base", base2, "--cwd", str(repo), *TODAY])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "injected failure" in out and ".docs-map at merge-base" in out
