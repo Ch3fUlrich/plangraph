@@ -368,7 +368,7 @@ class SpawnerRunner:
         headers: Mapping[str, str] | None = None,
         dry_run: bool = False,
         cwd: str | None = None,
-        extra_env: Mapping[str, str] | None = None,
+        extra_env: Mapping[str, str | None] | None = None,
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
