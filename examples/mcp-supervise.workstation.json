@@ -17,18 +17,18 @@
     {
       "name": "serena-plangraph",
       "port": 8102,
-      "cmd": ["uvx", "serena-mcp"],
+      "cmd": ["uvx", "--from", "serena-agent==1.7.0", "serena", "start-mcp-server", "--context", "claude-code", "--project", "C:/path/to/plangraph"],
       "env": {},
       "scope": "project",
-      "project_dir": "%USERPROFILE%/fleet/plangraph"
+      "project_dir": "C:/path/to/plangraph"
     },
     {
       "name": "serena-autoos",
       "port": 8103,
-      "cmd": ["uvx", "serena-mcp"],
+      "cmd": ["uvx", "--from", "serena-agent==1.7.0", "serena", "start-mcp-server", "--context", "claude-code", "--project", "C:/path/to/autoos"],
       "env": {},
       "scope": "project",
-      "project_dir": "%USERPROFILE%/fleet/autoos"
+      "project_dir": "C:/path/to/autoos"
     }
   ],
   "log_file": "%USERPROFILE%/.plangraph/mcp-supervise.log",
