@@ -15,7 +15,8 @@ Decisions are evaluated per session (`state.json`), in this order. Every guard t
    - otherwise `done` with an output result: `done_grace_min` (default 2 min);
    - otherwise `done` without a result: `idle_min` (default 30 min).
 7. **Re-check before each stop**: `state.json` is read again immediately before `claude stop`. If it is no longer `done`, its `updatedAt` moved, or the policy no longer says stop, the session is skipped (reason `changed_since_scan`). A short window between that read and the stop remains.
-8. **Stop primitive**: `claude stop <id>` only, which keeps the conversation resumable. Processes are never killed by PID.
+8. **Already stopped**: `claude stop` leaves `state.json` unchanged (state stays `done`, `updatedAt` does not move), so the stop log is the only memory of a stop. Once per run the log is read (a missing file is empty; an unreadable or malformed line is skipped, never fatal). A session whose `updatedAt` equals the `updated_at` of that id's last `rc` 0 log line is kept (reason `already_stopped`): no `claude stop`, no new log line, in a dry run too. If `updatedAt` moved (resumed and finished again) it is stoppable again; a failed stop (`rc` non-zero) is retried; log lines without `updated_at` (older than this field) never match.
+9. **Stop primitive**: `claude stop <id>` only, which keeps the conversation resumable. Processes are never killed by PID.
 
 ## Session TTL Marker
 
@@ -40,7 +41,7 @@ Apply stops (executes `claude stop <id>` for eligible sessions):
 ```bash
 python -m plangraph.session_reap --apply
 ```
-Every stop attempt is appended to `~/.local/state/plangraph/session-reap.jsonl` with `ts`, `host`, `short_id`, `name`, `age_min`, `state`, `reason`, `action`, `rc`. A failed stop is logged with `rc` non-zero (a timeout or a runner exception is `rc` 1) and `reason` gains a suffix `;stop_failed:timeout`, `;stop_failed:runner_error` or `;stop_failed:nonzero_rc`.
+Every stop attempt is appended to `~/.local/state/plangraph/session-reap.jsonl` with `ts`, `host`, `short_id`, `name`, `age_min`, `state`, `reason`, `action`, `rc`, `updated_at` (the session's `updatedAt`, ISO 8601 with offset; step 8 matches on it). A failed stop is logged with `rc` non-zero (a timeout or a runner exception is `rc` 1) and `reason` gains a suffix `;stop_failed:timeout`, `;stop_failed:runner_error` or `;stop_failed:nonzero_rc`.
 
 ### Config file (`--config`)
 
