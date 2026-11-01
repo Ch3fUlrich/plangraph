@@ -100,3 +100,15 @@ def test_load_legs_accepts_expires_and_rejects_bad_format(tmp_path):
                    encoding="utf-8")
     with pytest.raises(ValueError, match="expires"):
         load_legs(bad)
+
+
+@pytest.mark.parametrize("pick", [{"leg": "cx-gpt-6.1-sol"}, {"model": "omniroute/cx-gpt-6.1-sol"}])
+def test_d3505_override_cannot_spawn_an_expired_leg(tmp_path, pick):
+    import os, subprocess, sys
+    from pathlib import Path
+    payload = dict(state=str(tmp_path), card={"estimate_tokens": 100}, prompt="x",
+                   override_reason="operator selection", **pick)
+    child = subprocess.run([sys.executable, "-m", "plangraph.spawner.cli", "--supervise"],
+                           input=json.dumps(payload) + "\n", text=True, capture_output=True,
+                           env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src")))
+    assert json.loads(child.stdout)["error"] == "leg expired: cx-gpt-6.1-sol"
