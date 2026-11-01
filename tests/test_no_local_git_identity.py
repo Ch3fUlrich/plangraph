@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -70,44 +71,30 @@ def _writes_identity(strings: list[str]) -> bool:
     return bool(CONFIG_WORD.search(joined) and IDENTITY_KEY.search(joined))
 
 
-def _scope_nodes(scope: ast.AST) -> list[ast.AST]:
-    """Nodes of one scope, not descending into nested functions or classes."""
-    out: list[ast.AST] = []
-    todo = list(ast.iter_child_nodes(scope))
-    while todo:
-        node = todo.pop()
-        out.append(node)
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            todo.extend(ast.iter_child_nodes(node))
-    return out
+def _key_in_config_file(tree: ast.AST, skip: set[int]) -> list[ast.Constant]:
+    """A bare ``"user.email"`` constant in a file that also says ``config``.
 
-
-def _key_in_config_scope(tree: ast.AST, skip: set[int]) -> list[ast.Constant]:
-    """A bare ``"user.email"`` constant in a scope that also says ``config``.
-
-    Catches the key held in a variable and passed to ``git config`` later.
+    Catches the key held in a variable and passed to ``git config`` later, even
+    from another scope (a module-level key used inside a function).
     """
-    hits: list[ast.Constant] = []
-    scopes = [tree] + [n for n in ast.walk(tree) if isinstance(
-        n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda))]
-    for scope in scopes:
-        consts = [n for n in _scope_nodes(scope) if isinstance(n, ast.Constant)
-                  and isinstance(n.value, str) and id(n) not in skip]
-        if any(CONFIG_WORD.search(c.value) for c in consts):
-            hits += [c for c in consts if EXACT_KEY.fullmatch(c.value)]
-    return hits
+    consts = [n for n in ast.walk(tree) if isinstance(n, ast.Constant)
+              and isinstance(n.value, str) and id(n) not in skip]
+    if not any(CONFIG_WORD.search(c.value) for c in consts):
+        return []
+    return [c for c in consts if EXACT_KEY.fullmatch(c.value)]
 
 
 def find_violations(text: str, rel: str, *, allow_marker_file: bool = False) -> list[str]:
     """Violations in *text*; the marker excuses only a one-line ``--local`` write."""
     try:
         tree = _Fold().visit(ast.parse(text))
-    except SyntaxError as exc:  # fail closed: a file the guard cannot read is not clean
-        return [f"{rel}:{exc.lineno or 1}: unparseable, cannot be checked ({exc.msg})"]
+    except (SyntaxError, ValueError) as exc:  # fail closed: unreadable is not clean
+        line = getattr(exc, "lineno", None) or 1
+        return [f"{rel}:{line}: unparseable, cannot be checked ({getattr(exc, 'msg', exc)})"]
     lines = text.splitlines()
     skip = _docstring_nodes(tree)
     found: dict[int, str] = {}
-    keyed = {id(n) for n in _key_in_config_scope(tree, skip)}
+    keyed = {id(n) for n in _key_in_config_file(tree, skip)}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Call, ast.List, ast.Tuple, ast.Assign, ast.Constant)):
             continue
@@ -127,7 +114,11 @@ def find_violations(text: str, rel: str, *, allow_marker_file: bool = False) -> 
 
 def _scan(path: Path) -> list[str]:
     rel = path.relative_to(ROOT.parent).as_posix()
-    return find_violations(path.read_text(encoding="utf-8"), rel,
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, ValueError) as exc:
+        return [f"{rel}:1: unparseable, cannot be checked ({exc})"]
+    return find_violations(text, rel,
                            allow_marker_file=path.resolve() == ALLOWED_FILE.resolve())
 
 
@@ -147,7 +138,8 @@ def test_no_local_git_identity_in_tests():
 def test_allow_marker_restricted_to_prepush_identity():
     found_files: dict[str, list[tuple[int, str]]] = {}
     for py_file in _test_files():
-        for lineno, line in enumerate(py_file.read_text(encoding="utf-8").splitlines(), start=1):
+        text = py_file.read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), start=1):
             if ALLOW_MARKER in line:
                 rel = py_file.relative_to(ROOT.parent).as_posix()
                 found_files.setdefault(rel, []).append((lineno, line))
@@ -183,6 +175,11 @@ BAD = {
     "var_concat_key_left": 'run(["git", "config", key + ".email", "user." + k2, v])\n',
     "bare_prefix": 'p = "user."\nrun(["git", "config", p + name, v])\n',
     "unparseable": 'run(["git", "config", "user.name"\n',
+    "nul_bytes": 'x = 1\x00\n',
+    "cross_scope_key": ('KEY = "user.email"\n\n\ndef f(v):\n'
+                        '    run(["git", "config", KEY, v])\n'),
+    "cross_scope_config": ('CMD = ["git", "config"]\n\n\ndef f(v):\n'
+                           '    run(CMD + ["user.name", v])\n'),
 }
 
 
@@ -215,3 +212,12 @@ def test_marker_on_the_opening_line_of_a_multiline_call_excuses_nothing():
     src = (f'run([  {ALLOW_MARKER} --local user.name\n'
            '    "git", "config", "user.name", n,\n])\n')
     assert find_violations(src, "t.py", allow_marker_file=True)
+
+
+def test_unreadable_file_is_reported_not_raised(tmp_path, monkeypatch):
+    bad = tmp_path / "tests" / "bad.py"
+    bad.parent.mkdir()
+    bad.write_bytes(b"x = '\xff\xfe'\n")
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", bad.parent)
+    found = _scan(bad)
+    assert found and "unparseable" in found[0]

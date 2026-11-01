@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from git_identity import identity_args, identity_env
+from git_identity import identity_env
 
 from plangraph.keeper import evidence_ci
 from plangraph.keeper.evidence_ci import CIAdapter
