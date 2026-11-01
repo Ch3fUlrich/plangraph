@@ -51,7 +51,7 @@ def _legacy_snapshot(store, now):
             "worker_run": None, "reviewer_run": None,
             "lease_until": item["lease_until"], "model": item["model"],
             "review_waiver": item.get("review_waiver"), "reviews": reviews,
-            "evidence": [{"kind": r["kind"], "ref": r["ref"],
+            "evidence": [{"kind": r["kind"], "ref": r["ref"], "epoch": r["epoch"],
                           "verified": r["verified"], "at": r["at"]}
                          for r in store._evidence(item["key"])],
             "updated_at": item["updated_at"],
