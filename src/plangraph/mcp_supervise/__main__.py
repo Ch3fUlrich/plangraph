@@ -6,10 +6,19 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional, Tuple
 
 from .config import ConfigError, load_config
 from .health import probe
-from .procutil import kill_process_tree, pid_alive, pid_matches, read_pid_file, read_pid_record
+from .portowner import listener_pid
+from .procutil import (
+    SUPERVISOR_PID_NAME,
+    kill_process_tree,
+    pid_alive,
+    pid_matches,
+    read_pid_file,
+    read_pid_record,
+)
 from .render import render_json
 from .supervisor import run_supervisor
 
@@ -50,6 +59,25 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _recorded_pid(name: str, pid_file: Path) -> Tuple[Optional[int], Optional[str]]:
+    """(pid, None) when the pid file names the live server process, else (None, why not)."""
+    record = read_pid_record(pid_file)
+    if record is None:
+        return None, f"No pid file for server '{name}' ({pid_file}): is the supervisor running?"
+    pid, start = record
+    if not pid_alive(pid):
+        return None, f"Pid {pid} of server '{name}' is not alive (stale pid file)"
+    if not pid_matches(pid, start):
+        return None, (f"Pid {pid} of server '{name}' is alive but started at a different "
+                      "time than the pid file recorded: the pid was recycled, refusing to kill it")
+    return pid, None
+
+
+def _supervisor_alive(state_dir: Path) -> bool:
+    record = read_pid_record(state_dir / f"{SUPERVISOR_PID_NAME}.pid")
+    return record is not None and pid_matches(*record)
+
+
 def _cmd_check(args: argparse.Namespace) -> int:
     try:
         cfg = load_config(args.config)
@@ -64,19 +92,18 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
     state_dir = Path(cfg.state_dir or "mcp-supervise.state").resolve()
     pid_file = state_dir / f"{target.name}.pid"
-    record = read_pid_record(pid_file)
-    if record is None:
-        print(f"No pid file for server '{target.name}' ({pid_file}): is the supervisor running?",
-              file=sys.stderr)
-        return 1
-    old_pid, old_start = record
-    if not pid_alive(old_pid):
-        print(f"Pid {old_pid} of server '{target.name}' is not alive (stale pid file)",
-              file=sys.stderr)
-        return 1
-    if not pid_matches(old_pid, old_start):
-        print(f"Pid {old_pid} of server '{target.name}' is alive but started at a different "
-              "time than the pid file recorded: the pid was recycled, refusing to kill it",
+    old_pid, problem = _recorded_pid(target.name, pid_file)
+    if problem:
+        # An adopted server whose owner was unresolvable has no usable pid file: the
+        # process listening on its port is the server.
+        old_pid = listener_pid(target.host, target.port)
+        if old_pid is None:
+            print(problem, file=sys.stderr)
+            return 1
+
+    if not args.force and not _supervisor_alive(state_dir):
+        print(f"No live supervisor found in {state_dir}: killing '{target.name}' would leave it "
+              "dead with nothing to restart it. Start the supervisor, or pass --force.",
               file=sys.stderr)
         return 1
 
@@ -124,6 +151,9 @@ def main(argv=None) -> int:
     p_check.add_argument("--config", "-c", required=True, help="Path to JSON config file")
     p_check.add_argument("--name", "-n", required=True, help="Server name to test")
     p_check.add_argument("--timeout", type=float, default=60.0, help="Seconds to wait for recovery (default 60)")
+
+    p_check.add_argument("--force", action="store_true",
+                         help="Kill even when no live supervisor is found (nothing will restart it)")
 
     args = parser.parse_args(argv)
 

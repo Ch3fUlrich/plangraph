@@ -139,6 +139,36 @@ class TestAdoptionRecordsPid(WorkdirCase):
         self._adopt(port)
         self.assertEqual(self.pid_of("a"), listener_pid("127.0.0.1", port))
 
+    def test_unknown_owner_leaves_the_pid_file_alone_and_logs_it(self):
+        port = free_port()
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        write_pid_file(self.state_dir, "a", dead.pid)
+        before = (self.state_dir / "a.pid").read_text(encoding="utf-8")
+        self.spawn_orphan(port)
+        self.assertTrue(wait_healthy(port))
+        with mock.patch.object(supervisor, "listener_pid", return_value=None):
+            self._adopt(port)
+        self.assertEqual((self.state_dir / "a.pid").read_text(encoding="utf-8"), before)
+        self.assertIn("adopt_pid_unknown", self.log_text())
+
+    def test_check_falls_back_to_the_port_listener_when_no_pid_file_names_it(self):
+        port = free_port()
+        orphan = self.spawn_orphan(port)
+        self.assertTrue(wait_healthy(port))
+        raw = self.config(server_entry("a", port, self.script))
+        self.spawn_supervisor(raw)
+        self.assertTrue(wait_until(lambda: self.pid_of("a") is not None))
+        old = self.pid_of("a")
+        (self.state_dir / "a.pid").unlink()
+        res = subprocess.run(
+            CLI + ["check", "--config", str(self.config_path(raw)), "--name", "a",
+                   "--timeout", "40"],
+            capture_output=True, text=True, env=CLI_ENV)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue(wait_until(lambda: orphan.poll() is not None))
+        self.assertNotEqual(self.pid_of("a"), old)
+
     def test_check_works_against_an_adopted_server_that_had_no_pid_file(self):
         port = free_port()
         orphan = self.spawn_orphan(port)

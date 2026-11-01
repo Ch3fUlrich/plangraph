@@ -211,9 +211,19 @@ class TestSupervisorAndCheck(WorkdirCase):
         log_content = self.log_file.read_text(encoding="utf-8")
         self.assertNotIn(self.secret, log_content, "Secret was leaked into the supervisor log!")
         self.assertIn("name=test-server", log_content)
-        self.assertIn("pid=", log_content)
-        self.assertIn("action=start", log_content)
-        self.assertIn("rc=", log_content)
+        fields = [dict(kv.split("=", 1) for kv in line.split()[1:])
+                  for line in log_content.splitlines()]
+        start = next(f for f in fields if f["action"] == "start")
+        self.assertEqual(start["name"], "test-server")
+        self.assertEqual(int(start["pid"]), pid, "start line must carry the child's real pid")
+        self.assertEqual(start["rc"], "None", "a start has no exit code yet")
+        exited = next(f for f in fields if f["action"] == "exit")
+        self.assertEqual(int(exited["pid"]), pid)
+        int(exited["rc"])  # numeric exit code of the killed child
+        restart = next(f for f in fields if f["action"] == "restart")
+        self.assertGreater(int(restart["pid"]), 0)
+        self.assertNotEqual(int(restart["pid"]), pid)
+        self.assertTrue(all({"name", "pid", "action", "rc", "reason"} <= f.keys() for f in fields))
 
     def test_check_cli_exit_codes(self):
         raw = self.config(server_entry("test-check", self.port2, self.script))

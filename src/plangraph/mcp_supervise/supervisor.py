@@ -13,6 +13,7 @@ from .config import ServerConfig, SuperviseConfig
 from .health import probe
 from .portowner import listener_pid
 from .procutil import (
+    SUPERVISOR_PID_NAME,
     kill_process_tree,
     pid_matches,
     read_pid_record,
@@ -180,7 +181,12 @@ class Supervisor:
             pid: Optional[int] = record[0]
         else:
             pid = listener_pid(server.host, server.port)
-            self._write_pid_file(name, pid)
+            if pid is None:
+                # Writing None would delete the pid file; `check` falls back to the
+                # port listener instead.
+                self._log(name, None, "adopt_pid_unknown", None, "listener_owner_unresolved")
+            else:
+                self._write_pid_file(name, pid)
         tracker.adopted = True
         tracker.proc = None
         tracker.next_probe_time = time.time() + ADOPT_RECHECK_SECONDS
@@ -278,6 +284,7 @@ class Supervisor:
 
     def run(self) -> None:
         """Main supervisor loop."""
+        self._write_pid_file(SUPERVISOR_PID_NAME, os.getpid())
         for tracker in self.trackers.values():
             self._start_child(tracker, reason="initial_start")
 
@@ -306,6 +313,7 @@ class Supervisor:
                     pass
                 self._log(tracker.server.name, pid, "exit", tracker.proc.returncode, "supervisor_shutdown")
                 self._write_pid_file(tracker.server.name, None)
+        self._write_pid_file(SUPERVISOR_PID_NAME, None)
 
 
 def run_supervisor(

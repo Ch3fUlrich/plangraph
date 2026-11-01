@@ -8,6 +8,7 @@ workstation startup. It needs `uvx` and a one-time download of the pinned versio
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -61,10 +62,10 @@ class TestRealPinnedProxy(WorkdirCase):
         self.stdio = self.tmp / "stdio_srv.py"
         self.stdio.write_text(STDIO_SERVER_SCRIPT, encoding="utf-8")
         self.starts = self.tmp / "starts.txt"
-        self.env = {"STARTS_FILE": str(self.starts), "MARK": "m1"}
+        self.env = {"MARK": "m1"}
         self.url = f"http://127.0.0.1:{self.port}/mcp"
         self.entry = {"name": "real", "port": self.port, "scope": "host", "env": self.env,
-                      "cmd": [sys.executable, str(self.stdio)]}  # proxy defaults to True
+                      "cmd": [sys.executable, str(self.stdio), str(self.starts)]}  # proxy defaults to True
 
     def starts_lines(self):
         return self.starts.read_text(encoding="utf-8").splitlines() if self.starts.exists() else []
@@ -98,12 +99,28 @@ class TestRealPinnedProxy(WorkdirCase):
         self.assertEqual(len(lines), 1, "a probe must not start another stdio session")
         self.assertIn("utf8=1 mark=m1", lines[0], "--pass-environment lost the child env")
 
+        # Default --timeout (60 s): the brief's "healthy again <= 60 s" on the pinned path.
+        # setUpClass already ran the pinned uvx env once, so this times a warm restart.
         res = subprocess.run(
             CLI + ["check", "--config", str(self.config_path(self.config(dict(self.entry)))),
-                   "--name", "real", "--timeout", "120"],
+                   "--name", "real"],
             capture_output=True, text=True, env=CLI_ENV)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        elapsed = re.search(r"healthy in ([0-9.]+)s", res.stdout)
+        self.assertIsNotNone(elapsed, res.stdout)
+        self.assertLessEqual(float(elapsed.group(1)), 60.0)
         self.assertTrue(wait_healthy(self.port, tries=300))
+
+    def test_without_pass_environment_the_server_loses_the_configured_env(self):
+        server = load_config({"servers": [dict(self.entry)]}).servers[0]
+        argv = [a for a in build_child_command(server) if a != "--pass-environment"]
+        self.assertNotIn("--pass-environment", argv)
+        proc = subprocess.Popen(argv, env={**os.environ, **self.env, "PYTHONUTF8": "1"},
+                                start_new_session=True)
+        self.cleanup_procs.append(proc)
+        self.assertTrue(wait_healthy(self.port, tries=900))
+        self.assertEqual(len(self.starts_lines()), 1)
+        self.assertNotIn("mark=m1", self.starts_lines()[0])
 
     def _orphan_proxy_with_dead_stdio_child(self):
         server = load_config({"servers": [dict(self.entry)]}).servers[0]

@@ -13,7 +13,13 @@ from pathlib import Path
 
 from plangraph.mcp_supervise.config import load_config
 from plangraph.mcp_supervise.health import probe
-from plangraph.mcp_supervise.procutil import kill_process_tree, pid_alive, read_pid_file
+from plangraph.mcp_supervise.procutil import (
+    SUPERVISOR_PID_NAME,
+    kill_process_tree,
+    pid_alive,
+    read_pid_file,
+    write_pid_file,
+)
 from plangraph.mcp_supervise.supervisor import Supervisor
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,11 +69,11 @@ Server(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
 """
 
 # Tiny stdio MCP server (newline-delimited JSON-RPC) for the real-proxy test. It
-# records its pid, and the environment the proxy handed it, in $STARTS_FILE.
+# records its pid, and the environment the proxy handed it, in the file named by argv[1].
 STDIO_SERVER_SCRIPT = """
 import json, os, sys
 
-with open(os.environ["STARTS_FILE"], "a", encoding="utf-8") as f:
+with open(sys.argv[1], "a", encoding="utf-8") as f:
     f.write("start pid=%d utf8=%s mark=%s\\n" % (
         os.getpid(), os.environ.get("PYTHONUTF8"), os.environ.get("MARK")))
 for line in sys.stdin:
@@ -193,6 +199,10 @@ class WorkdirCase(unittest.TestCase):
 
     def pid_of(self, name: str):
         return read_pid_file(self.state_dir / f"{name}.pid")
+
+    def mark_supervisor_alive(self):
+        """Stand in for a running supervisor: this test process owns the heartbeat file."""
+        write_pid_file(self.state_dir, SUPERVISOR_PID_NAME, os.getpid())
 
     def log_text(self) -> str:
         return self.log_file.read_text(encoding="utf-8") if self.log_file.exists() else ""

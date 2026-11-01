@@ -13,7 +13,12 @@ from unittest import mock
 
 from plangraph.mcp_supervise import supervisor
 from plangraph.mcp_supervise.config import load_config
-from plangraph.mcp_supervise.procutil import pid_alive, read_pid_file, write_pid_file
+from plangraph.mcp_supervise.procutil import (
+    SUPERVISOR_PID_NAME,
+    pid_alive,
+    read_pid_file,
+    write_pid_file,
+)
 from plangraph.mcp_supervise.supervisor import kill_process_tree, run_supervisor
 from test_mcp_supervise_support import (
     CLI,
@@ -129,11 +134,60 @@ class TestAdoption(WorkdirCase):
 
 
 class TestCheckGuards(WorkdirCase):
-    def _check(self, raw, timeout="3"):
+    def _check(self, raw, timeout="3", *extra):
         return subprocess.run(
             CLI + ["check", "--config", str(self.config_path(raw)), "--name", "a",
-                   "--timeout", timeout],
+                   "--timeout", timeout, *extra],
             capture_output=True, text=True, env=CLI_ENV)
+
+    def _decoy_server(self):
+        port = free_port()
+        server = subprocess.Popen([sys.executable, str(self.script), str(port)])
+        decoy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.cleanup_procs += [server, decoy]
+        self.assertTrue(wait_healthy(port))
+        write_pid_file(self.state_dir, "a", decoy.pid)
+        return self.config(server_entry("a", port, self.script)), decoy
+
+    def test_refuses_to_kill_when_no_supervisor_is_alive(self):
+        raw, decoy = self._decoy_server()
+        res = self._check(raw)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("supervisor", (res.stdout + res.stderr).lower())
+        self.assertIsNone(decoy.poll(), "check killed the server with no supervisor to restart it")
+
+    def test_refuses_when_the_supervisor_crashed(self):
+        raw, decoy = self._decoy_server()
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        write_pid_file(self.state_dir, SUPERVISOR_PID_NAME, gone.pid)
+        res = self._check(raw)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("supervisor", (res.stdout + res.stderr).lower())
+        self.assertIsNone(decoy.poll())
+
+    def test_force_kills_without_a_supervisor(self):
+        raw, decoy = self._decoy_server()
+        res = self._check(raw, "1", "--force")
+        self.assertEqual(res.returncode, 1, "nothing restarts it, so no healthy pass")
+        self.assertIsNotNone(decoy.poll(), "--force must kill the recorded tree")
+
+    def test_running_supervisor_writes_its_heartbeat(self):
+        self.spawn_supervisor(self.config(server_entry("a", free_port(), self.script)))
+        beat = self.state_dir / f"{SUPERVISOR_PID_NAME}.pid"
+        self.assertTrue(_wait(beat.exists))
+        # Not Popen.pid: a venv launcher can sit between it and the interpreter.
+        pid = read_pid_file(beat)
+        self.assertTrue(pid_alive(pid))
+        self.assertNotEqual(pid, os.getpid())
+
+    def test_stopped_supervisor_clears_its_heartbeat(self):
+        sup = supervisor.Supervisor(
+            load_config(self.config(server_entry("a", free_port(), self.script))),
+            poll_interval=0.05)
+        sup.stop_event.set()
+        sup.run()
+        self.assertFalse((self.state_dir / f"{SUPERVISOR_PID_NAME}.pid").exists())
 
     def test_refuses_without_pid_file(self):
         res = self._check(self.config(server_entry("a", free_port(), self.script)))
@@ -155,6 +209,7 @@ class TestCheckGuards(WorkdirCase):
         self.cleanup_procs += [server, decoy]
         self.assertTrue(wait_healthy(port))
         write_pid_file(self.state_dir, "a", decoy.pid)
+        self.mark_supervisor_alive()
         res = self._check(self.config(server_entry("a", port, self.script)))
         self.assertEqual(res.returncode, 1, "healthy but never restarted must fail")
         self.assertNotEqual(decoy.poll(), None, "decoy (the pid-file pid) must have been killed")

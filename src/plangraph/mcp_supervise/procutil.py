@@ -12,9 +12,12 @@ from .config import SERVER_NAME_RE
 
 _STILL_ACTIVE = 259  # also a legal exit code, so liveness pairs it with a wait check
 _WAIT_TIMEOUT = 0x102
-_TASKKILL_NOT_FOUND = 128
 _SYNCHRONIZE = 0x100000
 _QUERY_LIMITED = 0x1000
+
+# The supervisor's own heartbeat in state_dir. The leading underscore cannot collide
+# with a server name (SERVER_NAME_RE needs an alphanumeric first character).
+SUPERVISOR_PID_NAME = "_supervisor"
 
 LogFn = Callable[[str], None]
 
@@ -184,7 +187,7 @@ def read_pid_file(path: Path) -> Optional[int]:
 
 def write_pid_file(state_dir: Path, name: str, pid: Optional[int]) -> None:
     """Atomically write `<name>.pid` as "pid start-stamp"; pid None removes it."""
-    if not SERVER_NAME_RE.fullmatch(name):
+    if name != SUPERVISOR_PID_NAME and not SERVER_NAME_RE.fullmatch(name):
         raise ValueError(f"unsafe server name for a pid file: {name!r}")
     state_dir = Path(state_dir)
     target = state_dir / f"{name}.pid"
