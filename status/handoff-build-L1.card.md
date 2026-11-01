@@ -1,35 +1,31 @@
-# L1 card · build-L1-0049 · 2026-11-01T07:45Z
+# L1 card · build-L1-0057 · 2026-11-01T11:50Z
 ## Goal
-- Close PH-RT-ROUTING-IN gates; land the D-3454/D-3465 leaves; keep >= 2 L2 lanes busy within the coding.vm run budget (D-3473: <= 2 runs)
+- D-3505 freeze: land PR #294 (probe PWD leak + cancel) and the sol removal (PR #280), then unfreeze fleet writers
 ## Keeper
-- claimed: plangraph:LE-SNAPSHOT-SERVE-PATH (claimed ep1, since 06:07Z), plangraph:LE-ORPHAN-OWNER-RELAUNCH (claimed ep1, since 06:44Z), plangraph:SPAWNER-LEG-CONSOLE-SONNET (claimed ep1, since 07:03Z), plangraph:LE-SPAWNER-PROBE-COMMIT (claimed ep1, since 07:20Z)
-- ready next: plangraph:PG-STATIC-CHECKS, plangraph:COST-GATE-PLANGRAPH
+- claimed: plangraph:LE-SPAWNER-PROBE-COMMIT (claimed, since 07:20Z), plangraph:SPAWNER-LEG-CONSOLE-SONNET (claimed, since 07:03Z), plangraph:LE-SNAPSHOT-SERVE-PATH (claimed, since 06:07Z), plangraph:LE-ORPHAN-OWNER-RELAUNCH (claimed, since 06:44Z)
+- ready next: plangraph:SEAT-VERDICT-INLINE-RUNS, plangraph:PG-STATIC-CHECKS
 ## Done
-- 11-01T07:00Z GATEWAY-LOG-TOKEN-MINT ff1ad941 OmniRoute PR#4 merged (D-3457, checks autoos-tests+image green)
-- 11-01T07:12Z LE-ROUTER-RECYCLE-DETECT 106449d0 PR#9 merged (qwen run-d9ccea30 PASS, tests 317, live proof 06:36Z), in_review
-- 11-01T07:19Z KEEPER-DCLOSE-TRACK-EVIDENCE 8663b4bc PR#277 merged (D-3465), LIVE-SYNC-14 keeper+md-sync, md-sync refused 0, in_review
-- 11-01T07:19Z RIN-LEDGER-PREP - closed by md-sync after LIVE-SYNC-14
-- 11-01T07:38Z D-3473 - cancelled duplicate reviews run-536144c1/cc73a9cf/0a17a8dc, coding.vm at 2 runs
+- 11-01T10:29Z LE-SPAWNER-PROBE-COMMIT d5eb8711 PR#281 merged (agy-gemini seat run-3db7af1b PASS on workst, CI 7/7 green)
+- 11-01T11:45Z D-3505 31e05774 PR#294 fix-2 Hand-Edits (live mimo probe ok, caller HEAD unchanged; 945 tests passed)
+- 11-01T09:20Z D-3478 308f6320 PR#280 ses_ writer id + file-size fix (mimo seat run-5d21a142 PASS 6 LOW)
+- 11-01T08:50Z LE-SNAPSHOT-SERVE-PATH 8cc76d47 PR#279 ssp2 pushed + docs move (file-size ok)
+- 11-01T11:10Z D-3502 - session_reap dry run reported (130 sessions, 34 stop, L1 pattern gaps)
 ## In flight
-- LE-SNAPSHOT-SERVE-PATH run-47bc92e4 writer ssp2 (PR #279 r2) since 07:22Z next check 08:15Z
-- LE-SPAWNER-PROBE-COMMIT PR #281 71629e60 qwen seat (serial chain seat2.sh) since 07:40Z next check 08:15Z
-- SPAWNER-LEG-CONSOLE-SONNET PR #280 abd34556 qwen seat (same chain) since 07:40Z next check 08:30Z
-- LE-ORPHAN-OWNER-RELAUNCH plangraph-data PR #10 4bc78b93 qwen seat (same chain) since 07:40Z next check 08:45Z
-- build-L2-autoosmove-0053 / build-L2-skills-0052 / build-L2-spawner-0045 / build-L2-gwtok-0047 since 06:40Z next check 08:15Z
+- none
 ## Planned
-1. Seat results -> PASS: MERGE-READY + merge (standard self-approve) + submit; qwen credit fail: luna for mimo PRs, mimo-pro for #280
-2. ssp2 verify, push, delta seat on PR #279
-3. PR #278 squash-merge with one trailer paragraph after its delta seat PASS
-4. owner-watch timer install = live GO-REQ after PR #10 merge
+1. LE-SPAWNER-PROBE-COMMIT PR #294 seats: mimo-v2.6-pro here + agy-gemini via workst-L1-autoos (HIGH, 2 seats)
+2. SPAWNER-LEG-CONSOLE-SONNET remove cx-gpt-6.1-sol from legs.py WRITER_ORDER (Hand-Edit, D-3505) + 2nd seat
+3. After both merge: ff spawner-main, writers GO to server-L1-main-0058, evidence + submit
+4. PR #279 / data #10 seats on a non-mimo leg (agy via workst)
 ## Open
-- GO-REQ gateway deploy OmniRoute ff1ad941 | default one deploy after part B | deadline none
-- BLOCKED GATEWAY-LOG-TOKEN-MINT part B past round cap | default a final writer round | deadline 08:00Z
-- GO-REQ leaf KEEPER-DCLOSE-EPOCH-FAILCLOSED (Haiku LOWs on #277) | default drop | deadline none
+- D-3505 fleet writer freeze until #294 + sol removal merge | default seats only | deadline none
+- Q-SEAT-2ND-FAMILY no 2nd local seat family (qwen, free legs, luna all down) | default agy via workst | deadline none
+- D-3507 keeper evidence refuses merge-commit PR head | default propose create to router | deadline none
 ## Traps
-- routing via ~/.local/state/fleet/inbox/routing.jsonl only; never routerctl status
-- D-3461: Claude subagents never seats; D-3473: <= 2 runs on coding.vm, gate spawns on host runs < 2
-- keeper live tree now plangraph-worktrees/live-8663b4bc (not .claude/worktrees); never Hand-Edit keeper/* door paths
-- probe state is not ground truth (LE-SPAWNER-PROBE-COMMIT): spawn with explicit --leg + override reason
+- routing only via ~/.local/state/fleet/inbox/routing.jsonl; never routerctl status
+- killing a session's stdio spawner MCP disconnects it for good; never kill other sessions' MCPs
+- pkill -f <script> also kills your own shell if the name is in the command line
+- ci_commit_gate.py is AUTH_DOOR: no Hand-Edit; L1 adds Gate-Edit trailers itself
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-60 block, line 2)
-- T=/home/s/.claude/jobs/ba306816/tmp; J4=/home/s/.claude/jobs/4e49c8f0/tmp
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-61 block, line 2)
+- T=/home/s/.claude/jobs/4f4e8666/tmp; T0=/home/s/.claude/jobs/ba306816/tmp; J4=/home/s/.claude/jobs/4e49c8f0/tmp
