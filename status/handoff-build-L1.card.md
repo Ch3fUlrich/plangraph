@@ -15,10 +15,14 @@
 ## In flight
 - SEAT-VERDICT-FROM-RECORD run-f1e658e9 openrouter-free since 23:03Z next check 23:45Z (f320d886 mimo-pro stalled, no diff; fix r3 = cap)
 - KEEPER-EVIDENCE-MERGE-HEAD run-ebb874d2 since 22:33Z next check 23:15Z (fix r1, delta seat, verdict to router)
-- held PRs seats workst-L1-autoos since 22:33Z next check 23:30Z (#308 #310 #278 #297-#301 pd#15-17)
+- L2-LAUNCH build-L2-heldfix (brief ~/.local/share/plangraph/briefs/L2-heldpr-fixes.md: #278 #297 #299-#301 #310 pd#15-17) sent 23:20Z
+- MERGE-READY #308 29cc101d + #298 6153ca17 sent 23:22Z (clean ACCEPT)
+- BLOCKED D-3581 3 in_review items need router reopen (claim refused) sent 23:28Z; commits pd 5e731c00/5e9855a2/b448d462
+- #309 r1 409218b8 full suite running; then push + delta seat
+- RIN-LEDGER-VIEWS ep1 + RIN-PATH-REPOINT ep1 claimed 23:19Z (D-3581), lease 01:18Z
 - ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 operator step OS-PD12-MERGE since 13:52Z next check 23:30Z
 ## Planned
-1. D-3577 ff spawner-main -> dc3eaf4a+ after both writers end (rollback e71f63f2), CLI route check, report families
+1. D-3577 GO (routing-0071): ff spawner-main -> dc3eaf4a+ after both writers end (rollback e71f63f2), CLI route check, report families
 2. #314/#309 push fixes, delta seats via workst, GO-REQ new shas; #309 verdict to router
 4. SPBR run-18e3f402 ACCEPT via seat_verdict.py after #314 merge; slice 2 D-3558
 ## Open
