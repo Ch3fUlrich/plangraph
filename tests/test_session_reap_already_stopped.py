@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from plangraph.session_reap.__main__ import main as cli_main, reap
-from plangraph.session_reap.log import log_stop
+from plangraph.session_reap.log import log_stop, stopped_updated_at
 
 NOW = datetime(2026, 11, 1, 12, 0, 0, tzinfo=timezone.utc)
 UPDATED = NOW - timedelta(hours=3)
@@ -192,6 +192,7 @@ def test_non_string_naive_and_non_stop_lines_never_match(tmp_path):
     lines = [{"action": "stop", "updated_at": v} for v in (123, [1], {"a": 1}, UPDATED.replace(tzinfo=None).isoformat())]
     lines += [{"action": "keep", "updated_at": good}, {"updated_at": good}]
     log.write_bytes("".join(json.dumps({"short_id": "j1", "rc": 0, **x}) + "\n" for x in lines).encode())
+    assert stopped_updated_at(log) == {}
     runner = _Runner()
     rows = reap(jobs_dir=jobs, apply=True, runner=runner, log_path=log, now=NOW)
     assert _row(rows)["action"] == "stop"
