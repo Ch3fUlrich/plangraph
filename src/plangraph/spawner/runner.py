@@ -432,6 +432,9 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        # D-3505: harnesses take their project dir from an inherited $PWD over the
+        # process cwd; a caller's PWD put probe commits into the caller's worktree.
+        child_env['PWD'] = os.path.abspath(work_dir)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
