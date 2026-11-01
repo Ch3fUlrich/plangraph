@@ -1,35 +1,35 @@
-# L1 card · build-L1-0043 · 2026-11-01T06:12Z
+# L1 card · build-L1-0049 · 2026-11-01T07:45Z
 ## Goal
-- Close PH-RT-ROUTING-IN gates (KEEPER-DCLOSE #277, LE-ROUTER-RECYCLE-DETECT live proof, RIN-CUTOVER-DATA verdict); keep >= 2 L2 lanes on ready items (D-3454)
+- Close PH-RT-ROUTING-IN gates; land the D-3454/D-3465 leaves; keep >= 2 L2 lanes busy within the coding.vm run budget (D-3473: <= 2 runs)
 ## Keeper
-- claimed: plangraph:KEEPER-DCLOSE-TRACK-EVIDENCE (claimed ep2, since 00:54Z, lease 08:08Z), plangraph:LE-ROUTER-RECYCLE-DETECT (claimed ep1, since 05:43Z), plangraph:LE-SNAPSHOT-SERVE-PATH (claimed ep1, since 06:07Z)
-- ready next: plangraph:LE-ORPHAN-OWNER-RELAUNCH, plangraph:PG-STATIC-CHECKS, plangraph:COST-GATE-PLANGRAPH
+- claimed: plangraph:LE-SNAPSHOT-SERVE-PATH (claimed ep1, since 06:07Z), plangraph:LE-ORPHAN-OWNER-RELAUNCH (claimed ep1, since 06:44Z), plangraph:SPAWNER-LEG-CONSOLE-SONNET (claimed ep1, since 07:03Z), plangraph:LE-SPAWNER-PROBE-COMMIT (claimed ep1, since 07:20Z)
+- ready next: plangraph:PG-STATIC-CHECKS, plangraph:COST-GATE-PLANGRAPH
 ## Done
-- 11-01T02:24Z KEEPER-DCLOSE-TRACK-EVIDENCE 499309a9 r1 mimo-pro run-4fb85260, qwen delta run-dfe3d467 PASS
-- 11-01T02:43Z KEEPER-DCLOSE-TRACK-EVIDENCE ee8cc8de PR#277 replay (mimo-flash run-f524b92c), CI green; PR#276 closed
-- 11-01T03:20Z RIN-CUTOVER-DATA - resubmitted in_review (D-3449)
-- 11-01T02:40Z D-3445 - finding sent: proposal gone before 10-31T05:34Z; LE-SNAPSHOT-SERVE-PATH filed (D-3452)
-- 11-01T05:55Z LE-ROUTER-RECYCLE-DETECT 32498e1 plangraph-data main (r1 11dc4884, qwen run-da1e12df PASS, tests 309, GO D-3452)
-- 11-01T06:00Z D-3452 - md-sync refused=1 = RIN-LEDGER-PREP close (DCLOSE bug), reported
+- 11-01T07:00Z GATEWAY-LOG-TOKEN-MINT ff1ad941 OmniRoute PR#4 merged (D-3457, checks autoos-tests+image green)
+- 11-01T07:12Z LE-ROUTER-RECYCLE-DETECT 106449d0 PR#9 merged (qwen run-d9ccea30 PASS, tests 317, live proof 06:36Z), in_review
+- 11-01T07:19Z KEEPER-DCLOSE-TRACK-EVIDENCE 8663b4bc PR#277 merged (D-3465), LIVE-SYNC-14 keeper+md-sync, md-sync refused 0, in_review
+- 11-01T07:19Z RIN-LEDGER-PREP - closed by md-sync after LIVE-SYNC-14
+- 11-01T07:38Z D-3473 - cancelled duplicate reviews run-536144c1/cc73a9cf/0a17a8dc, coding.vm at 2 runs
 ## In flight
-- KEEPER-DCLOSE-TRACK-EVIDENCE run-c8d75e2d luna 2nd HIGH seat since 05:58Z next check 06:30Z
-- LE-ROUTER-RECYCLE-DETECT run rrd3 mimo-pro r3 (J5/w-rrd3.log) since 06:00Z next check 06:30Z
-- LE-SNAPSHOT-SERVE-PATH run ssp1 mimo-pro (J5/w-ssp1.log) since 06:10Z next check 06:40Z
-- D-3454 L2-LAUNCH build-L2-skills + build-L2-autoosmove sent 06:05Z next check 06:30Z
+- LE-SNAPSHOT-SERVE-PATH run-47bc92e4 writer ssp2 (PR #279 r2) since 07:22Z next check 08:15Z
+- LE-SPAWNER-PROBE-COMMIT PR #281 71629e60 qwen seat (serial chain seat2.sh) since 07:40Z next check 08:15Z
+- SPAWNER-LEG-CONSOLE-SONNET PR #280 abd34556 qwen seat (same chain) since 07:40Z next check 08:30Z
+- LE-ORPHAN-OWNER-RELAUNCH plangraph-data PR #10 4bc78b93 qwen seat (same chain) since 07:40Z next check 08:45Z
+- build-L2-autoosmove-0053 / build-L2-skills-0052 / build-L2-spawner-0045 / build-L2-gwtok-0047 since 06:40Z next check 08:15Z
 ## Planned
-1. KEEPER-DCLOSE-TRACK-EVIDENCE luna PASS -> MERGE-READY #277 (both seats) -> merge + live sync under GO
-2. LE-ROUTER-RECYCLE-DETECT verify r3, delta qwen seat, MERGE-READY PR#9; confirm RECYCLED routing in ctx-watchdog.log
-3. LE-SNAPSHOT-SERVE-PATH verify, PR, qwen seat, MERGE-READY
-4. Claim RT-P4-SKILLS-REWRITE / AUTOOS-* when the L2s start; then LE-ORPHAN-OWNER-RELAUNCH
+1. Seat results -> PASS: MERGE-READY + merge (standard self-approve) + submit; qwen credit fail: luna for mimo PRs, mimo-pro for #280
+2. ssp2 verify, push, delta seat on PR #279
+3. PR #278 squash-merge with one trailer paragraph after its delta seat PASS
+4. owner-watch timer install = live GO-REQ after PR #10 merge
 ## Open
+- GO-REQ gateway deploy OmniRoute ff1ad941 | default one deploy after part B | deadline none
 - BLOCKED GATEWAY-LOG-TOKEN-MINT part B past round cap | default a final writer round | deadline 08:00Z
-- GO-REQ GATEWAY-LOG-TOKEN-MINT part A f6b99498c0 judge GO + Haiku-subagent seat count | default hold | deadline none
+- GO-REQ leaf KEEPER-DCLOSE-EPOCH-FAILCLOSED (Haiku LOWs on #277) | default drop | deadline none
 ## Traps
-- routing via ~/.local/state/fleet/inbox/routing.jsonl; never routerctl status
-- never Hand-Edit AUTH_DOOR_PATHS (keeper/*): ci-gate refuses; replay via writer
-- plangraph-data main moves fast: merge in a fresh detached worktree, push, then ff /home/s/code/plangraph-data
-- heartbeat DCLOSE before 08:08Z (MCP identity)
-- authorized_keys and ~/.claude/settings.json are operator/L1-live only; AutoOS tree: no pull/ff/move
+- routing via ~/.local/state/fleet/inbox/routing.jsonl only; never routerctl status
+- D-3461: Claude subagents never seats; D-3473: <= 2 runs on coding.vm, gate spawns on host runs < 2
+- keeper live tree now plangraph-worktrees/live-8663b4bc (not .claude/worktrees); never Hand-Edit keeper/* door paths
+- probe state is not ground truth (LE-SPAWNER-PROBE-COMMIT): spawn with explicit --leg + override reason
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-59 block, line 2)
-- J5=/home/s/.claude/jobs/0ac7d817/tmp; J4=/home/s/.claude/jobs/4e49c8f0/tmp
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-60 block, line 2)
+- T=/home/s/.claude/jobs/ba306816/tmp; J4=/home/s/.claude/jobs/4e49c8f0/tmp
