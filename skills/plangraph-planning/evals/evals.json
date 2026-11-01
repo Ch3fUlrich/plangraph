@@ -15,6 +15,6 @@
     "id": "plangraph-planning-3",
     "prompt": "When must a task's execution card be created, and what path rules does the card follow?",
     "must": ["in the same batch", "relative paths only"],
-    "must_not": ["write the card after", "cards come later", "/home/repo/src"]
+    "must_not": ["write the card after", "cards come later", "edit files outside the card write set"]
   }
 ]
