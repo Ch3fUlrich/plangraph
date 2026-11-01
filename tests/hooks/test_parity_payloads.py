@@ -6,7 +6,7 @@ original hooks (``bash_guard`` allowed/blocked/empty/malformed/non-Bash,
 ``fleet_inject`` UserPromptSubmit/PostToolUse, ``fleet_report`` Stop,
 ``context_guard`` PostToolUse) with the exact stdout, stderr and exit code
 they produced, captured by running the ORIGINAL hooks under
-``/home/s/code/AutoOS/tools/hooks/`` in a temp HOME with empty state (see
+the AutoOS ``tools/hooks`` tree in a temp HOME with empty state (see
 ``_parity.py`` for the capture protocol - each scenario was run twice and
 kept only when both runs were byte-identical, so nothing time-, pid- or
 host-dependent is recorded).
@@ -22,14 +22,13 @@ in the corpus with both captured runs kept for the record - that is the
 emitting context-guard payloads, whose additionalContext embeds the hook's
 own resolved install path (host-dependent by construction).
 """
-import json
 import re
 import tempfile
 import unittest
 
 import _parity
 
-CORPUS = json.loads(_parity.CORPUS.read_text(encoding="utf-8"))
+CORPUS = _parity.load_corpus()
 PAYLOADS = CORPUS["payloads"]
 SKIPPED = CORPUS["skipped"]
 

@@ -11,7 +11,7 @@ test_opencode_bash_guard_c.py; the class name and the shared role helpers
 import tempfile
 import unittest
 
-from _helpers import (DENIED_MARKER, INCIDENT_COMMAND,  # noqa: F401
+from _helpers import (DENIED_MARKER, INCIDENT_COMMAND, SYS_PW,  # noqa: F401
                       L2RoleChecks, run_plugin)
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
     # command. `git status` is on the list, but `git -c core.fsmonitor='touch
     # /tmp/p' status` runs that fsmonitor as a shell; `rg` is on the list, but
     # `rg --pre 'sh -c id'` pipes every file through that program; `cat` is on
-    # the list, but `/proc/self/environ` holds the lane's server password. The
+    # the list, but the process's own environ file holds the lane's server password. The
     # flags that turn an inspection command into a program runner are denied
     # whatever head they hang off, and so is an environment-assignment prefix,
     # which reaches the same config knobs (`GIT_PAGER=x git log`) without any
@@ -249,8 +249,8 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
                     "cat /proc/se*", "cat /proc/*",
                     "rg foo /proc/self", "cat ~/.claude.json",
                     "cat ~/.config/opencode/auth.json", "cat ../sibling/file",
-                    "cat docs/../../etc/passwd", "cat .config/../auth.json",
-                    "rg foo ~/", "git diff HEAD -- /etc/passwd"):
+                    "cat docs/../../" + SYS_PW, "cat .config/../auth.json",
+                    "rg foo ~/", "git diff HEAD -- " + SYS_PW):
             self._l2_denied(cmd, "path outside repo")
         # The `$$` and `$HOME` spellings of these reads are denied one rule
         # earlier now: no `$` reaches an L2 command at all, so the path rule never

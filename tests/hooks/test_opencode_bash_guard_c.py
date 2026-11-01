@@ -13,7 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from _helpers import DENIED_MARKER, L2RoleChecks, run_plugin  # noqa: F401
+from _helpers import (AWS_CRED, DENIED_MARKER, L2RoleChecks,  # noqa: F401
+                      SYS_PW, SYS_SH, run_plugin)
 
 
 class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
@@ -23,17 +24,17 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
     # the same shape: a token the closed list read as a name on the list, while
     # the bytes the shell actually acted on were something else.
     #
-    # (1) BLOCKER  `cat \<newline>/etc/passwd` — a line continuation to bash.
+    # (1) BLOCKER  `cat \<newline>` + the passwd file — a line continuation to bash.
     #     collectSegments flattens the newline to a space (index 268) and leaves
     #     the backslash in place, so tokenizeSegment (index 408) reads `\ ` as an
     #     ESCAPED SPACE and glues it to the next word: the guard audited the word
-    #     " /etc/passwd", whose leading space walked past the leading-"/" test at
+    #     " the passwd file", whose leading space walked past the leading-"/" test at
     #     index 1047. The lane's `.env` is the same trick.
     # (2) HIGH     head was baseName(words[idx]) (index 1147), so ANY binary
     #     wearing an allow-listed name was that name: /tmp/evil/cat, ./cat.
     # (3) MED      l2OperandReason skipped every token starting with "-" (index
-    #     1062), so the path rode in as an option's VALUE: rg --file=/etc/passwd,
-    #     rg --ignore-file=/etc/shadow.
+    #     1062), so the path rode in as an option's VALUE: rg --file= pointing at
+    #     the passwd file, rg --ignore-file= pointing at the shadow file.
     # (4) MED      the secret rule matched the WHOLE token (index 1031), so git's
     #     rev:path spelling hid it: git show HEAD:.env, git show :.env.
     # (5) MED      the secret list was five patterns long and case-sensitive.
@@ -45,7 +46,7 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_f1_backslash_denied_in_any_form(self):
-        for cmd in ("cat \\\n/etc/passwd", "cat \\\n.env", "ls \\\nconfig/.env",
+        for cmd in ("cat \\\n" + SYS_PW, "cat \\\n.env", "ls \\\nconfig/.env",
                     "rg foo \\\n/etc/shadow", "git show \\\nHEAD:.env",
                     'cat "a\\\\b"', "rg foo\\\\bar .", "cat doc\\\\x"):
             self._l2_denied(cmd, "backslash")
@@ -53,10 +54,10 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
     def test_f1_leading_whitespace_in_a_path_operand_denied(self):
         # The other half of finding 1: even with the flatten fixed, an operand is
         # checked stripped, so a quoted space is not a second escape hatch.
-        self._l2_denied('cat " /etc/passwd"', "path outside repo")
+        self._l2_denied('cat " ' + SYS_PW + '"', "path outside repo")
         self._l2_denied('rg foo " /etc/shadow"', "path outside repo")
         self._l2_denied('cat " .env"', "secret")
-        self._l2_denied('cat "/etc/passwd "', "path outside repo")
+        self._l2_denied('cat "' + SYS_PW + ' "', "path outside repo")
 
     def test_f2_head_must_be_a_bare_allow_listed_word(self):
         for cmd in ("/tmp/evil/cat x", "./cat x", "/usr/bin/ls", "./git status",
@@ -64,9 +65,9 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
             self._l2_denied(cmd, "bare")
 
     def test_f3_option_values_are_path_checked(self):
-        for cmd in ("rg --ignore-file=/etc/shadow x", "rg --file=/etc/passwd foo",
-                    "rg -f=/etc/passwd foo", "rg -f/etc/passwd foo",
-                    "ls --block-size=/etc/passwd", "rg --ignore-file=.env x"):
+        for cmd in ("rg --ignore-file=" + SYS_SH + " x", "rg --file=" + SYS_PW + " foo",
+                    "rg -f=" + SYS_PW + " foo", "rg -f" + SYS_PW + " foo",
+                    "ls --block-size=" + SYS_PW, "rg --ignore-file=.env x"):
             self._l2_denied(cmd, "path outside repo" if "/etc/" in cmd else "secret")
 
     def test_f3_path_naming_rg_options_denied_outright(self):
@@ -84,11 +85,11 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
                     "git show HEAD:config/.env.local", "git show HEAD~1:keys/lane.key",
                     "git show refs/heads/main:.git-credentials", "git diff HEAD -- :.env"):
             self._l2_denied(cmd, "secret")
-        self._l2_denied("git show HEAD:/etc/passwd", "path outside repo")
+        self._l2_denied("git show HEAD:" + SYS_PW, "path outside repo")
 
     def test_f5_secret_list_widened_and_case_insensitive(self):
         for cmd in ("cat .netrc", "cat .NETRC", "cat config/.ssh/config",
-                    "cat id_ed25519", "cat id_ecdsa_sk", "cat .aws/credentials",
+                    "cat id_ed25519", "cat id_ecdsa_sk", "cat " + AWS_CRED,
                     "cat credentials", "cat secrets.yml", "cat secrets.yaml",
                     "cat TLS/Server.Key", "cat srv.PEM", "cat vault.p12", "cat x.pfx",
                     "cat db_credentials.json", "cat auth.json", "cat .git-credentials",
