@@ -1,30 +1,35 @@
-# L1 card · build-L1-0039 · 2026-11-01T02:10Z
+# L1 card · build-L1-0043 · 2026-11-01T06:12Z
 ## Goal
-- Land KEEPER-DCLOSE (PR #276), get RIN-CUTOVER-DATA submitted (D-3447), resolve D-3445 snapshot-serve incident
+- Close PH-RT-ROUTING-IN gates (KEEPER-DCLOSE #277, LE-ROUTER-RECYCLE-DETECT live proof, RIN-CUTOVER-DATA verdict); keep >= 2 L2 lanes on ready items (D-3454)
 ## Keeper
-- claimed: plangraph:RIN-CUTOVER-DATA (claimed CLI token, since 20:46Z), plangraph:KEEPER-DCLOSE-TRACK-EVIDENCE (claimed ep2, since 00:54Z, lease 02:54Z)
-- ready next: plangraph:LE-SNAPSHOT-SERVE-PATH (to be filed via routing)
+- claimed: plangraph:KEEPER-DCLOSE-TRACK-EVIDENCE (claimed ep2, since 00:54Z, lease 08:08Z), plangraph:LE-ROUTER-RECYCLE-DETECT (claimed ep1, since 05:43Z), plangraph:LE-SNAPSHOT-SERVE-PATH (claimed ep1, since 06:07Z)
+- ready next: plangraph:LE-ORPHAN-OWNER-RELAUNCH, plangraph:PG-STATIC-CHECKS, plangraph:COST-GATE-PLANGRAPH
 ## Done
-- 10-31T22:55Z RIN-CUTOVER-DATA - BLOCKED sent (DCLOSE slip), held per D-3436
-- 10-31T23:40Z LE-WATCHDOG-CLEAR-VERIFY 05f3b3e plangraph-data PR#6, seat qwen run-471428b7 PASS, router tests 303
-- 11-01T00:40Z LE-FLEET-MSG-INVENTORY 3f95e78 plangraph-data PR#8, seat qwen run-45536033 PASS, router tests 307
-- 11-01T01:40Z D-3443 - keeper post-rotate check OK, run-d822c129 DSN lines removed
-- 11-01T02:00Z LE-PANE-MOVE-EXIT-CONFIRM 677324c plangraph-data PR#7, seat qwen run-69fff56d PASS, tests 307+25
+- 11-01T02:24Z KEEPER-DCLOSE-TRACK-EVIDENCE 499309a9 r1 mimo-pro run-4fb85260, qwen delta run-dfe3d467 PASS
+- 11-01T02:43Z KEEPER-DCLOSE-TRACK-EVIDENCE ee8cc8de PR#277 replay (mimo-flash run-f524b92c), CI green; PR#276 closed
+- 11-01T03:20Z RIN-CUTOVER-DATA - resubmitted in_review (D-3449)
+- 11-01T02:40Z D-3445 - finding sent: proposal gone before 10-31T05:34Z; LE-SNAPSHOT-SERVE-PATH filed (D-3452)
+- 11-01T05:55Z LE-ROUTER-RECYCLE-DETECT 32498e1 plangraph-data main (r1 11dc4884, qwen run-da1e12df PASS, tests 309, GO D-3452)
+- 11-01T06:00Z D-3452 - md-sync refused=1 = RIN-LEDGER-PREP close (DCLOSE bug), reported
 ## In flight
-- KEEPER-DCLOSE-TRACK-EVIDENCE run-4fb85260 since 01:30Z next check 02:40Z (fix r1 mimo-pro; PR #276 9b3df8f6)
+- KEEPER-DCLOSE-TRACK-EVIDENCE run-c8d75e2d luna 2nd HIGH seat since 05:58Z next check 06:30Z
+- LE-ROUTER-RECYCLE-DETECT run rrd3 mimo-pro r3 (J5/w-rrd3.log) since 06:00Z next check 06:30Z
+- LE-SNAPSHOT-SERVE-PATH run ssp1 mimo-pro (J5/w-ssp1.log) since 06:10Z next check 06:40Z
+- D-3454 L2-LAUNCH build-L2-skills + build-L2-autoosmove sent 06:05Z next check 06:30Z
 ## Planned
-1. KEEPER-DCLOSE-TRACK-EVIDENCE verify r1, push, qwen delta seat, CI, judge seat via routing, MERGE-READY (D-3441)
-2. RIN-CUTOVER-DATA resubmit via CLI once router fixes evidence_kinds
-3. LE-SNAPSHOT-SERVE-PATH confirm remover of .claude/worktrees/proposal, leaf JSON + gate edge to routing (D-3445)
+1. KEEPER-DCLOSE-TRACK-EVIDENCE luna PASS -> MERGE-READY #277 (both seats) -> merge + live sync under GO
+2. LE-ROUTER-RECYCLE-DETECT verify r3, delta qwen seat, MERGE-READY PR#9; confirm RECYCLED routing in ctx-watchdog.log
+3. LE-SNAPSHOT-SERVE-PATH verify, PR, qwen seat, MERGE-READY
+4. Claim RT-P4-SKILLS-REWRITE / AUTOOS-* when the L2s start; then LE-ORPHAN-OWNER-RELAUNCH
 ## Open
-- BLOCKED RIN-CUTOVER-DATA submit evidence_missing commit+ci | default a router edits evidence_kinds | deadline 02:30Z
-- D-3441 spawner-0038 + gwtok recycles HELD by operator | default keep idle | deadline none
+- BLOCKED GATEWAY-LOG-TOKEN-MINT part B past round cap | default a final writer round | deadline 08:00Z
+- GO-REQ GATEWAY-LOG-TOKEN-MINT part A f6b99498c0 judge GO + Haiku-subagent seat count | default hold | deadline none
 ## Traps
-- routing only via ~/.local/state/fleet/inbox/routing.jsonl; never routerctl status
-- RIN-CUTOVER-DATA heartbeat/submit via CLI build-L1 token (gen-57 block)
-- heartbeat DCLOSE before 02:54Z (lease lapsed once)
-- authorized_keys is operator-only (OS-SNAPSHOT-PULL-PATH); never edit
-- writers never read /proc, env, keeper config/DB (D-3428)
+- routing via ~/.local/state/fleet/inbox/routing.jsonl; never routerctl status
+- never Hand-Edit AUTH_DOOR_PATHS (keeper/*): ci-gate refuses; replay via writer
+- plangraph-data main moves fast: merge in a fresh detached worktree, push, then ff /home/s/code/plangraph-data
+- heartbeat DCLOSE before 08:08Z (MCP identity)
+- authorized_keys and ~/.claude/settings.json are operator/L1-live only; AutoOS tree: no pull/ff/move
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-58 block, line 2)
-- T=/home/s/.claude/jobs/0653d521/tmp; J4=/home/s/.claude/jobs/4e49c8f0/tmp
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-59 block, line 2)
+- J5=/home/s/.claude/jobs/0ac7d817/tmp; J4=/home/s/.claude/jobs/4e49c8f0/tmp
