@@ -53,12 +53,18 @@ def test_review_skill_states_the_verdict_line():
 
 def test_implement_skill_forbids_spawn_push_merge():
     text = _skill("implement").lower()
-    for verb in ("spawn", "push", "merge"):
+    for verb in ("spawn", "push", "merge", "git config"):
         assert re.search(rf"never[^.\n]*\b{verb}", text), f"implement skill must forbid {verb}"
+    assert "failing test first" in text
+
+
+def test_review_skill_reviewer_is_never_the_author():
+    assert "never the author" in _skill("review")
 
 
 def test_research_skill_states_labels_and_template():
     text = _skill("research")
+    assert re.search(r"Label every statement", text), "the labelling rule itself must stay"
     for label in ("verified", "sourced", "inferred"):
         assert label in text
     for heading in ("Question", "Findings", "Contradictions", "Unknowns", "Next steps"):
