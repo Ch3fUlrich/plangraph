@@ -1,9 +1,9 @@
-# L1 card · build-L1-0067 · 2026-11-01T15:58Z
+# L1 card · build-L1-0067 · 2026-11-01T16:40Z
 ## Goal
 - D-3517 queue: RIN-* lanes via build-L2-rin-0066 (live steps mine); seats for hooks slices + RIN PRs when a non-mimo family returns; then SEAT-VERDICT-INLINE-RUNS (+D-3527), LESSONS L-R1..R3, lane_gates size gate
 ## Keeper
 - claimed: LE-SPAWNER-PROBE-COMMIT (in_review), SPAWNER-LEG-CONSOLE-SONNET (in_review)
-- claimed 14:31Z: KEEPER-EVIDENCE-MERGE-HEAD epoch 1 (D-3538, HIGH), PR #309 4a0b4293 draft (file-size fix pushed 15:48Z) (writer mimo run-e06fc491, tests 64/3418 pass), needs 2 non-mimo seats + judge + keeper sync GO
+- claimed 14:31Z: KEEPER-EVIDENCE-MERGE-HEAD epoch 1 (D-3538, HIGH), PR #309 4a0b4293 draft CI green (writer mimo run-e06fc491, tests 64/3418 pass), needs 2 non-mimo seats + judge + keeper sync GO
 - ready next: ROUTER-LAUNCH-OOM-SCOPE (PR pd#12 MERGE-READY), AUTOOS-HOOKS-INTERIM-S01..S14, SEAT-VERDICT-INLINE-RUNS
 ## Done
 - 11-01T12:05Z D-3502 PR#295 merged 217e669b seat run-6aee2407 PASS CI green
@@ -19,7 +19,7 @@
 - ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 merge GO D-3536, classifier refused router merge = operator step OS-PD12-MERGE (do not merge) since 13:52Z next check 14:30Z
 - L2-DONE sent 15:5xZ for rin-0066, skills-0052, autoosmove-0053 (all unseated drafts; S06-S14 cut after S01-S05 merge: relaunch autoosmove)
 - unseated PRs: #278 #297-#301 #308 #309 #310, pd#15 (S14 batch) #16 (inbox_move live) #17 (rename_mcp_specs live)
-- SEAT-VERDICT-REQUEST-CHANGES claimed epoch 1 (D-3544/D-3547 HIGH), writer run-49c4c2d2 in plangraph-worktrees/seat-verdict-rc
+- SEAT-VERDICT-REQUEST-CHANGES epoch 1 PR #311 dddb84ec draft (HIGH; 25 fail-first tests); after merge post SPBR run-18e3f402 ACCEPT via seat_verdict.py main() only (D-3550/D-3551), seat dir /home/s/.claude/jobs/b87f0c9f/tmp/seatdir-spbr4 (live.raw + record.json)
 ## Planned
 1. seats #297-#301, #305, pd#11, pd#13 when a non-mimo leg answers (J/waitleg.sh)
 2. RIN live steps after merges under router GO (batch apply, inbox_move)
