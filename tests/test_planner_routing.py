@@ -310,13 +310,13 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
 def test_writer_order_d2683_implement_first_seven():
     # (a) implement plan, public standard card (20000 tokens, no exclusions): free tier first, then
     # subscription: deepseek-free, glm-free, openrouter-free, agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash,
-    # cx-gpt-6.1-sol as the first 7 leg ids in that order
+    # console-sonnet as the first 7 leg ids in that order (no Sol, D-3505)
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
     expected = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
                 "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash",
-                "opencode-console-sonnet-5.5", "cx-gpt-6.1-sol"]
-    assert [leg.id for leg in plan.legs[:8]] == expected
+                "opencode-console-sonnet-5.5"]
+    assert [leg.id for leg in plan.legs[:7]] == expected
 
 
 def test_writer_order_d2683_unavailable_skipped():

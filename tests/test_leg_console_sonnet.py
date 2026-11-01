@@ -44,7 +44,14 @@ def test_writer_order_after_free_legs_and_before_cx():
     assert free_ids
     assert all(WRITER_ORDER.index(free) < WRITER_ORDER.index(SONNET) for free in free_ids)
     assert WRITER_ORDER.index(SONNET) == WRITER_ORDER.index("mimo-v2.6-flash") + 1
-    assert WRITER_ORDER.index(SONNET) + 1 == WRITER_ORDER.index("cx-gpt-6.1-sol")
+    assert WRITER_ORDER[-1] == SONNET and "cx-gpt-6.1-sol" not in WRITER_ORDER   # D-3505
+
+
+def test_d3505_no_implement_or_review_route_reaches_sol():
+    for role in ("implement", "review"):
+        for card in ({"estimate_tokens": 20000, "risk_tags": []}, {"estimate_tokens": 600000, "risk_tags": []}):
+            legs = plan_spawn(card, role=role, writer_families=("mimo",)).legs
+            assert "cx-gpt-6.1-sol" not in [leg.id for leg in legs]
 
 
 def test_implement_route_ranks_sonnet_after_free_legs():

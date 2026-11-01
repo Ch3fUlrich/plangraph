@@ -16,7 +16,7 @@ from plangraph.spawner.cli import main
 CARD = {"estimate_tokens": 20000, "risk_tags": []}
 FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free"]
 SUBS = ["agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash",
-        "opencode-console-sonnet-5.5", "cx-gpt-6.1-sol"]
+        "opencode-console-sonnet-5.5"]
 
 
 def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
@@ -57,7 +57,7 @@ def test_agy_skipped_while_out_of_quota():
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
     ids = [leg.id for leg in plan.legs]
     assert ids == FREE + ["mimo-v2.6-pro", "mimo-v2.6-flash",
-                          "opencode-console-sonnet-5.5", "cx-gpt-6.1-sol", "deepseek"]
+                          "opencode-console-sonnet-5.5", "deepseek"]
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in plan.skipped}["agy-gemini-3.8-flash"] == "limited"
 

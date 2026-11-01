@@ -95,7 +95,8 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
+        note="D-3355 rule 4.0: no Sol leg anywhere", expires="2026-10-31"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
@@ -124,7 +125,6 @@ WRITER_ORDER: tuple[str, ...] = (
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
     "opencode-console-sonnet-5.5",
-    "cx-gpt-6.1-sol",
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
