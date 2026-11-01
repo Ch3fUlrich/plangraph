@@ -374,7 +374,7 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
   command of a `restrict` authorized_keys line (one pull key per host). It prints one JSON line
   `{"format": "plangraph-snapshot-pull-v1", "snapshot": <base64>, "sig": <base64>}` and nothing
   else, ignores `SSH_ORIGINAL_COMMAND` and stdin, opens files with `O_NOFOLLOW`, and serves nothing
-  unless signing is configured and the snapshot verifies.
+  unless signing is configured and the snapshot verifies. Pinned checkout: `docs/SNAPSHOT-SERVE-PATH.md`.
 - Reader side: `pg --config reader.json sync pull` runs a locked-down ssh (`-F none`, BatchMode,
   StrictHostKeyChecking, no agent/X11/forwarding/tty, host after `--`, every config value validated),
   verifies the signature with `snapshot_pubkey`, refuses a copy older than the newest one seen
