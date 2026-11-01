@@ -1,9 +1,9 @@
-# L1 card · build-L1-0067 · 2026-11-01T14:52Z
+# L1 card · build-L1-0067 · 2026-11-01T15:58Z
 ## Goal
 - D-3517 queue: RIN-* lanes via build-L2-rin-0066 (live steps mine); seats for hooks slices + RIN PRs when a non-mimo family returns; then SEAT-VERDICT-INLINE-RUNS (+D-3527), LESSONS L-R1..R3, lane_gates size gate
 ## Keeper
 - claimed: LE-SPAWNER-PROBE-COMMIT (in_review), SPAWNER-LEG-CONSOLE-SONNET (in_review)
-- claimed 14:31Z: KEEPER-EVIDENCE-MERGE-HEAD epoch 1 (D-3538, HIGH), PR #309 b7950d30 draft (writer mimo run-e06fc491, tests 64/3418 pass), needs 2 non-mimo seats + judge + keeper sync GO
+- claimed 14:31Z: KEEPER-EVIDENCE-MERGE-HEAD epoch 1 (D-3538, HIGH), PR #309 4a0b4293 draft (file-size fix pushed 15:48Z) (writer mimo run-e06fc491, tests 64/3418 pass), needs 2 non-mimo seats + judge + keeper sync GO
 - ready next: ROUTER-LAUNCH-OOM-SCOPE (PR pd#12 MERGE-READY), AUTOOS-HOOKS-INTERIM-S01..S14, SEAT-VERDICT-INLINE-RUNS
 ## Done
 - 11-01T12:05Z D-3502 PR#295 merged 217e669b seat run-6aee2407 PASS CI green
@@ -17,14 +17,16 @@
 - 11-01T13:50Z RT-P4-SKILLS-REWRITE PR#307 merged ab16d0cd seat run-8c9f5cc2 PASS
 ## In flight
 - ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 merge GO D-3536, classifier refused router merge = operator step OS-PD12-MERGE (do not merge) since 13:52Z next check 14:30Z
-- build-L2-rin-0066 DRAFT-READY 13:58Z, self-stops 14:28Z: #305 cc1e5bf4, pd#11 3a0fcf4, pd#13 32f6c63, pd#14 e1ba61f (ROUTING-REPOINT-AUTOOS s1); all mimo writers, unseated; live steps in its msg (inbox_move, rename_mcp_specs dry-run 14 then apply) after merge + router D-id; S13 needs md-sync flip live step
+- L2-DONE sent 15:5xZ for rin-0066, skills-0052, autoosmove-0053 (all unseated drafts; S06-S14 cut after S01-S05 merge: relaunch autoosmove)
+- unseated PRs: #278 #297-#301 #308 #309 #310, pd#15 (S14 batch) #16 (inbox_move live) #17 (rename_mcp_specs live)
+- SEAT-VERDICT-REQUEST-CHANGES claimed epoch 1 (D-3544/D-3547 HIGH), writer run-49c4c2d2 in plangraph-worktrees/seat-verdict-rc
 - seat-leg probe bg baimic18i since 13:20Z next check 15:20Z
 ## Planned
 1. seats #297-#301, #305, pd#11, pd#13 when a non-mimo leg answers (J/waitleg.sh)
 2. RIN live steps after merges under router GO (batch apply, inbox_move)
 3. pd#12 merged -> ff plangraph-data, journal check
 ## Open
-- 14:50Z D-3542(1) SKILL-PHASE-BATCH-REVIEW ok=false posted http 200; GO-REQ leaf SEAT-VERDICT-REQUEST-CHANGES sent
+- SPBR: r3 fresh seat run-20d81242 FIX posted ok=false (state open, round cap 3 -> replan, routing's)
 - #308 skills slice6 29cc101d needs non-mimo seat (card /home/s/.claude/jobs/5dd7fc7f/tmp/seatcard6.json + seatprompt7.md)
 - S14 batch D-3542(2): resend SPAWNER-REGISTRY-ROUTE, TASK-CONTEXT-GUARD, SKILL-PHASE-BATCH-REVIEW after in_review; BUS-WAKE-STOPGAP-2 done_criteria: drop 2-seat clause (standard tier)
 - Q-SEAT-2ND-FAMILY only mimo legs; paid seat = operator | default wait + hourly retry | deadline none
