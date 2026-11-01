@@ -5,6 +5,7 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+from git_identity import identity_env
 
 from keeper_util import World, defn, to_done
 from plangraph.keeper import cli, cli_check
@@ -61,11 +62,9 @@ def _repo(tmp_path, keys):
 
     def git(*args):
         return subprocess.run(("git", *args), cwd=str(repo), check=True,
-                              capture_output=True, text=True).stdout.strip()
+                              capture_output=True, text=True, env=identity_env()).stdout.strip()
 
     git("init", "-b", "main")
-    git("config", "user.name", "tester")
-    git("config", "user.email", "tester@example.invalid")
     shas = []
     for index, key in enumerate(keys):
         (repo / f"f{index}.txt").write_text(f"{key}\n", encoding="utf-8")
@@ -171,10 +170,9 @@ def test_edge_with_undeclared_paths_is_not_called_order_only(world, tmp_path, mo
 def test_every_plan_item_trailer_of_a_commit_is_found(tmp_path):
     repo = tmp_path / "multi"
     repo.mkdir()
-    for args in (("init", "-b", "main"), ("config", "user.name", "t"),
-                 ("config", "user.email", "t@example.invalid"),
+    for args in (("init", "-b", "main"),
                  ("commit", "--allow-empty", "-m", "x\n\nPlan-Item: demo:A\nPlan-Item: demo:B")):
-        subprocess.run(("git", *args), cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(("git", *args), cwd=str(repo), check=True, capture_output=True, env=identity_env())
     assert sorted(v for _, v in cli_check.plan_item_trailers(repo, "main")) == ["demo:A", "demo:B"]
 
 

@@ -21,6 +21,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from git_identity import identity_env
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tools" / "check_file_size.py"
 HOOK = ROOT / "tools" / "hooks" / "pre-push"
@@ -41,13 +43,11 @@ class RepoFixture(unittest.TestCase):
         self.repo = self.tmp / "repo"
         self.repo.mkdir()
         self.git("init", "-q")
-        # CI runners carry no git identity: a fixture commit must carry its own.
-        self.git("config", "user.name", "file-size tests")
-        self.git("config", "user.email", "filesize@example.invalid")
 
     def git(self, *args):
         return subprocess.run(["git"] + list(args), cwd=str(self.repo),
-                              capture_output=True, text=True)
+                              capture_output=True, text=True,
+                              env=identity_env("file-size tests", "filesize@example.invalid"))
 
     def write(self, rel, text):
         path = self.repo / rel

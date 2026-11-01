@@ -9,6 +9,7 @@ import shutil
 import subprocess
 
 import pytest
+from git_identity import identity_env
 
 from plangraph.governor import metrics
 
@@ -252,11 +253,10 @@ def test_landed_by_day_real_repo(tmp_path):
     repo.mkdir()
 
     def git(*args):
-        subprocess.run(["git", "-C", str(repo), *args], check=True, text=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), *args], check=True, text=True,
+                       capture_output=True, env=identity_env())
 
     git("init")
-    git("config", "user.email", "t@example.invalid")
-    git("config", "user.name", "Test")
     (repo / "a.txt").write_text("base\n")
     git("add", "a.txt")
     git("commit", "-m", "base")

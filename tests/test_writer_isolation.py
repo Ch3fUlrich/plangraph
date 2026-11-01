@@ -14,17 +14,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from git_identity import identity_args
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner
 
 
 def _git_repo(path):
     subprocess.run(['git', 'init', '-q', str(path)], check=True)
-    for key, value in (('user.email', 't@example.invalid'), ('user.name', 't'), ('commit.gpgsign', 'false')):
-        subprocess.run(['git', '-C', str(path), 'config', key, value], check=True)
+    subprocess.run(['git', '-C', str(path), 'config', 'commit.gpgsign', 'false'], check=True)
     (path / 'a.txt').write_text('a\n')
     subprocess.run(['git', '-C', str(path), 'add', '.'], check=True)
-    subprocess.run(['git', '-C', str(path), 'commit', '-qm', 'init'], check=True)
+    subprocess.run(['git', '-C', str(path), *identity_args(), 'commit', '-qm', 'init'], check=True)
     return path
 
 

@@ -9,6 +9,7 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+from git_identity import identity_env
 
 from keeper_util import World, seed, to_claimed
 from plangraph.keeper import evidence
@@ -23,9 +24,9 @@ pytestmark = pytest.mark.skipif(
 KEY = "demo:A"
 
 
-def _git(repo, *args):
+def _git(repo, *args, env=None):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                          text=True, check=True).stdout.strip()
+                          text=True, check=True, env=env or identity_env()).stdout.strip()
 
 
 @pytest.fixture
@@ -34,8 +35,6 @@ def repo(tmp_path):
     r = tmp_path / "r"
     r.mkdir()
     subprocess.run(["git", "init", "-q", str(r)], check=True)
-    _git(r, "config", "user.email", "t@example.invalid")
-    _git(r, "config", "user.name", "T")
     (r / "f.txt").write_text("x", encoding="utf-8")
     _git(r, "add", "f.txt")
     # Deliberately trailer-less: kind `commit` must not care.

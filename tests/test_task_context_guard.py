@@ -14,15 +14,16 @@ import subprocess
 import pytest
 
 from keeper_util import World, defn, seed
+from git_identity import identity_env
 from plangraph.keeper import fmt, mcp
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter
 
 
-def _git(repo, *args):
+def _git(repo, *args, env=None):
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True,
-                          text=True).stdout.strip()
+                          text=True, env=env or identity_env()).stdout.strip()
 
 
 def _commit(repo, name, message):
@@ -37,8 +38,6 @@ def repo(tmp_path):
     path = tmp_path / "repo"
     path.mkdir()
     _git(path, "init", "-q", "-b", "main")
-    _git(path, "config", "user.email", "t@example.invalid")
-    _git(path, "config", "user.name", "t")
     _git(path, "config", "commit.gpgsign", "false")
     _commit(path, "base", "base")
     return path

@@ -3,6 +3,7 @@
 import subprocess
 
 import pytest
+from git_identity import identity_env
 
 from keeper_util import FakeVerifier, World, defn
 from plangraph.keeper.errors import Refused
@@ -17,11 +18,9 @@ def w(tmp_path):
     repo.mkdir()
 
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+        return subprocess.check_output(["git", *args], cwd=repo, text=True, env=identity_env()).strip()
 
     git("init", "-b", "main")
-    git("config", "user.name", "Test")
-    git("config", "user.email", "test@example.invalid")
     git("commit", "--allow-empty", "-m", "base")
     world.non_merge = git("rev-parse", "HEAD")
     git("checkout", "-b", "phase")

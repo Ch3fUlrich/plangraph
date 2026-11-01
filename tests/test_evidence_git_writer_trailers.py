@@ -19,25 +19,26 @@ from pathlib import Path
 
 import pytest
 
+from git_identity import identity_args, identity_env
 from plangraph.keeper.evidence_git import GitAdapter
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None,
                                 reason="git not available")
 
 
-def _git(repo: Path, *args: str) -> str:
+def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     proc = subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, check=True)
+                          capture_output=True, text=True, check=True,
+                          env=env if env is not None else identity_env("Test Writer", "writer@example.invalid"))
     return proc.stdout.strip()
 
 
 def _commit(repo: Path, subject: str, trailers: dict[str, str],
             *, email: str | None = None) -> str:
     """One ``--allow-empty`` commit; returns its sha."""
-    if email:
-        _git(repo, "config", "user.email", email)
+    args = identity_args("Test Writer", email) if email else []
     body = "".join(f"{key}: {value}\n" for key, value in trailers.items())
-    _git(repo, "commit", "--allow-empty", "-q", "-m", f"{subject}\n\n{body}")
+    _git(repo, *args, "commit", "--allow-empty", "-q", "-m", f"{subject}\n\n{body}")
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -67,8 +68,6 @@ def repo(tmp_path: Path, hermetic_git) -> Path:
     path = tmp_path / "r"
     subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True,
                    capture_output=True)
-    _git(path, "config", "user.name", "Test Writer")
-    _git(path, "config", "user.email", "writer@example.invalid")
     _git(path, "config", "commit.gpgsign", "false")
     return path
 

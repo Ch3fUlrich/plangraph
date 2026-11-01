@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from git_identity import identity_args
 from plangraph.spawner import git_guard
 from plangraph.spawner.git_guard import check_guard, init_guard, writer_launch
 from plangraph.spawner.runner import SpawnerRunner
@@ -26,10 +27,8 @@ def _setup_repo_and_worktree(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", *identity_args(), "commit", "--allow-empty", "-m", "init"], cwd=repo, check=True, capture_output=True)
 
     wt = tmp_path / "worktree"
     subprocess.run(["git", "worktree", "add", str(wt), "-b", "wt-branch"], cwd=repo, check=True, capture_output=True)

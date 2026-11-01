@@ -35,15 +35,14 @@ def test_quota_state_and_compound_reset(tmp_path, monkeypatch):
 
 def test_writer_identity_commits_with_writer_committer(tmp_path):
     subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
-    for key, value in [('user.name', 'Host'), ('user.email', 'host@example.com')]:
-        subprocess.run(['git', '-C', str(tmp_path), 'config', key, value], check=True)
     prompt, extra = writer_launch('work', 'implement', 'agy/model', 'run-123')
     assert prompt.endswith('Writer: agy/model run-123')
 
     async def fake_writer():
         process = await asyncio.create_subprocess_exec(
             'git', 'commit', '--allow-empty', '-m', 'x', cwd=tmp_path,
-            env={**os.environ, **extra}, stdout=asyncio.subprocess.PIPE)
+            env={**os.environ, 'GIT_AUTHOR_NAME': 'Host', 'GIT_COMMITTER_NAME': 'Host', **extra},
+            stdout=asyncio.subprocess.PIPE)
         await process.communicate()
         assert process.returncode == 0
 

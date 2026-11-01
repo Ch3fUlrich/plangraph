@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from git_identity import identity_env
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -27,13 +28,11 @@ def repo(tmp_path):
 
     def run(*args):
         out = subprocess.run(["git", *args], cwd=path, capture_output=True,
-                             text=True)
+                             text=True, env=identity_env("synthetic", "synthetic@example.invalid"))
         assert out.returncode == 0, out.stderr
         return out
 
     run("init", "-q", "-b", "main")
-    run("config", "user.email", "synthetic@example.invalid")
-    run("config", "user.name", "synthetic")
     (path / "a.txt").write_text("alpha\n", encoding="utf-8")
     run("add", "a.txt")
     run("commit", "-q", "-m", "alpha")

@@ -93,8 +93,6 @@ def repo(tmp_path):
     r = tmp_path / "r"
     r.mkdir()
     git(r, "init", "-q", "-b", "main")
-    git(r, "config", "user.name", "t")
-    git(r, "config", "user.email", "t@example.invalid")
     base = commit_file(r, "app/clean.py", "x = 1\n")
     return r, base
 

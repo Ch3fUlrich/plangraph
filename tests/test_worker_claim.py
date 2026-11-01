@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from git_identity import identity_env
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.planner import gitenv
@@ -31,12 +32,13 @@ def test_build_claim_preserves_gate_inputs():
 def _code(exc: Refused):
     return getattr(exc, "code", exc.args[0] if exc.args else None)
 
-def _git(root: Path, *args: str) -> None:
+def _git(root: Path, *args: str, env: dict[str, str] | None = None) -> None:
     subprocess.run(
         ["git", "-C", str(root), *args],
         check=True,
         capture_output=True,
         text=True,
+        env=env or identity_env(),
     )
 
 def make_repo(tmp_path: Path):
@@ -44,8 +46,6 @@ def make_repo(tmp_path: Path):
     root.mkdir()
     _git(root, "init")
     _git(root, "checkout", "-B", "main")
-    _git(root, "config", "user.email", "test@example.com")
-    _git(root, "config", "user.name", "Test")
     (root / "a.txt").write_text("A")
     _git(root, "add", ".")
     _git(root, "commit", "-m", "A")

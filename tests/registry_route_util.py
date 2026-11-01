@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import pytest
 
+from git_identity import identity_env
 from plangraph.planner.legs import DEFAULT_LEGS, HARNESSES, TOOL_MODES
 from plangraph.planner.route_policy import RoutePolicy, load_route_policy
 from plangraph.planner.routing import SpawnRefused, plan_spawn
@@ -66,10 +67,8 @@ def _families(plan):
 def _repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True)
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True, env=identity_env())
     run("init", "-q")
-    run("config", "user.email", "t@example.invalid")
-    run("config", "user.name", "t")
     (repo / "a.txt").write_text("one\n")
     run("add", "a.txt")
     run("commit", "-qm", "base")

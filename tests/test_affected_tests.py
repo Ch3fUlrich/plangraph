@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from git_identity import identity_env
 
 
 def selector():
@@ -60,11 +61,9 @@ def test_changed_files_includes_worktree_and_untracked(tmp_path):
     import subprocess
 
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True)
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True, env=identity_env())
 
     git("init", "-q")
-    git("config", "user.email", "test@example.invalid")
-    git("config", "user.name", "Test")
     (tmp_path / "tracked.py").write_text("before")
     git("add", ".")
     git("commit", "-qm", "base")
@@ -86,11 +85,9 @@ def _asset_repo(tmp_path, extra=None):
     import subprocess
 
     def git(*args):
-        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True)
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True, env=identity_env())
 
     git("init", "-q")
-    git("config", "user.email", "test@example.invalid")
-    git("config", "user.name", "Test")
     files = {
         "src/pkg/__init__.py": "",
         "src/pkg/core.py": "VALUE = 1",

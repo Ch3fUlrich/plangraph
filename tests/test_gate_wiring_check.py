@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from git_identity import identity_env
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = '.github/workflows/tests.yml'
@@ -45,8 +46,9 @@ wiring_at = gate_wiring_check.wiring_at
 has_gate_edit = gate_wiring_check.has_gate_edit
 
 
-def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=repo, check=True, capture_output=True, text=True)
+def _run(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, cwd=repo, check=True, capture_output=True, text=True,
+                          env=env or identity_env('ci', 'ci@example.invalid'))
 
 
 @pytest.fixture
@@ -54,9 +56,6 @@ def repo(tmp_path: Path) -> Path:
     path = tmp_path / 'repo'
     path.mkdir()
     _run(path, 'git', 'init', '-q')
-    _run(path, 'git', 'config', 'user.name', 'ci')
-    email = 'ci' + '@' + 'example.invalid'
-    _run(path, 'git', 'config', 'user.email', email)
     return path
 
 

@@ -4,17 +4,19 @@ import subprocess
 
 import pytest
 
+from git_identity import identity_env
 from door_util import Doors
 from keeper_util import World, defn
 from plangraph.keeper import api_routes
 from plangraph.planner import gitenv
 
-def _git(root, *args):
+def _git(root, *args, env=None):
     subprocess.run(
         ["git", "-C", str(root), *args],
         check=True,
         capture_output=True,
         text=True,
+        env=env or identity_env(),
     )
 
 def make_repo(tmp_path):
@@ -22,8 +24,6 @@ def make_repo(tmp_path):
     root.mkdir()
     _git(root, "init")
     _git(root, "checkout", "-B", "main")
-    _git(root, "config", "user.email", "test@example.com")
-    _git(root, "config", "user.name", "Test")
     (root / "a.txt").write_text("A")
     _git(root, "add", ".")
     _git(root, "commit", "-m", "A")

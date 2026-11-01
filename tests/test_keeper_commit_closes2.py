@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from git_identity import identity_env
 
 from keeper_util import World, defn
 from plangraph.keeper import evidence
@@ -39,10 +40,11 @@ def _batch_file(tmp_path: Path) -> str:
     return f"{path}@{hashlib.sha256(path.read_bytes()).hexdigest()}"
 
 
-def _git_cmd(repo_path: Path, *args: str) -> str:
+def _git_cmd(repo_path: Path, *args: str, env: dict[str, str] | None = None) -> str:
     return subprocess.run(
         ["git", "-C", str(repo_path), *args],
         capture_output=True, text=True, check=True,
+        env=env or identity_env("Operator", "operator@example.invalid"),
     ).stdout.strip()
 
 
@@ -52,8 +54,6 @@ def git_repo(tmp_path: Path):
     repo = tmp_path / "git_repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    _git_cmd(repo, "config", "user.email", "operator@example.invalid")
-    _git_cmd(repo, "config", "user.name", "Operator")
     (repo / "base.txt").write_text("base\n", encoding="utf-8")
     _git_cmd(repo, "add", "base.txt")
     _git_cmd(repo, "commit", "-q", "-m", "main commit")
@@ -177,8 +177,6 @@ def test_resolve_commit_cases(tmp_path: Path):
     repo = tmp_path / "repo_e"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    _git_cmd(repo, "config", "user.email", "operator@example.invalid")
-    _git_cmd(repo, "config", "user.name", "Operator")
     (repo / "f.txt").write_text("hello\n", encoding="utf-8")
     _git_cmd(repo, "add", "f.txt")
     _git_cmd(repo, "commit", "-q", "-m", "commit 1")
