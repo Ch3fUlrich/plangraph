@@ -152,7 +152,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 8, record
+        assert len(models) == 9, record
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert models[0] == 'opencode/deepseek-v4.1-flash-free' and 'glm' in models[1] and 'openrouter' in models[2]
@@ -163,7 +163,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record['attempts']) == 8
+        assert len(record['attempts']) == 9
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -280,7 +280,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record['attempts']) == 8
+        assert len(record['attempts']) == 9
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)
