@@ -74,6 +74,11 @@ def test_allowlist_matches_case_insensitively(name):
     assert (action, reason) == ("keep", "allowlisted")
 
 
+@pytest.mark.parametrize("name", ["build-L2-0064", "worker-L2", "build-L3-x", "level1-x", "abc-l1x", "l10-x"])
+def test_l1_patterns_do_not_protect_other_levels(name):
+    assert decide(_rec(name=name), NOW) != ("keep", "allowlisted")
+
+
 def test_config_allowlist_extends_defaults_never_replaces_them():
     cfg = ReapConfig(allowlist=["Custom-*"])
     assert decide(_rec(name="custom-thing"), NOW, cfg) == ("keep", "allowlisted")
