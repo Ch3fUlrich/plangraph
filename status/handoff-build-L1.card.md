@@ -20,7 +20,6 @@
 - L2-DONE sent 15:5xZ for rin-0066, skills-0052, autoosmove-0053 (all unseated drafts; S06-S14 cut after S01-S05 merge: relaunch autoosmove)
 - unseated PRs: #278 #297-#301 #308 #309 #310, pd#15 (S14 batch) #16 (inbox_move live) #17 (rename_mcp_specs live)
 - SEAT-VERDICT-REQUEST-CHANGES claimed epoch 1 (D-3544/D-3547 HIGH), writer run-49c4c2d2 in plangraph-worktrees/seat-verdict-rc
-- seat-leg probe bg baimic18i since 13:20Z next check 15:20Z
 ## Planned
 1. seats #297-#301, #305, pd#11, pd#13 when a non-mimo leg answers (J/waitleg.sh)
 2. RIN live steps after merges under router GO (batch apply, inbox_move)
