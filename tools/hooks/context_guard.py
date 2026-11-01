@@ -2,8 +2,9 @@
 
 The hook reads the hook JSON off stdin (`transcript_path`, `session_id`, `cwd`)
 and reports how full the model's context window is by summing the three fields
-that occupy it — `input_tokens` plus both cache buckets — of the *last*
-assistant usage record near the end of the transcript. When that fill crosses
+that occupy it — `input_tokens` plus both cache buckets — of the *last usable*
+assistant usage record near the end of the transcript (a record with non-numeric
+usage is stepped past). When that fill crosses
 the handoff threshold it prints one `additionalContext` line telling the agent
 to write its handoff and run `ready`; past the hard threshold it says stop. It
 also drops a per-session state file so the same fill is not re-announced.
@@ -20,18 +21,28 @@ never break the agent that called it. The `ready` and `status` sub-commands are
 the exception: those report errors on stderr and exit non-zero.
 
 Thresholds come from the environment: `AUTOOS_CTX_HANDOFF` (default 270000) and
-`AUTOOS_CTX_HARD` (default 300000); a non-integer or empty value falls back.
+`AUTOOS_CTX_HARD` (default 300000); a non-integer or empty value falls back,
+and `AUTOOS_CTX_HARD` is clamped to at least `AUTOOS_CTX_HANDOFF` so a garbled
+pair can never make the hard cap unreachable or misreport its threshold.
 State lives under `$XDG_STATE_HOME/autoos/ctx-guard/`, else
-`~/.local/state/autoos/ctx-guard/`.
+`~/.local/state/autoos/ctx-guard/`. Set `AUTOOS_CTX_DEBUG` to get the
+otherwise-swallowed failure traceback on stderr.
+
+The safe-id check, the state-home resolution and the atomic write come from
+the shared `hook_common` helper (extraction, plangraph #299).
 """
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import time
+import traceback
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from hook_common import safe_id, state_home, write_json as _write_json  # noqa: E402
 
 # Only the last 256 KB of the transcript is read — enough to hold the most
 # recent assistant record while bounding the read on a many-megabyte file.
@@ -52,32 +63,12 @@ REEMIT_DELTA = 10000
 _SKIP = object()
 
 
-# A session id becomes a file name: a letter/digit first, then letters, digits, dot, dash, underscore.
-_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-
-
-def safe_id(session_id) -> bool:
-    """True when `session_id` is usable as a file name under the state dir."""
-    return isinstance(session_id, str) and _SAFE_ID.match(session_id) is not None
-
-
-def _write_json(path: Path, data: dict) -> None:
-    """Write `data` as JSON via a temp file + rename, so a reader never sees half a file."""
-    tmp = path.with_name("%s.%d.tmp" % (path.name, os.getpid()))
-    try:
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-        os.replace(str(tmp), str(path))
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+# A session id becomes a file name: checked by hook_common.safe_id (shared).
 
 
 def state_dir() -> Path:
     """The per-user state directory for the guard (XDG state home, else home)."""
-    xdg = os.environ.get("XDG_STATE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
-    return base / "autoos" / "ctx-guard"
+    return state_home() / "autoos" / "ctx-guard"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -93,7 +84,7 @@ def _tail_ctx(line):
 
     `_SKIP` means "not the record we are looking for" and the scan continues; a
     returned int is the fill, and None marks a record whose usage fields are not
-    all integers — that is the last assistant record, so it yields no result.
+    all integers — the scan steps past it and keeps looking at older records.
     """
     text = line.strip()
     if not text:
@@ -118,13 +109,13 @@ def _tail_ctx(line):
 
 
 def context_tokens(path) -> int | None:
-    """The context fill of the last assistant usage record in the transcript tail.
+    """The context fill of the last usable assistant usage record in the transcript tail.
 
     Reads only the last `TAIL_BYTES`; the byte offset there is mid-line, so the
     first split element is dropped as a partial line (but never when the whole
     file fit inside the tail). Returns the summed fill, or None when the file is
-    missing/unreadable, when no assistant+usage record is in the tail, or when
-    that record's usage is non-numeric.
+    missing/unreadable or when no assistant record with all-numeric usage is in
+    the tail (a non-numeric record is stepped past, not the last word).
     """
     p = Path(path)
     try:
@@ -145,7 +136,7 @@ def context_tokens(path) -> int | None:
         lines = lines[1:]
     for line in reversed(lines):
         result = _tail_ctx(line)
-        if result is _SKIP:
+        if result is _SKIP or result is None:
             continue
         return result
     return None
@@ -193,17 +184,24 @@ def write_state(session_id: str, state: dict) -> None:
     _write_json(directory / ("%s.json" % session_id), state)
 
 
+def _cmd(*parts) -> str:
+    """A paste-ready command line: parts containing spaces are quoted (Windows paths)."""
+    return " ".join('"%s"' % p if " " in p else p for p in parts)
+
+
 def emit_line(level: str, ctx: int, threshold: int, script_path) -> str:
     """The single-line `additionalContext`, naming the `ready` command to run.
 
     No newline is embedded: the whole message is one line, as the hook contract
-    and the tests require.
+    and the tests require. The interpreter is `sys.executable`, not a hardcoded
+    `python3`, which typically does not exist on Windows.
     """
     n = ctx // 1000
     h = threshold // 1000
     script = str(Path(script_path).resolve())
-    tail = ("then run python3 %s ready <handoff-path> (and SendMessage "
-            "RECYCLE-READY <path> to your parent if your brief says so)" % script)
+    tail = ("then run %s ready <handoff-path> (and SendMessage "
+            "RECYCLE-READY <path> to your parent if your brief says so)"
+            % _cmd(sys.executable, script))
     if level == "hard":
         return "HARD-CAP ctx=%dk >= %dk: no new work; handoff now, %s" % (n, h, tail)
     return ("HANDOFF-NOW ctx=%dk >= %dk: finish the current step, write your "
@@ -214,8 +212,10 @@ def run_hook() -> int:
     """The PostToolUse path: read stdin, compute the fill, maybe announce.
 
     Any failure — bad stdin, missing fields, a missing or garbled transcript, an
-    unwritable state dir — exits 0 with no output. The state file is written
-    before anything is printed, so a failed write means nothing was announced.
+    unwritable state dir — exits 0 with no output; set AUTOOS_CTX_DEBUG to get
+    the swallowed traceback on stderr instead. The state file is written only
+    after the line is printed, so a failed run is re-announced next time rather
+    than lost.
     """
     try:
         payload = json.loads(sys.stdin.read())
@@ -232,6 +232,7 @@ def run_hook() -> int:
             return 0
         handoff = _env_int("AUTOOS_CTX_HANDOFF", DEFAULT_HANDOFF)
         hard = _env_int("AUTOOS_CTX_HARD", DEFAULT_HARD)
+        hard = max(hard, handoff)  # a garbled pair must never hide or misreport the hard cap
         if ctx < handoff:
             clear_state(session_id)  # back under the line (compaction): the next climb is announced afresh
             return 0
@@ -239,15 +240,17 @@ def run_hook() -> int:
         threshold = hard if level == "hard" else handoff
         if not should_emit(session_id, ctx, level):
             return 0
-        write_state(session_id, {
-            "session_id": session_id, "cwd": cwd, "ctx": ctx,
-            "ts": time.time(), "level": level,
-        })
         line = emit_line(level, ctx, threshold, Path(__file__))
         out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                       "additionalContext": line}}
         print(json.dumps(out))
+        write_state(session_id, {
+            "session_id": session_id, "cwd": cwd, "ctx": ctx,
+            "ts": time.time(), "level": level,
+        })
     except Exception:
+        if os.environ.get("AUTOOS_CTX_DEBUG"):
+            traceback.print_exc(file=sys.stderr)
         return 0
     return 0
 
