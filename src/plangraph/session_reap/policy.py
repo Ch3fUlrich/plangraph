@@ -7,6 +7,7 @@ marker, no real timestamp) keeps the session.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -74,8 +75,15 @@ def _cfg_val(cfg: Any, key: str, default: Any) -> Any:
     return _get_val(cfg, key, default)
 
 
-def _floor(minutes: Any) -> float:
-    return max(float(minutes), MIN_THRESHOLD_MIN)
+def _minutes(value: Any) -> Optional[float]:
+    """A finite real number of minutes, or None for anything else (bool, str, nan, inf)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def _floor(minutes: float) -> float:
+    return max(minutes, MIN_THRESHOLD_MIN)
 
 
 def decide(
@@ -95,7 +103,7 @@ def decide(
     name = _get_val(record, "name", "")
     name = name.strip() if isinstance(name, str) else ""
     state = str(_get_val(record, "state", "") or "")
-    has_result = bool(_get_val(record, "has_result", False))
+    has_result = _get_val(record, "has_result", False)
     allow_stop = _get_val(record, "allow_stop", None)
     ttl_min = _get_val(record, "ttl_min", None)
     ttl_error = _get_val(record, "ttl_error", None)
@@ -118,6 +126,18 @@ def decide(
         return "keep", "ttl_invalid"
     if allow_stop is False:
         return "keep", "ttl_no_stop"
+    # Only a real True/None may reach the timing rules; 0, "false", 0.0 etc. are garbled.
+    if allow_stop is not None and allow_stop is not True:
+        return "keep", "ttl_invalid"
+    # A marker ttl_min that is not a positive number is garbled, not a short TTL.
+    if ttl_min is not None:
+        ttl_min = _minutes(ttl_min)
+        if ttl_min is None or ttl_min <= 0:
+            return "keep", "ttl_invalid"
+
+    # A truthy string such as "false" would shorten the idle threshold to the grace one.
+    if not isinstance(has_result, bool):
+        return "keep", "result_invalid"
 
     # 4. Stop only if state == 'done'.
     if state != "done":
@@ -139,10 +159,12 @@ def decide(
     # 6. Threshold: ttl_min (when the launcher set one) replaces both defaults.
     if ttl_min is not None:
         threshold_min, within = _floor(ttl_min), "within_ttl"
-    elif has_result:
-        threshold_min, within = _floor(done_grace_min), "within_grace"
     else:
-        threshold_min, within = _floor(idle_min), "within_idle"
+        configured = _minutes(done_grace_min if has_result else idle_min)
+        if configured is None:
+            return "keep", "config_invalid"
+        threshold_min = _floor(configured)
+        within = "within_grace" if has_result else "within_idle"
 
     if age_seconds >= threshold_min * 60.0:
         return "stop", "done_with_result" if has_result else "done_idle"

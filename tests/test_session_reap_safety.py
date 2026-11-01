@@ -156,11 +156,11 @@ def test_ttl_dict_on_a_plain_record_is_parsed_strictly():
 # ---- ttl_min bounds and scope ----
 
 @pytest.mark.parametrize("ttl", [0, -5, -0.5])
-def test_non_positive_ttl_min_is_clamped_not_instant_reap(ttl):
+def test_non_positive_ttl_min_is_invalid_not_instant_reap(ttl):
     rec = _rec(has_result=False, updated_at=NOW - timedelta(seconds=30), ttl_min=ttl)
-    assert decide(rec, NOW)[0] == "keep"
+    assert decide(rec, NOW) == ("keep", "ttl_invalid")
     old = _rec(has_result=False, updated_at=NOW - timedelta(minutes=2), ttl_min=ttl)
-    assert decide(old, NOW) == ("stop", "done_idle")
+    assert decide(old, NOW) == ("keep", "ttl_invalid")
 
 
 def test_ttl_min_applies_to_sessions_with_a_result_too():
