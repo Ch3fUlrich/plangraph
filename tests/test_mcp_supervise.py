@@ -194,7 +194,7 @@ class TestSupervisorAndCheck(WorkdirCase):
         super().setUp()
         self.port = free_port()
         self.port2 = free_port()
-        self.secret = "SUPER_SECRET_TOKEN_DO_NOT_LOG"
+        self.secret = "hygiene-fixture-9"
 
     def test_supervisor_restart_and_log_hygiene(self):
         raw = self.config(server_entry(
