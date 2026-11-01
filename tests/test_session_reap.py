@@ -30,7 +30,7 @@ def test_done_with_result_stops_after_grace(frozen_now):
     )
     action, reason = decide(rec_fresh, frozen_now)
     assert action == "keep"
-    assert reason in ("within_grace", "done_grace")
+    assert reason == "within_grace"
 
     # 2 minutes ago -> stop
     rec_grace = SessionRecord(
@@ -59,7 +59,7 @@ def test_done_without_result_idle_30_min_stops_and_29_min_keeps(frozen_now):
     )
     action, reason = decide(rec_29, frozen_now)
     assert action == "keep"
-    assert reason in ("within_idle", "done_idle_wait")
+    assert reason == "within_idle"
 
     # 30 minutes -> stop
     rec_30 = SessionRecord(
