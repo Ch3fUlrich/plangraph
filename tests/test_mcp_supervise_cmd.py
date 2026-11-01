@@ -180,7 +180,9 @@ class TestLauncher(unittest.TestCase):
 
     def test_second_instance_exits_zero_with_message(self):
         d = Path(tempfile.mkdtemp(prefix="mcp-test-ps1-"))
-        name = f"Local\\plangraph-mcp-supervise-test-{free_port()}"
+        # Global, not Local: each launch gets its own POSIX session (start_new_session), and
+        # .NET on Linux scopes Local\ mutexes per session, so the two would never collide.
+        name = f"Global\\plangraph-mcp-supervise-test-{free_port()}"
         first_out, second_out = d / "first.txt", d / "second.txt"
         first = self._launch(first_out, "-MutexName", name, "-RestartDelay", "30")
         try:
