@@ -48,10 +48,12 @@ def test_writer_order_after_free_legs_and_before_cx():
 
 
 def test_d3505_no_implement_or_review_route_reaches_sol():
-    for role in ("implement", "review"):
-        for card in ({"estimate_tokens": 20000, "risk_tags": []}, {"estimate_tokens": 600000, "risk_tags": []}):
-            legs = plan_spawn(card, role=role, writer_families=("mimo",)).legs
-            assert "cx-gpt-6.1-sol" not in [leg.id for leg in legs]
+    for card in ({"estimate_tokens": 20000, "risk_tags": []}, {"estimate_tokens": 600000, "risk_tags": []}):
+        implement = plan_spawn(card, role="implement")   # no family filter: Sol is gpt, not excluded by one
+        review = plan_spawn(card, role="review", writer_families=("mimo",))
+        assert "cx-gpt-6.1-sol" not in [leg.id for leg in implement.legs + review.legs]
+    sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
+    assert not leg_active(sol)   # every leg_active-gated path (routing, leg_probe, override) drops it
 
 
 def test_implement_route_ranks_sonnet_after_free_legs():
