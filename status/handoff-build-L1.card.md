@@ -1,4 +1,4 @@
-# L1 card · build-L1-0072 · 2026-11-01T22:55Z
+# L1 card · build-L1-0074 · 2026-11-01T23:08Z
 ## Goal
 - D-3552/D-3576: land #314 + #309 fix rounds, ff spawner-main (D-3577), re-seat held PRs, then review-legs slice 2 (D-3558)
 ## Keeper
@@ -10,16 +10,16 @@
 - 11-01T22:20Z SPAWNER-REVIEW-LEGS-D3552 dc3eaf4a PR#315 merged, seats gemini-4-argon + qwen3.8-max ACCEPT
 - 11-01T22:22Z SEAT-VERDICT-REQUEST-CHANGES 18ae9c37 PR#311 merged, seats gemini + qwen ACCEPT
 - 11-01T21:50Z SEAT-VERDICT-FROM-RECORD cca1a2e2 PR#314 CI 7/7, gemini delta ACCEPT, qwen REQUEST_CHANGES
+- 11-01T23:05Z SEAT-VERDICT-REQUEST-CHANGES - evidence dddb84ec verified (merge sha lacks trailer), submitted in_review ep2
 - 11-01T22:50Z D-3577 - REVIEW-LEGS-SEAT-LOWS item JSON + gate edge sent (create refused unreachable_goal)
 ## In flight
-- SEAT-VERDICT-FROM-RECORD run-f320d886 since 22:32Z next check 23:15Z (fix r3 = cap, then delta seat + new GO)
+- SEAT-VERDICT-FROM-RECORD run-f1e658e9 openrouter-free since 23:03Z next check 23:45Z (f320d886 mimo-pro stalled, no diff; fix r3 = cap)
 - KEEPER-EVIDENCE-MERGE-HEAD run-ebb874d2 since 22:33Z next check 23:15Z (fix r1, delta seat, verdict to router)
 - held PRs seats workst-L1-autoos since 22:33Z next check 23:30Z (#308 #310 #278 #297-#301 pd#15-17)
 - ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 operator step OS-PD12-MERGE since 13:52Z next check 23:30Z
 ## Planned
 1. D-3577 ff spawner-main -> dc3eaf4a+ after both writers end (rollback e71f63f2), CLI route check, report families
 2. #314/#309 push fixes, delta seats via workst, GO-REQ new shas; #309 verdict to router
-3. SEAT-VERDICT-REQUEST-CHANGES evidence commit+ci 18ae9c37 + submit
 4. SPBR run-18e3f402 ACCEPT via seat_verdict.py after #314 merge; slice 2 D-3558
 ## Open
 - OS-CODINGVM-OPENCODE-GO Go auth on coding.vm (operator) | default seats via workst | deadline none
