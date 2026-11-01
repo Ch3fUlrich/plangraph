@@ -61,7 +61,7 @@ def test_code_rows_are_gaps_or_named_existing_tests():
     for rid, disp, enf, _ in _rows():
         if disp != "code":
             continue
-        if "none" in enf:
+        if enf == "none (gap)":
             assert rid in gaps, rid
             continue
         match = REF_RE.match(enf)
