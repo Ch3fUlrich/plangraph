@@ -14,7 +14,10 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
     "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna", "opencode-console-sonnet-5.5",
-    "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "deepseek",
+    "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
+    # D-3552 opencode-go review legs
+    "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
+    "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek",
 ]
 
 
