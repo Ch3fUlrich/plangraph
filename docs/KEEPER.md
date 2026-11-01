@@ -374,16 +374,7 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
   command of a `restrict` authorized_keys line (one pull key per host). It prints one JSON line
   `{"format": "plangraph-snapshot-pull-v1", "snapshot": <base64>, "sig": <base64>}` and nothing
   else, ignores `SSH_ORIGINAL_COMMAND` and stdin, opens files with `O_NOFOLLOW`, and serves nothing
-  unless signing is configured and the snapshot verifies.
-- Pinned checkout (LE-SNAPSHOT-SERVE-PATH, D-3445): the forced command runs from the pinned
-  checkout `~/.local/share/plangraph/snapshot-serve` (`PYTHONPATH=<checkout>/src`), refreshed ONLY
-  by the live-sync step — never from a `.claude/worktrees/` checkout (session cleanup removes
-  those and pulls then break silently). AGENTS NEVER EDIT `authorized_keys`; changing the forced
-  command's path is operator step OS-SNAPSHOT-PULL-PATH only. Helpers:
-  `python3 -m plangraph.keeper.snapshot_serve_path print --checkout P --config C` prints the exact
-  forced command to install; `python3 -m plangraph.keeper.snapshot_serve_path check
-  --authorized-keys FILE` flags snapshot-serve lines whose PYTHONPATH dir is missing or under
-  `.claude/worktrees/` (exit 1 on problems, 0 clean).
+  unless signing is configured and the snapshot verifies. Pinned checkout: `docs/SNAPSHOT-SERVE-PATH.md`.
 - Reader side: `pg --config reader.json sync pull` runs a locked-down ssh (`-F none`, BatchMode,
   StrictHostKeyChecking, no agent/X11/forwarding/tty, host after `--`, every config value validated),
   verifies the signature with `snapshot_pubkey`, refuses a copy older than the newest one seen
