@@ -16,7 +16,7 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 ITEM_RE = re.compile(r"^Plan-Item:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
 #: gh --json fields of every PR lookup (all exist for `gh pr list` and `gh pr view`).
 PR_FIELDS = ("number,title,headRefName,headRefOid,baseRefName,state,isDraft,isCrossRepository,"
-             "labels,files,additions,deletions,statusCheckRollup")
+             "labels,files,changedFiles,additions,deletions,statusCheckRollup")
 
 
 class MergeBatchError(Exception):
@@ -137,6 +137,7 @@ def drop_state(st):
     for ref in git("for-each-ref", "--format=%(refname)", prefix).stdout.split():
         git("update-ref", "-d", ref)
     state_path(st["name"]).unlink(missing_ok=True)
+    state_path(st["name"]).with_suffix(".attrs").unlink(missing_ok=True)
 
 
 # --- PR records -------------------------------------------------------------------------------
@@ -167,7 +168,8 @@ def norm_pr(raw):
         "ref": raw["headRefName"], "base": raw["baseRefName"], "state": raw.get("state") or "OPEN",
         "draft": bool(raw.get("isDraft")), "cross": bool(raw.get("isCrossRepository")),
         "labels": [lab["name"] for lab in raw.get("labels") or []],
-        "files": [f["path"] for f in files], "lines": lines or sum(
+        "files": [f["path"] for f in files], "truncated": (raw.get("changedFiles") or 0) > len(files),
+        "lines": lines or sum(
             (f.get("additions") or 0) + (f.get("deletions") or 0) for f in files),
         "ci": ci_state(raw.get("statusCheckRollup")),
     }

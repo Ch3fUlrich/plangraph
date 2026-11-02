@@ -21,13 +21,14 @@ ROLLUP = {
 
 
 def pr_json(number, ref, base="main", title=None, head=None, labels=("batch-ready",), draft=False,
-            ci="green", files=(), lines=10, cross=False, state="OPEN"):
+            ci="green", files=(), lines=10, cross=False, state="OPEN", changed=None):
     """One PR as `gh pr view --json` returns it."""
     return {"number": number, "title": title or f"change {number}", "headRefName": ref,
             "headRefOid": head or f"{number:040x}", "baseRefName": base, "state": state, "isDraft": draft,
             "isCrossRepository": cross, "labels": [{"name": name} for name in labels],
             "files": [{"path": path, "additions": 0, "deletions": 0} for path in files],
-            "additions": lines, "deletions": 0, "statusCheckRollup": ROLLUP[ci], "mergeCommit": None}
+            "changedFiles": len(files) if changed is None else changed, "additions": lines, "deletions": 0,
+            "statusCheckRollup": ROLLUP[ci], "mergeCommit": None}
 
 
 class Env:

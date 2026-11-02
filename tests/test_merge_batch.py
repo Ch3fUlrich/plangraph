@@ -6,9 +6,13 @@ runs as a subprocess with a minimal env. `test_guard_real_gh_unreachable` fails 
 could run; the `env` fixture fails any test whose tool called a gh command the stub lacks.
 
 Mutations killed: stacked PR before its base, HIGH PR sharing a batch or a stack above it
-escaping the tier, caps ignored or a stack split, a draft/red/needs-update PR batched, a
-conflict merged blind or left half merged, a skipped PR not labelled, land with a moved head,
-a red or missing check, no or failing approval, an included PR not reported MERGED.
+escaping the tier or a file list gh cut short read as safe, caps ignored or a stack split, a
+draft/red/needs-update PR batched, a conflict merged blind or left half merged, a skipped PR not
+labelled, a --union path still conflicting, land with a moved head, a red or missing check, no or
+failing approval, an included PR not reported MERGED.
+
+`gh pr checks` has no --json in gh 2.45 (checked against the real gh), so the stub serves the
+piped text format (name, bucket, elapsed, url) and refuses --json.
 """
 import json
 import sys
@@ -83,6 +87,8 @@ def test_plan_high_split():
     assert by_num[4]["tier"] == "HIGH" and by_num[4]["high"] is False  # stacked on a HIGH PR
     assert by_num[2]["high_paths"] == ["src/plangraph/keeper/store.py"] and by_num[1]["high_paths"] == []
     assert high_patterns(("docs/*",)) != high_patterns()
+    cut = plan_batches([P(7, files=["docs/a.md"], changed=300)], "main", patterns=high_patterns())  # gh cut the list
+    assert cut["batches"][0]["tier"] == "HIGH" and cut["prs"][0]["high_paths"] == ["(file list truncated by gh)"]
 
 
 def test_plan_caps():
@@ -184,6 +190,19 @@ def test_conflict_stop_continue_and_push(env):
     assert "Resolution commits" in body and "PR #2: `shared.txt`" in body
 
 
+def test_union_paths_do_not_conflict(env):
+    env.branch_pr(1, {"shared.txt": SHARED.replace("line 1\n", "line 1\nadd one\n")})
+    env.branch_pr(2, {"shared.txt": SHARED.replace("line 1\n", "line 1\nadd two\n")})
+    assert env.run("build", "--name", "u0", "--prs", "1,2").returncode == 3  # same spot: a conflict
+    assert env.run("abort", "--name", "u0").returncode == 0
+    res = env.run("build", "--name", "u1", "--prs", "1,2", "--union", "shared.txt")
+    assert res.returncode == 0, res.stdout + res.stderr
+    text = (env.tmp / "repo-worktrees" / "batch-u1" / "shared.txt").read_text()
+    assert "add one\n" in text and "add two\n" in text and text.count("line ") == 6
+    assert env.state_file("u1").with_suffix(".attrs").exists()
+    assert env.run("abort", "--name", "u1").returncode == 0 and not env.state_file("u1").with_suffix(".attrs").exists()
+
+
 def test_skip_conflicts_labels_and_continues(env):
     conflicting(env)
     res = env.run("build", "--name", "s1", "--prs", "1,2,3", "--skip-conflicts")
@@ -223,7 +242,7 @@ def pushed(env, name="l1", prs=(1, 2, 3), checks="pass"):
     assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs))).returncode == 0
     assert env.run("push", "--name", name).stdout == "100\n"
     env.load()  # the stub created PR 100
-    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": checks, "state": "SUCCESS"}]
+    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": checks}]
     env.save()
     approval = env.tmp / "approval.txt"
     approval.write_text("looks fine\nVERDICT: pass\n")
@@ -282,7 +301,20 @@ def test_land_merges_closes_unmerged_and_reports(env):
                                                                                "merged via batch PR #100")
     assert env.calls("pr", "merge") == [["pr", "merge", "100", "--repo", "owner/proj", "--merge",
                                          "--match-head-commit", head]]
+    assert env.calls("pr", "checks") == [["pr", "checks", "100", "--repo", "owner/proj", "--required"]]
     assert not env.state_file("l1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
+
+
+def test_land_named_checks(env):
+    approval = pushed(env, prs=(1, 2))
+    env.state["checks"]["100"].append({"name": "lint", "bucket": "fail"})
+    env.save()
+    missing = land(env, approval, "--checks", "ci-gate,docs")
+    assert missing.returncode == 1 and "not reported on the batch head: docs" in missing.stderr
+    assert land(env, approval, "--checks", "ci-gate,lint").returncode == 1  # a named check is red
+    ok = land(env, approval, "--checks", "ci-gate")  # --checks replaces the required set
+    assert ok.returncode == 0 and ok.stdout.count("MERGED") == 2
+    assert env.calls("pr", "checks")[-1] == ["pr", "checks", "100", "--repo", "owner/proj"]
 
 
 def test_land_resumes_after_a_merge_made_elsewhere(env):

@@ -17,6 +17,16 @@ def default_worktree(name):
     return main.parent / f"{main.name}-worktrees" / f"batch-{name}"
 
 
+def attrs_args(st):
+    """git -c args that merge the --union paths line by line (an append-only ledger such as
+    CHANGELOG.md conflicts in every pair of PRs that each add a line at the same spot)."""
+    if not st.get("union"):
+        return []
+    path = state_dir() / f"{st['name']}.attrs"
+    path.write_text("".join(f"{glob} merge=union\n" for glob in st["union"]), encoding="utf-8")
+    return ["-c", f"core.attributesFile={path}"]
+
+
 def merge_commit(wt, head):
     """The first-parent merge of ``head`` on the batch branch, or None."""
     for line in git("rev-list", "--first-parent", "--parents", "-n", "200", "HEAD", cwd=wt).stdout.splitlines():
@@ -48,7 +58,8 @@ def run_pending(st, skip_conflicts):
         if git("merge-base", "--is-ancestor", pr["head"], "HEAD", cwd=wt, ok=(0, 1)).returncode == 0:
             st["skipped"].append({"pr": num, "head": pr["head"], "reason": "already in base", "files": []})
         else:
-            proc = git("merge", "--no-ff", "-m", f"Merge PR #{num}: {pr['title']}", pr["head"], cwd=wt, ok=None)
+            proc = git(*attrs_args(st), "merge", "--no-ff", "-m", f"Merge PR #{num}: {pr['title']}", pr["head"],
+                       cwd=wt, ok=None)
             if proc.returncode == 0:
                 head = git("rev-parse", "HEAD", cwd=wt).stdout.strip()
                 st["merged"].append(merged_record(wt, num, pr["head"], head, False, []))
@@ -111,7 +122,8 @@ def cmd_build(args):
     git("worktree", "add", "--no-track", "-b", branch, str(path), f"{REMOTE}/{base}")
     st = {"version": 1, "name": name, "repo": repo, "base": base, "branch": branch, "worktree": str(path.resolve()),
           "status": "building", "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-          "skip_conflicts": bool(args.skip_conflicts), "pending": order, "current": None, "merged": [],
+          "skip_conflicts": bool(args.skip_conflicts), "union": list(args.union), "pending": order,
+          "current": None, "merged": [],
           "skipped": [], "head": None, "pr": None, "url": None,
           "prs": {str(n): {k: infos[n][k] for k in ("title", "head", "ref", "base")} for n in order}}
     save_state(st)

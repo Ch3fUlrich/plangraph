@@ -59,12 +59,12 @@ def cmd_push(args):
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")
             gh("pr", "edit", str(st["pr"]), "--repo", st["repo"], "--title", title, "--body-file", str(body))
         else:
-            url = first_line(gh("pr", "create", "--repo", st["repo"], "--base", st["base"], "--head", st["branch"],
-                                "--title", title, "--body-file", str(body)).stdout)
-            found = re.search(r"/pull/(\d+)", url)
+            out = gh("pr", "create", "--repo", st["repo"], "--base", st["base"], "--head", st["branch"],
+                     "--title", title, "--body-file", str(body)).stdout
+            found = re.search(r"\S+/pull/(\d+)", out)  # gh may print warnings around the url
             if not found:
-                raise MergeBatchError(f"gh pr create printed no PR url: {url}")
-            st.update(pr=int(found.group(1)), url=url)
+                raise MergeBatchError(f"gh pr create printed no PR url: {first_line(out)}")
+            st.update(pr=int(found.group(1)), url=found.group(0))
     st.update(status="pushed", head=head)
     save_state(st)
     print(f"pushed {st['branch']} {short(head)}; {st['url']}", file=sys.stderr)
@@ -89,23 +89,24 @@ def check_approval(path):
 
 
 def require_green(repo, number, names):
-    """Every required check (or each of --checks) is reported and green on the PR's head."""
-    cmd = ["pr", "checks", str(number), "--repo", repo, "--json", "name,bucket,state"]
-    proc = gh(*cmd, *([] if names else ["--required"]), ok=(0, 1, 8))  # 1 failing, 8 pending
-    try:
-        rows = json.loads(proc.stdout)
-    except ValueError:
-        raise MergeBatchError(f"cannot read the checks of PR #{number}: "
-                              f"{first_line(proc.stderr or proc.stdout)}") from None
+    """Every required check (or each of --checks) is reported and green on the PR's head.
+
+    gh 2.45 has no `pr checks --json`, so this reads the piped text, one check per line:
+    ``name<TAB>bucket<TAB>elapsed<TAB>url`` with bucket pass|fail|pending|skipping|cancel;
+    the exit code is 1 when a check failed and 8 while one is pending.
+    """
+    proc = gh("pr", "checks", str(number), "--repo", repo, *([] if names else ["--required"]), ok=(0, 1, 8))
+    rows = [(cols[0].strip(), cols[1].strip().lower())
+            for cols in (line.split("\t") for line in proc.stdout.splitlines()) if len(cols) > 1]
     if names:
-        seen = {row["name"] for row in rows}
-        if set(names) - seen:
-            raise MergeBatchError("check(s) not reported on the batch head: " + ", ".join(sorted(set(names) - seen)))
-        rows = [row for row in rows if row["name"] in names]
+        missing = sorted(set(names) - {name for name, _ in rows})
+        if missing:
+            raise MergeBatchError("check(s) not reported on the batch head: " + ", ".join(missing))
+        rows = [(name, bucket) for name, bucket in rows if name in names]
     if not rows:
-        raise MergeBatchError(f"no required check is reported for batch PR #{number}: wait for CI "
-                              "or name the checks with --checks")
-    bad = [f"{row['name']}={row['bucket']}" for row in rows if row["bucket"] not in GREEN]
+        raise MergeBatchError(f"no required check is reported for batch PR #{number} "
+                              f"({first_line(proc.stderr)}): wait for CI or name the checks with --checks")
+    bad = [f"{name}={bucket}" for name, bucket in rows if bucket not in GREEN]
     if bad:
         raise MergeBatchError("required check(s) not green on the batch head: " + ", ".join(bad))
 

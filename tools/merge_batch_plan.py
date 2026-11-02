@@ -22,9 +22,10 @@ def high_patterns(extra=()):
     return tuple(dict.fromkeys((*AUTH_DOOR_PATHS, *GATE_PATHS, *KEEPER_PATHS, *extra)))
 
 
-def high_hits(files, patterns):
-    """The changed paths that match a HIGH glob."""
-    return [path for path in files if any(fnmatch.fnmatchcase(path, pat) for pat in patterns)]
+def high_hits(pr, patterns):
+    """The changed paths of ``pr`` that match a HIGH glob; a file list gh cut short counts as a hit."""
+    hits = [path for path in pr["files"] if any(fnmatch.fnmatchcase(path, pat) for pat in patterns)]
+    return hits + ["(file list truncated by gh)"] if pr["truncated"] else hits
 
 
 def stack_parents(prs):
@@ -110,7 +111,7 @@ def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
     for members in units.values():
         members = stack_sorted(sorted(members), parent)
         unit_list.append({"prs": members, "lines": sum(by_num[n]["lines"] for n in members),
-                          "high": any(high_hits(by_num[n]["files"], patterns) for n in members)})
+                          "high": any(high_hits(by_num[n], patterns) for n in members)})
     unit_list.sort(key=lambda unit: min(unit["prs"]))
     batches, cur = [], None
     for unit in unit_list:
@@ -133,8 +134,8 @@ def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
     rows = [{"number": n, "title": by_num[n]["title"], "head": by_num[n]["head"], "ref": by_num[n]["ref"],
              "base": by_num[n]["base"], "draft": by_num[n]["draft"], "ci": by_num[n]["ci"],
              "files": len(by_num[n]["files"]), "lines": by_num[n]["lines"], "paths": by_num[n]["files"],
-             "high": bool(high_hits(by_num[n]["files"], patterns)),
-             "high_paths": high_hits(by_num[n]["files"], patterns)[:5], "batch": placed.get(n, (None, None))[0],
+             "high": bool(high_hits(by_num[n], patterns)),
+             "high_paths": high_hits(by_num[n], patterns)[:5], "batch": placed.get(n, (None, None))[0],
              "tier": placed.get(n, (None, None))[1], "after": parent.get(n), "reason": why.get(n)}
             for n in order]
     return {"base": base, "max_prs": max_prs, "max_lines": max_lines, "batches": batches, "prs": rows}

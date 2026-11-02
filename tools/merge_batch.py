@@ -8,6 +8,7 @@
   build     branch batch/NAME in a new worktree from origin/<base>; `git merge --no-ff` each PR
             head as `Merge PR #N: <title>`. A conflict stops with exit 3 (resolve, commit, run
             `continue`) or, with --skip-conflicts, skips the PR and labels it needs-update.
+            --union GLOB merges an append-only ledger (CHANGELOG.md) line by line instead.
   continue  resume after the resolution commit.
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
@@ -83,6 +84,9 @@ def parser():
     cmd.add_argument("--prs", required=True, help="comma separated PR numbers, in merge order")
     cmd.add_argument("--skip-conflicts", action="store_true", help="skip a conflicting PR and label it needs-update")
     cmd.add_argument("--worktree", help="worktree path (default: <repo>-worktrees/batch-NAME)")
+    cmd.add_argument("--union", action="append", default=[], metavar="GLOB",
+                     help="merge this path line by line (git merge=union) instead of conflicting, "
+                          "for append-only ledgers such as CHANGELOG.md (repeatable)")
     cmd = add("continue", build.cmd_continue, "resume after a conflict resolution commit")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--skip-conflicts", action="store_true")

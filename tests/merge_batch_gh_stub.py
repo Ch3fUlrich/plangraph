@@ -18,7 +18,6 @@ comments commits createdAt deletions files headRefName headRefOid headRepository
 isCrossRepository isDraft labels latestReviews maintainerCanModify mergeCommit mergeStateStatus mergeable
 mergedAt mergedBy milestone number potentialMergeCommit reviewDecision reviews state statusCheckRollup
 title updatedAt url""".split())
-CHECK_FIELDS = set("bucket completedAt description event link name startedAt state workflow".split())
 S = json.load(open(os.path.join(DIR, "state.json")))
 with open(os.path.join(DIR, "calls.jsonl"), "a") as log:
     log.write(json.dumps(ARGV) + "\n")
@@ -93,10 +92,15 @@ elif cmd == ["pr", "create"]:
     save()
     print(f"https://example.invalid/{S['repo']}/pull/{number}")
 elif cmd == ["pr", "checks"]:
-    fields(CHECK_FIELDS)
+    if "--json" in ARGV:  # gh 2.45 has no JSON output for pr checks
+        die("unknown flag: --json")
     rows = S["checks"].get(ARGV[2], [])
-    print(json.dumps(rows))
-    sys.exit(0 if rows and all(r["bucket"] == "pass" for r in rows) else 1)
+    if not rows:
+        die("no required checks reported on the 'batch' branch")
+    for row in rows:  # the piped format: name, bucket, elapsed, link, description
+        print(f"{row['name']}\t{row['bucket']}\t0\thttps://example.invalid/run\t")
+    buckets = [row["bucket"] for row in rows]
+    sys.exit(0 if all(b in ("pass", "skipping") for b in buckets) else 8 if "pending" in buckets else 1)
 elif cmd == ["pr", "merge"]:
     pr = pr_arg()
     if pr["state"] != "OPEN" or "--merge" not in ARGV:
