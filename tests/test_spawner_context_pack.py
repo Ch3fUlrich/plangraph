@@ -108,10 +108,15 @@ def test_pack_never_exceeds_cap(tree, monkeypatch, cap):
 def test_omitted_line_forces_extra_drop(tree, monkeypatch):
     card = dict(CARD, context=["b.py:1-1", "b.py:2-2"])
     full = len(_Seat(tree)._leg_prompt("", card, "implement", INLINE))
+    partial = 0
     for cap in range(full - 1, full - 80, -1):
         monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", str(cap))
         out = _Seat(tree)._leg_prompt("", card, "implement", INLINE)
         assert len(out) <= cap
+        if out:
+            assert "omitted: b.py:2-2" in out and "--- b.py:1-1 ---" in out
+            partial += 1
+    assert partial > 0
 
 
 def test_big_file_detection_without_extension_regex(tree):
@@ -148,3 +153,8 @@ def test_line_count_streams_and_matches_splitlines(tmp_path, monkeypatch, data):
     path.write_bytes(data)
     monkeypatch.setattr(context_pack.Path, 'read_text', lambda *a, **k: pytest.fail('read whole file'))
     assert context_pack._line_count(path) == len(data.decode().splitlines())
+
+
+def test_range_mention_without_slice_still_warns(tree):
+    found = context_pack.warnings("edit big.py:1-50 and big.py:7", dict(CARD), tree)
+    assert [w for w in found if w.startswith("big_file_unsliced: big.py ")]

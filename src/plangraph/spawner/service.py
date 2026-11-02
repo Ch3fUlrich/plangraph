@@ -13,7 +13,7 @@ from pathlib import Path
 import socket
 import time
 import uuid
-
+from . import context_pack
 from .runner import SpawnerRunner
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
@@ -299,7 +299,7 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running',
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
-        __import__(__package__ + '.context_pack', fromlist=['x']).annotate(record, prompt, card, record['cwd']); self._save(record)  # D-3622
+        context_pack.annotate(record, prompt, card, record['cwd']); self._save(record)  # D-3622 (file at the 400-line cap)
 
         async def execute():
             try:

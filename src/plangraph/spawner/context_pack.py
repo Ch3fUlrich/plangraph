@@ -22,6 +22,7 @@ from plangraph.routing_errors import ParameterRefused
 BIG_FILE_LINES = 400
 DEFAULT_MAX_CHARS = 60_000
 _SLICE = re.compile(r'^(.+):(\d+)-(\d+)$')
+_RANGE = re.compile(r':\d+(?:-\d+)?$')  # 'big.py:1-50' names big.py
 _TOKEN = re.compile(r'''[^\s`'"<>()\[\]{},;=]+''')
 #: Secret-looking names never packed (matched on every path part, lower-cased).
 DENY = ('*.token', '*.dsn', '*.key', '*.pem', 'id_*', '.env*', 'api-keys*.yml', '*secret*', '*credential*')
@@ -167,7 +168,7 @@ def warnings(prompt: str, card, cwd) -> list[str]:
     kept, _ = slices(card, cwd)
     refused = _pack(card, cwd)[1]
     covered = {_locate(root, raw) for raw, *_ in kept}
-    names = dict.fromkeys(t for t in (x.removeprefix('./').rstrip('.:') for x in _TOKEN.findall(prompt)) if '/' in t or '.' in t)
+    names = dict.fromkeys(t for t in (_RANGE.sub('', x.removeprefix('./')).rstrip('.:') for x in _TOKEN.findall(prompt)) if '/' in t or '.' in t)
     files = tracked(root) if names else frozenset()
     big = []
     for name in names:
