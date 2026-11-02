@@ -326,3 +326,44 @@ fn decide_queues_behind_an_older_ticket() {
         1_000,
     ));
 }
+
+#[test]
+fn decide_queues_a_reservation_above_free_memory_with_a_zero_floor() {
+    // 100 free and a 300 MB reservation: 100 - 300 < 0 even when the floor is 0.
+    queue(decide(
+        &SlotTable::default(),
+        &ticket(SlotClass::Other, 300, 500),
+        &caps(9, 9, 9, 9, 0),
+        100,
+        no_rss,
+        700,
+    ));
+    // Exactly the free memory passes a zero floor.
+    grant(decide(
+        &SlotTable::default(),
+        &ticket(SlotClass::Other, 100, 500),
+        &caps(9, 9, 9, 9, 0),
+        100,
+        no_rss,
+        700,
+    ));
+}
+
+#[test]
+fn decide_a_queued_ticket_with_the_same_stamp_does_not_block() {
+    // The requester's own queued ticket (same enqueued_ms) never blocks it.
+    let req = ticket(SlotClass::Writer, 50, 500);
+    let table = SlotTable {
+        version: 1,
+        active: vec![],
+        queued: vec![req.clone()],
+    };
+    grant(decide(
+        &table,
+        &req,
+        &caps(9, 9, 9, 9, 0),
+        9_999,
+        no_rss,
+        1_000,
+    ));
+}

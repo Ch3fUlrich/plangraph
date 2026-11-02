@@ -98,7 +98,11 @@ pub fn decide(
 ) -> Decision {
     let caps_ok = room_for(class_counts(&table.active), request.class, caps);
     let free = effective_free_mb(mem_available_mb, &table.active, rss_of);
-    let mem_ok = free.saturating_sub(request.reservation_mb) >= caps.mem_floor_mb;
+    // checked_sub: a reservation above the free memory never passes, even
+    // with a zero floor (saturating to 0 would read as 0 >= 0).
+    let mem_ok = free
+        .checked_sub(request.reservation_mb)
+        .is_some_and(|left| left >= caps.mem_floor_mb);
     let fifo_ok = !table
         .queued
         .iter()
