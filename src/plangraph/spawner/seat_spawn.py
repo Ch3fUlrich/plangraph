@@ -8,16 +8,20 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import json
+import os
 import uuid
 
 
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
-    @staticmethod
-    def _leg_prompt(prompt, card, role, leg):
-        """The prompt one leg gets: an inline-only review leg gets the card's diff inlined."""
-        if role != 'review' or getattr(leg, 'tool_mode', 'tools') != 'inline-only':
+    def _leg_prompt(self, prompt, card, role, leg):
+        """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff."""
+        if getattr(leg, 'tool_mode', 'tools') != 'inline-only':
+            return prompt
+        from . import context_pack
+        prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd())
+        if role != 'review':
             return prompt
         from .inline_diff import inline_diff_prompt
         return inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3)
