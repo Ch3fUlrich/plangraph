@@ -193,7 +193,10 @@ def run_hook() -> int:
             return 0
         event = payload.get("hook_event_name")
         if not isinstance(event, str) or not event:
-            return 0  # no event name on stdin: emit nothing under a guessed one
+            # Intentional (r2 contract, pinned by tests/hooks/test_fleet_hook.py): the hook is
+            # registered only for PostToolUse and UserPromptSubmit, both always send the name;
+            # an absent name means a manual/legacy run, which defaults to PostToolUse.
+            event = "PostToolUse"
         name, _parent = _REPORT.resolve_name(payload.get("session_id"))
         if not _REPORT.safe_name(name):
             return 0
