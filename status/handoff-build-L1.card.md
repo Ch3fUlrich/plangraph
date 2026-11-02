@@ -1,34 +1,29 @@
-# L1 card · build-L1-0106 · 2026-11-02T14:47Z
+# L1 card · build-L1-0106 · 2026-11-02T15:11Z
 ## Goal
-- plangraph PRs: MERGE-READY to plangraph-replan-0105; sol writers via spawner only (D-3666, D-3668); plangraph-data PRs mine
+- plangraph PRs: MERGE-READY to plangraph-replan-0105; plangraph-data PRs mine (GO-REQ/batch to routing); D-3676: new impl in Rust, Python = bug fixes only
 ## Keeper
-- claimed: SPAWNER-LEGS-D3605 (claimed ep3, waits SEAT-TOOLS + #334), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1), LE-FLEET-MSG-INVENTORY (ep4), RIN-PATH-REPOINT (ep3), RIN-LEDGER-VIEWS (ep3), SEAT-TOOLS-LEG-SANDBOX (ep2); leases to 16:22Z
+- claimed: SPAWNER-LEGS-D3605 (ep3, waits #334 + SEAT-PATH-FIXES), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1), LE-FLEET-MSG-INVENTORY (ep4), RIN-PATH-REPOINT (ep3), RIN-LEDGER-VIEWS (ep3; #310 merged 8d0654df, routing decision-closes); leases to 16:22Z
+- SEAT-PATH-FIXES released 15:1xZ for router D-3677(2) edit -> RE-CLAIM after router DONE
+- released: SEAT-TOOLS-LEG-SANDBOX (D-3676 hold; sol commit 07dde1e42 local only, not pushed; replan re-cuts as Rust)
 ## Done
-- 11-02T13:00Z SPAWNER-DISPATCH-FAIL-DETECT 9ce359d1 #324 r3 full suite 8940 passed; luna seat run-c902f841 ACCEPT
-- 11-02T13:55Z D-3667 - spawner-main ff 2afe7810->95debf131->6aabc7721; sol probe run-9d96b520 exit 0
-- 11-02T14:05Z SPAWNER-CONTEXT-PACK-D3622 ce860671 submitted in_review (commit+ci verified)
-- 11-02T14:05Z FLEET-BUS-DISCOVERY-SELF c01d0b69 submitted in_review (commit+ci verified)
-- 11-02T14:08Z D-3667 5de211c6 PR#334 sol-first, CI green 41459034022
-- 11-02T14:00Z D-3666 - luna seat #318 run-814e5820 REQUEST_CHANGES sent to build-L2-spawner3605-0092
+- 11-02T14:50Z #334 delta seat mimo-pro run-a46e7d43 ACCEPT on efbc85d86
+- 11-02T15:05Z #334 ae309f39 file-size fix pushed (suite: only test_the_real_tree_passes failed before it)
+- 11-02T15:00Z #324 f90855f0 pushed (CHANGELOG union after #328), gh pr ready
 ## In flight
-- SPAWNER-DISPATCH-FAIL-DETECT #324 main-merge 30ce6163 (unpushed) suite log /home/s/.claude/jobs/582c2aba/tmp/r3-merge-suite.log since 14:16Z next check 14:50Z
-- #334 fix efbc85d86 (seat-334d MED+LOW+2NIT, hand-edit 13 lines, UNPUSHED); full suite J/s334-suite.log; delta mimo-pro seat J/seat-334e.out (J=/home/s/.claude/jobs/7d533977/tmp) next check 15:00Z
-- SEAT-TOOLS sol writer: gated spawn J/spawn-st.sh -> J/r-st.json (wt seat-tools-leg-sandbox) next check 15:00Z
-- #318 fix round build-L2-spawner3605-0092 since 14:00Z next check 15:00Z
-- #309 MERGE-READY f0bde3a8 (CI 41464942877 green, mergeable; code = e3e05fcc + CHANGELOG merge); luna TOOLS seat queued to workst-L1-autoos successor (0088 recycling 14:5xZ; no successor by 15:20Z -> ask routing-0101); then GO-REQ (HIGH) to routing
-- #314 #279 build-L2-keeperfix-0102 next check 15:00Z
-## Planned
-1. #324: suite rc=0 -> push lane, gh pr ready 324, CI green -> MERGE-READY 324 to replan-0105
-2. #334: suite rc=0 + seat ACCEPT -> push, CI green -> MERGE-READY 334 efbc85d86
-3. SEAT-TOOLS: writer report -> verify full suite -> Haiku seat
+- #334 CI on ae309f39 (bg watch) -> green: MERGE-READY 334 ae309f39 to replan-0105
+- #324 D-3677(1): re-cut lane/spawner-kill-own-tree-4 from f90855f0 tree, move commit with Test-Removal: D-3677 + Hand-Edit, new PR replaces #324, no force-push
+- #309 f0bde3a8 MERGE-READY (CI 41464942877 green); luna TOOLS seat queued to workst-L1-autoos successor; none by 15:20Z -> ask routing; ACCEPT -> GO-REQ
+- SEAT-PATH-FIXES sol writer spawned 15:10Z (brief incl. (4) 25 min review cap, approved D-3677): J/spawn-spf.sh -> J/r-spf.json/.wait (wt seat-path-fixes)
+- pd#20 91c1d775 MERGE-READY from spawner3605 (RC fix): mimo-pro delta seat J/seat-pd20.out; local router tests 61 passed; HIGH -> also tools seat (workst luna) -> GO-REQ
+- #314 #279 build-L2-keeperfix-0102
 ## Open
-- D-3668 no Agent-tool writers; writers = spawner runs only
-- BLOCKED SEAT-PATH-FIXES define (3 seat-path fixes, replan FYI 15:0xZ) | *default a router defines | deadline 15:45Z
+- J=/home/s/.claude/jobs/7d533977/tmp
+- workst-L1-autoos-0088 recycled 14:5xZ; successor owes #309 seat (ask it for pd#20 tools seat too)
 - D-3633(1) LEG-STATE mgmt key: operator places omniroute-mgmt.key | default slice 1 + fakes | deadline none
 ## Traps
-- luna inline seats fuse commentary into the VERDICT line -> parse_verdict None; mimo-flash seat printed tool_call text only
-- keeper edit refuses while claimed; L1 cannot edit 'done'; no `pg` binary
-- zsh: "$c:refs" eats :r modifier, use ${c}; never pkill -f a pattern your own shell matches
-- coding.vm cap 4 agent runs, MemAvailable >= 3000 MB (routing-0101 hold after OOM 14:36Z, L2s told); done checks = FULL suite
+- CI ci-gate refuses renamed/moved tests without Test-Removal trailer; check gh run conclusion, not only suite
+- baselined files may not grow (check_file_size); keeper edit refuses desc/done for L1
+- bash_guard denies unquoted heredoc with $(...) or backticks: use <<'EOF'
+- coding.vm cap 4 agent runs, MemAvailable >= 3000 MB (routing hold after OOM 14:36Z); done checks = FULL suite
 ## Drill-down
 - handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-75 block)
