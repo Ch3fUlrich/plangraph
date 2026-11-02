@@ -16,9 +16,13 @@ two writers can never interleave half a record. `fleet_inject.py` later feeds
 those lines back to the parent as `additionalContext`.
 
 Dedupe is a marker per session: `<state>/inbox/.seen/<session_id>` holds the
-last turn id that was filed, so the same turn is never appended twice. The
-marker is written only after the append succeeded — a failed append retries on
-the next Stop instead of silently losing the line.
+last turn id that was filed — at most one successful append per turn marker
+write; consumers should dedupe on `turn`. The marker is written only after
+the append succeeded — a failed append retries on the next Stop instead of
+silently losing the line. The design is at-least-once, not exactly-once: the
+marker write can fail after a successful append, and the check-append-mark
+window is not serialised across concurrent Stops, so a rare duplicate turn
+can slip through.
 
 Fail-silent, like every hook here: bad stdin, a garbled transcript, an unsafe
 name, an unwritable state dir — exit 0 with no output, because a Stop hook must
@@ -48,9 +52,12 @@ TAIL_BYTES = 256 * 1024
 # The status line, after redaction, travels as both `status` and `line`.
 MAX_LINE = 300
 
-# First matching line of the assistant text; \b keeps STOPPED/ DONEX out.
+# First matching line of the assistant text. (?![\w-]) keeps STOPPED, DONEX
+# and hyphenated continuations like DONE-whatever out: the keyword must not
+# run into more word characters or a dash. (\b would treat "-" as a boundary
+# and file "DONE-whatever" as DONE.)
 STATUS_KEYWORDS = ("DONE", "MERGE-READY", "BLOCKED", "FAILED", "RECYCLE-READY", "STOP")
-STATUS_RE = re.compile(r"^(%s)\b" % "|".join(STATUS_KEYWORDS))
+STATUS_RE = re.compile(r"^(%s)(?![\w-])" % "|".join(STATUS_KEYWORDS))
 
 # A name (session id, session name, parent) becomes a file name under the state
 # dir: a letter/digit first, then letters, digits, dot, dash, underscore.
@@ -148,7 +155,9 @@ def ensure_dir(path) -> Path:
     """`path` as a 0o700 directory, creating every missing level with that mode.
 
     Only levels this call actually creates are chmod'ed — an existing
-    directory's mode is left as its owner set it.
+    directory's mode is left as its owner set it. A level a concurrent hook
+    wins the race to create is left as that winner made it (the same 0o700),
+    never raised as FileExistsError: the directory is all this call wanted.
     """
     p = Path(path)
     missing = []
@@ -156,7 +165,12 @@ def ensure_dir(path) -> Path:
         missing.append(p)
         p = p.parent
     for directory in reversed(missing):
-        os.mkdir(str(directory), 0o700)
+        try:
+            os.mkdir(str(directory), 0o700)
+        except FileExistsError:
+            # The exists() probe above is not a lock: a concurrent Stop hook
+            # can create this level first. It exists now; move on.
+            continue
     return Path(path)
 
 
@@ -168,8 +182,10 @@ def atomic_write(path, data: bytes) -> None:
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(str(tmp), flags, 0o600)
         with os.fdopen(fd, "wb") as fh:
-            if fh.write(data) != len(data):
-                raise OSError("short write")
+            # Buffered write: it takes all of `data` or raises — a length
+            # check here is dead code. (os.write on a raw fd can short-write,
+            # which is why append_inbox checks there.)
+            fh.write(data)
         os.replace(str(tmp), str(path))
     finally:
         try:
@@ -311,7 +327,7 @@ def run_hook() -> int:
     return 0
 
 
-def main(argv=None) -> int:
+def main() -> int:
     return run_hook()
 
 
