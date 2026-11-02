@@ -50,10 +50,21 @@ class CounterRange(SeqCase):
     def test_h1_missing_or_empty_file_starts_at_one(self):
         self.assertEqual(self.mod.next_seq(), 1)
         self.assertEqual(self.counter_text(), "1")
-        self.stored("")
-        self.assertEqual(self.mod.next_seq(), 1)
-        self.stored("  \n")
-        self.assertEqual(self.mod.next_seq(), 1)
+        for text in ("", "  \n"):   # without a mark an empty counter starts over
+            self.seq_file.with_name("session-seq.last").unlink()
+            self.stored(text)
+            self.assertEqual(self.mod.next_seq(), 1)
+
+    def test_h1_a_truncated_or_garbled_counter_continues_after_the_last_issued_value(self):
+        for text in ("", "garbled", "1730000000"):
+            self.stored("4999")
+            first = self.mod.next_seq()
+            self.stored(text)   # e.g. a crash between truncate and write
+            self.assertEqual((first, self.mod.next_seq()), (5000, 5001), repr(text))
+
+    def test_h1_the_ring_wraps_9999_to_1_and_never_reissues_9999(self):
+        self.stored("9998")
+        self.assertEqual([self.mod.next_seq() for _ in range(3)], [9999, 1, 2])
 
     def test_h1_zero_is_a_valid_counter(self):
         self.stored("0")
@@ -61,7 +72,7 @@ class CounterRange(SeqCase):
         self.assertEqual(self.counter_text(), "1")
 
     def test_h1_every_counter_value_counts_on_by_one(self):
-        for stored, want in (("1", 2), ("41", 42), ("0007", 8), (" 99 \n", 100), ("9998", 9999)):
+        for stored, want in (("1", 2), ("41", 42), ("0007", 8), (" 99 \n", 100), ("9998", 9999), ("9999", 1)):
             self.stored(stored)
             self.assertEqual(self.mod.next_seq(), want, repr(stored))
             self.assertEqual(self.counter_text(), str(want))
@@ -70,12 +81,14 @@ class CounterRange(SeqCase):
         self.assertEqual([self.mod.next_seq() for _ in range(5)], [1, 2, 3, 4, 5])
 
     def test_h1_garbled_counters_never_leave_four_digits(self):
-        garbled = ["abc", "-3", "-0", "+5", "1.5", "0x10", "1 2", "9999", "10000", "1730000000",
+        garbled = ["abc", "-3", "-0", "+5", "1.5", "0x10", "1 2", "10000", "1730000000",
                    "9" * 5000, "\u0663", "\x00\x00", "{\"n\": 1}"]
+        prev = None
         for text in garbled:
             self.stored(text)
             seq = self.mod.next_seq()
-            self.assertTrue(1000 <= seq <= 9999, "%r -> %r" % (text[:20], seq))
+            self.assertTrue(1000 <= seq <= 9999 if prev is None else seq == prev % 9999 + 1, "%r -> %r" % (text[:20], seq))
+            prev = seq
             self.assertEqual(self.counter_text(), str(seq), "the shared counter keeps a four-digit value")
             self.assertRegex(self.mod.title("/w/x", seq), FOUR_DIGITS)
 
