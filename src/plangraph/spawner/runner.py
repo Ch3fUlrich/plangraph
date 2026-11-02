@@ -15,7 +15,7 @@ import logging
 import math
 import os
 import re
-import sqlite3
+import sqlite3  # tests patch runner.sqlite3.connect (test_opencode_served_witness)
 import subprocess
 import sys
 import time
@@ -36,9 +36,6 @@ from plangraph.spawner.mimo_policy import check_mimo_path
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 
-_SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
-_SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
-
 _KEEPER_UNCONFIGURED_WARN_S = 600
 # D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
 IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed and required per your brief; "
@@ -50,6 +47,7 @@ from .env_redact import first_reason
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import kill_process_tree
+from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
 
 
 def redact(value):
@@ -147,82 +145,6 @@ class JobInfo:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str, str]:
-    """Extract served model and family from OmniRoute headers or JSON output."""
-    served_model = ""
-    served_family = ""
-
-    if output:
-        # Check header patterns
-        m_mod = _SELECTED_MODEL_RE.search(output)
-        if m_mod:
-            served_model = m_mod.group(1).strip()
-
-        m_fam = _SELECTED_FAMILY_RE.search(output)
-        if m_fam:
-            served_family = m_fam.group(1).strip()
-
-        # Check JSON payload if present
-        if not served_model or not served_family:
-            for line in output.splitlines():
-                line = line.strip()
-                if line.startswith("{") and line.endswith("}"):
-                    try:
-                        data = json.loads(line)
-                        if isinstance(data, dict):
-                            if not served_model and "served_model" in data:
-                                served_model = str(data["served_model"])
-                            if not served_family and "served_family" in data:
-                                served_family = str(data["served_family"])
-                    except (ValueError, TypeError):
-                        continue
-                    except Exception as exc:
-                        logging.getLogger(__name__).warning('telemetry_failed: %s', type(exc).__name__)
-                        continue
-
-    if not served_family and served_model:
-        served_family = detect_model_family(served_model)
-
-    return served_model, served_family
-
-
-def _claude_stream_model(text) -> str | None:
-    """Model id from the stream-json ``system``/init event of a claude -p run (D-3605)."""
-    for line in str(text or '').splitlines():
-        try:
-            data = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(data, dict) and data.get('type') == 'system' and isinstance(data.get('model'), str):
-            return data['model']
-    return None
-
-
-def _opencode_served_model(db_path, title) -> str | None:
-    """Served model witnessed in opencode's session store for one titled session (D-2898).
-
-    Only a unanimous assistant model id counts; anything else stays unwitnessed.
-    """
-    try:
-        from urllib.parse import quote
-        # 2s timeout: a locked/busy store must never block the monitor
-        # (D-2921 F2); it just stays unwitnessed.
-        conn = sqlite3.connect('file:' + quote(str(db_path)) + '?mode=ro', uri=True, timeout=2.0)
-        try:
-            rows = conn.execute('SELECT id FROM session_v2 WHERE title = ?', (title,)).fetchall()
-            models = set()
-            for (data,) in conn.execute(
-                    "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant'",
-                    (rows[0][0],) if len(rows) == 1 else (None,)):
-                model = json.loads(data)['model']
-                models.add(model['providerID'] + '/' + model['id'])
-        finally:
-            conn.close()
-    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-        return None
-    return next(iter(models)) if len(models) == 1 else None
 
 
 #: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
