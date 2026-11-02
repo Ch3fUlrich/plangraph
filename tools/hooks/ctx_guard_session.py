@@ -6,8 +6,11 @@ and "hard" integers replace AUTOOS_CTX_HANDOFF / AUTOOS_CTX_HARD for that one
 session, and {"off": true} skips the guard. Every other session runs the guard
 unchanged. <state> is $XDG_STATE_HOME, else ~/.local/state (as the guard).
 The guard's HANDOFF/HARD line gets the card rule appended (operator 2026-10-31: fixed handoff format).
-The thresholds are re-read from ~/.claude/settings.json env on every call, so a changed cap reaches sessions that
-started before the change (a session's own process env is fixed at its start).
+The thresholds are re-read on every call, layered as Claude Code layers them:
+the nearest project .claude/settings.local.json over .claude/settings.json
+(cwd and its parents) over the ~/.claude/settings.json env, so a changed cap
+reaches sessions that started before the change (a session's own process env
+is fixed at its start).
 Fail-safe: a missing or garbled override file is ignored; any error exits 0.
 """
 import importlib.util
@@ -20,17 +23,21 @@ from pathlib import Path
 
 GUARD = str(Path(__file__).resolve().parent / 'context_guard.py')
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+# The guard's threshold line (context_guard.emit_line), the only line the card
+# rule belongs to: anything else the guard emits must pass through untouched.
+_HANDOFF_LINE = re.compile(r"^(?:HANDOFF-NOW|HARD-CAP) ctx=")
 CARD_RULE = (" Card: fleet-handoff skill format (Goal, Keeper, Done, In flight, Planned, Open, Traps, Drill-down;"
              " max 40 lines, next to the handoff as <stem>.card.md); run `handoff-check <card> --log` before ready.")
 
 
 def add_card_rule(out: str) -> str:
-    """The guard's JSON line with CARD_RULE appended to its additionalContext; anything else unchanged."""
+    """The guard's JSON line with CARD_RULE appended to its HANDOFF/HARD line; anything else unchanged."""
     try:
         doc = json.loads(out)
         hso = doc["hookSpecificOutput"]
-        if isinstance(hso.get("additionalContext"), str) and hso["additionalContext"]:
-            hso["additionalContext"] += CARD_RULE
+        context = hso.get("additionalContext")
+        if isinstance(context, str) and _HANDOFF_LINE.match(context):
+            hso["additionalContext"] = context + CARD_RULE
             return json.dumps(doc) + "\n"
     except Exception:
         pass
@@ -61,9 +68,16 @@ KEYS = ("AUTOOS_CTX_HANDOFF", "AUTOOS_CTX_HARD")
 def _env_of(path):
     try:
         env = json.loads(Path(path).read_text(encoding="utf-8")).get("env") or {}
-        return {k: str(int(env[k])) for k in KEYS if k in env}
     except Exception:
         return {}
+    out = {}
+    for key in KEYS:  # each key parsed on its own: one garbled value drops only itself
+        if key in env:
+            try:
+                out[key] = str(int(env[key]))
+            except Exception:
+                pass
+    return out
 
 
 def settings_thresholds(cwd=None):
@@ -99,9 +113,14 @@ def main() -> int:
             val = doc.get(key)
             if isinstance(val, int) and not isinstance(val, bool):
                 os.environ[var] = str(val)
-    spec = importlib.util.spec_from_file_location("context_guard", GUARD)
-    guard = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(guard)
+    try:
+        spec = importlib.util.spec_from_file_location("context_guard", GUARD)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+    except Exception:
+        print("ctx_guard_session: context_guard.py missing or broken next to "
+              "this hook; context guard is off", file=sys.stderr)
+        return 0
     sys.stdin = io.StringIO(text)
     buf, real = io.StringIO(), sys.stdout
     sys.stdout = buf

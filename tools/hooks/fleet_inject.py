@@ -77,21 +77,26 @@ def read_cursor(path) -> int:
     return value if value > 0 else 0
 
 
-def take_lines(chunk: bytes, limit: int = MAX_EMIT):
-    """`(records, extra, consumed)` over the complete lines of `chunk`.
+def _scan(chunk: bytes, limit: int):
+    """`(records, extra, consumed, starts)` over the complete lines of `chunk`.
 
-    At most `limit` (default `MAX_EMIT`) parsed dict records are kept; the record that overflows
-    the cap and everything after it stays unread — `extra` counts the records
-    that must wait for the next emission. Unparsable complete lines are
+    One pass, one JSON parse per line. At most `limit` parsed dict records are
+    kept and `starts[i]` is the byte offset where `records[i]`'s line begins —
+    `starts[keep]` is where a run that keeps only `keep` records must leave the
+    cursor. `extra` counts the records that must wait for a later emission;
+    `consumed` is the byte count safe to record in the cursor (the end of the
+    last kept or skipped line before the first record that overflowed the cap,
+    or the whole chunk when nothing overflowed). Unparsable complete lines are
     consumed anyway, so one corrupt line cannot poison the file forever.
-    `consumed` is the byte count safe to record in the cursor.
     """
     records = []
+    starts = []
     extra = 0
     consumed = 0
     capped = False
     cursor = 0
     for raw in chunk.split(b"\n")[:-1]:  # chunk ends on \n, so [:-1] drops only the empty tail
+        line_start = cursor
         line_end = cursor + len(raw) + 1
         obj = None
         try:
@@ -107,11 +112,25 @@ def take_lines(chunk: bytes, limit: int = MAX_EMIT):
             consumed = line_end
         elif len(records) < limit:
             records.append(obj)
+            starts.append(line_start)
             consumed = line_end
         else:
             capped = True
             extra += 1
         cursor = line_end
+    return records, extra, consumed, starts
+
+
+def take_lines(chunk: bytes, limit: int = MAX_EMIT):
+    """`(records, extra, consumed)` over the complete lines of `chunk`.
+
+    At most `limit` (default `MAX_EMIT`) parsed dict records are kept; the record that overflows
+    the cap and everything after it stays unread — `extra` counts the records
+    that must wait for the next emission. Unparsable complete lines are
+    consumed anyway, so one corrupt line cannot poison the file forever.
+    `consumed` is the byte count safe to record in the cursor.
+    """
+    records, extra, consumed, _starts = _scan(chunk, limit)
     return records, extra, consumed
 
 
@@ -134,34 +153,47 @@ def format_row(record: dict) -> str:
     return "%s %s: %s" % (frm, status, line)
 
 
-def fit_count(rows) -> int:
-    """How many leading `rows` fit under MAX_CONTEXT with header and a `+k more` tail."""
-    budget = MAX_CONTEXT - len(_header(99)) - len("\n+99999 more")
+def fit_count(rows, extra=0) -> int:
+    """How many leading `rows` fit under MAX_CONTEXT with header and a `+k more` tail.
+
+    `extra` counts the records still unread after `rows`; every candidate
+    count reserves its own exact tail width (its own `+k more`), so the
+    emitted context never exceeds MAX_CONTEXT. One row is kept even when it
+    alone overflows — the cursor must always make progress — and run_hook
+    clamps the emitted context to MAX_CONTEXT after building it, so the cap
+    stays hard even for that forced first row.
+    """
     used = 0
-    n = 0
-    for row in rows:
+    best = 0
+    for n, row in enumerate(rows, 1):
         used += len(row) + 1
-        if used > budget:
+        tail = (len(rows) - n) + extra
+        total = len(_header(n)) + used + (len("\n+%d more" % tail) if tail else 0)
+        if total > MAX_CONTEXT:
             break
-        n += 1
-    return max(n, 1) if rows else 0
+        best = n
+    return max(best, 1) if rows else 0
 
 
 def run_hook() -> int:
     """stdin -> the inbox's unread complete lines -> one additionalContext.
 
-    The cursor is advanced BEFORE the print, so a crash mid-emission can only
-    re-deliver a line, never lose one. Any failure exits 0 with no output.
+    The cursor is advanced BEFORE the print, so delivery is deliberately
+    at-most-once: a crash between the cursor write and the print loses that
+    batch for good, and in exchange no line is ever delivered twice. Any
+    failure exits 0 with no output.
     """
     try:
         if _REPORT is None:
+            print("fleet_inject: fleet_report.py missing or broken next to "
+                  "this hook; inbox delivery is off", file=sys.stderr)
             return 0
         payload = json.loads(sys.stdin.read())
         if not isinstance(payload, dict):
             return 0
         event = payload.get("hook_event_name")
         if not isinstance(event, str) or not event:
-            event = "PostToolUse"
+            return 0  # no event name on stdin: emit nothing under a guessed one
         name, _parent = _REPORT.resolve_name(payload.get("session_id"))
         if not _REPORT.safe_name(name):
             return 0
@@ -172,6 +204,12 @@ def run_hook() -> int:
             return 0
         cursor_path = _REPORT.state_dir() / "inbox" / ".cursor" / name
         offset = read_cursor(cursor_path)
+        if size < offset:
+            # The inbox was truncated or rotated: the bytes the cursor named
+            # are gone, so delivery restarts at the beginning of the new file.
+            offset = 0
+            _REPORT.ensure_dir(cursor_path.parent)
+            _REPORT.atomic_write(cursor_path, b"0")
         if size <= offset:
             return 0
         with inbox.open("rb") as fh:
@@ -181,18 +219,22 @@ def run_hook() -> int:
         if cut < 0:
             return 0  # only a partial line: nothing is consumed until it completes
         chunk = data[:cut + 1]
-        records, _extra, _consumed = take_lines(chunk)
-        keep = fit_count([format_row(record) for record in records])
-        records, extra, consumed = take_lines(chunk, keep)
+        records, extra, consumed, starts = _scan(chunk, MAX_EMIT)  # parsed once
+        rows = [format_row(record) for record in records]  # formatted once
+        keep = fit_count(rows, extra)
+        if keep < len(records):
+            consumed = starts[keep]  # the first unkept record's line stays unread
+        extra += len(records) - keep
+        records, rows = records[:keep], rows[:keep]
         if consumed:
             _REPORT.ensure_dir(cursor_path.parent)
             _REPORT.atomic_write(cursor_path, str(offset + consumed).encode("utf-8"))
         if not records:
             return 0
-        rows = [format_row(record) for record in records]
         context = _header(len(rows)) + "\n" + "\n".join(rows)
         if extra:
             context += "\n+%d more" % extra
+        context = context[:MAX_CONTEXT]  # the cap is hard: never emit more
         out = {"hookSpecificOutput": {"hookEventName": event,
                                       "additionalContext": context}}
         print(json.dumps(out))
