@@ -185,6 +185,23 @@ def test_odd_tracked_symlink_names_are_read_with_z(
     assert "broken-link" not in proc.stdout
 
 
+def test_explicit_routing_root_stat_error_is_kept_on_every_platform(ar, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import autoos_refs_roots as roots
+    home = tmp_path / "h"
+    home.mkdir()
+    root = tmp_path / "routing"
+    root.mkdir()
+    real = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(path) == root:
+            raise PermissionError(13, "denied")
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(roots.os, "stat", stat)
+    with pytest.raises(ar.RootScanError, match="PermissionError"):
+        ar.scan_all(home, routing_root=root)
+
+
 @windows_skip
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads every directory")
 def test_unreadable_explicit_routing_root_keeps_its_stat_error(ar, tmp_path: Path) -> None:
