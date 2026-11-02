@@ -35,7 +35,10 @@ def notify_leg_refused(service, record, chosen, reason):
     line per refused attempt (G3); a service without a completion sink stays
     silent.  The completion sink is a local file write and stays synchronous;
     only the PLANGRAPH_SPAWN_NOTIFY_CMD hook (a subprocess with a 10 s timeout)
-    runs on a daemon thread so it never blocks the event loop (H2).
+    runs on a daemon thread so it never blocks the event loop (H2).  F3: that
+    thread is joined for at most 2 s, so a process exiting right after the
+    refusal still delivers the hook line, while a hanging command can never
+    block the caller for more than ~2.5 s (the daemon thread is abandoned).
     """
     import logging
     import os
@@ -50,7 +53,10 @@ def notify_leg_refused(service, record, chosen, reason):
         sink.deliver('parent', event)
         command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
         if command:
-            threading.Thread(target=_deliver_cmd, args=(command, event), daemon=True).start()
+            worker = threading.Thread(target=_deliver_cmd, args=(command, event), daemon=True)
+            worker.start()
+            # F3: bounded join -- a prompt process exit must not lose the hook.
+            worker.join(timeout=2.0)
     except Exception:
         logging.getLogger(__name__).exception('leg refusal notify failed')
 
