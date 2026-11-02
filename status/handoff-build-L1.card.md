@@ -5,6 +5,7 @@
 - claimed (all leases 13:07Z): SPAWNER-LEGS-D3605 (ep2), SPAWNER-CONTEXT-PACK-D3622 (ep1), FLEET-BUS-DISCOVERY-SELF (ep1), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1), RIN-PATH-REPOINT + RIN-LEDGER-VIEWS (ep3, re-claimed D-3646, lease 13:24Z), LE-FLEET-MSG-INVENTORY (ep4)
 - ready next: LE-RECYCLE-KEEP-SUBAGENTS (HIGH, D-3631), LE-HANDOFF-OPEN-ITEMS-GATE (D-3627)
 ## Done
+- 11-02 keeper tailnet bind live: plangraph-keeper-tailnet.socket (proxyd 100.82.253.38:8787 -> 127.0.0.1); rollback disable --now the socket
 - 11-02T10:00Z LE-PANE-MOVE-EXIT-CONFIRM - parked+released, luna MED in desc (D-3633(3))
 - 11-02T10:45Z FLEET-BUS-DISCOVERY-SELF PR#326 c01d0b69 CI green, Haiku tool seat ACCEPT + luna delta ACCEPT run-30141a2e
 - 11-02T10:50Z SPAWNER-CONTEXT-PACK-D3622 PR#325 ce860671 CI 41430998085 green, Haiku delta ACCEPT seat-h325d.md
@@ -28,7 +29,6 @@
 - spawn hold: coding.vm agent-run cap 4 (oversight I-23); md-sync re-armed 11:23Z (D-1297)
 - #310 RIN-LEDGER-VIEWS = replan merges; on MERGED: evidence+submit ep3
 - D-3645: SPAWNER-SESSION-NAMES closed by decision; live probe on 2 hosts at the next spawner deploy -> DONE <probe evidence> to routing
-- BLOCKED keeper tailnet bind: operator types OK in build-L1 session (D-3633(6)) | default wait | deadline none
 - D-3633(1) LEG-STATE: operator places ~/.config/plangraph/omniroute-mgmt.key | default slice 1 reader + fakes | deadline none
 ## Traps
 - Haiku seat = same family as Sonnet writers (D-2511): Sonnet PRs need workst cx-luna tools seat
