@@ -27,8 +27,11 @@ class RefusalGate:
             self.refused.set()
 
     def finish(self, proc, result):
-        if proc.returncode:   # exited non-zero with a pending candidate: book it at once
+        if proc.returncode and self.pending:   # exited non-zero with a pending candidate: book it at once
             self.poll(float('inf'))
+            if self.job.status not in ('cancelled', 'stalled', 'timeout'):   # same booking as the watchdog loop
+                self.job.status, self.job.exit_code = 'failed', 7
+                self.job.events.append({'event': 'dispatch_refused', 'reason': self.job.refusal})
         return result
 
     async def run(self):

@@ -59,4 +59,4 @@ def test_real_refusal_then_hang_is_confirmed_in_time(tmp_path):
 def test_refusal_then_nonzero_exit_is_booked_at_once(tmp_path):
     body = "sys.stdout.write('Error: Rate limit reached, please wait\\n'); sys.stdout.flush()\nsys.exit(1)\n"
     job, proc, took = _collect(tmp_path, body)
-    assert took < 2 and job.refusal and proc.returncode == 1
+    assert took < 2 and job.refusal and proc.returncode == 1 and job.status == "failed" and job.exit_code == 7
