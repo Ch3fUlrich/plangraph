@@ -11,7 +11,10 @@ sshd runs the ``command=`` value through ``sh -c``, so ``forced_command`` shell-
 every path and ``check_authorized_keys`` re-parses the value strictly (``shlex``):
 any snapshot-serve line whose PYTHONPATH it cannot read is a PROBLEM, never a skip.
 Problems name only the line number and the PYTHONPATH — never key material.
-``print`` refuses a ``--checkout`` under ``.claude/worktrees/`` or a relative path.
+Every PYTHONPATH entry must REALPATH to ``<pinned>/src`` — the pin is enforced,
+not advisory — and must be outside ``.claude/worktrees/`` by REALPATH as well as
+lexically.  ``print`` refuses a ``--checkout`` under ``.claude/worktrees/``, a
+relative path, or one that is not the pinned checkout.
 
 Installing or changing the forced command is OPERATOR STEP OS-SNAPSHOT-PULL-PATH;
 agents never edit ``authorized_keys``.
@@ -31,6 +34,9 @@ __all__ = ["PINNED_DEFAULT", "forced_command", "check_authorized_keys", "main"]
 PINNED_DEFAULT = "~/.local/share/plangraph/snapshot-serve"
 
 _SNIPPET = "plangraph.keeper.snapshot_serve"
+#: A command value is inspected when it contains this substring: covers both
+#: ``-m plangraph.keeper.snapshot_serve`` and a file-path ``.../snapshot_serve.py``.
+_TRIGGER = "snapshot_serve"
 #: ``command="..."`` value, honoring ``\\"`` escapes, at an option boundary only.
 _COMMAND_RE = re.compile(r'(?:^|,)command="((?:\\.|[^"\\])*)"')
 #: Unquoted ``command=`` value (up to the next option comma), quotes included.
@@ -109,7 +115,7 @@ def _command_value(options: str):
     return match.group(1) if match else None
 
 
-def _check_command(number: int, command: str) -> list:
+def _check_command(number: int, command: str, pinned) -> list:
     try:
         words = shlex.split(command)
     except ValueError:
@@ -117,29 +123,42 @@ def _check_command(number: int, command: str) -> list:
     entries = []
     for word in words:
         if word.startswith("PYTHONPATH="):
-            entries += [e for e in word.split("=", 1)[1].split(os.pathsep) if e]
+            # keep empty entries: CPython maps them to the cwd
+            entries += word.split("=", 1)[1].split(os.pathsep)
     if not entries:
         return [f"line {number}: no PYTHONPATH in snapshot_serve command"]
+    pinned_dir = os.path.expanduser(str(pinned))
+    pinned_src = os.path.realpath(os.path.join(pinned_dir, "src"))
     problems = []
     for entry in entries:
+        if not entry:
+            problems.append(f"line {number}: PYTHONPATH has an empty entry "
+                            "(CPython maps it to the cwd)")
+            continue
         if not os.path.isabs(entry):
             problems.append(f"line {number}: PYTHONPATH {entry} is not absolute")
         elif not os.path.isdir(entry):
             problems.append(f"line {number}: PYTHONPATH {entry} does not exist")
-        if _under_claude_worktrees(entry):
+        if _under_claude_worktrees(entry) or _under_claude_worktrees(os.path.realpath(entry)):
             problems.append(f"line {number}: PYTHONPATH {entry} is under "
                             ".claude/worktrees/ (removable by session cleanup)")
+        if os.path.realpath(entry) != pinned_src:
+            problems.append(f"line {number}: PYTHONPATH {entry} is not the pinned "
+                            f"checkout {pinned_dir}/src")
     return problems
 
 
-def check_authorized_keys(text: str) -> list:
+def check_authorized_keys(text: str, pinned=PINNED_DEFAULT) -> list:
     """Problems in ``text``; only snapshot-serve lines are inspected.
 
-    For every ``command=`` whose value runs ``plangraph.keeper.snapshot_serve``:
-    every PYTHONPATH entry (all ``PYTHONPATH=`` words, all ``os.pathsep`` dirs)
-    must be an EXISTING absolute directory outside ``.claude/worktrees/``.  A line
-    whose command cannot be parsed or carries no parseable PYTHONPATH is itself a
-    problem — never a skip.  Each problem names only the line number and the path.
+    For every ``command=`` whose value runs ``snapshot_serve`` (module or file
+    path spelling): every PYTHONPATH entry (all ``PYTHONPATH=`` words, all
+    ``os.pathsep`` dirs) must be an EXISTING absolute directory outside
+    ``.claude/worktrees/`` (by realpath as well as lexically) whose realpath is
+    exactly ``realpath(pinned/src)`` — the pin is ENFORCED.  An empty entry, or a
+    line whose command cannot be parsed or carries no parseable PYTHONPATH, is
+    itself a problem — never a skip.  Each problem names only the line number
+    and the path.
     """
     problems = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -147,9 +166,9 @@ def check_authorized_keys(text: str) -> list:
         if not stripped or stripped.startswith("#"):
             continue
         command = _command_value(_options_field(stripped))
-        if command is None or _SNIPPET not in command:
+        if command is None or _TRIGGER not in command:
             continue
-        problems += _check_command(number, command)
+        problems += _check_command(number, command, pinned)
     return problems
 
 
@@ -159,17 +178,25 @@ def main(argv=None) -> int:
     show = sub.add_parser("print", help="print the forced command to install")
     show.add_argument("--checkout", required=True)
     show.add_argument("--config", required=True)
+    show.add_argument("--pinned", default=PINNED_DEFAULT)
     check = sub.add_parser("check", help="check an authorized_keys file (exit 1 on problems)")
     check.add_argument("--authorized-keys", required=True)
+    check.add_argument("--pinned", default=PINNED_DEFAULT)
     args = parser.parse_args(argv)
     if args.cmd == "print":
         checkout = os.path.expanduser(args.checkout)
-        if _under_claude_worktrees(checkout):
+        if (_under_claude_worktrees(checkout)
+                or _under_claude_worktrees(os.path.realpath(checkout))):
             print("snapshot_serve_path: refusing --checkout under .claude/worktrees/ "
                   "(removable by session cleanup)", file=sys.stderr)
             return 1
         if not os.path.isabs(checkout):
             print("snapshot_serve_path: refusing relative --checkout", file=sys.stderr)
+            return 1
+        pinned = os.path.expanduser(str(args.pinned))
+        if os.path.realpath(checkout) != os.path.realpath(pinned):
+            print(f"snapshot_serve_path: refusing --checkout {checkout} is not the "
+                  f"pinned checkout {pinned}", file=sys.stderr)
             return 1
         print(forced_command(args.checkout, args.config))
         return 0
@@ -179,7 +206,7 @@ def main(argv=None) -> int:
     except OSError as exc:
         print(f"snapshot_serve_path: {exc}", file=sys.stderr)
         return 2
-    problems = check_authorized_keys(text)
+    problems = check_authorized_keys(text, pinned=args.pinned)
     for problem in problems:
         print(problem)
     return 1 if problems else 0

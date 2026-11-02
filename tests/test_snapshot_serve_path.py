@@ -9,6 +9,10 @@ or `python3 -c` PYTHONPATH slipping through as CLEAN, only the first PYTHONPATH 
 first `os.pathsep` entry checked, a relative or `~` entry resolved against the
 checker's cwd, `command="` matched in a comment/earlier option or truncated at an
 escaped `\"`, `print` emitting a `.claude/worktrees/` checkout.
+Round 3: a symlinked pin into `.claude/worktrees/` passing lexically, an advisory
+(never-compared) PINNED_DEFAULT, `snapshot_serve` reached by file path escaping
+inspection, empty PYTHONPATH entries dropped silently, and the missing
+authorized_keys rc-2 path.
 """
 from __future__ import annotations
 
@@ -32,7 +36,7 @@ def key_line(command, comment="pull@hostA"):
 
 def test_check_flags_missing_pypath_dir(tmp_path):
     cmd = ssp.forced_command(tmp_path / "gone-checkout", tmp_path / "keeper.json")
-    problems = ssp.check_authorized_keys(key_line(cmd))
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=tmp_path / "gone-checkout")
     assert len(problems) == 1
     assert "line 1" in problems[0]
     assert "does not exist" in problems[0]
@@ -43,11 +47,11 @@ def test_check_flags_claude_worktrees_path(tmp_path):
     checkout = tmp_path / "repo" / ".claude" / "worktrees" / "le-x"
     (checkout / "src").mkdir(parents=True)   # exists, but cleanup may remove it
     cmd = ssp.forced_command(checkout, tmp_path / "keeper.json")
-    problems = ssp.check_authorized_keys(key_line(cmd))
-    assert len(problems) == 1
-    assert "line 1" in problems[0]
-    assert ".claude/worktrees" in problems[0]
-    assert str(checkout / "src") in problems[0]
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=checkout)
+    worktrees = [p for p in problems if ".claude/worktrees" in p]
+    assert len(worktrees) == 1
+    assert "line 1" in worktrees[0]
+    assert str(checkout / "src") in worktrees[0]
 
 
 def test_pinned_default_dir_passes(tmp_path, monkeypatch):
@@ -63,7 +67,8 @@ def test_pinned_default_dir_passes(tmp_path, monkeypatch):
 def test_key_material_never_in_output(tmp_path, capsys):
     keys = tmp_path / "authorized_keys"
     keys.write_text(key_line(ssp.forced_command(tmp_path / "gone", tmp_path / "k.json")) + "\n")
-    assert ssp.main(["check", "--authorized-keys", str(keys)]) == 1
+    assert ssp.main(["check", "--authorized-keys", str(keys),
+                     "--pinned", str(tmp_path / "gone")]) == 1
     out = capsys.readouterr().out
     assert BLOB not in out
     assert "ssh-ed25519" not in out
@@ -88,7 +93,8 @@ def test_print_matches_expected_string(tmp_path, capsys):
     checkout, config = tmp_path / "co", tmp_path / "keeper.json"
     expected = (f'command="PYTHONPATH={checkout}/src /usr/bin/python3 '
                 f"-m plangraph.keeper.snapshot_serve --config {config}\"")
-    assert ssp.main(["print", "--checkout", str(checkout), "--config", str(config)]) == 0
+    assert ssp.main(["print", "--checkout", str(checkout), "--config", str(config),
+                     "--pinned", str(checkout)]) == 0
     assert capsys.readouterr().out == expected + "\n"
     assert ssp.forced_command(checkout, config) == expected
 
@@ -106,12 +112,14 @@ def test_line_numbers_across_lines_and_module_cli(tmp_path):
     bad = ssp.forced_command(tmp_path / "gone", tmp_path / "k.json")
     keys = tmp_path / "authorized_keys"
     keys.write_text("\n".join([key_line(good), "not-a-key-line", key_line(bad), ""]) + "\n")
-    problems = ssp.check_authorized_keys(keys.read_text())
-    assert [p.split(":")[0] for p in problems] == ["line 3"]
+    problems = ssp.check_authorized_keys(keys.read_text(), pinned=tmp_path / "ok")
+    assert problems
+    assert all(p.startswith("line 3:") for p in problems)
+    assert any("does not exist" in p for p in problems)
     env = dict(os.environ, PYTHONPATH=SRC)
     proc = subprocess.run(
         [sys.executable, "-m", "plangraph.keeper.snapshot_serve_path",
-         "check", "--authorized-keys", str(keys)],
+         "check", "--authorized-keys", str(keys), "--pinned", str(tmp_path / "ok")],
         capture_output=True, text=True, env=env)
     assert proc.returncode == 1
     assert "line 3" in proc.stdout
@@ -128,14 +136,16 @@ def test_forced_command_round_trips_through_check(tmp_path):
     assert f"--config '{config}'" in cmd
     keys = tmp_path / "authorized_keys"
     keys.write_text(key_line(cmd) + "\n")
-    assert ssp.check_authorized_keys(keys.read_text()) == []
-    assert ssp.main(["check", "--authorized-keys", str(keys)]) == 0
+    assert ssp.check_authorized_keys(keys.read_text(), pinned=checkout) == []
+    assert ssp.main(["check", "--authorized-keys", str(keys),
+                     "--pinned", str(checkout)]) == 0
 
 
 def test_spaced_missing_dir_still_flagged(tmp_path):
     gone = tmp_path / "snap shot" / "gone dir" / "src"
     cmd = ssp.forced_command(tmp_path / "snap shot" / "gone dir", tmp_path / "keeper.json")
-    problems = ssp.check_authorized_keys(key_line(cmd))
+    problems = ssp.check_authorized_keys(key_line(cmd),
+                                         pinned=tmp_path / "snap shot" / "gone dir")
     assert len(problems) == 1
     assert "does not exist" in problems[0]
     assert str(gone) in problems[0]
@@ -146,11 +156,11 @@ def test_quoted_pypath_value_parsed(tmp_path):
     src.mkdir(parents=True)
     line = key_line('command="PYTHONPATH=\\"{0}\\" /usr/bin/python3 '
                     '-m plangraph.keeper.snapshot_serve --config /k.json"'.format(src))
-    assert ssp.check_authorized_keys(line) == []
+    assert ssp.check_authorized_keys(line, pinned=tmp_path / "a b") == []
     gone = tmp_path / "gone dir" / "src"
     line = key_line("command=\"PYTHONPATH='{0}' /usr/bin/python3 "
                     "-m plangraph.keeper.snapshot_serve --config /k.json\"".format(gone))
-    problems = ssp.check_authorized_keys(line)
+    problems = ssp.check_authorized_keys(line, pinned=tmp_path / "gone dir")
     assert len(problems) == 1
     assert "does not exist" in problems[0]
     assert str(gone) in problems[0]
@@ -187,25 +197,28 @@ def test_multiple_pypath_entries_all_checked(tmp_path):
                tmp_path / "gone-c" / "src")
     cmd = ('command="PYTHONPATH={0}:{1} PYTHONPATH={2} /usr/bin/python3 '
            '-m plangraph.keeper.snapshot_serve --config /k.json"').format(a, b, c)
-    problems = ssp.check_authorized_keys(key_line(cmd))
-    assert len(problems) == 3
-    assert [p.split(":")[0] for p in problems] == ["line 1"] * 3
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=tmp_path / "gone-a")
+    missing = [p for p in problems if "does not exist" in p]
+    assert len(missing) == 3
     for path in (a, b, c):
-        assert any(str(path) in p for p in problems)
+        assert any(str(path) in p for p in missing)
+    assert all(p.startswith("line 1:") for p in problems)
 
 
 def test_relative_and_tilde_entries_not_absolute():
     cmd = ('command="PYTHONPATH=rel/src:~/x /usr/bin/python3 '
            '-m plangraph.keeper.snapshot_serve --config /k.json"')
     problems = ssp.check_authorized_keys(key_line(cmd))
-    assert len(problems) == 2
-    assert all("not absolute" in p for p in problems)
+    not_abs = [p for p in problems if "not absolute" in p]
+    assert len(not_abs) == 2
+    assert any("rel/src" in p for p in not_abs)
+    assert any("~/x" in p for p in not_abs)
 
 
 def test_worktree_and_missing_two_problems(tmp_path):
     checkout = tmp_path / "repo" / ".claude" / "worktrees" / "le-y"  # src NOT created
     cmd = ssp.forced_command(checkout, tmp_path / "keeper.json")
-    problems = ssp.check_authorized_keys(key_line(cmd))
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=checkout)
     assert len(problems) == 2
     assert "does not exist" in problems[0]
     assert ".claude/worktrees" in problems[1]
@@ -213,7 +226,8 @@ def test_worktree_and_missing_two_problems(tmp_path):
 
 def test_print_refuses_worktree_checkout(tmp_path, capsys):
     checkout = tmp_path / "repo" / ".claude" / "worktrees" / "le-z"
-    code = ssp.main(["print", "--checkout", str(checkout), "--config", str(tmp_path / "k.json")])
+    code = ssp.main(["print", "--checkout", str(checkout), "--config", str(tmp_path / "k.json"),
+                     "--pinned", str(checkout)])
     assert code == 1
     out, err = capsys.readouterr()
     assert out == ""
@@ -232,3 +246,122 @@ def test_command_in_comment_field_ignored(tmp_path):
     text = (f'ssh-ed25519 {BLOB} backup '
             'command="PYTHONPATH=/definitely/gone -m plangraph.keeper.snapshot_serve"')
     assert ssp.check_authorized_keys(text) == []
+
+
+def test_symlink_pin_into_worktrees_flagged(tmp_path):
+    """A pin that is a SYMLINK into .claude/worktrees/ must still be refused."""
+    real = tmp_path / "repo" / ".claude" / "worktrees" / "x"
+    (real / "src").mkdir(parents=True)
+    pin = tmp_path / "pin-checkout"
+    pin.symlink_to(real)          # lexical path looks like the pin
+    cmd = ssp.forced_command(pin, tmp_path / "k.json")
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=pin)
+    assert len(problems) == 1
+    assert ".claude/worktrees" in problems[0]
+    assert str(pin / "src") in problems[0]
+
+
+def test_print_refuses_symlink_into_worktrees(tmp_path, capsys):
+    real = tmp_path / "repo" / ".claude" / "worktrees" / "y"
+    (real / "src").mkdir(parents=True)
+    pin = tmp_path / "pin-checkout"
+    pin.symlink_to(real)
+    code = ssp.main(["print", "--checkout", str(pin), "--config", "/k.json",
+                     "--pinned", str(pin)])
+    assert code == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert ".claude/worktrees" in err
+
+
+def test_dotdot_entry_is_not_the_pin(tmp_path):
+    checkout = tmp_path / "co"
+    (checkout / "src").mkdir(parents=True)
+    entry = str(checkout / "src" / "..")
+    cmd = ('command="PYTHONPATH={0} /usr/bin/python3 '
+           '-m plangraph.keeper.snapshot_serve --config /k.json"').format(entry)
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=checkout)
+    assert len(problems) == 1
+    assert "is not the pinned checkout" in problems[0]
+    assert entry in problems[0]
+
+
+def test_empty_pypath_entry_flagged(tmp_path):
+    checkout = tmp_path / "co"
+    (checkout / "src").mkdir(parents=True)
+    for value in (f"{checkout}/src:", f":{checkout}/src"):
+        cmd = ('command="PYTHONPATH={0} /usr/bin/python3 '
+               '-m plangraph.keeper.snapshot_serve --config /k.json"').format(value)
+        problems = ssp.check_authorized_keys(key_line(cmd), pinned=checkout)
+        assert len(problems) == 1, problems
+        assert "line 1" in problems[0]
+        assert "empty entry" in problems[0]
+
+
+def test_file_path_spelling_with_worktrees_pypath(tmp_path):
+    """A file-path `.../snapshot_serve.py` command must be inspected, not skipped."""
+    wt = tmp_path / "w" / ".claude" / "worktrees" / "x"
+    script = wt / "src" / "plangraph" / "keeper" / "snapshot_serve.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("")
+    cmd = ('command="PYTHONPATH={0}/src /usr/bin/python3 {1} '
+           '--config /k.json"').format(wt, script)
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=wt)
+    assert len(problems) == 1
+    assert ".claude/worktrees" in problems[0]
+
+
+def test_pin_mismatch_check_and_print(tmp_path, capsys):
+    pin = tmp_path / "the-pin"
+    (pin / "src").mkdir(parents=True)
+    other = tmp_path / "other-co"
+    (other / "src").mkdir(parents=True)
+    cmd = ssp.forced_command(other, tmp_path / "k.json")
+    problems = ssp.check_authorized_keys(key_line(cmd), pinned=pin)
+    assert len(problems) == 1
+    assert "is not the pinned checkout" in problems[0]
+    assert str(other / "src") in problems[0]
+    assert f"{pin}/src" in problems[0]
+    code = ssp.main(["print", "--checkout", str(other), "--config", "/k.json",
+                     "--pinned", str(pin)])
+    assert code == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "pinned checkout" in err
+
+
+def test_pin_match_passes(tmp_path):
+    pin = tmp_path / "the-pin"
+    (pin / "src").mkdir(parents=True)
+    cmd = ssp.forced_command(pin, tmp_path / "k.json")
+    assert ssp.check_authorized_keys(key_line(cmd), pinned=pin) == []
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(key_line(cmd) + "\n")
+    assert ssp.main(["check", "--authorized-keys", str(keys),
+                     "--pinned", str(pin)]) == 0
+
+
+def test_missing_authorized_keys_file_rc2(tmp_path, capsys):
+    missing = tmp_path / "no-such-authorized_keys"
+    code = ssp.main(["check", "--authorized-keys", str(missing)])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert str(missing) in err
+
+
+def test_module_cli_round_trip(tmp_path):
+    pin = tmp_path / "the-pin"
+    (pin / "src").mkdir(parents=True)
+    env = dict(os.environ, PYTHONPATH=SRC)
+    base = [sys.executable, "-m", "plangraph.keeper.snapshot_serve_path"]
+    proc = subprocess.run(
+        base + ["print", "--checkout", str(pin), "--config", str(tmp_path / "k.json"),
+                "--pinned", str(pin)],
+        capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(key_line(proc.stdout.strip()) + "\n")
+    proc = subprocess.run(
+        base + ["check", "--authorized-keys", str(keys), "--pinned", str(pin)],
+        capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
