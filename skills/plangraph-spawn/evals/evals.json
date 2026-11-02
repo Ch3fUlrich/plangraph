@@ -1,0 +1,20 @@
+[
+  {
+    "id": "plangraph-spawn-1",
+    "prompt": "We have a card for a small refactor (card.json) and need an implementer run started on this host. Which command do I run, and how do I choose the model it runs on?",
+    "must": ["spawn --card", "never hand-pick a model"],
+    "must_not": ["hand-picked model", "choose the model myself", "model of my choice"]
+  },
+  {
+    "id": "plangraph-spawn-2",
+    "prompt": "The spawn call returned RUN_ID=run-88. How do I wait for the worker to finish so I can fetch its result?",
+    "must": ["plangraph-spawn wait run_id --timeout seconds"],
+    "must_not": ["pgrep -f in a loop", "poll the process table", "sleep and re-check"]
+  },
+  {
+    "id": "plangraph-spawn-3",
+    "prompt": "I need a cross-family review of run run-88 across every review seat the card routes to. How do I spawn it, and what fences the review?",
+    "must": ["--review-of", "is the source of the family fence", "covering each writer part"],
+    "must_not": ["without --review-of", "no fence needed", "unfenced is fine"]
+  }
+]
