@@ -10,8 +10,8 @@
 //! The policy half is pure: [`effective_free_mb`] subtracts only the
 //! not-yet-materialized part of every reservation, and [`decide`] grants or
 //! queues one request against the R1a [`crate::hosts::Caps`] of the host
-//! (FIFO by `enqueued_ms` across classes; R3b adds promotion, aging and
-//! reclaim).
+//! (queue order `(enqueued_ms, run_id)` across classes; R3b adds promotion,
+//! aging and reclaim).
 //!
 //! Roster shape:
 //!
@@ -21,17 +21,41 @@
 //!   as RSS).
 //! - [`Ticket`] is one request in the queue, stamped on arrival.
 //! - [`SlotTable`] is the whole file: `version`, `active`, `queued`.
+//!
+//! R3b-1 turns the queue pull-based: each waiting supervisor runs [`promote`]
+//! on its own ticket and takes it only when it is the oldest that fits
+//! ([`take_promotion`]); the exiting holder calls [`release`] and touches
+//! [`touch_wake`] outside the lock. R3b-2 adds stale [`reclaim`] by execution
+//! group liveness.
 
 use crate::hosts::Role;
 use serde::{Deserialize, Serialize};
 
 mod io;
+mod liveness;
 mod policy;
+mod promote;
+#[cfg(test)]
+mod promote_tests;
+mod reclaim;
 #[cfg(test)]
 mod tests;
+mod wake;
+#[cfg(test)]
+mod wake_tests;
 
 pub use io::{with_table, SlotError};
+#[cfg(windows)]
+pub use liveness::{FileSeatLocks, JobLiveness};
+pub use liveness::{GroupLiveness, GroupState, LockState, SeatLocks};
+#[cfg(target_os = "linux")]
+pub use liveness::{LinuxLiveness, ProcSeatLocks};
 pub use policy::{decide, effective_free_mb, Decision};
+pub use promote::{
+    aging_report, promote, release, take_promotion, AgingPolicy, AgingReport, Promotion, WaitReason,
+};
+pub use reclaim::{reclaim, ReclaimPolicy, ReclaimReport};
+pub use wake::{touch_wake, wait_for_wake, wake_token, WakeResult};
 
 /// Which caps a slot counts against (V6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -54,7 +78,8 @@ pub struct ActiveSlot {
     /// Attempt this slot belongs to.
     pub run_id: String,
     pub pid: u32,
-    /// Process start time in epoch ms; with `pid` it guards against pid reuse.
+    /// Opaque process start time (Linux: starttime ticks, Windows: creation
+    /// FILETIME); with `pid` it guards against pid reuse (D-3705).
     pub start_time: u64,
     /// Work the run does; taken from the R1a role vocabulary.
     pub role: Role,
@@ -81,7 +106,8 @@ pub struct Ticket {
     /// Attempt this request belongs to.
     pub run_id: String,
     pub pid: u32,
-    /// Process start time in epoch ms; with `pid` it guards against pid reuse.
+    /// Opaque process start time (Linux: starttime ticks, Windows: creation
+    /// FILETIME); with `pid` it guards against pid reuse (D-3705).
     pub start_time: u64,
     /// Arrival stamp (epoch ms): the FIFO order of the queue.
     pub enqueued_ms: u64,
