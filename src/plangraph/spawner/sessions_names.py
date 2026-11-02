@@ -12,13 +12,37 @@ record stays (stopped, transcript readable).
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
+import time
 from pathlib import Path
 
 from plangraph.routing_support.private_io import atomic_write_private
 
 _TAIL_RE = re.compile(r"(.+)-(\d+)\Z")
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
+
+
+def _flock(fd, lock):
+    """Exclusive advisory lock on the whole of fd (fcntl.flock, else msvcrt)."""
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX if lock else fcntl.LOCK_UN)
+        return
+    os.lseek(fd, 0, os.SEEK_SET)
+    while True:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_LOCK if lock else msvcrt.LK_UNLCK, 1)
+            return
+        except OSError:
+            if not lock:
+                raise
+            time.sleep(0.05)  # LK_LOCK gives up after ~10 s: keep waiting
 
 
 class _NamesMixin:
@@ -38,6 +62,25 @@ class _NamesMixin:
             raise _refuse(f"name {name!r} ends in -{m.group(2)}: a numbered name is "
                           f"<role>-NNNN with exactly 4 digits; pass the role only")
         return m.group(1), m.group(2)
+
+    @contextlib.contextmanager
+    def _counter_flock(self):
+        """Cross-process lock (counters.lock) around "read next number ->
+        write counters.json"; role-counter mode only. Taken after the
+        in-process role lock, never before it."""
+        if self._names_mode() != "role-counter":
+            yield
+            return
+        self._sessions.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(self._sessions / "counters.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            _flock(fd, True)
+            yield
+        finally:
+            try:
+                _flock(fd, False)
+            finally:
+                os.close(fd)
 
     def _lock_key(self, name):
         """launch's lock: the role in role-counter mode (the counter is per
@@ -99,7 +142,7 @@ class _NamesMixin:
         if cfg.get("session_names", "role-counter") != "role-counter":
             return name
         role, _ = self._role_of(name, strict=False)
-        with self._name_lock("role:" + role):
+        with self._name_lock("role:" + role), self._counter_flock():
             number = self._next_number(role)
             self._reserve_number(role, number)
         return f"{role}-{number:04d}"

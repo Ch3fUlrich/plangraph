@@ -140,7 +140,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
 
     def launch(self, *, name, cwd, model, effort, permission_mode, mcp_config,
                prompt=None, prompt_file=None, handoff=None, parent=None, dry_run=False):
-        with self._name_lock(self._lock_key(name)):
+        with self._name_lock(self._lock_key(name)), self._counter_flock():
             return self._action("launch", name, lambda: self._launch_inner(
                 name, cwd, model, effort, permission_mode, mcp_config,
                 prompt, prompt_file, handoff, parent, dry_run), dry=dry_run is True)

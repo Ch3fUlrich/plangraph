@@ -152,3 +152,32 @@ def test_corrupt_counters_file_refuses(rc):
     (rc.state / "sessions" / "counters.json").write_text("[1]")
     with pytest.raises(ParameterRefused, match="counters.json"):
         go(rc, s, "alpha")
+
+
+_CHILD = """
+import json, sys, time, types
+from plangraph.spawner.sessions import Sessions
+state, cfg, cwd, mcp, model, effort, mode = sys.argv[1:8]
+def run(argv, **kw):
+    if argv[1:3] == ["agents", "--json"]:
+        return types.SimpleNamespace(returncode=0, stdout="[]", stderr="")
+    time.sleep(0.3)  # widen the read-next -> write window
+    return types.SimpleNamespace(returncode=0, stdout="session %s" % sys.argv[8], stderr="")
+s = Sessions(state_root=state, config_path=cfg, run=run, sleep=lambda _s: None)
+print(s.launch(name="eps", cwd=cwd, model=model, effort=effort, permission_mode=mode,
+               mcp_config=mcp, prompt="do it")["name"])
+"""
+
+
+def test_processes_get_distinct_numbers(rc):
+    import os
+    import subprocess
+    import sys
+    from sessions_support import MODEL, EFFORT, MODE
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    procs = [subprocess.Popen(
+        [sys.executable, "-c", _CHILD, str(rc.state), str(rc.cfg), str(rc.proj), str(rc.mcp),
+         MODEL, EFFORT, MODE, UUID1], env=env, stdout=subprocess.PIPE, text=True) for _ in range(4)]
+    out = [p.communicate(timeout=60)[0].strip() for p in procs]
+    assert [p.returncode for p in procs] == [0, 0, 0, 0]
+    assert sorted(out) == [f"eps-{n:04d}" for n in range(1, 5)]
