@@ -26,7 +26,11 @@ class SeatSpawnMixin:
         if role != 'review':
             return prompt
         from .inline_diff import inline_diff_prompt
-        return inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3)
+        # A no-diff review is allowed here only because the path already decided
+        # it: routing skips inline-only legs without diff_ref (inline_only_needs_diff)
+        # and an explicit --leg reviews the document prompt unchanged.
+        return inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
+                                  allow_document=True)
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
                            **options):

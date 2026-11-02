@@ -22,10 +22,15 @@ READER_GRACE_S = 5.0          # bounded drain once the run is gone (M6)
 EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreadable (Q7)
 
 
+def terminal_status(status, role):
+    return 'timed_out' if status == 'timeout' and role == 'review' else status
+
+
 def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
         return False
-    record.update(status='timed_out' if job.status == 'timeout' and record.get('role') == 'review' else job.status, exit_code=job.exit_code, reason=job.status,
+    status = terminal_status(job.status, record.get('role'))
+    record.update(status=status, exit_code=job.exit_code, reason=job.status,
                   watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
                   events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
@@ -56,8 +61,7 @@ def thresholds(card=None, *, role=None):
             # M17: a bad env knob is refused before launch (exit 2), like a bad card.
             raise SpawnRefused('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
         result['max_s'] = value
-        # An operator-set run timeout is a wall clock: the first-edit hold
-        # never extends it (M5's hold 'does not extend the max deadline').
+        # An operator-set run timeout is a wall clock: the first-edit hold never extends it (M5).
         result['hard_max'] = True
     interval = os.environ.get('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL')
     try:
@@ -83,12 +87,10 @@ class Watchdog:
         self.progress = dict(edit=start, activity=start, cpu=start)
 
     def budget(self):
-        """Hard deadline in seconds. A pre-edit writer whose edits we can see is
-        owed its first-edit window on top of the table run budget (M5's 'holds
-        while output flows' ends at max_s + first_edit_s); once edited, or when
-        the edit signal is unavailable, or for non-writers, max_s ends the run.
-        An operator-set PLANGRAPH_SPAWN_RUN_TIMEOUT is a wall clock and is
-        never extended."""
+        """Hard deadline in seconds. A pre-edit writer whose edits we can see is owed its first-edit
+        window on top of the table run budget (M5's 'holds while output flows' ends at max_s +
+        first_edit_s); once edited, or when the edit signal is unavailable, or for non-writers,
+        max_s ends the run. An operator-set PLANGRAPH_SPAWN_RUN_TIMEOUT is a wall clock, never extended."""
         if self.limits.get('hard_max'):
             return self.limits['max_s']
         return self.limits['max_s'] + (self.limits['first_edit_s']
@@ -170,10 +172,9 @@ def edit_signature(cwd):
 
 
 async def run_gone(proc):
-    """Resolve once the run has exited. ``Process.wait()`` cannot signal this:
-    asyncio resolves its waiters only after every pipe transport disconnects
-    (CPython base_subprocess._try_finish), so a detached grandchild holding the
-    pipes wedges it forever although the return code is already known (M6)."""
+    """Resolve once the run has exited. ``Process.wait()`` cannot signal this: asyncio resolves
+    its waiters only after every pipe transport disconnects (CPython base_subprocess._try_finish),
+    so a detached grandchild holding the pipes wedges it although the exit code is known (M6)."""
     delay = .05
     while getattr(proc, 'returncode', None) is None:
         await asyncio.sleep(delay)

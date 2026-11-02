@@ -14,7 +14,9 @@ def test_inline_review_without_diff_ref(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("a document review must not invoke git")
     monkeypatch.setattr("plangraph.spawner.inline_diff.subprocess.run", forbidden)
-    assert inline_diff_prompt("Review this design", None, max_chars=1) == "Review this design"
+    assert inline_diff_prompt("Review this design", None, max_chars=1, allow_document=True) == "Review this design"
+    with pytest.raises(InlineDiffError, match="no diff_ref"):
+        inline_diff_prompt("Review this design", None, max_chars=1)
     with pytest.raises(InlineDiffError):
         inline_diff_prompt("Review", {}, max_chars=1)
 
@@ -40,6 +42,20 @@ def test_verdict_commentary_and_parser_parity():
         text = "VERDICT: halt\n" + line
         assert parse_verdict(text) == expected
         assert tool.parse_verdict(text)[0] == {"fix": False, "pass": True, None: None}[expected]
+    # Parity per rule: halt, low-label downgrade, and multi-VERDICT ordering
+    # (the last VERDICT line decides even when it is no decision at all).
+    for text, expected in [
+        ("VERDICT: halt", "halt"),
+        ("VERDICT: halt — low: nits only", "halt"),
+        ("VERDICT: fix — low: nit", "pass"),
+        ("VERDICT: changes: LOW: docs only", "pass"),
+        ("VERDICT: fix — low: nit, HIGH: broken contract", "fix"),
+        ("VERDICT: pass\nVERDICT: fix — high: broken", "fix"),
+        ("VERDICT: pass\nVERDICT: pass | fix", None),
+        ("VERDICT: fix\nVERDICT: unknown commentary", None),
+    ]:
+        assert parse_verdict(text) == expected
+        assert tool.parse_verdict(text)[0] == {"fix": False, "pass": True, "halt": False, None: None}[expected]
 
 
 def test_review_default_wall_cap(monkeypatch):

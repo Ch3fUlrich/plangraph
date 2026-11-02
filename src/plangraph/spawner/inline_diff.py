@@ -20,9 +20,15 @@ class InlineDiffError(Exception):
     """The diff could not be produced or does not fit the leg."""
 
 
-def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60) -> str:
+def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
+                       allow_document: bool = False) -> str:
+    """The prompt with the diff inlined. ``diff_ref is None`` returns the prompt
+    unchanged only when ``allow_document`` says the caller already decided a
+    document review (no diff) is allowed; otherwise the leg must not proceed."""
     if diff_ref is None:
-        return prompt
+        if allow_document:
+            return prompt
+        raise InlineDiffError("no diff_ref for inline-only leg")
     try:
         _check_diff_ref(diff_ref)
     except SpawnRefused as exc:
