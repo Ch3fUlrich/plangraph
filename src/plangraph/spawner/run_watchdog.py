@@ -10,7 +10,7 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
-from .run_refusal import REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
+from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
 HEADER = re.compile(r'^>\s+\S+\s+·\s+\S+')
@@ -235,7 +235,7 @@ async def collect(runner, job_id, proc):
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
     captured = {'stdout': [], 'stderr': []}
     refused = asyncio.Event()
-    seen = {'n': 0}   # activity lines seen run-wide (stdout + stderr): the first REFUSAL_MAX_LINES may speak a refusal
+    seen = {'n': 0, 'r': 0}   # activity lines run-wide (stdout + stderr): the first REFUSAL_MAX_LINES lines and REFUSAL_MAX_FRAMES frames may speak a refusal
     def scrub(text):
         return redact(redact_env_values(text, env))
     gate = RefusalGate(refused, job, scrub)
@@ -259,12 +259,12 @@ async def collect(runner, job_id, proc):
                     continue
                 if is_activity(line):
                     active = True
-                    if seen['n'] < REFUSAL_MAX_LINES:   # F1: banner/spinner frames may precede the refusal
+                    if seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:   # F1: banner/spinner frames may precede the refusal
                         candidates.append(line)
-                    seen['n'] += 1 if line.endswith('\n') else 0   # '\r'-alone = spinner frame: candidate, never counted
+                    seen['n' if line.endswith('\n') else 'r'] += 1   # F1: '\r'-alone spinner frames eat the frame cap, never the 40-line budget
             # F3: check the unterminated tail too; a refusal line printed
             # without a trailing newline while the child hangs must be seen.
-            if pending and seen['n'] < REFUSAL_MAX_LINES:
+            if pending and seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:
                 candidates.append(pending)   # tail is a candidate only, never counted
             found = candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S and early_refusal(''.join(candidates))
             if found or active:   # F2: a refusal is booked only after a quiet period; later activity cancels it
@@ -391,7 +391,7 @@ async def collect(runner, job_id, proc):
                     await asyncio.gather(task, return_exceptions=True)
                     return await proc.communicate()
                 break
-        return gate.finish(proc, await task)
+        return await gate.finish(runner, job_id, proc, await task)
     finally:
         refusal_wait.cancel(); ticker.cancel()
         if not task.done():

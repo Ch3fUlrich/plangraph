@@ -65,6 +65,10 @@ def fallthrough_reason(service, chosen, job, record):
     from . import leg_state
     from .leg_probe import key as leg_key
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
+    if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
+        # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
+        # not in the captured output) books and notifies like any harness limit.
+        line = job.refusal
     if line:
         target = service.leg_reader
         if not hasattr(target, 'record_harness_limit'):
