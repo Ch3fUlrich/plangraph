@@ -67,9 +67,12 @@ class Registry:
         # sharing that key is stale: Self wins. self.peers keeps only peers.
         lookup = dict(self.peers)
         local = status.get('Self') if isinstance(status, dict) else None
-        if not isinstance(local, dict) or not isinstance(local.get('PublicKey'), str):
-            local = None
-        if local is not None:
+        if isinstance(status, dict) and 'Self' in status and not (
+                isinstance(local, dict) and isinstance(local.get('PublicKey'), str)):
+            # Malformed Self: the local key is unknown, so a Peer could pose as
+            # the local node. Fail closed: resolve nothing this round.
+            lookup, local = {}, None
+        elif local is not None:
             lookup[local['PublicKey']] = local
         for host in self.hosts.values():
             host.endpoint, host.health = None, 'offline'

@@ -134,6 +134,19 @@ def test_self_wins_over_peer_with_same_key(tmp_path):
     assert registry.peers == status['Peer']
 
 
+@pytest.mark.parametrize('bad_self', ['self-key', None, {'DNSName': 'self.example.test.', 'Online': True},
+                                      {'PublicKey': 7, 'DNSName': 'self.example.test.', 'Online': True}])
+def test_malformed_self_fails_closed_even_with_same_key_peer(tmp_path, bad_self):
+    registry = make_local_registry(tmp_path)
+    status = {'Self': bad_self,
+              'Peer': {'self-key': {'DNSName': 'spoof.example.test.', 'HostName': 'spoof', 'Online': True}}}
+    probed = []
+    registry.refresh(status, 10, lambda endpoint: probed.append(endpoint) or True)
+    with pytest.raises(LookupError):
+        registry.resolve('alpha')
+    assert probed == []
+
+
 def test_tailscale_status_accepts_self_only_json():
     def run(*args, **kwargs):
         assert args[0] == ['tailscale', 'status', '--json']
