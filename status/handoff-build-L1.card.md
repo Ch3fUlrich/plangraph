@@ -15,7 +15,7 @@
 - #309 f0bde3a8 MERGE-READY (CI 41464942877 green); luna TOOLS seat queued to workst-L1-autoos successor; none by 15:20Z -> ask routing; ACCEPT -> GO-REQ
 - SEAT-PATH-FIXES sol writer spawned 15:10Z (brief incl. (4) 25 min review cap, approved D-3677): J/spawn-spf.sh -> J/r-spf.json/.wait (wt seat-path-fixes)
 - pd#20 91c1d775 MERGE-READY from spawner3605 (RC fix): mimo-pro delta seat J/seat-pd20.out; local router tests 61 passed; HIGH -> also tools seat (workst luna) -> GO-REQ
-- #314 #279 build-L2-keeperfix-0102
+- #314 #279 build-L2-keeperfix-0102 (spawner3605 L2 closed 15:2xZ, told to stop)
 ## Open
 - J=/home/s/.claude/jobs/7d533977/tmp
 - workst-L1-autoos-0088 recycled 14:5xZ; successor owes #309 seat (ask it for pd#20 tools seat too)
