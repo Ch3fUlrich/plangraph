@@ -17,16 +17,24 @@ REVIEW = "looks good overall\nVERDICT: PASS\nTEST_GAMING: no\n"
 
 def record_dir(tmp_path, name, live_log=None, tail=REVIEW, writer="deepseek",
                head=HEAD_SHA, **rec):
+    """Mirror real spawner records: run_id equals the dir name, writer_family is
+    the seat's own leg family, reviewed writers come only from the CLI ``writer``."""
     d = tmp_path / name
     d.mkdir()
-    record = {"run_id": "run-9f2c", "role": "review", "status": "completed",
+    leg = {"id": "leg-1", "tier": "subscription", "harness": "opencode",
+           "model": "opencode/mimo-v2.6-free", "family": "mimo"}
+    record = {"run_id": name, "role": "review", "status": "completed",
               "exit_code": 0, "served_model": "unwitnessed",
-              "chosen_leg": {"id": "leg-1", "model": "mimo/mimo-v2.6-pro",
-                             "family": "mimo"},
-              "writer_family": writer, "stdout_tail": tail,
+              "served_family": "unwitnessed", "chosen_leg": leg,
+              "writer_family": leg["family"],
+              "attempts": [{"leg": leg, "status": "completed",
+                            "served_model": "unwitnessed",
+                            "served_family": "unwitnessed", "stdout_tail": tail}],
+              "finish_reason": "stop", "stdout_tail": tail,
               "completion": {"head_sha": HEAD_SHA}}
     record.update(rec)
     (d / "record.json").write_text(json.dumps(record))
+    (d / "record.json").chmod(0o600)  # umask 002 would make it group-writable
     if live_log is not None:
         (d / "live.log").write_text(live_log)
     tokens = tmp_path / (name + "-tok")
@@ -46,7 +54,7 @@ def test_record_only_pass_posts(tmp_path, capsys):
     body = payload["body"]
     assert body["ok"] is True
     assert HEAD_SHA in body["reason"]
-    assert "run-9f2c" in body["reason"]
+    assert "run a" in body["reason"]
     assert "witness=record-chosen-leg" in body["reason"]
 
 
@@ -82,6 +90,8 @@ def test_record_no_verdict_line(tmp_path, capsys):
     assert "no parseable VERDICT" in capsys.readouterr().err
 
 
+# F1: the gate moved to seat_verdict ("covers no listed writer": the only CLI
+# writer here IS the seat family).
 def test_record_seat_family_over_same_writer_refused(tmp_path, capsys):
     assert sv.main(record_dir(tmp_path, "h", live_log=REVIEW,
                               writer="xiaomi")) == 2
@@ -116,11 +126,13 @@ def test_live_log_preferred_over_stdout_tail(tmp_path, capsys):
 def test_evidence_from_record_fails_closed(tmp_path):
     with pytest.raises(ValueError):
         seat_record.evidence_from_record(tmp_path / "missing")
-    d = tmp_path / "r"
+    d = tmp_path / "run-r"
     d.mkdir()
-    (d / "record.json").write_text(json.dumps({"role": "review", "status": "completed",
-        "exit_code": 0, "served_model": "unwitnessed", "chosen_leg": {},
-        "stdout_tail": REVIEW, "completion": {"head_sha": HEAD_SHA}}))
+    (d / "record.json").write_text(json.dumps({"run_id": "run-r", "role": "review",
+        "status": "completed", "exit_code": 0, "served_model": "unwitnessed",
+        "chosen_leg": {}, "attempts": [], "stdout_tail": REVIEW,
+        "completion": {"head_sha": HEAD_SHA}}))
+    (d / "record.json").chmod(0o600)
     with pytest.raises(ValueError, match="chosen_leg.model missing"):
         seat_record.evidence_from_record(d)
 
@@ -162,16 +174,21 @@ def test_evidence_json_record_chosen_leg_witness_refused(tmp_path, capsys):
 
 def test_record_chosen_leg_family_mismatch_refused(tmp_path, capsys):
     argv = record_dir(tmp_path, "n", live_log=REVIEW,
-                      chosen_leg={"id": "leg-1", "model": "mimo/mimo-v2.6-pro",
+                      chosen_leg={"id": "leg-1", "tier": "subscription",
+                                  "harness": "opencode",
+                                  "model": "opencode/mimo-v2.6-free",
                                   "family": "deepseek"})
     assert sv.main(argv) == 2
     assert "chosen_leg.family" in capsys.readouterr().err
 
 
-def test_record_writer_family_equals_seat_family_refused(tmp_path, capsys):
+# F1 (build-L1 (2)): record.writer_family is the seat's own family; it may
+# equal the seat family while the CLI list names a different reviewed writer.
+def test_record_writer_family_seat_family_cli_other_writer_accepted(tmp_path,
+                                                                   capsys):
     argv = record_dir(tmp_path, "n2", live_log=REVIEW, writer_family="xiaomi")
-    assert sv.main(argv) == 2
-    assert "seat family equals record writer_family" in capsys.readouterr().err
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is True
 
 
 def test_record_exit_code_false_refused(tmp_path, capsys):
@@ -196,6 +213,7 @@ def test_record_test_gaming_stored_lower_case(tmp_path):
 
 
 # D-3564 round 3: an echoed prompt's VERDICT may never decide the seat.
+# The last-line rule stays strict (D-3420) until routing rules say otherwise.
 def test_record_verdict_must_be_last_line(tmp_path, capsys):
     text = "prompt echo:\nVERDICT: PASS\nTEST_GAMING: no\n\nanswer: all good\n"
     assert sv.main(record_dir(tmp_path, "v", live_log=text)) == 2
@@ -211,38 +229,42 @@ def test_record_verdict_grammar_shared_with_seat_verdict(monkeypatch, tmp_path,
     assert "conflicting VERDICT lines" in capsys.readouterr().err
 
 
-# D-3564 round 3: record-derived evidence only carries attested fields.
+# F1/F3: record-derived evidence only carries attested fields; finish_reason
+# comes from the record, never hard-coded.
 def test_record_evidence_only_attested_fields(tmp_path):
-    argv = record_dir(tmp_path, "v2", live_log=REVIEW, run_id=None)
+    argv = record_dir(tmp_path, "v2", live_log=REVIEW)
     seat = Path(argv[argv.index("--seat-dir") + 1])
     evidence, _ = seat_record.evidence_from_record(seat)
-    assert "run_id" not in evidence
+    assert evidence["run_id"] == "v2"
     assert "correlation_id" not in evidence
     assert "prompt_sha256" not in evidence
     assert evidence["finish_reason"] == "stop"
 
 
-# D-3564 round 3: record writer_family is required and must sit in the CLI list.
-def test_record_writer_family_absent_refused(tmp_path, capsys):
+# F1: record.writer_family is never consulted; writer coverage comes only
+# from the CLI --writer-family list (its absence or value changes nothing).
+def test_record_writer_family_absent_accepted(tmp_path, capsys):
     assert sv.main(record_dir(tmp_path, "w", live_log=REVIEW,
-                              writer_family=None)) == 2
-    assert "writer_family" in capsys.readouterr().err
+                              writer_family=None)) == 0
 
 
-def test_record_writer_family_must_be_in_cli_list(tmp_path):
-    argv = record_dir(tmp_path, "w2", live_log=REVIEW)
+def test_record_writer_family_never_consulted_by_evidence(tmp_path, capsys):
+    argv = record_dir(tmp_path, "w2", live_log=REVIEW, writer="alibaba",
+                      writer_family="mimo")
     seat = Path(argv[argv.index("--seat-dir") + 1])
-    evidence, _ = seat_record.evidence_from_record(seat, ["deepseek", "alibaba"])
-    assert evidence["served_model"] == "mimo/mimo-v2.6-pro"
-    with pytest.raises(ValueError, match="not in CLI writer families"):
-        seat_record.evidence_from_record(seat, ["alibaba"])
+    evidence, _ = seat_record.evidence_from_record(seat, ["alibaba"])
+    assert evidence["served_model"] == "opencode/mimo-v2.6-free"
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is True
 
 
-def test_cli_writer_family_equal_to_seat_family_refused(tmp_path):
-    argv = record_dir(tmp_path, "w3", live_log=REVIEW, writer_family="xiaomi")
-    seat = Path(argv[argv.index("--seat-dir") + 1])
-    with pytest.raises(ValueError, match="covers no listed writer"):
-        seat_record.evidence_from_record(seat, ["xiaomi"])
+# build-L1 (2): only when the sole CLI writer IS the seat family is the seat
+# refused ("family ... covers no listed writer").
+def test_cli_writer_family_equal_to_seat_family_refused(tmp_path, capsys):
+    argv = record_dir(tmp_path, "w3", live_log=REVIEW, writer="xiaomi",
+                      writer_family="xiaomi")
+    assert sv.main(argv) == 2
+    assert "covers no listed writer" in capsys.readouterr().err
 
 
 def test_head_option_matches_record_head_sha(tmp_path, capsys):
@@ -271,12 +293,14 @@ def test_head_on_evidence_json_path_refused(tmp_path, capsys):
     assert "--head only for record seats" in capsys.readouterr().err
 
 
-# D-3564 slice B: the CLI --writer-family list must contain the record's
-# writer_family (seat family differs so only the CLI check can refuse).
-def test_record_writer_family_not_in_cli_list_refused(tmp_path, capsys):
-    argv = record_dir(tmp_path, "w4", live_log=REVIEW, writer="qwen",
-                      writer_family="mimo",
-                      chosen_leg={"id": "leg-1", "model": "deepseek/deepseek-v3",
+# F1: record writer_family (the seat's own family) never has to appear in the
+# CLI writer list; only seat_verdict's coverage check decides.
+def test_record_writer_family_not_in_cli_list_accepted(tmp_path, capsys):
+    argv = record_dir(tmp_path, "w4", live_log=REVIEW, writer="alibaba",
+                      writer_family="deepseek",
+                      chosen_leg={"id": "leg-1", "tier": "subscription",
+                                  "harness": "opencode",
+                                  "model": "opencode/deepseek-v3-free",
                                   "family": "deepseek"})
-    assert sv.main(argv) == 2
-    assert "not in CLI writer families" in capsys.readouterr().err
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is True

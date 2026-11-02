@@ -8,7 +8,8 @@ verdict strictly, checks the reviewing model's family, and POSTs
 ``/v1/verdict`` with ``Authorization: Bearer <reviewer-<family>.token>``.
 A spawner seat run dir may instead hold only ``record.json`` + ``live.log``;
 then ``tools/seat_record.py`` derives the evidence (served model witnessed via
-the chosen leg) and the review text (live log, else stdout_tail).  A record
+the chosen leg) and the review text (live log, else stdout_tail for
+single-attempt records).  A record
 that cannot witness a completed review is refused, never posted.
 
 The JSON ``ok`` is always a real boolean: the keeper coerces it with ``bool()``,
@@ -194,7 +195,9 @@ def main(argv=None):
     ap.add_argument("--token-dir", required=True, type=Path)
     ap.add_argument("--url", default=os.environ.get("PG_URL"))
     ap.add_argument("--head", help="expected record completion.head_sha "
-                                  "(record-derived evidence only)")
+                                  "(record-derived evidence only); binds the "
+                                  "completion-time HEAD of the run cwd, not "
+                                  "the launch commit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     writer_families = parse_writer_families(args.writer_family)
