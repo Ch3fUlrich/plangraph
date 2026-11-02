@@ -56,10 +56,6 @@ Output:
     "type": "http",
     "url": "http://127.0.0.1:8100/mcp"
   },
-  "autoos-agent": {
-    "type": "http",
-    "url": "http://127.0.0.1:8101/mcp"
-  },
   "serena-plangraph": {
     "type": "http",
     "url": "http://127.0.0.1:8102/mcp"

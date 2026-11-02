@@ -1,0 +1,20 @@
+[
+  {
+    "id": "plangraph-planning-1",
+    "prompt": "Two of my planned tasks both need to edit src/api/handlers.py. How does the method handle overlapping file scopes?",
+    "must": ["one agent, one task", "disjoint"],
+    "must_not": ["two agents on one task", "lock the file", "take turns on the same file"]
+  },
+  {
+    "id": "plangraph-planning-2",
+    "prompt": "What must a task contract look like for the phase agent to accept a planned task as valid?",
+    "must": ["one sentence, one outcome", "one command, pass = exit 0"],
+    "must_not": ["as many files as needed", "several acceptance commands", "no acceptance command"]
+  },
+  {
+    "id": "plangraph-planning-3",
+    "prompt": "When must a task's execution card be created, and what path rules does the card follow?",
+    "must": ["in the same batch", "relative paths only"],
+    "must_not": ["write the card after", "cards come later", "edit files outside the card write set"]
+  }
+]
