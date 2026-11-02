@@ -194,6 +194,7 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    #[ignore = "live capacity smoke test; requires host capacity access"]
     fn windows_capacity_shape() {
         let (mem, loads) = capacity().unwrap();
         assert!(mem.mem_total_mb > 0);

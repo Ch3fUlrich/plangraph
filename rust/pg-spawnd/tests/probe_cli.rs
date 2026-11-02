@@ -68,20 +68,34 @@ fn invalid_arguments() {
 
 #[test]
 fn help() {
+    // --help/-h only as the first arg or a verb's first arg prints usage, exits 0.
     for args in [
         vec!["--help"],
         vec!["--help", "extra"],
         vec!["-h"],
         vec!["probe", "--help"],
-        vec!["unknown", "-h"],
-        vec!["probe", "--host-id", "--help"],
+        vec!["probe", "-h"],
+        vec!["serve", "--help"],
+        vec!["shim", "-h"],
     ] {
         let output = cli(&args);
-        assert!(output.status.success());
-        assert!(output.stderr.is_empty());
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        assert!(output.stderr.is_empty(), "{args:?}");
         assert!(String::from_utf8(output.stdout)
             .unwrap()
             .starts_with("Usage:"));
+    }
+    // Anywhere else --help/-h is an unknown flag (exit 2); as a --host-id value
+    // it is that value and fails host-id validation.
+    for args in [
+        vec!["unknown", "-h"],
+        vec!["probe", "--host-id", "--help"],
+        vec!["probe", "--json", "--help"],
+    ] {
+        let output = cli(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert_eq!(String::from_utf8(output.stderr).unwrap().lines().count(), 1);
     }
 }
 
