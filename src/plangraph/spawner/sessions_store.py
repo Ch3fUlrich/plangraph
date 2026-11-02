@@ -216,7 +216,7 @@ class _StoreMixin:
                 rec = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if isinstance(rec, dict):
+            if isinstance(rec, dict) and isinstance(rec.get("name"), str):  # not a data file
                 out.append(rec)
         return out
 

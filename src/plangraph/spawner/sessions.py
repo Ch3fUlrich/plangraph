@@ -324,7 +324,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         return {"ok": True, "name": name, "handoff": str(handoff_path)}
 
     def relaunch(self, name, handoff=None):
-        with self._name_lock(str(name)):
+        with self._name_lock(str(name)), self._relaunch_locks(name):
             return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
 
     def _relaunch_inner(self, name, handoff):

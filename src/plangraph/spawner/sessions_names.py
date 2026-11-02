@@ -1,7 +1,6 @@
 """Session names (D-3605). Config ``session_names``: "role-counter" (default) or "free" (legacy).
-Role-counter: launch(name=<role>) assigns ``<role>-NNNN`` = max(``_counters.json``, highest
-NNNN of the role's records) + 1, taken under the role lock and written before the start, so a
-number is never reused. A relaunch stops the old session and starts a NEW one (next number).
+Role-counter: launch(name=<role>) assigns ``<role>-NNNN`` = max(``_counters.json``, highest NNNN
+of the role's records) + 1, written before the start (never reused); relaunch starts a NEW one.
 """
 from __future__ import annotations
 
@@ -23,19 +22,15 @@ except ImportError:  # Windows
     import msvcrt
 
 
-def _flock(fd, lock):
-    """Exclusive advisory lock on the whole of fd (fcntl.flock, else msvcrt)."""
+def _flock(fd):
+    """Exclusive advisory lock on fd, released on close (fcntl.flock, else msvcrt)."""
     if fcntl is not None:
-        fcntl.flock(fd, fcntl.LOCK_EX if lock else fcntl.LOCK_UN)
-        return
+        return fcntl.flock(fd, fcntl.LOCK_EX)
     os.lseek(fd, 0, os.SEEK_SET)
     while True:
         try:
-            msvcrt.locking(fd, msvcrt.LK_LOCK if lock else msvcrt.LK_UNLCK, 1)
-            return
+            return msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
         except OSError:
-            if not lock:
-                raise
             time.sleep(0.05)  # LK_LOCK gives up after ~10 s: keep waiting
 
 
@@ -47,14 +42,12 @@ class _NamesMixin:
             return "free"
 
     def _role_of(self, name, strict):
-        """(role, digits|None). strict (launch): a `-<digits>` tail must be
-        exactly 4 digits. Lenient (relaunch): any other tail is part of the role."""
+        """(role, digits|None); strict (launch) refuses a -<digits> tail of other than 4 digits."""
         m = _TAIL_RE.fullmatch(name)
         if m is None or (not strict and len(m.group(2)) != 4):
             return name, None
         if len(m.group(2)) != 4:
-            raise _refuse(f"name {name!r} ends in -{m.group(2)}: a numbered name is "
-                          f"<role>-NNNN with exactly 4 digits; pass the role only")
+            raise _refuse(f"name {name!r}: a numbered name is <role>-NNNN with exactly 4 digits")
         return m.group(1), m.group(2)
 
     @contextlib.contextmanager
@@ -66,13 +59,20 @@ class _NamesMixin:
         self._sessions.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(self._sessions / "_counters.lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            _flock(fd, True)
+            _flock(fd)
             yield
         finally:
-            try:
-                _flock(fd, False)
-            finally:
-                os.close(fd)
+            os.close(fd)  # closing the descriptor releases the lock
+
+    @contextlib.contextmanager
+    def _relaunch_locks(self, name):
+        """Role lock then counters flock (launch's order), held across the whole
+        relaunch so a concurrent one sees this one's record (role-counter mode)."""
+        if not isinstance(name, str) or self._names_mode() != "role-counter":
+            yield
+            return
+        with self._name_lock("role:" + self._role_of(name, False)[0]), self._counter_flock():
+            yield
 
     def _lock_key(self, name):
         """launch's lock: the role in role-counter mode, else the name."""
@@ -127,22 +127,21 @@ class _NamesMixin:
             self._reserve_number(role, int(digits))  # called under the role lock
 
     def _relaunch_name(self, cfg, name):
-        """The relaunched session's name (reserved here): the same in free mode, else the next number."""
+        """The relaunched name (reserved here): same in free mode, else the next number; refused if superseded."""
         if cfg.get("session_names", "role-counter") != "role-counter":
             return name
         role, digits = self._role_of(name, strict=False)
-        with self._name_lock("role:" + role), self._counter_flock():
-            for rec in self._all_records():  # a superseded record has no lineage of its own
-                other = str(rec.get("name") or "")
-                m = re.fullmatch(re.escape(role) + r"-(\d{4})", other, re.IGNORECASE)
-                if m and int(m.group(1)) > int(digits or 0) and _state(rec) in _LIVE:
-                    raise _refuse(f"session {name} is superseded by {other}: relaunch {other}")
-            number = self._next_number(role)
-            self._reserve_number(role, number)
+        for rec in self._all_records() if digits else ():  # legacy digit-less names never are superseded
+            other = rec["name"]
+            m = re.fullmatch(re.escape(role) + r"-(\d{4})", other, re.IGNORECASE)
+            if m and int(m.group(1)) > int(digits) and _state(rec) in _LIVE:
+                raise _refuse(f"session {name} is superseded by {other}: relaunch {other}")
+        number = self._next_number(role)  # the caller holds the role lock and flock
+        self._reserve_number(role, number)
         return f"{role}-{number:04d}"
 
     def _relaunch_record(self, rec, name, handoff_path):
-        """The relaunched record; a new name gets its own prompt file copy and launch clock."""
+        """The relaunched record; a new name gets its own prompt copy and launch clock."""
         new_rec = dict(rec)
         new_rec["handoff"] = str(handoff_path) if handoff_path else None
         if name != rec.get("name"):

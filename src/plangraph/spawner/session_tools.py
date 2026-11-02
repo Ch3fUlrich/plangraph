@@ -26,7 +26,7 @@ SESSION_TOOLS = [
     {'name': 'plangraph_session_stop', 'description': 'Stop a Claude Code session by name or id',
      'inputSchema': {'type': 'object', 'properties': {
          'name': {'type': 'string'}, 'id': {'type': 'string'}}}},
-    {'name': 'plangraph_session_relaunch', 'description': 'Stop a session and start a NEW one from its handoff; the result name is the new <role>-NNNN',
+    {'name': 'plangraph_session_relaunch', 'description': 'Stop a session and start a NEW one from its handoff; the result name is the new <role>-NNNN; refused if a later session of the role is live',
      'inputSchema': {'type': 'object', 'properties': {
          'name': {'type': 'string'}, 'handoff': {'type': 'string'}},
          'required': ['name']}},
