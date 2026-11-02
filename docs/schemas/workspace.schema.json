@@ -10,12 +10,12 @@
     "mode": {"enum": ["writer", "seat", "read", "none"]},
     "base_sha": {"$ref": "#/$defs/sha"},
     "revision_sha": {"$ref": "#/$defs/sha"},
-    "branch": {"type": "string", "maxLength": 200, "description": "writer only: lane/<name> following git ref rules after lane/; never a default branch name", "allOf": [
+    "branch": {"type": "string", "maxLength": 200, "description": "writer only: lane/<name>, ASCII git ref characters; lane/main is allowed", "allOf": [
       {"pattern": "^lane/.+"},
       {"not": {"pattern": "\\.\\."}},
       {"not": {"pattern": "//"}},
       {"not": {"pattern": "@\\{"}},
-      {"not": {"pattern": "[\\x00-\\x20\\x7f]"}},
+      {"not": {"pattern": "[^\\x21-\\x7e]"}},
       {"not": {"pattern": "[~^:?*\\[\\\\]"}},
       {"not": {"pattern": "(^|/)\\.|(/|\\.)$"}},
       {"not": {"pattern": "(^|/)[^/]*\\.lock(/|$)"}}

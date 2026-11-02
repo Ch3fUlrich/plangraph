@@ -4,6 +4,11 @@
 
 use serde::{Deserialize, Serialize};
 
+// Missing optional fields default to None; present fields must be strings, not null.
+fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
+}
+
 /// What a placement asks the worker to do with `repo_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,21 +25,37 @@ pub enum Mode {
 pub struct Workspace {
     pub repo_id: String,
     pub mode: Mode,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub base_sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub revision_sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch: Option<String>,
 }
 
-/// What a workspace run produced; shas are checked by `validate`.
+/// What a workspace run produced; repo, branch and shas are checked by `validate`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRecord {
     pub repo_id: String,
     pub toplevel: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch: Option<String>,
     pub base_sha: String,
     pub head_at_start: String,
@@ -63,7 +84,7 @@ pub enum WorkspaceError {
     Absent(&'static str, Mode),
     #[error("writer base_sha {0:?} must equal revision_sha {1:?}")]
     WriterShasDiffer(String, String),
-    #[error("branch {0:?} must start with `lane/` and never be a default branch name")]
+    #[error("writer branch {0:?} must start with `lane/`")]
     BranchNotLane(String),
     #[error("branch {0:?} must not contain `..`")]
     BranchDotDot(String),
@@ -73,6 +94,8 @@ pub enum WorkspaceError {
     BranchAtBrace(String),
     #[error("branch {0:?} must not contain control characters")]
     BranchControl(String),
+    #[error("branch {0:?} must contain only ASCII characters")]
+    BranchNonAscii(String),
     #[error("branch {0:?} must not contain spaces")]
     BranchSpace(String),
     #[error("branch {0:?} must not contain any of `~^:?*[\\`")]
@@ -104,7 +127,7 @@ fn check_branch(b: &str) -> Result<(), WorkspaceError> {
         .strip_prefix("lane/")
         .ok_or_else(|| E::BranchNotLane(b.to_string()))?;
     let e = |f: fn(String) -> E| f(b.to_string());
-    let long = b.chars().count() > 200;
+    let long = b.len() > 200;
     let ctrl = name.chars().any(char::is_control);
     let weird = name.chars().any(|c| "~^:?*[\\".contains(c));
     let space = name.contains(' ');
@@ -113,6 +136,7 @@ fn check_branch(b: &str) -> Result<(), WorkspaceError> {
     let lock = name.split('/').any(|c| c.ends_with(".lock"));
     let checks = [
         (long, e(E::BranchTooLong)),
+        (!name.is_ascii(), e(E::BranchNonAscii)),
         (b.contains(".."), e(E::BranchDotDot)),
         (b.contains("//"), e(E::BranchDoubleSlash)),
         (b.contains("@{"), e(E::BranchAtBrace)),
@@ -128,6 +152,20 @@ fn check_branch(b: &str) -> Result<(), WorkspaceError> {
     }
 }
 
+fn check_repo_id(id: &str) -> Result<(), WorkspaceError> {
+    let valid = !id.is_empty()
+        && id.len() <= 64
+        && id.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id
+            .chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '.' | '_' | '-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(WorkspaceError::RepoId(id.into()))
+    }
+}
+
 impl Workspace {
     /// Parse a workspace from JSON and validate every rule (D6).
     pub fn from_json_str(s: &str) -> Result<Self, WorkspaceError> {
@@ -138,16 +176,7 @@ impl Workspace {
 
     /// Check repo_id, sha shapes, per-mode presence and the branch rules.
     pub fn validate(&self) -> Result<(), WorkspaceError> {
-        let id = &self.repo_id;
-        let id_ok = !id.is_empty()
-            && id.len() <= 64
-            && id.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
-            && id
-                .chars()
-                .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '.' | '_' | '-'));
-        if !id_ok {
-            return Err(WorkspaceError::RepoId(id.clone()));
-        }
+        check_repo_id(&self.repo_id)?;
         if let Some(sha) = &self.base_sha {
             check_sha("base_sha", sha)?;
         }
@@ -199,8 +228,12 @@ impl Workspace {
 }
 
 impl WorkspaceRecord {
-    /// Every sha on a record is exactly 40 lowercase hex characters.
+    /// Check the same repo and branch rules as a workspace, plus every sha.
     pub fn validate(&self) -> Result<(), WorkspaceError> {
+        check_repo_id(&self.repo_id)?;
+        if let Some(branch) = &self.branch {
+            check_branch(branch)?;
+        }
         check_sha("base_sha", &self.base_sha)?;
         check_sha("head_at_start", &self.head_at_start)?;
         check_sha("head_at_end", &self.head_at_end)?;
@@ -208,123 +241,15 @@ impl WorkspaceRecord {
     }
 
     /// What the writer produced: `{repo_id, base_sha, head_at_end}`.
-    pub fn writer_result_diff(&self) -> DiffRef {
-        DiffRef {
+    pub fn writer_result_diff(&self) -> Result<DiffRef, WorkspaceError> {
+        self.validate()?;
+        Ok(DiffRef {
             repo_id: self.repo_id.clone(),
             base_sha: self.base_sha.clone(),
             head_sha: self.head_at_end.clone(),
-        }
+        })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeSet;
-
-    const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const W: &str = include_str!("../../../docs/schemas/examples/workspace.writer.json");
-    const S: &str = include_str!("../../../docs/schemas/examples/workspace.seat.json");
-    const R: &str = include_str!("../../../docs/schemas/examples/workspace.read.json");
-    const N: &str = include_str!("../../../docs/schemas/examples/workspace.none.json");
-    const SCHEMA: &str = include_str!("../../../docs/schemas/workspace.schema.json");
-
-    #[test]
-    fn examples_parse_and_validate() {
-        for (mode, src) in [("writer", W), ("seat", S), ("read", R), ("none", N)] {
-            let w = Workspace::from_json_str(src).expect(mode);
-            let name = format!("{:?}", w.mode).to_lowercase();
-            assert_eq!(name, mode);
-        }
-    }
-
-    fn fill(src: &str) -> String {
-        let long = format!("lane/{}", "a".repeat(196));
-        src.replace("@A", A).replace("@B", B).replace("@L", &long)
-    }
-
-    /// (rule the error must name)|(json); one refusal per rule and mode.
-    const REFUSE: &[&str] = &[
-        r#"base_sha is required|{"repo_id":"p","mode":"writer","revision_sha":"@A","branch":"lane/x"}"#,
-        r#"revision_sha is required|{"repo_id":"p","mode":"writer","base_sha":"@A","branch":"lane/x"}"#,
-        r#"branch is required|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A"}"#,
-        r#"must equal|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@B","branch":"lane/x"}"#,
-        r#"`lane/`|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"main"}"#,
-        r#"`..`|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/a..b"}"#,
-        r#"`//`|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/a//b"}"#,
-        r#"`@{`|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/a@{b"}"#,
-        "control characters|{\"repo_id\":\"p\",\"mode\":\"writer\",\"base_sha\":\"@A\",\"revision_sha\":\"@A\",\"branch\":\"lane/a\\tb\"}",
-        r#"spaces|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/a b"}"#,
-        r#"must not contain any of|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/a~b"}"#,
-        r#"start or end|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/.x"}"#,
-        r#".lock|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/x.lock"}"#,
-        r#"200|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"@L"}"#,
-        r#"40 lowercase hex|{"repo_id":"p","mode":"writer","base_sha":"deadbeef","revision_sha":"@A","branch":"lane/x"}"#,
-        r#"40 lowercase hex|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","branch":"lane/x"}"#,
-        r#"40 lowercase hex|{"repo_id":"p","mode":"writer","base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revision_sha":"@A","branch":"lane/x"}"#,
-        r#"repo_id|{"repo_id":"Repo","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/x"}"#,
-        r#"workspace json|{"repo_id":"p","mode":"writer","base_sha":"@A","revision_sha":"@A","branch":"lane/x","extra":1}"#,
-        r#"base_sha is required|{"repo_id":"p","mode":"seat","revision_sha":"@A"}"#,
-        r#"revision_sha is required|{"repo_id":"p","mode":"seat","base_sha":"@A"}"#,
-        r#"must be absent|{"repo_id":"p","mode":"seat","base_sha":"@A","revision_sha":"@A","branch":"lane/x"}"#,
-        r#"40 lowercase hex|{"repo_id":"p","mode":"seat","base_sha":"@A","revision_sha":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
-        r#"repo_id|{"repo_id":"r!","mode":"seat","base_sha":"@A","revision_sha":"@A"}"#,
-        r#"workspace json|{"repo_id":"p","mode":"seat","base_sha":"@A","revision_sha":"@A","extra":1}"#,
-        r#"revision_sha is required|{"repo_id":"p","mode":"read"}"#,
-        r#"must be absent|{"repo_id":"p","mode":"read","revision_sha":"@A","branch":"lane/x"}"#,
-        r#"40 lowercase hex|{"repo_id":"p","mode":"read","base_sha":"deadbeef","revision_sha":"@A"}"#,
-        r#"workspace json|{"repo_id":"p","mode":"read","revision_sha":"@A","extra":1}"#,
-        r#"base_sha must be absent|{"repo_id":"p","mode":"none","base_sha":"@A"}"#,
-        r#"revision_sha must be absent|{"repo_id":"p","mode":"none","revision_sha":"@A"}"#,
-        r#"branch must be absent|{"repo_id":"p","mode":"none","branch":"lane/x"}"#,
-        r#"missing field|{"mode":"none"}"#,
-        r#"workspace json|{"repo_id":"p","mode":"none","extra":1}"#,
-    ];
-
-    #[test]
-    fn refusals_name_the_field_and_rule() {
-        for case in REFUSE {
-            let (rule, src) = case.split_once('|').unwrap();
-            let e = Workspace::from_json_str(&fill(src)).unwrap_err();
-            assert!(e.to_string().contains(rule), "{case}: {e}");
-        }
-    }
-
-    #[test]
-    fn seat_input_diff_maps_revision_to_head() {
-        let seat = Workspace::from_json_str(S).unwrap();
-        let d = seat.seat_input_diff().unwrap();
-        assert_eq!(d.base_sha, seat.base_sha.unwrap());
-        assert_eq!(d.head_sha, seat.revision_sha.unwrap());
-        assert_eq!(d.repo_id, "plangraph");
-        let writer = Workspace::from_json_str(W).unwrap();
-        assert!(matches!(
-            writer.seat_input_diff(),
-            Err(WorkspaceError::NotSeat(Mode::Writer))
-        ));
-    }
-
-    #[test]
-    fn record_validates_shas_and_maps_head_at_end() {
-        let good = format!("{{\"repo_id\":\"p\",\"toplevel\":\"t\",\"base_sha\":\"{A}\",\"head_at_start\":\"{A}\",\"head_at_end\":\"{B}\"}}");
-        let mut rec: WorkspaceRecord = serde_json::from_str(&good).unwrap();
-        assert!(rec.validate().is_ok());
-        let d = rec.writer_result_diff();
-        assert_eq!((d.base_sha.as_str(), d.head_sha.as_str()), (A, B));
-        rec.head_at_end = "short".into();
-        assert!(matches!(rec.validate(), Err(WorkspaceError::Sha(f, _)) if f == "head_at_end"));
-    }
-
-    #[test]
-    fn schema_properties_match_serde_fields() {
-        let schema: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
-        let mut fields = BTreeSet::new();
-        for src in [W, S, R, N] {
-            let v = serde_json::to_value(Workspace::from_json_str(src).unwrap()).unwrap();
-            fields.extend(v.as_object().unwrap().keys().cloned());
-        }
-        let props = schema["properties"].as_object().unwrap();
-        assert_eq!(props.keys().cloned().collect::<BTreeSet<_>>(), fields);
-    }
-}
+mod tests;

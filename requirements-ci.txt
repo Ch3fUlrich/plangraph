@@ -3,6 +3,7 @@
 # files split across workers (test_zz_coverage). Lift once xdist catches up.
 pytest<9.2
 pytest-xdist
+jsonschema
 pyyaml
 cryptography>=41.0.7
 temporalio
