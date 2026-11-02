@@ -103,6 +103,22 @@ def _resolve_launch(
     return exe, None
 
 
+#: D-3605: the claude child logs in from ~/.claude/.credentials.json (this host); every API
+#: credential and provider-routing var is dropped, incl. CLAUDE_CODE_OAUTH_TOKEN (overrides the login).
+CLAUDE_DROP_ENV = (
+    'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
+    'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_SKIP_BEDROCK_AUTH', 'CLAUDE_CODE_SKIP_VERTEX_AUTH',
+    'AWS_BEARER_TOKEN_BEDROCK',
+)
+
+
+def scrub_claude_env(env):
+    """Drop every ANTHROPIC_* var plus CLAUDE_DROP_ENV; HOME, PATH and CLAUDE_CONFIG_DIR stay."""
+    for k in [k for k in env if k.startswith('ANTHROPIC_') or k in CLAUDE_DROP_ENV]:
+        del env[k]
+    return env
+
+
 @dataclass
 class JobInfo:
     """Execution state of a spawned agent task."""
@@ -449,8 +465,7 @@ class SpawnerRunner:
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only, never an API key
-            for _k in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'):
-                child_env.pop(_k, None)
+            scrub_claude_env(child_env)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
