@@ -530,8 +530,8 @@ def admitted_by_render(model):
 
 def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
-    if harness in ('agy', 'qodercli'):
-        return None if shutil.which(harness) else 'harness_missing: ' + harness
+    if harness in ('agy', 'qodercli', 'claude'):   # D-3649 r2: the child's exec PATH (env overlay; None -> os.defpath, '' finds nothing)
+        return None if shutil.which(harness, path=os.pathsep.join(os.get_exec_path({**os.environ, **(env or {})}))) else 'harness_missing: ' + harness
     if harness != 'opencode':
         return None
     model = row.get('model') or row.get('id') or row.get('model_id')
