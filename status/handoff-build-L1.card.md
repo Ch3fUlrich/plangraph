@@ -15,7 +15,7 @@
 - #334 fix efbc85d86 (seat-334d MED+LOW+2NIT, hand-edit 13 lines, UNPUSHED); full suite J/s334-suite.log; delta mimo-pro seat J/seat-334e.out (J=/home/s/.claude/jobs/7d533977/tmp) next check 15:00Z
 - SEAT-TOOLS sol writer: gated spawn J/spawn-st.sh -> J/r-st.json (wt seat-tools-leg-sandbox) next check 15:00Z
 - #318 fix round build-L2-spawner3605-0092 since 14:00Z next check 15:00Z
-- #309 MERGE-READY e3e05fcc from keeperfix-0102 but PR CONFLICTING (CHANGELOG) -> L2 merging main + CI; luna TOOLS seat asked of workst-L1-autoos-0088 14:46Z (reply to me); then GO-REQ (HIGH) to routing
+- #309 MERGE-READY e3e05fcc from keeperfix-0102 but PR CONFLICTING (CHANGELOG) -> L2 merging main + CI; luna TOOLS seat queued to workst-L1-autoos successor (0088 recycling 14:5xZ; no successor by 15:20Z -> ask routing-0101); then GO-REQ (HIGH) to routing
 - #314 #279 build-L2-keeperfix-0102 next check 15:00Z
 ## Planned
 1. #324: suite rc=0 -> push lane, gh pr ready 324, CI green -> MERGE-READY 324 to replan-0105
