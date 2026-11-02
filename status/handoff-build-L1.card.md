@@ -1,35 +1,30 @@
-# L1 card · build-L1-0087 · 2026-11-02T09:54Z
+# L1 card · build-L1-0090 · 2026-11-02T11:01Z
 ## Goal
-- D-3631: 7 spawner lanes (Sonnet writers) to MERGE-READY; #321 Sol GO-REQ; SPAWNER-LEG-STATE-FROM-OMNIROUTE (4.01)
+- D-3631 spawner lanes to merged: GO for #321/#325/#326, fix #323/#324, seat pd#20; FLEET-BUS-DISCOVERY-SELF (D-3633(5))
 ## Keeper
-- claimed: SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1, lease 11:29Z), SPAWNER-LEGS-D3605 (ep2, lease 10:34Z), RIN-PATH-REPOINT + RIN-LEDGER-VIEWS (ep2, lease 10:05Z: renew), LE-PANE-MOVE-EXIT-CONFIRM + LE-FLEET-MSG-INVENTORY (ep4, 11:18Z)
-- ready next: LE-RECYCLE-KEEP-SUBAGENTS (HIGH, D-3631), LE-HANDOFF-OPEN-ITEMS-GATE (D-3627), SPAWNER-CONTEXT-PACK-D3622
+- claimed: SPAWNER-LEGS-D3605 (ep2, lease 11:56Z), SPAWNER-CONTEXT-PACK-D3622 (ep1, 12:12Z), FLEET-BUS-DISCOVERY-SELF (ep1, 11:59Z), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1, 11:29Z), RIN-PATH-REPOINT + RIN-LEDGER-VIEWS (ep2, 11:56Z), LE-FLEET-MSG-INVENTORY (ep4, 11:18Z)
+- ready next: LE-RECYCLE-KEEP-SUBAGENTS (HIGH, D-3631), LE-HANDOFF-OPEN-ITEMS-GATE (D-3627)
 ## Done
-- 11-02T10:12Z SPAWNER-DISPATCH-FAIL-DETECT PR#324 bc9942e5 W4 kill-own-tree Sonnet, 155 passed, gates ok
-- 11-02T09:20Z OS-FLEET-MSG-INVENTORY 202e8e6 plangraph-data PR#19 ops env draft (router merges)
-- 11-02T09:40Z D-3628 - salvage pushed 1e6f2082/217d479e/5a888ce7/f8528ca/74797998 (WIP, gate-failing)
-- 11-02T09:45Z SPAWNER-CONTEXT-PACK-D3622 PR#320 0c822729 luna seat RC -> r1 9b400fe9 RC
-- 11-02T10:00Z SPAWNER-LEGS-D3605 PR#321 584c49f2 replaces #319 (seat run-932dbd17 ACCEPT, gate ok local)
-- 11-02T10:05Z SPAWNER-LEG-STATE-FROM-OMNIROUTE PR#322 274ae806 14 tests; seat run-f99e0318 RC 2 MED
-- 11-02T10:08Z SPAWNER-LEGS-D3605 PR#323 0eceb786 Haiku leg, 157 passed, live OK
+- 11-02T10:00Z LE-PANE-MOVE-EXIT-CONFIRM - parked+released, luna MED in desc (D-3633(3))
+- 11-02T10:45Z FLEET-BUS-DISCOVERY-SELF PR#326 c01d0b69 CI green, Haiku tool seat ACCEPT + luna delta ACCEPT run-30141a2e
+- 11-02T10:50Z SPAWNER-CONTEXT-PACK-D3622 PR#325 ce860671 CI 41430998085 green, Haiku delta ACCEPT seat-h325d.md
+- 11-02T10:55Z SPAWNER-SESSION-NAMES-D3605 PR#327 c799f562 merged (CI 41430912701 green, luna run-e41f0282)
+- 11-02T10:30Z SPAWNER-LEGS-D3605 PR#321 584c49f2 Haiku tool seat ACCEPT 1117 passed seat-h321.md
 ## In flight
-- SPAWNER-CONTEXT-PACK-D3622 Sonnet af815fc89c5b57107 r2 -> lane/spawner-context-pack-2 since 10:05Z next check 10:40Z
-- SPAWNER-DISPATCH-FAIL-DETECT W4 PR#324 bc9942e5 needs luna seat since 10:12Z next check 10:30Z
-- SPAWNER-LEG-STATE-FROM-OMNIROUTE fix run-6d943dc7 since 10:06Z next check 10:30Z
-- ROUTING-REPOINT-AUTOOS W3 run-80d4117d since 09:45Z next check 10:30Z
-- SPAWNER-LEGS-D3605 #323 luna seat s323l since 10:09Z next check 10:30Z; #321 CI since 10:01Z next check 10:20Z
+- SPAWNER-DISPATCH-FAIL-DETECT #324 Sonnet fix r2 subagent of build-L1-0090 since 10:42Z next check 11:30Z (lane/spawner-kill-own-tree-3 after 1d38f485)
+- SPAWNER-LEGS-D3605 #323 6f7f1d6f luna delta s323d since 10:48Z next check 11:15Z (J/seat-323d.log)
+- LE-RECYCLE-NEW-SESSION pd#20 4f1fc0f1 workst tools seat asked since 10:59Z next check 11:30Z
+- GO-REQs #321 #325 #326 at routing since 10:50Z next check 11:15Z
 ## Planned
-1. SPAWNER-LEGS-D3605 #321 CI green -> GO-REQ (no tool-running seat) -> merge, ff spawner-main
-2. SPAWNER-LEG-STATE-FROM-OMNIROUTE push r1 + luna delta seat; slice 2 wiring after mgmt key answer
-3. LE-RECYCLE-KEEP-SUBAGENTS + LE-HANDOFF-OPEN-ITEMS-GATE writers (Sonnet ok D-3631)
+1. On GO: merge #321 #325 (close #320) #326, evidence commit+ci + submit, ff spawner-main (rollback 2afe7810)
+2. #324 r2 -> workst delta tools seat; #323 delta ACCEPT -> CI -> GO-REQ; pd#20 seat -> GO-REQ routing
+3. LE-RECYCLE-KEEP-SUBAGENTS + LE-HANDOFF-OPEN-ITEMS-GATE writers (Sonnet ok D-3631, workst seats)
 ## Open
-- BLOCKED keeper tailnet bind: operator must OK in an L1 session (CLAUDE.md network) | default wait | deadline none
-- BLOCKED LE-PANE park | default a release | deadline 2026-11-02T10:30Z
-- BLOCKED OmniRoute mgmt key 403 | default a operator key | deadline 2026-11-02T11:00Z
-- BLOCKED B/W1/W2 L2 relaunch L2-LAUNCH asked | default router relaunches | deadline 2026-11-02T11:36Z
+- BLOCKED keeper tailnet bind: operator types OK in build-L1 session (D-3633(6)) | default wait | deadline none
+- D-3633(1) LEG-STATE: operator places ~/.config/plangraph/omniroute-mgmt.key | default slice 1 reader + fakes | deadline none
 ## Traps
-- gate: Writer id run-<32hex>|session_*|uuid; Test-Removal: D-<id>; hand-edit >50 lines fails -> salvage branches unusable
-- subagent notifications reach only build-L1-0087: successor checks branches/PRs by name
-- never git commit in /home/s/code/plangraph; keeper 127.0.0.1:8787
+- Haiku seat = same family as Sonnet writers (D-2511): Sonnet PRs need workst cx-luna tools seat
+- subagent notifications reach only build-L1-0090: successor checks lane/spawner-kill-own-tree-3 by name
+- evidence kind "commit+ci" ref lane head (merge commits lack Plan-Item); never git commit in /home/s/code/plangraph
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-72 block, line 2); J=/home/s/.claude/jobs/0109de81/tmp
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-73 block, line 2); J=/home/s/.claude/jobs/0109de81/tmp
