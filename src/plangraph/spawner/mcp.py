@@ -18,7 +18,6 @@ import sys
 from typing import Any, Mapping
 
 from plangraph.spawner.clients import effective_child_base_url
-from plangraph.spawner.context_pack import MAX_CHARS, MAX_ENTRIES, MAX_LINES
 from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
@@ -109,21 +108,12 @@ TOOLS_METADATA = [
 ]
 
 
-# D-3605: code slices the spawner inlines into the writer prompt (spawner/context_pack.py).
-CONTEXT_SCHEMA = {'type': 'array', 'maxItems': MAX_ENTRIES, 'description': (
-    f'implement: code slices inlined into the writer prompt (name the reuse targets: callers, readers, fixtures), '
-    f'one function or one file per entry, at most {MAX_LINES} lines or {MAX_CHARS} chars in all, paths inside the run cwd'),
-    'items': {'type': 'object', 'required': ['path'], 'additionalProperties': False, 'properties': {
-        'path': {'type': 'string'}, 'symbol': {'type': 'string', 'description': 'Python function, class or method: name or Class.method'},
-        'start_line': {'type': 'integer', 'minimum': 1}, 'end_line': {'type': 'integer', 'minimum': 1}},
-        'oneOf': [{'required': ['symbol']}, {'required': ['start_line', 'end_line']}]}}
 # D-3244: the schema names the field route refuses without, so callers send it.
 CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': {
     'stall_min': {'type': 'number', 'exclusiveMinimum': 0},
     'first_edit_min': {'type': 'number', 'exclusiveMinimum': 0},
     'max_min': {'type': 'number', 'exclusiveMinimum': 0},
     'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
-    'context': CONTEXT_SCHEMA,
     'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}
 for _tool in TOOLS_METADATA:
     if _tool['name'] in ('plangraph_agent_status', 'plangraph_agent_cancel'):
