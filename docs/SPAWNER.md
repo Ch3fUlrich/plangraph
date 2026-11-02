@@ -44,7 +44,7 @@ expiry kills its process tree and records rc 124 with FAILED completion.
 The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
-Writing run roles (implement/fix) guard shared .git/config against in-place mutations (e.g. core.autocrlf), restoring original bytes and failing the run if changed.
+Writing run roles (implement/fix) guard shared .git/config against in-place mutations (e.g. core.autocrlf), restoring original bytes and failing the run if changed. The spawner kills only the process tree it started: the root is proven ours at spawn (direct child, own group; or Job Object member), a snapshot of its descendants is taken before any signal, and a kill is verified (up to 10 s). Survivors fail the run with reason `kill_incomplete` (event `kill_incomplete`, `survivors` pids): no fall-through leg, no second writer. Runs use argv exec only (no shell wrapper), enforced by a static guard test.
 `--model`/`--leg` require `--override-reason` of at least ten characters,
 audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
@@ -557,13 +557,7 @@ Host binary and client prerequisites are delegated to AutoOS (`deploy/requiremen
 For host provisioning instructions, refer to [`deploy/README.md`](../deploy/README.md).
 # Bounded dispatch and gateway evidence
 
-`spawn --wait S` waits at most S seconds after supervisor startup. The default,
-`--wait 0`, returns the run id immediately with `status: running`; a detached
-supervisor keeps the child and record monitor alive. Use `result RUN_ID` to read
-the eventual result. If all eligible legs are limited, dispatch returns exit code
-3 with the plan's evidence list and starts no child. Provider stops trigger a
-fresh eligibility plan with the original card, role and writer-family exclusions;
-already attempted legs are never retried during that run.
+`spawn --wait S` waits at most S seconds after supervisor startup. The default, `--wait 0`, returns the run id immediately with `status: running`; a detached supervisor keeps the child and record monitor alive. Use `result RUN_ID` to read the eventual result. If all eligible legs are limited, dispatch returns exit code 3 with the plan's evidence list and starts no child. Provider stops trigger a fresh eligibility plan with the original card, role and writer-family exclusions; already attempted legs are never retried during that run.
 
 The OmniRoute fork emits provider failures as one JSON line on **stderr**:
 
@@ -726,3 +720,6 @@ See [spawner-sessions.md](spawner-sessions.md) (names are `<role>-NNNN`; relaunc
 # Watchdog
 
 Runs sample file signatures/git HEAD (edits), non-header output (activity), and process-tree CPU (post-edit only). Card `stall_min`, `first_edit_min`, `max_min` default to 20/45/90 minutes. Pre-edit, no activity or exceeding first-edit age stalls; post-edit, all signals must stop progressing. Maximum age wins. Status `stalled` exits 6; `timeout` exits 124; `writer_no_changes` exits 5. Events `watchdog_stalled`/`watchdog_timeout` carry rules and diagnostics. Private `runs/<run_id>/live.log` is capped at 2 MB; status exposes live tails and `last_activity_ts`. `PLANGRAPH_SPAWN_RUN_TIMEOUT` replaces the default maximum (seconds), but explicit card `max_min` wins. `PLANGRAPH_SPAWN_WATCHDOG_INTERVAL` overrides sampling seconds.
+### Refused dispatch (D-3605 a)
+
+A refused dispatch (rate limit, quota, credits out, auth: HTTP 401/402/403/429 or a 429/402 provider envelope in the first output lines, first 30 s and 40 lines) ends the run at once instead of `running` until a stall rule fires: `run_watchdog.collect` marks the job failed (exit 7, event `dispatch_refused`) and reaps the process tree, `fallthrough_reason` books the leg down (`unavailable_until`, `PLANGRAPH_LEG_DOWN_S`, default 1800 s for credit/auth lines without a reset time), and one `LEG_REFUSED` line (run id, leg, reason) goes to the parent inbox and `PLANGRAPH_SPAWN_NOTIFY_CMD`. Process CPU accounting lives in `spawner/run_cpu.py`.

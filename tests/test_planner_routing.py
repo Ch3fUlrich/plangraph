@@ -315,14 +315,14 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
 
 def test_writer_order_d2683_implement_first_seven():
     # (a) implement plan, public standard card (20000 tokens, no exclusions): free tier first, then
-    # subscription: deepseek-free, glm-free, openrouter-free, agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash,
-    # console-sonnet as the first 7 leg ids in that order (no Sol, D-3505)
+    # subscription headed by Sol (D-3667): deepseek-free, glm-free, openrouter-free, cx-gpt-6.1-sol,
+    # agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash, console-sonnet as the first 8 leg ids in that order
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
     expected = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-                "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash",
-                "opencode-console-sonnet-5.5"]
-    assert [leg.id for leg in plan.legs[:7]] == expected
+                "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
+                "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]
+    assert [leg.id for leg in plan.legs[:8]] == expected
 
 
 def test_writer_order_d2683_unavailable_skipped():
@@ -374,8 +374,9 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
-    from plangraph.planner.legs import WRITER_ORDER
-    expected_writers = [w for w in WRITER_ORDER if w != "mimo-v2.6-pro"]
+    expected_writers = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",  # pinned: tier first,
+                        "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash",  # then WRITER_ORDER
+                        "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]  # (D-2683, D-3667)
     assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
 
 

@@ -15,6 +15,7 @@ import time
 import uuid
 from . import context_pack
 from .runner import SpawnerRunner
+from .cancel_recorded import cancel_recorded
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -386,15 +387,4 @@ class SpawnService(SeatSpawnMixin):
         return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
 
     async def cancel(self, run_id):
-        record = self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
-        if record.get('job_id') in self.runner.jobs:
-            await self.runner.cancel(record['job_id'])
-        elif record['status'] == 'running' and record.get('pid'):
-            await self.runner.tree_killer(record['pid'])
-        task = self.tasks.get(run_id)
-        if task and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        record.update(status='cancelled', exit_code=1, ended=time.time())
-        self._save(record)
-        return record
+        return await cancel_recorded(self, run_id)

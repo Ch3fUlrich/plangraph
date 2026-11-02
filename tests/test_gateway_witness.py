@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pid 123 is never a live host pid
 
 from plangraph.spawner import gateway_witness as gw
 
