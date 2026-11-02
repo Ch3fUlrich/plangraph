@@ -94,7 +94,7 @@ def test_secret_or_untracked_skipped_unread(tree, path, why):
     card = dict(CARD, context=[path + ":1-1", "b.py:1-1"])
     out = _Seat(tree)._leg_prompt("p", card, "implement", INLINE)
     assert "tok" not in out and "```\nu\n" not in out and "b1" in out
-    assert any("context_path_refused: " + path in w and why in w for w in context_pack.annotate({}, "p", card, tree))
+    assert any("context_path_refused: " + path in w and why in w for w in context_pack.annotate({}, "p", card, tree).warnings)
 
 
 @pytest.mark.parametrize("cap", [0, 80, 150, 200, 260, 400, 1000])
@@ -128,7 +128,7 @@ def test_unfit_framing_returns_prompt_with_warning(tree, monkeypatch):
     monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", "20")
     card = dict(CARD, context=["b.py:1-1"])
     assert _Seat(tree)._leg_prompt("p", card, "implement", INLINE) == "p"
-    found = context_pack.annotate({}, "p", card, tree)
+    found = context_pack.annotate({}, "p", card, tree).warnings
     assert len(found) == 1 and found[0].startswith("context_pack_unfit: cap 20 chars, needs ")
 
 

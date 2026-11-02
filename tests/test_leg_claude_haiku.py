@@ -1,12 +1,14 @@
-"""D-3605/D-3619: Claude Haiku review fallback leg over the Claude subscription (hermetic)."""
+"""D-3605/D-3619: Claude Haiku review fallback leg over the Claude subscription (hermetic).
+
+The claude child env allowlist and the harness_missing admission live in test_claude_child_env.py (D-3649).
+"""
 from __future__ import annotations
 
-import asyncio
 import json
 
 from plangraph.planner.legs import DEFAULT_LEGS, HARNESSES, load_legs
 from plangraph.planner.routing import plan_spawn
-from plangraph.routing_support.clients import build_child_env, build_command, STDIN_PROMPT_HARNESSES
+from plangraph.routing_support.clients import build_command, STDIN_PROMPT_HARNESSES
 from plangraph.spawner import runner as runner_mod
 
 from registry_route_util import CARD, live_policy  # noqa: F401
@@ -62,57 +64,11 @@ def test_harnesses_validation_accepts_claude(tmp_path):
     assert [l.harness for l in load_legs(path)] == ["claude"]
 
 
-def test_witness_reads_stream_json_model_and_env_scrub_names():
+def test_witness_reads_stream_json_model():
     assert runner_mod._claude_stream_model('x\n{"type":"system","model":"m1"}') == "m1"
     assert runner_mod._claude_stream_model("not json") is None
-
-
-def test_claude_child_env_drops_credentials_and_routing_keeps_login(monkeypatch):
-    dropped = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
-               "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_BEARER_TOKEN_BEDROCK",
-               "CLAUDE_CODE_OAUTH_TOKEN")
-    for k in dropped:
-        monkeypatch.setenv(k, "x")
-    monkeypatch.setenv("HOME", "/h")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/cfg")
-    env = runner_mod.scrub_claude_env(build_child_env())
-    assert not set(dropped) & set(env)
-    assert env["HOME"] == "/h" and env["CLAUDE_CONFIG_DIR"] == "/cfg" and "PATH" in env
 
 
 def test_anthropic_writer_excludes_every_claude_family_review_leg():
     plan = plan_spawn(CARD, role="review", writer_families=("anthropic",), leg_reader=_clear)
     assert not [l.id for l in plan.legs if l.claude_family]
-
-
-def test_claude_spawn_path_scrubs_child_env(monkeypatch, tmp_path):
-    """Drive SpawnerRunner.spawn for the claude harness; capture env= at the exec boundary."""
-    seeded = set(runner_mod.CLAUDE_DROP_ENV) | {
-        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
-        "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
-        "CLAUDE_CODE_USE_FOUNDRY", "AWS_BEARER_TOKEN_BEDROCK"}
-    assert "CLAUDE_CODE_USE_FOUNDRY" in seeded
-    for k in seeded:
-        monkeypatch.setenv(k, "x")
-    monkeypatch.setenv("HOME", "/h")
-    monkeypatch.setenv("PATH", "/bin:/usr/bin")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/cfg")
-    monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", raising=False)
-    seen = {}
-
-    class Stop(Exception):
-        pass
-
-    async def factory(exe, *args, **kw):
-        seen["exe"], seen["env"] = exe, dict(kw["env"])
-        raise Stop
-
-    runner = runner_mod.SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
-    try:
-        asyncio.run(runner.spawn("review this", "claude-haiku-5-5", role="review", client="claude",
-                                 cwd=str(tmp_path)))
-    except Stop:
-        pass
-    env = seen["env"]
-    assert not seeded & set(env) and not [k for k in env if k.startswith("ANTHROPIC_")]
-    assert env["HOME"] == "/h" and env["CLAUDE_CONFIG_DIR"] == "/cfg" and env["PATH"]

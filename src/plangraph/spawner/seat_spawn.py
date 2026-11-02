@@ -15,12 +15,14 @@ import uuid
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
-    def _leg_prompt(self, prompt, card, role, leg):
-        """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff."""
+    def _leg_prompt(self, prompt, card, role, leg, pack=None):
+        """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
+
+        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here."""
         if getattr(leg, 'tool_mode', 'tools') != 'inline-only':
             return prompt
         from . import context_pack
-        prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd())
+        prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if role != 'review':
             return prompt
         from .inline_diff import inline_diff_prompt

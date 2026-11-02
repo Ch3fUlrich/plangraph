@@ -31,6 +31,8 @@ from plangraph.spawner.clients import (
     build_command,
     build_routing_envelope_headers,
 )
+from plangraph.spawner.claude_env import claude_child_env
+from plangraph.spawner.claude_stream import render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
 from plangraph.planner.legs import DEFAULT_LEGS
@@ -99,22 +101,6 @@ def _resolve_launch(
             return exe, f"command_line_too_long: {len(cmdline)} chars"
 
     return exe, None
-
-
-#: D-3605: the claude child logs in from ~/.claude/.credentials.json (this host); every API
-#: credential and provider-routing var is dropped, incl. CLAUDE_CODE_OAUTH_TOKEN (overrides the login).
-CLAUDE_DROP_ENV = (
-    'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
-    'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_SKIP_BEDROCK_AUTH', 'CLAUDE_CODE_SKIP_VERTEX_AUTH',
-    'AWS_BEARER_TOKEN_BEDROCK',
-)
-
-
-def scrub_claude_env(env):
-    """Drop every ANTHROPIC_* var plus CLAUDE_DROP_ENV; HOME, PATH and CLAUDE_CONFIG_DIR stay."""
-    for k in [k for k in env if k.startswith('ANTHROPIC_') or k in CLAUDE_DROP_ENV]:
-        del env[k]
-    return env
 
 
 @dataclass
@@ -386,8 +372,8 @@ class SpawnerRunner:
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
-        if cmd[0] == 'claude':   # D-3605: subscription login only, never an API key
-            scrub_claude_env(child_env)
+        if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
+            child_env = claude_child_env(child_env)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
@@ -741,6 +727,9 @@ class SpawnerRunner:
                 if m is not None and m == requested_model:
                     job.request_side_model = m
                     job.witness_kind = 'request-side-claude-stream'
+                # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
+                await asyncio.to_thread(render_review_output, job, stdout_text,
+                                        lambda text: redact(redact_env_values(text, env)))
 
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
@@ -1003,7 +992,7 @@ def spawn_service(*args, **kwargs):
                 writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             from .context_pack import annotate
-            annotate(record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings
+            pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
@@ -1044,7 +1033,7 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen)
+                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
@@ -1072,7 +1061,8 @@ def spawn_service(*args, **kwargs):
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
                             record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
-                                watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None), events=job.events)
+                                watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
+                                events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)

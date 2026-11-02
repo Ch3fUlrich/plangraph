@@ -299,7 +299,7 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running',
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
-        context_pack.annotate(record, prompt, card, record['cwd']); self._save(record)  # D-3622 (file at the 400-line cap)
+        pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
 
         async def execute():
             try:
@@ -309,7 +309,7 @@ class SpawnService(SeatSpawnMixin):
                 for chosen in plan.legs:
                     from .inline_diff import InlineDiffError
                     try:
-                        leg_prompt = self._leg_prompt(prompt, card, role, chosen)
+                        leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                             skip_reason='inline_diff_failed: ' + str(exc),
