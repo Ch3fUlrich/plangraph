@@ -1,5 +1,6 @@
 """Shared dispatch outcome policy for base and routed launches."""
-from .env_redact import first_reason, harness_limit_line, unavailable_reason
+import os
+from .env_redact import CREDIT_AUTH_MARKER, first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
@@ -18,7 +19,9 @@ def fallthrough_reason(service, chosen, job, record):
             target = leg_state
         # Q16/M8: one leg key shared with the probe path -- 'agy/<model>' only
         # for an agy leg's bare model.
-        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness')
+        # D-3605 (a): credits/auth refusals carry no reset time; keep the leg down (unavailable_until).
+        extra = {'down_s': float(os.environ.get('PLANGRAPH_LEG_DOWN_S') or 1800)} if CREDIT_AUTH_MARKER.search(line) else {}
+        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness', **extra)
         # M9/M15: a guard or cancel verdict is never stomped by a fallthrough.
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'

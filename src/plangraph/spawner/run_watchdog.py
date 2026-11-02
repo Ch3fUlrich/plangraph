@@ -17,6 +17,7 @@ LIVE_LOG_FLUSH = 16384        # batched appends: one write+fsync per 16 KB, not 
 LIVE_LOG_MAX = 2 * 1024 * 1024
 LIVE_LOG_ERRORS = 3           # record at most this many live.log failures per run
 READER_GRACE_S = 5.0          # bounded drain once the run is gone (M6)
+REFUSAL_WINDOW_S = 60.0       # a refused dispatch speaks at once; later output is task text (D-3605 a)
 EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreadable (Q7)
 
 
@@ -271,6 +272,7 @@ async def collect(runner, job_id, proc):
     baseline = getattr(job, '_watchdog_baseline', None)
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
     captured = {'stdout': [], 'stderr': []}
+    refused = asyncio.Event()
     def scrub(text):
         return redact(redact_env_values(text, env))
     async def reader(stream, name):
@@ -286,12 +288,20 @@ async def collect(runner, job_id, proc):
             lines = pending.splitlines(keepends=True)
             pending = ''
             active = False
+            complete = []
             for line in lines:
                 if not line.endswith(('\n', '\r')):
                     pending = line
                     continue
+                complete.append(line)
                 if is_activity(line):
                     active = True
+            if complete and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S:
+                from .env_redact import early_refusal
+                found = early_refusal(name, ''.join(complete))
+                if found:
+                    job.refusal = scrub(found)   # only the matched line is scrubbed: no second pass over the chunk
+                    refused.set()
             if active:
                 job.last_activity_ts = time.time()
             scrubbed = scrub(text)      # once per chunk: linear (Q4/M3)
@@ -355,14 +365,33 @@ async def collect(runner, job_id, proc):
                 pass
         return await proc.communicate()
     task = asyncio.create_task(output())
+    refusal_wait = asyncio.ensure_future(refused.wait())
     try:
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
             delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
             if w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
-            done, _ = await asyncio.wait([task], timeout=delay)
-            if done:
+            done, _ = await asyncio.wait([task, refusal_wait], timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+            if refused.is_set() and not task.done():
+                # D-3605 (a): a refused/rate-limited/credit/auth dispatch ends the run now,
+                # never 'running' until a stall rule fires; the leg loop records leg_state.
+                job.status, job.exit_code = 'failed', 7
+                job.events.append({'event': 'dispatch_refused', 'reason': job.refusal})
+                logging.getLogger(__name__).info('%s dispatch refused', job_id)
+                await runner._reap_process(job_id, proc)
+                try:
+                    callback = getattr(runner, 'on_sample', None)
+                    if callback:
+                        callback(job_id)
+                except Exception:
+                    logging.getLogger(__name__).exception('refusal sample callback failed')
+                if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    return await proc.communicate()
+                break
+            if task in done:
                 break
             edit = await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
             now = time.time()
@@ -390,6 +419,7 @@ async def collect(runner, job_id, proc):
                 break
         return await task
     finally:
+        refusal_wait.cancel()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
