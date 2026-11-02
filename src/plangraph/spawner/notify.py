@@ -129,3 +129,13 @@ def completion_event(record, cwd):
         item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM'),
         take_cmd=f'git cherry-pick {head}' if head else 'git log --oneline',
         discard_cmd=f'plangraph-spawn result {record["run_id"]} # discard: do not cherry-pick'))
+
+
+def leg_refused_event(record, leg, reason):
+    """One notify line per refused leg attempt (D-3605 a): run id, leg, reason."""
+    from .runner import redact
+    return redact(dict(event_id='%s:leg_refused:%s' % (record['run_id'], leg),
+        idempotency_key='%s:leg_refused:%s' % (record['run_id'], leg),
+        event='LEG_REFUSED', run_id=record['run_id'], leg=leg, reason=reason,
+        parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
+        item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM')))

@@ -46,7 +46,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .exit_outcome import fallthrough_reason, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import kill_process_tree
 from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
@@ -666,7 +666,8 @@ class SpawnerRunner:
             stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled') else proc.returncode
+            exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
+                                                        or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
 
             job = self.jobs[job_id]
             # Only the fork's exact stderr transport envelope is evidence.
@@ -1079,6 +1080,8 @@ def spawn_service(*args, **kwargs):
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
+                        if stop and not unavailable and job.status != 'cancelled':
+                            notify_leg_refused(self, record, chosen, reason or 'provider_stop')
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
