@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Canned `gh` for tests/test_merge_batch.py (D-852): never talks to a network.
+
+Serves JSON from $GH_STUB_DIR/state.json, appends every call to calls.jsonl, and merges batch
+PRs inside the local bare repo named there (git plumbing). A call it does not know exits 97
+and leaves UNEXPECTED, which the test fixture turns into a failure.
+"""
+import json
+import os
+import subprocess
+import sys
+
+DIR = os.environ["GH_STUB_DIR"]
+ARGV = sys.argv[1:]
+#: the real `gh pr ... --json` names (2.45): a misspelt field must fail here, not on a laptop.
+PR_FIELDS = set("""additions assignees author autoMergeRequest baseRefName body changedFiles closed closedAt
+comments commits createdAt deletions files headRefName headRefOid headRepository headRepositoryOwner id
+isCrossRepository isDraft labels latestReviews maintainerCanModify mergeCommit mergeStateStatus mergeable
+mergedAt mergedBy milestone number potentialMergeCommit reviewDecision reviews state statusCheckRollup
+title updatedAt url""".split())
+CHECK_FIELDS = set("bucket completedAt description event link name startedAt state workflow".split())
+S = json.load(open(os.path.join(DIR, "state.json")))
+with open(os.path.join(DIR, "calls.jsonl"), "a") as log:
+    log.write(json.dumps(ARGV) + "\n")
+
+
+def opt(flag):
+    return ARGV[ARGV.index(flag) + 1] if flag in ARGV else None
+
+
+def die(message, rc=1):
+    print(message, file=sys.stderr)
+    sys.exit(rc)
+
+
+def fields(allowed):
+    names = (opt("--json") or "").split(",")
+    if not names[0] or set(names) - allowed:
+        die(f"unknown json field in {names}", 1)
+    return names
+
+
+def git(*args, ok=(0,)):
+    proc = subprocess.run(["git", "--git-dir", S["origin"], *args], capture_output=True, text=True)
+    if proc.returncode not in ok:
+        die(f"git {args[0]}: {proc.stderr.strip()}")
+    return proc
+
+
+def save():
+    json.dump(S, open(os.path.join(DIR, "state.json"), "w"))
+
+
+def show(pr):
+    return {name: pr.get(name) for name in fields(PR_FIELDS)}
+
+
+def pr_arg():
+    return S["prs"].get(ARGV[2]) or die(f"no pull request {ARGV[2]}")
+
+
+cmd = ARGV[:2]
+if cmd == ["repo", "view"]:
+    print(json.dumps({"nameWithOwner": S["repo"], "defaultBranchRef": {"name": S["default_branch"]}}))
+elif cmd == ["pr", "list"]:
+    label = opt("--label")
+    print(json.dumps([show(p) for p in S["prs"].values() if p["state"] == "OPEN"
+                      and (label is None or label in [x["name"] for x in p["labels"]])]))
+elif cmd == ["pr", "view"]:
+    print(json.dumps(show(pr_arg())))
+elif cmd == ["pr", "edit"]:
+    pr = pr_arg()
+    if "--add-label" in ARGV:
+        if opt("--add-label") not in S["labels"]:
+            die(f"'{opt('--add-label')}' not found")
+        pr["labels"].append({"name": opt("--add-label")})
+    if "--title" in ARGV:
+        pr["title"] = opt("--title")
+    if "--body-file" in ARGV:
+        pr["body"] = open(opt("--body-file")).read()
+    save()
+elif cmd == ["label", "create"]:
+    S["labels"].append(ARGV[2])
+    save()
+elif cmd == ["pr", "create"]:
+    number, S["next_pr"] = S["next_pr"], S["next_pr"] + 1
+    head = git("rev-parse", f"refs/heads/{opt('--head')}").stdout.strip()
+    S["prs"][str(number)] = {
+        "number": number, "title": opt("--title"), "body": open(opt("--body-file")).read(),
+        "headRefName": opt("--head"), "headRefOid": head, "baseRefName": opt("--base"), "state": "OPEN",
+        "isDraft": False, "isCrossRepository": False, "labels": [], "files": [], "additions": 0,
+        "deletions": 0, "statusCheckRollup": [], "mergeCommit": None}
+    save()
+    print(f"https://example.invalid/{S['repo']}/pull/{number}")
+elif cmd == ["pr", "checks"]:
+    fields(CHECK_FIELDS)
+    rows = S["checks"].get(ARGV[2], [])
+    print(json.dumps(rows))
+    sys.exit(0 if rows and all(r["bucket"] == "pass" for r in rows) else 1)
+elif cmd == ["pr", "merge"]:
+    pr = pr_arg()
+    if pr["state"] != "OPEN" or "--merge" not in ARGV:
+        die("pull request is not open or no --merge given")
+    if opt("--match-head-commit") != pr["headRefOid"]:
+        die("head commit does not match --match-head-commit")
+    head, base = pr["headRefOid"], f"refs/heads/{pr['baseRefName']}"
+    tree = git("rev-parse", f"{head}^{{tree}}").stdout.strip()  # base has not moved in these tests
+    merge = git("commit-tree", tree, "-p", git("rev-parse", base).stdout.strip(), "-p", head,
+                "-m", f"Merge pull request #{pr['number']}").stdout.strip()
+    git("update-ref", base, merge)
+    for other in S["prs"].values():  # GitHub marks a PR merged once its head is on the base
+        if other["state"] == "OPEN" and other["number"] not in S["no_auto_merge"] \
+                and git("merge-base", "--is-ancestor", other["headRefOid"], merge, ok=(0, 1)).returncode == 0:
+            other.update(state="MERGED", mergeCommit={"oid": merge})
+    pr.update(state="MERGED", mergeCommit={"oid": merge})
+    save()
+elif cmd == ["pr", "close"]:
+    pr = pr_arg()
+    pr.update(state="CLOSED", closed_with=opt("--comment"))
+    save()
+else:
+    open(os.path.join(DIR, "UNEXPECTED"), "a").write(" ".join(ARGV) + "\n")
+    die(f"gh stub: unexpected call {ARGV}", 97)
