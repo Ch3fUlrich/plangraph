@@ -10,7 +10,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import seat_record  # noqa: E402
 import seat_verdict as sv  # noqa: E402
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "seat_records"
+# real-artifact copies live under fixtures/real/ (excluded from the public tree by
+# tools/split/manifest.toml); tests that need them skip when the dir is absent.
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "real" / "seat_records"
+needs_real = pytest.mark.skipif(not FIXTURES.is_dir(), reason="real fixtures excluded from public tree")
+
+
+def copy_fixture(tmp_path, name):
+    """Copy a fixture run dir with the 0600/0700 modes the record binding requires."""
+    seat = tmp_path / name
+    shutil.copytree(FIXTURES / name, seat)
+    seat.chmod(0o700)
+    for f in seat.iterdir():
+        f.chmod(0o600)
+    return seat
+
 OMNI_RUN = "run-17e7efa9a08149788618a3d189d437fa"   # real omniroute leg -> D-2905
 FREE_RUN = "run-2b6f4c8e1a9d3f7b5e0c4a8d2f6b1e3c"   # free leg, findings after VERDICT
 PASS_RUN = "run-9e1d5c3b7a2f6d4b8c0e2a6f4d8b1c3e"   # free leg, PASS + TEST-GAMING
@@ -181,20 +195,22 @@ def test_head_help_binds_completion_time_head(capsys):
     assert "completion" in capsys.readouterr().out
 
 # Fixture: real omniroute leg refused by the D-2905 unwitnessed rule.
-def test_fixture_omniroute_leg_refused_by_d2905(capsys):
-    assert sv.main(argv_for(FIXTURES / OMNI_RUN)) == 2
+@needs_real
+def test_fixture_omniroute_leg_refused_by_d2905(tmp_path, capsys):
+    assert sv.main(argv_for(copy_fixture(tmp_path, OMNI_RUN))) == 2
     err = capsys.readouterr().err
     assert "D-2905" in err and "omniroute/cx-gpt-6-luna" in err
 
 # Fixture: the real live.log has findings after the VERDICT line -> refused.
-def test_fixture_findings_after_verdict_refused(capsys):
-    assert sv.main(argv_for(FIXTURES / FREE_RUN)) == 2
+@needs_real
+def test_fixture_findings_after_verdict_refused(tmp_path, capsys):
+    assert sv.main(argv_for(copy_fixture(tmp_path, FREE_RUN))) == 2
     assert "verdict is not the last line" in capsys.readouterr().err
 
 # Fixture: free-leg completed review with finish_reason in the record -> posts.
+@needs_real
 def test_fixture_free_leg_pass_posts(tmp_path, capsys):
-    seat = tmp_path / PASS_RUN
-    shutil.copytree(FIXTURES / PASS_RUN, seat)
+    seat = copy_fixture(tmp_path, PASS_RUN)
     assert sv.main(argv_for(seat)) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["family"] == "openai"

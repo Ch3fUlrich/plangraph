@@ -30,6 +30,8 @@ def fixture_seat(tmp_path, name=PASS_RUN):
     """Copy a real-artifact fixture run dir like the spawner wrote it:
     run dir 0700, record.json and live.log 0600 (umask 002 would make the
     copies group-writable and record.json would be refused)."""
+    if not FIXTURES.is_dir():
+        pytest.skip("real fixtures excluded from public tree")
     seat = tmp_path / name
     shutil.copytree(FIXTURES / name, seat)
     seat.chmod(0o700)
