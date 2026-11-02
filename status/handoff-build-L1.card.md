@@ -18,7 +18,7 @@
 - pd#20 LE-RECYCLE-NEW-SESSION: HIGH ctx-watchdog:297 fix = L2 spawner3605-0092 W1; plangraph-data stays mine
 - plangraph-data #15 #16 #17 (RIN-PATH-REPOINT, ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS) mine: Haiku tool seats all RC (records /home/s/.claude/jobs/9d41ad45/tmp/seat-hpd1{5,6,7}.md) -> build-L2-pdfix-0098 fixing (D-3651); D-3650 ruling forwarded; merges via rule 3.18 batches (D-3648: batch-ready label + MERGE-READY to me)
 - pd#20 91c1d77 MERGE-READY from spawner3605-0092 (Sonnet): luna tools delta seat asked of workst-L1-autoos-0088 11:3xZ -> GO-REQ routing
-- #309 #314 #279 failed keeper batch #331 r1 (findings /home/s/code/plangraph-worktrees/batch-keeper-c-findings.md): L2-LAUNCH build-L2-keeperfix asked (brief ~/.local/share/plangraph/briefs/build-L2-keeperfix.brief.md); Gate-Edit D-id for seat_record.py in AUTH_DOOR_PATHS asked *a 14:00Z
+- #309 #314 #279 failed keeper batch #331 r1 (findings /home/s/code/plangraph-worktrees/batch-keeper-c-findings.md): build-L2-keeperfix-0102 running (brief ~/.local/share/plangraph/briefs/build-L2-keeperfix.brief.md); D-3663 Gate-Edit one line seat_record.py in AUTH_DOOR_PATHS (#314 own commit)
 - build-L2-recycle-0097 launched (D-3651) (brief ~/.local/share/plangraph/briefs/build-L2-recycle.brief.md): KEEP-SUBAGENTS + HANDOFF-OPEN-ITEMS-GATE
 - build-L2-heldfix-0091 DONE (9 heads listed to replan), stopping
 ## Planned
@@ -31,6 +31,7 @@
 - D-3645: SPAWNER-SESSION-NAMES closed by decision; live probe on 2 hosts at the next spawner deploy -> DONE <probe evidence> to routing
 - D-3633(1) LEG-STATE: operator places ~/.config/plangraph/omniroute-mgmt.key | default slice 1 reader + fakes | deadline none
 ## Traps
+- D-3662: a seat with errors/no verdict -> read-only Haiku seat at once
 - Haiku seat = same family as Sonnet writers (D-2511): Sonnet PRs need workst cx-luna tools seat
 - subagent notifications reach only build-L1-0090: successor checks lane/spawner-kill-own-tree-3 by name
 - evidence kind "commit+ci" ref lane head (merge commits lack Plan-Item); never git commit in /home/s/code/plangraph
