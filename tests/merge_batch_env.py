@@ -104,3 +104,52 @@ class Env:
 
     def state_file(self, name):
         return self.repo / ".git" / "merge-batch" / f"{name}.json"
+
+
+# --- helpers shared by the test modules ------------------------------------------------------------
+SHARED = "".join(f"line {i}\n" for i in range(1, 7))
+
+
+def env_fixture(tmp_path):
+    """The body of every module's ``env`` fixture: an Env, checked for stub calls nobody expected."""
+    env = Env(tmp_path)
+    yield env
+    assert not (env.stubs / "UNEXPECTED").exists(), "the tool called a gh command the stub lacks"
+
+
+def two(text):
+    return SHARED.replace("line 3", text)
+
+
+def conflicting(env):
+    """PR 1 and 2 edit the same line, 3 is independent."""
+    env.branch_pr(1, {"shared.txt": two("line 3 one")}, item="ITEM-A", title="edit one")
+    env.branch_pr(2, {"shared.txt": two("line 3 two")}, item="ITEM-B")
+    env.branch_pr(3, {"c.txt": "c\n"})
+
+
+def first_parent(env, ref, cwd=None):
+    return env.git("log", "--first-parent", "--format=%s", ref, cwd=cwd).splitlines()
+
+
+def pushed(env, name="l1", prs=(1, 2, 3), checks="pass"):
+    """A pushed batch of PRs 1..3 whose batch PR is #100 with green checks and a passing approval."""
+    env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
+    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
+    env.branch_pr(3, {"c.txt": "c\n"})
+    assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs))).returncode == 0
+    assert env.run("push", "--name", name).stdout == "100\n"
+    env.load()  # the stub created PR 100
+    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": checks}]
+    env.save()
+    approval = env.tmp / "approval.txt"
+    approval.write_text(f"reviewed {head_of(env, name)}\nlooks fine\nVERDICT: pass\n")
+    return approval
+
+
+def head_of(env, name="l1"):
+    return json.loads(env.state_file(name).read_text())["head"]
+
+
+def land(env, approval, *extra, name="l1", number="100"):
+    return env.run("land", "--name", name, "--batch-pr", number, "--approval", str(approval), "--wait", "0", *extra)

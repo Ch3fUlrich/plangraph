@@ -7,9 +7,7 @@ could run; the `env` fixture fails any test whose tool called a gh command the s
 
 Mutations killed: a conflict merged blind or left half merged, a skipped PR not labelled, a --union
 path or a missing .gitattributes still conflicting, a draft with the batch-ready label refused by
-build, land with a moved head, a red or missing check, no or failing approval, an approval that does
-not name the batch head, an included PR not reported MERGED. The pure plan logic is in
-test_merge_batch_plan.py.
+build. The pure plan logic is in test_merge_batch_plan.py, land in test_merge_batch_land.py.
 
 `gh pr checks` has no --json in gh 2.45 (checked against the real gh), so the stub serves the
 piped text format (name, bucket, elapsed, url) and refuses --json.
@@ -20,32 +18,14 @@ from pathlib import Path
 
 import pytest
 
-from merge_batch_env import ROOT, Env
+from merge_batch_env import SHARED, ROOT, conflicting, env_fixture, first_parent, two
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stubs")
-SHARED = "".join(f"line {i}\n" for i in range(1, 7))
 
 
 @pytest.fixture
 def env(tmp_path):
-    fixture = Env(tmp_path)
-    yield fixture
-    assert not (fixture.stubs / "UNEXPECTED").exists(), "the tool called a gh command the stub lacks"
-
-
-def two(text):
-    return SHARED.replace("line 3", text)
-
-
-def conflicting(env):
-    """PR 1 and 2 edit the same line, 3 is independent."""
-    env.branch_pr(1, {"shared.txt": two("line 3 one")}, item="ITEM-A", title="edit one")
-    env.branch_pr(2, {"shared.txt": two("line 3 two")}, item="ITEM-B")
-    env.branch_pr(3, {"c.txt": "c\n"})
-
-
-def first_parent(env, ref, cwd=None):
-    return env.git("log", "--first-parent", "--format=%s", ref, cwd=cwd).splitlines()
+    yield from env_fixture(tmp_path)
 
 
 def test_guard_real_gh_unreachable(env):
@@ -224,124 +204,6 @@ def test_push_opens_batch_pr_and_updates_it(env):
     patch = env.calls("api", "--method", "PATCH")
     assert again.stdout == "100\n" and len(env.calls("pr", "create")) == 1 and len(patch) == 1
     assert patch[0][3] == "repos/owner/proj/pulls/100" and env.load()["prs"]["100"]["body"] == pr["body"]
-
-
-# ------------------------------------------------------------------------------------- land
-def pushed(env, name="l1", prs=(1, 2, 3), checks="pass"):
-    """A pushed batch of PRs 1..3 whose batch PR is #100 with green checks and a passing approval."""
-    env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
-    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
-    env.branch_pr(3, {"c.txt": "c\n"})
-    assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs))).returncode == 0
-    assert env.run("push", "--name", name).stdout == "100\n"
-    env.load()  # the stub created PR 100
-    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": checks}]
-    env.save()
-    approval = env.tmp / "approval.txt"
-    approval.write_text(f"reviewed {head_of(env, name)}\nlooks fine\nVERDICT: pass\n")
-    return approval
-
-
-def head_of(env, name="l1"):
-    return json.loads(env.state_file(name).read_text())["head"]
-
-
-def land(env, approval, *extra, name="l1", number="100"):
-    return env.run("land", "--name", name, "--batch-pr", number, "--approval", str(approval), "--wait", "0", *extra)
-
-
-@pytest.mark.parametrize("case, message", [
-    ("head_moved", "head moved"), ("red_check", "not green"), ("pending_check", "not green"),
-    ("no_checks", "no required check"), ("no_approval", "cannot be read"), ("fix_verdict", "no passing VERDICT"),
-    ("no_verdict", "no passing VERDICT"), ("no_sha", "does not name the batch head"),
-    ("other_sha", "does not name the batch head"), ("short_sha", "does not name the batch head"),
-    ("wrong_pr", "push it first"), ("draft", "draft"), ("closed", "is CLOSED")])
-def test_land_refusals(env, case, message):
-    approval = pushed(env)
-    batch = env.state["prs"]["100"]
-    checks = env.state["checks"]["100"][0]
-    if case == "head_moved":
-        batch.update(headRefOid="f" * 40, live=False)  # GitHub shows another head than the one pushed
-    elif case == "red_check":
-        checks["bucket"] = "fail"
-    elif case == "pending_check":
-        checks["bucket"] = "pending"
-    elif case == "no_checks":
-        env.state["checks"]["100"] = []
-    elif case == "no_approval":
-        approval.unlink()
-    elif case in ("fix_verdict", "no_verdict"):
-        approval.write_text(head_of(env) + ("\nVERDICT: fix\n" if case == "fix_verdict" else "\nall good\n"))
-    elif case in ("no_sha", "other_sha", "short_sha"):  # the approval must be about this very head
-        named = {"no_sha": "", "other_sha": "1" * 40, "short_sha": head_of(env)[:11]}[case]
-        approval.write_text(f"reviewed {named}\nVERDICT: pass\n")
-    elif case == "draft":
-        batch["isDraft"] = True
-    elif case == "closed":
-        batch["state"] = "CLOSED"
-    env.save()
-    res = land(env, approval, number="101" if case == "wrong_pr" else "100")
-    assert res.returncode == 1 and message in res.stderr and res.stdout == ""
-    assert not env.calls("pr", "merge") and env.state_file("l1").exists()
-    if case == "no_approval":
-        assert "--approval" in env.run("land", "--name", "l1", "--batch-pr", "100").stderr
-
-
-def test_land_refuses_an_approval_for_an_older_head(env):
-    approval = pushed(env, prs=(1, 2))
-    old_head = head_of(env)
-    wt = env.tmp / "repo-worktrees" / "batch-l1"
-    (wt / "fix.txt").write_text("a fix after the review\n")
-    env.git("add", "fix.txt", cwd=wt)
-    env.git("commit", "-q", "-m", "fix after review", cwd=wt)
-    assert env.run("push", "--name", "l1").stdout == "100\n"
-    assert head_of(env) != old_head
-    res = land(env, approval)  # the approval still names the head it reviewed
-    assert res.returncode == 1 and f"does not name the batch head {head_of(env)}" in res.stderr
-    assert not env.calls("pr", "merge")
-    approval.write_text(f"{head_of(env)}\nVERDICT: accept\n")
-    assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
-
-
-def test_land_merges_closes_unmerged_and_reports(env):
-    approval = pushed(env)
-    env.state["no_auto_merge"] = [3]  # GitHub has not marked PR 3 merged
-    env.save()
-    head = json.loads(env.state_file("l1").read_text())["head"]
-    res = land(env, approval)
-    assert res.returncode == 0, res.stderr
-    merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
-    assert res.stdout.splitlines() == [f"MERGED 1 {merge} plangraph:ITEM-A", f"MERGED 2 {merge} plangraph:ITEM-B",
-                                       f"MERGED 3 {merge} -"]
-    prs = env.load()["prs"]
-    assert (prs["1"]["state"], prs["3"]["state"], prs["3"]["closed_with"]) == ("MERGED", "CLOSED",
-                                                                               "merged via batch PR #100")
-    assert env.calls("pr", "merge") == [["pr", "merge", "100", "--repo", "owner/proj", "--merge",
-                                         "--match-head-commit", head]]
-    assert env.calls("pr", "checks") == [["pr", "checks", "100", "--repo", "owner/proj", "--required"]]
-    assert not env.state_file("l1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
-
-
-def test_land_named_checks(env):
-    approval = pushed(env, prs=(1, 2))
-    env.state["checks"]["100"].append({"name": "lint", "bucket": "fail"})
-    env.save()
-    missing = land(env, approval, "--checks", "ci-gate,docs")
-    assert missing.returncode == 1 and "not reported on the batch head: docs" in missing.stderr
-    assert land(env, approval, "--checks", "ci-gate,lint").returncode == 1  # a named check is red
-    ok = land(env, approval, "--checks", "ci-gate")  # --checks replaces the required set
-    assert ok.returncode == 0 and ok.stdout.count("MERGED") == 2
-    assert env.calls("pr", "checks")[-1] == ["pr", "checks", "100", "--repo", "owner/proj"]
-
-
-def test_land_resumes_after_a_merge_made_elsewhere(env):
-    approval = pushed(env, prs=(1, 2))
-    head = head_of(env)
-    approval.write_text(f"reviewed `{head[:12].upper()}`\nVERDICT: pass\n")  # 12 digits in any case name the head
-    done = env.run_gh("pr", "merge", "100", "--repo", "owner/proj", "--merge", "--match-head-commit", head)
-    assert done.returncode == 0
-    res = land(env, approval)
-    assert res.returncode == 0 and res.stdout.count("MERGED") == 2 and len(env.calls("pr", "merge")) == 1
 
 
 def test_status_and_abort(env):
