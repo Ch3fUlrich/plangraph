@@ -1,39 +1,81 @@
 """Deny rules for the Bash PreToolUse guard.
 
-Mechanical split of the original single-file ``bash_guard.py``: this
-module holds the rule-level scanners and ``check_command`` - the entry
-the hook's ``main`` calls. The scanning primitives live in
-``bash_guard_rules2``; the hook entry point, ``main`` and stdin/stdout IO
-live in ``bash_guard``, which puts this file's directory on ``sys.path``
-once so the sibling imports below resolve. Every function is moved from
-the original module as of PR #292 commit cc9332e1; the only logic change
-since is the ``_is_short_p_cluster`` narrowing noted in its docstring.
+This module holds the rules and ``check_command`` - the entry the hook's
+``main`` calls. The scanner lives in ``bash_guard_rules2``; the hook entry
+point, ``main`` and stdin/stderr IO live in ``bash_guard``, which puts this
+file's directory on ``sys.path`` once so the sibling imports resolve.
 
-Slice note (S01): ``bash_guard_rules2`` ships in the NEXT slice (S02,
-PR #298). Until #298 merges, importing this module raises ImportError at
-the ``bash_guard_rules2`` import below and the guard is inert - it fails
-open (a traceback on stderr, nothing denied) on every input. The import
-is kept as is on purpose: without its scanners there are no deny rules
-to run.
+The rules run over every simple command ``scan`` reports - top level,
+subshells, ``{ }`` groups, compound-keyword bodies, ``$( )``, backticks - so
+a command is checked wherever it sits. A command word is found past leading
+reserved words (``if``, ``then``, ``!`` ...), ``NAME=value`` words and, after
+a wrapper (``env``, ``time``, ``nice``, ``nohup``, ``sudo``, ``timeout``,
+``stdbuf``, ``setsid``, ``command``, ``exec``, ``systemd-run``, ``xargs`` ...),
+at any later word: the options of a wrapper are not modelled, so every word
+after one is tried as the command word. The guard fails closed: a command
+that cannot be scanned, is over 1 MiB, or nests ``-c``/``eval`` strings past
+three levels is denied.
 """
 import re
-import sys
 
-from bash_guard_rules2 import (  # noqa: E402
-    _find_unquoted_heredoc_with_injection,
-    _split_top_level_commands,
-    _tokenize_args,
-)
+from bash_guard_rules2 import lead, scan
 
-_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+MAX_COMMAND_BYTES = 1024 * 1024  # 1 MiB
+_MAX_C_DEPTH = 3  # `shell -c` / `eval` strings nested inside each other
+
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 _CLAUDE_BG_OR_PRINT_FLAGS = ("--bg", "-p", "--print")
 # getopt(3)-style short-flag metadata: a cluster letter listed here takes
 # an option-argument and so swallows the rest of the cluster. `-m` is the
 # short spelling of claude's `--model`: `-mp` is `-m p`, not `-m -p`.
 _CLAUDE_SHORT_FLAGS_WITH_ARG = ("m",)
-# bash/sh/zsh/dash short flags that take an option-argument (besides -c,
-# which is what this guard hunts for): `-o` takes an opt-name.
-_SHELL_FLAGS_WITH_ARG = ("o",)
+_SHELLS = frozenset(("bash", "sh", "zsh", "dash", "ksh", "ash", "mksh", "rbash"))
+# bash long options that take an argument (the others take none).
+_SHELL_LONG_FLAGS_WITH_ARG = ("--rcfile", "--init-file")
+_WRAPPERS = frozenset((
+    "env", "time", "nice", "nohup", "sudo", "timeout", "stdbuf", "setsid",
+    "command", "builtin", "exec", "ionice", "systemd-run", "xargs",
+))
+
+_HEREDOC_MSG = (
+    "bash-guard: DENIED - unquoted heredoc <<%s whose body contains a "
+    "backtick or $(...) command substitution; the shell expands that "
+    "before the command even runs (the netplan-apply incident shape). "
+    "Quote the delimiter if this is prose, not a command: <<'%s'.")
+_CLAUDE_MSG = (
+    "bash-guard: DENIED - claude %s carries %s argument "
+    "containing a backtick or $(...) command substitution; the CALLING "
+    "shell expands that before claude ever sees the prompt. Use single "
+    "quotes, or pass the prompt from a file, instead.")
+_DEPTH_MSG = (
+    "bash-guard: DENIED - shell -c / eval strings nested more than %d levels "
+    "deep; the guard cannot scan that far and fails closed. Flatten the "
+    "command or run a script file." % _MAX_C_DEPTH)
+_SIZE_MSG = (
+    "bash-guard: DENIED - command is larger than the 1 MiB scan limit; the "
+    "guard fails closed. Pass the text from a file.")
+_PARSE_MSG = (
+    "bash-guard: DENIED - could not parse this command (%s); the guard fails "
+    "closed. Simplify the quoting or pass the text from a file.")
+
+
+# ─── unquoted heredoc scanner ───────────────────────────────────────────
+
+def _has_unescaped_heredoc_injection(text):
+    """Scan an unquoted heredoc body character by character.
+    A backslash escapes the next character, so \\` and \\$( are literal.
+    Two backslashes (an escaped backslash) followed by a backtick or $(
+    leaves the trigger live and is denied."""
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "`" or (c == "$" and text.startswith("(", i + 1)):
+            return True
+        i += 1
+    return False
 
 
 # ─── claude --bg / -p / --print scanner ────────────────────────────────
@@ -77,220 +119,106 @@ def _extract_flag_hit(word):
     return None
 
 
-def _skip_wrappers(words):
-    """Skip leading wrapper words before looking for claude or shell commands:
-    sudo, env, command, nohup, time, exec, nice, setsid, timeout, builtin,
-    and environment variable assignments. Stop at the first non-wrapper word."""
-    idx = 0
-    n = len(words)
-    while idx < n:
-        w = words[idx][0]
-        base = _basename(w)
-        if _ENV_ASSIGN_RE.match(w):
-            idx += 1
-            continue
-        if base == "sudo":
-            idx += 1
-            while idx < n:
-                opt = words[idx][0]
-                if opt == "--":
-                    idx += 1
-                    break
-                if opt in ("-u", "-g", "-C", "-h", "-p", "-r", "-t", "-U"):
-                    idx += 1
-                    if idx < n:
-                        idx += 1
-                    continue
-                if opt.startswith("-"):
-                    idx += 1
-                    continue
-                break
-            continue
-        if base == "env":
-            idx += 1
-            while idx < n:
-                opt = words[idx][0]
-                if opt == "--":
-                    idx += 1
-                    break
-                if opt == "-u":
-                    idx += 1
-                    if idx < n:
-                        idx += 1
-                    continue
-                if opt == "-i" or opt.startswith("-"):
-                    idx += 1
-                    continue
-                if _ENV_ASSIGN_RE.match(opt):
-                    idx += 1
-                    continue
-                break
-            continue
-        if base == "nice":
-            idx += 1
-            while idx < n:
-                opt = words[idx][0]
-                if opt == "--":
-                    idx += 1
-                    break
-                if opt == "-n":
-                    idx += 1
-                    if idx < n:
-                        idx += 1
-                    continue
-                if opt.startswith("-"):
-                    idx += 1
-                    continue
-                break
-            continue
-        if base == "timeout":
-            idx += 1
-            while idx < n:
-                opt = words[idx][0]
-                if opt == "--":
-                    idx += 1
-                    break
-                if opt in ("-s", "-k", "--signal", "--kill-after"):
-                    idx += 1
-                    if idx < n:
-                        idx += 1
-                    continue
-                if opt.startswith("-"):
-                    idx += 1
-                    continue
-                break
-            if idx < n and not words[idx][0].startswith("-"):
-                idx += 1
-            continue
-        if base in ("command", "nohup", "time", "exec", "setsid", "builtin"):
-            idx += 1
-            while idx < n and words[idx][0].startswith("-"):
-                if words[idx][0] == "--":
-                    idx += 1
-                    break
-                idx += 1
-            continue
-        break
-    return idx
+def _suffix(pos, extra):
+    """For each index k: the first claude background/print flag at or after
+    it, and the live bits of every word at or after it (`extra` carries the
+    redirection targets, which can hold a prompt too: `claude -p <<< "$(x)"`)."""
+    n = len(pos)
+    flags, live = [None] * (n + 1), [extra] * (n + 1)
+    for k in range(n - 1, -1, -1):
+        flags[k] = _extract_flag_hit(pos[k].text) or flags[k + 1]
+        live[k] = live[k + 1] | pos[k].live
+    return flags, live
 
 
-def _find_claude_bg_or_print_with_quoted_injection(command):
-    """The matched flag (`--bg`, `-p` or `--print`) of the first `claude`
-    invocation that carries both that flag AND a double-quoted argument
-    with an unescaped backtick or `$(` in it, else None. Flag and the
-    injected argument may appear in either order."""
-    for segment in _split_top_level_commands(command):
-        words = _tokenize_args(segment)
-        idx = _skip_wrappers(words)
-        if idx >= len(words):
-            continue
-        if _basename(words[idx][0]) != "claude":
-            continue
-        rest = words[idx + 1:]
-        flag_hit = None
-        for w, _trig in rest:
-            hit = _extract_flag_hit(w)
-            if hit:
-                flag_hit = hit
-                break
-        if not flag_hit:
-            continue
-        if any(trig for _w, trig in rest):
-            return flag_hit
-    return None
+# ─── shell -c scanner ─────────────────────────────────────────────────
 
-
-def _find_shell_c_injection(command, depth=0):
-    """Recursively scan command strings passed to bash/sh/zsh/dash -c.
-    Depth cap is 3; deeper nesting is allowed (exit 0) with a stderr note.
-
-    Flag parsing is getopt(3)-style, like the scanners' cluster handling:
-    a letter from ``_SHELL_FLAGS_WITH_ARG`` swallows the rest of the
-    cluster as its option-argument (``-oc 'x'`` is ``-o c``, no ``-c``),
-    and ``-c`` takes the rest of its cluster or the next word as the
-    command string (``-cx 'x'`` runs ``x``, not ``'x'``)."""
-    for segment in _split_top_level_commands(command):
-        words = _tokenize_args(segment)
-        idx = _skip_wrappers(words)
-        if idx >= len(words):
-            continue
-        cmd = _basename(words[idx][0])
-        if cmd not in ("bash", "sh", "zsh", "dash"):
-            continue
-        k = idx + 1
-        c_string = None
-        while k < len(words):
-            arg = words[k][0]
-            if arg == "--":
-                break
-            if arg.startswith("-") and not arg.startswith("--"):
-                cluster = arg[1:]
-                j = 0
-                c_hit = False
-                consumed_next = False
-                while j < len(cluster):
-                    letter = cluster[j]
-                    rest = cluster[j + 1:]
-                    if letter in _SHELL_FLAGS_WITH_ARG:
-                        # option-argument: attached remainder or next word
-                        if not rest and k + 1 < len(words):
-                            k += 2
-                            consumed_next = True
-                        break
-                    if letter == "c":
-                        c_hit = True
-                        if rest:
-                            c_string = rest
-                        elif k + 1 < len(words):
-                            c_string = words[k + 1][0]
-                        break
-                    j += 1
-                if c_hit:
-                    break
-                if not consumed_next:
-                    k += 1
-                continue
-            if arg.startswith("--"):
-                if arg in ("--rcfile",) and k + 1 < len(words):
-                    k += 2
-                    continue
-                k += 1
-                continue
+def _shell_strings(words, k):
+    """Candidate command strings of the shell whose arguments start at
+    words[k]. Options are read the way bash reads them: cluster letters left
+    to right, each `o`/`O` takes the next word, `c` marks command mode, and
+    `-`, `--` or the first operand ends the options. The command string is
+    the first operand; the word right after the cluster that carries `c` is
+    tried too (dash-style shells take that one), so `bash -ce '...'`,
+    `bash -c -e '...'`, `bash -O extglob -c '...'` and `sh -c -- '...'` are
+    all read."""
+    n, out, c_seen = len(words), [], False
+    while k < n:
+        arg = words[k].text
+        if arg in ("-", "--"):
+            k += 1
             break
-        if c_string is None:
-            continue
-        inner_depth = depth + 1
-        if inner_depth > 3:
-            sys.stderr.write("bash-guard: shell -c nesting depth limit exceeded, allowing\n")
-            return None
-        reason = check_command(c_string, depth=inner_depth)
-        if reason is not None:
-            return reason
+        if arg.startswith("--"):
+            k += 2 if arg in _SHELL_LONG_FLAGS_WITH_ARG else 1
+        elif arg[:1] in ("-", "+"):
+            nxt = k + 1
+            for letter in arg[1:]:
+                if letter == "c":
+                    c_seen = True
+                    if nxt < n:
+                        out.append(words[nxt].text)
+                elif letter in "oO":
+                    nxt += 1
+            k = nxt
+        else:
+            break
+    if c_seen and k < n:
+        out.append(words[k].text)
+    return out
+
+
+# ─── per-command rules ────────────────────────────────────────────────
+
+def _check_simple(cmd, depth):
+    pos = [w for w in cmd if not w.redir]
+    i = lead(pos)
+    while i < len(pos) and _ENV_ASSIGN_RE.match(pos[i].text):
+        i += 1
+    if i >= len(pos):
+        return None
+    wrapped = _basename(pos[i].text) in _WRAPPERS
+    sfx, evaled = None, False
+    for j in (range(i, len(pos)) if wrapped else (i,)):
+        word = pos[j]
+        name = _basename(word.text)
+        if name == "claude" or (word.live and "claude" in word.text
+                                and not _ENV_ASSIGN_RE.match(word.text)):
+            if sfx is None:
+                sfx = _suffix(pos, max([w.live for w in cmd if w.redir], default=0))
+            flag, live = sfx[0][j + 1], sfx[1][j + 1]
+            if flag and live:
+                return _CLAUDE_MSG % (flag, "a double-quoted" if live & 1 else "an unquoted")
+        elif name in _SHELLS:
+            for string in _shell_strings(pos, j + 1):
+                reason = check_command(string, depth + 1)
+                if reason:
+                    return reason
+        elif name == "eval" and not evaled:
+            evaled = True
+            reason = check_command(" ".join(w.text for w in pos[j + 1:]), depth + 1)
+            if reason:
+                return reason
     return None
 
 
 # ─── deny-rule entry point ──────────────────────────────────────────────
 
 def check_command(command, depth=0):
-    """The deny message for `command`, or None to allow."""
-    delim = _find_unquoted_heredoc_with_injection(command)
-    if delim is not None:
-        return (
-            "bash-guard: DENIED - unquoted heredoc <<%s whose body contains a "
-            "backtick or $(...) command substitution; the shell expands that "
-            "before the command even runs (the netplan-apply incident shape). "
-            "Quote the delimiter if this is prose, not a command: <<'%s'."
-            % (delim, delim)
-        )
-    flag = _find_claude_bg_or_print_with_quoted_injection(command)
-    if flag is not None:
-        return (
-            "bash-guard: DENIED - claude %s carries a double-quoted argument "
-            "containing a backtick or $(...) command substitution; the CALLING "
-            "shell expands that before claude ever sees the prompt. Use single "
-            "quotes, or pass the prompt from a file, instead." % flag
-        )
-    reason = _find_shell_c_injection(command, depth=depth)
-    if reason is not None:
-        return reason
+    """The deny message for `command`, or None to allow. Never raises: a
+    command that cannot be scanned is denied (fail closed)."""
+    if depth > _MAX_C_DEPTH:
+        return _DEPTH_MSG
+    if len(command.encode("utf-8", "surrogatepass")) > MAX_COMMAND_BYTES:
+        return _SIZE_MSG
+    try:
+        commands, heredocs = scan(command)
+        for delim, quoted, body in heredocs:
+            if not quoted and _has_unescaped_heredoc_injection(body):
+                return _HEREDOC_MSG % (delim, delim)
+        for cmd in commands:
+            reason = _check_simple(cmd, depth)
+            if reason:
+                return reason
+    except Exception as exc:  # ParseError, RecursionError, MemoryError, a bug: all fail closed
+        return _PARSE_MSG % (str(exc) or type(exc).__name__)[:80]
     return None

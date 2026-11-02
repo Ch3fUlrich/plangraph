@@ -1,28 +1,75 @@
 #!/bin/sh
 # install_hooks.sh: install the plangraph hook scripts into a user's tree.
 #
-# Copies every `tools/hooks/*.py` - the hook entry points and the rule
-# modules they import - from this script's own directory into DEST
-# (default: ${DEST:-$HOME/.local/share/plangraph/hooks}), writes a
-# DEST/SHA256SUMS manifest over the copied files via sha256sum, and prints
-# the list of installed files (one destination path per line, SHA256SUMS
-# last). Only *.py is shipped: the tests/ tree and non-Python files such as
-# the pre-push hook are never copied here.
-#
-# The install refuses to run when DEST is the read-only source checkout this
-# script ships from - the AutoOS tree the hooks are ported from when run from
-# that tree - or anything beneath it: neither overwriting that tree nor
-# nesting an install inside it is ever what an install wants. Every other
-# DEST - including a second run over an existing install - is fine; the
+# Copies every `tools/hooks/*.py` - the hook entry points and the modules they
+# import - from this script's own directory into DEST (default:
+# ${DEST:-$HOME/.local/share/plangraph/hooks}), writes a DEST/SHA256SUMS
+# manifest over the copied files via sha256sum, and prints the list of
+# installed files (one destination path per line, SHA256SUMS last). Only *.py
+# is shipped: the tests/ tree and non-Python files such as the pre-push hook
+# are never copied here. A second run over an existing install is fine: the
 # copies replace same-named files and the manifest is rewritten to match.
+#
+# The install refuses (exit 1, nothing created) a DEST that is, or lies
+# beneath, either tree it must never write into: the checkout this script
+# ships from, or the read-only AutoOS tree the hooks were ported from
+# ($AUTOOS_ROOT, else $HOME/code/AutoOS). DEST is canonicalised first
+# (symlinks resolved where realpath exists), so a dotted or symlinked path
+# cannot get past the check.
+#
+# This script only copies files: it registers nothing and never edits Claude
+# Code settings. Register each hook entry point yourself, always through the
+# guarded command form
+#
+#   sh -c 'test -f "$1" || exit 1; exec python3 "$1"' _ DEST/<hook>.py
+#
+# never as a bare `python3 DEST/<hook>.py`. A hook script that is missing
+# (moved, half-installed, mistyped) must exit 1, never 2: python3 itself exits
+# 2 when its script file does not exist, and exit 2 is the Claude Code block
+# code, so a bare command registered on PreToolUse would deny every Bash call.
+# The `test -f` gate owns the missing-file case (exit 1, silent); an existing
+# script is exec'd untouched, so the wrapped run is the direct run.
+#
+# Entry points and their events (the other *.py files are modules they import):
+#   bash_guard.py      PreToolUse (Bash)
+#   context_guard.py   PostToolUse; ctx_guard_session.py is the same guard with
+#                      per-session thresholds - register one of the two, not both
+#   fleet_inject.py    PostToolUse and UserPromptSubmit
+#   fleet_report.py    Stop
+#   session_title.py   UserPromptSubmit
 #
 # Usage:
 #   tools/hooks/install_hooks.sh                 # into $HOME/.local/share/plangraph/hooks
 #   DEST=/elsewhere tools/hooks/install_hooks.sh # into /elsewhere
+#   tools/hooks/install_hooks.sh --help          # print this text
 set -eu
 
 # shellcheck disable=SC1007  # `CDPATH= cd` is a deliberate empty-value assignment prefix
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+
+# The leading comment block above, without the shebang and the `# ` prefix.
+usage() {
+    while IFS= read -r _u_line; do
+        case $_u_line in
+            '#!'*) ;;
+            '#') echo ;;
+            '# '*) printf '%s\n' "${_u_line#"# "}" ;;
+            *) break ;;
+        esac
+    done < "$0"
+}
+
+case ${1:-} in
+    '') ;;
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    *)
+        echo "install_hooks.sh: unknown argument: $1 (see --help)" >&2
+        exit 2
+        ;;
+esac
 
 if [ -z "${DEST:-}" ]; then
     : "${HOME:?install_hooks.sh: set HOME or DEST}"
@@ -60,33 +107,43 @@ canon_path() {
     printf '%s\n' "$_cp_out"
 }
 
-# Canonicalise DEST so a dotted path cannot smuggle the install under the
-# source checkout past the guard below. realpath also resolves symlinks; the
-# lexical fallback cannot - only realpath resolves symlinks - so with
-# realpath absent a symlinked DEST can still point into the checkout
+# realpath also resolves symlinks; the lexical fallback cannot, so with
+# realpath absent a symlinked path can still point into a guarded tree
 # undetected.
-if command -v realpath >/dev/null 2>&1; then
-    DEST=$(realpath -m -- "$DEST")
-else
-    DEST=$(canon_path "$DEST")
-fi
+canon() {
+    if command -v realpath >/dev/null 2>&1; then
+        realpath -m -- "$1"
+    else
+        canon_path "$1"
+    fi
+}
 
-# AUTOOS_ROOT is the read-only source checkout this script ships from: the
-# root of the checkout that holds tools/hooks - the AutoOS tree the hooks are
-# ported from when run from that tree. It is derived from this script's own
-# location so the guard below is live on every host and every clone, not dead
-# code against one machine's hard-coded path. The fallback is one unsplit
-# literal (the historical AutoOS location, per user): a constant assembled
-# from string fragments is a scanner-evasion pattern, not a path.
+# Canonicalise DEST so a dotted or symlinked path cannot smuggle the install
+# into a guarded tree past the checks below.
+DEST=$(canon "$DEST")
+
+# refuse_inside ROOT WHAT: exit 1 when DEST is ROOT or lies beneath it. ROOT is
+# canonicalised like DEST; an empty ROOT (unset variable) guards nothing.
+refuse_inside() {
+    [ -n "$1" ] || return 0
+    _ri_root=$(canon "$1")
+    case $DEST in
+        "$_ri_root"|"${_ri_root%/}"/*)
+            echo "install_hooks.sh: refusing DEST inside $2 ($_ri_root): $DEST" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# The source checkout is derived from this script's own location, so the check
+# is live on every host and every clone. The AutoOS tree is named the way the
+# rest of this repository names it: $AUTOOS_ROOT, else $HOME/code/AutoOS (both
+# are checked; neither is a machine-specific literal).
 # shellcheck disable=SC1007  # `CDPATH= cd` is a deliberate empty-value assignment prefix
-AUTOOS_ROOT=$(CDPATH= cd -- "$SELF_DIR/../.." && pwd -P) ||
-    AUTOOS_ROOT="${HOME:-}/code/AutoOS"
-case "$DEST" in
-    "$AUTOOS_ROOT"|"$AUTOOS_ROOT"/*)
-        echo "install_hooks.sh: refusing DEST inside the read-only source checkout: $DEST" >&2
-        exit 1
-        ;;
-esac
+SRC_ROOT=$(CDPATH= cd -- "$SELF_DIR/../.." && pwd -P)
+refuse_inside "$SRC_ROOT" "the source checkout"
+refuse_inside "${AUTOOS_ROOT:-}" "the read-only AutoOS tree"
+refuse_inside "${HOME:+$HOME/code/AutoOS}" "the read-only AutoOS tree"
 
 mkdir -p -- "$DEST"
 

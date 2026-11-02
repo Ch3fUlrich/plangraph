@@ -121,19 +121,6 @@ def _scan(chunk: bytes, limit: int):
     return records, extra, consumed, starts
 
 
-def take_lines(chunk: bytes, limit: int = MAX_EMIT):
-    """`(records, extra, consumed)` over the complete lines of `chunk`.
-
-    At most `limit` (default `MAX_EMIT`) parsed dict records are kept; the record that overflows
-    the cap and everything after it stays unread — `extra` counts the records
-    that must wait for the next emission. Unparsable complete lines are
-    consumed anyway, so one corrupt line cannot poison the file forever.
-    `consumed` is the byte count safe to record in the cursor.
-    """
-    records, extra, consumed, _starts = _scan(chunk, limit)
-    return records, extra, consumed
-
-
 def _clean(value) -> str:
     """`value` as a string with every control character replaced by a space."""
     return _CONTROL.sub(" ", value) if isinstance(value, str) else ""
@@ -193,7 +180,7 @@ def run_hook() -> int:
             return 0
         event = payload.get("hook_event_name")
         if not isinstance(event, str) or not event:
-            # Intentional (r2 contract, pinned by tests/hooks/test_fleet_hook.py): the hook is
+            # Intentional (r2 contract, pinned by tests/hooks/test_fleet_inject.py): the hook is
             # registered only for PostToolUse and UserPromptSubmit, both always send the name;
             # an absent name means a manual/legacy run, which defaults to PostToolUse.
             event = "PostToolUse"

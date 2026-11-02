@@ -26,7 +26,10 @@ and `AUTOOS_CTX_HARD` is clamped to at least `AUTOOS_CTX_HANDOFF` so a garbled
 pair can never make the hard cap unreachable or misreport its threshold.
 State lives under `$XDG_STATE_HOME/autoos/ctx-guard/`, else
 `~/.local/state/autoos/ctx-guard/`. Set `AUTOOS_CTX_DEBUG` to get the
-otherwise-swallowed failure traceback on stderr.
+otherwise-swallowed failure traceback on stderr. The `AUTOOS_CTX_*` names and
+the `autoos/ctx-guard` state dir are kept on purpose: the live fleet guard and
+its per-session override files depend on them, so renaming them belongs to the
+cutover item G13.
 
 The safe-id check, the state-home resolution and the atomic write come from
 the shared `hook_common` helper (extraction, plangraph #299).
