@@ -155,6 +155,10 @@ def test_host_skip_reason_names_a_missing_claude_binary(monkeypatch, tmp_path):
     monkeypatch.setenv('PATH', str(fake_binary(tmp_path / 'bin', 'claude')))
     assert resolver.host_skip_reason(row) is None
     assert resolver.host_skip_reason(row, env={'PATH': str(empty)}) == 'harness_missing: claude'   # the child's PATH decides
+    assert resolver.host_skip_reason(row, env={'PATH': ''}) == 'harness_missing: claude'   # empty is the child's PATH, not the host's
+    monkeypatch.setattr(os, 'defpath', str(empty))   # hermetic: a host claude in /usr/bin must not decide
+    assert resolver.host_skip_reason(row, env={'PATH': None}) == 'harness_missing: claude'   # removed: exec searches os.defpath
+    assert resolver.host_skip_reason(row, env={'OTHER': '1'}) is None   # no PATH key: the host PATH is inherited
 
 
 def test_launch_plan_skips_the_haiku_leg_on_a_host_without_claude(monkeypatch, tmp_path):

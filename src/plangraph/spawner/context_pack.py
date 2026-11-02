@@ -11,8 +11,10 @@ the spawn.
 
 Safety, in order of strength:
 
-* Fail closed (``ContextError``, the spawn is refused): git cannot list the tracked files of the run cwd
-  (no work tree, git missing or failing), a symlink loop, more than ``MAX_ENTRIES`` entries.
+* Fail closed (``ContextError``, the spawn is refused): the card has ``context`` entries and git cannot list
+  the tracked files of the run cwd (no work tree, git missing or failing), a symlink loop, more than
+  ``MAX_ENTRIES`` entries.  A build without entries packs nothing, so a failed listing there only skips the
+  advisory big-file scan and says so (one ``big_file_scan_skipped`` warning, never a clean empty result).
 * Refused per entry (a ``context_path_refused`` warning, the file is never read): a secret-looking name
   (``DENY``, case-insensitive on every path part, a superset of the repo's own fences in opencode.jsonc),
   a ``.git`` path part, an untracked file.
@@ -306,16 +308,19 @@ def build(prompt: str, card, cwd) -> Pack:
     outside the cwd, a symlink loop, or no tracked-file listing refuses via ``ContextError``).  Pass the result to
     every leg: nothing here is repeated per leg."""
     root, ents, names = _root(cwd), entries(card), _brief_names(prompt)
+    skipped = []
     try:
         files = tracked(root) if ents or names else frozenset()
-    except ContextError:
+    except ContextError as exc:
         if ents:
             raise
-        files = frozenset()   # only the advisory big-file scan lacks its listing: nothing to warn about
+        # Nothing is packed without entries; only the advisory scan lost its listing.  Report that instead of
+        # passing a scan nobody ran as clean (D-3649 r2).
+        files, skipped = frozenset(), [f'big_file_scan_skipped: {exc}']
     cap = max_chars()
     kept, notes = _slices(root, ents, files, cap)
     text, unfit = _fit(kept, cap)
-    return Pack(text, tuple(notes + unfit + _big_files(root, names, files, {k[0] for k in kept})))
+    return Pack(text, tuple(notes + unfit + skipped + _big_files(root, names, files, {k[0] for k in kept})))
 
 
 def pack_prompt(prompt: str, card, cwd, pack: Pack | None = None) -> str:
@@ -326,7 +331,8 @@ def pack_prompt(prompt: str, card, cwd, pack: Pack | None = None) -> str:
 
 def warnings(prompt: str, card, cwd) -> list[str]:
     """Every warning of :func:`build`: ``context_path_refused``, ``context_range_past_eof``, ``context_pack_unfit``,
-    and one ``big_file_unsliced`` per tracked file the brief names."""
+    ``big_file_scan_skipped`` (no entries and no tracked-file listing), and one ``big_file_unsliced`` per tracked
+    file the brief names."""
     return list(build(prompt, card, cwd).warnings)
 
 

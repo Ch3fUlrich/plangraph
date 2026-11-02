@@ -156,7 +156,12 @@ def test_git_failure_fails_closed_with_context_error(tree, monkeypatch, failure)
         context_pack.annotate({}, "p", dict(CARD, context=["a.py:1-1"]), tree)
     with pytest.raises(ContextError):
         _Seat(tree)._leg_prompt("p", dict(CARD, context=["a.py:1-1"]), "implement", INLINE)
-    assert context_pack.warnings("see a.py", dict(CARD), tree) == []   # the advisory scan alone just has nothing to say
+    skipped = context_pack.warnings("see a.py", dict(CARD), tree)   # no entries: no refusal, but never a silent clean scan
+    assert [w.split(":", 1)[0] for w in skipped] == ["big_file_scan_skipped"] and "tracked files" in skipped[0]
+    record = {}
+    context_pack.annotate(record, "see a.py", dict(CARD), tree)
+    assert [e["event"] for e in record["events"]] == ["big_file_scan_skipped"]
+    assert context_pack.warnings("no file named here", dict(CARD), tree) == []   # nothing named: no listing attempted
 
 
 def test_directory_without_a_git_work_tree_fails_closed(tmp_path, monkeypatch):
@@ -166,7 +171,7 @@ def test_directory_without_a_git_work_tree_fails_closed(tmp_path, monkeypatch):
     (plain / "a.py").write_text("a1\n")
     with pytest.raises(ContextError, match="git work tree"):
         context_pack.annotate({}, "p", dict(CARD, context=["a.py:1-1"]), plain)
-    assert context_pack.warnings("see a.py and big.py", dict(CARD), plain) == []
+    assert [w.split(":", 1)[0] for w in context_pack.warnings("see a.py and big.py", dict(CARD), plain)] == ["big_file_scan_skipped"]
 
 
 def test_git_redirect_env_cannot_point_the_listing_at_another_repo(tree, tmp_path, monkeypatch):
