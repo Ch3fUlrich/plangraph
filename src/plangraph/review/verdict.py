@@ -1,9 +1,9 @@
 """Review-reply parsing: verdict, test-gaming, payload helpers.
 
 The verdict parse is identical to ``tools/seat_verdict.py``: the last
-``VERDICT:`` line decides and fenced, quoted, indented, and hunk lines
-all count. Only the test-gaming check and the finish-reason gating
-here are stricter.
+``VERDICT:`` line outside a ``` fence or ``>`` quote decides; indented
+and hunk lines count.  Only the test-gaming check and the finish-reason
+gating here are stricter.
 """
 
 from __future__ import annotations
@@ -35,7 +35,8 @@ _BLOCKING_LABEL = re.compile(
 _LOW_LABEL = re.compile(
     r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
-_WORD_END = r"(?=$|[\s.,;:!?)(*_`—–-])(?!\s*[|/])"
+# no "?": "VERDICT: pass?" is a question, not a decision (fail closed)
+_WORD_END = r"(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])"
 _FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
 _REQUEST_CHANGES = re.compile(r"request[\s_-]+changes" + _WORD_END, re.I)
 
@@ -66,10 +67,26 @@ def _indent_columns(line: str) -> int:
 
 def _scan_verdict(text: str) -> tuple[str | None, bool]:
     lines = (text or "").splitlines()
-    for idx in range(len(lines) - 1, -1, -1):
-        match = _VERDICT_LINE.match(lines[idx])
-        if not match:
+    # r3: VERDICT lines inside ``` fences or starting with ">" (quoted template
+    # echoes) never decide; the last remaining line keeps the last-line rule.
+    fence = None
+    match = None
+    for raw in lines:
+        if fence is not None:
+            close = _FENCE_CLOSE_RE.match(raw)
+            if close and close.group(1)[0] == fence[0] and len(close.group(1)) >= fence[1]:
+                fence = None
             continue
+        opener = _FENCE_OPEN_RE.match(raw)
+        if opener:
+            fence = (opener.group(1)[0], len(opener.group(1)))
+            continue
+        if raw.lstrip().startswith(">"):
+            continue
+        found = _VERDICT_LINE.match(raw)
+        if found:
+            match = found
+    if match is not None:
         stripped = match.group(1).strip()
         if _REQUEST_CHANGES.match(stripped):
             return "fix", False

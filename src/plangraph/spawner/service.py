@@ -310,7 +310,8 @@ class SpawnService(SeatSpawnMixin):
                 for chosen in plan.legs:
                     from .inline_diff import InlineDiffError
                     try:
-                        leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
+                        leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack,
+                                                      document_review=leg is not None)   # r3: only an explicit --leg reviews a document
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                             skip_reason='inline_diff_failed: ' + str(exc),

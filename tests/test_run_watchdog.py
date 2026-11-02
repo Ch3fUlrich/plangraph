@@ -312,6 +312,14 @@ def test_real_run(tmp_path, monkeypatch, kind, rule):
     from plangraph.spawner.runner import SpawnerRunner, JobInfo
     from plangraph.spawner.run_watchdog import collect, edit_signature
     monkeypatch.setenv('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL', '.1')
+    # r3 NIT: a fake clock (frozen through child start-up, then stepped in 0.25 s
+    # quanta) keeps the rules and the timing asserts independent of machine load.
+    import math
+    import plangraph.spawner.run_watchdog as run_watchdog
+    real_time = time.time
+    epoch = real_time()
+    monkeypatch.setattr(run_watchdog.time, 'time',
+                        lambda: epoch + max(0.0, math.ceil((real_time() - epoch - 2.0) / .25) * .25))
     scripts = {
         'headers': ("import subprocess,sys,time\n"
                     "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"

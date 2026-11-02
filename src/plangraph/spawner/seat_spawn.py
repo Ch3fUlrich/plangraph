@@ -15,10 +15,12 @@ import uuid
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
-    def _leg_prompt(self, prompt, card, role, leg, pack=None):
+    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
-        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here."""
+        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
+        ``document_review`` is set only for an explicit ``--leg`` review of a document; every routed inline-only
+        review leg needs the card's diff inlined and refuses without ``diff_ref`` (r3)."""
         if getattr(leg, 'tool_mode', 'tools') != 'inline-only':
             return prompt
         from . import context_pack
@@ -26,11 +28,8 @@ class SeatSpawnMixin:
         if role != 'review':
             return prompt
         from .inline_diff import inline_diff_prompt
-        # A no-diff review is allowed here only because the path already decided
-        # it: routing skips inline-only legs without diff_ref (inline_only_needs_diff)
-        # and an explicit --leg reviews the document prompt unchanged.
         return inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
-                                  allow_document=True)
+                                  allow_document=document_review)
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
                            **options):
