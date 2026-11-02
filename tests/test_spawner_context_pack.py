@@ -23,9 +23,17 @@ class _Seat(SeatSpawnMixin):
 
 @pytest.fixture
 def tree(tmp_path):
+    import subprocess
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
     (tmp_path / "a.py").write_text("\n".join(f"a{i}" for i in range(1, 11)) + "\n")
     (tmp_path / "b.py").write_text("\n".join(f"b{i}" for i in range(1, 6)) + "\n")
     (tmp_path / "big.py").write_text("\n".join(f"x{i}" for i in range(500)) + "\n")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "tool").write_text("\n".join(f"t{i}" for i in range(450)) + "\n")
+    (tmp_path / "v1.2.cfg").write_text("\n".join(f"c{i}" for i in range(450)) + "\n")
+    (tmp_path / "a.token").write_text("tok\n")
+    (tmp_path / "untracked.py").write_text("u\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "a.py", "b.py", "big.py", "bin", "v1.2.cfg", "a.token"], check=True)
     return tmp_path
 
 
@@ -38,7 +46,7 @@ def test_slices_inlined_in_order_with_labels(tree):
 
 
 def test_cap_drops_and_names_overflow(tree, monkeypatch):
-    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", "60")
+    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", "130")
     card = dict(CARD, context=["b.py:1-1", "a.py:1-10", "b.py:5-5"])
     out = _Seat(tree)._leg_prompt("p", card, "implement", INLINE)
     assert "b.py:1-1" in out and "```\nb5\n```" in out
@@ -79,3 +87,33 @@ def test_sliced_big_file_no_warning(tree, tmp_path, monkeypatch):
     svc.runner.default_cwd = str(tree)
     out = asyncio.run(svc.spawn(card=dict(CARD, context=["big.py:1-5"]), prompt="edit big.py", dry_run=True))
     assert "warnings" not in out
+
+
+@pytest.mark.parametrize("path,why", [("a.token", "secret"), ("untracked.py", "not tracked")])
+def test_secret_or_untracked_skipped_unread(tree, path, why):
+    card = dict(CARD, context=[path + ":1-1", "b.py:1-1"])
+    out = _Seat(tree)._leg_prompt("p", card, "implement", INLINE)
+    assert "tok" not in out and "```\nu\n" not in out and "b1" in out
+    assert any("context_path_refused: " + path in w and why in w for w in context_pack.annotate({}, "p", card, tree))
+
+
+@pytest.mark.parametrize("cap", [0, 80, 150, 200, 260, 400, 1000])
+def test_pack_never_exceeds_cap(tree, monkeypatch, cap):
+    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", str(cap))
+    card = dict(CARD, context=["a.py:1-10", "b.py:1-5", "a.py:1-3"])
+    out = _Seat(tree)._leg_prompt("", card, "implement", INLINE)
+    assert len(out) <= cap
+
+
+def test_omitted_line_forces_extra_drop(tree, monkeypatch):
+    card = dict(CARD, context=["b.py:1-1", "b.py:2-2"])
+    full = len(_Seat(tree)._leg_prompt("", card, "implement", INLINE))
+    for cap in range(full - 1, full - 80, -1):
+        monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", str(cap))
+        out = _Seat(tree)._leg_prompt("", card, "implement", INLINE)
+        assert len(out) <= cap
+
+
+def test_big_file_detection_without_extension_regex(tree):
+    found = context_pack.warnings("run `bin/tool` and (v1.2.cfg), see untracked.py", dict(CARD), tree)
+    assert any("bin/tool 450" in w for w in found) and any("v1.2.cfg 450" in w for w in found)

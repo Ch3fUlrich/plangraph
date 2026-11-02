@@ -7,11 +7,14 @@ labelled ``path:start-end``, capped by ``PLANGRAPH_CONTEXT_PACK_MAX_CHARS`` (def
 over the cap are dropped and named in one ``omitted:`` line.  Tool legs read files themselves and get
 no pack.  ``warnings`` names every repo file the brief mentions that has over 400 lines and no slice.
 Paths are relative to the run cwd; a path that leaves it (lexically or by symlink) refuses the spawn.
+A slice of an untracked or secret-looking file is skipped with a ``context_path_refused`` warning, unread.
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
+import subprocess
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
@@ -19,7 +22,9 @@ from plangraph.routing_errors import ParameterRefused
 BIG_FILE_LINES = 400
 DEFAULT_MAX_CHARS = 60_000
 _SLICE = re.compile(r'^(.+):(\d+)-(\d+)$')
-_NAME = re.compile(r'(?<![\w./-])((?:[\w.-]+/)*[\w-][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,7})(?![\w/-])')
+_TOKEN = re.compile(r'''[^\s`'"<>()\[\]{},;=]+''')
+#: Secret-looking names never packed (matched on every path part, lower-cased).
+DENY = ('*.token', '*.dsn', '*.key', '*.pem', 'id_*', '.env*', 'api-keys*.yml', '*secret*', '*credential*')
 
 
 class ContextError(ParameterRefused):
@@ -67,14 +72,37 @@ def entries(card) -> list[tuple[str, int, int]]:
     return out
 
 
-def slices(card, cwd) -> list[tuple[str, int, int, str]]:
-    """``(path, start, end, text)`` per entry, in order; end is clamped to the file length."""
-    root, out = Path(cwd).resolve(), []
+def tracked(root: Path) -> frozenset[str]:
+    """Git-tracked paths under ``root`` (one ``git ls-files -z``); empty when git fails."""
+    try:
+        out = subprocess.run(['git', '-C', str(root), 'ls-files', '-z'], capture_output=True, check=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    return frozenset(p for p in out.decode('utf-8', 'replace').split('\0') if p)
+
+
+def _refusal(rel: str, files: frozenset[str]) -> str | None:
+    parts = rel.lower().split('/')
+    if parts[0] == '.git' or any(fnmatch.fnmatchcase(x, pat) for x in parts for pat in DENY):
+        return 'secret-looking path'
+    return None if rel in files else 'not tracked by git'
+
+
+def slices(card, cwd):
+    """``(kept, refused)``: ``(path, start, end, text)`` per readable entry in order (end clamped to the
+    file length), and ``context_path_refused`` warnings for entries never read."""
+    root, kept, refused = Path(cwd).resolve(), [], []
+    files = tracked(root) if entries(card) else frozenset()
     for raw, start, end in entries(card):
-        lines = _lines(_locate(root, raw))
-        end = min(end, len(lines))
-        out.append((raw, start, end, '\n'.join(lines[start - 1:end])))
-    return out
+        path = _locate(root, raw)
+        rel = path.relative_to(root).as_posix()
+        why = _refusal(Path(os.path.normpath(raw)).as_posix(), files) or _refusal(rel, files)
+        if why:
+            refused.append(f'context_path_refused: {raw} ({why})')
+            continue
+        lines = _lines(path)
+        kept.append((raw, start, min(end, len(lines)), '\n'.join(lines[start - 1:min(end, len(lines))])))
+    return kept, refused
 
 
 def max_chars() -> int:
@@ -84,47 +112,60 @@ def max_chars() -> int:
         return DEFAULT_MAX_CHARS
 
 
+def _assemble(blocks, omitted) -> str:
+    text = '\n\n=== CONTEXT PACK ===\n' + '\n'.join(b for _, b in blocks)
+    if omitted:
+        text += '\nomitted: ' + ', '.join(omitted)
+    return text + '\n=== END CONTEXT PACK ===\n'
+
+
 def pack_prompt(prompt: str, card, cwd) -> str:
-    """The prompt plus a CONTEXT PACK section; unchanged without ``context``."""
-    packed = slices(card, cwd)
+    """The prompt plus a CONTEXT PACK section no longer than the cap (framing and ``omitted:`` included)."""
+    packed, _ = slices(card, cwd)
     if not packed:
         return prompt
-    budget, blocks, omitted = max_chars(), [], []
-    for raw, start, end, text in packed:
-        label = f'{raw}:{start}-{end}'
-        block = f'--- {label} ---\n```\n{text}\n```'
-        if len(block) > budget:
-            omitted.append(label)
-            continue
-        budget -= len(block)
-        blocks.append(block)
-    section = '\n\n=== CONTEXT PACK ===\n' + '\n'.join(blocks)
-    if omitted:
-        section += '\nomitted: ' + ', '.join(omitted)
-    return prompt + section + '\n=== END CONTEXT PACK ===\n'
+    cap = max_chars()
+    blocks = [(f'{raw}:{start}-{end}', f'--- {raw}:{start}-{end} ---\n```\n{text}\n```') for raw, start, end, text in packed]
+    kept, omitted = [], []
+    for item in blocks:
+        if len(_assemble(kept + [item], omitted)) <= cap:
+            kept.append(item)
+        else:
+            omitted.append(item[0])
+    while kept and len(_assemble(kept, omitted)) > cap:   # the omitted line may itself force another drop
+        omitted.append(kept.pop()[0])
+    return prompt + _assemble(kept, omitted) if kept else prompt
 
 
 def warnings(prompt: str, card, cwd) -> list[str]:
-    """One ``big_file_unsliced`` warning per repo file the brief names (over 400 lines, no slice)."""
+    """``context_path_refused`` warnings, and one ``big_file_unsliced`` per tracked file the brief names."""
     root = Path(cwd).resolve()
-    covered = {_locate(root, raw) for raw, _, _ in entries(card)}
-    found = []
-    for name in list(dict.fromkeys(_NAME.findall(prompt[:200_000])))[:200]:
+    kept, refused = slices(card, cwd)
+    covered = {_locate(root, raw) for raw, *_ in kept}
+    names = []
+    for token in _TOKEN.findall(prompt[:200_000]):
+        token = token.removeprefix('./').rstrip('.:')
+        if ('/' in token or '.' in token) and token not in names:
+            names.append(token)
+    files = tracked(root) if names else frozenset()
+    big = []
+    for name in names[:500]:
+        if name not in files or _refusal(name, files):
+            continue
         try:
             path = _locate(root, name)
             count = len(_lines(path))
         except (ContextError, OSError):
             continue
         if count > BIG_FILE_LINES and path not in covered:
-            found.append(f'big_file_unsliced: {name} {count} lines; name one function per slice in card.context')
-    return found
+            big.append(f'big_file_unsliced: {name} {count} lines; name one function per slice in card.context')
+    return refused + big
 
 
 def annotate(record: dict, prompt: str, card, cwd) -> list[str]:
-    """Validate ``context`` (refuses a bad entry) and put the warnings on ``record`` and its events."""
-    slices(card, cwd)
+    """Validate ``context`` (refuses a malformed entry) and put the warnings on ``record`` and its events."""
     found = warnings(prompt, card, cwd)
     if found:
         record['warnings'] = found
-        record.setdefault('events', []).extend({'event': 'big_file_unsliced', 'detail': w} for w in found)
+        record.setdefault('events', []).extend({'event': w.split(':', 1)[0], 'detail': w} for w in found)
     return found
