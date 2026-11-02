@@ -49,6 +49,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from hook_common import read_stdin_text, read_text_capped  # noqa: E402,F401  (read_* re-exported for fleet_inject)
 from hook_common import safe_id as safe_name  # noqa: E402,F401  (re-exported for fleet_inject)
 from redact_common import redact_credentials  # noqa: E402
 
@@ -274,7 +275,7 @@ def run_hook() -> int:
     so a failed append is retried on the next Stop instead of lost.
     """
     try:
-        payload = json.loads(sys.stdin.read())
+        payload = json.loads(read_stdin_text())
         if not isinstance(payload, dict):
             return 0
         session_id = payload.get("session_id")

@@ -45,7 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from hook_common import safe_id, state_home, write_json as _write_json  # noqa: E402
+from hook_common import read_stdin_text, read_text_capped, safe_id, state_home, write_json as _write_json  # noqa: E402
 
 # Only the last 256 KB of the transcript is read — enough to hold the most
 # recent assistant record while bounding the read on a many-megabyte file.
@@ -221,7 +221,7 @@ def run_hook() -> int:
     than lost.
     """
     try:
-        payload = json.loads(sys.stdin.read())
+        payload = json.loads(read_stdin_text())
         if not isinstance(payload, dict):
             return 0
         transcript_path = payload.get("transcript_path")
@@ -291,8 +291,8 @@ def cmd_status() -> int:
         return 0
     for path in files:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            data = json.loads(read_text_capped(path))
+        except (OSError, ValueError):  # TooLarge is a ValueError
             continue
         if not isinstance(data, dict):
             continue

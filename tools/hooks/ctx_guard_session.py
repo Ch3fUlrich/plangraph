@@ -26,9 +26,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
-    from hook_common import safe_id, state_home  # noqa: E402
+    from hook_common import read_stdin_text, read_text_capped, safe_id, state_home  # noqa: E402
 except ImportError:  # a half-installed hooks dir: main() says so and exits 0, as for a missing context_guard.py
-    safe_id = state_home = None
+    safe_id = state_home = read_stdin_text = read_text_capped = None
 
 GUARD = str(Path(__file__).resolve().parent / 'context_guard.py')
 # The guard's threshold line (context_guard.emit_line), the only line the card
@@ -62,7 +62,7 @@ def session_override(text: str):
         sid = json.loads(text).get("session_id")
         if not safe_id(sid):
             return None
-        doc = json.loads((overrides_dir() / ("%s.json" % sid)).read_text(encoding="utf-8"))
+        doc = json.loads(read_text_capped(overrides_dir() / ("%s.json" % sid)))
         return doc if isinstance(doc, dict) else None
     except Exception:
         return None
@@ -73,7 +73,7 @@ KEYS = ("AUTOOS_CTX_HANDOFF", "AUTOOS_CTX_HARD")
 
 def _env_of(path):
     try:
-        env = json.loads(Path(path).read_text(encoding="utf-8")).get("env") or {}
+        env = json.loads(read_text_capped(path)).get("env") or {}
     except Exception:
         return {}
     out = {}
@@ -108,7 +108,10 @@ def main() -> int:
     if state_home is None:
         print("ctx_guard_session: hook_common.py missing next to this hook; context guard is off", file=sys.stderr)
         return 0
-    text = sys.stdin.read()
+    try:
+        text = read_stdin_text()
+    except ValueError:  # over the cap: not a payload this hook handles
+        return 0
     try:
         cwd = json.loads(text).get("cwd")
     except Exception:

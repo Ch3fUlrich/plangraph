@@ -38,7 +38,7 @@ Everything else allows silently (exit 0, no output) - a guard that prints on
 every ordinary command is noise nobody will read before disabling it.
 
 The guard fails CLOSED on the command: one that cannot be parsed (unbalanced
-quotes or ``$(``, absurd nesting), one over 1 MiB, and a `shell -c`/`eval`
+quotes or ``$(``, absurd nesting), one over 1 MiB, a hook payload over 8 MiB (never read past that), and a `shell -c`/`eval`
 string nested more than three levels deep are denied with a message saying
 why. A hook payload that is not a Bash call with a string command (not JSON,
 not an object, another tool) is not a command and is allowed with one stderr
@@ -64,17 +64,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bash_guard_rules import check_command  # noqa: E402
+from hook_common import STDIN_MAX, TooLarge, read_stdin_text  # noqa: E402
 
 
 # ─── hook entry point ───────────────────────────────────────────────────
 
 def main():
     try:
-        if hasattr(sys.stdin, "buffer"):
-            raw_bytes = sys.stdin.buffer.read()
-        else:
-            raw_bytes = sys.stdin.read().encode("utf-8", errors="replace")
-        payload = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+        payload = json.loads(read_stdin_text())
+    except TooLarge:
+        sys.stderr.write("bash-guard: DENIED - hook input is larger than %d bytes; the guard fails closed.\n"
+                         % STDIN_MAX)
+        return 2
     except Exception as exc:
         sys.stderr.write(
             "bash-guard: could not parse hook input as JSON, allowing (%s)\n" % exc)

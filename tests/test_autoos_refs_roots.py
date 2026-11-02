@@ -177,3 +177,27 @@ def test_odd_tracked_symlink_names_are_read_with_z(
     proc = run_cli("--home", str(home), "--repo", str(repo))
     assert proc.returncode == 1 and proc.stderr == ""  # reported, no crash, not 'broken-link'
     assert "broken-link" not in proc.stdout
+
+
+@windows_skip
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads every directory")
+def test_unreadable_explicit_roots_are_a_scan_error(ar, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    home = tmp_path / "h"
+    home.mkdir()
+    for flag, name in (("--launch-dir", "records"), ("--routing-root", "tree")):
+        root = tmp_path / name
+        (root / "ops").mkdir(parents=True)
+        (root / "bin").mkdir()
+        root.chmod(0)
+        try:
+            assert ar.main(["--home", str(home), flag, str(root)]) == 2
+        finally:
+            root.chmod(0o755)
+        assert "cannot read" in capsys.readouterr().err
+    tree = tmp_path / "tree2"
+    (tree / "bin").mkdir(parents=True)
+    (tree / "bin").chmod(0)
+    try:
+        assert ar.main(["--home", str(home), "--routing-root", str(tree)]) == 2
+    finally:
+        (tree / "bin").chmod(0o755)

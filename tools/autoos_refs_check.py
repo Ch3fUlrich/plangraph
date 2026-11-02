@@ -32,7 +32,7 @@ from autoos_refs_core import (  # noqa: F401  (re-exported: the scanner's public
 from autoos_refs_roots import (
     scan_claude_hooks, scan_claude_settings, scan_launch_specs, scan_mcp_configs,
     scan_router_bin, scan_routing_launch, scan_routing_tree, scan_skills_and_opencode,
-    scan_systemd,
+    scan_systemd, RootScanError,
 )
 
 
@@ -102,6 +102,7 @@ def scan_all(
     places under *home*; a root that does not exist there is simply absent."""
     if not home.is_dir():
         raise ValueError(f"home is not an existing directory: {home}")
+    explicit_launch, explicit_routing = launch_dir is not None, routing_root is not None
     if launch_dir is None:
         launch_dir = home / ".local" / "state" / "routing" / "launch"
     if routing_root is None:
@@ -114,8 +115,8 @@ def scan_all(
     hits.extend(scan_launch_specs(home))
     hits.extend(scan_mcp_configs(home))
     hits.extend(scan_router_bin(home))
-    hits.extend(scan_routing_launch(launch_dir))
-    hits.extend(scan_routing_tree(routing_root))
+    hits.extend(scan_routing_launch(launch_dir, strict=explicit_launch))
+    hits.extend(scan_routing_tree(routing_root, strict=explicit_routing))
     if repo is not None:
         hits.extend(scan_repo_symlinks(repo))
     return hits
@@ -149,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         hits = scan_all(home=args.home, repo=args.repo,
                         launch_dir=args.launch_dir, routing_root=args.routing_root)
-    except RepoScanError as exc:
+    except (RepoScanError, RootScanError) as exc:
         print(f"autoos_refs_check: error: {exc}", file=sys.stderr)
         return 2
     for kind, path, detail in hits:

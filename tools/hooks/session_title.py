@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from hook_common import atomic_write_text, safe_id, state_home  # noqa: E402
+from hook_common import atomic_write_text, read_stdin_text, safe_id, state_home  # noqa: E402
 
 try:
     import fcntl
@@ -86,7 +86,11 @@ SEQ_MAX = 9999
 SEQ_RESTART = 1000
 
 
-def _bump(raw):
+def _counts_on(raw):
+    return len(raw) <= len(str(SEQ_MAX)) and raw.isascii() and raw.isdigit() and int(raw) < SEQ_MAX
+
+
+def _bump(raw, last=0):
     """The counter after `raw`, the stored text: a fresh file and 0 start at 1, 1..9998 count on.
 
     Anything else (garbled, negative, fractional, a stale 10-digit time value, a counter that reached 9999) must
@@ -95,9 +99,12 @@ def _bump(raw):
     """
     if not raw:
         return 1
-    if len(raw) <= len(str(SEQ_MAX)) and raw.isascii() and raw.isdigit() and int(raw) < SEQ_MAX:
+    if _counts_on(raw):
         return int(raw) + 1
-    return SEQ_RESTART + int(time.time()) % (SEQ_MAX - SEQ_RESTART + 1)
+    n = SEQ_RESTART + int(time.time()) % (SEQ_MAX - SEQ_RESTART + 1)
+    if n <= last:  # `last`: the previous recovery value; the clock must not hand the same name out twice
+        n = last + 1
+    return n if n <= SEQ_MAX else SEQ_RESTART
 
 
 def next_seq():
@@ -106,10 +113,18 @@ def next_seq():
     with open(path, "a+", encoding="utf-8", errors="replace") as f:  # bytes that are not text are garbled, not fatal
         _lock(f)
         f.seek(0)
-        n = _bump(f.read().strip())
+        raw = f.read().strip()
+        recovered = path.with_name(path.name + ".recovered")
+        try:
+            last = int(recovered.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            last = 0
+        n = _bump(raw, last)
         f.seek(0)
         f.truncate()
         f.write(str(n))
+        if raw and not _counts_on(raw):
+            atomic_write_text(recovered, str(n))
     return n
 
 
@@ -128,7 +143,7 @@ def _mark(marker):
 
 def main():
     try:
-        doc = json.loads(sys.stdin.read())
+        doc = json.loads(read_stdin_text())
         sid = doc.get("session_id")
         if not safe_id(sid):
             return 0

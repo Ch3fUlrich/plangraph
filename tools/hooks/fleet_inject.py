@@ -71,7 +71,7 @@ def _header(n: int) -> str:
 def read_cursor(path) -> int:
     """The stored byte offset for one inbox, 0 when missing or garbled."""
     try:
-        value = int(Path(path).read_text(encoding="utf-8").strip())
+        value = int(_REPORT.read_text_capped(path, 64).strip())
     except (OSError, ValueError):
         return 0
     return value if value > 0 else 0
@@ -175,7 +175,7 @@ def run_hook() -> int:
             print("fleet_inject: fleet_report.py missing or broken next to "
                   "this hook; inbox delivery is off", file=sys.stderr)
             return 0
-        payload = json.loads(sys.stdin.read())
+        payload = json.loads(_REPORT.read_stdin_text())
         if not isinstance(payload, dict):
             return 0
         event = payload.get("hook_event_name")

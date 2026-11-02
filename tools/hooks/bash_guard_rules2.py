@@ -149,6 +149,8 @@ class _Scanner:
                     cases[-1] = "body"  # ends a case pattern list
                 elif closer == ")":
                     return
+                elif closer is None:
+                    raise ParseError("unexpected )")
             else:
                 w = self.word()
                 is_esac = w.plain and w.text == "esac"
@@ -351,6 +353,10 @@ class _Scanner:
                     self.backtick(text, True)
                 else:
                     self.dollar(text)
+                i = self.i
+            elif s.startswith("${", i):
+                self.i = i
+                live |= self.brace(text) and 1  # substitutions nested in the expansion run too
                 i = self.i
             else:
                 text.append(c)  # a lone $

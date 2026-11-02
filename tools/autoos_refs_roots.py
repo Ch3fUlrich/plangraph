@@ -6,6 +6,7 @@ opens a secret-named file; symlinked files are followed by ``check_file``.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from autoos_refs_core import Hit, check_file, looks_secret
@@ -180,23 +181,54 @@ def scan_router_bin(home: Path) -> list[Hit]:
     return scan_bin_dir(home / ".local" / "bin", "router-bin")
 
 
-def scan_routing_launch(launch_dir: Path) -> list[Hit]:
+class RootScanError(RuntimeError):
+    """An explicitly supplied scan root cannot be read: a scan error, not a clean root."""
+
+
+def _listing(directory: Path, strict: bool) -> list[Path]:
+    """Sorted entries of *directory*. *strict* (an explicit root): a read failure
+    raises RootScanError; otherwise it is an absent root."""
+    try:
+        return sorted(directory / name for name in os.listdir(directory))
+    except OSError as exc:
+        if strict:
+            raise RootScanError(f"cannot read {directory}: {type(exc).__name__}") from exc
+        return []
+
+
+def scan_routing_launch(launch_dir: Path, strict: bool = False) -> list[Hit]:
     """Routing launch records (``<launch_dir>/*.json``): the specs the fleet
     router replays when it relaunches a session."""
     hits: list[Hit] = []
-    if launch_dir.is_dir():
-        for p in sorted(launch_dir.glob("*.json")):
-            hits.extend(check_file(p, "routing-launch"))
+    if strict or launch_dir.is_dir():
+        for p in _listing(launch_dir, strict):
+            if p.name.endswith(".json"):
+                hits.extend(check_file(p, "routing-launch"))
     return hits
 
 
-def scan_routing_tree(routing_root: Path) -> list[Hit]:
+def scan_routing_tree(routing_root: Path, strict: bool = False) -> list[Hit]:
+    try:
+        return _scan_routing_tree(routing_root, strict)
+    except OSError as exc:
+        if strict:
+            raise RootScanError(f"cannot read {routing_root}: {type(exc).__name__}") from exc
+        raise
+
+
+def _scan_routing_tree(routing_root: Path, strict: bool) -> list[Hit]:
     """The routing checkout: ``ops/*.mcp.json`` (the MCP sets it launches
     sessions with) and the scripts in ``bin/``."""
     hits: list[Hit] = []
     ops = routing_root / "ops"
     if ops.is_dir():
-        for p in sorted(ops.glob("*.mcp.json")):
-            hits.extend(check_file(p, "routing-mcp"))
-    hits.extend(scan_bin_dir(routing_root / "bin", "routing-bin"))
+        for p in _listing(ops, strict):
+            if p.name.endswith(".mcp.json"):
+                hits.extend(check_file(p, "routing-mcp"))
+    elif strict and ops.exists():
+        raise RootScanError(f"cannot read {ops}: not a directory")
+    bin_dir = routing_root / "bin"
+    if strict and bin_dir.is_dir():
+        _listing(bin_dir, True)  # an unreadable bin/ must not look clean
+    hits.extend(scan_bin_dir(bin_dir, "routing-bin"))
     return hits

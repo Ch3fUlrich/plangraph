@@ -107,14 +107,55 @@ canon_path() {
     printf '%s\n' "$_cp_out"
 }
 
-# realpath also resolves symlinks; the lexical fallback cannot, so with
-# realpath absent a symlinked path can still point into a guarded tree
-# undetected.
+# Physical canonicalisation for hosts without realpath: walk the path one
+# segment at a time, entering each existing directory with `cd -P` (symlinks
+# resolved, `..` taken physically); the first segment that does not exist
+# starts a tail that is appended lexically.
+canon_phys() {
+    _cf_rest=$1
+    case $_cf_rest in
+        /*) ;;
+        *) _cf_rest=${PWD%/}/$_cf_rest ;;
+    esac
+    _cf_cur=/
+    _cf_tail=
+    while [ -n "$_cf_rest" ]; do
+        case $_cf_rest in
+            */*)
+                _cf_seg=${_cf_rest%%/*}
+                _cf_rest=${_cf_rest#*/}
+                ;;
+            *)
+                _cf_seg=$_cf_rest
+                _cf_rest=
+                ;;
+        esac
+        case $_cf_seg in ''|.) continue ;; esac
+        if [ -z "$_cf_tail" ] && [ -d "$_cf_cur/$_cf_seg" ]; then
+            # shellcheck disable=SC1007
+            if _cf_new=$(CDPATH= cd -P -- "$_cf_cur/$_cf_seg" 2>/dev/null && pwd -P); then
+                _cf_cur=$_cf_new
+            else
+                _cf_tail=$_cf_tail/$_cf_seg
+            fi
+        else
+            _cf_tail=$_cf_tail/$_cf_seg
+        fi
+    done
+    if [ -n "$_cf_tail" ]; then _cf_tail=$(canon_path "$_cf_tail"); fi
+    case $_cf_cur in
+        /) printf '%s\n' "${_cf_tail:-/}" ;;
+        *) printf '%s\n' "$_cf_cur${_cf_tail%/}" ;;
+    esac
+}
+
+# realpath resolves symlinks; without it canon_phys does, so a symlinked path
+# cannot point into a guarded tree undetected on either kind of host.
 canon() {
     if command -v realpath >/dev/null 2>&1; then
         realpath -m -- "$1"
     else
-        canon_path "$1"
+        canon_phys "$1"
     fi
 }
 
