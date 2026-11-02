@@ -211,6 +211,22 @@ pub(super) fn outside(value: &str, base: &str, os: Os) -> bool {
     !(nv == nb || nv.starts_with(&prefix))
 }
 
+/// Resolve symlinked ancestors even when the final path has not been created.
+fn canonicalize_prefix(path: &str) -> Option<std::path::PathBuf> {
+    let mut prefix = Path::new(path);
+    let mut tail = Vec::new();
+    loop {
+        if let Ok(mut resolved) = std::fs::canonicalize(prefix) {
+            for part in tail.iter().rev() {
+                resolved.push(part);
+            }
+            return Some(resolved);
+        }
+        tail.push(prefix.file_name()?);
+        prefix = prefix.parent()?;
+    }
+}
+
 /// V3 and V5 for one path field; V4 out-of-tree when `repo` is given.
 fn check_path(
     h: &HostEntry,
@@ -242,9 +258,7 @@ fn check_path(
         }
         // For the `self` host also compare canonicalized forms (symlinks).
         if is_self {
-            let canon = std::fs::canonicalize(val)
-                .ok()
-                .zip(std::fs::canonicalize(&repo.worktrees_root).ok());
+            let canon = canonicalize_prefix(val).zip(canonicalize_prefix(&repo.worktrees_root));
             if let Some((cv, cb)) = canon {
                 if !outside(&cv.to_string_lossy(), &cb.to_string_lossy(), h.os) {
                     return Err(HostsError::OutOfTree(v(
@@ -261,10 +275,14 @@ fn check_path(
 }
 
 pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsError> {
-    // V5: `%SLOT%` nowhere but cache_env values.
-    for name in std::iter::once(&h.id).chain(&h.aliases) {
-        if name.contains(SLOT) {
-            return Err(HostsError::SlotToken(v(&h.id, "-", "id/aliases", SLOT)));
+    for (index, role) in h.roles.iter().enumerate() {
+        if h.roles[..index].contains(role) {
+            return Err(HostsError::DuplicateRole(v(
+                &h.id,
+                "-",
+                "roles",
+                "duplicate role",
+            )));
         }
     }
     check_path(h, "-", "state_dir", &h.state_dir, is_self, None)?;

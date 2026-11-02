@@ -54,6 +54,8 @@ fn v3_paths_absolute_by_host_os() {
     assert!(matches!(drive, Err(HostsError::AbsolutePath(_))));
     assert!(abs_for(Os::Linux, "/srv/x") && !abs_for(Os::Linux, r"C:\x"));
     assert!(!abs_for(Os::Linux, r"\\srv\sh\x") && !abs_for(Os::Linux, "x/y"));
+    assert!(!abs_for(Os::Windows, "C:"));
+    assert!(!abs_for(Os::Windows, r"\server"));
     assert!(abs_for(Os::Windows, r"C:\x") && abs_for(Os::Windows, "C:/x"));
     assert!(abs_for(Os::Windows, r"\\srv\sh\x") && !abs_for(Os::Windows, "/srv/x"));
 }
@@ -158,6 +160,7 @@ fn unknown_fields_name_the_host_repo_and_field() {
 fn slot_tokens_and_import_roots_cover_non_path_fields() {
     for (ptr, value) in [
         ("/self", json!("%SLOT%")),
+        ("/hosts/0/aliases/0", json!("%SLOT%")),
         ("/hosts/0/warmup/ramp_mb", json!({"%SLOT%": 1})),
         ("/hosts/0/repos/plangraph/remote", json!("%SLOT%")),
         (
@@ -198,7 +201,7 @@ fn resolve_maps_ids_and_aliases_any_case() {
 }
 
 #[test]
-fn schema_property_names_match_serde_fields() {
+fn schema_fields_required_and_patterns_match_rust() {
     let schema: Value = serde_json::from_str(SCHEMA).unwrap();
     let doc = serde_json::to_value(HostRegistry::from_json_str(EXAMPLE).unwrap()).unwrap();
     let host = &doc["hosts"][0];
@@ -216,18 +219,109 @@ fn schema_property_names_match_serde_fields() {
         } else {
             &schema["$defs"][name]
         };
-        let props: Vec<&str> = node["properties"]
+        let props: std::collections::BTreeSet<&str> = node["properties"]
             .as_object()
             .unwrap()
             .keys()
             .map(String::as_str)
             .collect();
-        let keys: Vec<&str> = sample
+        let keys: std::collections::BTreeSet<&str> = sample
             .as_object()
             .unwrap()
             .keys()
             .map(String::as_str)
             .collect();
         assert_eq!(props, keys, "schema node {name}");
+        let required: std::collections::BTreeSet<&str> = node["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let expected: std::collections::BTreeSet<&str> = keys
+            .into_iter()
+            .filter(|key| name != "repoEntry" || *key != "python")
+            .collect();
+        assert_eq!(required, expected, "required fields for {name}");
+    }
+    assert_eq!(
+        schema["$defs"]["hostEntry"]["properties"]["id"]["pattern"],
+        HOST_ID_PATTERN
+    );
+    assert_eq!(
+        schema["$defs"]["hostEntry"]["properties"]["repos"]["propertyNames"]["pattern"],
+        REPO_ID_PATTERN
+    );
+}
+
+#[test]
+fn v2_invalid_host_ids_refused() {
+    for id in [
+        "",
+        "Code",
+        "1code",
+        "bad_id",
+        "abcdefghijklmnopqrstuvwxyzabcdefg",
+    ] {
+        assert!(matches!(
+            edited("/hosts/0/id", json!(id)),
+            Err(HostsError::Namespace(_))
+        ));
+    }
+}
+
+#[test]
+fn duplicate_roles_refused() {
+    assert!(matches!(
+        edited("/hosts/0/roles", json!(["implement", "implement"])),
+        Err(HostsError::DuplicateRole(_))
+    ));
+}
+
+#[test]
+fn v6_seats_warmup_and_session_refused() {
+    for (ptr, value) in [
+        ("/hosts/0/caps/max_seats", json!(999)),
+        ("/hosts/0/warmup/warmup_s", json!(0)),
+        ("/hosts/0/session_mb", json!(0)),
+    ] {
+        assert!(
+            matches!(edited(ptr, value), Err(HostsError::NumbersShape(_))),
+            "{ptr}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn v4_self_host_resolves_missing_leaf_and_worktree_ancestors() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("wt/sub")).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("wt/sub"), tmp.path().join("link")).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("wt"), tmp.path().join("wt-link")).unwrap();
+    for field in ["python", "cache_env"] {
+        for missing_root in [false, true] {
+            let mut d: Value = serde_json::from_str(EXAMPLE).unwrap();
+            let repo = &mut d["hosts"][0]["repos"]["plangraph"];
+            let (root, leaf) = if missing_root {
+                ("wt-link/new", "wt/new/venv/bin/python")
+            } else {
+                ("wt", "link/venv/bin/python")
+            };
+            repo["worktrees_root"] = json!(tmp.path().join(root));
+            let path = json!(tmp.path().join(leaf));
+            repo[field] = if field == "cache_env" {
+                json!({"CACHE": path})
+            } else {
+                path
+            };
+            assert!(
+                matches!(
+                    HostRegistry::from_json_str(&d.to_string()),
+                    Err(HostsError::OutOfTree(_))
+                ),
+                "{field}, missing_root={missing_root}"
+            );
+        }
     }
 }

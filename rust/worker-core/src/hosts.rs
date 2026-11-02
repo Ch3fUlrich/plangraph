@@ -34,6 +34,10 @@ pub enum Role {
     Session,
 }
 
+#[cfg(test)]
+const HOST_ID_PATTERN: &str = "^[a-z][a-z0-9-]{0,31}$";
+#[cfg(test)]
+const REPO_ID_PATTERN: &str = "^[a-z0-9][a-z0-9._-]{0,63}$";
 const ROLE_KEYS: [&str; 5] = ["implement", "review", "research", "orchestrate", "session"];
 /// The `%SLOT%` token: one path segment, only in cache_env values (V5).
 const SLOT: &str = "%SLOT%";
@@ -111,6 +115,8 @@ pub enum HostsError {
     SlotToken(String),
     #[error("V6 {0}")]
     NumbersShape(String),
+    #[error("duplicate role: {0}")]
+    DuplicateRole(String),
     #[error("V7 {0}")]
     UnknownField(String),
     #[error("io: {0}")]

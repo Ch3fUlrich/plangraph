@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/plangraph/hosts.schema.json",
+  "description": "OS-specific path absoluteness and filesystem containment are enforced only by Rust. Rust also accepts an explicit null python as absent.",
   "title": "plangraph host registry",
   "type": "object",
   "additionalProperties": false,
@@ -61,6 +62,7 @@
         "warmup_s": { "type": "integer", "minimum": 1 },
         "ramp_mb": {
           "type": "object",
+          "propertyNames": { "enum": ["implement", "review", "research", "orchestrate", "session"] },
           "additionalProperties": { "type": "integer", "minimum": 0 }
         }
       }
@@ -73,11 +75,12 @@
         "root": { "type": "string", "minLength": 1 },
         "worktrees_root": { "type": "string", "minLength": 1 },
         "remote": { "type": "string", "minLength": 1 },
-        "python": { "type": "string", "minLength": 1 },
+        "python": { "type": ["string", "null"], "minLength": 1 },
         "import_roots": {
           "type": "array",
           "items": {
             "type": "string",
+            "pattern": "^(?![/\\\\]|[A-Za-z]:)",
             "not": { "pattern": "(^|[\\\\/])\\.\\.([\\\\/]|$)" }
           }
         },
