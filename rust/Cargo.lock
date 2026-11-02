@@ -229,6 +229,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-spawnd"
+version = "0.1.0"
+dependencies = [
+ "pg-worker-core",
+ "serde_json",
+]
+
+[[package]]
 name = "pg-worker-core"
 version = "0.1.0"
 dependencies = [
