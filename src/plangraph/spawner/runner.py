@@ -46,9 +46,11 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .exit_outcome import fallthrough_reason, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
-from .proc_kill import kill_process_tree
+from .proc_kill import KillIncomplete, kill_process_tree, root_identity
+from . import proc_kill
+from .reap import kill_proven, reap, sample_tree, unproven_survivors
 from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
 
 
@@ -128,6 +130,7 @@ class JobInfo:
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
     last_activity_ts: float | None = None
+    survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -226,6 +229,8 @@ class NonceCapacity(RuntimeError):
 class SpawnerRunner:
     """Async process runner for Plangraph agent tasks."""
 
+    identity_provider = staticmethod(root_identity)   # ownership seam: tests inject a fake provider
+
     def __init__(self, default_cwd: str | None = None, *, process_factory=None, tree_killer=None):
         self.default_cwd = default_cwd or os.getcwd()
         self.jobs: dict[str, JobInfo] = {}
@@ -233,7 +238,8 @@ class SpawnerRunner:
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self.process_factory = process_factory or asyncio.create_subprocess_exec
-        self.tree_killer = tree_killer or kill_process_tree
+        self.tree_killer = tree_killer or self._own_kill
+        self.platform = None   # tests inject 'nt'
         self.provider_responses = {}
         self._nonces = {}
         self._adapter_tokens = {}
@@ -562,25 +568,40 @@ class SpawnerRunner:
                 raise
             self._processes[job_id] = proc
             self._nonces[job_id] = nonce
+            root_pid = getattr(proc, 'pid', None)   # pid-less process objects (test fakes): nothing of ours to track or kill
+            if root_pid is not None:
+                self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=self.identity_provider(root_pid, platform='nt' if self._nt() else None), job_object=False)}
+                start = self._owned[job_id]['pid_start']
+                if start is not None and not self._nt():   # setsid() orphans: remember the tree while the root lives
+                    self._seen = {**getattr(self, '_seen', {}), job_id: {}}
+                    self._samplers = {**getattr(self, '_samplers', {}), job_id: asyncio.create_task(sample_tree(self._seen[job_id], root_pid, start))}
 
-            # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
-            # find an exited root pid, so an orphan (`opencode serve`) would outlive
-            # the run (SPAWN-ORPHAN-REAP). Failure never fails the run: taskkill runs.
-            # Descendants started before assign() escape the job (no CREATE_SUSPENDED
-            # under asyncio); taskkill /T in _reap_process still covers them.
-            if _is_nt():
+            # F3: kill-on-close Job Object (SPAWN-ORPHAN-REAP); fail closed if unavailable.
+            if root_pid is not None and self._nt():
                 self._win_jobs = getattr(self, '_win_jobs', {})
                 try:
                     self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
                     handle = self.win_job_api.create_job()
                     try:
-                        self.win_job_api.assign(handle, proc.pid)
+                        self.win_job_api.assign(handle, root_pid)
                     except Exception:
                         self.win_job_api.close(handle)
                         raise
-                    self._win_jobs[job_id] = handle
+                    self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
+                    # Descendants made before assign() are not job members: record them now, kill+verify at reap.
+                    self._escapees = {**getattr(self, '_escapees', {}), job_id: proc_kill.escapees(root_pid, self.win_job_api.pids(handle) if hasattr(type(self.win_job_api), 'pids') else [])}
                 except Exception:
+                    stale = self._win_jobs.pop(job_id, None)
+                    if stale is not None:   # assigned but unverifiable: release the handle, the run does not start
+                        try:
+                            self.win_job_api.close(stale)
+                        except Exception:
+                            pass
                     job.events.append({'event': 'win_job_unavailable'})
+                    await self._reap_process(job_id, proc)
+                    job.status, job.exit_code, job.end_time = 'failed', 1, time.time()
+                    job.survivors = job.survivors or [root_pid]
+                    return job
 
             # Start background monitor
             task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
@@ -614,6 +635,27 @@ class SpawnerRunner:
                         shutil.rmtree(_oc, ignore_errors=True)
                 self._tasks[job_id].add_done_callback(_sweep)
 
+    def _nt(self) -> bool:
+        return self.platform == 'nt' or _is_nt()
+
+    async def kill_recorded(self, pid, pid_start=None):
+        """Cancel after a service restart: prove the recorded root by its persisted start token,
+        kill its tree, verify.  Returns survivors ([] = clean); unprovable and alive = survivors."""
+        plat = 'nt' if self._nt() else None
+        if pid_start is None or plat == 'nt':   # nt: the job died with the old service
+            return unproven_survivors(pid, plat)
+        return await kill_proven(self, pid, pid_start, plat=plat) or []
+
+    async def _own_kill(self, pid, ident=None):
+        """Default killer: posix signals only a group proven ours by (pid, starttime); nt kills via the Job Object."""
+        if self._nt():
+            return
+        if ident is None:   # match on (pid, current starttime), never on pid alone
+            st = proc_kill._stat(pid)
+            ident = next((o['pid_start'] for o in getattr(self, '_owned', {}).values()
+                          if o.get('pid') == pid and st and o.get('pid_start') == st[4]), None)
+        await kill_process_tree(pid, ident=ident)
+
     async def _reap_process(self, job_id: str, proc: Any) -> None:
         reaped = getattr(self, '_reaped_jobs', None)
         if reaped is None:
@@ -622,37 +664,8 @@ class SpawnerRunner:
         if job_id in reaped:
             return
         reaped.add(job_id)
-        # F3: kill the run's Job Object first, then pop it — taskkill /T cannot
-        # find a root pid that has already exited (SPAWN-ORPHAN-REAP).
-        win_job = getattr(self, '_win_jobs', {}).pop(job_id, None)
-        if win_job is not None:
-            api = getattr(self, 'win_job_api', None)
-            try:
-                api.terminate(win_job)
-            except Exception as exc:
-                job = self.jobs.get(job_id)
-                if job is not None:
-                    job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
-            finally:
-                try:
-                    api.close(win_job)
-                except Exception:
-                    pass  # handle already invalid; the terminate result is recorded
-        pid = getattr(proc, 'pid', None)
-        if pid is None:
-            return
-        try:
-            res = self.tree_killer(pid)
-            if asyncio.iscoroutine(res):
-                await res
-        except ProcessLookupError:
-            pass  # the run's process group is already gone
-        except Exception as exc:
-            # F2: never swallow a mis-kill or platform failure silently; type
-            # name only, no message text or pid list. Never raise out of here.
-            job = self.jobs.get(job_id)
-            if job is not None:
-                job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
+        job = self.jobs.get(job_id)
+        await reap(self, job_id, proc)
 
     async def _monitor_process(
         self,
@@ -666,7 +679,9 @@ class SpawnerRunner:
             stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled') else proc.returncode
+            exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
+                                                        or self.jobs[job_id].survivors
+                                                        or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
 
             job = self.jobs[job_id]
             # Only the fork's exact stderr transport envelope is evidence.
@@ -1044,6 +1059,7 @@ def spawn_service(*args, **kwargs):
                         self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
+                                      **{k: bool(v) if k == 'job_object' else v for k, v in getattr(self.runner, '_owned', {}).get(job.job_id, {}).items() if k != 'pid'},
                                       writer_family=chosen.family,
                                       cwd=job.cwd or getattr(self.runner, 'default_cwd', os.getcwd()))
                         self._save(record)
@@ -1054,6 +1070,11 @@ def spawn_service(*args, **kwargs):
                                 job.status = 'cancelled'
                             elif not task.cancelled() and task.exception() is not None:
                                 raise task.exception()
+                        if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
+                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='kill_incomplete'))
+                            record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=job.survivors,
+                                events=record.get('events', []) + job.events)
+                            return
                         if self._path(run_id).with_name('cancelled').exists():   # D-3505: a CLI cancel from
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
                         stop = self.runner.provider_responses.get(job.job_id)
@@ -1079,6 +1100,8 @@ def spawn_service(*args, **kwargs):
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
+                        if stop and not unavailable and job.status != 'cancelled':
+                            notify_leg_refused(self, record, chosen, reason or 'provider_stop')
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,

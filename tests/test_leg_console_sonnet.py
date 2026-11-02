@@ -44,7 +44,7 @@ def test_writer_order_after_free_legs_and_before_cx():
     assert free_ids
     assert all(WRITER_ORDER.index(free) < WRITER_ORDER.index(SONNET) for free in free_ids)
     assert WRITER_ORDER.index(SONNET) == WRITER_ORDER.index("mimo-v2.6-flash") + 1
-    assert WRITER_ORDER[-1] == SONNET and "cx-gpt-6.1-sol" not in WRITER_ORDER   # D-3505
+    assert WRITER_ORDER[-1] == SONNET and WRITER_ORDER[0] == "cx-gpt-6.1-sol"   # D-3667: Sol heads the order
 
 
 def test_d3605_sol_routes_implement_never_review():

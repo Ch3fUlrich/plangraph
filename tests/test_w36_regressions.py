@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
 import pytest
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pid 123 is never a live host pid
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan
@@ -104,6 +105,9 @@ def test_windows_process_cmd_resolution(tmp_path, monkeypatch):
             return b'', b'\x1b[91mError: \x1b[0mModel unavailable: fixture/model\r\n'
         return SimpleNamespace(pid=123, returncode=None, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    # r3 V3: simulated nt needs a Job Object; a hermetic fake, no Toolhelp scan (the run must start)
+    runner.win_job_api = SimpleNamespace(create_job=lambda: 7, assign=lambda h, p: None, close=lambda h: None, terminate=lambda h: None)
+    monkeypatch.setattr('plangraph.spawner.proc_kill.escapees', lambda root, job_pids, **k: {})
     monkeypatch.setattr(shutil, 'which', lambda *a, **kw: 'C:/Tools/opencode.cmd')
     async def probe(*a, **kw):
         return None
