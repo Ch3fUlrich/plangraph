@@ -4,9 +4,9 @@
 use super::super::{ActiveSlot, Ticket};
 use super::*;
 use crate::hosts::Role;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const NOW: u64 = 1_000_000;
 
@@ -33,7 +33,22 @@ impl GroupLiveness for FakeLiveness {
 pub(super) struct FakeSeats {
     pub(super) locks: HashMap<(String, u32), PathBuf>,
     pub(super) held: HashSet<PathBuf>,
+    pub(super) unknown: HashSet<PathBuf>,
     pub(super) calls: Cell<u32>,
+    pub(super) batch_calls: Cell<u32>,
+    pub(super) batch_paths: RefCell<Vec<PathBuf>>,
+}
+
+impl FakeSeats {
+    fn state_of(&self, path: &Path) -> LockState {
+        if self.held.contains(path) {
+            LockState::Held
+        } else if self.unknown.contains(path) {
+            LockState::Unknown
+        } else {
+            LockState::Free
+        }
+    }
 }
 
 impl SeatLocks for FakeSeats {
@@ -42,8 +57,14 @@ impl SeatLocks for FakeSeats {
         self.locks.get(&(repo_id.to_string(), seat_slot)).cloned()
     }
 
-    fn held_by_live_process(&self, path: &std::path::Path) -> bool {
-        self.held.contains(path)
+    fn lock_state(&self, path: &Path) -> LockState {
+        self.state_of(path)
+    }
+
+    fn lock_states(&self, paths: &[PathBuf]) -> Vec<LockState> {
+        self.batch_calls.set(self.batch_calls.get() + 1);
+        self.batch_paths.borrow_mut().extend(paths.iter().cloned());
+        paths.iter().map(|path| self.state_of(path)).collect()
     }
 }
 
@@ -95,6 +116,28 @@ pub(super) fn table(active: Vec<ActiveSlot>, queued: Vec<Ticket>) -> SlotTable {
 /// Reclaim with the default policy (60 s pending TTL) at the injected `NOW`.
 pub(super) fn run(table: &mut SlotTable, live: &FakeLiveness, seats: &FakeSeats) -> ReclaimReport {
     reclaim(table, live, seats, NOW, &ReclaimPolicy::default())
+}
+
+/// Reclaim with a custom policy at the injected `NOW`.
+pub(super) fn run_policy(
+    table: &mut SlotTable,
+    live: &FakeLiveness,
+    seats: &FakeSeats,
+    policy: &ReclaimPolicy,
+) -> ReclaimReport {
+    reclaim(table, live, seats, NOW, policy)
+}
+
+/// Reclaim at a caller-chosen `now_ms` (seat lock ages are real file mtimes,
+/// so those tests derive `now_ms` from `SystemTime`).
+pub(super) fn run_at(
+    table: &mut SlotTable,
+    live: &FakeLiveness,
+    seats: &FakeSeats,
+    now_ms: u64,
+    policy: &ReclaimPolicy,
+) -> ReclaimReport {
+    reclaim(table, live, seats, now_ms, policy)
 }
 
 /// Bound slot with a group: Empty frees (D4 group liveness rule).
@@ -258,4 +301,24 @@ fn ticket_with_reused_waiter_dropped() {
     let report = run(&mut table, &live, &FakeSeats::default());
     assert_eq!(report.tickets_dropped, 1);
     assert!(table.queued.is_empty());
+}
+
+/// The injected `pending_ttl_ms` is the TTL that frees -- 5 s here, not the
+/// hardcoded 60 s default. The boundary itself frees.
+#[test]
+fn pending_ttl_is_the_injected_policy_value() {
+    let policy = ReclaimPolicy {
+        pending_ttl_ms: 5_000,
+        ..Default::default()
+    };
+    let kept = pending("run-a", NOW - 4_999);
+    let freed = pending("run-b", NOW - 5_000);
+    let mut live = FakeLiveness::default();
+    live.alive.insert((kept.pid, kept.start_time));
+    live.alive.insert((freed.pid, freed.start_time));
+    let mut table = table(vec![kept, freed], Vec::new());
+    let report = run_policy(&mut table, &live, &FakeSeats::default(), &policy);
+    assert_eq!(report.freed, 1);
+    assert_eq!(table.active.len(), 1);
+    assert_eq!(table.active[0].run_id, "run-a");
 }

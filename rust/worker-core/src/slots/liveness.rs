@@ -6,8 +6,9 @@
 //! `pid` and `start_time` only identify the group -- a dead supervisor, or a
 //! reused pid with another start time, does NOT free a slot while the group
 //! still has members. [`SeatLocks`] finds the leftover
-//! `.git/worktrees/seat-NN/index.lock` of a freed seat and reports whether a
-//! live process still holds it.
+//! `.git/worktrees/seat-NN/index.lock` of a freed seat and answers [`LockState`]
+//! -- `Held`, `Free` or `Unknown` -- never a bare "not held" when the probe
+//! simply cannot see the holders.
 //!
 //! `start_time` is an opaque per-host process identity (Linux: `starttime`,
 //! field 22 of `/proc/<pid>/stat`; Windows: the process creation FILETIME),
@@ -54,18 +55,38 @@ pub trait GroupLiveness {
     fn process_alive(&self, pid: u32, start_time: u64) -> bool;
 }
 
+/// What a seat `index.lock` file looks like right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockState {
+    /// A live process holds the lock file.
+    Held,
+    /// No live process holds the lock file.
+    Free,
+    /// The state could not be determined; reclaim must fail safe and keep
+    /// the file (never delete a lock another process may hold).
+    Unknown,
+}
+
 /// The `.git/worktrees/seat-NN/index.lock` files of seat slots.
 pub trait SeatLocks {
     /// Lock file of a seat slot, or `None` when the repo is unknown to the
     /// caller-supplied map (R4/R5 own seat worktrees).
     fn index_lock(&self, repo_id: &str, seat_slot: u32) -> Option<PathBuf>;
 
-    /// Does a live process still hold this lock file?
-    fn held_by_live_process(&self, path: &Path) -> bool;
+    /// [`LockState`] of one lock file.
+    fn lock_state(&self, path: &Path) -> LockState;
+
+    /// [`LockState`] of many lock files, in the order of `paths`. The default
+    /// maps [`Self::lock_state`]; a probe that can answer a whole reclaim pass
+    /// from one system walk overrides it.
+    fn lock_states(&self, paths: &[PathBuf]) -> Vec<LockState> {
+        paths.iter().map(|path| self.lock_state(path)).collect()
+    }
 }
 
 /// `<repo_root>/.git/worktrees/seat-NN/index.lock` for a seat slot:
 /// `seat-NN` is the two-digit zero-padded seat number.
+#[cfg(any(target_os = "linux", windows))]
 fn seat_index_lock(repo_root: &Path, seat_slot: u32) -> PathBuf {
     repo_root
         .join(".git")

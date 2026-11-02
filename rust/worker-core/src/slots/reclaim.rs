@@ -8,11 +8,14 @@
 //! empty or gone -- a dead supervisor pid, or a reused pid with another start
 //! time, does NOT free a slot while the group still has members, and an
 //! [`GroupState::Unknown`] group keeps the slot (fail safe) and lists it in
-//! [`ReclaimReport::kept_unknown`].
+//! [`ReclaimReport::kept_unknown`]. Seat index locks get the same fail-safe
+//! treatment: only a [`LockState::Free`] answer that is also older than
+//! [`ReclaimPolicy::lock_grace_ms`] is deleted, a [`LockState::Unknown`] lock
+//! is kept and listed in [`ReclaimReport::index_locks_unknown`].
 
-use super::liveness::{GroupLiveness, GroupState, SeatLocks};
+use super::liveness::{GroupLiveness, GroupState, LockState, SeatLocks};
 use super::{SlotClass, SlotTable};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// How an unbound (pending) slot expires and how long it may sit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,12 +23,17 @@ pub struct ReclaimPolicy {
     /// TTL of a pending (unbound) entry in ms: 60 s (D4). The boundary itself
     /// frees; a pending entry whose creator is dead is reclaimed at once.
     pub pending_ttl_ms: u64,
+    /// Minimum age of a `Free` seat index lock before it may be deleted:
+    /// 10 s. Git closes its lock fd just before the rename, so a lock younger
+    /// than this may still be in flight; it is kept and counted as held.
+    pub lock_grace_ms: u64,
 }
 
 impl Default for ReclaimPolicy {
     fn default() -> Self {
         ReclaimPolicy {
             pending_ttl_ms: 60_000,
+            lock_grace_ms: 10_000,
         }
     }
 }
@@ -43,8 +51,12 @@ pub struct ReclaimReport {
     /// Leftover seat `index.lock` files deleted.
     pub index_locks_removed: usize,
     /// Seat `index.lock` files left in place because a live process holds
-    /// them.
+    /// them, or because they are younger than
+    /// [`ReclaimPolicy::lock_grace_ms`] and may still be in flight.
     pub index_locks_held: usize,
+    /// Seat `index.lock` files left in place because their state could not be
+    /// determined ([`LockState::Unknown`], fail safe).
+    pub index_locks_unknown: Vec<PathBuf>,
     /// Lock paths whose removal failed; reported here, never a panic.
     pub index_lock_errors: Vec<PathBuf>,
 }
@@ -65,7 +77,12 @@ pub struct ReclaimReport {
 /// - a queued ticket is dropped when its waiter is not alive; the other
 ///   tickets keep their order;
 /// - for every freed seat slot a leftover `.git/worktrees/seat-NN/index.lock`
-///   is removed only when no live process holds it ([`SeatLocks`]).
+///   is removed only when [`SeatLocks`] answers [`LockState::Free`] for it and
+///   it is older than [`ReclaimPolicy::lock_grace_ms`]; a held or
+///   still-young lock counts as held, a [`LockState::Unknown`] lock is kept
+///   (fail safe) and listed in [`ReclaimReport::index_locks_unknown`]. The
+///   lock states of one pass are probed with a single
+///   [`SeatLocks::lock_states`] call before any file is touched.
 pub fn reclaim(
     table: &mut SlotTable,
     live: &impl GroupLiveness,
@@ -75,6 +92,7 @@ pub fn reclaim(
 ) -> ReclaimReport {
     let mut report = ReclaimReport::default();
     let mut kept = Vec::with_capacity(table.active.len());
+    let mut lock_paths: Vec<PathBuf> = Vec::new();
     for slot in std::mem::take(&mut table.active) {
         let stale = if slot.bound {
             match &slot.group {
@@ -96,7 +114,9 @@ pub fn reclaim(
             report.freed += 1;
             if slot.class == SlotClass::Seat {
                 if let Some(seat_slot) = slot.seat_slot {
-                    reclaim_index_lock(seats, &slot.repo_id, seat_slot, &mut report);
+                    if let Some(path) = seats.index_lock(&slot.repo_id, seat_slot) {
+                        lock_paths.push(path);
+                    }
                 }
             }
         } else {
@@ -104,6 +124,7 @@ pub fn reclaim(
         }
     }
     table.active = kept;
+    reclaim_index_locks(seats, lock_paths, now_ms, policy, &mut report);
 
     for ticket in std::mem::take(&mut table.queued) {
         if live.process_alive(ticket.pid, ticket.start_time) {
@@ -115,28 +136,72 @@ pub fn reclaim(
     report
 }
 
-/// Remove the leftover `.git/worktrees/seat-NN/index.lock` of a freed seat
-/// slot -- only when no live process holds it. A removal error is reported in
-/// [`ReclaimReport::index_lock_errors`], never a panic.
-fn reclaim_index_lock(
+/// Remove the leftover `.git/worktrees/seat-NN/index.lock` files of freed
+/// seat slots -- only those no live process holds ([`LockState::Free`]) and
+/// none younger than [`ReclaimPolicy::lock_grace_ms`] (git closes its lock fd
+/// just before the rename). [`LockState::Unknown`] locks are kept (fail safe)
+/// and listed in [`ReclaimReport::index_locks_unknown`]; a removal error is
+/// reported in [`ReclaimReport::index_lock_errors`], never a panic. All lock
+/// states are probed with ONE [`SeatLocks::lock_states`] call per pass.
+fn reclaim_index_locks(
     seats: &impl SeatLocks,
-    repo_id: &str,
-    seat_slot: u32,
+    paths: Vec<PathBuf>,
+    now_ms: u64,
+    policy: &ReclaimPolicy,
     report: &mut ReclaimReport,
 ) {
-    let Some(path) = seats.index_lock(repo_id, seat_slot) else {
+    if paths.is_empty() {
         return;
+    }
+    let states = seats.lock_states(&paths);
+    for (path, state) in paths.into_iter().zip(states) {
+        match state {
+            LockState::Held => report.index_locks_held += 1,
+            LockState::Unknown => report.index_locks_unknown.push(path),
+            LockState::Free => match lock_age(&path, now_ms, policy.lock_grace_ms) {
+                LockAge::Gone => {}
+                LockAge::Young => report.index_locks_held += 1,
+                LockAge::Aged => match std::fs::remove_file(&path) {
+                    Ok(()) => report.index_locks_removed += 1,
+                    Err(_) => report.index_lock_errors.push(path),
+                },
+            },
+        }
+    }
+}
+
+/// How old a `Free` lock file looks right now.
+enum LockAge {
+    /// No file there any more: nothing to remove, nothing to count.
+    Gone,
+    /// Younger than the grace period, or of unreadable age: keep it (git may
+    /// still be about to rename over it) and count it as held.
+    Young,
+    /// Older than the grace period: safe to remove.
+    Aged,
+}
+
+/// Age of a lock file against the injected `now_ms`; an unreadable mtime
+/// fails safe to [`LockAge::Young`] and is never removed.
+fn lock_age(path: &Path, now_ms: u64, lock_grace_ms: u64) -> LockAge {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LockAge::Gone,
+        Err(_) => return LockAge::Young,
     };
-    if !path.exists() {
-        return;
-    }
-    if seats.held_by_live_process(&path) {
-        report.index_locks_held += 1;
-        return;
-    }
-    match std::fs::remove_file(&path) {
-        Ok(()) => report.index_locks_removed += 1,
-        Err(_) => report.index_lock_errors.push(path),
+    let modified = match meta.modified() {
+        Ok(modified) => modified,
+        Err(_) => return LockAge::Young,
+    };
+    let mtime_ms = match modified.duration_since(std::time::SystemTime::UNIX_EPOCH) {
+        Ok(age) => age.as_millis() as u64,
+        // Not expressible as a since-epoch age: unreadable, fail safe.
+        Err(_) => return LockAge::Young,
+    };
+    if mtime_ms > now_ms.saturating_sub(lock_grace_ms) {
+        LockAge::Young
+    } else {
+        LockAge::Aged
     }
 }
 

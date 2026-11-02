@@ -1,7 +1,7 @@
 //! Windows probes: Job Objects for groups, process times for identity, and a
 //! share-mode-0 open for seat index locks (compile-checked, D-3705).
 
-use super::{GroupLiveness, GroupState, SeatLocks};
+use super::{GroupLiveness, GroupState, LockState, SeatLocks};
 use std::path::{Path, PathBuf};
 
 /// Group liveness from the run's Job Object and process identity from the
@@ -36,14 +36,21 @@ impl GroupLiveness for JobLiveness {
     }
 
     fn process_alive(&self, pid: u32, start_time: u64) -> bool {
-        use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, STILL_ACTIVE};
+        use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            GetProcessTimes, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE,
         };
 
         // SAFETY: `pid` is a plain id; the returned handle is checked for null
         // and closed on every path below.
-        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        let process = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
         if process.is_null() {
             return false;
         }
@@ -54,13 +61,16 @@ impl GroupLiveness for JobLiveness {
         // SAFETY: all out-params are stack values that outlive the call.
         let times_ok =
             unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) };
-        let mut exit_code: u32 = 0;
-        // SAFETY: `process` is open and `exit_code` outlives the call.
-        let code_ok = unsafe { GetExitCodeProcess(process, &mut exit_code) };
+        // A zero-time wait reports whether the process has exited; this is
+        // the documented-safe answer to the `STILL_ACTIVE` exit-code pitfall
+        // (a process may legitimately exit with code 259 and then would look
+        // alive forever).
+        // SAFETY: `process` is open and carries SYNCHRONIZE.
+        let signaled = unsafe { WaitForSingleObject(process, 0) };
         // SAFETY: `process` is an open handle owned by this function.
         unsafe { CloseHandle(process) };
         let created = ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64;
-        times_ok != 0 && code_ok != 0 && created == start_time && exit_code == STILL_ACTIVE as u32
+        times_ok != 0 && created == start_time && signaled == WAIT_TIMEOUT
     }
 }
 
@@ -94,7 +104,8 @@ fn job_state(job: windows_sys::Win32::Foundation::HANDLE) -> GroupState {
 }
 
 /// Seat index locks checked with a share-mode-0 open: a sharing violation
-/// means a live process holds the file.
+/// means a live process holds the file, a missing file is free, and anything
+/// else (access denied included) is unknown and must fail safe.
 pub struct FileSeatLocks<F> {
     map: F,
 }
@@ -113,7 +124,7 @@ impl<F: Fn(&str) -> Option<PathBuf>> SeatLocks for FileSeatLocks<F> {
         Some(super::seat_index_lock(&root, seat_slot))
     }
 
-    fn held_by_live_process(&self, path: &Path) -> bool {
+    fn lock_state(&self, path: &Path) -> LockState {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::{
             CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_LOCK_VIOLATION, ERROR_PATH_NOT_FOUND,
@@ -145,17 +156,20 @@ impl<F: Fn(&str) -> Option<PathBuf>> SeatLocks for FileSeatLocks<F> {
         if file != INVALID_HANDLE_VALUE {
             // SAFETY: `file` is an open handle owned by this function.
             unsafe { CloseHandle(file) };
-            return false;
+            return LockState::Free;
         }
         match std::io::Error::last_os_error().raw_os_error() {
             Some(e) if e == ERROR_SHARING_VIOLATION as i32 || e == ERROR_LOCK_VIOLATION as i32 => {
-                true
+                LockState::Held
             }
             Some(e) if e == ERROR_FILE_NOT_FOUND as i32 || e == ERROR_PATH_NOT_FOUND as i32 => {
-                false
+                LockState::Free
             }
-            // Unreadable state: fail safe and leave the file alone.
-            _ => true,
+            // ERROR_ACCESS_DENIED and every other error: the state is
+            // unknown, so the file is kept and reported in
+            // `index_locks_unknown` -- never folded into "held" and never
+            // deleted.
+            _ => LockState::Unknown,
         }
     }
 }
