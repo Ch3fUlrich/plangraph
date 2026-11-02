@@ -23,7 +23,7 @@ EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreada
 def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
         return False
-    record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
+    record.update(status='timed_out' if job.status == 'timeout' and record.get('role') == 'review' else job.status, exit_code=job.exit_code, reason=job.status,
                   watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
                   events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
@@ -31,10 +31,10 @@ def terminal_record(record, job):
 
 def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
-    return thresholds(card), record['live_log']
+    return thresholds(card, role=record.get('role')), record['live_log']
 
 
-def thresholds(card=None):
+def thresholds(card=None, *, role=None):
     from plangraph.planner.routing import SpawnRefused
     card = card or {}
     result = {}
@@ -44,7 +44,7 @@ def thresholds(card=None):
             raise SpawnRefused('invalid watchdog threshold: ' + key)
         result[key.replace('_min', '_s')] = value * 60
     result['hard_max'] = False   # table max_min may carry the first-edit hold (M5)
-    timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
+    timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT') or ('1500' if role == 'review' else None)
     if timeout and 'max_min' not in card:
         try:
             value = float(timeout)

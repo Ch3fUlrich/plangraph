@@ -493,7 +493,7 @@ class SpawnerRunner:
             )
             self.jobs[job_id] = job
             from .run_watchdog import thresholds, edit_signature
-            job._watchdog_limits = watchdog or thresholds()
+            job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
             if tools_event:
@@ -1015,7 +1015,7 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
-                    limits = thresholds(card)
+                    limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
@@ -1060,7 +1060,7 @@ def spawn_service(*args, **kwargs):
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                            record.update(status='timed_out' if job.status == 'timeout' and role == 'review' else job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return

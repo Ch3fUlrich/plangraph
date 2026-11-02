@@ -24,7 +24,7 @@ __all__ = [
 
 VERDICTS = ("pass", "fix", "halt")
 
-PASS_WORDS = frozenset({"pass", "approve"})
+PASS_WORDS = frozenset({"pass", "approve", "accept"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
 # [*_`]* before/after the word: markdown-bold labels like **MED**: or
@@ -35,7 +35,9 @@ _BLOCKING_LABEL = re.compile(
 _LOW_LABEL = re.compile(
     r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
-_FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I)
+_WORD_END = r"(?=$|[\s.,;:!?)(*_`—–-])(?!\s*[|/])"
+_FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
+_REQUEST_CHANGES = re.compile(r"request[\s_-]+changes" + _WORD_END, re.I)
 
 _STANDING_ANSWER_RE = re.compile(
     r"^TEST-GAMING: (?:"
@@ -69,6 +71,8 @@ def _scan_verdict(text: str) -> tuple[str | None, bool]:
         if not match:
             continue
         stripped = match.group(1).strip()
+        if _REQUEST_CHANGES.match(stripped):
+            return "fix", False
         word_m = _FIRST_WORD.match(stripped)
         word = word_m.group(1).lower() if word_m else ""
         if word in PASS_WORDS:

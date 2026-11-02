@@ -57,7 +57,7 @@ _LOW_LABEL = re.compile(
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 # word end: end/space/punctuation and NOT followed by "|" or "/" (that would
 # be an echoed "pass | fix | halt" template, not a decision)
-_WORD_END = r"(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])"
+_WORD_END = r"(?=$|[\s.,;:!?)(*_`—–-])(?!\s*[|/])"
 # first word of the decision
 _FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
 # D-3544: the phrase "request changes" (any case, joined by space, "-" or "_")

@@ -22,7 +22,7 @@ class InlineDiffError(Exception):
 
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60) -> str:
     if diff_ref is None:
-        raise InlineDiffError("card has no diff_ref")
+        return prompt
     try:
         _check_diff_ref(diff_ref)
     except SpawnRefused as exc:

@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **SEAT-PATH-FIXES (D-3676):** allow inline document reviews without diff_ref, route mimo-flash inline-only, align verdict commentary parsing, and cap reviews at 25 minutes unless explicitly overridden.
+
 - **RIN-LEDGER-VIEWS S12 (D-3516):** `tools/decisions_render.py` renders decision items back into the rules file from a batch YAML (fixed-point check mode; CRLF-safe, duplicate ids and placeholders are errors).
 - **AUTOOS-REMOVAL-GUARD:** `tools/autoos_refs_check.py` (read-only scan of live AutoOS references in home config, systemd units and tracked symlinks; exit 2 on a missing `--home`, redacted details, Windows-safe tests).
 - **AUTOOS-HOOKS-INTERIM S05 (D-3516/D-3522):** `tools/hooks/fleet_report.py` and `install_hooks.sh`, ported from the AutoOS tree (#292); installer derives its source root portably and builds the SHA256SUMS manifest from the files it copied; Stop-hook status dir creation is race-safe.
