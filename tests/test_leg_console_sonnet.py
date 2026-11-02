@@ -47,13 +47,14 @@ def test_writer_order_after_free_legs_and_before_cx():
     assert WRITER_ORDER[-1] == SONNET and "cx-gpt-6.1-sol" not in WRITER_ORDER   # D-3505
 
 
-def test_d3505_no_implement_or_review_route_reaches_sol():
-    for card in ({"estimate_tokens": 20000, "risk_tags": []}, {"estimate_tokens": 600000, "risk_tags": []}):
-        implement = plan_spawn(card, role="implement")   # no family filter: Sol is gpt, not excluded by one
-        review = plan_spawn(card, role="review", writer_families=("mimo",))
-        assert "cx-gpt-6.1-sol" not in [leg.id for leg in implement.legs + review.legs]
+def test_d3605_sol_routes_implement_never_review():
+    card = {"estimate_tokens": 20000, "risk_tags": []}
+    implement = plan_spawn(card, role="implement")
+    review = plan_spawn(card, role="review", writer_families=("mimo",))
+    assert "cx-gpt-6.1-sol" in [leg.id for leg in implement.legs]
+    assert "cx-gpt-6.1-sol" not in [leg.id for leg in review.legs]
     sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
-    assert not leg_active(sol)   # every leg_active-gated path (routing, leg_probe, override) drops it
+    assert leg_active(sol) and not sol.expires   # D-3605: operator implement leg again
 
 
 def test_implement_route_ranks_sonnet_after_free_legs():
@@ -102,15 +103,3 @@ def test_load_legs_accepts_expires_and_rejects_bad_format(tmp_path):
                    encoding="utf-8")
     with pytest.raises(ValueError, match="expires"):
         load_legs(bad)
-
-
-@pytest.mark.parametrize("pick", [{"leg": "cx-gpt-6.1-sol"}, {"model": "omniroute/cx-gpt-6.1-sol"}])
-def test_d3505_override_cannot_spawn_an_expired_leg(tmp_path, pick):
-    import os, subprocess, sys
-    from pathlib import Path
-    payload = dict(state=str(tmp_path), card={"estimate_tokens": 100}, prompt="x",
-                   override_reason="operator selection", **pick)
-    child = subprocess.run([sys.executable, "-m", "plangraph.spawner.cli", "--supervise"],
-                           input=json.dumps(payload) + "\n", text=True, capture_output=True,
-                           env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src")))
-    assert json.loads(child.stdout)["error"] == "leg expired: cx-gpt-6.1-sol"
