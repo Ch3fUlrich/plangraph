@@ -7,15 +7,39 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
 
 
+def _booking_seconds():
+    """H1: the booked-down window is clamped to [60, 86400] seconds.
+
+    PLANGRAPH_LEG_DOWN_S accepts extremes like '0'/'1e-9' (the leg would never
+    come back down) and '1e308' (near-permanent); a booking is at least one
+    minute and at most one day.  Invalid values still fall back to 1800 inside
+    _down_seconds (leg_state.py stays untouched).
+    """
+    return max(60.0, min(_down_seconds(None), 86400.0))
+
+
+def _deliver_cmd(command, event):
+    """H2: command-hook delivery on a daemon thread; a failure never fails the run."""
+    import logging
+    from . import notify
+    try:
+        notify.CommandSink(command).deliver('parent', event)
+    except Exception:
+        logging.getLogger(__name__).exception('leg refusal command notify failed')
+
+
 def notify_leg_refused(service, record, chosen, reason):
     """D-3605 (a): tell the parent at once that a leg refused; delivery never fails the run.
 
     Lives here so the base and routed leg loops share exactly one LEG_REFUSED
     line per refused attempt (G3); a service without a completion sink stays
-    silent.
+    silent.  The completion sink is a local file write and stays synchronous;
+    only the PLANGRAPH_SPAWN_NOTIFY_CMD hook (a subprocess with a 10 s timeout)
+    runs on a daemon thread so it never blocks the event loop (H2).
     """
     import logging
     import os
+    import threading
     from . import notify
     from .leg_probe import key as leg_key
     sink = getattr(service, 'completion_sink', None)
@@ -26,7 +50,7 @@ def notify_leg_refused(service, record, chosen, reason):
         sink.deliver('parent', event)
         command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
         if command:
-            notify.CommandSink(command).deliver('parent', event)
+            threading.Thread(target=_deliver_cmd, args=(command, event), daemon=True).start()
     except Exception:
         logging.getLogger(__name__).exception('leg refusal notify failed')
 
@@ -45,10 +69,11 @@ def fallthrough_reason(service, chosen, job, record):
         # for an agy leg's bare model.
         # D-3605 (a): every harness-limit line without a provider reset time
         # is booked down for the validated PLANGRAPH_LEG_DOWN_S window (1800
-        # on invalid/negative/non-finite); 'Resets in ...' lines keep their
-        # own reset because record_harness_limit applies down_s only when the
-        # line carries no reset time.
-        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness', down_s=_down_seconds(None))
+        # on invalid/negative/non-finite), clamped to [60, 86400] s (H1);
+        # 'Resets in ...' lines keep their own reset because
+        # record_harness_limit applies down_s only when the line carries no
+        # reset time.
+        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness', down_s=_booking_seconds())
         # M9/M15: a guard or cancel verdict is never stomped by a fallthrough.
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'

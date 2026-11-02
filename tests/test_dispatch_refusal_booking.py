@@ -1,6 +1,8 @@
 """Review G1/G2/G3 (D-3605 a): validated leg-down time on every harness-limit
 line, and exactly one LEG_REFUSED notify per refused attempt."""
 import json
+import shlex
+import sys
 import time
 from types import SimpleNamespace
 
@@ -50,6 +52,55 @@ def test_no_reset_line_books_down_window_reset_line_keeps_its_own(tmp_path, monk
     after = time.time()
     reset_at = store.leg_status('other')['evidence']['reset_at']
     assert before + 38426 <= reset_at <= after + 38426   # 'Resets in 10h40m26s' is unchanged
+
+
+@pytest.mark.parametrize('value, window', [('0', 60.0), ('1e-9', 60.0),
+                                           ('1e308', 86400.0), (None, 1800.0)])
+def test_booking_time_clamped_to_minute_and_day(tmp_path, monkeypatch, value, window):
+    # H1: '0'/'1e-9' would never bring the leg back; '1e308' is near-permanent.
+    if value is None:
+        monkeypatch.delenv('PLANGRAPH_LEG_DOWN_S', raising=False)   # default 1800
+    else:
+        monkeypatch.setenv('PLANGRAPH_LEG_DOWN_S', value)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    before = time.time()
+    fallthrough_reason(_service(tmp_path), SimpleNamespace(model='m', harness='qodercli'),
+                        _job(CREDIT), {})
+    after = time.time()
+    reset_at = store.leg_status('m')['evidence']['reset_at']
+    assert before + window - 5 <= reset_at <= after + window + 5     # 5 s tolerance
+
+
+def test_notify_cmd_delivers_leg_refused_line_off_the_event_loop(tmp_path, monkeypatch):
+    # H2: the command hook runs on a daemon thread; its stdin is the event JSON.
+    log = tmp_path / 'notify-stdin.log'
+    script = f"import sys; open({str(log)!r},'a').write(sys.stdin.read())"
+    command = ' '.join(shlex.quote(part) for part in (sys.executable, '-c', script))
+    monkeypatch.setenv('PLANGRAPH_SPAWN_NOTIFY_CMD', command)   # sink appends 'parent' argv
+    service = _service(tmp_path, completion_sink=FileInbox(tmp_path))
+    record = {'run_id': 'run-booking3'}
+    fallthrough_reason(service, SimpleNamespace(model='m', harness='qodercli'), _job(CREDIT), record)
+    events, deadline = [], time.time() + 5
+    while time.time() < deadline:
+        if log.exists():
+            events = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+            if events:
+                break
+        time.sleep(0.05)
+    refused = [e for e in events if e['event'] == 'LEG_REFUSED']
+    assert len(refused) == 1
+    assert refused[0]['run_id'] == 'run-booking3'
+    assert refused[0]['leg'] == 'm'
+    assert refused[0]['reason'].startswith('harness_limit:')
+
+
+def test_notify_cmd_missing_binary_never_raises_out_of_fallthrough(tmp_path, monkeypatch):
+    # H2: a failing command hook is logged on its daemon thread, never raised here.
+    monkeypatch.setenv('PLANGRAPH_SPAWN_NOTIFY_CMD', str(tmp_path / 'no-such-notify-cmd'))
+    service = _service(tmp_path, completion_sink=FileInbox(tmp_path))
+    reason = fallthrough_reason(service, SimpleNamespace(model='m', harness='qodercli'),
+                                _job(CREDIT), {'run_id': 'run-booking4'})
+    assert reason.startswith('harness_limit:')
 
 
 def test_notify_leg_refused_delivers_one_line_per_refusal(tmp_path, monkeypatch):
