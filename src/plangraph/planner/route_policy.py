@@ -9,7 +9,10 @@ operator's current lists; ``PLANGRAPH_ROUTE_POLICY`` names a replacement file.
   harness serves only the listed roles (qodercli: review seats only);
 * ``review_allowed_families`` -- families lifted for the *review* role only
   (D-3552: deepseek/glm for review seats; implement/orchestrate stay banned/off).
-  kimi is refused here: it stays banned for every role (D-3084).
+  kimi is refused here: it stays banned for every role (D-3084);
+* ``lifted_models`` -- model ids routed despite a banned/off family, for every
+  role the leg serves (D-3700: the paid ``omniroute/deepseek-direct-flash`` leg).
+  kimi is never liftable here either (D-3084).
 
 Skips are recorded in the plan with reason ``banned_family`` / ``off_family`` /
 ``paused_harness``.  Pure data and validation; the only I/O is reading the file.
@@ -26,7 +29,8 @@ __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
 _ROLES = ("implement", "review", "orchestrate")
-_KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families")
+_KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families",
+         "lifted_models")
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,7 @@ class RoutePolicy:
     off_families: tuple[str, ...] = ()
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     review_allowed_families: tuple[str, ...] = ()
+    lifted_models: tuple[str, ...] = ()
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -49,11 +54,13 @@ class RoutePolicy:
             return bool({leg.family, seat_family(leg.family)}
                         & ({seat_family(f) for f in families} | set(families)))
         # D-3552: review seats may use review_allowed_families even when the
-        # family is banned/off.  Only those two checks are skipped: kimi is
+        # family is banned/off.  D-3700: a model in lifted_models is routed for
+        # every role its leg serves.  Only those two checks are skipped: kimi is
         # never liftable (D-3084), and paused_harness / no_verdict_seat below
         # still apply.
-        lifted = (role == "review" and listed(self.review_allowed_families)
-                  and not listed(("kimi",)))
+        lifted = not listed(("kimi",)) and (
+            leg.model in self.lifted_models
+            or (role == "review" and listed(self.review_allowed_families)))
         if not lifted:
             if listed(self.banned_families):
                 return "banned_family"
@@ -97,6 +104,7 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
     banned = _str_list(doc, "banned_families", problems)
     off = _str_list(doc, "off_families", problems)
     review_allowed = _str_list(doc, "review_allowed_families", problems)
+    lifted_models = _str_list(doc, "lifted_models", problems)
     from .seats import seat_family
     if any(seat_family(f) == "kimi" for f in review_allowed):
         problems.append("review_allowed_families: kimi is never a seat (D-3084)")
@@ -114,4 +122,4 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
         paused[harness] = tuple(roles)
     if problems:
         raise ValueError("invalid route policy: " + "; ".join(problems))
-    return RoutePolicy(banned, off, paused, review_allowed)
+    return RoutePolicy(banned, off, paused, review_allowed, lifted_models)

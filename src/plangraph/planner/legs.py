@@ -129,7 +129,8 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
-    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
+    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash",
+             roles=("implement", "review")),  # D-3700: lifted model, routed for implement+review
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),

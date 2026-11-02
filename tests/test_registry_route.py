@@ -17,7 +17,7 @@ from dataclasses import replace
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS, HARNESSES, TOOL_MODES
+from plangraph.planner.legs import DEFAULT_LEGS, HARNESSES, TOOL_MODES, Leg
 from plangraph.planner.route_policy import RoutePolicy, load_route_policy
 from plangraph.planner.routing import SpawnRefused, plan_spawn
 from plangraph.routing_support import resolver
@@ -125,6 +125,8 @@ def test_default_policy_file():
     # D-3552: deepseek/glm lifted for review seats only; kimi never (D-3084).
     assert policy.review_allowed_families == ("deepseek", "glm")
     assert "kimi" not in policy.review_allowed_families
+    # D-3700: the paid deepseek-direct-flash leg is lifted for every role it serves.
+    assert policy.lifted_models == ("omniroute/deepseek-direct-flash",)
     assert policy.allows("qodercli", "review") and not policy.allows("qodercli", "implement")
     assert not policy.allows("agy", "review") and policy.allows("agy", "implement")
 
@@ -157,8 +159,12 @@ def test_route_skips_banned_and_off_families(role):
         # D-3552: deepseek/glm lift for review seats only; kimi never (D-3084).
         assert {"deepseek", "glm"} <= families
         return
-    # implement/orchestrate stay banned/off (D-3552).
-    assert not families & {"deepseek", "glm"}
+    # implement/orchestrate stay banned/off (D-3552) but for the one D-3700
+    # lifted model: only the paid deepseek leg routes, every other deepseek
+    # leg stays banned and glm stays off.
+    assert not families & {"glm"}
+    lifted_ids = {leg.id for leg in plan.legs if leg.family == "deepseek"}
+    assert lifted_ids == ({"deepseek"} if role == "implement" else set())
     policy = load_route_policy()
     by_id = {leg.id: leg for leg in DEFAULT_LEGS}
     for leg_id, reason in (("opencode-deepseek-v4.1-flash-free", "banned_family"),
@@ -182,6 +188,61 @@ def test_explicit_policy_argument_wins():
     open_policy = RoutePolicy(banned_families=(), off_families=(), paused_harnesses={})
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=open_policy)
     assert "opencode-glm-5.3-flash-free" in [leg.id for leg in plan.legs]
+
+
+# --- 3b. lifted_models (D-3700): one paid model despite the ban ---------------
+
+def test_lifted_model_routes_for_implement_and_review():
+    policy = load_route_policy()
+    paid = {leg.id: leg for leg in DEFAULT_LEGS}["deepseek"]
+    assert paid.model == "omniroute/deepseek-direct-flash"
+    assert paid.roles == ("implement", "review")
+    for role in ("implement", "review"):
+        assert policy.skip_reason(paid, role) is None
+        plan = plan_spawn(CARD, role=role, writer_families=("mimo",))
+        assert paid.id in [leg.id for leg in plan.legs]
+        assert paid.id not in {s["leg"] for s in plan.skipped}
+
+
+def test_lift_covers_only_the_named_model():
+    # The free and opencode-go deepseek legs stay banned for implement/orchestrate.
+    policy = load_route_policy()
+    by_id = {leg.id: leg for leg in DEFAULT_LEGS}
+    for leg_id in ("opencode-deepseek-v4.1-flash-free", "opencode-go-deepseek-v4-flash"):
+        for role in ("implement", "orchestrate"):
+            assert policy.skip_reason(by_id[leg_id], role) == "banned_family"
+
+
+def test_kimi_model_is_never_lifted():
+    kimi = Leg("kimi-seat", "subscription", "opencode", "opencode-go/kimi-k3", "kimi",
+               ("128k",), 100000, False, roles=("implement",))
+    policy = RoutePolicy(banned_families=("kimi",),
+                         lifted_models=("opencode-go/kimi-k3",))
+    assert policy.skip_reason(kimi, "implement") == "banned_family"
+
+
+def test_lifted_models_validates_like_banned_families(tmp_path):
+    path = tmp_path / "p.json"
+    for doc in ({"lifted_models": "omniroute/deepseek-direct-flash"},
+                {"lifted_models": [""]}, {"lifted_models": [1]}):
+        path.write_text(json.dumps(doc))
+        with pytest.raises(ValueError):
+            load_route_policy(path)
+    path.write_text(json.dumps({"lifted_models": ["a/m", "b/n"]}))
+    assert load_route_policy(path).lifted_models == ("a/m", "b/n")
+
+
+def test_model_lift_keeps_paused_and_no_verdict_checks():
+    paid = {leg.id: leg for leg in DEFAULT_LEGS}["deepseek"]
+    paused = RoutePolicy(banned_families=("deepseek",),
+                         lifted_models=("omniroute/deepseek-direct-flash",),
+                         paused_harnesses={"opencode": ("implement",)})
+    assert paused.skip_reason(paid, "review") == "paused_harness"
+    no_verdict = Leg("no-verdict", "subscription", "opencode",
+                     "opencode-go/qwen3.8-flash", "qwen", ("128k",), 100000, False,
+                     roles=("review",))
+    assert RoutePolicy(lifted_models=("opencode-go/qwen3.8-flash",)).skip_reason(
+        no_verdict, "review") == "no_verdict_seat"
 
 
 # --- 4. seats per writer part --------------------------------------------------

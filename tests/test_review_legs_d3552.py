@@ -96,7 +96,10 @@ def test_implement_route_still_skips_banned_and_off():
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
     assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
-    assert not {leg.family for leg in plan.legs} & {"deepseek", "glm", "kimi"}
+    assert not {leg.family for leg in plan.legs} & {"glm", "kimi"}
+    # D-3700: only the lifted paid deepseek model routes; every other
+    # deepseek leg stays banned for implement.
+    assert {leg.id for leg in plan.legs if leg.family == "deepseek"} == {"deepseek"}
     assert not {leg.id for leg in plan.legs} & set(NEW_IDS)
 
 

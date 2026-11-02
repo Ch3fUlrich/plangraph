@@ -105,7 +105,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
         "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
         "opencode-go-qwen3.8-max", "opencode-go-muse-spark",
-        "opencode-go-deepseek-v4-flash"]
+        "opencode-go-deepseek-v4-flash", "deepseek"]
 
 
 def test_unmapped_leg_no_p(tmp_path, capsys):
