@@ -1,10 +1,34 @@
 """Shared dispatch outcome policy for base and routed launches."""
-import os
-from .env_redact import CREDIT_AUTH_MARKER, first_reason, harness_limit_line, unavailable_reason
+from plangraph.routing_support.leg_state import _down_seconds
+from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
 TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
+
+
+def notify_leg_refused(service, record, chosen, reason):
+    """D-3605 (a): tell the parent at once that a leg refused; delivery never fails the run.
+
+    Lives here so the base and routed leg loops share exactly one LEG_REFUSED
+    line per refused attempt (G3); a service without a completion sink stays
+    silent.
+    """
+    import logging
+    import os
+    from . import notify
+    from .leg_probe import key as leg_key
+    sink = getattr(service, 'completion_sink', None)
+    if sink is None:
+        return
+    try:
+        event = notify.leg_refused_event(record, leg_key(chosen), reason)
+        sink.deliver('parent', event)
+        command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
+        if command:
+            notify.CommandSink(command).deliver('parent', event)
+    except Exception:
+        logging.getLogger(__name__).exception('leg refusal notify failed')
 
 
 def fallthrough_reason(service, chosen, job, record):
@@ -19,14 +43,22 @@ def fallthrough_reason(service, chosen, job, record):
             target = leg_state
         # Q16/M8: one leg key shared with the probe path -- 'agy/<model>' only
         # for an agy leg's bare model.
-        # D-3605 (a): credits/auth refusals carry no reset time; keep the leg down (unavailable_until).
-        extra = {'down_s': float(os.environ.get('PLANGRAPH_LEG_DOWN_S') or 1800)} if CREDIT_AUTH_MARKER.search(line) else {}
-        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness', **extra)
+        # D-3605 (a): every harness-limit line without a provider reset time
+        # is booked down for the validated PLANGRAPH_LEG_DOWN_S window (1800
+        # on invalid/negative/non-finite); 'Resets in ...' lines keep their
+        # own reset because record_harness_limit applies down_s only when the
+        # line carries no reset time.
+        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness', down_s=_down_seconds(None))
         # M9/M15: a guard or cancel verdict is never stomped by a fallthrough.
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
-        return 'harness_limit: ' + line
-    return unavailable_reason(job.exit_code, job.stdout, job.stderr)
+        reason = 'harness_limit: ' + line
+        notify_leg_refused(service, record, chosen, reason)
+        return reason
+    reason = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+    if reason is not None:
+        notify_leg_refused(service, record, chosen, reason)
+    return reason
 
 
 def release_attempts(service, record):

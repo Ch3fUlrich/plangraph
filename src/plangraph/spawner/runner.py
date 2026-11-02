@@ -47,7 +47,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
+from .exit_outcome import fallthrough_reason, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import kill_process_tree
 
@@ -969,19 +969,6 @@ def spawn_service(*args, **kwargs):
                             except Exception:
                                 logging.getLogger(__name__).exception('completion hook failed')
 
-        def _notify_leg_refused(self, record, leg, reason):
-            """D-3605 (a): tell the parent at once that a leg refused; delivery never fails the run."""
-            from .notify import CommandSink, leg_refused_event
-            from .leg_probe import key as leg_key
-            event = leg_refused_event(record, leg_key(leg), reason)
-            try:
-                self.completion_sink.deliver('parent', event)
-                command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
-                if command:
-                    CommandSink(command).deliver('parent', event)
-            except Exception:
-                logging.getLogger(__name__).exception('leg refusal notify failed')
-
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
@@ -1143,8 +1130,8 @@ def spawn_service(*args, **kwargs):
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
-                        if (unavailable or stop) and job.status != 'cancelled':
-                            self._notify_leg_refused(record, chosen, reason or 'refused')
+                        if stop and not unavailable and job.status != 'cancelled':
+                            notify_leg_refused(self, record, chosen, reason or 'provider_stop')
                         if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
