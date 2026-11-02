@@ -1,6 +1,7 @@
-//! Windows supervisor tests. Every test here is `#[serial]` (serial_test):
-//! they share one process-wide handle table with their siblings, so no test
-//! may hold a job handle while another samples handle counts.
+//! Windows supervisor tests. Every test here is `#[serial]` (serial_test).
+//! The handle-leak check samples the process-wide handle count in a child
+//! that runs only the helper, because the other tests of this binary run in
+//! parallel and move that count both ways.
 
 use super::*;
 use std::path::Path;
@@ -55,12 +56,29 @@ fn windows_supervise_helper() {
         "sleep" => {}
         "exit" => std::process::exit(7),
         "leaf" => write_pid(&dir, "leaf.pid"),
+        "leak" => {
+            let missing = || Command::new(Path::new(&dir).join("no-such-program.exe"));
+            // The first failed spawn may pay one-time process setup.
+            assert!(supervise(missing(), &quick()).is_err());
+            let before = handle_count();
+            for _ in 0..3 {
+                assert!(supervise(missing(), &quick()).is_err());
+            }
+            let now = handle_count();
+            std::fs::write(
+                Path::new(&dir).join("handles"),
+                format!("{before} -> {now}"),
+            )
+            .unwrap();
+            std::process::exit(if now == before { 0 } else { 3 });
+        }
         "parent" => {
             // The grandchild is killed with the job; waiting on it would
             // block until exactly that.
             #[allow(clippy::zombie_processes)]
             let _grandchild = helper("leaf", Path::new(&dir)).spawn().unwrap();
-            let deadline = Instant::now() + Duration::from_secs(3);
+            // A loaded host can take seconds to start a third test binary.
+            let deadline = Instant::now() + Duration::from_secs(20);
             while !Path::new(&dir).join("leaf.pid").exists() {
                 assert!(Instant::now() < deadline, "grandchild never started");
                 println!("waiting"); // keeps the stall window open
@@ -188,21 +206,14 @@ fn normal_exit_reports_the_exit_code() {
 #[test]
 #[serial]
 fn failed_spawn_errors_without_leaking_a_job_handle() {
+    // One warm-up and three sampled failed spawns, in a child process that
+    // runs only the helper (see the module doc).
     let d = tempfile::tempdir().unwrap();
-    let missing = || Command::new(d.path().join("no-such-program.exe"));
-    // The first failed spawn may pay one-time process-wide setup (a Windows
-    // host showed +40 handles on it), so warm up, then sample. Every test in
-    // this module is #[serial], so no sibling holds a job handle across the
-    // sample, and a leak shows as growth over the repeated failures.
-    assert!(supervise(missing(), &quick()).is_err());
-    let before = handle_count();
-    for _ in 0..3 {
-        assert!(supervise(missing(), &quick()).is_err());
-    }
-    let now = handle_count();
-    assert_eq!(
-        now, before,
-        "handles leaked over 3 failed spawns: {before} -> {now}"
+    let status = helper("leak", d.path()).status().unwrap();
+    let counts = std::fs::read_to_string(d.path().join("handles")).unwrap_or_default();
+    assert!(
+        status.success(),
+        "handles leaked over 3 failed spawns: {counts} ({status})"
     );
 }
 
