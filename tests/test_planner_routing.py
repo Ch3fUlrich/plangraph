@@ -374,10 +374,9 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
-    # tier first, then WRITER_ORDER (D-2683, D-3667); pinned list, not derived from legs.py
-    expected_writers = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-                        "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash",
-                        "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]
+    expected_writers = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",  # pinned: tier first,
+                        "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash",  # then WRITER_ORDER
+                        "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]  # (D-2683, D-3667)
     assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
 
 
