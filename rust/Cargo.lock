@@ -241,6 +241,7 @@ dependencies = [
  "serial_test",
  "tempfile",
  "thiserror",
+ "windows-sys",
 ]
 
 [[package]]
