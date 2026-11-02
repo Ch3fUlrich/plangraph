@@ -330,6 +330,9 @@ def test_real_run(tmp_path, monkeypatch, kind, rule):
         runner.on_sample = lambda jid: snapshots.append((job.stdout, job.last_activity_ts))
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', scripts[kind], cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        from plangraph.spawner.proc_kill import root_identity
+        # r3 (V4): the real root is ours; register it so reap proves ownership instead of kill_incomplete
+        runner._owned = {'j': dict(pid=proc.pid, pid_start=root_identity(proc.pid), job_object=False)}
         output, _ = await collect(runner, 'j', proc)
         event = next(e for e in job.events if e['event'].startswith('watchdog_'))
         assert event['rule'] == rule

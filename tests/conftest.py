@@ -175,3 +175,11 @@ def pytest_collection_modifyitems(config, items):
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
+
+
+@pytest.fixture
+def fake_ownership(monkeypatch):
+    """Fake ownership provider (r3, V3): every root pid is "ours" with a fixed token, so a test
+    with a stub pid never depends on which pids are live on the host. Opt-in per file."""
+    from plangraph.spawner.runner import SpawnerRunner
+    monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: 'fake-token'))

@@ -17,6 +17,11 @@ from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
+def _stub_pids_owned(fake_ownership):
+    """r3 V3: stub pids are owned via the fake provider, never via live host pids."""
+
+
+@pytest.fixture(autouse=True)
 def _gateway_url(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
 
@@ -325,6 +330,9 @@ def test_breaker_503_fails_run_without_same_leg_retry(tmp_path):
 
 
 def test_windows_killer():
+    # r3 (V3): fail-closed contract - a raw pid is never taskkilled (no proof of ownership);
+    # only proven members are, so the pre-r2b call without members now raises KillIncomplete.
+    from plangraph.spawner.proc_kill import KillIncomplete
     async def run():
         calls = []
         class Process:
@@ -333,7 +341,10 @@ def test_windows_killer():
         async def factory(*args, **kwargs):
             calls.append(args)
             return Process()
-        await kill_process_tree(123, platform='nt', command_factory=factory)
+        with pytest.raises(KillIncomplete):
+            await kill_process_tree(123, platform='nt', command_factory=factory)
+        assert calls == []
+        await kill_process_tree(123, platform='nt', command_factory=factory, members={123: None})
         assert calls == [('taskkill', '/PID', '123', '/T', '/F')]
     asyncio.run(run())
 
