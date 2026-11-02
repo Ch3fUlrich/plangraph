@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **AUTOOS-HOOKS-INTERIM S05 (D-3516/D-3522):** `tools/hooks/fleet_report.py` and `install_hooks.sh`, ported from the AutoOS tree (#292); installer derives its source root portably and builds the SHA256SUMS manifest from the files it copied; Stop-hook status dir creation is race-safe.
 - **AUTOOS-HOOKS-INTERIM S04 (D-3516/D-3522):** `tools/hooks/fleet_inject.py` and `ctx_guard_session.py`, ported from the AutoOS tree (#292); truncated-inbox cursor reset, single-pass parse, real at-most-once cursor contract documented.
 - **AUTOOS-HOOKS-INTERIM S03 (D-3516/D-3522):** `tools/hooks/context_guard.py` and `session_title.py` (plus shared `hook_common.py`), ported from the AutoOS tree (#292); Windows-safe locking, thresholds clamped, one-shot title marker written after print.
 - **AUTOOS-HOOKS-INTERIM S01 (D-3516/D-3522):** `tools/hooks/bash_guard.py` and `bash_guard_rules.py`, the Bash deny hook ported from the AutoOS tree (#292); inert (fails open) until S02 `bash_guard_rules2.py` (#298) merges.
