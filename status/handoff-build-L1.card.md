@@ -13,7 +13,7 @@
 - 11-02T14:00Z D-3666 - luna seat #318 run-814e5820 REQUEST_CHANGES sent to build-L2-spawner3605-0092
 ## In flight
 - SPAWNER-DISPATCH-FAIL-DETECT #324 main-merge 30ce6163 (unpushed) suite log /home/s/.claude/jobs/582c2aba/tmp/r3-merge-suite.log since 14:16Z next check 14:50Z
-- D-3667 #334 mimo-pro seat s334d (/home/s/.claude/jobs/582c2aba/tmp/r-s334d.wait) since 14:12Z next check 14:40Z
+- D-3667 #334 mimo-pro seat run done: REQUEST_CHANGES with 1 LOW + 2 NIT only (/home/s/.claude/jobs/582c2aba/tmp/seat-334d.out); fix in-round (hand-edit <=30, pin hardcoded order at test_planner_routing.py:377, rename _first_eight, legs.py:143 comment), then delta seat; next check 14:40Z
 - #318 fix round build-L2-spawner3605-0092 since 14:00Z next check 15:00Z
 - #309 #314 #279 build-L2-keeperfix-0102 since 12:30Z next check 15:00Z
 ## Planned
