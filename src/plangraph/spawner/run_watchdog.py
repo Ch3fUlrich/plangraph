@@ -10,6 +10,7 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
+from .run_refusal import REFUSAL_MAX_LINES, REFUSAL_WINDOW_S  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
 HEADER = re.compile(r'^>\s+\S+\s+·\s+\S+')
@@ -18,7 +19,6 @@ LIVE_LOG_FLUSH = 16384        # batched appends: one write+fsync per 16 KB, not 
 LIVE_LOG_MAX = 2 * 1024 * 1024
 LIVE_LOG_ERRORS = 3           # record at most this many live.log failures per run
 READER_GRACE_S = 5.0          # bounded drain once the run is gone (M6)
-REFUSAL_WINDOW_S = 60.0       # a refused dispatch speaks at once; later output is task text (D-3605 a)
 EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreadable (Q7)
 
 
@@ -235,7 +235,7 @@ async def collect(runner, job_id, proc):
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
     captured = {'stdout': [], 'stderr': []}
     refused = asyncio.Event()
-    seen = {'n': 0}   # activity lines seen run-wide (stdout + stderr): only the first 3 may speak a refusal
+    seen = {'n': 0}   # activity lines seen run-wide (stdout + stderr): the first REFUSAL_MAX_LINES may speak a refusal
     def scrub(text):
         return redact(redact_env_values(text, env))
     async def reader(stream, name):
@@ -258,12 +258,12 @@ async def collect(runner, job_id, proc):
                     continue
                 if is_activity(line):
                     active = True
-                    if seen['n'] < 3:      # F1: only the run's first activity lines may trigger a refusal
+                    if seen['n'] < REFUSAL_MAX_LINES:   # F1: banner/spinner frames may precede the refusal
                         candidates.append(line)
-                    seen['n'] += 1
+                    seen['n'] += 1 if line.endswith('\n') else 0   # '\r'-alone = spinner frame: candidate, never counted
             # F3: check the unterminated tail too; a refusal line printed
             # without a trailing newline while the child hangs must be seen.
-            if pending and seen['n'] < 3:
+            if pending and seen['n'] < REFUSAL_MAX_LINES:
                 candidates.append(pending)   # tail is a candidate only, never counted
             if candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S:
                 from .env_redact import early_refusal

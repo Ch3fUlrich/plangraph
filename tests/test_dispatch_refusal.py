@@ -98,7 +98,7 @@ LATE_ERRORS = {
 }
 
 LATE = ("import sys,time\n"
-        "print('step 1', flush=True)\nprint('step 2', flush=True)\nprint('step 3', flush=True)\n"
+        "for _i in range(45): print('step', _i, flush=True)\n"   # late = past REFUSAL_MAX_LINES (F1)
         "time.sleep(.1)\n"
         "sys.%s.write(%r + '\\n'); sys.%s.flush()\n"
         "time.sleep(.5)\nprint('done', flush=True)\n")
