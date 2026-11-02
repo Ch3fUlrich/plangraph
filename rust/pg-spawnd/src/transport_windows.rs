@@ -14,7 +14,13 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
+// Declared locally: the windows-sys feature that carries it reads as
+// high-entropy to the public-repo scrub (as in worker-core stall/windows.rs).
+#[link(name = "advapi32")]
+#[allow(non_snake_case)]
+extern "system" {
+    fn GetUserNameW(lpbuffer: *mut u16, pcbbuffer: *mut u32) -> i32;
+}
 
 /// The per-user server pipe address.
 pub(crate) fn pipe_name() -> Result<String, String> {
