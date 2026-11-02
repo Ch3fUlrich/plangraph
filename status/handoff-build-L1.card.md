@@ -18,6 +18,7 @@
 - #314 #279 build-L2-keeperfix-0102 (spawner3605 L2 closed 15:2xZ, told to stop)
 ## Open
 - J=/home/s/.claude/jobs/7d533977/tmp
+- GO-REQ sent 15:2xZ: spawner-main ff 6aabc772 -> eec57783 (#318 merged); on GO ff at 0 live runs, reconnect MCP, probe; rollback 6aabc772
 - workst-L1-autoos-0088 recycled 14:5xZ; successor owes #309 seat (ask it for pd#20 tools seat too)
 - D-3633(1) LEG-STATE mgmt key: operator places omniroute-mgmt.key | default slice 1 + fakes | deadline none
 ## Traps
