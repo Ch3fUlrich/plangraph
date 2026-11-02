@@ -168,7 +168,7 @@ def warnings(prompt: str, card, cwd) -> list[str]:
     kept, _ = slices(card, cwd)
     refused = _pack(card, cwd)[1]
     covered = {_locate(root, raw) for raw, *_ in kept}
-    names = dict.fromkeys(t for t in (_RANGE.sub('', x.removeprefix('./')).rstrip('.:') for x in _TOKEN.findall(prompt)) if '/' in t or '.' in t)
+    names = dict.fromkeys(t for t in (_RANGE.sub('', x.removeprefix('./').rstrip('.:')).rstrip('.:') for x in _TOKEN.findall(prompt)) if '/' in t or '.' in t)
     files = tracked(root) if names else frozenset()
     big = []
     for name in names:

@@ -156,5 +156,6 @@ def test_line_count_streams_and_matches_splitlines(tmp_path, monkeypatch, data):
 
 
 def test_range_mention_without_slice_still_warns(tree):
-    found = context_pack.warnings("edit big.py:1-50 and big.py:7", dict(CARD), tree)
-    assert [w for w in found if w.startswith("big_file_unsliced: big.py ")]
+    for brief in ("edit big.py:1-50 now", "see big.py:7.", "see big.py:1-50:"):
+        found = context_pack.warnings(brief, dict(CARD), tree)
+        assert [w for w in found if w.startswith("big_file_unsliced: big.py ")], brief
