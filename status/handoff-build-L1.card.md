@@ -1,4 +1,4 @@
-# L1 card · build-L1-0074 · 2026-11-02T00:15Z
+# L1 card · build-L1-0074 · 2026-11-02T01:05Z
 ## Goal
 - D-3552/D-3576: land #314 + #309 fix rounds, ff spawner-main (D-3577), re-seat held PRs, then review-legs slice 2 (D-3558)
 ## Keeper
@@ -13,12 +13,12 @@
 - 11-01T23:05Z SEAT-VERDICT-REQUEST-CHANGES - evidence dddb84ec verified (merge sha lacks trailer), submitted in_review ep2
 - 11-01T22:50Z D-3577 - REVIEW-LEGS-SEAT-LOWS item JSON + gate edge sent (create refused unreachable_goal)
 ## In flight
-- #314 r3 respawn mimo-pro queued bg 00:30Z (D-3589), log J=/home/s/.claude/jobs/0109de81/tmp/svfr5.log
-- #309 GO-REQ sent 00:14Z head f8d803aa (qwen-flash delta ACCEPT run-af18aacf, CI 41364991379 green); on GO merge + evidence lane head + submit
+- #314 r3 slice A (seat_record.py only, brief J/brief-svfr4a.md) mimo-pro writer since 00:58Z; slice B (seat_verdict.py wiring) after; 3 stalls on full brief
+- #309 head beba8a11 (my test Hand-Edit, CI 41367482260 green): D-3593 needs tool-running seat; BLOCKED sent (qodercli pytest refused, free legs limit); workst queued qwen3.8-max tool seat at Go reset
 - L2-LAUNCH build-L2-heldfix (brief ~/.local/share/plangraph/briefs/L2-heldpr-fixes.md: #278 #297 #299-#301 #310 pd#15-17) sent 23:20Z
 - #298 6153ca17 gemini seat RC 1 HIGH slice-scope artefact: re-seat w/ S02 criteria after Go quota reset (BLOCKED sent)
 - pgd#9 re-seat range 11dc4884..b448d462 after Go quota reset
-- build-L2-heldfix-0076 running 4 writers hf-278/297/299/300 (run cap full)
+- build-L2-heldfix-0076: 8/9 fixed+pushed, delta seats queued workst (Go limit); pd#15 writer; #292 draft source: close when slices merge
 - RIN-LEDGER-VIEWS ep1 + RIN-PATH-REPOINT ep1 claimed 23:19Z (D-3581), lease 01:18Z
 - ROUTER-LAUNCH-OOM-SCOPE pd#12 b2d00399 operator step OS-PD12-MERGE since 13:52Z next check 23:30Z
 ## Planned
