@@ -383,3 +383,31 @@ def test_sync_md_import_questions_are_question_kind_and_land_in_answers(world, s
     snap = {i["key"]: i for i in world.store.snapshot(reader)["items"]}
     assert snap["routing:Q-ALPHA"]["answer"]["decision_id"] == alpha["decision_id"]
     assert snap["routing:Q-GHOST"]["answer"] is None
+
+
+def test_snapshot_read_uses_the_snapshot_timeout(world, srv, token, site, monkeypatch):
+    """MD-SYNC-SNAPSHOT-TIMEOUT: the large keeper snapshot GET gets its own budget."""
+    seen = []
+    orig_get = md_sync.apply_batch.Session.get
+    def spy(self, verb, **kw):
+        seen.append((verb, kw.get("timeout")))
+        return orig_get(self, verb, **kw)
+    monkeypatch.setattr(md_sync.apply_batch.Session, "get", spy)
+    sync(site, srv, token, "--dry-run")
+    reads = [t for verb, t in seen if verb == "snapshot"]
+    assert reads and set(reads) == {md_sync.apply_batch.SNAPSHOT_TIMEOUT}
+    assert md_sync.apply_batch.SNAPSHOT_TIMEOUT == 60
+
+
+def test_unreachable_snapshot_read_keeps_unreachable_in_the_status_error(world, srv, token,
+                                                                        site, tmp_path,
+                                                                        monkeypatch):
+    status = tmp_path / "status.json"
+    def down(self, verb, **kw):
+        raise md_sync.apply_batch.ApiError("unreachable", "TimeoutError")
+    monkeypatch.setattr(md_sync.apply_batch.Session, "get", down)   # no socket, no port race
+    rc, out, err = sync(site, srv, token, "--status-file", str(status))
+    assert rc == 2
+    assert "cannot read the live graph: unreachable" in err
+    doc = json.loads(status.read_text(encoding="utf-8"))
+    assert doc["error"].startswith("error: cannot read the live graph: unreachable")

@@ -16,6 +16,8 @@ import apply_batch_atomic as atomic
 
 # No built-in keeper URL (D-A): --url or PG_URL required; main() reads the env at call time.
 TIMEOUT = 15
+# MD-SYNC-SNAPSHOT-TIMEOUT: the keeper "snapshot" GET is large; give it its own budget.
+SNAPSHOT_TIMEOUT = 60
 OP_SPECS = {
     "create": (["item"], {}),
     "edit": (["key", "fields"], {"fields": dict}),
@@ -222,7 +224,7 @@ class Session:
             urllib.request.ProxyHandler({}),
             NoRedirectHandler()
         )
-    def _call(self, verb, body=None):
+    def _call(self, verb, body=None, timeout=TIMEOUT):
         try:
             data = json.dumps(body, allow_nan=False).encode("utf-8") if body is not None else None
         except (TypeError, ValueError) as exc:
@@ -234,7 +236,7 @@ class Session:
         if body is not None:
             request.add_header("Content-Type", "application/json")
         try:
-            with self._opener.open(request, timeout=TIMEOUT) as resp:
+            with self._opener.open(request, timeout=timeout) as resp:
                 return resp.read()
         except urllib.error.HTTPError as exc:
             code, msg = _parse_error(exc.read(), exc.code)
@@ -243,9 +245,9 @@ class Session:
             raise ApiError("unreachable", exc.__class__.__name__) from None
     def post(self, verb, body):
         return self._call(verb, body)
-    def get(self, verb):
+    def get(self, verb, timeout=TIMEOUT):
         try:
-            raw = self._call(verb)
+            raw = self._call(verb, timeout=timeout)
             data = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             raise ApiError("unreachable", f"bad whoami reply: {exc.__class__.__name__}") from None
