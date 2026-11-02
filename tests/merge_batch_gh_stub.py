@@ -7,6 +7,7 @@ and leaves UNEXPECTED, which the test fixture turns into a failure.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -67,18 +68,31 @@ elif cmd == ["pr", "list"]:
                       and (label is None or label in [x["name"] for x in p["labels"]])]))
 elif cmd == ["pr", "view"]:
     print(json.dumps(show(pr_arg())))
-elif cmd == ["pr", "edit"]:
-    pr = pr_arg()
-    if "--add-label" in ARGV:
-        if opt("--add-label") not in S["labels"]:
-            die(f"'{opt('--add-label')}' not found")
-        pr["labels"].append({"name": opt("--add-label")})
-    if "--title" in ARGV:
-        pr["title"] = opt("--title")
-    if "--body-file" in ARGV:
-        pr["body"] = open(opt("--body-file")).read()
+elif cmd == ["pr", "edit"]:  # gh 2.45 fails here for every repo: the tool must use the REST API
+    die("GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience "
+        "(repository.pullRequest.projectCards)")
+elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update title and body
+    method = opt("--method") or "GET"
+    endpoint = ARGV[ARGV.index("--method") + 2] if "--method" in ARGV else ""
+    fields = [ARGV[i + 1] for i, arg in enumerate(ARGV) if arg in ("-f", "-F")]
+    target = re.fullmatch(r"repos/[^/]+/[^/]+/(issues|pulls)/(\d+)(/labels)?", endpoint)
+    pr = S["prs"].get(target.group(2)) if target else None
+    if pr is None or not ((method, bool(target.group(3))) in (("POST", True), ("PATCH", False))):
+        die(f"gh stub: api call not served: {ARGV}", 97)
+    if method == "POST":
+        label = fields[0].split("=", 1)[1]
+        if S.get("label_fail") or label not in S["labels"]:
+            die("HTTP 422: Validation Failed (label does not exist)")
+        pr["labels"].append({"name": label})
+    else:
+        for field in fields:
+            key, value = field.split("=", 1)
+            pr[key] = open(value[1:]).read() if value.startswith("@") else value
     save()
+    print("{}")
 elif cmd == ["label", "create"]:
+    if S.get("label_fail"):
+        die("HTTP 403: Resource not accessible")
     S["labels"].append(ARGV[2])
     save()
 elif cmd == ["pr", "create"]:
@@ -90,6 +104,8 @@ elif cmd == ["pr", "create"]:
         "isDraft": False, "isCrossRepository": False, "labels": [], "files": [], "additions": 0,
         "deletions": 0, "statusCheckRollup": [], "mergeCommit": None}
     save()
+    if S.get("create_noise"):  # real gh warns about uncommitted changes around the url
+        print("Warning: 1 uncommitted change")
     print(f"https://example.invalid/{S['repo']}/pull/{number}")
 elif cmd == ["pr", "checks"]:
     if "--json" in ARGV:  # gh 2.45 has no JSON output for pr checks

@@ -213,13 +213,26 @@ def test_skip_conflicts_labels_and_continues(env):
     assert (st["skipped"][0]["pr"], st["skipped"][0]["files"]) == (2, ["shared.txt"])
     assert env.git("status", "--porcelain", cwd=wt) == ""
     assert not Path(env.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=wt)).exists()
-    assert len(env.calls("pr", "edit", "2")) == 2 and env.calls("label", "create")[0][2] == "needs-update"
+    label = ["api", "--method", "POST", "repos/owner/proj/issues/2/labels", "-f", "labels[]=needs-update"]
+    assert env.calls("api") == [label, label]  # the first try finds no such label, the retry follows its creation
+    assert env.calls("label", "create")[0][2] == "needs-update" and not env.calls("pr", "edit")
     assert {"name": "needs-update"} in env.load()["prs"]["2"]["labels"]
+
+
+def test_skip_conflicts_survives_a_label_it_cannot_add(env):
+    conflicting(env)
+    env.state["label_fail"] = True
+    env.save()
+    res = env.run("build", "--name", "s2", "--prs", "1,2,3", "--skip-conflicts")
+    assert res.returncode == 0 and "could not add the needs-update label to PR #2" in res.stderr
+    assert json.loads(env.state_file("s2").read_text())["skipped"][0]["labeled"] is False
 
 
 def test_push_opens_batch_pr_and_updates_it(env):
     conflicting(env)
     assert env.run("build", "--name", "p1", "--prs", "1,2,3", "--skip-conflicts").returncode == 0
+    env.load()["create_noise"] = True
+    env.save()
     res = env.run("push", "--name", "p1")
     assert res.returncode == 0 and res.stdout == "100\n"
     st = json.loads(env.state_file("p1").read_text())
@@ -230,7 +243,9 @@ def test_push_opens_batch_pr_and_updates_it(env):
     assert "| #1 | plangraph:ITEM-A |" in pr["body"] and "| edit one |" in pr["body"]
     assert "Skipped" in pr["body"] and "#2" in pr["body"] and "`shared.txt`" in pr["body"]
     again = env.run("push", "--name", "p1")
-    assert again.stdout == "100\n" and len(env.calls("pr", "create")) == 1 and len(env.calls("pr", "edit", "100")) == 1
+    patch = env.calls("api", "--method", "PATCH")
+    assert again.stdout == "100\n" and len(env.calls("pr", "create")) == 1 and len(patch) == 1
+    assert patch[0][3] == "repos/owner/proj/pulls/100" and env.load()["prs"]["100"]["body"] == pr["body"]
 
 
 # ------------------------------------------------------------------------------------- land

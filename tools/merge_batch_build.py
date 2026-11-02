@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import sys
 from pathlib import Path
 
 from merge_batch_plan import stack_parents, stack_sorted
@@ -76,6 +77,8 @@ def run_pending(st, skip_conflicts):
                     return EXIT_CONFLICT
                 git("merge", "--abort", cwd=wt)
                 labeled = add_label(st["repo"], num, NEEDS_UPDATE)
+                if not labeled:
+                    print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
                 st["skipped"].append({"pr": num, "head": pr["head"], "reason": "conflict", "files": files,
                                       "labeled": labeled})
         st["pending"].pop(0)
@@ -110,8 +113,8 @@ def cmd_build(args):
     for num in order:
         got = git("rev-parse", f"refs/merge-batch/{name}/{num}").stdout.strip()
         if got != infos[num]["head"]:
-            raise MergeBatchError(f"PR #{num} moved while fetching ({short(got)} != {short(infos[num]['head'])}): "
-                                  "run build again")
+            raise MergeBatchError(f"PR #{num} is {short(got)} in {REMOTE} but {short(infos[num]['head'])} on GitHub: "
+                                  f"run build again (is {REMOTE} the remote of {repo}?)")
     branch = f"batch/{name}"
     if git("rev-parse", "--verify", "-q", f"refs/heads/{branch}", ok=(0, 1)).returncode == 0:
         raise MergeBatchError(f"branch {branch} already exists: pick another name or delete the branch")

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from merge_batch_util import (REMOTE, MergeBatchError, all_states, drop_state, first_line, gh, gh_json, git,
-                              load_state, save_state, short)
+                              load_state, save_state, short, update_pr)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -57,7 +57,7 @@ def cmd_push(args):
         if st.get("pr"):
             if gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state")["state"] != "OPEN":
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")
-            gh("pr", "edit", str(st["pr"]), "--repo", st["repo"], "--title", title, "--body-file", str(body))
+            update_pr(st["repo"], st["pr"], title, body)
         else:
             out = gh("pr", "create", "--repo", st["repo"], "--base", st["base"], "--head", st["branch"],
                      "--title", title, "--body-file", str(body)).stdout
