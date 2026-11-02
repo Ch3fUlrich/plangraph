@@ -21,6 +21,7 @@ pub mod redact;
 pub mod sandbox_env;
 pub mod scope;
 pub mod stall;
+pub mod workspace;
 pub mod worktree;
 pub mod wsl;
 
