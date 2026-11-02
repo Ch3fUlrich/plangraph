@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 from merge_batch_plan import stack_parents, stack_sorted
-from merge_batch_util import (EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, check_name, drop_state,
-                              fetch_pr, git, items_in, load_state, parse_prs, repo_info, save_state, short,
-                              state_dir, state_path)
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, add_label,
+                              check_name, drop_state, fetch_pr, git, items_in, load_state, parse_prs, repo_info,
+                              save_state, short, state_dir, state_path)
 
 
 def default_worktree(name):
@@ -99,8 +99,10 @@ def cmd_build(args):
     repo = args.repo or repo_info()[0]
     infos = {num: fetch_pr(repo, num) for num in parse_prs(args.prs)}
     for pr in infos.values():
-        if pr["state"] != "OPEN" or pr["draft"]:
-            raise MergeBatchError(f"PR #{pr['number']} is {'a draft' if pr['draft'] else pr['state'].lower()}")
+        if pr["state"] != "OPEN":
+            raise MergeBatchError(f"PR #{pr['number']} is {pr['state'].lower()}")
+        if pr["draft"] and BATCH_READY not in pr["labels"]:
+            raise MergeBatchError(f"PR #{pr['number']} is a draft without the {BATCH_READY} label")
     parent = stack_parents(list(infos.values()))
     order = stack_sorted(list(infos), parent)
     roots = {num: infos[num]["base"] for num in order if num not in parent}

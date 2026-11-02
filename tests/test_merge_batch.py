@@ -115,13 +115,15 @@ def test_plan_high_batches_obey_the_caps():
 
 
 def test_plan_excludes():
-    prs = [P(1, draft=True), P(2, ci="red"), P(3, labels=("batch-ready", "needs-update")), P(4, base="release"),
-           P(5, base="lane/p1"), P(6, ci="pending"), P(7, ci="none"), P(8, state="CLOSED")]
+    prs = [P(1, draft=True, labels=()), P(2, ci="red"), P(3, labels=("batch-ready", "needs-update")),
+           P(4, base="release"), P(5, base="lane/p1"), P(6, ci="pending"), P(7, ci="none"), P(8, state="CLOSED"),
+           P(9, draft=True), P(10, draft=True, ci="red"), P(11, draft=True, labels=("batch-ready", "needs-update"))]
     plan = plan_batches(prs, "main")
     why = {r["number"]: r["reason"] for r in plan["prs"] if r["reason"]}
     assert why == {1: "draft", 2: "ci red", 3: "label needs-update", 4: "targets 'release', not 'main'",
-                   5: "stacked on #1 (draft)", 8: "not open (closed)"}
-    assert [b["prs"] for b in plan["batches"]] == [[6, 7]]
+                   5: "stacked on #1 (draft)", 8: "not open (closed)", 10: "ci red", 11: "label needs-update"}
+    # PR 9 is a draft, but it carries batch-ready: the label overrides draft status
+    assert [b["prs"] for b in plan["batches"]] == [[6, 7, 9]]
 
 
 def test_a_hung_command_is_an_error_not_a_hang():
@@ -142,11 +144,16 @@ def test_plan_cli_label_json_and_table(env):
     env.add_pr(3, "lane/p3", labels=(), files=["c.py"])
     env.add_pr(4, "lane/p4", ci="red", files=["d.py"])
     env.add_pr(5, "lane/p5", files=[".github/workflows/tests.yml"], lines=20)
+    env.add_pr(6, "lane/p6", draft=True, labels=(), files=["f.py"])  # a draft without the label
+    env.add_pr(7, "lane/p7", draft=True, files=["g.py"])  # a draft that carries batch-ready
     res = env.run("plan", "--json")
     plan = json.loads(res.stdout)
     assert res.returncode == 0 and plan["repo"] == "owner/proj" and plan["label"] == "batch-ready"
-    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [("STANDARD", [1]), ("HIGH", [2, 5])]
+    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [("STANDARD", [1, 7]), ("HIGH", [2, 5])]
     assert {r["number"]: r["reason"] for r in plan["prs"] if r["reason"]} == {4: "ci red"}
+    assert [r["draft"] for r in plan["prs"] if r["number"] == 7] == [True]
+    only = json.loads(env.run("plan", "--prs", "6", "--json").stdout)
+    assert only["batches"] == [] and only["prs"][0]["reason"] == "draft"
     table = env.run("plan", "--prs", "1,2,3", "--repo", "owner/proj").stdout
     assert "#3" in table and "batch 1 STANDARD: --prs 1,3" in table and "batch 2 HIGH: --prs 2" in table
     assert "HIGH via src/plangraph/keeper/x.py" in table
@@ -176,15 +183,22 @@ def test_build_clean(env):
 def test_build_stack_order_and_refusals(env):
     env.branch_pr(4, {"a.txt": "a\n"}, ref="lane/s4")
     env.branch_pr(5, {"b.txt": "b\n"}, base="lane/s4", ref="lane/s5")
-    env.branch_pr(6, {"c.txt": "c\n"}, draft=True)
+    env.branch_pr(6, {"c.txt": "c\n"}, draft=True, labels=())
     env.add_pr(7, "lane/p7", base="release")
-    assert "draft" in env.run("build", "--name", "r0", "--prs", "4,6").stderr
+    assert "draft without the batch-ready label" in env.run("build", "--name", "r0", "--prs", "4,6").stderr
     assert "one base branch" in env.run("build", "--name", "r0", "--prs", "4,7").stderr
     assert "bad batch name" in env.run("build", "--name", "../x", "--prs", "4").stderr
     assert env.run("build", "--name", "r1", "--prs", "5,4").returncode == 0  # base PR first, whatever the order
     assert first_parent(env, "batch/r1")[:2] == ["Merge PR #5: change 5", "Merge PR #4: change 4"]
     again = env.run("build", "--name", "r1", "--prs", "4")
     assert again.returncode == 1 and "already in progress" in again.stderr
+
+
+def test_build_accepts_a_batch_ready_draft(env):
+    env.branch_pr(1, {"a.txt": "a\n"}, draft=True)  # a draft, labelled batch-ready by default
+    res = env.run("build", "--name", "d1", "--prs", "1")
+    assert res.returncode == 0, res.stderr
+    assert (env.tmp / "repo-worktrees" / "batch-d1" / "a.txt").read_text() == "a\n"
 
 
 def test_conflict_stop_continue_and_push(env):

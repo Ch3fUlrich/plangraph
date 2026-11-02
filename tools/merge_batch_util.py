@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 REMOTE = "origin"
+BATCH_READY = "batch-ready"  # the label that marks a PR ready to join a batch, draft or not
 NEEDS_UPDATE = "needs-update"
 EXIT_REFUSED, EXIT_USAGE, EXIT_CONFLICT = 1, 2, 3
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}")

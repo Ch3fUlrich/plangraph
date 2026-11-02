@@ -5,7 +5,8 @@
             Stacks stay together (a PR goes after the PR it is based on); a PR touching an
             AUTH_DOOR/gate path of tools/ci_commit_gate.py or src/plangraph/keeper/ is HIGH;
             HIGH PRs fill HIGH batches apart from the standard ones, both cut by --max-prs and
-            --max-lines.
+            --max-lines. The batch-ready label overrides draft status; red CI and the
+            needs-update label keep a PR out.
   build     branch batch/NAME in a new worktree from origin/<base>; `git merge --no-ff` each PR
             head as `Merge PR #N: <title>`. A conflict stops with exit 3 (resolve, commit, run
             `continue`) or, with --skip-conflicts, skips the PR and labels it needs-update.
@@ -30,8 +31,8 @@ import sys
 import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
-from merge_batch_util import (EXIT_REFUSED, PR_FIELDS, MergeBatchError, fetch_pr, gh_json, norm_pr, parse_prs,
-                              repo_info)
+from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, fetch_pr, gh_json, norm_pr,
+                              parse_prs, repo_info)
 
 
 def cmd_plan(args):
@@ -72,7 +73,7 @@ def parser():
         return cmd
 
     cmd = add("plan", cmd_plan, "list batch candidates and cut batches", repo=True)
-    cmd.add_argument("--label", default="batch-ready", help="PR label to select (default batch-ready)")
+    cmd.add_argument("--label", default=BATCH_READY, help=f"PR label to select (default {BATCH_READY})")
     cmd.add_argument("--prs", help="comma separated PR numbers instead of the label")
     cmd.add_argument("--max-prs", type=positive, default=6)
     cmd.add_argument("--max-lines", type=positive, default=1200, help="added + deleted lines per batch")

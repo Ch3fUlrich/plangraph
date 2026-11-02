@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import fnmatch
 
-from merge_batch_util import NEEDS_UPDATE, MergeBatchError
+from merge_batch_util import BATCH_READY, NEEDS_UPDATE, MergeBatchError
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
@@ -75,7 +75,7 @@ def exclusions(prs, base, parent):
     for pr in prs:
         if pr["state"] != "OPEN":
             why[pr["number"]] = f"not open ({pr['state'].lower()})"
-        elif pr["draft"]:
+        elif pr["draft"] and BATCH_READY not in pr["labels"]:  # the label overrides draft status
             why[pr["number"]] = "draft"
         elif pr["ci"] == "red":
             why[pr["number"]] = "ci red"
