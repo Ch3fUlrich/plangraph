@@ -4,7 +4,7 @@ The Stop hook JSON arrives on stdin (`session_id`, `transcript_path`). Only the
 last 256 KB of the transcript is read (seek to the tail, first partial line
 dropped); the LAST assistant record is taken, its `text` content blocks are
 joined (`tool_use`/`tool_result` blocks are never copied), and the first line
-starting with a fleet status keyword — DONE, MERGE-READY, BLOCKED, FAILED,
+starting with a fleet status keyword — DONE, MERGE-READY, BLOCKED, FAIL, FAILED,
 RECYCLE-READY, STOP — becomes the message. No keyword line, no name, or no
 parent to report to: exit 0, no-op.
 
@@ -28,12 +28,14 @@ Fail-silent, like every hook here: bad stdin, a garbled transcript, an unsafe
 name, an unwritable state dir — exit 0 with no output, because a Stop hook must
 never break the agent that called it. Nothing from the environment and nothing
 from tool output is copied; the line passes through `redact()` first (this
-repository is public). Every directory this hook creates is 0o700, inbox files
-0o600. State: `$FLEET_STATE_DIR` else `~/.local/state/fleet`.
+repository is public; the masking rules are `redact_common.py`, shared with
+`tools/autoos_refs_check.py`). Every directory this hook creates is 0o700,
+inbox files 0o600. State: `$FLEET_STATE_DIR` else `~/.local/state/fleet`.
 
-The shared helpers — `resolve_name`, `redact`, `state_dir`, `safe_name`,
-`ensure_dir`, `atomic_write` — live here so `fleet_inject.py` can load this
-module by path with importlib instead of duplicating them.
+The shared helpers — `resolve_name`, `redact`, `state_dir`, `safe_name`
+(`hook_common.safe_id`), `ensure_dir`, `atomic_write` — live here so
+`fleet_inject.py` can load this module by path with importlib instead of
+duplicating them.
 """
 from __future__ import annotations
 
@@ -44,6 +46,11 @@ import re
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from hook_common import safe_id as safe_name  # noqa: E402,F401  (re-exported for fleet_inject)
+from redact_common import redact_credentials  # noqa: E402
 
 # Only the last 256 KB of the transcript is read — enough to hold the most
 # recent assistant record while bounding the read on a many-megabyte file.
@@ -56,35 +63,15 @@ MAX_LINE = 300
 # and hyphenated continuations like DONE-whatever out: the keyword must not
 # run into more word characters or a dash. (\b would treat "-" as a boundary
 # and file "DONE-whatever" as DONE.)
-STATUS_KEYWORDS = ("DONE", "MERGE-READY", "BLOCKED", "FAILED", "RECYCLE-READY", "STOP")
+STATUS_KEYWORDS = ("DONE", "MERGE-READY", "BLOCKED", "FAILED", "FAIL", "RECYCLE-READY", "STOP")
 STATUS_RE = re.compile(r"^(%s)(?![\w-])" % "|".join(STATUS_KEYWORDS))
 
-# A name (session id, session name, parent) becomes a file name under the state
-# dir: a letter/digit first, then letters, digits, dot, dash, underscore.
-_SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-
-# Key-like strings, most specific first and the catch-all 32+ character run
-# last, so a known prefix is replaced whole instead of being chopped in half.
-# These patterns stay deliberately greedy: a missed token lands in a public
-# repository, while an over-eager redaction only costs a readable word.
-_REDACTIONS = (
-    (re.compile(r"sk[-_][A-Za-z0-9_-]{16,}"), "[redacted]"),
-    (re.compile(r"ghp_[A-Za-z0-9]+"), "[redacted]"),
-    (re.compile(r"gho_[A-Za-z0-9]+"), "[redacted]"),
-    (re.compile(r"github_pat_[A-Za-z0-9_]+"), "[redacted]"),
-    (re.compile(r"xox[bp]-[A-Za-z0-9-]+"), "[redacted]"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "[redacted]"),
-    (re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+"), "[redacted]"),
-    (re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "[redacted]"),
-    (re.compile(r"\b[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*=[^\s]+",
-                re.IGNORECASE), "[redacted]"),
-    (re.compile(r"[A-Za-z0-9_-]{32,}"), "[redacted]"),
-)
-
-
-def safe_name(value) -> bool:
-    """True when `value` is usable as a file name under the state dir."""
-    return isinstance(value, str) and _SAFE_NAME.match(value) is not None
+# The masking rules live in redact_common.py (shared with tools/autoos_refs_check.py).
+# On top of them a 32+ character run of key characters is masked as a last resort,
+# after the known shapes so a known prefix is replaced whole instead of being
+# chopped in half. A missed token lands in a public repository, while an
+# over-eager redaction only costs a readable word.
+_LONG_RUN = re.compile(r"[A-Za-z0-9_-]{32,}")
 
 
 def state_dir() -> Path:
@@ -139,16 +126,14 @@ def resolve_name(session_id):
 
 
 def redact(s: str) -> str:
-    """`[redacted]` in place of every key-like string in `s` (see `_REDACTIONS`).
+    """`[redacted]` in place of every credential in `s`: `redact_credentials`, then long runs.
 
     Applied to the status line before it is filed and again when the injector
     prints it, so a line filed by an older writer still ships scrubbed.
     """
     if not isinstance(s, str):
         return ""
-    for pattern, replacement in _REDACTIONS:
-        s = pattern.sub(replacement, s)
-    return s
+    return _LONG_RUN.sub("[redacted]", redact_credentials(s, "[redacted]"))
 
 
 def ensure_dir(path) -> Path:
