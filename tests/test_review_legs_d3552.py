@@ -131,4 +131,4 @@ def test_new_legs_use_catalog_models_and_sit_before_the_paid_deepseek_leg():
     # L1 placement: the new review legs sit just before the paid deepseek leg,
     # which itself stays last in DEFAULT_LEGS.
     assert all(ids.index(new_id) < ids.index("deepseek") for new_id in NEW_IDS)
-    assert DEFAULT_LEGS[-1].id == "deepseek"
+    assert DEFAULT_LEGS[-2].id == "deepseek"  # D-3605 Haiku leg

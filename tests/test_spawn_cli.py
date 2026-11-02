@@ -6,14 +6,12 @@ import uuid
 
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
-from plangraph.spawner.runner import SpawnerRunner, kill_process_tree
+from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo
 from plangraph.spawner.runner import spawn_service
 from plangraph.spawner.leg_state import LegStateStore
-import pytest
-import sys
-import os
+import pytest, sys, os
 from pathlib import Path
-
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owned via the fake provider, never live host pids
 
 
 @pytest.fixture(autouse=True)
@@ -152,7 +150,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 8, record   # D-3505: Sol expired
+        assert len(models) == 9, record   # D-3605: Sol implement leg active again
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert models[0] == 'opencode/deepseek-v4.1-flash-free' and 'glm' in models[1] and 'openrouter' in models[2]
@@ -163,7 +161,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record['attempts']) == 8   # D-3505: Sol expired
+        assert len(record["attempts"]) == 9   # D-3605: Sol active again
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -176,8 +174,8 @@ def test_cancel_injected_windows_killer(tmp_path):
         async def killer(pid):
             calls.append(pid)
         runner = SpawnerRunner(tree_killer=killer)
-        from plangraph.spawner.runner import JobInfo
         runner.jobs['fake'] = JobInfo('fake', 'running', '', '')
+        runner._owned = {'fake': dict(pid=123, pid_start='fake-token', job_object=False)}   # r3 V3: never a live host pid
         class Process:
             pid = 123
         runner._processes['fake'] = Process()
@@ -280,7 +278,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record['attempts']) == 8
+        assert len(record["attempts"]) == 9   # D-3605: Sol active again
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)
@@ -328,12 +326,13 @@ def test_windows_killer():
     async def run():
         calls = []
         class Process:
-            async def communicate(self):
-                return b'', b''
+            async def communicate(self): return b'', b''
         async def factory(*args, **kwargs):
             calls.append(args)
             return Process()
-        await kill_process_tree(123, platform='nt', command_factory=factory)
+        with pytest.raises(KillIncomplete): await kill_process_tree(123, platform='nt', command_factory=factory)
+        assert calls == []
+        await kill_process_tree(123, platform='nt', command_factory=factory, members={123: None})
         assert calls == [('taskkill', '/PID', '123', '/T', '/F')]
     asyncio.run(run())
 

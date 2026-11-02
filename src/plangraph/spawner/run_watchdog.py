@@ -7,8 +7,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 import time
+
+from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
+from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
 HEADER = re.compile(r'^>\s+\S+\s+·\s+\S+')
@@ -25,7 +27,7 @@ def terminal_record(record, job):
         return False
     record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
                   watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
-                  events=job.events)
+                  events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
 
 
@@ -167,45 +169,6 @@ def edit_signature(cwd):
         return None
 
 
-def proc_scan():
-    result = {}
-    for path in Path('/proc').iterdir():
-        if not path.name.isdigit():
-            continue
-        try:
-            fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
-            result[int(path.name)] = (int(fields[1]), int(fields[3]),
-                                      sum(int(fields[i]) for i in (11, 12, 13, 14)))
-        except (OSError, ValueError, IndexError):
-            continue
-    return result
-
-
-async def cpu_seconds(runner, job_id, pid, tick):
-    try:
-        handle = getattr(runner, '_win_jobs', {}).get(job_id)
-        if handle is not None:
-            return runner.win_job_api.cpu_seconds(handle)
-        if not sys.platform.startswith('linux') or not pid:
-            return None
-        cache = getattr(runner, '_watchdog_cpu_cache', None)
-        if cache is None or cache[0] != tick:
-            # Cache the task before awaiting: concurrent monitors share ONE scan.
-            cache = runner._watchdog_cpu_cache = (tick, asyncio.create_task(asyncio.to_thread(proc_scan)))
-        rows = await cache[1]
-        def belongs(child):
-            seen = set()
-            while child in rows and child not in seen:
-                if child == pid or rows[child][1] == pid:
-                    return True
-                seen.add(child)
-                child = rows[child][0]
-            return False
-        return sum(row[2] for child, row in rows.items() if belongs(child)) / os.sysconf('SC_CLK_TCK')
-    except Exception:
-        return None
-
-
 async def run_gone(proc):
     """Resolve once the run has exited. ``Process.wait()`` cannot signal this:
     asyncio resolves its waiters only after every pipe transport disconnects
@@ -264,15 +227,19 @@ class LiveLog:
 
 async def collect(runner, job_id, proc):
     from .runner import redact
-    from .env_redact import redact_env_values
+    from .reap import cancel_and_close
+    from .env_redact import early_refusal, redact_env_values
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
     baseline = getattr(job, '_watchdog_baseline', None)
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
     captured = {'stdout': [], 'stderr': []}
+    refused = asyncio.Event()
+    seen = {'n': 0, 'r': 0}   # activity lines run-wide (stdout + stderr): the first REFUSAL_MAX_LINES lines and REFUSAL_MAX_FRAMES frames may speak a refusal
     def scrub(text):
         return redact(redact_env_values(text, env))
+    gate = RefusalGate(refused, job, scrub)
     async def reader(stream, name):
         pending, tail = '', ''
         log = LiveLog(job)
@@ -286,12 +253,23 @@ async def collect(runner, job_id, proc):
             lines = pending.splitlines(keepends=True)
             pending = ''
             active = False
+            candidates = []
             for line in lines:
                 if not line.endswith(('\n', '\r')):
                     pending = line
                     continue
                 if is_activity(line):
                     active = True
+                    if seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:   # F1: banner/spinner frames may precede the refusal
+                        candidates.append(line)
+                    seen['n' if line.endswith('\n') else 'r'] += 1   # F1: '\r'-alone spinner frames eat the frame cap, never the 40-line budget
+            # F3: check the unterminated tail too; a refusal line printed
+            # without a trailing newline while the child hangs must be seen.
+            if pending and seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:
+                candidates.append(pending)   # tail is a candidate only, never counted
+            found = candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S and early_refusal(''.join(candidates))
+            if found or active:   # F2: a refusal is booked only after a quiet period; later activity cancels it
+                (gate.candidate(found, time.time()) if found else gate.activity(time.time()))
             if active:
                 job.last_activity_ts = time.time()
             scrubbed = scrub(text)      # once per chunk: linear (Q4/M3)
@@ -355,14 +333,39 @@ async def collect(runner, job_id, proc):
                 pass
         return await proc.communicate()
     task = asyncio.create_task(output())
+    refusal_wait = asyncio.ensure_future(refused.wait())
+    waiters = [task, refusal_wait]
+    ticker = asyncio.ensure_future(gate.run())
     try:
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
             delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
             if w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
-            done, _ = await asyncio.wait([task], timeout=delay)
-            if done:
+            done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+            if refused.is_set() and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
+                # Q14/M9/M15: a cancel/stall/timeout verdict is never stomped;
+                # the refusal is booked (job.refusal) but the verdict stands.
+                # Drop the resolved waiter so the loop keeps sampling normally.
+                waiters = [task]
+            elif refused.is_set() and not task.done():
+                # D-3605 (a): a refused/rate-limited/credit/auth dispatch ends the run now,
+                # never 'running' until a stall rule fires; the leg loop records leg_state.
+                job.status, job.exit_code = 'failed', 7
+                job.events.append({'event': 'dispatch_refused', 'reason': job.refusal})
+                logging.getLogger(__name__).info('%s dispatch refused', job_id)
+                await runner._reap_process(job_id, proc)
+                try:
+                    callback = getattr(runner, 'on_sample', None)
+                    if callback:
+                        callback(job_id)
+                except Exception:
+                    logging.getLogger(__name__).exception('refusal sample callback failed')
+                if job.survivors or not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
+                    task.cancel(); await asyncio.gather(task, return_exceptions=True)   # kill_incomplete: never wait on a process we may not signal
+                    return (await cancel_and_close(task, proc, getattr(job, '_live_log', None)) or (b'', b'')) if job.survivors else await proc.communicate()
+                break
+            if task in done:
                 break
             edit = await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
             now = time.time()
@@ -379,17 +382,18 @@ async def collect(runner, job_id, proc):
                 job.status = 'timeout' if event['rule'] == 'max' else 'stalled'
                 job.exit_code = 124 if job.status == 'timeout' else 6
                 job.events.append(event)
-                if job.status == 'timeout':
-                    job.events.append({'event': 'run_timeout'})
+                job.events.extend([{'event': 'run_timeout'}] if job.status == 'timeout' else [])
                 logging.getLogger(__name__).info('%s %s rule=%s', job_id, job.status, event['rule'])
                 await runner._reap_process(job_id, proc)
+                if job.survivors:   # kill_incomplete: never wait on a process we may not signal
+                    return await cancel_and_close(task, proc, getattr(job, '_live_log', None)) or (b'', b'')   # V4: no transport leak on this early return
                 if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+                    task.cancel(); await asyncio.gather(task, return_exceptions=True)
                     return await proc.communicate()
                 break
-        return await task
+        return await gate.finish(runner, job_id, proc, await task)
     finally:
+        refusal_wait.cancel(); ticker.cancel()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)

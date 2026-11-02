@@ -18,7 +18,10 @@ D25_IDS = [
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
     "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek",
+    "claude-haiku-5.5",  # D-3605 Haiku leg
 ]
+#: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
+ROUTE_IDS = D25_IDS[:-2] + ["claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
 
 
 def card(**kw):
@@ -45,11 +48,11 @@ def good_leg(**kw):
 def test_default_legs_exact_d25_order():
     assert [leg.id for leg in DEFAULT_LEGS] == D25_IDS
     assert "trial" not in {leg.tier for leg in DEFAULT_LEGS}
-    tiers = [TIERS.index(leg.tier) for leg in DEFAULT_LEGS]
+    tiers = [TIERS.index(leg.tier) for leg in DEFAULT_LEGS[:-1]]  # D-3605 Haiku leg: appended last
     assert tiers == sorted(tiers)
     ids_ = [leg.id for leg in DEFAULT_LEGS]
     assert ids_.index("cx-gpt-6.1-sol") < ids_.index("agy-gemini-3.8-flash") < ids_.index("mimo-v2.6-flash")
-    assert ids_[-1] == "deepseek"
+    assert ids_[-2:] == ["deepseek", "claude-haiku-5.5"]  # D-3605 Haiku leg
 
 
 def test_load_legs_none_is_default():
@@ -94,9 +97,9 @@ def test_load_legs_rejects_bad_shapes(tmp_path):
 def test_with_measured_overrides_by_id_and_ignores_unknown():
     out = with_measured(DEFAULT_LEGS, {"deepseek": 5000, "nope": 1})
     assert [leg.id for leg in out] == D25_IDS
-    assert out[-1].max_request_tokens == 5000
+    assert out[-2].max_request_tokens == 5000  # D-3605 Haiku leg
     assert out[0].max_request_tokens == DEFAULT_LEGS[0].max_request_tokens
-    assert DEFAULT_LEGS[-1].max_request_tokens == 100000  # original untouched
+    assert DEFAULT_LEGS[-2].max_request_tokens == 100000  # original untouched
     with pytest.raises(ValueError):
         with_measured(DEFAULT_LEGS, {"deepseek": 0})
 
@@ -134,7 +137,7 @@ def test_small_estimate_goes_128k_qodercli_first():
     assert r.first_leg.id == "qodercli-qwen3.8-flash"
     assert r.harness == "qodercli"
     assert (r.attempt_budget, r.promotions, r.cross_family) == (3, 1, True)
-    assert ids(r) == D25_IDS  # all legs eligible, D25 order, tiers ascending
+    assert ids(r) == ROUTE_IDS  # D-3605 Haiku leg; all legs eligible, D25 order, tiers ascending
 
 
 def test_90000_goes_256k_and_only_legs_with_that_window():
@@ -142,7 +145,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
                       "opencode-console-sonnet-5.5", "agy-gemini-3.8-flash",
-                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "deepseek"]
+                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
     assert all("256k" in leg.windows for leg in r.legs)
 
 
@@ -172,7 +175,7 @@ def test_over_leg_max_request_drops_leg():
                                         "openrouter-free": 50000})
     r3 = route_card(card(estimate_tokens=60000), legs=legs)
     assert r3.window_class == "128k"
-    assert ids(r3) == [i for i in D25_IDS
+    assert ids(r3) == [i for i in ROUTE_IDS  # D-3605 Haiku leg
                        if i not in ("opencode-glm-5.3-flash-free", "openrouter-free")]
     assert "excluded 2 legs: max_request_tokens" in r3.reasons
 
@@ -230,7 +233,7 @@ def test_review_levels():
 
 
 def test_tier_order_beats_list_order_in_custom_legs():
-    paid_first = (dataclasses.replace(DEFAULT_LEGS[-1]),) + DEFAULT_LEGS[:2]
+    paid_first = (dataclasses.replace(DEFAULT_LEGS[-2]),) + DEFAULT_LEGS[:2]  # D-3605 Haiku leg
     r = route_card(card(), legs=paid_first)
     assert ids(r) == ["qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "deepseek"]
 
@@ -312,14 +315,14 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
 
 def test_writer_order_d2683_implement_first_seven():
     # (a) implement plan, public standard card (20000 tokens, no exclusions): free tier first, then
-    # subscription: deepseek-free, glm-free, openrouter-free, agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash,
-    # console-sonnet as the first 7 leg ids in that order (no Sol, D-3505)
+    # subscription headed by Sol (D-3667): deepseek-free, glm-free, openrouter-free, cx-gpt-6.1-sol,
+    # agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash, console-sonnet as the first 8 leg ids in that order
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
     expected = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-                "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash",
-                "opencode-console-sonnet-5.5"]
-    assert [leg.id for leg in plan.legs[:7]] == expected
+                "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
+                "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]
+    assert [leg.id for leg in plan.legs[:8]] == expected
 
 
 def test_writer_order_d2683_unavailable_skipped():
@@ -371,8 +374,9 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
-    from plangraph.planner.legs import WRITER_ORDER
-    expected_writers = [w for w in WRITER_ORDER if w != "mimo-v2.6-pro"]
+    expected_writers = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",  # pinned: tier first,
+                        "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash",  # then WRITER_ORDER
+                        "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]  # (D-2683, D-3667)
     assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
 
 

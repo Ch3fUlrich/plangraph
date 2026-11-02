@@ -22,6 +22,28 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+_TOOLS = Path(__file__).resolve().parents[1] / "tools"
+
+
+@pytest.fixture
+def tools_importable():
+    """Put the repo's ``tools/`` dir on sys.path for one test only.
+
+    tests/test_decisions_render.py used to ``sys.path.insert(0, .../tools)``
+    at module import time, leaking the entry into the whole pytest session;
+    this fixture scopes the setup and removes the entry again on teardown,
+    so importing a tools/ module never mutates the session-wide sys.path.
+    """
+    tools = str(_TOOLS)
+    added = tools not in sys.path
+    if added:
+        sys.path.insert(0, tools)
+    try:
+        yield tools
+    finally:
+        if added and tools in sys.path:
+            sys.path.remove(tools)
+
 _NEUTRAL_POLICY = '{"banned_families": [], "off_families": [], "paused_harnesses": {}}'
 # Module-level route plans (computed at collection) see the same neutral route
 # policy as the per-test fixture below.
@@ -175,3 +197,17 @@ def pytest_collection_modifyitems(config, items):
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
+
+
+@pytest.fixture
+def fake_ownership(monkeypatch):
+    """r3 V3: stub pids are "ours" (fixed token) and invisible in /proc, so no test depends on which
+    host pids are live; our real descendants keep their real identity.  Opt-in per file."""
+    import os
+    from plangraph.spawner import proc_kill
+    from plangraph.spawner.runner import SpawnerRunner
+    real_stat, real_identity = proc_kill._stat, proc_kill.root_identity
+
+    born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
+    monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
+    monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
