@@ -42,3 +42,21 @@ def test_refusal_shaped_line_past_the_line_window_is_task_text(tmp_path):
             "sys.stdout.write('Error: Rate limit reached, retrying in 2s\\n'); sys.stdout.flush()\nprint('done')\n")
     job, proc, _ = _collect(tmp_path, body)
     assert getattr(job, 'refusal', None) is None and proc.returncode == 0
+
+
+def test_quota_prose_in_a_healthy_run_is_not_a_refusal(tmp_path):
+    body = ("sys.stdout.write('Error: usage limit test case passed\\n'); sys.stdout.flush()\n"
+            "for _i in range(3):\n    time.sleep(1.5)\n    sys.stdout.write('step %d\\n' % _i); sys.stdout.flush()\n")
+    job, proc, _ = _collect(tmp_path, body)
+    assert getattr(job, 'refusal', None) is None and proc.returncode == 0
+
+
+def test_real_refusal_then_hang_is_confirmed_in_time(tmp_path):
+    job, proc, took = _collect(tmp_path, REFUSE)
+    assert took < 10 and job.status == 'failed' and job.exit_code == 7 and job.refusal
+
+
+def test_refusal_then_nonzero_exit_is_booked_at_once(tmp_path):
+    body = "sys.stdout.write('Error: Rate limit reached, please wait\\n'); sys.stdout.flush()\nsys.exit(1)\n"
+    job, proc, took = _collect(tmp_path, body)
+    assert took < 2 and job.refusal and proc.returncode == 1

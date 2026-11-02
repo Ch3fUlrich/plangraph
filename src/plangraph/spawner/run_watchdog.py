@@ -10,7 +10,7 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
-from .run_refusal import REFUSAL_MAX_LINES, REFUSAL_WINDOW_S  # noqa: F401  re-exported for callers and tests
+from .run_refusal import REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
 HEADER = re.compile(r'^>\s+\S+\s+·\s+\S+')
@@ -227,7 +227,7 @@ class LiveLog:
 
 async def collect(runner, job_id, proc):
     from .runner import redact
-    from .env_redact import redact_env_values
+    from .env_redact import early_refusal, redact_env_values
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
@@ -238,6 +238,7 @@ async def collect(runner, job_id, proc):
     seen = {'n': 0}   # activity lines seen run-wide (stdout + stderr): the first REFUSAL_MAX_LINES may speak a refusal
     def scrub(text):
         return redact(redact_env_values(text, env))
+    gate = RefusalGate(refused, job, scrub)
     async def reader(stream, name):
         pending, tail = '', ''
         log = LiveLog(job)
@@ -265,12 +266,9 @@ async def collect(runner, job_id, proc):
             # without a trailing newline while the child hangs must be seen.
             if pending and seen['n'] < REFUSAL_MAX_LINES:
                 candidates.append(pending)   # tail is a candidate only, never counted
-            if candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S:
-                from .env_redact import early_refusal
-                found = early_refusal(''.join(candidates))
-                if found:
-                    job.refusal = scrub(found)   # only the matched line is scrubbed: no second pass over the chunk
-                    refused.set()
+            found = candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S and early_refusal(''.join(candidates))
+            if found or active:   # F2: a refusal is booked only after a quiet period; later activity cancels it
+                (gate.candidate(found, time.time()) if found else gate.activity(time.time()))
             if active:
                 job.last_activity_ts = time.time()
             scrubbed = scrub(text)      # once per chunk: linear (Q4/M3)
@@ -336,6 +334,7 @@ async def collect(runner, job_id, proc):
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())
     waiters = [task, refusal_wait]
+    ticker = asyncio.ensure_future(gate.run())
     try:
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
@@ -392,9 +391,9 @@ async def collect(runner, job_id, proc):
                     await asyncio.gather(task, return_exceptions=True)
                     return await proc.communicate()
                 break
-        return await task
+        return gate.finish(proc, await task)
     finally:
-        refusal_wait.cancel()
+        refusal_wait.cancel(); ticker.cancel()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)

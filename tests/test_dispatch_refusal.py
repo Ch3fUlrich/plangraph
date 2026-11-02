@@ -190,9 +190,10 @@ def test_refusal_notifies_parent_once_with_run_leg_reason(tmp_path):
 def test_refusal_never_stomps_a_cancel_verdict(tmp_path, monkeypatch):
     # F2 (Q14/M9/M15): a cancel/stall/timeout verdict is final. A refusal line
     # is booked on the job but must not overwrite the verdict or fire
-    # dispatch_refused; the loop keeps observing the run normally.
+    # dispatch_refused; the loop keeps observing the run normally. (The child
+    # outlives the F2 quiet-confirmation period so the refusal is booked.)
     monkeypatch.setenv('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL', '0.05')
-    script = "import time\nprint('Error: rate limit exceeded', flush=True)\ntime.sleep(3)\n"
+    script = "import time\nprint('Error: rate limit exceeded', flush=True)\ntime.sleep(4.5)\n"
 
     async def run():
         runner, job = _job(tmp_path, {'stall_min': 10, 'first_edit_min': 20, 'max_min': 0.03})
