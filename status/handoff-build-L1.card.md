@@ -1,4 +1,4 @@
-# L1 card · build-L1-0106 · 2026-11-02T14:30Z
+# L1 card · build-L1-0106 · 2026-11-02T14:25Z
 ## Goal
 - plangraph PRs: MERGE-READY to plangraph-replan-0105; sol writers via spawner only (D-3666, D-3668); plangraph-data PRs mine
 ## Keeper
