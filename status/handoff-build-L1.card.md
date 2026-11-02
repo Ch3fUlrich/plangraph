@@ -1,8 +1,8 @@
-# L1 card · build-L1-0090 · 2026-11-02T11:01Z
+# L1 card · build-L1-0093 · 2026-11-02T11:12Z
 ## Goal
 - D-3631 spawner lanes to merged: GO for #321/#325/#326, fix #323/#324, seat pd#20; FLEET-BUS-DISCOVERY-SELF (D-3633(5))
 ## Keeper
-- claimed: SPAWNER-LEGS-D3605 (ep2, lease 11:56Z), SPAWNER-CONTEXT-PACK-D3622 (ep1, 12:12Z), FLEET-BUS-DISCOVERY-SELF (ep1, 11:59Z), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1, 11:29Z), RIN-PATH-REPOINT + RIN-LEDGER-VIEWS (ep2, 11:56Z), LE-FLEET-MSG-INVENTORY (ep4, 11:18Z)
+- claimed (all leases 13:07Z): SPAWNER-LEGS-D3605 (ep2), SPAWNER-CONTEXT-PACK-D3622 (ep1), FLEET-BUS-DISCOVERY-SELF (ep1), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1), RIN-PATH-REPOINT + RIN-LEDGER-VIEWS (ep2), LE-FLEET-MSG-INVENTORY (ep4)
 - ready next: LE-RECYCLE-KEEP-SUBAGENTS (HIGH, D-3631), LE-HANDOFF-OPEN-ITEMS-GATE (D-3627)
 ## Done
 - 11-02T10:00Z LE-PANE-MOVE-EXIT-CONFIRM - parked+released, luna MED in desc (D-3633(3))
@@ -11,11 +11,12 @@
 - 11-02T10:55Z SPAWNER-SESSION-NAMES-D3605 PR#327 c799f562 merged (CI 41430912701 green, luna run-e41f0282)
 - 11-02T10:30Z SPAWNER-LEGS-D3605 PR#321 584c49f2 Haiku tool seat ACCEPT 1117 passed seat-h321.md
 ## In flight
-- SPAWNER-DISPATCH-FAIL-DETECT #324 Sonnet fix r2 subagent of build-L1-0090 since 10:42Z next check 11:30Z (lane/spawner-kill-own-tree-3 after 1d38f485)
-- SPAWNER-LEGS-D3605 #323 6f7f1d6f luna delta s323d since 10:48Z next check 11:15Z (J/seat-323d.log)
-- LE-RECYCLE-NEW-SESSION pd#20 4f1fc0f1 workst luna tools RC: HIGH ctx-watchdog:297 stops old before new launch confirmed (12 fail WSL, rerun here) -> fix r via L2 spawner3605 successor since 11:05Z next check 11:45Z
-- GO-REQs #321 #325 #326 at routing since 10:50Z next check 11:15Z
-- build-L2-spawner3605 RECYCLE-READY 11:02Z, L2-LAUNCH asked; #318 r4 mimo runs ae02de39/ca9b7600; LIVENESS B waits #318 (decision A)
+- OPERATOR ORDER 11-02 (via 'plangraph replan'): replan merges + seats ALL plangraph PRs; I send it MERGE-READY <pr> <sha>; I keep other repos
+- MERGE-READY sent to replan 11:1xZ: #321 584c49f2, #325 ce860671 (close #320), #326 c01d0b69; evidence+submit on my claims after its merge
+- SPAWNER-DISPATCH-FAIL-DETECT #324 r2 Sonnet subagent of build-L1-0093 (resumed WIP of dead 0090 writer; brief /home/s/.claude/jobs/9d41ad45/tmp/brief-324r2.md) -> MERGE-READY to replan
+- SPAWNER-LEGS-D3605 #323 r3 (LAST) Sonnet subagent of build-L1-0093 (delta seat MED+LOW J/seat-323d.log) -> MERGE-READY to replan
+- pd#20 LE-RECYCLE-NEW-SESSION: HIGH ctx-watchdog:297 fix = L2 spawner3605-0092 W1; plangraph-data stays mine
+- build-L2-heldfix-0091 DONE (9 heads listed to replan), stopping
 ## Planned
 1. On GO: merge #321 #325 (close #320) #326, evidence commit+ci + submit, ff spawner-main (rollback 2afe7810)
 2. #324 r2 -> workst delta tools seat; #323 delta ACCEPT -> CI -> GO-REQ; pd#20 seat -> GO-REQ routing
