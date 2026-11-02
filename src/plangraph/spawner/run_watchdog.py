@@ -227,6 +227,7 @@ class LiveLog:
 
 async def collect(runner, job_id, proc):
     from .runner import redact
+    from .reap import cancel_and_close
     from .env_redact import early_refusal, redact_env_values
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
@@ -360,10 +361,9 @@ async def collect(runner, job_id, proc):
                         callback(job_id)
                 except Exception:
                     logging.getLogger(__name__).exception('refusal sample callback failed')
-                if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
-                    return await proc.communicate()
+                if job.survivors or not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
+                    task.cancel(); await asyncio.gather(task, return_exceptions=True)   # kill_incomplete: never wait on a process we may not signal
+                    return (await cancel_and_close(task, proc, getattr(job, '_live_log', None)) or (b'', b'')) if job.survivors else await proc.communicate()
                 break
             if task in done:
                 break
@@ -382,13 +382,13 @@ async def collect(runner, job_id, proc):
                 job.status = 'timeout' if event['rule'] == 'max' else 'stalled'
                 job.exit_code = 124 if job.status == 'timeout' else 6
                 job.events.append(event)
-                if job.status == 'timeout':
-                    job.events.append({'event': 'run_timeout'})
+                job.events.extend([{'event': 'run_timeout'}] if job.status == 'timeout' else [])
                 logging.getLogger(__name__).info('%s %s rule=%s', job_id, job.status, event['rule'])
                 await runner._reap_process(job_id, proc)
+                if job.survivors:   # kill_incomplete: never wait on a process we may not signal
+                    return await cancel_and_close(task, proc, getattr(job, '_live_log', None)) or (b'', b'')   # V4: no transport leak on this early return
                 if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+                    task.cancel(); await asyncio.gather(task, return_exceptions=True)
                     return await proc.communicate()
                 break
         return await gate.finish(runner, job_id, proc, await task)

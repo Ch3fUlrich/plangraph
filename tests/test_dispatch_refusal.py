@@ -10,7 +10,7 @@ import pytest
 from plangraph.routing_support.leg_state import LegStateStore
 from plangraph.spawner.exit_outcome import fallthrough_reason
 from plangraph.spawner.run_watchdog import collect
-from tests.test_run_watchdog import _job
+from tests.test_run_watchdog import _job, _own
 
 LIMITS = {'stall_min': 10, 'first_edit_min': 20, 'max_min': 30}
 HANG = "import sys,time\nsys.%s.write(%r + '\\n'); sys.%s.flush()\ntime.sleep(40)\n"
@@ -44,6 +44,7 @@ def test_refused_dispatch_ends_within_10s(tmp_path, name):
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         started = time.time()
+        _own(runner, proc)
         await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
         assert time.time() - started < 10          # the child sleeps 40 s: it was stopped, not awaited
         assert job.status == 'failed' and job.exit_code == 7
@@ -60,6 +61,7 @@ def test_healthy_slow_run_stays_running(tmp_path):
         runner, job = _job(tmp_path, LIMITS)
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        _own(runner, proc)
         task = asyncio.ensure_future(collect(runner, 'j', proc))
         await asyncio.sleep(.8)
         assert not task.done() and job.status == 'running' and not getattr(job, 'refusal', None)
@@ -78,6 +80,7 @@ def test_healthy_run_with_refusal_looking_prose_not_killed(tmp_path, name):
         runner, job = _job(tmp_path, LIMITS)
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        _own(runner, proc)
         output, _ = await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
         assert proc.returncode == 0 and job.status == 'running'
         assert getattr(job, 'refusal', None) is None
@@ -113,6 +116,7 @@ def test_healthy_run_late_error_line_not_killed(tmp_path, name):
         runner, job = _job(tmp_path, LIMITS)
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        _own(runner, proc)
         output, _ = await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
         assert getattr(job, 'refusal', None) is None
         assert b'done' in output and proc.returncode == 0
@@ -134,6 +138,7 @@ def test_refusal_as_second_activity_line_still_detected(tmp_path):
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         started = time.time()
+        _own(runner, proc)
         await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
         assert time.time() - started < 10          # the child sleeps 40 s: it was stopped, not awaited
         assert job.status == 'failed' and job.exit_code == 7
@@ -200,6 +205,7 @@ def test_refusal_never_stomps_a_cancel_verdict(tmp_path, monkeypatch):
         job.status = 'cancelled'
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        _own(runner, proc)
         await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
         assert getattr(job, 'refusal', None)     # the refusal itself was seen and booked
         assert not any(e['event'] == 'dispatch_refused' for e in job.events)
@@ -221,8 +227,23 @@ def test_refusal_without_trailing_newline_still_detected(tmp_path):
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         started = time.time()
+        _own(runner, proc)
         await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
         assert time.time() - started < 10          # the child sleeps 40 s: it was stopped, not awaited
         assert job.status == 'failed' and job.exit_code == 7
         assert job.refusal and any(e['event'] == 'dispatch_refused' for e in job.events)
+    asyncio.run(run())
+
+
+def test_refusal_with_unproven_owner_returns_without_waiting(tmp_path):
+    async def run():   # #336 fail-closed: nothing signalled, survivors booked, the 40 s child is not awaited
+        runner, job = _job(tmp_path, LIMITS)
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', HANG % (('stderr', FAKE_HARNESSES['auth error'][1], 'stderr')), cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        try:
+            out, _ = await asyncio.wait_for(collect(runner, 'j', proc), timeout=10)
+            assert job.status == 'failed' and job.exit_code == 7 and proc.pid in job.survivors and b'401' in out
+            assert all(proc._transport.get_pipe_transport(fd).is_closing() for fd in (1, 2))   # no transport leak
+        finally:
+            proc.kill(); await proc.wait()
     asyncio.run(run())

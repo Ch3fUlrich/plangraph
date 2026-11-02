@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from plangraph.spawner.run_watchdog import collect
-from tests.test_run_watchdog import _job
+from tests.test_run_watchdog import _job, _own
 
 LIMITS = {'stall_min': 10, 'first_edit_min': 20, 'max_min': 30}
 BANNER = ("for _l in ['opencode 1.4.2','loading config','connecting to provider']:\n"
@@ -23,6 +23,7 @@ def _collect(tmp_path, body):
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'import sys,time\n' + body,
             cwd=tmp_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         t0 = time.time()
+        _own(runner, proc)
         await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
         return job, proc, time.time() - t0
     return asyncio.run(run())

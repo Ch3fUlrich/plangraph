@@ -147,6 +147,8 @@ def terminal_reason(record):
     later attempt's outcome.  Guard evidence names the run (M9), and guard and
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
     """
+    if record.get('reason') == 'kill_incomplete':
+        return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()
     special = next((e['event'] for e in events
                     if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)

@@ -29,6 +29,11 @@ def _sent(prompt):
 
 
 @pytest.fixture(autouse=True)
+def _stub_pids_owned(fake_ownership):
+    """r3 V3: stub pids are owned via the fake provider, never via live host pids."""
+
+
+@pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     monkeypatch.setenv("OMNIROUTE_BASE_URL", "http://127.0.0.1:20128")
     monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", raising=False)
