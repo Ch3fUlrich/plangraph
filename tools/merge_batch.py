@@ -23,8 +23,8 @@
   land      merge the batch PR only if its head is the pushed head, every required check is
             green and --approval ends in `HEAD: <sha>` (the batch head in full, all 40 hex
             digits) and `VERDICT: PASS` lines, with
-            no FAIL/CHANGES verdict line anywhere. Then per included PR: MERGED -> `MERGED <pr> <sha>
-            <item>`; open but in the merge -> closed as `merged via batch PR #N` (after its head is
+            no FAIL/CHANGES verdict line anywhere. Then per included PR whose recorded head is an ancestor of the
+            merge commit (else a problem, no MERGED line): MERGED -> `MERGED <pr> <sha> <item>`; open but in the merge -> closed as `merged via batch PR #N` (after its head is
             read once more), same line; a head that moved after the build -> `NOT-MERGED <pr> head
             moved`, not closed, needs-update.
   status    batches in progress, interrupted ones and orphans.  abort: drop a batch (worktree,

@@ -319,7 +319,8 @@ def cmd_abort(args):
     if st.get("worktree") in registered:
         paths.add(st["worktree"])
     for wt in sorted(paths):
-        git("merge", "--abort", cwd=wt, ok=None)
+        if Path(wt).is_dir():  # a directory removed by hand: worktree remove/prune clean its admin entry
+            git("merge", "--abort", cwd=wt, ok=None)
         git("worktree", "remove", "--force", "--force", wt)
     git("worktree", "prune", ok=None)
     if st.get("worktree") and Path(st["worktree"]).exists():

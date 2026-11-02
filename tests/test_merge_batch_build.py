@@ -14,6 +14,7 @@ that PR's branch, a build that skips the plan rules or a --force-set that is not
 a HIGH path built with standard PRs, a union merge that changed an old line without a warning.
 """
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -149,6 +150,16 @@ def test_abort_drops_a_build_that_died_right_after_a_merge(env):
     assert res.returncode == 0, res.stderr
     assert not wt_of(env, "k4").exists() and not env.state_file("k4").exists()
     assert env.git("branch", "--list", "batch/k4") == "" and env.git("for-each-ref", "refs/merge-batch") == ""
+
+
+def test_abort_cleans_a_batch_whose_worktree_directory_was_removed_by_hand(env):
+    env.branch_pr(1, {"a.txt": "a\n"})
+    assert env.run("build", "--name", "k8", "--prs", "1").returncode == 0
+    shutil.rmtree(wt_of(env, "k8"))  # the admin entry stays, so `worktree list` still names it
+    res = env.run("abort", "--name", "k8")
+    assert res.returncode == 0, res.stderr
+    assert not env.state_file("k8").exists() and env.git("branch", "--list", "batch/k8") == ""
+    assert env.git("for-each-ref", "refs/merge-batch") == ""
 
 
 def test_status_and_abort_find_an_orphan_by_branch_name(env):
