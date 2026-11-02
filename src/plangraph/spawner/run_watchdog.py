@@ -383,6 +383,10 @@ async def collect(runner, job_id, proc):
                     job.events.append({'event': 'run_timeout'})
                 logging.getLogger(__name__).info('%s %s rule=%s', job_id, job.status, event['rule'])
                 await runner._reap_process(job_id, proc)
+                if job.survivors:   # kill_incomplete: never wait on a process we may not signal
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    return b'', b''
                 if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
