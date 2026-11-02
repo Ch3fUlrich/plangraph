@@ -12,7 +12,7 @@ that expansion entirely, which is the fix this guard enforces.
 
 Reads one PreToolUse hook JSON object from stdin (``{"tool_name": "Bash",
 "tool_input": {"command": "..."}, ...}``, the shape Claude Code sends) and
-denies (stderr message, exit 2) exactly two shapes:
+denies (stderr message, exit 2) exactly three shapes:
 
 1. An unquoted heredoc whose body contains a literal backtick or ``$(`` -
    the incident shape above.
@@ -22,6 +22,12 @@ denies (stderr message, exit 2) exactly two shapes:
    call whose prompt string is built with an unquoted-feeling double-quoted
    argument lets the CALLING shell, not claude, expand the substitution
    before claude ever sees the text.
+3. Shape 1 or 2 nested any number of layers down inside a command string
+   passed to a `bash`/`sh`/`zsh`/`dash` `-c` invocation (scanned
+   recursively by ``_find_shell_c_injection`` in ``bash_guard_rules``) -
+   a `shell -c` string is parsed and expanded by the calling shell exactly
+   like an outer command, so the same two hazards apply at every nesting
+   level.
 
 Everything else allows silently (exit 0, no output) - a guard that prints on
 every ordinary command is noise nobody will read before disabling it. A
@@ -29,11 +35,19 @@ malformed or unexpected hook payload fails OPEN (exit 0) with one stderr
 note: this is a shell gate, not a sandbox, and a bug here must never be the
 thing that bricks an interactive session.
 
-This module intentionally re-implements two small, independent scanners
-rather than reach for a real shell grammar: one for heredoc operators (see
-``_heredoc_operators_in_line``), one for splitting a command into top-level
-simple commands to find `claude` invocations (see
-``_split_top_level_commands``). Both track quote state and `(`/`$(`/`$((`
+Slice note (S01): ``bash_guard_rules`` imports its scanning primitives from
+``bash_guard_rules2``, which ships in the NEXT slice (S02, PR #298). Until
+#298 merges, running this hook raises ImportError at import time and the
+guard is inert - it fails open (a traceback on stderr, nothing denied) on
+every input. The import is kept as is on purpose: the deny rules are
+meaningless without their scanners.
+
+The guard intentionally uses two small, independent scanners instead of a
+real shell grammar - both live in ``bash_guard_rules2``: one for heredoc
+operators (see ``bash_guard_rules2._heredoc_operators_in_line``), one for
+splitting a command into top-level simple commands to find `claude`
+invocations (see ``bash_guard_rules2._split_top_level_commands``). Both
+track quote state and `(`/`$(`/`$((`
 nesting with the same small stack idea, kept separate because they answer
 different questions and a shared "generic parser" would hide exactly the
 one-character details (`<<<` vs `<<`, `((` vs `$((`) that make the
@@ -60,9 +74,10 @@ _MAX_INPUT_BYTES = 1024 * 1024  # 1 MiB
 def main():
     try:
         if hasattr(sys.stdin, "buffer"):
-            raw_bytes = sys.stdin.buffer.read()
+            raw_bytes = sys.stdin.buffer.read(_MAX_INPUT_BYTES + 1)
         else:
-            raw_bytes = sys.stdin.read().encode("utf-8", errors="replace")
+            raw_text = sys.stdin.read(_MAX_INPUT_BYTES + 1)
+            raw_bytes = raw_text.encode("utf-8", errors="replace")
         if len(raw_bytes) > _MAX_INPUT_BYTES:
             sys.stderr.write("bash-guard: input exceeds 1 MiB size limit, allowing\n")
             return 0
