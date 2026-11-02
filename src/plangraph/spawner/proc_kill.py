@@ -49,6 +49,40 @@ def group_alive(pgid):
     return any(s[0] != 'Z' and s[2] == pgid for s in _scan().values())
 
 
+def group_members(pgid, *, proc_root='/proc'):
+    """Live non-zombie pids whose process group is ``pgid`` (a pgid is never reused while populated)."""
+    return sorted(p for p, s in _scan(proc_root).items() if s[0] != 'Z' and s[2] == pgid)
+
+
+def escapees(root, job_pids, *, table=None):
+    """nt: {pid: ppid} of root's descendants alive right after job assignment but not in the job.
+
+    Processes created before AssignProcessToJobObject are not job members; they are
+    recorded here and killed/verified at reap.  Raises KillIncomplete when the table is unreadable."""
+    table = table if table is not None else _nt_table()
+    if not table:
+        raise KillIncomplete([root])
+    found, grew = {root}, True
+    while grew:
+        kids = {p for p, pp in table.items() if pp in found and p not in found}
+        grew = bool(kids)
+        found |= kids
+    inside = {int(p) for p in job_pids} | {root}
+    return {p: table[p] for p in found if p not in inside}
+
+
+async def verify_gone(pids, *, platform=None, wait_s=None):
+    """Poll until none of ``pids`` is alive; KillIncomplete with the stragglers at the deadline."""
+    deadline = time.monotonic() + (KILL_WAIT_S if wait_s is None else wait_s)
+    while True:
+        left = {p for p in pids if alive(p, None, platform=platform)}
+        if not left:
+            return
+        if time.monotonic() >= deadline:
+            raise KillIncomplete(left)
+        await asyncio.sleep(0.05)
+
+
 def root_identity(pid, *, platform=None, proc_root='/proc'):
     """Start-time token proving ``pid`` is our direct child and its own group leader.
 
@@ -107,7 +141,11 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     posix: the root, its process group and session, and every ppid-descendant of
     those (a setsid()'d grandchild still has its parent in the set).  nt: Job
     Object members when a job exists, else the Toolhelp32 ppid closure (only when
-    the root is our child).  Empty when ``ident`` does not prove the root ours."""
+    the root is our child).  Empty when ``ident`` does not prove the root ours.
+
+    Caveat (known, pre-existing): a descendant that setsid()s away and is orphaned
+    after its root exits is invisible here; reap.sample_tree narrows the window, but
+    closing it fully needs a subreaper (PR_SET_CHILD_SUBREAPER) or a cgroup."""
     if ident is None:
         return {}
     if (platform or os.name) == 'nt':

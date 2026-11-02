@@ -264,6 +264,7 @@ class LiveLog:
 
 async def collect(runner, job_id, proc):
     from .runner import redact
+    from .reap import cancel_and_close
     from .env_redact import redact_env_values
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
@@ -384,8 +385,7 @@ async def collect(runner, job_id, proc):
                 logging.getLogger(__name__).info('%s %s rule=%s', job_id, job.status, event['rule'])
                 await runner._reap_process(job_id, proc)
                 if job.survivors:   # kill_incomplete: never wait on a process we may not signal
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+                    await cancel_and_close(task, proc)   # V4: the transport must not leak on this early return
                     return b'', b''
                 if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
                     task.cancel()

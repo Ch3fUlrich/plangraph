@@ -233,7 +233,7 @@ def test_unproven_ownership_never_reaches_killer(monkeypatch):
         killed = []
         runner = SpawnerRunner(tree_killer=lambda pid: killed.append(pid))
         runner.jobs['j'] = job = type('J', (), {'events': [], 'survivors': [], 'status': 'running', 'exit_code': 0})()
-        monkeypatch.setattr(runner_mod, 'root_identity', lambda *a, **k: None)
+        monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda *a, **k: None))   # r3: the ownership seam
         monkeypatch.setattr(reap_mod, 'alive', lambda *a, **k: True)   # a live root we cannot prove ours
         runner._owned = {'j': dict(pid=4242, pid_start=None, job_object=False)}
         await runner._reap_process('j', _Fake(4242))
@@ -346,7 +346,7 @@ def test_unproven_pid_timeout_ends_kill_incomplete_without_blocking(monkeypatch)
     async def run():
         runner = SpawnerRunner(process_factory=lambda *a, **k: asyncio.sleep(0, Hanging(4242)),
                                tree_killer=lambda pid: killed.append(pid))
-        monkeypatch.setattr(runner_mod, 'root_identity', lambda *a, **k: None)
+        monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda *a, **k: None))   # r3: the ownership seam
         monkeypatch.setattr(reap_mod, 'alive', lambda *a, **k: True)
         job = await runner.spawn('test', wait_seconds=0)
         t0 = time.monotonic()
