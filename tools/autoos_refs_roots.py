@@ -219,6 +219,8 @@ def scan_routing_tree(routing_root: Path, strict: bool = False) -> list[Hit]:
 def _scan_routing_tree(routing_root: Path, strict: bool) -> list[Hit]:
     """The routing checkout: ``ops/*.mcp.json`` (the MCP sets it launches
     sessions with) and the scripts in ``bin/``."""
+    if strict and not routing_root.is_dir():   # an explicit root that is missing or no directory is no clean scan
+        raise RootScanError(f"cannot read {routing_root}: {'not a directory' if routing_root.exists() else 'missing'}")
     hits: list[Hit] = []
     ops = routing_root / "ops"
     if ops.is_dir():

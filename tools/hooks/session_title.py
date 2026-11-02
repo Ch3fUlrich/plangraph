@@ -95,7 +95,9 @@ def _bump(raw, last=0):
 
     Anything else (garbled, negative, fractional, a stale 10-digit time value, a counter that reached 9999) must
     not restart at 1 (names would repeat) and must not grow past four digits: it restarts at a clock-derived value
-    in SEQ_RESTART..SEQ_MAX and the shared counter continues from there.
+    in SEQ_RESTART..SEQ_MAX and the shared counter continues from there.  Past SEQ_MAX it wraps to SEQ_RESTART: names
+    are four-digit by fleet rule, so a value can repeat only after the space is spent; addressing needs uniqueness
+    among live sessions, not forever.
     """
     if not raw:
         return 1

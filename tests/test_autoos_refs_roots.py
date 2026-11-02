@@ -84,6 +84,12 @@ def test_explicit_roots_must_exist(ar, tmp_path: Path, capsys: pytest.CaptureFix
         assert ar.main(["--home", str(home), flag, str(tmp_path / "absent")]) == 2
         assert flag in capsys.readouterr().err
     assert ar.main(["--home", str(home)]) == 0  # absent defaults are just absent
+    (tmp_path / "file").write_text("x")
+    for root in (tmp_path / "absent", tmp_path / "file"):   # the API, not only main(), refuses a bad explicit root
+        with pytest.raises(ar.RootScanError):
+            ar.scan_all(home, routing_root=root)
+        with pytest.raises(ar.RootScanError):
+            ar.scan_all(home, launch_dir=root)
 
 
 @windows_skip
