@@ -15,6 +15,7 @@
 - SPAWNER-LEGS-D3605 #323 6f7f1d6f luna delta s323d since 10:48Z next check 11:15Z (J/seat-323d.log)
 - LE-RECYCLE-NEW-SESSION pd#20 4f1fc0f1 workst tools seat asked since 10:59Z next check 11:30Z
 - GO-REQs #321 #325 #326 at routing since 10:50Z next check 11:15Z
+- build-L2-spawner3605 RECYCLE-READY 11:02Z, L2-LAUNCH asked; #318 r4 mimo runs ae02de39/ca9b7600; LIVENESS B waits #318 (decision A)
 ## Planned
 1. On GO: merge #321 #325 (close #320) #326, evidence commit+ci + submit, ff spawner-main (rollback 2afe7810)
 2. #324 r2 -> workst delta tools seat; #323 delta ACCEPT -> CI -> GO-REQ; pd#20 seat -> GO-REQ routing
