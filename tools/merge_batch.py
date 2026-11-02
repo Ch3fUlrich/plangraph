@@ -15,9 +15,9 @@
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
   land      merge the batch PR only if its head is the pushed head, every required check is
-            green and --approval names that head sha and ends in a passing seat VERDICT; then
-            check each included PR is MERGED (else close it as `merged via batch PR #N`) and
-            print `MERGED <pr> <sha> <item>`.
+            green and --approval ends in `HEAD: <sha>` (that head) and `VERDICT: PASS` lines, with
+            no FAIL/CHANGES verdict line anywhere; then check each included PR is MERGED (else
+            close it as `merged via batch PR #N`) and print `MERGED <pr> <sha> <item>`.
   status    batches in progress.  abort: drop a batch (worktree, branch, state).
 
 State lives in `<git common dir>/merge-batch/NAME.json`, so every worktree of the repo sees it.
@@ -98,7 +98,7 @@ def parser():
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--batch-pr", required=True, type=int)
     cmd.add_argument("--approval", metavar="PATH",
-                     help="seat verdict text: it names the batch head sha and its last VERDICT line passes")
+                     help="seat verdict text ending in 'HEAD: <batch head sha>' and 'VERDICT: PASS' lines")
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")

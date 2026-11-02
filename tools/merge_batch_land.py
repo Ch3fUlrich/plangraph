@@ -13,7 +13,10 @@ from merge_batch_util import (REMOTE, MergeBatchError, all_states, drop_state, f
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
-HEX_TOKEN = re.compile(r"\b[0-9a-fA-F]{12,40}\b")
+#: A verdict line that says fail, whatever precedes it (quote mark, bullet, bold): it refuses the approval.
+BAD_VERDICT = re.compile(r"\bverdict\W*:\W*(?:fail|fix|halt|reject|change|request[\s_-]*change)", re.IGNORECASE)
+HEAD_LINE = re.compile(r"HEAD: ([0-9a-fA-F]{12,40})")
+PASS_LINES = ("VERDICT: PASS", "VERDICT: pass")
 
 
 def cell(text):
@@ -68,34 +71,36 @@ def cmd_push(args):
             st.update(pr=int(found.group(1)), url=found.group(0))
     st.update(status="pushed", head=head)
     save_state(st)
-    print(f"pushed {st['branch']} {head}; {st['url']}; the approval for land must name this head", file=sys.stderr)
+    print(f"pushed {st['branch']} {head}; {st['url']}; land needs an approval ending in 'HEAD: {head}' and "
+          "'VERDICT: PASS'", file=sys.stderr)
     print(st["pr"])
     return 0
 
 
-def names_head(text, head):
-    """True when ``text`` names the batch head sha: in full, or as at least 12 leading hex digits."""
-    return any(head.startswith(token.lower()) for token in HEX_TOKEN.findall(text))
-
-
 def check_approval(path, head):
-    """The approval is seat verdict text about this very head: it names the sha, and its last
-    VERDICT line passes (the parser the keeper's seat tool uses)."""
+    """The approval is seat verdict text about this very head, with a fixed ending: free text, then
+    ``HEAD: <sha>`` (the batch head, in full or 12+ hex digits), then ``VERDICT: PASS`` (or
+    ``pass``) as the last non-empty line, with no prefix. A FAIL or CHANGES verdict line anywhere
+    refuses it, so a quoted or bulleted ``VERDICT: pass`` cannot flip an earlier ``fix``.
+    This parser is deliberately stricter than the keeper's seat tool and does not use it."""
     if not path:
-        raise MergeBatchError("land needs --approval PATH (seat verdict text naming the batch head)")
+        raise MergeBatchError("land needs --approval PATH (seat verdict text ending in HEAD: <sha> and VERDICT: PASS)")
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise MergeBatchError(f"approval file {path} cannot be read: {exc.strerror or exc}") from None
-    if not names_head(text, head):
-        raise MergeBatchError(f"approval file {path} does not name the batch head {head}: the seats must "
-                              "review that sha (in full, or at least 12 hex digits)")
-    try:
-        from seat_verdict import parse_verdict
-    except ImportError:
-        raise MergeBatchError("tools/seat_verdict.py is not importable: cannot read the approval") from None
-    if parse_verdict(text)[0] is not True:
-        raise MergeBatchError(f"approval file {path} has no passing VERDICT line (the last VERDICT line decides)")
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if BAD_VERDICT.search(line):
+            raise MergeBatchError(f"approval file {path} has a FAIL/CHANGES verdict line: {line.strip()[:80]!r}")
+    last = lines[-1][:80] if lines else ""
+    if last not in PASS_LINES:
+        raise MergeBatchError(f"approval file {path}: its last non-empty line must be exactly 'VERDICT: PASS' "
+                              f"(no prefix), found {last!r}")
+    found = HEAD_LINE.fullmatch(lines[-2]) if len(lines) > 1 else None
+    if not found or not head.startswith(found.group(1).lower()):
+        raise MergeBatchError(f"approval file {path}: the line before the verdict must be 'HEAD: <sha>' naming "
+                              f"the batch head {head} (in full, or at least 12 hex digits)")
 
 
 def require_green(repo, number, names):

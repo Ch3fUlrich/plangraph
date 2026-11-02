@@ -143,7 +143,7 @@ def pushed(env, name="l1", prs=(1, 2, 3), checks="pass"):
     env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": checks}]
     env.save()
     approval = env.tmp / "approval.txt"
-    approval.write_text(f"reviewed {head_of(env, name)}\nlooks fine\nVERDICT: pass\n")
+    approval.write_text(f"looks fine\nHEAD: {head_of(env, name)}\nVERDICT: PASS\n")
     return approval
 
 

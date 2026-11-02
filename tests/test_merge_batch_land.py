@@ -21,11 +21,33 @@ def env(tmp_path):
     yield from env_fixture(tmp_path)
 
 
+#: approval texts (``{h}`` = the batch head) that land must refuse, with the message it gives.
+BAD_APPROVALS = {
+    "fix_verdict": ("HEAD: {h}\nVERDICT: fix\n", "FAIL/CHANGES verdict line"),
+    "no_verdict": ("HEAD: {h}\nall good\n", "last non-empty line must be exactly 'VERDICT: PASS'"),
+    "quoted_pass_after_fix": ("VERDICT: fix\nHEAD: {h}\n> VERDICT: pass\n", "FAIL/CHANGES verdict line"),
+    "prefixed_pass": ("HEAD: {h}\n> VERDICT: pass\n", "last non-empty line must be exactly"),
+    "bulleted_pass": ("HEAD: {h}\n- VERDICT: PASS\n", "last non-empty line must be exactly"),
+    "mixed_case_pass": ("HEAD: {h}\nVERDICT: Pass\n", "last non-empty line must be exactly"),
+    "accept_word": ("HEAD: {h}\nVERDICT: accept\n", "last non-empty line must be exactly"),
+    "text_after_verdict": ("HEAD: {h}\nVERDICT: PASS\nthanks\n", "last non-empty line must be exactly"),
+    "changes_earlier": ("- VERDICT: CHANGES\nHEAD: {h}\nVERDICT: PASS\n", "FAIL/CHANGES verdict line"),
+    "request_changes_earlier": ("**VERDICT**: REQUEST_CHANGES\nHEAD: {h}\nVERDICT: PASS\n", "FAIL/CHANGES"),
+    "no_head_line": ("looks fine\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "other_head": ("HEAD: " + "1" * 40 + "\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "short_head": ("HEAD: {h11}\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "sha_elsewhere": ("{h}\nlooks fine\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "head_not_next_to_verdict": ("HEAD: {h}\nlooks fine\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "head_with_prefix": ("> HEAD: {h}\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "head_with_text": ("HEAD: {h} (reviewed)\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "verdict_only": ("VERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "empty": ("\n\n", "last non-empty line must be exactly"),
+}
+
+
 @pytest.mark.parametrize("case, message", [
     ("head_moved", "head moved"), ("red_check", "not green"), ("pending_check", "not green"),
-    ("no_checks", "no required check"), ("no_approval", "cannot be read"), ("fix_verdict", "no passing VERDICT"),
-    ("no_verdict", "no passing VERDICT"), ("no_sha", "does not name the batch head"),
-    ("other_sha", "does not name the batch head"), ("short_sha", "does not name the batch head"),
+    ("no_checks", "no required check"), ("no_approval", "cannot be read"),
     ("wrong_pr", "push it first"), ("draft", "draft"), ("closed", "is CLOSED")])
 def test_land_refusals(env, case, message):
     approval = pushed(env)
@@ -41,11 +63,6 @@ def test_land_refusals(env, case, message):
         env.state["checks"]["100"] = []
     elif case == "no_approval":
         approval.unlink()
-    elif case in ("fix_verdict", "no_verdict"):
-        approval.write_text(head_of(env) + ("\nVERDICT: fix\n" if case == "fix_verdict" else "\nall good\n"))
-    elif case in ("no_sha", "other_sha", "short_sha"):  # the approval must be about this very head
-        named = {"no_sha": "", "other_sha": "1" * 40, "short_sha": head_of(env)[:11]}[case]
-        approval.write_text(f"reviewed {named}\nVERDICT: pass\n")
     elif case == "draft":
         batch["isDraft"] = True
     elif case == "closed":
@@ -58,6 +75,30 @@ def test_land_refusals(env, case, message):
         assert "--approval" in env.run("land", "--name", "l1", "--batch-pr", "100").stderr
 
 
+@pytest.mark.parametrize("case", sorted(BAD_APPROVALS))
+def test_land_refuses_a_bad_approval(env, case):
+    """The approval ends in `HEAD: <sha>` and `VERDICT: PASS`; no fail verdict line anywhere."""
+    approval = pushed(env, prs=(1, 2))
+    text, message = BAD_APPROVALS[case]
+    head = head_of(env)
+    approval.write_text(text.format(h=head, h11=head[:11]))
+    res = land(env, approval)
+    assert res.returncode == 1 and message in res.stderr and res.stdout == "", res.stderr
+    assert not env.calls("pr", "merge") and env.state_file("l1").exists()
+
+
+@pytest.mark.parametrize("text", [
+    "HEAD: {h}\nVERDICT: PASS\n", "HEAD: {h}\nVERDICT: pass", "notes\r\nHEAD: {h}\r\nVERDICT: PASS\r\n\r\n",
+    "VERDICT: PASS | FAIL (template)\nHEAD: {h12}\nVERDICT: PASS\n\n  \n", "HEAD: {hup}\nVERDICT: pass\n"])
+def test_land_accepts_the_exact_ending(env, text):
+    approval = pushed(env, prs=(1, 2))
+    head = head_of(env)
+    approval.write_text(text.format(h=head, h12=head[:12], hup=head[:12].upper()))
+    res = land(env, approval)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.count("MERGED") == 2 and len(env.calls("pr", "merge")) == 1
+
+
 def test_land_refuses_an_approval_for_an_older_head(env):
     approval = pushed(env, prs=(1, 2))
     old_head = head_of(env)
@@ -68,9 +109,9 @@ def test_land_refuses_an_approval_for_an_older_head(env):
     assert env.run("push", "--name", "l1").stdout == "100\n"
     assert head_of(env) != old_head
     res = land(env, approval)  # the approval still names the head it reviewed
-    assert res.returncode == 1 and f"does not name the batch head {head_of(env)}" in res.stderr
+    assert res.returncode == 1 and f"naming the batch head {head_of(env)}" in res.stderr
     assert not env.calls("pr", "merge")
-    approval.write_text(f"{head_of(env)}\nVERDICT: accept\n")
+    approval.write_text(f"HEAD: {head_of(env)}\nVERDICT: PASS\n")
     assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
 
 
@@ -108,7 +149,7 @@ def test_land_named_checks(env):
 def test_land_resumes_after_a_merge_made_elsewhere(env):
     approval = pushed(env, prs=(1, 2))
     head = head_of(env)
-    approval.write_text(f"reviewed `{head[:12].upper()}`\nVERDICT: pass\n")  # 12 digits in any case name the head
+    approval.write_text(f"HEAD: {head[:12].upper()}\nVERDICT: pass\n")  # 12 digits in any case name the head
     done = env.run_gh("pr", "merge", "100", "--repo", "owner/proj", "--merge", "--match-head-commit", head)
     assert done.returncode == 0
     res = land(env, approval)
