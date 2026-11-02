@@ -189,14 +189,21 @@ fn normal_exit_reports_the_exit_code() {
 #[serial]
 fn failed_spawn_errors_without_leaking_a_job_handle() {
     let d = tempfile::tempdir().unwrap();
-    let missing = Command::new(d.path().join("no-such-program.exe"));
-    // Every test in this module is #[serial], so no sibling holds a job
-    // handle across the sample and the count must come back to exactly its
-    // starting value: any slack would mask a leaked handle.
+    let missing = || Command::new(d.path().join("no-such-program.exe"));
+    // The first failed spawn may pay one-time process-wide setup (a Windows
+    // host showed +40 handles on it), so warm up, then sample. Every test in
+    // this module is #[serial], so no sibling holds a job handle across the
+    // sample, and a leak shows as growth over the repeated failures.
+    assert!(supervise(missing(), &quick()).is_err());
     let before = handle_count();
-    assert!(supervise(missing, &quick()).is_err());
+    for _ in 0..3 {
+        assert!(supervise(missing(), &quick()).is_err());
+    }
     let now = handle_count();
-    assert_eq!(now, before, "job handle leaked: {before} -> {now}");
+    assert_eq!(
+        now, before,
+        "handles leaked over 3 failed spawns: {before} -> {now}"
+    );
 }
 
 /// The child harness must get libtest's `--nocapture` (a misspelling makes
