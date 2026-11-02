@@ -14,14 +14,14 @@
 ## In flight
 - OPERATOR ORDER 11-02 (via 'plangraph replan'): replan merges + seats ALL plangraph PRs; I send it MERGE-READY <pr> <sha>; I keep other repos
 - #324 r3 LAST (Haiku RC r2: /home/s/code/plangraph-worktrees/pr324-r2-findings.md) Sonnet subagent of build-L1-0093 on lane/spawner-kill-own-tree-3 after ef06b97f; full suite -> MERGE-READY replan (joins spawner batch with #318)
-- INCIDENT mimo rc124 (Server runs): diagnosis timeout post-edit, edits dropped; item JSON ~/.local/share/plangraph/briefs/SPAWNER-TIMEOUT-SALVAGE.item.json BLOCKED at routing *a 14:30Z
+- INCIDENT mimo rc124: diagnosis timeout post-edit, edits dropped + cwd not worktree; Sonnet subagent of build-L1-0093 writes SPAWNER-TIMEOUT-SALVAGE on lane/spawner-timeout-salvage (item JSON ~/.local/share/plangraph/briefs/SPAWNER-TIMEOUT-SALVAGE.item.json; router to define) -> draft PR -> MERGE-READY replan + probe
+- #314 seat rule: keeperfix slice A (strict D-2905) now; slice B (request-side witness for mimo/omniroute + spawner-run tests in record.json) waits a D-id amending D-2905 -> forward to keeperfix-0102 by name
 - #321 #323 #325 #326 in replan merge batch #329 (cdbc015b, runner split); replan runs Haiku seats (operator: luna rate-limited); on MERGED: evidence+submit, ff spawner-main, Haiku probe -> DONE D-3659
 - pd#20 LE-RECYCLE-NEW-SESSION: HIGH ctx-watchdog:297 fix = L2 spawner3605-0092 W1; plangraph-data stays mine
 - plangraph-data #15 #16 #17 (RIN-PATH-REPOINT, ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS) mine: Haiku tool seats all RC (records /home/s/.claude/jobs/9d41ad45/tmp/seat-hpd1{5,6,7}.md) -> build-L2-pdfix-0098 fixing (D-3651); D-3650 ruling forwarded; merges via rule 3.18 batches (D-3648: batch-ready label + MERGE-READY to me)
 - pd#20 91c1d77 MERGE-READY from spawner3605-0092 (Sonnet): luna tools delta seat asked of workst-L1-autoos-0088 11:3xZ -> GO-REQ routing
 - #309 #314 #279 failed keeper batch #331 r1 (findings /home/s/code/plangraph-worktrees/batch-keeper-c-findings.md): build-L2-keeperfix-0102 running (brief ~/.local/share/plangraph/briefs/build-L2-keeperfix.brief.md); D-3663 Gate-Edit one line seat_record.py in AUTH_DOOR_PATHS (#314 own commit)
 - build-L2-recycle-0097 launched (D-3651) (brief ~/.local/share/plangraph/briefs/build-L2-recycle.brief.md): KEEP-SUBAGENTS + HANDOFF-OPEN-ITEMS-GATE
-- build-L2-heldfix-0091 DONE (9 heads listed to replan), stopping
 ## Planned
 1. On GO: merge #321 #325 (close #320) #326, evidence commit+ci + submit, ff spawner-main (rollback 2afe7810)
 2. #324 r2 -> workst delta tools seat; #323 delta ACCEPT -> CI -> GO-REQ; pd#20 seat -> GO-REQ routing
@@ -32,6 +32,7 @@
 - D-3645: SPAWNER-SESSION-NAMES closed by decision; live probe on 2 hosts at the next spawner deploy -> DONE <probe evidence> to routing
 - D-3633(1) LEG-STATE: operator places ~/.config/plangraph/omniroute-mgmt.key | default slice 1 reader + fakes | deadline none
 ## Traps
+- console-sonnet credits used up (operator 11-02): only Claude subscription models; non-Claude via spawner legs
 - D-3662: a seat with errors/no verdict -> read-only Haiku seat at once
 - Haiku seat = same family as Sonnet writers (D-2511): Sonnet PRs need workst cx-luna tools seat
 - subagent notifications reach only build-L1-0090: successor checks lane/spawner-kill-own-tree-3 by name
