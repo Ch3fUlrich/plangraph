@@ -5,8 +5,9 @@
 //! [`decide`] then turns one request into a grant or a queue entry against the
 //! R1a [`Caps`] of the host: class caps first, then the memory floor, then the
 //! queue. Since R3b both [`decide`] and [`super::promote`] share one blocking
-//! rule ([`first_blocker`]): an older ticket blocks only while it is
-//! [`eligible`] or a [`is_reservation`], everything else is backfilled around.
+//! rule ([`first_blocker`]) and one aging ladder (the caller's
+//! [`AgingPolicy`]): an older ticket blocks only while it is [`eligible`] or
+//! a [`is_reservation`], everything else is backfilled around.
 
 use super::promote::AgingPolicy;
 use super::{ActiveSlot, SlotClass, SlotTable, Ticket};
@@ -157,8 +158,9 @@ pub(super) fn first_blocker<'a>(
 /// 3. no older queued ticket blocks it ([`first_blocker`]): an older ticket
 ///    blocks only while it is eligible or a reservation (aged past
 ///    [`AgingPolicy::reserve_after_ms`], waiting on memory alone), so a new
-///    arrival backfills around the rest. [`decide`] takes no aging policy of
-///    its own and uses [`AgingPolicy::default`]; `now_ms` ages the queue.
+///    arrival backfills around the rest. `policy` is the same
+///    [`AgingPolicy`] ladder [`super::promote`] takes — one ladder and one
+///    blocking rule for both halves of the queue; `now_ms` ages the queue.
 ///
 /// The caller applies the returned decision inside [`super::with_table`];
 /// `now_ms` stamps `created_ms` of a granted slot. The request's `enqueued_ms`
@@ -170,21 +172,14 @@ pub fn decide(
     mem_available_mb: u64,
     rss_of: impl Fn(&ActiveSlot) -> u64,
     now_ms: u64,
+    policy: &AgingPolicy,
 ) -> Decision {
     let counts = class_counts(&table.active);
     let free = effective_free_mb(mem_available_mb, &table.active, &rss_of);
     let caps_ok = room_for(counts, request.class, caps);
     let mem_ok = mem_fit(free, request.reservation_mb, caps);
-    let order_ok = first_blocker(
-        &table.queued,
-        request,
-        counts,
-        caps,
-        free,
-        now_ms,
-        &AgingPolicy::default(),
-    )
-    .is_none();
+    let order_ok =
+        first_blocker(&table.queued, request, counts, caps, free, now_ms, policy).is_none();
     if caps_ok && mem_ok && order_ok {
         Decision::Grant(ActiveSlot {
             run_id: request.run_id.clone(),

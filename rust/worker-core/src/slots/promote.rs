@@ -5,8 +5,9 @@
 //! Every waiting supervisor runs [`promote`] on its OWN ticket under
 //! `slots.lock` (after a [`crate::slots::touch_wake`] or a 1 s timeout) and
 //! wins only when it is the oldest ticket that may run right now: eligible
-//! (the class caps and the memory floor, the same tests as
-//! [`crate::slots::decide`]) with no older ticket blocking it. An older
+//! (the class caps and the memory floor, the same tests and the same
+//! [`AgingPolicy`] ladder as [`crate::slots::decide`]) with no older ticket
+//! blocking it. An older
 //! [`crate::slots::policy::first_blocker`] blocks only while it is eligible or
 //! a [`is_reservation`]; every other older ticket is backfilled around, and
 //! past [`AgingPolicy::release_after_ms`] a stuck ticket blocks nothing at
@@ -72,13 +73,15 @@ pub enum Promotion {
 
 /// May the caller promote ITSELF right now? (R3b, pure.)
 ///
-/// [`Promotion::Promoted`] iff the ticket with `run_id` is queued, eligible
-/// ([`crate::slots::policy::eligible`]) and no older ticket blocks it
-/// ([`crate::slots::policy::first_blocker`]); the order is total,
-/// `(enqueued_ms, run_id)` ascending. Otherwise [`Promotion::Wait`] carries
-/// the reason — `Caps`/`Memory` when the ticket itself is not eligible, else
-/// `Older` with the first blocking ticket's run_id — and
-/// [`Promotion::NotQueued`] when no queued ticket matches at all.
+/// [`Promotion::Promoted`] iff the queued ticket with `run_id` — the row with
+/// the least `(enqueued_ms, run_id)` [`order_key`] when the queue holds the
+/// run_id more than once — is eligible ([`crate::slots::policy::eligible`])
+/// and no older ticket blocks it ([`crate::slots::policy::first_blocker`]);
+/// the order is total, `(enqueued_ms, run_id)` ascending. Otherwise
+/// [`Promotion::Wait`] carries the reason — `Caps`/`Memory` when the ticket
+/// itself is not eligible, else `Older` with the first blocking ticket's
+/// run_id — and [`Promotion::NotQueued`] when no queued ticket matches at
+/// all.
 ///
 /// A promoted slot has the same shape as [`crate::slots::decide`]'s grant:
 /// `bound = false`, `created_ms = now_ms`, `seat_slot = None`, `group = None`
@@ -93,7 +96,12 @@ pub fn promote(
     now_ms: u64,
     policy: &AgingPolicy,
 ) -> Promotion {
-    let Some(ticket) = table.queued.iter().find(|t| t.run_id == run_id) else {
+    let Some(ticket) = table
+        .queued
+        .iter()
+        .filter(|t| t.run_id == run_id)
+        .min_by(|a, b| order_key(a).cmp(&order_key(b)))
+    else {
         return Promotion::NotQueued;
     };
     let counts = class_counts(&table.active);
@@ -122,11 +130,20 @@ pub fn promote(
     }
 }
 
-/// Apply a [`Promotion::Promoted`] slot: drop the ticket with `slot.run_id`
-/// from `queued` (the order of the other tickets is untouched) and append the
+/// Apply a [`Promotion::Promoted`] slot: drop the queued row for `slot.run_id`
+/// that [`promote`] picked — the one with the least
+/// `(enqueued_ms, run_id)` [`order_key`] when the queue holds the run_id more
+/// than once (the order of the other tickets is untouched) — and append the
 /// slot to `active`.
 pub fn take_promotion(table: &mut SlotTable, slot: ActiveSlot) {
-    if let Some(pos) = table.queued.iter().position(|t| t.run_id == slot.run_id) {
+    let hit = table
+        .queued
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.run_id == slot.run_id)
+        .min_by(|(_, a), (_, b)| order_key(a).cmp(&order_key(b)))
+        .map(|(pos, _)| pos);
+    if let Some(pos) = hit {
         table.queued.remove(pos);
     }
     table.active.push(slot);
