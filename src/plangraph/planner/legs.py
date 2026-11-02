@@ -140,6 +140,7 @@ DEFAULT_LEGS = (
 # D-2683 operator writer order (free-first): the free tier leads, then
 # subscription.  agy-sonnet-5.5 is orchestrate-only and never a writer here.
 WRITER_ORDER: tuple[str, ...] = (
+    "cx-gpt-6.1-sol",   # D-3666/D-3667: tuple head; tier-first sort (D-2683) keeps it behind the free tier
     "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free",
     "openrouter-free",

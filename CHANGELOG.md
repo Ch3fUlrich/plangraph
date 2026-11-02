@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **SOL-FIRST (D-3666, D-3667):** `cx-gpt-6.1-sol` heads `WRITER_ORDER`, so it leads the subscription tier for implement (free-tier legs still sort first by tier, D-2683); mimo and console-sonnet follow; pinned route tests updated.
 - **SPAWNER-DISPATCH-FAIL-DETECT (D-3605 a, PR #318):** a refused dispatch (rate limit, quota, credits out, auth, HTTP 401/402/403/429 or a 429/402 provider envelope in the first output lines, first 30 s and 40 lines) ends the run at once instead of `running` until a stall rule fires: `run_watchdog.collect` marks the job failed (exit 7, event `dispatch_refused`) and reaps the process tree, `fallthrough_reason` books the leg down (`unavailable_until`, `PLANGRAPH_LEG_DOWN_S`, default 1800 s, for credit/auth lines without a reset time), and one `LEG_REFUSED` line (run id, leg, reason) goes to the parent inbox and `PLANGRAPH_SPAWN_NOTIFY_CMD`. Process CPU accounting moved to `spawner/run_cpu.py` (file-size).
 - **RIN-LEDGER-VIEWS S12 (D-3516):** `tools/decisions_render.py` renders decision items back into the rules file from a batch YAML (fixed-point check mode; CRLF-safe, duplicate ids and placeholders are errors).
 - **AUTOOS-REMOVAL-GUARD:** `tools/autoos_refs_check.py` (read-only scan of live AutoOS references in home config, systemd units and tracked symlinks; exit 2 on a missing `--home`, redacted details, Windows-safe tests).
