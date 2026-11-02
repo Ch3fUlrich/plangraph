@@ -16,8 +16,7 @@ import apply_batch_atomic as atomic
 
 # No built-in keeper URL (D-A): --url or PG_URL required; main() reads the env at call time.
 TIMEOUT = 15
-# MD-SYNC-SNAPSHOT-TIMEOUT: the keeper "snapshot" GET is large; give it its own budget.
-SNAPSHOT_TIMEOUT = 60
+SNAPSHOT_TIMEOUT = 60  # MD-SYNC-SNAPSHOT-TIMEOUT: the keeper "snapshot" GET is large; its own budget.
 OP_SPECS = {
     "create": (["item"], {}),
     "edit": (["key", "fields"], {"fields": dict}),
@@ -60,8 +59,7 @@ class ApiError(Exception):
 def sha256_of(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
+        for chunk in iter(lambda: handle.read(65536), b""): digest.update(chunk)
     return digest.hexdigest()
 class _DupLoader(yaml.SafeLoader):
     """Safe loader that refuses duplicate mapping keys (nested too)."""
@@ -77,8 +75,7 @@ def _dup_mapping(loader, node, deep=False):
             raise BatchError(f"duplicate key {key!r}")
         mapping[key] = loader.construct_object(value_node, deep=True)
     return mapping
-_DupLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _dup_mapping)
+_DupLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _dup_mapping)
 def resolve_source(batch_file, source):
     base = os.path.dirname(os.path.realpath(batch_file))
     if not os.path.isabs(source):
@@ -186,16 +183,15 @@ def build_request(op, source, digest):
     if name == "edit":
         return "edit_definition", {"key": op["key"], "fields": op["fields"]}
     if name == "legacy_state":
-        return ("set_legacy_state", {"key": op["key"], "state": op["state"],
-                                     "note": op.get("note", "")})
+        return "set_legacy_state", {"key": op["key"], "state": op["state"],
+                                    "note": op.get("note", "")}
     if name == "add_evidence":
         ref = dict(op.get("ref") or {})
         if op.get("repo") is not None: ref["repo"] = op["repo"]
         return "add_evidence_router", {"key": op["key"], "kind": op["kind"],
                                        "ref": ref}
     if name == "close_on_decision":
-        return ("close_on_decision",
-                {"key": op["key"], "batch_ref": f"{source}@{digest}"})
+        return "close_on_decision", {"key": op["key"], "batch_ref": f"{source}@{digest}"}
     if name == "cancel":
         return "cancel", {"key": op["key"], "reason": op.get("reason", "")}
     if name == "priority":
@@ -258,6 +254,8 @@ class Session:
         if not isinstance(data, dict):
             raise ApiError("unreachable", "bad whoami reply")
         return data
+    def snapshot(self):
+        return self.get("snapshot", timeout=SNAPSHOT_TIMEOUT)
 def _parse_error(raw, status):
     try:
         data = json.loads(raw.decode("utf-8"))
@@ -529,8 +527,8 @@ def main(argv=None, out=None, err=None):
         try:
             payload = (opts.queue_line + "\n").encode("utf-8")
         except (OSError, UnicodeError) as exc:
-            detail = getattr(exc, "strerror", None) or str(exc) \
-                or exc.__class__.__name__
+            detail = (getattr(exc, "strerror", None) or str(exc)
+                      or exc.__class__.__name__)
             line(f"error: batch applied but queue line not written: {detail}",
                  refusal=True)
             return _done(3)
@@ -548,8 +546,8 @@ def main(argv=None, out=None, err=None):
             finally:
                 os.close(fd)
         except (OSError, UnicodeError) as exc:
-            detail = getattr(exc, "strerror", None) or str(exc) \
-                or exc.__class__.__name__
+            detail = (getattr(exc, "strerror", None) or str(exc)
+                      or exc.__class__.__name__)
             line(f"error: batch applied but queue line not written: {detail}",
                  refusal=True)
             return _done(3)

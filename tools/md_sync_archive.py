@@ -259,8 +259,7 @@ def archive_main(argv, out, err, write_status):
         err.write(f"error: {exc}\n")
         return stop(2, f"error: {exc}")
     try:
-        items = apply_batch.Session(opts.url, token).get(
-            "snapshot", timeout=apply_batch.SNAPSHOT_TIMEOUT).get("items") or []
+        items = apply_batch.Session(opts.url, token).snapshot().get("items") or []
     except apply_batch.ApiError as exc:
         err.write(f"error: cannot read the live graph: {exc.code} {exc.msg}\n")
         return stop(2, f"error: cannot read the live graph: {exc.code} {exc.msg}")
