@@ -6,6 +6,10 @@ A review seat is a tool-less LLM call that leaves a directory holding
 verdict, test_gaming, correlation_id, prompt_sha256, ...).  This tool parses the
 verdict strictly, checks the reviewing model's family, and POSTs
 ``/v1/verdict`` with ``Authorization: Bearer <reviewer-<family>.token>``.
+A spawner seat run dir may instead hold only ``record.json`` + ``live.log``;
+then ``tools/seat_record.py`` derives the evidence (served model witnessed via
+the chosen leg) and the review text (live log, else stdout_tail).  A record
+that cannot witness a completed review is refused, never posted.
 
 The JSON ``ok`` is always a real boolean: the keeper coerces it with ``bool()``,
 so a string such as ``"false"`` would be read as true.
@@ -29,6 +33,8 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from seat_record import evidence_from_record
 
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
@@ -120,13 +126,21 @@ def verdict_payload(key, ok, reason):
     return {"key": str(key), "ok": ok, "reason": str(reason)}
 
 
-def build_reason(evidence, ok, text, idx, covers=None, witness=None):
+def build_reason(evidence, ok, text, idx, covers=None, witness=None,
+                 witness_kind=None):
     head = (f"seat {evidence.get('served_model') or evidence.get('requested_model')}"
-            f" {'PASS' if ok else 'FIX'} corr {evidence.get('correlation_id')}"
-            f" prompt {str(evidence.get('prompt_sha256') or '')[:12]}")
+            f" {'PASS' if ok else 'FIX'}")
+    if evidence.get("correlation_id"):
+        head += f" corr {evidence['correlation_id']}"
+    if evidence.get("prompt_sha256"):
+        head += f" prompt {str(evidence['prompt_sha256'])[:12]}"
     if witness:
         # D-2905 (2): keep the request-side witness kind auditable in the keeper record.
-        head += f" witness=request-side-opencode-store {witness}"
+        head += f" witness={witness_kind or 'request-side-opencode-store'} {witness}"
+    if evidence.get("head_sha"):
+        head += f" head {evidence['head_sha']}"
+    if evidence.get("run_id"):
+        head += f" run {evidence['run_id']}"
     reason = head if ok else f"{head}\n{findings(text, idx)}".rstrip()
     if covers is not None:
         reason = f"{reason}\ncovers: {', '.join(covers)}"
@@ -179,18 +193,42 @@ def main(argv=None):
     ap.add_argument("--writer-family", required=True)
     ap.add_argument("--token-dir", required=True, type=Path)
     ap.add_argument("--url", default=os.environ.get("PG_URL"))
+    ap.add_argument("--head", help="expected record completion.head_sha "
+                                  "(record-derived evidence only)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
-    try:
-        evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
-        text = (args.seat_dir / "review.txt").read_text("utf-8")
-    except (OSError, ValueError) as exc:
-        print(f"seat_verdict: cannot read seat dir: {type(exc).__name__}", file=sys.stderr)
-        return EXIT_IO
-    if not isinstance(evidence, dict):
-        print("seat_verdict: evidence.json is not an object", file=sys.stderr)
-        return EXIT_IO
     writer_families = parse_writer_families(args.writer_family)
+    from_record = False
+    if not (args.seat_dir / "evidence.json").exists() and \
+            (args.seat_dir / "record.json").exists():
+        try:
+            evidence, text = evidence_from_record(
+                args.seat_dir, cli_writer_families=writer_families)
+        except ValueError as exc:
+            print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
+            return EXIT_REFUSED
+        from_record = True
+    else:
+        try:
+            evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
+            text = (args.seat_dir / "review.txt").read_text("utf-8")
+        except (OSError, ValueError) as exc:
+            print(f"seat_verdict: cannot read seat dir: {type(exc).__name__}", file=sys.stderr)
+            return EXIT_IO
+        if not isinstance(evidence, dict):
+            print("seat_verdict: evidence.json is not an object", file=sys.stderr)
+            return EXIT_IO
+    if args.head and not from_record:
+        print("seat_verdict: refused, --head only for record seats", file=sys.stderr)
+        return EXIT_REFUSED
+    if from_record and not args.head:
+        print("seat_verdict: refused, record seats require --head", file=sys.stderr)
+        return EXIT_REFUSED
+    if args.head and from_record and \
+            str(evidence.get("head_sha") or "").lower() != args.head.strip().lower():
+        print(f"seat_verdict: refused, record head_sha {evidence.get('head_sha')!r} "
+              f"does not match --head {args.head!r}", file=sys.stderr)
+        return EXIT_REFUSED
     if not writer_families:
         print("seat_verdict: refused, writer family list is empty", file=sys.stderr)
         return EXIT_REFUSED
@@ -207,11 +245,25 @@ def main(argv=None):
     # the request-side model; a response-side source (gateway logs) replaces
     # this when it exists.  Anything else keeps today's behaviour.
     witness_model = None
+    if evidence.get("witness_kind") == "record-chosen-leg" and not from_record:
+        # D-3564: only evidence_from_record (this very call) may name the
+        # record-chosen-leg witness, and it does so only when the record's
+        # served_model was unwitnessed.  A hand-written evidence.json carrying
+        # this witness kind is a spoof attempt and is refused.
+        print("seat_verdict: refused, witness_kind 'record-chosen-leg' is only "
+              "valid on record-derived evidence", file=sys.stderr)
+        return EXIT_REFUSED
     if (not served or served == "unwitnessed") and \
             evidence.get("witness_kind") == "request-side-opencode-store":
         candidate = evidence.get("request_side_model")
         if (isinstance(candidate, str) and candidate.startswith("opencode/")
                 and candidate.endswith("-free")):
+            witness_model = candidate
+    elif from_record and evidence.get("witness_kind") == "record-chosen-leg":
+        # D-3564: the record's chosen leg is the only witness; count the family
+        # by the request-side model and keep the witness auditable in the reason.
+        candidate = evidence.get("request_side_model")
+        if isinstance(candidate, str) and candidate:
             witness_model = candidate
     if witness_model is not None:
         model = witness_model
@@ -242,7 +294,8 @@ def main(argv=None):
     covers = sorted({writer for writer in writer_families if writer != family})
     payload = verdict_payload(args.key, ok,
                               build_reason(evidence, ok, text, idx, covers,
-                                           witness=witness_model))
+                                           witness=witness_model,
+                                           witness_kind=evidence.get("witness_kind")))
     if args.dry_run:
         print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
                           "headers": {"Authorization": "Bearer <redacted>"},

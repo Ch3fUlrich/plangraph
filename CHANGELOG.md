@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **SEAT-VERDICT-FROM-RECORD (D-3564):** `tools/seat_verdict.py` posts a verdict from a record.json-only spawner seat run dir (`tools/seat_record.py`): the verdict must be the last line of the review text, conflicting VERDICT lines, unknown or missing families and a record writer family outside `--writer-family` are refused, and `--head` is required for record seats.
 - **KEEPER-EVIDENCE-MERGE-HEAD (D-3507/D-3538):** keeper `commit+ci` evidence accepts a lane PR whose head is a merge commit: `evidence_git.merge_commit_of` falls through to the non-merge proof instead of refusing, and a failed merge-sha lookup fails closed.
 - **SPAWNER-SESSION-NAMES (D-3605):** spawner session names are `<role>-NNNN` (config `session_names`: `role-counter` default, `free` = legacy). `launch(name=<role>)` assigns the next 4-digit number per role (`_counters.json` plus the records, under a per-role lock, never reused); an explicit wrong or non-4-digit number is refused. `relaunch` stops the old session and starts a NEW one under the next number (old record stays stopped, prompt copied, old ready marker removed; refused while a later record of the role is live; result `name` = new, `previous_name` = old).
 - **RT-P4-SKILLS-REWRITE slice 6 (D-3583, PR #308):** 2-3 evals per skill dir (`skills/*/evals/evals.json`) plus a grounding test (`tests/test_skill_evals.py`); eval `must_not` patterns carry no home path (scrub CI).
