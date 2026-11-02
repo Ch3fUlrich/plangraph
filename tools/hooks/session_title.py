@@ -81,32 +81,30 @@ def has_title(transcript):
     return any('"custom-title"' in line for line in data.decode("utf-8", "replace").split("\n"))
 
 
-# The counter is four digits (-NNNN): 0..SEQ_MAX-1 counts on by one; anything else restarts in SEQ_RESTART..SEQ_MAX.
+# The counter is a four-digit ring (-NNNN, fleet naming rule): 0..SEQ_MAX-1 count on by one, SEQ_MAX wraps to 1.
 SEQ_MAX = 9999
 SEQ_RESTART = 1000
 
 
 def _counts_on(raw):
-    return len(raw) <= len(str(SEQ_MAX)) and raw.isascii() and raw.isdigit() and int(raw) < SEQ_MAX
+    return len(raw) <= len(str(SEQ_MAX)) and raw.isascii() and raw.isdigit() and int(raw) <= SEQ_MAX
 
 
 def _bump(raw, last=0):
-    """The counter after `raw`, the stored text: a fresh file and 0 start at 1, 1..9998 count on.
+    """The counter after `raw`, the stored text: a fresh file starts at 1, 0..9998 count on, 9999 wraps to 1.
 
-    Anything else (garbled, negative, fractional, a stale 10-digit time value, a counter that reached 9999) must
-    not restart at 1 (names would repeat) and must not grow past four digits: it restarts at a clock-derived value
-    in SEQ_RESTART..SEQ_MAX and the shared counter continues from there.  Past SEQ_MAX it wraps to SEQ_RESTART: names
-    are four-digit by fleet rule, so a value can repeat only after the space is spent; addressing needs uniqueness
-    among live sessions, not forever.
+    `last` is the mark beside the counter, the value issued last (written on every call).  An empty, garbled,
+    negative, fractional or stale 10-digit counter continues from it, so no name repeats before the ring has turned
+    once (9999 launches, far longer than any session lives).  Without a mark an empty file starts at 1 and a garbled
+    one restarts at a clock-derived value in SEQ_RESTART..SEQ_MAX.
     """
+    if raw and _counts_on(raw):
+        return int(raw) % SEQ_MAX + 1
+    if 1 <= last <= SEQ_MAX:
+        return last % SEQ_MAX + 1
     if not raw:
         return 1
-    if _counts_on(raw):
-        return int(raw) + 1
-    n = SEQ_RESTART + int(time.time()) % (SEQ_MAX - SEQ_RESTART + 1)
-    if n <= last:  # `last`: the previous recovery value; the clock must not hand the same name out twice
-        n = last + 1
-    return n if n <= SEQ_MAX else SEQ_RESTART
+    return SEQ_RESTART + int(time.time()) % (SEQ_MAX - SEQ_RESTART + 1)
 
 
 def next_seq():
@@ -116,17 +114,16 @@ def next_seq():
         _lock(f)
         f.seek(0)
         raw = f.read().strip()
-        recovered = path.with_name(path.name + ".recovered")
+        mark = path.with_name(path.name + ".last")
         try:
-            last = int(recovered.read_text(encoding="utf-8").strip())
+            last = int(mark.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             last = 0
         n = _bump(raw, last)
+        atomic_write_text(mark, str(n))   # before the counter: a crash in between still leaves the mark
         f.seek(0)
         f.truncate()
         f.write(str(n))
-        if raw and not _counts_on(raw):
-            atomic_write_text(recovered, str(n))
     return n
 
 
