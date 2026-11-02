@@ -235,6 +235,7 @@ async def collect(runner, job_id, proc):
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
     captured = {'stdout': [], 'stderr': []}
     refused = asyncio.Event()
+    seen = {'n': 0}   # activity lines seen run-wide (stdout + stderr): only the first 3 may speak a refusal
     def scrub(text):
         return redact(redact_env_values(text, env))
     async def reader(stream, name):
@@ -250,19 +251,23 @@ async def collect(runner, job_id, proc):
             lines = pending.splitlines(keepends=True)
             pending = ''
             active = False
-            complete = []
+            candidates = []
             for line in lines:
                 if not line.endswith(('\n', '\r')):
                     pending = line
                     continue
-                complete.append(line)
                 if is_activity(line):
                     active = True
+                    if seen['n'] < 3:      # F1: only the run's first activity lines may trigger a refusal
+                        candidates.append(line)
+                    seen['n'] += 1
             # F3: check the unterminated tail too; a refusal line printed
             # without a trailing newline while the child hangs must be seen.
-            if (complete or pending) and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S:
+            if pending and seen['n'] < 3:
+                candidates.append(pending)   # tail is a candidate only, never counted
+            if candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S:
                 from .env_redact import early_refusal
-                found = early_refusal(name, ''.join(complete) + pending)
+                found = early_refusal(''.join(candidates))
                 if found:
                     job.refusal = scrub(found)   # only the matched line is scrubbed: no second pass over the chunk
                     refused.set()

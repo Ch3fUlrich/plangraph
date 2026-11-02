@@ -50,7 +50,7 @@ def harness_limit_line(exit_code, stdout, stderr):
     return lines[0].strip() if lines else None
 
 
-def early_refusal(stream, complete_text):
+def early_refusal(complete_text):
     """First refusal line (rate limit, credits, auth, 429/402 envelope) in complete output lines.
 
     Streamed while the child still runs, so a refused dispatch ends at once

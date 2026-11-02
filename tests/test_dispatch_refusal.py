@@ -85,6 +85,62 @@ def test_healthy_run_with_refusal_looking_prose_not_killed(tmp_path, name):
     asyncio.run(run())
 
 
+# F1 (D-3605): a real refusal is the FIRST thing a harness says. A healthy run
+# that prints normal activity first and an error-shaped marker later (retry
+# log / fixture prose) must never be killed or booked down. The 3 normal lines
+# go out first (with a drain beat so arrival order matches write order); the
+# marker is then the run's 4th activity line and may not speak a refusal.
+LATE_ERRORS = {
+    'retrying rate limit': ('stderr', 'Error: Rate limit reached, retrying in 2s'),
+    'http 429 retry': ('stdout', 'HTTP 429: retrying in 2s'),
+    'usage limit passed': ('stdout', 'error: usage limit test case passed'),
+    'credits fixture': ('stdout', 'Error: credits exhausted fixture loaded'),
+}
+
+LATE = ("import sys,time\n"
+        "print('step 1', flush=True)\nprint('step 2', flush=True)\nprint('step 3', flush=True)\n"
+        "time.sleep(.1)\n"
+        "sys.%s.write(%r + '\\n'); sys.%s.flush()\n"
+        "time.sleep(.5)\nprint('done', flush=True)\n")
+
+
+@pytest.mark.parametrize('name', sorted(LATE_ERRORS))
+def test_healthy_run_late_error_line_not_killed(tmp_path, name):
+    stream, line = LATE_ERRORS[name]
+    script = LATE % (stream, line, stream)
+
+    async def run():
+        runner, job = _job(tmp_path, LIMITS)
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        output, _ = await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
+        assert getattr(job, 'refusal', None) is None
+        assert b'done' in output and proc.returncode == 0
+    asyncio.run(run())
+
+
+def test_refusal_as_second_activity_line_still_detected(tmp_path):
+    # F1: the run's first 3 activity lines may speak a refusal; the 2nd one
+    # (after a single 'starting' line) must still stop the run at once.
+    script = ("import sys, time\n"
+              "print('starting', flush=True)\n"
+              "time.sleep(.1)\n"
+              "sys.stderr.write('Error: rate limit exceeded, retry later\\n')\n"
+              "sys.stderr.flush()\n"
+              "time.sleep(40)\n")
+
+    async def run():
+        runner, job = _job(tmp_path, LIMITS)
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        started = time.time()
+        await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
+        assert time.time() - started < 10          # the child sleeps 40 s: it was stopped, not awaited
+        assert job.status == 'failed' and job.exit_code == 7
+        assert job.refusal and any(e['event'] == 'dispatch_refused' for e in job.events)
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('name', ['qodercli credits out', 'auth error'])
 def test_credit_and_auth_refusal_books_leg_unavailable_until(tmp_path, name):
     stream, line = FAKE_HARNESSES[name]
@@ -144,6 +200,7 @@ def test_refusal_never_stomps_a_cancel_verdict(tmp_path, monkeypatch):
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
+        assert getattr(job, 'refusal', None)     # the refusal itself was seen and booked
         assert not any(e['event'] == 'dispatch_refused' for e in job.events)
         assert job.exit_code != 7
         assert job.status == 'cancelled'
