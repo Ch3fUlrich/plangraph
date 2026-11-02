@@ -1,33 +1,32 @@
-# L1 card · build-L1-0112 · 2026-11-02T18:42Z
+# L1 card · build-L1-0116 · 2026-11-02T19:52Z
 ## Goal
-- plangraph PRs MERGE-READY to replan successor; plangraph-data PRs GO-REQ to routing; spawner-main ff 2485630d (D-3680 ruling a); D-3681(2) omniroute upstream merge for prox-L1-main
+- D-3693 recycle chain (S8 done; S7a->S6->S7b->S9 via build-L2-readyv2); #309+#338 HIGH batch merge; MD-SYNC-SNAPSHOT-TIMEOUT; D-3681(2) omniroute lane for prox-L1-main; pd PRs MERGE-READY
 ## Keeper
-- claimed: SPAWNER-LEGS-D3605 (claimed ep5, since 13:39Z), SEAT-PATH-FIXES (claimed ep2, since 15:16Z), SPAWNER-LEG-STATE-FROM-OMNIROUTE (claimed ep1, since 12:53Z), LE-FLEET-MSG-INVENTORY (claimed ep4, since 12:53Z); leases to 18:34Z: heartbeat first
-- ready next: MD-SYNC-SNAPSHOT-TIMEOUT (after #338 merges), SPAWNER-LEGS-D3605 submit after ff probe
+- claimed: MD-SYNC-SNAPSHOT-TIMEOUT (claimed ep1, since 19:48Z), SEAT-PATH-FIXES (claimed ep3, since 18:40Z), KEEPER-EVIDENCE-MERGE-HEAD (claimed ep2, since 18:45Z); LE-READY-S8-LAUNCH-ID in_review
+- ready next: SPAWNER-LEGS-D3605 (after #338), SPAWNER-GO-CATALOG-IDS (leaf asked of routing)
 ## Done
-- 11-02T18:05Z LE-RECYCLE-NEW-SESSION 8d63ed3 r3 sol run-9bfdb796, 320 passed, seat run-dfafc34d ACCEPT
-- 11-02T18:22Z D-3690 268cd8af pd#20 merged, live plangraph-data ff'd
-- 11-02T17:25Z KEEPER-EVIDENCE-MERGE-HEAD ea374ad1 r3 + Hand-Edit, full suite f0bde3a8 9160 passed
-- 11-02T18:35Z KEEPER-EVIDENCE-MERGE-HEAD 9d7a3549 CI ci-gate green, GO-REQ sent
-- 11-02T18:35Z SEAT-PATH-FIXES d9263c35 r2 31c2e8b1 mimo-pro run-8d06ae2b, CI ci-gate green
+- 11-02T19:40Z LE-READY-S8-LAUNCH-ID bc0b528 pd#22 dd016020, router suite 344 passed, seat qwen run-d73c453a ACCEPT, evidence verified
+- 11-02T19:00Z SEAT-PATH-FIXES - seat qwen run-dd7e8700 ACCEPT on d9263c35, my suite 966 passed
 ## In flight
-- D-3681(2) omniroute lane f62ce612 run-7ab7bdbb since 17:52Z next check 18:50Z: J/or-unit.log unit run -> fix round or seat
-- spawner-main ff loop pid 1589089 since 16:15Z next check 19:15Z (gives up then: rerun)
-- PR#309 GO-REQ routing since 18:35Z next check 19:00Z
-- PR#338 Gate-Edit D-id GO-REQ routing since 18:42Z next check 19:00Z
+- MD-SYNC-SNAPSHOT-TIMEOUT worktree plangraph-worktrees/md-sync-timeout since 19:48Z next check now: brief mimo-pro writer (handoff gen-79 item 1)
+- SPAWNER-GO-CATALOG-IDS writer goids (lane/catalog-go-ids) since 19:30Z next check 20:30Z
+- D-3681(2) omniroute chunk driver scripts/_tmp/run-chunks.sh since 19:35Z next check 21:00Z: r3 writer triage+commit
+- SEAT-PATH-FIXES #338 2nd seat waits a leg reset since 19:20Z next check 20:30Z: K/seat-338t.md
+- build-L2-pdfix-0115 r5 pd#15/16 + r6 pd#17 since 19:10Z next check 20:30Z
+- build-L2-readyv2 L2-LAUNCH approved D-3695c since 19:20Z next check 20:00Z
 ## Planned
-1. SEAT-PATH-FIXES #338: 2 seats outside gpt/mimo/anthropic (door path HIGH) -> MERGE-READY again
-2. KEEPER-EVIDENCE-MERGE-HEAD #309 on GO: merge_batch HIGH batch, evidence, submit
-3. D-3681(2) omniroute: unit/docs fix or seat -> sha + verdict to prox-L1-main, DONE to routing
+1. MD-SYNC-SNAPSHOT-TIMEOUT: D-3696 next after S8
+2. SEAT-PATH-FIXES + KEEPER-EVIDENCE-MERGE-HEAD: batch #309+#338 once 2nd seat ACCEPT (gh pr ready 309)
+3. D-3681(2) omniroute r3 + Haiku seat -> lane sha to prox-L1-main
 ## Open
-- BLOCKED pd#21 r4 2 new MED | default L1 Hand-Edit + delta seat | deadline none
-- BLOCKED no pytest-capable seat leg (incident) | default my suite as 3.3 record | deadline none
-- D-3684 ws ff 41e7b729->2485630d before 18:50Z | default report missed to routing | deadline 18:50Z
+- BLOCKED pd#21 1649adf MED handoff-check:394 | default r6 or leaf per routing | deadline none
+- BLOCKED #338 2nd seat leg (Go quota, free limits) | default retry after reset | deadline none
+- BLOCKED SPAWNER-GO-CATALOG-IDS leaf define | default writer runs meanwhile | deadline none
 ## Traps
-- J=/home/s/.claude/jobs/bfa93ec2/tmp (spawnw.sh, seat prompts, mb/ merge_batch copy); J2=/home/s/.claude/jobs/3e2d7005/tmp (seat.sh)
-- spawner route takes ONE --writer-family; Haiku seat leg runs in plan mode; opencode-go glm/qwen unavailable
-- conflicting PRs get no CI: check mergeable, union-merge CHANGELOG
-- pkill -f matching own command kills your shell/bg jobs: pgrep + filter
-- merges via tools/merge_batch.py (plangraph); plangraph-data single PR: gh pr merge --match-head-commit + ff live checkout
+- K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79 (seat.sh multi-family, spawnw.sh, briefs); plangraph-data is PRIVATE: privacy private
+- duplicate sessions keep appearing (pdfix-0114/0117/0120/0124, L1-0118): 0115 owns pdfix; tell dupes to stop
+- opencode-go: "Go usage limit exceeded"; catalog ids stale; spawner steer unsupported
+- plangraph-data has no CI: GO = local router suite; evidence commit = lane head with Plan-Item
+- merge_batch: git archive origin/main tools -> run from plangraph checkout
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-78 block)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-79 block)
