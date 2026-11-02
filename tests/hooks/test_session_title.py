@@ -62,6 +62,14 @@ class CounterRange(SeqCase):
             self.stored(text)   # e.g. a crash between truncate and write
             self.assertEqual((first, self.mod.next_seq()), (5000, 5001), repr(text))
 
+    def test_h1_a_marked_value_is_never_issued_again_after_a_lost_counter_write(self):
+        self.stored("4999")
+        self.assertEqual(self.mod.next_seq(), 5000)
+        self.stored("4999")   # crash after the mark write, before the counter write
+        self.assertEqual(self.mod.next_seq(), 5001)
+        self.seq_file.with_name("session-seq.last").write_bytes(b"\xff\xfe")   # a non-UTF-8 mark is no mark
+        self.assertEqual(self.mod.next_seq(), 5002)
+
     def test_h1_the_ring_wraps_9999_to_1_and_never_reissues_9999(self):
         self.stored("9998")
         self.assertEqual([self.mod.next_seq() for _ in range(3)], [9999, 1, 2])

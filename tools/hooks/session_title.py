@@ -99,7 +99,8 @@ def _bump(raw, last=0):
     one restarts at a clock-derived value in SEQ_RESTART..SEQ_MAX.
     """
     if raw and _counts_on(raw):
-        return int(raw) % SEQ_MAX + 1
+        n = int(raw) % SEQ_MAX + 1
+        return n % SEQ_MAX + 1 if n == last else n   # marked but the counter write was lost: count it as issued
     if 1 <= last <= SEQ_MAX:
         return last % SEQ_MAX + 1
     if not raw:
