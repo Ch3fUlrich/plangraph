@@ -319,3 +319,40 @@ def test_posix_killpg_refuses_unowned_group(monkeypatch):
         with pytest.raises(proc_kill.KillIncomplete):
             asyncio.run(proc_kill.kill_process_tree(pid, ident=ident))
     assert sent == []
+
+
+def test_pidless_process_not_failed():
+    async def run():
+        runner = SpawnerRunner(tree_killer=lambda pid: 1 / 0)
+        runner.jobs['j'] = job = type('J', (), {'events': [], 'survivors': [], 'status': 'running', 'exit_code': 0})()
+        await runner._reap_process('j', type('P', (), {})())
+        return job
+    job = asyncio.run(run())
+    assert job.status == 'running' and job.survivors == []
+
+
+def test_absent_pid_is_unproven_without_the_fixture():
+    assert proc_kill.root_identity(2 ** 22 + 12345) is None   # only test_spawner_hardening_delivery.py fakes ownership
+
+
+def test_unproven_pid_timeout_ends_kill_incomplete_without_blocking(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '0.05')
+    killed = []
+
+    class Hanging(_Fake):
+        async def communicate(self):
+            await asyncio.Event().wait()                    # never exits unless killed
+
+    async def run():
+        runner = SpawnerRunner(process_factory=lambda *a, **k: asyncio.sleep(0, Hanging(4242)),
+                               tree_killer=lambda pid: killed.append(pid))
+        monkeypatch.setattr(runner_mod, 'root_identity', lambda *a, **k: None)
+        monkeypatch.setattr(reap_mod, 'alive', lambda *a, **k: True)
+        job = await runner.spawn('test', wait_seconds=0)
+        t0 = time.monotonic()
+        await asyncio.wait_for(runner._tasks[job.job_id], 10)
+        return job, time.monotonic() - t0
+    job, elapsed = asyncio.run(run())
+    assert elapsed < 5                                      # bounded: no wait on a process we may not signal
+    assert killed == [] and job.status == 'failed' and job.survivors == [4242]
+    assert any(e['event'] == 'kill_incomplete' for e in job.events)

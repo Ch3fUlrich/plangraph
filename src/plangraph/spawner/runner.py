@@ -721,7 +721,7 @@ class SpawnerRunner:
             stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled') else proc.returncode
+            exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled') or self.jobs[job_id].survivors) else proc.returncode
 
             job = self.jobs[job_id]
             # Only the fork's exact stderr transport envelope is evidence.
