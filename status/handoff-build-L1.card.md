@@ -18,6 +18,7 @@
 - pd#20 LE-RECYCLE-NEW-SESSION: HIGH ctx-watchdog:297 fix = L2 spawner3605-0092 W1; plangraph-data stays mine
 - plangraph-data #15 #16 #17 (RIN-PATH-REPOINT, ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS) mine: Haiku tool seats all RC (records /home/s/.claude/jobs/9d41ad45/tmp/seat-hpd1{5,6,7}.md) -> build-L2-pdfix-0098 fixing (D-3651); D-3650 ruling forwarded; merges via rule 3.18 batches (D-3648: batch-ready label + MERGE-READY to me)
 - pd#20 91c1d77 MERGE-READY from spawner3605-0092 (Sonnet): luna tools delta seat asked of workst-L1-autoos-0088 11:3xZ -> GO-REQ routing
+- #309 #314 #279 failed keeper batch #331 r1 (findings /home/s/code/plangraph-worktrees/batch-keeper-c-findings.md): L2-LAUNCH build-L2-keeperfix asked (brief ~/.local/share/plangraph/briefs/build-L2-keeperfix.brief.md); Gate-Edit D-id for seat_record.py in AUTH_DOOR_PATHS asked *a 14:00Z
 - build-L2-recycle-0097 launched (D-3651) (brief ~/.local/share/plangraph/briefs/build-L2-recycle.brief.md): KEEP-SUBAGENTS + HANDOFF-OPEN-ITEMS-GATE
 - build-L2-heldfix-0091 DONE (9 heads listed to replan), stopping
 ## Planned
