@@ -1,32 +1,30 @@
-# L1 card · build-L1-0079 · 2026-11-02T07:34Z
+# L1 card · build-L1-0081 · 2026-11-02T08:56Z
 ## Goal
-- D-3596: close LE items (pd7/pd8 left), land #309 + #314 (tool seats), heldfix L2 to merge-ready, then review-legs slice 2 (D-3558)
+- D-3605 spawner legs (Haiku via Claude subscription, bans), seats back, then LE-PANE seat, #309/#314/heldfix seats, OS-FLEET-MSG-INVENTORY finish
 ## Keeper
-- claimed: KEEPER-EVIDENCE-MERGE-HEAD (claimed, since 11-01T14:31Z), SEAT-VERDICT-FROM-RECORD (claimed, since 11-01T19:25Z), SPAWNER-REVIEW-LEGS-D3552 (claimed, since 11-01T17:15Z), RIN-PATH-REPOINT + RIN-LEDGER-VIEWS (claimed ep2, lease 09:18Z), LE-PANE-MOVE-EXIT-CONFIRM + LE-FLEET-MSG-INVENTORY (claimed ep4, since 07:18Z, lease 11:18Z)
-- ready next: AUTOOS-HOOKS-INTERIM-S06, SEAT-VERDICT-INLINE-RUNS
+- claimed: SPAWNER-LEGS-D3605 (claimed ep2, lease 10:34Z), RIN-PATH-REPOINT + RIN-LEDGER-VIEWS (claimed ep2, lease 10:05Z), LE-PANE-MOVE-EXIT-CONFIRM + LE-FLEET-MSG-INVENTORY (claimed ep4, lease 11:18Z), KEEPER-EVIDENCE-MERGE-HEAD, SEAT-VERDICT-FROM-RECORD, SPAWNER-REVIEW-LEGS-D3552 (claimed)
+- ready next: OS-FLEET-MSG-INVENTORY (operator GO), AUTOOS-HOOKS-INTERIM-S06
 ## Done
-- 11-02T03:30Z D-3596 - LE r1 qwen REQUEST_CHANGES x3 posted via seat_verdict.py
-- 11-02T06:15Z LE-ROUTER-RECYCLE-DETECT 3e035d0 PR#18 (lane 95e6668) qwen run-bd80525b ACCEPT, keeper done, router/tests 321 passed
-- 11-02T06:01Z D-3599 - md-sync timer+path re-armed, dry-run 0 ops, 06:01 apply ok, render ok
-- 11-02T06:39Z RT-P4-SKILLS-REWRITE 055a6444 main CI incident PR#317 changelog line, main run 41400586824 green
-- 11-02T07:19Z D-3602 - LE pd7/pd8 re-claimed ep4, RIN-* heartbeat ep2
+- 11-02T08:01Z D-3603 4939979 LE-PANE r4a mimo-pro run-cdc18eec, 33 passed
+- 11-02T08:05Z D-3603 2ef763a LE-PANE r4b Hand-Edit 27 lines, cap test fail-first, 34 passed
+- 11-02T08:29Z D-3609 821e143 LE-PANE r4c mimo-pro run-6143a666, 2 tests fail-first, 36 passed
+- 11-02T08:20Z D-3609 - items SPAWNER-LEGS/DISPATCH-FAIL/SESSION-NAMES/COST-TIME created, L2 spawner3605-0083 launched
+- 11-02T08:50Z OS-FLEET-MSG-INVENTORY - coding-vm inventory.json + key 0600, client config loads
 ## In flight
-- LE-FLEET-MSG-INVENTORY 2nd-family seat workst-L1-autoos Go gemini-4-argon since 05:50Z next check 09:00Z
-- KEEPER-EVIDENCE-MERGE-HEAD + SEAT-VERDICT-FROM-RECORD tool seats workst-L1-autoos Go qwen3.8-max since 01:50Z next check 09:00Z
-- build-L2-heldfix-0076 waits on workst seats since 01:35Z next check 09:00Z
+- SPAWNER-DISPATCH-FAIL-DETECT build-L2-spawner3605-0083 since 08:20Z next check 10:00Z
+- heldfix 9 heads build-L2-heldfix-0076 since 01:35Z next check 10:00Z
 ## Planned
-1. LE-PANE-MOVE-EXIT-CONFIRM r4 per routing D-id (default a in BLOCKED 07:3xZ): exact-spec mimo-pro slice, 1 qwen delta seat, merge
-2. LE-FLEET-MSG-INVENTORY on seat ACCEPT: PR, merge, ff live tree, evidence decision, submit, post seat, DONE
-3. #309/#314 on ACCEPT: merge main (CHANGELOG conflict after #317), CI, GO-REQ
-4. renew RIN-* leases before 09:18Z (heartbeat ep2)
+1. SPAWNER-LEGS-D3605 slice A new mimo-pro brief (handoff gen-71 block), then slice B claude harness Haiku leg
+2. OS-FLEET-MSG-INVENTORY: find MCP env config, report 3 blockers to operator (keeper 127.0.0.1, self-resolve defect, workst key transfer)
+3. LE-PANE seat J/seat-pd7r5.md once a seat leg answers; then #309/#314/heldfix/pd8 seats
 ## Open
-- BLOCKED LE-PANE r3 cap, 2 valid HIGH (start signal) | default a r4 exact spec | deadline none
-- BLOCKED #309/#314/heldfix/pd8 seats: workst Go usage limit, all free legs + agy limited | default wait Go reset | deadline none
-- OS-CODINGVM-OPENCODE-GO Go auth on coding.vm (operator) | default seats via workst | deadline none
+- BLOCKED cx provider auth (Sol hang, luna 401) | default a land legs w/o Sol | deadline 09:30Z
+- BLOCKED all review legs down (deepseek-free limit, muse unavailable) | default a Haiku leg | deadline 10:00Z
+- OS-CODINGVM-OPENCODE-GO Go auth on coding.vm (operator) | default none | deadline none
 ## Traps
-- seat_verdict --writer-family uses family names (xiaomi, not mimo); verdict posts only when item is in_review
-- keeper evidence kind commit is router-only: use decision; LE claims lapse to open -> claim with force_stale reason
-- spawner CLI wait returns empty while running: poll status; mimo-pro stalls on 4+ findings: 1-3 per slice
-- never git commit in /home/s/code/plangraph; zsh `set -- $t` does not split (bash -c)
+- spawner --writer-family takes ONE family (mimo); seat_verdict uses xiaomi,anthropic
+- MCP steer does not know CLI runs; console-anthropic has no credits (D-3619)
+- this host IS coding-vm (tailscale Self); keeper on 127.0.0.1:8787 only
+- never git commit in /home/s/code/plangraph; never print key bytes
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-70 block, line 2); J=/home/s/.claude/jobs/0109de81/tmp
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-71 block, line 2); J=/home/s/.claude/jobs/0109de81/tmp
