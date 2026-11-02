@@ -30,6 +30,12 @@ _SHA_ARG_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
 _FULL_HEX40_RE = re.compile(r"^[0-9a-f]{40}\Z")
 
 
+def _stdout(proc: subprocess.CompletedProcess) -> str:
+    """Subprocess stdout as text (never assume the subprocess layer's str)."""
+    out = proc.stdout
+    return out if isinstance(out, str) else out.decode("utf-8", "replace")
+
+
 def valid_ref(ref: Any) -> bool:
     """Validate git ref: only [A-Za-z0-9._/-], no leading '-', no '..'."""
     if not isinstance(ref, str) or not ref:
@@ -309,17 +315,14 @@ class GitAdapter:
             )
             if proc_parents.returncode != 0:
                 return None
-            out_parents = (
-                proc_parents.stdout
-                if isinstance(proc_parents.stdout, str)
-                else proc_parents.stdout.decode("utf-8", "replace")
-            )
+            out_parents = _stdout(proc_parents)
             lines_parents = [ln.strip() for ln in out_parents.splitlines() if ln.strip()]
             if not lines_parents:
                 return None
             tokens = lines_parents[0].split()
             is_merge = len(tokens) >= 3
 
+            m_sha: str | None = None
             if is_merge:
                 proc_rev = self._run(
                     repo,
@@ -333,20 +336,18 @@ class GitAdapter:
                     ],
                 )
                 if proc_rev.returncode != 0:
+                    # A failed lookup of a merge sha fails closed right here:
+                    # the proc_fp path below answers a different question and
+                    # must never be reached through an error.
                     return None
-                out_rev = (
-                    proc_rev.stdout
-                    if isinstance(proc_rev.stdout, str)
-                    else proc_rev.stdout.decode("utf-8", "replace")
-                )
+                out_rev = _stdout(proc_rev)
                 rev_lines = [ln.strip().lower() for ln in out_rev.splitlines() if ln.strip()]
-                if not rev_lines:
-                    return None
-                first_line = rev_lines[0]
-                if not valid_commit_ref(first_line) or first_line != sha.lower():
-                    return None
-                m_sha = first_line
-            else:
+                if rev_lines:
+                    first_line = rev_lines[0]
+                    if valid_commit_ref(first_line) and first_line == sha.lower():
+                        m_sha = first_line
+
+            if m_sha is None:
                 proc_fp = self._run(
                     repo,
                     [
@@ -360,11 +361,7 @@ class GitAdapter:
                 )
                 if proc_fp.returncode != 0:
                     return None
-                out_fp = (
-                    proc_fp.stdout
-                    if isinstance(proc_fp.stdout, str)
-                    else proc_fp.stdout.decode("utf-8", "replace")
-                )
+                out_fp = _stdout(proc_fp)
                 fp_lines = [ln.strip().lower() for ln in out_fp.splitlines() if ln.strip()]
                 fp = [ln for ln in fp_lines if valid_commit_ref(ln)]
 
@@ -380,11 +377,7 @@ class GitAdapter:
                 )
                 if proc_anc.returncode != 0:
                     return None
-                out_anc = (
-                    proc_anc.stdout
-                    if isinstance(proc_anc.stdout, str)
-                    else proc_anc.stdout.decode("utf-8", "replace")
-                )
+                out_anc = _stdout(proc_anc)
                 anc_lines = [ln.strip().lower() for ln in out_anc.splitlines() if ln.strip()]
                 anc = {ln for ln in anc_lines if valid_commit_ref(ln)}
 
@@ -417,11 +410,7 @@ class GitAdapter:
             )
             if proc_email.returncode != 0:
                 return None
-            out_email = (
-                proc_email.stdout
-                if isinstance(proc_email.stdout, str)
-                else proc_email.stdout.decode("utf-8", "replace")
-            )
+            out_email = _stdout(proc_email)
             committer_email = out_email.strip()
             if not committer_email:
                 return None
