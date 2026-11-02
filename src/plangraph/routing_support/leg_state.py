@@ -136,11 +136,13 @@ class LegStateStore:
         except sqlite3.Error:
             return None
 
-    def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None):
+    def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
+        if reset is None and down_s is not None:
+            reset = now + _down_seconds(down_s)   # D-3605 (a): credit/auth refusal, no provider reset time
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
                        (leg, account, combo, 429, _redact(line),
@@ -211,8 +213,8 @@ def record_probe_pass(leg, caller, now=None, account=None, combo=None):
     return _default_store().record_probe_pass(leg, caller, now, account, combo)
 
 
-def record_harness_limit(leg, line, caller, now=None, account=None, combo=None):
-    return _default_store().record_harness_limit(leg, line, caller, now, account, combo)
+def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, down_s=None):
+    return _default_store().record_harness_limit(leg, line, caller, now, account, combo, down_s)
 
 
 def leg_status(leg, now=None, account=None, combo=None):
