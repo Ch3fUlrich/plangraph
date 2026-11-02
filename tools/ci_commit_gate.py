@@ -105,16 +105,16 @@ OPEN_PR_SKIP_NOTICE = 'ci-commit-gate: open PR merge check skipped (no --open-he
 
 MISSING_WRITER = 'missing Writer trailer'
 CLAUDE_WRITER = 'claude writer not in form claude-<model> <run|session|uuid id> [(note)]'
-#: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional
-#: trailing parenthetical note; ``)`` is forbidden inside the note (no nested
-#: parens), as are a newline and a second Writer marker (case-insensitive,
-#: optional spaces before ':'). Case rule: ``claude-<model>`` and the run-hex
-#: id are lowercase only, a uuid may be any case. <id> is shape only (never
-#: looked up): a spawner run id, a Claude Code session id, or a uuid (D-2955, D-2967).
+#: A Claude Writer is accepted only as ``claude-<model> <id>`` with an optional trailing
+#: parenthetical note; ``)`` is forbidden inside the note (no nested parens), as are a
+#: newline and a second Writer marker (case-insensitive, optional spaces before ':').
+#: Case rule: ``claude-<model>`` and the run-hex id are lowercase only, a uuid may be any
+#: case. <id> is shape only (never looked up): a spawner run id, a Claude Code session
+#: id, an opencode ses_ id (console-anthropic legs, D-3478), or a uuid (D-2955, D-2967).
 CLAUDE_WRITER_RE = re.compile(
     r'^claude-[a-z0-9.-]+ '
     r'(?:run-[0-9a-f]{32}'
-    r'|session_[A-Za-z0-9]+'
+    r'|(?:session|ses)_[A-Za-z0-9]+'
     r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
     r'(?: \((?:(?!(?i:Writer\s*:))[^)\n])+\))?\Z'
 )

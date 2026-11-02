@@ -1,0 +1,20 @@
+[
+  {
+    "id": "routing-registry-1",
+    "prompt": "Where is the authoritative list of OmniRoute models, providers and routes kept, and can I edit configuration/omniroute/combos.json directly to add a model?",
+    "must": ["one model truth", "never hand-structured"],
+    "must_not": ["edit combos.json by hand", "hand-edit the generated file", "combos.json is the source of truth"]
+  },
+  {
+    "id": "routing-registry-2",
+    "prompt": "I need to add a new route with two legs to the OmniRoute registry. What is the exact procedure from registry edit to apply?",
+    "must": ["render --check", "apply --dry-run", "never reorder these steps"],
+    "must_not": ["apply first", "skip combo-contract", "reorder the steps freely"]
+  },
+  {
+    "id": "routing-registry-3",
+    "prompt": "The live gateway shows a stale combo; can I fix ~/.omniroute by hand or write through the MCP to correct it?",
+    "must": ["live state is read-only", "apply.sh --drift"],
+    "must_not": ["edit ~/.omniroute directly", "write through the api to fix", "fix the live combo in place"]
+  }
+]

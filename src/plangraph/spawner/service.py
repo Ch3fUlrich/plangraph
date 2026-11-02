@@ -243,8 +243,7 @@ class SpawnService(SeatSpawnMixin):
             reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
             plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *([reviewed] if reviewed else [])])
             chosen = next((l for l in DEFAULT_LEGS if l.id == leg), None) if leg else None
-            if leg and chosen is None:
-                raise SpawnRefused('unknown leg')
+            if leg and chosen is None: raise SpawnRefused('unknown leg')
             if model and chosen and model != chosen.model:
                 raise SpawnRefused('model and leg disagree')
             target = model if model is not None else (chosen.model if chosen else None)
@@ -254,10 +253,11 @@ class SpawnService(SeatSpawnMixin):
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-            from plangraph.planner.legs import NO_VERDICT_SEATS
+            from plangraph.planner.legs import NO_VERDICT_SEATS, leg_active
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
+            if chosen is not None and not leg_active(chosen): raise SpawnRefused('leg expired: ' + chosen.id)  # D-3505
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg
