@@ -29,7 +29,7 @@ __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_OR
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
 #: Harness names a leg may run under.
-HARNESSES = ("qodercli", "opencode", "agy")
+HARNESSES = ("qodercli", "opencode", "agy", "claude")
 #: How a review leg reads the change: with its own tools, or only from a diff the
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
@@ -96,7 +96,7 @@ DEFAULT_LEGS = (
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
-        note="D-3355 rule 4.0: no Sol leg anywhere", expires="2026-10-31"),
+        note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
@@ -130,11 +130,17 @@ DEFAULT_LEGS = (
         "opencode-go/deepseek-v4-flash-max", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
+    # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
+    Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
+        ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
+        tool_mode="tools",
+        note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
 # D-2683 operator writer order (free-first): the free tier leads, then
 # subscription.  agy-sonnet-5.5 is orchestrate-only and never a writer here.
 WRITER_ORDER: tuple[str, ...] = (
+    "cx-gpt-6.1-sol",   # D-3666/D-3667: tuple head; tier-first sort (D-2683) keeps it behind the free tier
     "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free",
     "openrouter-free",

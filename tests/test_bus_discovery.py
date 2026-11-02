@@ -73,6 +73,92 @@ def test_discovery_failure_degrades(registry, status, failure):
         registry.resolve('alpha')
 
 
+def make_local_registry(tmp_path):
+    key = tmp_path / 'a.key'
+    key.write_bytes(b'a' * 32)
+    return Registry([Host('alpha', 'self-key', 'ka', key)])
+
+
+def test_self_only_status_resolves_local_host(tmp_path):
+    registry = make_local_registry(tmp_path)
+    status = {'Self': {'PublicKey': 'self-key', 'ID': 'n123',
+                       'DNSName': 'alpha.example.test.', 'HostName': 'alpha', 'Online': True}}
+    probed = []
+    registry.refresh(status, 10, lambda endpoint: probed.append(endpoint) or True)
+    assert registry.resolve('alpha') == 'http://127.0.0.1:8765'
+    assert probed == ['http://127.0.0.1:8765']
+    assert registry.hosts['alpha'].last_seen == 10
+    assert registry.hosts['alpha'].health == 'healthy'
+    assert registry.peers == {}
+
+
+def test_self_offline_stays_offline_and_is_not_probed(tmp_path):
+    registry = make_local_registry(tmp_path)
+    status = {'Self': {'PublicKey': 'self-key',
+                       'DNSName': 'alpha.example.test.', 'HostName': 'alpha', 'Online': False}}
+    probed = []
+    registry.refresh(status, 10, lambda endpoint: probed.append(endpoint) or True)
+    assert probed == []
+    assert registry.hosts['alpha'].health == 'offline'
+    with pytest.raises(LookupError):
+        registry.resolve('alpha')
+
+
+def test_peer_with_self_dnsname_other_node_id_is_not_local(tmp_path):
+    key = tmp_path / 'a.key'
+    zkey = tmp_path / 'z.key'
+    key.write_bytes(b'a' * 32)
+    zkey.write_bytes(b'z' * 32)
+    registry = Registry([Host('alpha', 'self-key', 'ka', key), Host('zeta', 'node-z', 'kz', zkey)])
+    status = {'Self': {'PublicKey': 'self-key',
+                       'DNSName': 'alpha.example.test.', 'HostName': 'alpha', 'Online': False},
+              'Peer': {'node-z': {'DNSName': 'alpha.example.test.', 'HostName': 'alpha', 'Online': True}}}
+    probed = []
+    registry.refresh(status, 10, lambda endpoint: probed.append(endpoint) or True)
+    with pytest.raises(LookupError):
+        registry.resolve('alpha')
+    assert registry.hosts['alpha'].health == 'offline'
+    assert registry.hosts['zeta'].endpoint == 'http://alpha.example.test:8765'
+    assert 'http://127.0.0.1:8765' not in probed
+
+
+def test_self_wins_over_peer_with_same_key(tmp_path):
+    registry = make_local_registry(tmp_path)
+    status = {'Self': {'PublicKey': 'self-key',
+                       'DNSName': 'self.example.test.', 'HostName': 'selfhost', 'Online': True},
+              'Peer': {'self-key': {'DNSName': 'spoof.example.test.', 'HostName': 'spoof', 'Online': True}}}
+    probed = []
+    registry.refresh(status, 10, lambda endpoint: probed.append(endpoint) or True)
+    assert registry.resolve('alpha') == 'http://127.0.0.1:8765'
+    assert probed == ['http://127.0.0.1:8765']
+    assert registry.peers == status['Peer']
+
+
+@pytest.mark.parametrize('bad_self', ['self-key', None, {'DNSName': 'self.example.test.', 'Online': True},
+                                      {'PublicKey': 7, 'DNSName': 'self.example.test.', 'Online': True}])
+def test_malformed_self_fails_closed_even_with_same_key_peer(tmp_path, bad_self):
+    registry = make_local_registry(tmp_path)
+    status = {'Self': bad_self,
+              'Peer': {'self-key': {'DNSName': 'spoof.example.test.', 'HostName': 'spoof', 'Online': True}}}
+    probed = []
+    registry.refresh(status, 10, lambda endpoint: probed.append(endpoint) or True)
+    with pytest.raises(LookupError):
+        registry.resolve('alpha')
+    assert probed == []
+
+
+def test_tailscale_status_accepts_self_only_json():
+    def run(*args, **kwargs):
+        assert args[0] == ['tailscale', 'status', '--json']
+        return subprocess.CompletedProcess(args[0], 0, json.dumps(
+            {'Self': {'PublicKey': 'self-key', 'Online': True}}))
+    value = tailscale_status(run)
+    assert value['Self']['PublicKey'] == 'self-key'
+    def run_neither(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, json.dumps({'BackendState': 'Running'}))
+    assert tailscale_status(run_neither) == {}
+
+
 def test_loop_retries(registry, status):
     calls = []
     class Stop:
