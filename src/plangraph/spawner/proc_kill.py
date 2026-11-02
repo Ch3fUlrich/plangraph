@@ -1,43 +1,180 @@
-"""Terminate a run's isolated process group or Windows tree, and wait for death."""
+"""Kill only the process tree a run started, then prove it is gone.
+
+The root is proven ours at spawn (``root_identity``); a snapshot of its
+descendants is taken before any signal, every kill is checked against the
+snapshot's (pid, start time), and ``verify`` reports survivors.  A root that
+is not proven ours is never snapshotted and never killed.
+"""
 import asyncio
 import os
 import time
 from pathlib import Path
 
 WAIT_S = 2.0
+KILL_WAIT_S = 10.0
+
+
+class KillIncomplete(RuntimeError):
+    """Processes of the run's tree outlived the kill; ``survivors`` are their pids."""
+
+    def __init__(self, survivors):
+        self.survivors = sorted(survivors)
+        super().__init__('kill_incomplete: %d survivor(s)' % len(self.survivors))
+
+
+def _stat(pid, proc_root='/proc'):
+    """(state, ppid, pgrp, sid, starttime) of a pid, or None when unreadable."""
+    try:
+        f = (Path(proc_root) / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()
+        return f[0], int(f[1]), int(f[2]), int(f[3]), int(f[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _scan(proc_root='/proc'):
+    out = {}
+    try:
+        names = [p.name for p in Path(proc_root).iterdir() if p.name.isdigit()]
+    except OSError:
+        return out
+    for name in names:
+        st = _stat(name, proc_root)
+        if st is not None:
+            out[int(name)] = st
+    return out
 
 
 def group_alive(pgid):
     """True while any non-zombie member of the process group survives."""
+    return any(s[0] != 'Z' and s[2] == pgid for s in _scan().values())
+
+
+def root_identity(pid, *, platform=None, proc_root='/proc'):
+    """Start-time token proving ``pid`` is our direct child and its own group leader.
+
+    None means "not proven ours": nothing is snapshotted or killed for it."""
+    if (platform or os.name) == 'nt':
+        return 'nt' if isinstance(pid, int) else None
+    st = _stat(pid, proc_root) if isinstance(pid, int) else None
+    return st[4] if st and st[1] == os.getpid() and st[2] == pid else None
+
+
+def _nt_table():
+    """{pid: ppid} through Toolhelp32 (stdlib ctypes); {} off Windows."""
     try:
-        entries = list(Path('/proc').iterdir())
-    except OSError:
-        return False  # no /proc: the kill is fire-and-forget on this platform
-    for path in entries:
-        if not path.name.isdigit():
-            continue
+        import ctypes
+        from ctypes import wintypes as w
+
+        class Entry(ctypes.Structure):
+            _fields_ = [('dwSize', w.DWORD), ('cntUsage', w.DWORD), ('pid', w.DWORD),
+                        ('heap', ctypes.c_size_t), ('module', w.DWORD), ('threads', w.DWORD),
+                        ('ppid', w.DWORD), ('pri', ctypes.c_long), ('flags', w.DWORD),
+                        ('exe', ctypes.c_wchar * 260)]
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+        snap = ctypes.c_void_p(k32.CreateToolhelp32Snapshot(2, 0))
+        table, entry = {}, Entry()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            table[entry.pid] = entry.ppid
+            ok = k32.Process32NextW(snap, ctypes.byref(entry))
+        k32.CloseHandle(snap)
+        return table
+    except Exception:
+        return {}
+
+
+def _nt_alive(pid):
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        handle = k32.OpenProcess(0x100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            return False
         try:
-            fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
-            if fields[0] != 'Z' and int(fields[2]) == pgid:
-                return True
-        except (OSError, ValueError, IndexError):
-            continue
-    return False
+            return k32.WaitForSingleObject(ctypes.c_void_p(handle), 0) == 0x102  # WAIT_TIMEOUT
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(handle))
+    except Exception:
+        return False
 
 
-async def kill_process_tree(pid, *, platform=None, command_factory=None):
-    """Terminate the isolated POSIX group or Windows process tree."""
+def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt_table=None):
+    """{pid: starttime} of the run's tree, taken before any kill.
+
+    posix: the root, its process group and session, and every ppid-descendant of
+    those (a setsid()'d grandchild still has its parent in the set).  nt: Job
+    Object members when a job exists, else the Toolhelp32 ppid closure (only when
+    the root is our child).  Empty when ``ident`` does not prove the root ours."""
+    if ident is None:
+        return {}
+    if (platform or os.name) == 'nt':
+        found = {int(p) for p in (job_pids or ())}
+        table = (nt_table or _nt_table)() if not found else {}
+        if table.get(root) == os.getpid():
+            found.add(root)
+            grew = True
+            while grew:
+                kids = {p for p, pp in table.items() if pp in found and p not in found}
+                grew = bool(kids)
+                found |= kids
+        return {p: None for p in found | {root}}
+    procs = _scan(proc_root)
+    found = {p for p, s in procs.items() if s[0] != 'Z' and root in (s[2], s[3])}
+    if root in procs and procs[root][4] != ident:
+        return {}  # the root pid was reused by a foreign process
+    found = {p for p in found if p != root or procs[p][4] == ident}
+    grew = True
+    while grew:
+        kids = {p for p, s in procs.items() if s[1] in found and p not in found and p != root}
+        grew = bool(kids)
+        found |= kids
+    return {p: procs[p][4] for p in found if procs[p][0] != 'Z'}
+
+
+def alive(pid, start, *, platform=None, proc_root='/proc'):
+    """True while ``pid`` is the same live non-zombie process recorded at ``start``."""
+    if (platform or os.name) == 'nt':
+        return _nt_alive(pid)
+    st = _stat(pid, proc_root)
+    return st is not None and st[0] != 'Z' and (start is None or st[4] == start)
+
+
+def _winpid(pid, proc_root):
+    """MSYS pid -> Windows pid (taskkill speaks Windows pids)."""
+    try:
+        return int((Path(proc_root) / str(pid) / 'winpid').read_text().strip())
+    except (OSError, ValueError):
+        return pid
+
+
+async def kill_process_tree(pid, *, platform=None, command_factory=None, members=None,
+                            proc_root='/proc'):
+    """Terminate the isolated POSIX group or Windows process tree.
+
+    ``members`` is a pre-kill ``snapshot``: each member is killed individually
+    (posix: only while its start time still matches)."""
+    import signal
     if (platform or os.name) == 'nt':
         factory = command_factory or asyncio.create_subprocess_exec
-        proc = await factory('taskkill', '/PID', str(pid), '/T', '/F',
-                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
+        for target in (sorted(members) if members else [pid]):
+            proc = await factory('taskkill', '/PID', str(_winpid(target, proc_root) if members else target),
+                                 '/T', '/F', stdout=asyncio.subprocess.PIPE,
+                                 stderr=asyncio.subprocess.PIPE)
+            await proc.communicate()
         return
-    import signal
     try:
         os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return  # the run's process group is already gone
+    except (ProcessLookupError, PermissionError):
+        pass  # the run's process group is already gone
+    for member, start in (members or {}).items():
+        if alive(member, start, proc_root=proc_root):
+            try:
+                os.kill(member, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
     # SIGKILL + wait: the reaped run must be seen dead, not merely signalled -
     # CI caught a grandchild still in state R while collect was returning.
     deadline = time.monotonic() + WAIT_S
@@ -45,3 +182,29 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None):
         if not await asyncio.to_thread(group_alive, pid):
             return
         await asyncio.sleep(0.02)
+
+
+async def verify(root, ident, members, *, platform=None, job_pids=None, proc_root='/proc',
+                 wait_s=KILL_WAIT_S):
+    """Poll until every snapshot member is gone; raise KillIncomplete otherwise.
+
+    Each pass re-scans the group/session and kills late forks (pids that were
+    not in the snapshot); snapshot members are only observed."""
+    import signal
+    deadline = time.monotonic() + wait_s
+    while True:
+        late = await asyncio.to_thread(snapshot, root, ident, platform=platform,
+                                       job_pids=job_pids, proc_root=proc_root)
+        left = {p for p, s in members.items() if alive(p, s, platform=platform, proc_root=proc_root)}
+        for pid, start in late.items():
+            if pid not in members and (platform or os.name) != 'nt' and alive(pid, start, proc_root=proc_root):
+                left.add(pid)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        if not left:
+            return
+        if time.monotonic() >= deadline:
+            raise KillIncomplete(left)
+        await asyncio.sleep(0.05)
