@@ -15,10 +15,20 @@ the first dash a dot, any letter lowercased (``RULE-0-2A`` -> ``0.2a``);
 the text is the description up to its last ``\\nTags:`` line (whole
 description when there is none), whitespace-collapsed to one line.  A
 placeholder with no item, or an item with no placeholder, is an error
-naming the id (exit 1).  The output ends with exactly the skeleton's
-trailing newline state.  argparse errors exit 2; any other problem exits 1.
+naming the id (exit 1); a duplicate item id or a placeholder seen twice is
+likewise an error naming the id.  The output ends with exactly the
+skeleton's trailing newline state and line endings: the source's end of
+line is re-attached to every ``{{id}}`` placeholder and rendered rule line,
+so a CRLF source renders back byte-equal to its CRLF target.  argparse
+errors and usage exit 2 and go to the injected ``err`` stream (help to
+``out``); any other problem exits 1.
+
+Import note: ``decisions_import`` is imported as a top-level module, so the
+``tools/`` directory must be on ``sys.path`` when this file is imported as
+a module (running it as a script puts its own directory there).
 """
 import argparse
+import contextlib
 import difflib
 import json
 import re
@@ -39,18 +49,23 @@ class RenderError(Exception):
 
 
 def make_skeleton(text, prefix="RULE"):
-    """Copy `text` with every rule block replaced by one ``{{id}}`` line."""
+    """Copy `text` with every rule block replaced by one ``{{id}}`` line.
+
+    Rule detection ignores the line's end-of-line marker and the placeholder
+    re-attaches the replaced rule line's one (``\\r`` for CRLF sources), so
+    the skeleton keeps the source's line endings intact.
+    """
     groups = set(parse_rules(text).group_headings)
     lines = text.split("\n")
     out, i = [], 0
     while i < len(lines):
-        match = RULE_RE.match(lines[i])
+        match = RULE_RE.match(lines[i].rstrip("\r"))
         if not match:
             out.append(lines[i])
             i += 1
             continue
         j = i + 1
-        while (j < len(lines) and not RULE_RE.match(lines[j])
+        while (j < len(lines) and not RULE_RE.match(lines[j].rstrip("\r"))
                and not HEADING_RE.match(lines[j])):
             j += 1
         while j > i + 1 and not lines[j - 1].strip():
@@ -58,7 +73,8 @@ def make_skeleton(text, prefix="RULE"):
         if match.group(2) in groups:
             out.extend(lines[i:j])   # group headings stay literal
         else:
-            out.append("{{%s}}" % item_id(prefix, match.group(2)))
+            eol = "\r" if lines[i].endswith("\r") else ""
+            out.append("{{%s}}" % item_id(prefix, match.group(2)) + eol)
         i = j
     return "\n".join(out)
 
@@ -87,14 +103,14 @@ def load_items(path):
         with open(path, encoding="utf-8") as handle:
             raw = handle.read()
     except (OSError, UnicodeDecodeError) as exc:
-        raise RenderError("cannot read items: %s" % exc.__class__.__name__)
+        raise RenderError("cannot read items %s: %s" % (path, exc))
     try:
         data = json.loads(raw)
     except ValueError:
         try:
             data = yaml.safe_load(raw)
         except yaml.YAMLError as exc:
-            raise RenderError("cannot parse items: %s" % exc.__class__.__name__)
+            raise RenderError("cannot parse items %s: %s" % (path, exc))
     if isinstance(data, dict):
         try:
             data = [op["item"][0] for op in data["ops"]]
@@ -104,24 +120,43 @@ def load_items(path):
         raise RenderError("items must be a JSON list or a batch with ops")
     if any(not isinstance(e, dict) or "id" not in e for e in data):
         raise RenderError("item entry without an id")
-    return [{"id": str(e["id"]), "description": str(e.get("description") or "")}
-            for e in data]
+    items = [{"id": str(e["id"]), "description": str(e.get("description") or "")}
+             for e in data]
+    seen = set()
+    for item in items:
+        if item["id"] in seen:
+            raise RenderError("duplicate item id %s" % item["id"])
+        seen.add(item["id"])
+    return items
 
 
 def render_text(skeleton, items):
-    """Fill every ``{{id}}`` from `items`; the id sets must match exactly."""
-    by_id = {item["id"]: item["description"] for item in items}
+    """Fill every ``{{id}}`` from `items`; the id sets must match exactly.
+
+    Duplicates are errors, never a silent collapse: a repeated item id or a
+    placeholder seen twice raises naming the id.  A placeholder line's end
+    of line (``\\r`` after CRLF sources) is re-attached to its rendered rule
+    line, so mixed-EOL sources round-trip byte-exact.
+    """
+    by_id = {}
+    for item in items:
+        if item["id"] in by_id:
+            raise RenderError("duplicate item id %s" % item["id"])
+        by_id[item["id"]] = item["description"]
     used, out = set(), []
     for line in skeleton.split("\n"):
-        match = PLACEHOLDER_RE.match(line)
+        eol = "\r" if line.endswith("\r") else ""
+        match = PLACEHOLDER_RE.match(line[:-1] if eol else line)
         if not match:
             out.append(line)
             continue
         ident = match.group(1)
+        if ident in used:
+            raise RenderError("placeholder %s appears twice" % ident)
         if ident not in by_id:
             raise RenderError("placeholder %s has no item" % ident)
         used.add(ident)
-        out.append(rule_line(ident, by_id[ident]))
+        out.append(rule_line(ident, by_id[ident]) + eol)
     extra = sorted(set(by_id) - used)
     if extra:
         raise RenderError("item %s has no placeholder" % extra[0])
@@ -133,7 +168,7 @@ def read_text(path, label):
         with open(path, "rb") as handle:
             return handle.read().decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        raise RenderError("cannot read %s: %s" % (label, exc.__class__.__name__))
+        raise RenderError("cannot read %s %s: %s" % (label, path, exc))
 
 
 def write_text(path, text):
@@ -141,7 +176,7 @@ def write_text(path, text):
         with open(path, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
     except OSError as exc:
-        raise RenderError("cannot write output: %s" % exc.__class__.__name__)
+        raise RenderError("cannot write output %s: %s" % (path, exc))
 
 
 def diff_head(target, rendered, name):
@@ -169,7 +204,10 @@ def main(argv=None, out=None, err=None):
         sub.add_argument("--out" if name == "render" else "--target",
                          required=True, help="file to write or verify")
     try:
-        args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+        # argparse writes usage/errors to sys.stderr and help to sys.stdout;
+        # redirect both into the injected streams (LOW: no real-std-stream leak).
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else 2
     try:
