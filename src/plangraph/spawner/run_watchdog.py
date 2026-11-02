@@ -5,14 +5,12 @@ import logging
 import math
 import os
 from pathlib import Path
-import re
 import subprocess
 import time
 
+from .run_activity import ANSI, HEADER, first_event, first_event_limit, hang_event, heartbeat, is_activity, note  # noqa: F401  ANSI, HEADER, is_activity re-exported
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
 
-ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
-HEADER = re.compile(r'^>\s+\S+\s+·\s+\S+')
 SKIP = {'.git', '.pytest_cache', '__pycache__', '.venv', 'logs', 'output', 'node_modules', 'site'}
 LIVE_LOG_FLUSH = 16384        # batched appends: one write+fsync per 16 KB, not per line
 LIVE_LOG_MAX = 2 * 1024 * 1024
@@ -45,6 +43,7 @@ def thresholds(card=None):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
         result[key.replace('_min', '_s')] = value * 60
+    result['first_event_s'], result['first_event_card'] = first_event(card)   # D-3605 (b): hang rule
     result['hard_max'] = False   # table max_min may carry the first-edit hold (M5)
     timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
     if timeout and 'max_min' not in card:
