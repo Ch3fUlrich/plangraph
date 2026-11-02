@@ -103,3 +103,20 @@ def test_load_legs_accepts_expires_and_rejects_bad_format(tmp_path):
                    encoding="utf-8")
     with pytest.raises(ValueError, match="expires"):
         load_legs(bad)
+
+
+def test_override_cannot_spawn_an_expired_leg(tmp_path, monkeypatch):
+    """D-3505 override refusal kept after D-3605 un-expired Sol (seat run-932dbd17 LOW)."""
+    import asyncio
+    from plangraph.planner import legs as legs_mod
+    from plangraph.spawner.leg_state import LegStateStore
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner.service import SpawnService
+    expired = replace(_leg(), expires="2020-01-01")
+    monkeypatch.setattr(legs_mod, "DEFAULT_LEGS",
+                        tuple(expired if leg.id == SONNET else leg for leg in legs_mod.DEFAULT_LEGS))
+    svc = SpawnService(SpawnerRunner(), tmp_path, LegStateStore(tmp_path / "legs.sqlite"))
+    from plangraph.planner.routing import SpawnRefused
+    with pytest.raises(SpawnRefused, match="^leg expired: " + SONNET.replace(".", r"\.") + "$"):
+        asyncio.run(svc.spawn(card=CARD, prompt="x", role="implement", leg=SONNET,
+                              override_reason="operator selection", dry_run=True))
