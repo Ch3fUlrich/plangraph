@@ -13,7 +13,8 @@
 - 11-02T10:30Z SPAWNER-LEGS-D3605 PR#321 584c49f2 Haiku tool seat ACCEPT 1117 passed seat-h321.md
 ## In flight
 - OPERATOR ORDER 11-02 (via 'plangraph replan'): replan merges + seats ALL plangraph PRs; I send it MERGE-READY <pr> <sha>; I keep other repos
-- #324 ef06b97f (r2a/b/c, hang fix) MERGE-READY to replan 12:4xZ; seat = replan's next spawner batch
+- #324 r3 LAST (Haiku RC r2: /home/s/code/plangraph-worktrees/pr324-r2-findings.md) Sonnet subagent of build-L1-0093 on lane/spawner-kill-own-tree-3 after ef06b97f; full suite -> MERGE-READY replan (joins spawner batch with #318)
+- INCIDENT mimo rc124 (Server runs): diagnosis timeout post-edit, edits dropped; item JSON ~/.local/share/plangraph/briefs/SPAWNER-TIMEOUT-SALVAGE.item.json BLOCKED at routing *a 14:30Z
 - #321 #323 #325 #326 in replan merge batch #329 (cdbc015b, runner split); replan runs Haiku seats (operator: luna rate-limited); on MERGED: evidence+submit, ff spawner-main, Haiku probe -> DONE D-3659
 - pd#20 LE-RECYCLE-NEW-SESSION: HIGH ctx-watchdog:297 fix = L2 spawner3605-0092 W1; plangraph-data stays mine
 - plangraph-data #15 #16 #17 (RIN-PATH-REPOINT, ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS) mine: Haiku tool seats all RC (records /home/s/.claude/jobs/9d41ad45/tmp/seat-hpd1{5,6,7}.md) -> build-L2-pdfix-0098 fixing (D-3651); D-3650 ruling forwarded; merges via rule 3.18 batches (D-3648: batch-ready label + MERGE-READY to me)
