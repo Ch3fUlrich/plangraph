@@ -14,18 +14,30 @@ from pathlib import Path
 
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _TEST_GAMING = re.compile(r"^TEST_GAMING:[ \t]*(.*)$", re.I | re.M)
-_VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
+
+
+def _verdict_line():
+    """seat_verdict's authoritative VERDICT-line grammar (lazy: circular import)."""
+    from seat_verdict import _VERDICT_LINE
+    return _VERDICT_LINE
 
 
 def _canon_family(name):
     """Canonical family of a model or family name via seat_verdict's alias table."""
-    from seat_verdict import model_family  # local: seat_verdict imports this module
-    return model_family(name) or str(name or "").strip().lower()
+    from seat_verdict import model_family, KNOWN_FAMILIES  # local: seat_verdict imports this module
+    family = model_family(name)
+    if family is not None:
+        return family
+    candidate = str(name or "").strip().lower()
+    if candidate not in KNOWN_FAMILIES:
+        raise ValueError(f"unknown model family {name!r}")
+    return candidate
 
 
-def evidence_from_record(run_dir: Path) -> tuple[dict, str]:
+def evidence_from_record(run_dir: Path, cli_writer_families=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
 
+    ``cli_writer_families``, when given, must contain the record's writer_family.
     Raises ValueError whenever the record cannot witness a completed review.
     """
     run_dir = Path(run_dir)
@@ -62,8 +74,9 @@ def evidence_from_record(run_dir: Path) -> tuple[dict, str]:
     if leg_family is not None and _canon_family(leg_family) != _canon_family(chosen):
         raise ValueError(f"chosen_leg.family {leg_family!r} does not match "
                          f"family {_canon_family(chosen)!r} of chosen_leg.model {chosen!r}")
-    evidence = {"finish_reason": "stop", "head_sha": head_sha,
-                "run_id": record.get("run_id"), "source": "record.json"}
+    evidence = {"finish_reason": "stop", "head_sha": head_sha, "source": "record.json"}
+    if record.get("run_id"):
+        evidence["run_id"] = record["run_id"]
     if isinstance(served, str) and served and served != "unwitnessed":
         evidence["served_model"] = served
     else:
@@ -72,18 +85,31 @@ def evidence_from_record(run_dir: Path) -> tuple[dict, str]:
         evidence.update(served_model=chosen, witness_kind="record-chosen-leg",
                         request_side_model=chosen)
     writer_family = record.get("writer_family")
-    if writer_family is not None and \
-            _canon_family(writer_family) == _canon_family(evidence["served_model"]):
+    if not isinstance(writer_family, str) or not writer_family.strip():
+        raise ValueError("record writer_family missing; seat covers no listed writer")
+    if _canon_family(writer_family) == _canon_family(evidence["served_model"]):
         raise ValueError(f"seat family equals record writer_family {writer_family!r}"
                          f"; seat covers no listed writer")
+    if cli_writer_families is not None and \
+            _canon_family(writer_family) not in \
+            {_canon_family(writer) for writer in cli_writer_families}:
+        raise ValueError(f"record writer_family {writer_family!r} is not in "
+                         f"CLI writer families {list(cli_writer_families)!r}")
+    verdict_line = _verdict_line()
+    lines = review_text.splitlines()
     verdicts = {" ".join(m.group(1).split()).lower()
-                for line in review_text.splitlines()
-                for m in [_VERDICT_LINE.match(line)] if m}
+                for line in lines
+                for m in [verdict_line.match(line)] if m}
     if len(verdicts) > 1:
         raise ValueError("conflicting VERDICT lines")
+    last = max((i for i, line in enumerate(lines) if verdict_line.match(line)),
+               default=-1)
+    if last >= 0 and any(line.strip() and not _TEST_GAMING.match(line)
+                         for line in lines[last + 1:]):
+        raise ValueError("verdict is not the last line")
     gaming = None
     for match in _TEST_GAMING.finditer(review_text):
         gaming = match.group(1).strip()
     if gaming and "|" not in gaming:
-        evidence["test_gaming"] = gaming.split()[0]
+        evidence["test_gaming"] = gaming.split()[0].lower()
     return evidence, review_text

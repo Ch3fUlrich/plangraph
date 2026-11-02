@@ -1,5 +1,6 @@
 """D-3564: seat_verdict posts from a record.json-only spawner seat run dir."""
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -101,7 +102,7 @@ def test_live_log_preferred_over_stdout_tail(tmp_path, capsys):
                       tail="VERDICT: FIX\nfrom the tail")
     assert sv.main(argv) == 0
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is True
-    argv = record_dir(tmp_path, "j2", live_log="", tail="VERDICT: FIX\ntail finding")
+    argv = record_dir(tmp_path, "j2", live_log="", tail="tail finding\nVERDICT: FIX")
     assert sv.main(argv) == 0
     body = json.loads(capsys.readouterr().out)["body"]
     assert body["ok"] is False
@@ -115,8 +116,8 @@ def test_evidence_from_record_fails_closed(tmp_path):
     d.mkdir()
     (d / "record.json").write_text(json.dumps({"role": "review", "status": "completed",
         "exit_code": 0, "served_model": "unwitnessed", "chosen_leg": {},
-        "stdout_tail": "", "completion": {"head_sha": HEAD_SHA}}))
-    with pytest.raises(ValueError):
+        "stdout_tail": REVIEW, "completion": {"head_sha": HEAD_SHA}}))
+    with pytest.raises(ValueError, match="chosen_leg.model missing"):
         seat_record.evidence_from_record(d)
 
 
@@ -173,6 +174,71 @@ def test_record_exit_code_false_refused(tmp_path, capsys):
     assert sv.main(record_dir(tmp_path, "o", live_log=REVIEW,
                               exit_code=False)) == 2
     assert "exit_code" in capsys.readouterr().err
+
+
+# D-3564 round 3: unknown families are refused; TEST_GAMING is stored lower-cased.
+def test_record_unknown_family_refused(tmp_path, capsys):
+    assert sv.main(record_dir(tmp_path, "u", live_log=REVIEW,
+                      chosen_leg={"id": "leg-1", "model": "mystery/mystery-1",
+                                  "family": "mystery"})) == 2
+    assert "unknown model family" in capsys.readouterr().err
+
+
+def test_record_test_gaming_stored_lower_case(tmp_path):
+    argv = record_dir(tmp_path, "u2", live_log="fine\nVERDICT: PASS\nTEST_GAMING: NO\n")
+    seat = Path(argv[argv.index("--seat-dir") + 1])
+    evidence, _ = seat_record.evidence_from_record(seat)
+    assert evidence["test_gaming"] == "no"
+
+
+# D-3564 round 3: an echoed prompt's VERDICT may never decide the seat.
+def test_record_verdict_must_be_last_line(tmp_path, capsys):
+    text = "prompt echo:\nVERDICT: PASS\nTEST_GAMING: no\n\nanswer: all good\n"
+    assert sv.main(record_dir(tmp_path, "v", live_log=text)) == 2
+    assert "verdict is not the last line" in capsys.readouterr().err
+
+
+# D-3564 round 3: the conflicting-VERDICT guard runs on seat_verdict's grammar.
+def test_record_verdict_grammar_shared_with_seat_verdict(monkeypatch, tmp_path,
+                                                         capsys):
+    monkeypatch.setattr(sv, "_VERDICT_LINE", re.compile(r"^decision:[ \t]*(.*)$", re.I))
+    text = "answer\ndecision: PASS\nTEST_GAMING: no\ndecision: FIX\n"
+    assert sv.main(record_dir(tmp_path, "u3", live_log=text)) == 2
+    assert "conflicting VERDICT lines" in capsys.readouterr().err
+
+
+# D-3564 round 3: record-derived evidence only carries attested fields.
+def test_record_evidence_only_attested_fields(tmp_path):
+    argv = record_dir(tmp_path, "v2", live_log=REVIEW, run_id=None)
+    seat = Path(argv[argv.index("--seat-dir") + 1])
+    evidence, _ = seat_record.evidence_from_record(seat)
+    assert "run_id" not in evidence
+    assert "correlation_id" not in evidence
+    assert "prompt_sha256" not in evidence
+    assert evidence["finish_reason"] == "stop"
+
+
+# D-3564 round 3: record writer_family is required and must sit in the CLI list.
+def test_record_writer_family_absent_refused(tmp_path, capsys):
+    assert sv.main(record_dir(tmp_path, "w", live_log=REVIEW,
+                              writer_family=None)) == 2
+    assert "writer_family" in capsys.readouterr().err
+
+
+def test_record_writer_family_must_be_in_cli_list(tmp_path):
+    argv = record_dir(tmp_path, "w2", live_log=REVIEW)
+    seat = Path(argv[argv.index("--seat-dir") + 1])
+    evidence, _ = seat_record.evidence_from_record(seat, ["deepseek", "alibaba"])
+    assert evidence["served_model"] == "mimo/mimo-v2.6-pro"
+    with pytest.raises(ValueError, match="not in CLI writer families"):
+        seat_record.evidence_from_record(seat, ["alibaba"])
+
+
+def test_cli_writer_family_equal_to_seat_family_refused(tmp_path):
+    argv = record_dir(tmp_path, "w3", live_log=REVIEW, writer_family="xiaomi")
+    seat = Path(argv[argv.index("--seat-dir") + 1])
+    with pytest.raises(ValueError, match="covers no listed writer"):
+        seat_record.evidence_from_record(seat, ["xiaomi"])
 
 
 def test_head_option_matches_record_head_sha(tmp_path, capsys):
