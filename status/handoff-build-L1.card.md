@@ -1,9 +1,8 @@
-# L1 card · build-L1-0103 · 2026-11-02T14:21Z
+# L1 card · build-L1-0106 · 2026-11-02T14:30Z
 ## Goal
 - plangraph PRs: MERGE-READY to plangraph-replan-0105; sol writers via spawner only (D-3666, D-3668); plangraph-data PRs mine
 ## Keeper
-- claimed: SPAWNER-LEGS-D3605 (claimed ep3, waits SEAT-TOOLS + #334), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1), LE-FLEET-MSG-INVENTORY (ep4), RIN-PATH-REPOINT (ep3), RIN-LEDGER-VIEWS (ep3); leases to 14:53Z, heartbeat first
-- ready next: SEAT-TOOLS-LEG-SANDBOX (open, done amended a-d by router d3676; re-claim, then sol writer)
+- claimed: SPAWNER-LEGS-D3605 (claimed ep3, waits SEAT-TOOLS + #334), SPAWNER-LEG-STATE-FROM-OMNIROUTE (ep1), LE-FLEET-MSG-INVENTORY (ep4), RIN-PATH-REPOINT (ep3), RIN-LEDGER-VIEWS (ep3), SEAT-TOOLS-LEG-SANDBOX (ep2); leases to 16:22Z
 ## Done
 - 11-02T13:00Z SPAWNER-DISPATCH-FAIL-DETECT 9ce359d1 #324 r3 full suite 8940 passed; luna seat run-c902f841 ACCEPT
 - 11-02T13:55Z D-3667 - spawner-main ff 2afe7810->95debf131->6aabc7721; sol probe run-9d96b520 exit 0
@@ -13,13 +12,14 @@
 - 11-02T14:00Z D-3666 - luna seat #318 run-814e5820 REQUEST_CHANGES sent to build-L2-spawner3605-0092
 ## In flight
 - SPAWNER-DISPATCH-FAIL-DETECT #324 main-merge 30ce6163 (unpushed) suite log /home/s/.claude/jobs/582c2aba/tmp/r3-merge-suite.log since 14:16Z next check 14:50Z
-- D-3667 #334 mimo-pro seat run done: REQUEST_CHANGES with 1 LOW + 2 NIT only (/home/s/.claude/jobs/582c2aba/tmp/seat-334d.out); fix in-round (hand-edit <=30, pin hardcoded order at test_planner_routing.py:377, rename _first_eight, legs.py:143 comment), then delta seat; next check 14:40Z
+- #334 fix efbc85d86 (seat-334d MED+LOW+2NIT, hand-edit 13 lines, UNPUSHED); full suite J/s334-suite.log; delta mimo-pro seat J/seat-334e.out (J=/home/s/.claude/jobs/7d533977/tmp) next check 15:00Z
+- SEAT-TOOLS sol writer: gated spawn J/spawn-st.sh -> J/r-st.json (wt seat-tools-leg-sandbox) next check 15:00Z
 - #318 fix round build-L2-spawner3605-0092 since 14:00Z next check 15:00Z
 - #309 #314 #279 build-L2-keeperfix-0102 since 12:30Z next check 15:00Z
 ## Planned
 1. #324: suite rc=0 -> push lane, gh pr ready 324, CI green -> MERGE-READY 324 to replan-0105
-2. #334: counted seat (VERDICT last line) -> MERGE-READY 334 5de211c6
-3. SEAT-TOOLS-LEG-SANDBOX: claim, gated sol spawn per brief-seat-tools.md, Haiku seat
+2. #334: suite rc=0 + seat ACCEPT -> push, CI green -> MERGE-READY 334 efbc85d86
+3. SEAT-TOOLS: writer report -> verify full suite -> Haiku seat
 ## Open
 - D-3668 no Agent-tool writers; writers = spawner runs only
 - BLOCKED SPAWNER-TIMEOUT-SALVAGE define | default a (router defines) | deadline 14:30Z
