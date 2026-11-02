@@ -8,6 +8,7 @@ and leaves UNEXPECTED, which the test fixture turns into a failure.
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 
@@ -63,6 +64,12 @@ def show(pr):
     return {name: pr.get(name) for name in fields(PR_FIELDS)}
 
 
+def crash_after(call):
+    """Tests: kill the tool (the parent process) right after ``call`` did its work, like an OOM kill."""
+    if S.get("die_after") == call:
+        os.kill(os.getppid(), signal.SIGKILL)
+
+
 def pr_arg():
     return follow_branch(S["prs"].get(ARGV[2]) or die(f"no pull request {ARGV[2]}"))
 
@@ -71,9 +78,10 @@ cmd = ARGV[:2]
 if cmd == ["repo", "view"]:
     print(json.dumps({"nameWithOwner": S["repo"], "defaultBranchRef": {"name": S["default_branch"]}}))
 elif cmd == ["pr", "list"]:
-    label = opt("--label")
+    label, head = opt("--label"), opt("--head")
     print(json.dumps([show(p) for p in S["prs"].values() if p["state"] == "OPEN"
-                      and (label is None or label in [x["name"] for x in p["labels"]])]))
+                      and (label is None or label in [x["name"] for x in p["labels"]])
+                      and (head is None or head == p["headRefName"])]))
 elif cmd == ["pr", "view"]:
     print(json.dumps(show(pr_arg())))
 elif cmd == ["pr", "edit"]:  # gh 2.45 fails here for every repo: the tool must use the REST API
@@ -110,8 +118,10 @@ elif cmd == ["pr", "create"]:
         "number": number, "title": opt("--title"), "body": open(opt("--body-file")).read(),
         "headRefName": opt("--head"), "headRefOid": head, "baseRefName": opt("--base"), "state": "OPEN",
         "isDraft": False, "isCrossRepository": False, "labels": [], "files": [], "additions": 0,
-        "deletions": 0, "statusCheckRollup": [], "mergeCommit": None, "live": True}
+        "deletions": 0, "statusCheckRollup": [], "mergeCommit": None, "live": True,
+        "url": f"https://example.invalid/{S['repo']}/pull/{number}"}
     save()
+    crash_after("pr create")
     if S.get("create_noise"):  # real gh warns about uncommitted changes around the url
         print("Warning: 1 uncommitted change")
     print(f"https://example.invalid/{S['repo']}/pull/{number}")
@@ -122,7 +132,7 @@ elif cmd == ["pr", "checks"]:
     if not rows:
         die("no required checks reported on the 'batch' branch")
     for row in rows:  # the piped format: name, bucket, elapsed, link, description
-        print(f"{row['name']}\t{row['bucket']}\t0\thttps://example.invalid/run\t")
+        print(f"{row['name']}\t{row['bucket']}\t0\thttps://example.invalid/run\t{row.get('description', '')}")
     buckets = [row["bucket"] for row in rows]
     sys.exit(0 if all(b in ("pass", "skipping") for b in buckets) else 8 if "pending" in buckets else 1)
 elif cmd == ["pr", "merge"]:

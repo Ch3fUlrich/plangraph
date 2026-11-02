@@ -8,13 +8,16 @@ import tempfile
 import time
 from pathlib import Path
 
-from merge_batch_util import (REMOTE, MergeBatchError, all_states, drop_state, first_line, gh, gh_json, git,
-                              load_state, save_state, short, update_pr)
+from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
+                              gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
-#: A verdict line that says fail, whatever precedes it (quote mark, bullet, bold): it refuses the approval.
-BAD_VERDICT = re.compile(r"\bverdict\W*:\W*(?:fail|fix|halt|reject|change|request[\s_-]*change)", re.IGNORECASE)
+#: Every bucket gh prints; any other word is unknown, and unknown is never green.
+BUCKETS = ("pass", "fail", "pending", "skipping", "cancel")
+#: A verdict line that says fail, whatever precedes it (quote mark, bullet, bold, underscores): it refuses the approval.
+BAD_VERDICT = re.compile(r"(?<![A-Za-z0-9])verdict[\W_]*:[\W_]*(?:fail|fix|halt|reject|change|request[\W_]*change)",
+                         re.IGNORECASE)
 HEAD_LINE = re.compile(r"HEAD: ([0-9a-fA-F]{12,40})")
 PASS_LINES = ("VERDICT: PASS", "VERDICT: pass")
 
@@ -35,12 +38,29 @@ def render_body(st):
         body += ["", "Skipped (not in this batch):"]
         body += [f"- #{s['pr']} (`{short(s['head'])}`): {s['reason']}"
                  + (f" in {', '.join(f'`{f}`' for f in s['files'])}" if s["files"] else "") for s in st["skipped"]]
+    if st.get("forced"):
+        body += ["", "Built with --force-set, past the plan rules: " + "; ".join(st["forced"])]
     resolved = [rec for rec in st["merged"] if rec["resolved"]]
     if resolved:
         body += ["", "Resolution commits (conflicts resolved by hand, review these hunks):"]
-        body += [f"- `{short(rec['merge'])}` PR #{rec['pr']}: {', '.join(f'`{f}`' for f in rec['files'])}"
+        body += [f"- `{short(rec['merge'])}` PR #{rec['pr']}: "
+                 + (", ".join(f"`{f}`" for f in rec["files"]) or "merge found after an interrupted build, check it")
                  for rec in resolved]
+    notes = [f"- PR #{rec['pr']}: {text}" for rec in st["merged"] for text in rec.get("warnings", [])]
+    if notes:
+        body += ["", "Check these (a PR changed old lines of a path that is merged line by line):", *notes]
     return "\n".join(body) + "\n"
+
+
+def adopt_open_pr(st):
+    """A push that died after `gh pr create` left an open batch PR the state does not know: take it over
+    (same repo, same base), rather than failing on GitHub's "a pull request already exists"."""
+    found = gh_json("pr", "list", "--repo", st["repo"], "--head", st["branch"], "--state", "open", "--json",
+                    "number,url,baseRefName,isCrossRepository", "--limit", "5")
+    for pr in found:
+        if pr["baseRefName"] == st["base"] and not pr["isCrossRepository"]:
+            st.update(pr=pr["number"], url=pr["url"])
+            return
 
 
 def cmd_push(args):
@@ -58,6 +78,8 @@ def cmd_push(args):
     with tempfile.TemporaryDirectory() as tmp:
         body = Path(tmp, "body.md")
         body.write_text(render_body(st), encoding="utf-8")
+        if not st.get("pr"):
+            adopt_open_pr(st)
         if st.get("pr"):
             if gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state")["state"] != "OPEN":
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")
@@ -89,7 +111,7 @@ def check_approval(path, head):
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise MergeBatchError(f"approval file {path} cannot be read: {exc.strerror or exc}") from None
-    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    lines = [line.rstrip() for line in text.split("\n") if line.strip()]  # only \n ends a line (not U+2028 ...)
     for line in lines:
         if BAD_VERDICT.search(line):
             raise MergeBatchError(f"approval file {path} has a FAIL/CHANGES verdict line: {line.strip()[:80]!r}")
@@ -103,16 +125,31 @@ def check_approval(path, head):
                               f"the batch head {head} (in full, or at least 12 hex digits)")
 
 
+def parse_checks(text):
+    """[(name, bucket)] from the piped `gh pr checks` text, one check per line:
+    ``name<TAB>bucket<TAB>elapsed<TAB>link<TAB>description`` (gh 2.45 has no `pr checks --json`).
+
+    The columns are read from the right, so a tab inside a check name only lengthens the name and cannot
+    move the bucket (a check named ``lint<TAB>pass`` is not a green ``lint``). A line that does not fit, or
+    a bucket gh does not use, is an error: unknown is never green."""
+    rows = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        cols = line.split("\t")
+        if len(cols) < 5 or cols[-4] not in BUCKETS:
+            raise MergeBatchError(f"unreadable line in the `gh pr checks` output: {line[:80]!r}")
+        rows.append(("\t".join(cols[:-4]), cols[-4]))
+    return rows
+
+
 def require_green(repo, number, names):
     """Every required check (or each of --checks) is reported and green on the PR's head.
 
-    gh 2.45 has no `pr checks --json`, so this reads the piped text, one check per line:
-    ``name<TAB>bucket<TAB>elapsed<TAB>url`` with bucket pass|fail|pending|skipping|cancel;
-    the exit code is 1 when a check failed and 8 while one is pending.
-    """
+    The exit code of gh is 1 when a check failed and 8 while one is pending. For the required set it must be
+    0 as well as every line green, so a line that fooled the parser still cannot hide a failing check."""
     proc = gh("pr", "checks", str(number), "--repo", repo, *([] if names else ["--required"]), ok=(0, 1, 8))
-    rows = [(cols[0].strip(), cols[1].strip().lower())
-            for cols in (line.split("\t") for line in proc.stdout.splitlines()) if len(cols) > 1]
+    rows = parse_checks(proc.stdout)
     if names:
         missing = sorted(set(names) - {name for name, _ in rows})
         if missing:
@@ -124,16 +161,26 @@ def require_green(repo, number, names):
     bad = [f"{name}={bucket}" for name, bucket in rows if bucket not in GREEN]
     if bad:
         raise MergeBatchError("required check(s) not green on the batch head: " + ", ".join(bad))
+    if not names and proc.returncode != 0:
+        raise MergeBatchError(f"gh pr checks --required exits {proc.returncode} although every line reads green: "
+                              "not trusting the output")
 
 
-def settle(repo, numbers, wait):
-    """PR numbers still not MERGED after polling for ``wait`` seconds."""
+def settle(repo, recs, wait):
+    """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
+    or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
     deadline = time.monotonic() + wait
-    todo = list(numbers)
+    views = {}
+
+    def open_rec(rec):
+        view = views.get(rec["pr"])
+        return view is None or (view["state"] != "MERGED" and view["headRefOid"] == rec["head"])
+
     while True:
-        todo = [n for n in todo if gh_json("pr", "view", str(n), "--repo", repo, "--json", "state")["state"] != "MERGED"]
-        if not todo or time.monotonic() >= deadline:
-            return todo
+        for rec in filter(open_rec, recs):
+            views[rec["pr"]] = gh_json("pr", "view", str(rec["pr"]), "--repo", repo, "--json", "state,headRefOid")
+        if not any(map(open_rec, recs)) or time.monotonic() >= deadline:
+            return views
         time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
 
 
@@ -165,17 +212,29 @@ def cmd_land(args):
     if pr["state"] != "MERGED" or not merge:
         raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
     git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
-    left = settle(repo, [rec["pr"] for rec in st["merged"]], args.wait)
-    problems = []
+    views = settle(repo, st["merged"], args.wait)
+    problems, moved = [], []
     for rec in st["merged"]:
-        if rec["pr"] in left:
+        num, view = rec["pr"], views[rec["pr"]]
+        if view["headRefOid"] != rec["head"]:
+            # a commit was pushed after the build: the batch merged the old head, so this PR is neither
+            # closed nor reported merged, and its author has to update it
+            print(f"NOT-MERGED {num} head moved")
+            moved.append(num)
+            if view["state"] == "OPEN" and not add_label(repo, num, NEEDS_UPDATE):
+                print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
+            continue
+        if view["state"] != "MERGED":
             if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
-                problems.append(f"#{rec['pr']}: head {short(rec['head'])} is not in merge {short(merge)}")
+                problems.append(f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}")
                 continue
-            gh("pr", "close", str(rec["pr"]), "--repo", repo, "--comment", f"merged via batch PR #{number}")
-        print(f"MERGED {rec['pr']} {merge} {','.join(rec['items']) or '-'}")
+            gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
+        print(f"MERGED {num} {merge} {','.join(rec['items']) or '-'}")
     if problems:
         raise MergeBatchError("batch PR merged, but " + "; ".join(problems) + " (state kept, land again after a fix)")
+    if moved:
+        print(f"batch PR #{number} merged without " + ", ".join(f"#{n}" for n in moved)
+              + f" (head moved after the build; labelled {NEEDS_UPDATE}): they need a new batch", file=sys.stderr)
     for skip in st["skipped"]:
         print(f"not merged: #{skip['pr']} ({skip['reason']})", file=sys.stderr)
     drop_state(st)
@@ -185,10 +244,13 @@ def cmd_land(args):
 
 def cmd_status(args):
     states = all_states()
+    where = {branch: path for path, branch in worktrees()}
+    orphans = [{"name": name, "status": "orphan", "branch": f"batch/{name}", "worktree": where.get(f"batch/{name}", "-"),
+                "merged": [], "skipped": [], "pending": []} for name in orphan_names()]
     if args.json:
-        print(json.dumps(states, indent=2, sort_keys=True))
+        print(json.dumps(states + orphans, indent=2, sort_keys=True))
         return 0
-    if not states:
+    if not states and not orphans:
         print("no batch in progress")
     for st in states:
         print(f"{st['name']}  {st['status']}  base={st.get('base', '-')}  merged={len(st['merged'])} "
@@ -197,4 +259,11 @@ def cmd_status(args):
         if st.get("current"):
             cur = st["current"]
             print(f"  conflict in PR #{cur['pr']}: {', '.join(cur['files'])}")
+        if st["status"] == "creating":
+            print(f"  died while its worktree was made: merge_batch.py abort --name {st['name']}, then build again")
+        if st.get("merging"):
+            print(f"  died while merging PR #{st['merging']['pr']}: merge_batch.py continue --name {st['name']}")
+    for orphan in orphans:
+        print(f"{orphan['name']}  orphan  no state file, but a build left its PR-head refs ({orphan['branch']}, "
+              f"worktree {orphan['worktree']}): merge_batch.py abort --name {orphan['name']}")
     return 0

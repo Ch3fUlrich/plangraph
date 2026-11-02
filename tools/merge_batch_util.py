@@ -134,13 +134,38 @@ def all_states():
     return out
 
 
+def drop_refs(name):
+    """Delete the PR-head refs a build of batch ``name`` fetched."""
+    for ref in git("for-each-ref", "--format=%(refname)", f"refs/merge-batch/{name}/").stdout.split():
+        git("update-ref", "-d", ref)
+
+
 def drop_state(st):
     """Delete the state file and the PR-head refs the build fetched."""
-    prefix = f"refs/merge-batch/{st['name']}/"
-    for ref in git("for-each-ref", "--format=%(refname)", prefix).stdout.split():
-        git("update-ref", "-d", ref)
+    drop_refs(st["name"])
     state_path(st["name"]).unlink(missing_ok=True)
     state_path(st["name"]).with_suffix(".attrs").unlink(missing_ok=True)
+
+
+def orphan_names():
+    """Batch names with PR-head refs (refs/merge-batch/NAME/N, made by a build) but no state file: what an
+    old build left when it died before saving its state, or a state file deleted by hand."""
+    names = {ref.split("/")[2] for ref in git("for-each-ref", "--format=%(refname)", "refs/merge-batch/").stdout.split()
+             if ref.count("/") >= 3}
+    return sorted(name for name in names if not state_path(name).exists())
+
+
+def worktrees():
+    """[(path, branch)] of every worktree of the repo; branch is '' for a detached one."""
+    out, cur = [], {}
+    for line in [*git("worktree", "list", "--porcelain").stdout.splitlines(), ""]:
+        if line:
+            key, _, value = line.partition(" ")
+            cur[key] = value
+        elif cur:
+            out.append((cur.get("worktree", ""), cur.get("branch", "").removeprefix("refs/heads/")))
+            cur = {}
+    return out
 
 
 # --- PR records -------------------------------------------------------------------------------
@@ -172,6 +197,7 @@ def norm_pr(raw):
         "draft": bool(raw.get("isDraft")), "cross": bool(raw.get("isCrossRepository")),
         "labels": [lab["name"] for lab in raw.get("labels") or []],
         "files": [f["path"] for f in files], "truncated": (raw.get("changedFiles") or 0) > len(files),
+        "extra": [],  # paths git sees in the diff that gh's list lacks (add_extra_paths)
         "lines": lines or sum(
             (f.get("additions") or 0) + (f.get("deletions") or 0) for f in files),
         "ci": ci_state(raw.get("statusCheckRollup")),
@@ -180,6 +206,31 @@ def norm_pr(raw):
 
 def fetch_pr(repo, number):
     return norm_pr(gh_json("pr", "view", str(number), "--repo", repo, "--json", PR_FIELDS))
+
+
+def add_extra_paths(base, prs, heads=None):
+    """Set ``pr["extra"]``: the paths git sees in the PR diff that gh's file list lacks, above all the old
+    path of a rename (gh names only the new one). ``git diff --name-only --no-renames`` of the head against
+    origin/<base> names both ends of a rename. ``heads`` maps PR number to an already fetched sha; without
+    it the PR heads are fetched here (objects only: no ref and no FETCH_HEAD is written). Fails closed: a
+    PR whose diff cannot be read stops the command instead of passing as free of HIGH paths."""
+    prs = list(prs)
+    if not prs:
+        return
+    if heads is None:
+        refspecs = [f"+refs/heads/{base}:refs/remotes/{REMOTE}/{base}", *[f"refs/pull/{pr['number']}/head" for pr in prs]]
+        try:
+            git("fetch", "--quiet", "--no-write-fetch-head", REMOTE, *refspecs)
+        except MergeBatchError as exc:
+            raise MergeBatchError(f"cannot fetch the PR heads from {REMOTE} to read their paths: {exc} "
+                                  f"(run it in a checkout whose {REMOTE} is the repo)") from None
+        heads = {pr["number"]: pr["head"] for pr in prs}
+    for pr in prs:
+        try:
+            out = git("diff", "--name-only", "--no-renames", "-z", f"{REMOTE}/{base}...{heads[pr['number']]}").stdout
+        except MergeBatchError as exc:
+            raise MergeBatchError(f"cannot list the paths of PR #{pr['number']} ({short(pr['head'])}): {exc}") from None
+        pr["extra"] = sorted({path for path in out.split("\0") if path} - set(pr["files"]))
 
 
 def repo_info(repo=None):

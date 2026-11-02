@@ -5,7 +5,9 @@ plan CLI and the git/gh flows stay there.
 
 Mutations killed: stacked PR before its base, HIGH and standard PRs sharing a batch or HIGH batches
 ignoring a cap or splitting a stack, a stack above a HIGH PR or a file list gh cut short read as
-safe, a draft without the label, a red-CI or needs-update PR batched, a hung command that hangs.
+safe, a draft without the label, a red-CI or needs-update PR batched, a hung command that hangs;
+a missing gate file that still tiers PRs (with --high-path), a rename out of a HIGH path read as
+standard, a build set that breaks the plan rules read as one batch.
 """
 import sys
 
@@ -15,7 +17,8 @@ from merge_batch_env import ROOT, pr_json
 
 sys.path.insert(0, str(ROOT / "tools"))
 
-from merge_batch_plan import high_patterns, plan_batches, stack_parents  # noqa: E402
+import merge_batch_plan  # noqa: E402
+from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents  # noqa: E402
 from merge_batch_util import MergeBatchError, norm_pr, run  # noqa: E402
 
 
@@ -93,3 +96,34 @@ def test_a_hung_command_is_an_error_not_a_hang():
 def test_pr_head_must_be_a_sha():
     with pytest.raises(MergeBatchError, match="not a commit sha"):
         norm_pr(pr_json(1, "lane/p1", head="--upload-pack=x"))
+
+
+def test_high_patterns_fail_closed_without_the_gate_lists(monkeypatch):
+    """The import of tools/ci_commit_gate.py failed: --high-path adds globs, it cannot replace the AUTH_DOOR list."""
+    assert any(pat.startswith("tools/ci_commit_gate.py") for pat in high_patterns(("docs/*",)))
+    monkeypatch.setattr(merge_batch_plan, "AUTH_DOOR_PATHS", ())
+    for extra in ((), ("docs/*",)):
+        with pytest.raises(MergeBatchError, match="HIGH path list is unknown"):
+            high_patterns(extra)
+
+
+def test_plan_high_by_the_old_path_of_a_rename():
+    moved = P(1, files=["docs/store.py"])  # gh lists only the new path of src/plangraph/keeper/store.py
+    assert plan_batches([moved], "main", patterns=high_patterns())["prs"][0]["tier"] == "STANDARD"
+    moved["extra"] = ["src/plangraph/keeper/store.py"]  # what git diff --no-renames adds
+    row = plan_batches([moved], "main", patterns=high_patterns())["prs"][0]
+    assert row["tier"] == "HIGH" and row["high_paths"] == ["src/plangraph/keeper/store.py"]
+
+
+def test_set_problems_name_what_breaks_the_plan_rules():
+    hi = "src/plangraph/keeper/store.py"
+    assert set_problems(plan_batches([P(1), P(2)], "main", patterns=high_patterns())) == []
+    red = set_problems(plan_batches([P(1), P(2, ci="red"), P(3, labels=("batch-ready", "needs-update"))], "main"))
+    assert red == ["#2 ci red", "#3 label needs-update"]
+    mixed = set_problems(plan_batches([P(1, files=[hi]), P(2)], "main", patterns=high_patterns()))
+    assert len(mixed) == 1 and "HIGH #1" in mixed[0] and "STANDARD #2" in mixed[0] and "reviewed apart" in mixed[0]
+    cut = set_problems(plan_batches([P(1), P(2), P(3)], "main", max_prs=2))
+    assert len(cut) == 1 and "cuts them into 2 batches" in cut[0]
+    big = set_problems(plan_batches([P(1, lines=2000)], "main"))
+    assert big == ["1 PR(s) and 2000 lines are over the caps (--max-prs 6, --max-lines 1200)"]
+

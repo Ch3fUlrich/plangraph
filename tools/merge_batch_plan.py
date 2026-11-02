@@ -7,7 +7,7 @@ from merge_batch_util import BATCH_READY, NEEDS_UPDATE, MergeBatchError
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
-except ImportError:  # merge_batch copied away from its sibling: the caller names the paths
+except ImportError:  # merge_batch copied away from its sibling: high_patterns refuses
     AUTH_DOOR_PATHS, GATE_PATHS = (), ()
 
 #: Always HIGH, even if the gate's own list is renamed.
@@ -15,16 +15,21 @@ KEEPER_PATHS = ("src/plangraph/keeper/*",)
 
 
 def high_patterns(extra=()):
-    """The AUTH_DOOR + gate globs of tools/ci_commit_gate.py, the keeper tree and --high-path."""
-    if not AUTH_DOOR_PATHS and not extra:
-        raise MergeBatchError("tools/ci_commit_gate.py is not importable, so the HIGH path list "
-                              "is unknown: pass --high-path GLOB (repeatable)")
+    """The AUTH_DOOR + gate globs of tools/ci_commit_gate.py, the keeper tree and --high-path.
+
+    Fails closed: without the gate's own lists the HIGH set is unknown, and --high-path (which only adds
+    globs) cannot stand in for them, so every command that tiers PRs refuses."""
+    if not AUTH_DOOR_PATHS:
+        raise MergeBatchError("tools/ci_commit_gate.py is not importable (or lists no AUTH_DOOR paths), so "
+                              "the HIGH path list is unknown: keep it next to merge_batch.py")
     return tuple(dict.fromkeys((*AUTH_DOOR_PATHS, *GATE_PATHS, *KEEPER_PATHS, *extra)))
 
 
 def high_hits(pr, patterns):
-    """The changed paths of ``pr`` that match a HIGH glob; a file list gh cut short counts as a hit."""
-    hits = [path for path in pr["files"] if any(fnmatch.fnmatchcase(path, pat) for pat in patterns)]
+    """The paths of ``pr`` (gh's list plus the old paths of renames git found) that match a HIGH glob; a
+    file list gh cut short counts as a hit."""
+    paths = [*pr["files"], *pr.get("extra", ())]
+    hits = [path for path in paths if any(fnmatch.fnmatchcase(path, pat) for pat in patterns)]
     return hits + ["(file list truncated by gh)"] if pr["truncated"] else hits
 
 
@@ -141,6 +146,21 @@ def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
              "tier": placed.get(n, (None, None))[1], "after": parent.get(n), "reason": why.get(n)}
             for n in order]
     return {"base": base, "max_prs": max_prs, "max_lines": max_lines, "batches": batches, "prs": rows}
+
+
+def set_problems(plan):
+    """Why the PRs of ``plan`` (plan_batches over exactly the PRs of one build) are not a single plan batch:
+    an excluded PR, HIGH and standard PRs together, a stack cut by the caps, or a batch over the caps."""
+    why = [f"#{row['number']} {row['reason']}" for row in plan["prs"] if row["reason"]]
+    if len(plan["batches"]) > 1:
+        cut = ", ".join(f"{b['tier']} " + ",".join(f"#{n}" for n in b["prs"]) for b in plan["batches"])
+        why.append(f"the plan cuts them into {len(plan['batches'])} batches ({cut}): HIGH and standard PRs are "
+                   "reviewed apart and every batch stays under the caps")
+    elif plan["batches"] and plan["batches"][0]["over_cap"]:
+        batch = plan["batches"][0]
+        why.append(f"{len(batch['prs'])} PR(s) and {batch['lines']} lines are over the caps "
+                   f"(--max-prs {plan['max_prs']}, --max-lines {plan['max_lines']})")
+    return why
 
 
 def render_table(plan):

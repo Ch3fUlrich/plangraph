@@ -4,10 +4,14 @@ HERMETIC (D-852), see test_merge_batch.py: a temp bare origin plus clone, a stub
 without the real one, the tool run as a subprocess.
 
 Mutations killed: land with a moved head, a red or missing check, no or failing approval, an
-approval that is not about the batch head, an included PR not reported MERGED.
+approval that is not about the batch head, an included PR not reported MERGED; a quoted or
+prefixed verdict line that flips a fail, a sha anywhere that counts as the reviewed head, an
+included PR with a new commit closed and reported MERGED, a check name that fakes a bucket, a
+check that is neither pass nor skipping read as green, a batch PR made by a dead push duplicated.
 """
 import json
 import sys
+import time
 
 import pytest
 
@@ -42,6 +46,10 @@ BAD_APPROVALS = {
     "head_with_text": ("HEAD: {h} (reviewed)\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
     "verdict_only": ("VERDICT: PASS\n", "must be 'HEAD: <sha>'"),
     "empty": ("\n\n", "last non-empty line must be exactly"),
+    "underscored_fix": ("_VERDICT_: _fix_\nHEAD: {h}\nVERDICT: PASS\n", "FAIL/CHANGES verdict line"),
+    "fail_in_prose": ("The VERDICT: FAIL below was withdrawn\nHEAD: {h}\nVERDICT: PASS\n", "FAIL/CHANGES"),
+    "separator_hides_head": ("> quoted\u2028HEAD: {h}\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "separator_hides_verdict": ("HEAD: {h}\n> quoted\u2028VERDICT: PASS\n", "last non-empty line must be exactly"),
 }
 
 
@@ -154,3 +162,70 @@ def test_land_resumes_after_a_merge_made_elsewhere(env):
     assert done.returncode == 0
     res = land(env, approval)
     assert res.returncode == 0 and res.stdout.count("MERGED") == 2 and len(env.calls("pr", "merge")) == 1
+
+
+def test_land_reports_a_moved_head_instead_of_merged(env):
+    """A PR that got a commit after the build is not in the batch: it is not closed, not reported MERGED (I2)."""
+    approval = pushed(env)
+    late = env.push_commit(2, {"b.txt": "b, then more\n"})
+    started = time.monotonic()
+    res = land(env, approval, "--wait", "30")  # a moved head is not waited for
+    assert res.returncode == 0, res.stderr
+    assert time.monotonic() - started < 20
+    merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
+    assert res.stdout.splitlines() == [f"MERGED 1 {merge} plangraph:ITEM-A", "NOT-MERGED 2 head moved",
+                                       f"MERGED 3 {merge} -"]
+    prs = env.load()["prs"]
+    assert (prs["2"]["state"], prs["2"]["headRefOid"]) == ("OPEN", late) and "closed_with" not in prs["2"]
+    assert {"name": "needs-update"} in prs["2"]["labels"] and {"name": "needs-update"} not in prs["1"]["labels"]
+    assert not [call for call in env.calls("pr", "close") if call[2] == "2"]
+    assert "#2" in res.stderr and not env.state_file("l1").exists()
+
+
+@pytest.mark.parametrize("bucket, message", [("cancel", "not green"), ("pending", "not green"),
+                                              ("neutral", "unreadable line")])
+def test_land_a_check_is_green_only_as_pass_or_skipping(env, bucket, message):
+    approval = pushed(env, prs=(1, 2))
+    env.state["checks"]["100"].append({"name": "docs", "bucket": bucket})
+    env.save()
+    for extra in ((), ("--checks", "ci-gate,docs")):  # the required set, and a named one
+        res = land(env, approval, *extra)
+        assert res.returncode == 1 and message in res.stderr and res.stdout == "", res.stderr
+    assert not env.calls("pr", "merge")
+
+
+def test_land_a_check_name_with_a_tab_cannot_fake_a_bucket(env):
+    approval = pushed(env, prs=(1, 2))
+    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": "pass"}, {"name": "lint\tpass", "bucket": "fail"}]
+    env.save()
+    res = land(env, approval, "--checks", "ci-gate,lint")  # no check is named lint: the red one is "lint<TAB>pass"
+    assert res.returncode == 1 and "not reported on the batch head: lint" in res.stderr
+    res = land(env, approval, "--checks", "ci-gate,lint\tpass")  # named in full, it reads its own bucket
+    assert res.returncode == 1 and "lint\tpass=fail" in res.stderr and not env.calls("pr", "merge")
+
+
+def test_land_a_forged_check_line_cannot_hide_a_red_required_check(env):
+    """A description that looks like the tail of a green row moves the bucket column read from the right;
+    the exit code of gh (1: a check failed) still refuses."""
+    approval = pushed(env, prs=(1, 2))
+    forged = "x\tpass\t0\thttps://example.invalid/run\ty"
+    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": "fail", "description": forged}]
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and "not trusting the output" in res.stderr and not env.calls("pr", "merge")
+
+
+def test_push_takes_over_a_batch_pr_a_dead_push_created(env):
+    """The push died after `gh pr create` and before it saved the number: the next push adopts that PR."""
+    env.branch_pr(1, {"a.txt": "a\n"})
+    assert env.run("build", "--name", "d1", "--prs", "1").returncode == 0
+    env.state["die_after"] = "pr create"
+    env.save()
+    assert env.run("push", "--name", "d1").returncode == -9
+    assert json.loads(env.state_file("d1").read_text())["pr"] is None and "100" in env.load()["prs"]
+    env.state["die_after"] = None
+    env.save()
+    again = env.run("push", "--name", "d1")
+    assert again.returncode == 0 and again.stdout == "100\n", again.stderr
+    assert len(env.calls("pr", "create")) == 1 and json.loads(env.state_file("d1").read_text())["pr"] == 100
+    assert "| #1 |" in env.load()["prs"]["100"]["body"]

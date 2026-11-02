@@ -7,12 +7,15 @@ could run; the `env` fixture fails any test whose tool called a gh command the s
 
 Mutations killed: a conflict merged blind or left half merged, a skipped PR not labelled, a --union
 path or a missing .gitattributes still conflicting, a draft with the batch-ready label refused by
-build. The pure plan logic is in test_merge_batch_plan.py, land in test_merge_batch_land.py.
+build, a rename out of a HIGH path planned as standard, a plan that tiers PRs without the gate
+file. The pure plan logic is in test_merge_batch_plan.py, land in test_merge_batch_land.py, the
+crash recovery and the build rules in test_merge_batch_build.py.
 
 `gh pr checks` has no --json in gh 2.45 (checked against the real gh), so the stub serves the
 piped text format (name, bucket, elapsed, url) and refuses --json.
 """
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -38,13 +41,13 @@ def test_guard_real_gh_unreachable(env):
 
 # ------------------------------------------------------------------------------------- plan
 def test_plan_cli_label_json_and_table(env):
-    env.add_pr(1, "lane/p1", files=["a.py"], lines=30)
-    env.add_pr(2, "lane/p2", files=["src/plangraph/keeper/x.py"], lines=40, title="keeper change")
-    env.add_pr(3, "lane/p3", labels=(), files=["c.py"])
-    env.add_pr(4, "lane/p4", ci="red", files=["d.py"])
-    env.add_pr(5, "lane/p5", files=[".github/workflows/tests.yml"], lines=20)
-    env.add_pr(6, "lane/p6", draft=True, labels=(), files=["f.py"])  # a draft without the label
-    env.add_pr(7, "lane/p7", draft=True, files=["g.py"])  # a draft that carries batch-ready
+    env.branch_pr(1, {"a.py": "a\n"}, lines=30)
+    env.branch_pr(2, {"src/plangraph/keeper/x.py": "x\n"}, lines=40, title="keeper change")
+    env.branch_pr(3, {"c.py": "c\n"}, labels=())
+    env.branch_pr(4, {"d.py": "d\n"}, ci="red")
+    env.branch_pr(5, {".github/workflows/tests.yml": "on: push\n"}, lines=20)
+    env.branch_pr(6, {"f.py": "f\n"}, draft=True, labels=())  # a draft without the label
+    env.branch_pr(7, {"g.py": "g\n"}, draft=True)  # a draft that carries batch-ready
     res = env.run("plan", "--json")
     plan = json.loads(res.stdout)
     assert res.returncode == 0 and plan["repo"] == "owner/proj" and plan["label"] == "batch-ready"
@@ -57,6 +60,41 @@ def test_plan_cli_label_json_and_table(env):
     assert "#3" in table and "batch 1 STANDARD: --prs 1,3" in table and "batch 2 HIGH: --prs 2" in table
     assert "HIGH via src/plangraph/keeper/x.py" in table
     assert env.run("plan", "--max-prs", "0").returncode == 2
+
+
+def test_plan_high_by_the_old_path_of_a_rename(env):
+    keeper = "src/plangraph/keeper/store.py"
+    env.seed({keeper: "x = 1\n"})
+    env.branch_pr(1, {}, moves={keeper: "docs/store.py"})  # gh lists only docs/store.py
+    env.branch_pr(2, {"c.txt": "c\n"})
+    plan = json.loads(env.run("plan", "--json").stdout)
+    rows = {row["number"]: row for row in plan["prs"]}
+    assert rows[1]["paths"] == ["docs/store.py"] and rows[1]["high"] is True and rows[1]["high_paths"] == [keeper]
+    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [("HIGH", [1]), ("STANDARD", [2])]
+    assert "HIGH via " + keeper in env.run("plan").stdout
+    assert env.git("for-each-ref", "refs/merge-batch") == "" and not (env.repo / ".git" / "FETCH_HEAD").exists()
+
+
+def test_plan_refuses_when_it_cannot_read_the_pr_paths(env):
+    env.add_pr(1, "lane/p1", files=["docs/a.md"])  # no refs/pull/1/head in the origin
+    res = env.run("plan", "--prs", "1")
+    assert res.returncode == 1 and "cannot fetch the PR heads" in res.stderr and res.stdout == ""
+
+
+def test_plan_refuses_without_the_gate_file_even_with_high_paths(env, tmp_path):
+    """merge_batch copied away from tools/ci_commit_gate.py: the AUTH_DOOR list is unknown, --high-path is no stand-in."""
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    for path in (ROOT / "tools").glob("merge_batch*.py"):
+        shutil.copy(path, copy)
+    env.branch_pr(1, {"docs/a.md": "a\n"})
+    ok = env.run("plan", "--prs", "1", "--high-path", "docs/*")
+    assert ok.returncode == 0 and "HIGH via docs/a.md" in ok.stdout
+    for extra in ((), ("--high-path", "docs/*")):
+        res = env.run("plan", "--prs", "1", *extra, tool=copy / "merge_batch.py")
+        assert res.returncode == 1 and "HIGH path list is unknown" in res.stderr and res.stdout == ""
+    res = env.run("build", "--name", "g1", "--prs", "1", "--high-path", "docs/*", tool=copy / "merge_batch.py")
+    assert res.returncode == 1 and "HIGH path list is unknown" in res.stderr and not env.state_file("g1").exists()
 
 
 # ------------------------------------------------------------------------------------ build
@@ -85,7 +123,7 @@ def test_build_stack_order_and_refusals(env):
     env.branch_pr(6, {"c.txt": "c\n"}, draft=True, labels=())
     env.add_pr(7, "lane/p7", base="release")
     assert "draft without the batch-ready label" in env.run("build", "--name", "r0", "--prs", "4,6").stderr
-    assert "one base branch" in env.run("build", "--name", "r0", "--prs", "4,7").stderr
+    assert "#7 -> 'release'" in env.run("build", "--name", "r0", "--prs", "4,7").stderr
     assert "bad batch name" in env.run("build", "--name", "../x", "--prs", "4").stderr
     assert env.run("build", "--name", "r1", "--prs", "5,4").returncode == 0  # base PR first, whatever the order
     assert first_parent(env, "batch/r1")[:2] == ["Merge PR #5: change 5", "Merge PR #4: change 4"]
@@ -159,6 +197,7 @@ def test_repo_gitattributes_stop_changelog_conflicts(env):
     assert res.returncode == 0, res.stdout + res.stderr
     text = (env.tmp / "repo-worktrees" / "batch-g1" / "CHANGELOG.md").read_text()
     assert "- one\n" in text and "- two\n" in text and text.count("- old entry") == 1
+    assert "warning" not in res.stderr  # both PRs only add lines: no old line was touched
 
 
 def test_skip_conflicts_labels_and_continues(env):

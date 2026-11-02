@@ -12,6 +12,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "merge_batch.py"
 STUB = Path(__file__).with_name("merge_batch_gh_stub.py")
+#: A `git` that kills its parent (the tool) after the n-th `git $CRASH_SUB` it runs, like an OOM kill.
+CRASH_GIT = """#!/bin/sh
+"$REAL_GIT" "$@"
+rc=$?
+sub=
+skip=0
+for arg in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$arg" in -c) skip=1 ;; -*) ;; *) sub=$arg; break ;; esac
+done
+if [ "$sub" = "$CRASH_SUB" ]; then
+  n=0
+  [ -f "$CRASH_COUNT" ] && read n < "$CRASH_COUNT"
+  n=$((n + 1))
+  echo "$n" > "$CRASH_COUNT"
+  [ "$n" = "$CRASH_NTH" ] && kill -9 "$PPID"
+fi
+exit $rc
+"""
 ROLLUP = {
     "green": [{"__typename": "CheckRun", "name": "ci-gate", "status": "COMPLETED", "conclusion": "SUCCESS"}],
     "red": [{"__typename": "CheckRun", "name": "ci-gate", "status": "COMPLETED", "conclusion": "FAILURE"}],
@@ -74,10 +93,23 @@ class Env:
         self.state["prs"][str(number)] = pr_json(number, ref, **kw)
         self.save()
 
-    def branch_pr(self, number, files, *, base="main", ref=None, item=None, **kw):
-        """A real PR branch in the origin (plus refs/pull/N/head) and its canned gh record."""
+    def seed(self, files):
+        """Commit ``files`` (path -> text) to main in the origin."""
+        for rel, text in files.items():
+            (self.repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / rel).write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "seed more")
+        self.git("push", "-q", "origin", "main")
+
+    def branch_pr(self, number, files, *, base="main", ref=None, item=None, moves=None, **kw):
+        """A real PR branch in the origin (plus refs/pull/N/head) and its canned gh record. ``moves`` renames
+        files (old -> new); gh lists only the new path of a rename."""
         ref = ref or f"lane/p{number}"
         self.git("checkout", "-q", "-B", ref, f"origin/{base}")
+        for old, new in (moves or {}).items():
+            (self.repo / new).parent.mkdir(parents=True, exist_ok=True)
+            self.git("mv", old, new)
         for rel, text in files.items():
             (self.repo / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.repo / rel).write_text(text)
@@ -86,11 +118,38 @@ class Env:
         sha = self.git("rev-parse", "HEAD")
         self.git("push", "-q", "origin", ref, f"{sha}:refs/pull/{number}/head")
         self.git("checkout", "-q", "main")
-        self.add_pr(number, ref, base=base, head=sha, files=list(files), **kw)
+        self.add_pr(number, ref, base=base, head=sha, files=[*files, *(moves or {}).values()], **kw)
         return sha
 
-    def run(self, *argv, cwd=None):
-        return subprocess.run([sys.executable, str(TOOL), *argv], cwd=cwd or self.repo, env=self.env,
+    def push_commit(self, number, files):
+        """A new commit on a PR's branch, pushed after a batch was built: the PR head moves, as on GitHub."""
+        self.load()
+        pr = self.state["prs"][str(number)]
+        self.git("checkout", "-q", pr["headRefName"])
+        for rel, text in files.items():
+            (self.repo / rel).write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "late change")
+        sha = self.git("rev-parse", "HEAD")
+        self.git("push", "-q", "origin", pr["headRefName"], f"{sha}:refs/pull/{number}/head")
+        self.git("checkout", "-q", "main")
+        pr["headRefOid"] = sha
+        self.save()
+        return sha
+
+    def run(self, *argv, cwd=None, crash=None, tool=None):
+        """Run the tool. ``crash=(git subcommand, n)`` kills it right after its n-th `git <subcommand>` (a
+        crash window); ``tool`` runs another copy of merge_batch.py."""
+        env = dict(self.env)
+        if crash:
+            hook, count = self.tmp / "crashbin", self.tmp / "crash.count"
+            hook.mkdir(exist_ok=True)
+            (hook / "git").write_text(CRASH_GIT)
+            (hook / "git").chmod(0o755)
+            count.unlink(missing_ok=True)
+            env.update(PATH=f"{hook}:{env['PATH']}", REAL_GIT=shutil.which("git"), CRASH_SUB=crash[0],
+                       CRASH_NTH=str(crash[1]), CRASH_COUNT=str(count))
+        return subprocess.run([sys.executable, str(tool or TOOL), *argv], cwd=cwd or self.repo, env=env,
                               capture_output=True, text=True, timeout=120)
 
     def run_gh(self, *argv):

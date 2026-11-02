@@ -3,22 +3,29 @@
 
   plan      open PRs with a label (or --prs): head sha, CI on head, draft, files/lines, base.
             Stacks stay together (a PR goes after the PR it is based on); a PR touching an
-            AUTH_DOOR/gate path of tools/ci_commit_gate.py or src/plangraph/keeper/ is HIGH;
-            HIGH PRs fill HIGH batches apart from the standard ones, both cut by --max-prs and
-            --max-lines. The batch-ready label overrides draft status; red CI and the
-            needs-update label keep a PR out.
-  build     branch batch/NAME in a new worktree from origin/<base>; `git merge --no-ff` each PR
-            head as `Merge PR #N: <title>`. A conflict stops with exit 3 (resolve, commit, run
-            `continue`) or, with --skip-conflicts, skips the PR and labels it needs-update.
-            --union GLOB merges an append-only ledger (CHANGELOG.md) line by line instead.
-  continue  resume after the resolution commit.
+            AUTH_DOOR/gate path of tools/ci_commit_gate.py or src/plangraph/keeper/ is HIGH (git
+            adds the old path of a rename; without the gate file plan refuses); HIGH PRs fill HIGH
+            batches apart from the standard ones, both cut by --max-prs and --max-lines. The
+            batch-ready label overrides draft status; red CI and the needs-update label keep a PR out.
+  build     branch batch/NAME in a new worktree from origin/<default branch>, `git merge --no-ff` each
+            PR head as `Merge PR #N: <title>`. Every stack root must target the default branch (a PR
+            stacked on a PR outside the batch is refused) and the plan rules apply to the set (red CI,
+            needs-update, HIGH with standard PRs, caps) unless --force-set, which is logged in the
+            state and the batch PR. A conflict stops with exit 3 (resolve, commit, run `continue`) or,
+            with --skip-conflicts, skips the PR and labels it needs-update. --union GLOB merges an
+            append-only ledger (CHANGELOG.md) line by line instead; build warns when a PR changed old
+            lines of such a path, because a union keeps the old text beside the new.
+  continue  resume after the resolution commit, or after a crash: the state is saved before the
+            worktree and before each merge, so a merge that was made is recorded, not lost.
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
   land      merge the batch PR only if its head is the pushed head, every required check is
             green and --approval ends in `HEAD: <sha>` (that head) and `VERDICT: PASS` lines, with
-            no FAIL/CHANGES verdict line anywhere; then check each included PR is MERGED (else
-            close it as `merged via batch PR #N`) and print `MERGED <pr> <sha> <item>`.
-  status    batches in progress.  abort: drop a batch (worktree, branch, state).
+            no FAIL/CHANGES verdict line anywhere. Then per included PR: MERGED -> `MERGED <pr> <sha>
+            <item>`; open but in the merge -> closed as `merged via batch PR #N`, same line; a head
+            that moved after the build -> `NOT-MERGED <pr> head moved`, not closed, needs-update.
+  status    batches in progress, interrupted ones and orphans.  abort: drop a batch (worktree,
+            branch, state; without a state file by branch name).
 
 State lives in `<git common dir>/merge-batch/NAME.json`, so every worktree of the repo sees it.
 Exit codes: 0 ok, 1 refused or failed, 2 usage, 3 conflict stop. Needs only git and gh.
@@ -32,8 +39,8 @@ import sys
 import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
-from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, fetch_pr, gh_json, norm_pr,
-                              parse_prs, repo_info)
+from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, add_extra_paths, fetch_pr,
+                              gh_json, norm_pr, parse_prs, repo_info)
 
 
 def cmd_plan(args):
@@ -48,6 +55,7 @@ def cmd_plan(args):
         raw = gh_json("pr", "list", "--repo", repo, "--state", "open", "--label", args.label,
                       "--limit", "200", "--json", PR_FIELDS)
         prs = [norm_pr(item) for item in raw]
+    add_extra_paths(base, prs)  # the old paths of renames: a keeper file moved away is still a keeper change
     plan = plan_batches(prs, base, args.max_prs, args.max_lines, patterns)
     plan.update(repo=repo, label=None if args.prs else args.label)
     print(json.dumps(plan, indent=2) if args.json else render_table(plan))
@@ -59,6 +67,14 @@ def positive(text):
     if value < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return value
+
+
+def set_options(cmd):
+    """The plan rules, as options of plan and of build (which applies them to its PRs)."""
+    cmd.add_argument("--max-prs", type=positive, default=6)
+    cmd.add_argument("--max-lines", type=positive, default=1200, help="added + deleted lines per batch")
+    cmd.add_argument("--high-path", action="append", default=[], metavar="GLOB",
+                     help="extra path glob that makes a PR HIGH (repeatable)")
 
 
 def parser():
@@ -76,16 +92,17 @@ def parser():
     cmd = add("plan", cmd_plan, "list batch candidates and cut batches", repo=True)
     cmd.add_argument("--label", default=BATCH_READY, help=f"PR label to select (default {BATCH_READY})")
     cmd.add_argument("--prs", help="comma separated PR numbers instead of the label")
-    cmd.add_argument("--max-prs", type=positive, default=6)
-    cmd.add_argument("--max-lines", type=positive, default=1200, help="added + deleted lines per batch")
     cmd.add_argument("--base", help="batch base branch (default: the repo default branch)")
-    cmd.add_argument("--high-path", action="append", default=[], metavar="GLOB",
-                     help="extra path glob that makes a PR HIGH (repeatable)")
+    set_options(cmd)
     cmd.add_argument("--json", action="store_true")
     cmd = add("build", build.cmd_build, "merge PRs into batch/NAME", repo=True)
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--prs", required=True, help="comma separated PR numbers, in merge order")
     cmd.add_argument("--skip-conflicts", action="store_true", help="skip a conflicting PR and label it needs-update")
+    set_options(cmd)
+    cmd.add_argument("--force-set", action="store_true",
+                     help="build PRs that break the plan rules (red CI, needs-update, HIGH with standard PRs, caps); "
+                          "logged in the state and the batch PR")
     cmd.add_argument("--worktree", help="worktree path (default: <repo>-worktrees/batch-NAME)")
     cmd.add_argument("--union", action="append", default=[], metavar="GLOB",
                      help="merge this path line by line (git merge=union) instead of conflicting, "
