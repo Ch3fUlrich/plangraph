@@ -4,7 +4,9 @@ Runs context_guard.py's PostToolUse hook in-process. When
 <state>/claude-hooks/ctx-guard-session/<session_id>.json exists, its "handoff"
 and "hard" integers replace AUTOOS_CTX_HANDOFF / AUTOOS_CTX_HARD for that one
 session, and {"off": true} skips the guard. Every other session runs the guard
-unchanged. <state> is $XDG_STATE_HOME, else ~/.local/state (as the guard).
+unchanged. <state> is $XDG_STATE_HOME, else ~/.local/state (hook_common.state_home, as the guard).
+The AUTOOS_CTX_* names and the guard's autoos/ctx-guard state dir are kept on purpose: the live fleet guard and its
+per-session override files depend on them, so renaming them belongs to the cutover item G13.
 The guard's HANDOFF/HARD line gets the card rule appended (operator 2026-10-31: fixed handoff format).
 The thresholds are re-read on every call, layered as Claude Code layers them:
 the nearest project .claude/settings.local.json over .claude/settings.json
@@ -21,8 +23,14 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+try:
+    from hook_common import safe_id, state_home  # noqa: E402
+except ImportError:  # a half-installed hooks dir: main() says so and exits 0, as for a missing context_guard.py
+    safe_id = state_home = None
+
 GUARD = str(Path(__file__).resolve().parent / 'context_guard.py')
-_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 # The guard's threshold line (context_guard.emit_line), the only line the card
 # rule belongs to: anything else the guard emits must pass through untouched.
 _HANDOFF_LINE = re.compile(r"^(?:HANDOFF-NOW|HARD-CAP) ctx=")
@@ -45,16 +53,14 @@ def add_card_rule(out: str) -> str:
 
 
 def overrides_dir() -> Path:
-    xdg = os.environ.get("XDG_STATE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
-    return base / "claude-hooks" / "ctx-guard-session"
+    return state_home() / "claude-hooks" / "ctx-guard-session"
 
 
 def session_override(text: str):
     """The override dict for the hook payload's session, or None."""
     try:
         sid = json.loads(text).get("session_id")
-        if not (isinstance(sid, str) and _SAFE_ID.match(sid)):
+        if not safe_id(sid):
             return None
         doc = json.loads((overrides_dir() / ("%s.json" % sid)).read_text(encoding="utf-8"))
         return doc if isinstance(doc, dict) else None
@@ -99,6 +105,9 @@ def settings_thresholds(cwd=None):
 
 
 def main() -> int:
+    if state_home is None:
+        print("ctx_guard_session: hook_common.py missing next to this hook; context guard is off", file=sys.stderr)
+        return 0
     text = sys.stdin.read()
     try:
         cwd = json.loads(text).get("cwd")

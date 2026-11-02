@@ -1,12 +1,19 @@
 """Counter titles for unnamed sessions (operator 2026-10-31: every session name ends in a counter).
 
 UserPromptSubmit hook. On a session's first prompt, when the transcript has no custom title yet, it prints
-`{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "sessionTitle": "<cwd name>-NNNN <first words>"}}`.
+`{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "sessionTitle": "<cwd name>-NNNN"}}`: the working
+directory's name and the counter, nothing else. The prompt is never read, so no prompt text can reach a title.
+
 NNNN comes from the per-host counter that routing's bin/fleet-launch also uses
-(~/.local/state/routing/session-seq, lock'd). Named sessions (fleet launches, `-n`) are left alone. A per-session
-marker under ~/.local/state/claude-hooks/session-title/ is written only after the title is out (or once the session
-is known to be titled), so a failed run is retried on the next prompt instead of consuming the session. Fail-safe:
-any error in main() exits 0 with no output, so a prompt is never blocked. Interim until plangraph SU-HOOK-FLEET ships this.
+(~/.local/state/routing/session-seq, lock'd). A missing or empty counter file and a stored 0 both count on to 0001.
+Text that is not a whole number below 9999 (garbled, negative, a counter that reached 9999) restarts at a
+clock-derived value in 1000..9999 and counts on from there, so a name never carries more than four digits.
+
+Named sessions (fleet launches, `-n`) are left alone. A per-session marker under
+~/.local/state/claude-hooks/session-title/ is written only after the title is out (or once the session is known
+to be titled), so a failed run is retried on the next prompt instead of consuming the session. Fail-safe: any
+error in main() exits 0 with no output, so a prompt is never blocked. Interim until plangraph SU-HOOK-FLEET
+ships this.
 """
 import json
 import os
@@ -17,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from hook_common import SAFE_ID as _SAFE_ID, atomic_write_text, state_home  # noqa: E402
+from hook_common import atomic_write_text, safe_id, state_home  # noqa: E402
 
 try:
     import fcntl
@@ -28,8 +35,6 @@ try:
     import msvcrt
 except ImportError:  # POSIX: no msvcrt
     msvcrt = None
-
-_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 # Only the last 128 KB of the transcript is scanned for `custom-title`: the
 # read stays bounded on a tens-of-MB file. Tradeoff: a title recorded before
@@ -76,37 +81,43 @@ def has_title(transcript):
     return any('"custom-title"' in line for line in data.decode("utf-8", "replace").split("\n"))
 
 
+# The counter is four digits (-NNNN): 0..SEQ_MAX-1 counts on by one; anything else restarts in SEQ_RESTART..SEQ_MAX.
+SEQ_MAX = 9999
+SEQ_RESTART = 1000
+
+
+def _bump(raw):
+    """The counter after `raw`, the stored text: a fresh file and 0 start at 1, 1..9998 count on.
+
+    Anything else (garbled, negative, fractional, a stale 10-digit time value, a counter that reached 9999) must
+    not restart at 1 (names would repeat) and must not grow past four digits: it restarts at a clock-derived value
+    in SEQ_RESTART..SEQ_MAX and the shared counter continues from there.
+    """
+    if not raw:
+        return 1
+    if len(raw) <= len(str(SEQ_MAX)) and raw.isascii() and raw.isdigit() and int(raw) < SEQ_MAX:
+        return int(raw) + 1
+    return SEQ_RESTART + int(time.time()) % (SEQ_MAX - SEQ_RESTART + 1)
+
+
 def next_seq():
     path = Path(os.environ.get("ROUTING_STATE_DIR") or state("routing")) / "session-seq"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a+") as f:
+    with open(path, "a+", encoding="utf-8", errors="replace") as f:  # bytes that are not text are garbled, not fatal
         _lock(f)
         f.seek(0)
-        raw = f.read().strip()
-        try:
-            n = int(raw or 0) + 1
-            if raw and n < 2:
-                raise ValueError
-        except ValueError:
-            # A garbled counter must not restart at 1 (titles would collide):
-            # fall back to a time-derived value and count on from there.
-            n = int(time.time())
+        n = _bump(f.read().strip())
         f.seek(0)
         f.truncate()
         f.write(str(n))
     return n
 
 
-def title(cwd, prompt, seq):
-    words = _WORD.findall(prompt or "")[:6]
-    base = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(cwd or "session").name)[:30] or "session"
-    text = (f"{base}-{seq:04d} " + " ".join(words)).rstrip()
-    if len(text) <= 64:
-        return text
-    head = text[:64]
-    # truncate at a word boundary, never mid-word; a single word longer than
-    # the cap has no boundary and is cut hard as the only option
-    return head.rsplit(" ", 1)[0] if " " in head and text[64] != " " else head
+def title(cwd, seq):
+    """`<cwd name>-NNNN`: the directory's cleaned name (at most 30 characters) and the counter, nothing else."""
+    name = Path(cwd).name if isinstance(cwd, str) and cwd else ""
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", name)[:30] or "session"
+    return f"{base}-{seq:04d}"
 
 
 def _mark(marker):
@@ -119,7 +130,7 @@ def main():
     try:
         doc = json.loads(sys.stdin.read())
         sid = doc.get("session_id")
-        if not (isinstance(sid, str) and _SAFE_ID.match(sid)):
+        if not safe_id(sid):
             return 0
         marker = state("claude-hooks", "session-title", sid)
         if marker.exists():
@@ -128,7 +139,7 @@ def main():
             _mark(marker)  # already titled: settle the session, no title to emit
             return 0
         out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                      "sessionTitle": title(doc.get("cwd"), doc.get("prompt"), next_seq())}}
+                                      "sessionTitle": title(doc.get("cwd"), next_seq())}}
         print(json.dumps(out))
         _mark(marker)  # only after the title is out: a failed run retries next prompt
         return 0
