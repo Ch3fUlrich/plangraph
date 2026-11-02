@@ -81,6 +81,44 @@ def test_reset_formats(store, headers, body, reset):
     assert store.leg_status("cx/sol", now=101)["evidence"]["reset_at"] == reset
 
 
+@pytest.mark.parametrize("body, delta", [
+    ("(reset after 3h 12m 5s)", 11525),
+    ("(reset after 45s)", 45),
+    ("reset after 0s", None),
+    ("resets in 2 minutes", 120),
+    ("(reset after 4d 2h)", ls.RESET_CAP_S),
+])
+def test_reset_after_formats(store, body, delta):
+    """D-3685: OmniRoute's "reset after" books like "resets in"; an elapsed
+    cooldown ("reset after 0s") books nothing and a far-future reset is capped
+    at now + 24 h."""
+    store.record_provider_response("cx/zz-model", 429, body, {}, "gateway", now=100)
+    assert store.leg_status("cx/zz-model", now=101)["evidence"]["reset_at"] == (
+        None if delta is None else 100 + delta)
+
+
+def test_probe_failure_does_not_hide_active_limit(store):
+    """D-3685: a liveness-probe failure newer than a booked limit must not hide
+    it while the limit's reset is still ahead."""
+    store.record_harness_limit("agy/zz-lim", "error: quota reached. Resets in 10h",
+                               "spawner:harness", now=1000)
+    reset = 1000 + 36000
+    store.record_probe_fail("agy/zz-lim", "timeout", "leg-probe", now=1100, down_s=60)
+    state = store.leg_status("agy/zz-lim", now=1101)
+    assert state["state"] == "limited"
+    assert state["evidence"]["body_excerpt"] == "error: quota reached. Resets in 10h"
+    assert state["evidence"]["reset_at"] == reset
+    # Past the reset the probe-fail streak decides again: reprobe, then ok.
+    assert store.leg_status("agy/zz-lim", now=reset + 1)["state"] == "reprobe"
+    store.record_probe_pass("agy/zz-lim", "leg-probe", now=reset + 2)
+    assert store.leg_status("agy/zz-lim", now=reset + 3)["state"] == "ok"
+    # A newer success still lifts a limit early.
+    store.record_harness_limit("agy/zz-lift", "error: quota reached. Resets in 10h",
+                               "spawner:harness", now=1000)
+    store.record_probe_pass("agy/zz-lift", "leg-probe", now=1100)
+    assert store.leg_status("agy/zz-lift", now=1101)["state"] == "ok"
+
+
 def test_runner_response_not_agent_claim(store):
     from plangraph.spawner.runner import SpawnerRunner, JobInfo
     runner = SpawnerRunner()

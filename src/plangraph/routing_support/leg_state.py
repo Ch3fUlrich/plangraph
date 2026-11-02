@@ -16,6 +16,11 @@ from email.utils import parsedate_to_datetime
 
 REPROBE_MINUTES = 10
 
+#: D-3685: a booked reset never parks a leg for days: every reset is capped at
+#: now + 24 h, so the leg is checked once after the cap and re-booked if the
+#: provider still reports it limited.
+RESET_CAP_S = 86400
+
 #: Probe/harness evidence is leg-level: a probe session cannot attribute its
 #: outcome to a card's account/combo. Rows written without those dimensions
 #: stay visible to every reader of the leg, while provider responses keep the
@@ -47,6 +52,7 @@ def _redact(body):
 
 
 def _reset(headers, body, now):
+    reset = None
     for key in ("retry-after", "x-ratelimit-reset"):
         value = headers.get(key)
         if value is None:
@@ -54,20 +60,28 @@ def _reset(headers, body, now):
         try:
             number = float(value)
             if math.isfinite(number) and number >= 0:
-                return now + number if key == "retry-after" else number
+                reset = now + number if key == "retry-after" else number
+                break
         except (ValueError, TypeError):
             try:
-                return parsedate_to_datetime(value).timestamp()
+                reset = parsedate_to_datetime(value).timestamp()
+                break
             except (ValueError, TypeError, OverflowError):
                 try:
-                    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                    reset = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                    break
                 except (ValueError, TypeError, AttributeError):
                     pass
-    match = re.search(r"resets?\s+in\s+((?:\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\s*)+)", body, re.I)
-    if match:
-        return now + sum(float(n) * {"s": 1, "m": 60, "h": 3600}[unit[0].lower()]
-                         for n, unit in re.findall(r'(\d+(?:\.\d+)?)\s*([a-z]+)', match[1], re.I))
-    return None
+    if reset is None:
+        # D-3685: OmniRoute prints "(reset after 3h 12m 5s)"; accept "reset
+        # after" as well as "resets in" over the same unit parsing.
+        match = re.search(r"resets?\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\s*)+)", body, re.I)
+        if match:
+            total = sum(float(n) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit[0].lower()]
+                        for n, unit in re.findall(r'(\d+(?:\.\d+)?)\s*([a-z]+)', match[1], re.I))
+            # "reset after 0s": the cooldown already elapsed, nothing to book.
+            reset = now + total if total > 0 else None
+    return None if reset is None else min(reset, now + RESET_CAP_S)
 
 
 class LegStateStore:
@@ -170,11 +184,21 @@ class LegStateStore:
                     # Two consecutive probe failures before down (M11): one
                     # failure is a reprobe hint, never proof the leg is gone.
                     streak = 1
+                    behind = None
                     for older in rows:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
                             streak += 1
                         else:
+                            behind = older
                             break
+                    # D-3685: a newer probe failure never hides a limit row
+                    # whose reset is still ahead. Skip the leading probe-fail
+                    # rows; if the next row is such a limit, it is the evidence.
+                    if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
+                            and behind['reset_at'] is not None and now < behind['reset_at']):
+                        evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
+                        evidence["event_id"] = behind["id"]
+                        return {"state": "limited", "evidence": evidence}
                     reset = row["reset_at"]
                     down = streak >= 2 and reset is not None and now < reset
                     return {'state': 'down' if down else 'reprobe', 'evidence': evidence}

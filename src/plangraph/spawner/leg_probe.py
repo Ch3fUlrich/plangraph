@@ -235,6 +235,14 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
                 (leg.id in ids or
                  (all_writers and any(role in leg.roles for role in ('implement', 'fix'))))]
     results = []
+    state = _store_for(runner)
     for leg in selected:
-        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout)))
+        # D-3685: a leg booked limited is known-unusable; probing it would only
+        # spend a model run and let the probe failure mask the booked reset.
+        status = state.leg_status(key(leg))
+        if status.get('state') == 'limited':
+            results.append(dict(id=leg.id, ok=False, skipped='limited',
+                                reset_at=(status.get('evidence') or {}).get('reset_at')))
+            continue
+        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state)))
     return dict(ok=all(row['ok'] for row in results), probes=results)

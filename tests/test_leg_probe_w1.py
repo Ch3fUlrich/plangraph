@@ -8,6 +8,7 @@ probe writes through the store the planner reads, and error-shaped/anchored
 stderr quota detection.
 """
 import asyncio
+import sqlite3
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -95,6 +96,18 @@ def test_harness_limit_stderr_is_error_shaped_or_anchored():
         'Traceback (most recent call last):\n  File "x.py", line 3, in retry\n'
         '    raise after rate limits reset\nDone') is None
     assert harness_limit_line(1, '', 'a run of tests mentioning resets in the docs') is None
+
+
+def test_harness_limit_omniroute_reset_after_line():
+    """D-3685: OmniRoute's quota line ends in '(reset after 3h 12m 5s)' and must
+    mark the leg; prose stays out (error-shaped or start-anchored only)."""
+    from plangraph.spawner.env_redact import harness_limit_line
+    line = 'Error: [codex/zz-model] quota threshold (reset after 3h 12m 5s)'
+    assert harness_limit_line(1, '', '\x1b[1m' + line + '\x1b[0m') == line
+    assert harness_limit_line(0, '', line) is None
+    assert harness_limit_line(1, '', 'backoff (reset after 5 s of uptime)') is None
+    assert harness_limit_line(1, '', 'Error: the model exhausted their quota') == \
+        'Error: the model exhausted their quota'
 
 
 def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
@@ -258,6 +271,42 @@ def test_probe_many_selection_errors():
     with pytest.raises(ValueError) as unknown:
         asyncio.run(probe_many(None, 'zz/nope', False))
     assert str(unknown.value) == 'unknown legs: zz/nope'
+
+
+def test_probe_many_skips_a_limited_leg(tmp_path, monkeypatch):
+    """D-3685: probe_many skips a leg booked limited and writes no row for it;
+    an unbooked leg still probes."""
+    from plangraph.planner import legs as planner_legs
+    from plangraph.spawner import leg_probe
+
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    monkeypatch.setattr(planner_legs, 'DEFAULT_LEGS', (
+        planner_legs.Leg('zz-limited', 'free', 'agy', 'zz-model-a', 'other',
+                         ('128k',), 1000, False, roles=('implement',)),
+        planner_legs.Leg('zz-ok', 'free', 'agy', 'zz-model-b', 'other',
+                         ('128k',), 1000, False, roles=('implement',))))
+
+    class Runner:
+        leg_reader = store
+
+        async def spawn(self, **kwargs):
+            raise RuntimeError('spawn refused in tests')
+
+    store.record_harness_limit('agy/zz-model-a',
+                               'error: quota threshold (reset after 3h 12m 5s)', 'test')
+    reset = store.leg_status('agy/zz-model-a')['evidence']['reset_at']
+
+    def count(leg):
+        return sqlite3.connect(str(store.path)).execute(
+            'SELECT count(*) FROM leg_events WHERE leg_key=?', (leg,)).fetchone()[0]
+
+    assert count('agy/zz-model-a') == 1
+    result = asyncio.run(leg_probe.probe_many(Runner(), ['zz-limited', 'zz-ok']))
+    by_id = {row['id']: row for row in result['probes']}
+    assert by_id['zz-limited'] == dict(id='zz-limited', ok=False, skipped='limited', reset_at=reset)
+    assert count('agy/zz-model-a') == 1
+    assert 'skipped' not in by_id['zz-ok'] and by_id['zz-ok']['ok'] is False
+    assert count('agy/zz-model-b') == 1
 
 
 def test_mcp_probe_string_leg_is_one_leg(tmp_path):
