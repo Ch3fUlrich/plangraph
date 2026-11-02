@@ -140,7 +140,11 @@ impl AsyncWrite for BlockingStdout {
         if this.pending.is_none() {
             let data = buf.to_vec();
             this.pending = Some(tokio::task::spawn_blocking(move || {
-                Write::write_all(&mut std::io::stdout(), &data)
+                // std's stdout is line-buffered: flush, or the bytes after the
+                // last newline would sit in the buffer until the next write.
+                let mut out = std::io::stdout().lock();
+                Write::write_all(&mut out, &data)?;
+                Write::flush(&mut out)
             }));
         }
         match this.poll_write_done(cx) {
