@@ -1,31 +1,33 @@
-# L1 card · build-L1-0110 · 2026-11-02T16:33Z
+# L1 card · build-L1-0112 · 2026-11-02T18:42Z
 ## Goal
-- plangraph PRs MERGE-READY to replan successor; plangraph-data PRs GO-REQ to routing; spawner-main ff 2485630d per D-3680/D-3684; D-3676 Python = bug fixes only
+- plangraph PRs MERGE-READY to replan successor; plangraph-data PRs GO-REQ to routing; spawner-main ff 2485630d (D-3680 ruling a); D-3681(2) omniroute upstream merge for prox-L1-main
 ## Keeper
-- claimed: SPAWNER-LEGS-D3605 (claimed ep5, since 13:39Z), SEAT-PATH-FIXES (claimed ep2, since 15:16Z), SPAWNER-LEG-STATE-FROM-OMNIROUTE (claimed ep1, since 12:53Z), LE-FLEET-MSG-INVENTORY (claimed ep4, since 12:53Z); heartbeat first
-- ready next: MD-SYNC-SNAPSHOT-TIMEOUT (after SEAT-PATH-FIXES merges), SPAWNER-LEGS-D3605 submit after ff probe
+- claimed: SPAWNER-LEGS-D3605 (claimed ep5, since 13:39Z), SEAT-PATH-FIXES (claimed ep2, since 15:16Z), SPAWNER-LEG-STATE-FROM-OMNIROUTE (claimed ep1, since 12:53Z), LE-FLEET-MSG-INVENTORY (claimed ep4, since 12:53Z); leases to 18:34Z: heartbeat first
+- ready next: MD-SYNC-SNAPSHOT-TIMEOUT (after #338 merges), SPAWNER-LEGS-D3605 submit after ff probe
 ## Done
-- 11-02T15:35Z SPAWNER-LEGS-D3605 PR#337 re-cut of #334 (ci-gate test rename), CI green, merged da91878e
-- 11-02T15:50Z SPAWNER-LEGS-D3605 8ec627bd evidence commit+ci verified
-- 11-02T16:05Z SPAWNER-DISPATCH-FAIL-DETECT f2aa3243 PR#336 refusal-test fix + LOWs, CI 41476943447, seat run-657e54c7 ACCEPT, merged 2485630d
-- 11-02T16:20Z SPAWNER-DISPATCH-FAIL-DETECT - closed by router D-3682
-- 11-02T16:30Z SEAT-PATH-FIXES 2385f77d PR#338 pushed, full suite 9997 passed
-- 11-02T16:25Z D-3683 - MD-SYNC-SNAPSHOT-TIMEOUT defined (router batch d3683)
+- 11-02T18:05Z LE-RECYCLE-NEW-SESSION 8d63ed3 r3 sol run-9bfdb796, 320 passed, seat run-dfafc34d ACCEPT
+- 11-02T18:22Z D-3690 268cd8af pd#20 merged, live plangraph-data ff'd
+- 11-02T17:25Z KEEPER-EVIDENCE-MERGE-HEAD ea374ad1 r3 + Hand-Edit, full suite f0bde3a8 9160 passed
+- 11-02T18:35Z KEEPER-EVIDENCE-MERGE-HEAD 9d7a3549 CI ci-gate green, GO-REQ sent
+- 11-02T18:35Z SEAT-PATH-FIXES d9263c35 r2 31c2e8b1 mimo-pro run-8d06ae2b, CI ci-gate green
 ## In flight
-- spawner-main ff loop -> 2485630d (bg; dies with session: rerun) since 16:15Z next check 17:00Z -> smoke sol/luna/mimo-pro/haiku -> LIVE to routing-0101
-- PR#338 seat mimo-pro J2/seat-spf.out since 16:30Z next check 17:00Z -> MERGE-READY 338
-- pd#20 r3 sol writer J2/r-pd20r3.wait since 16:00Z next check 17:00Z -> verify, delta seat, GO-REQ
+- D-3681(2) omniroute lane f62ce612 run-7ab7bdbb since 17:52Z next check 18:50Z: J/or-unit.log unit run -> fix round or seat
+- spawner-main ff loop pid 1589089 since 16:15Z next check 19:15Z (gives up then: rerun)
+- PR#309 GO-REQ routing since 18:35Z next check 19:00Z
+- PR#338 Gate-Edit D-id GO-REQ routing since 18:42Z next check 19:00Z
 ## Planned
-1. D-3684 relay workst-L1-autoos ff ws checkout 41e7b729->2485630d after code-host smoke, before 18:50Z
-2. MD-SYNC-SNAPSHOT-TIMEOUT sol writer after ff (hold spawns until ff)
-3. #309 f0bde3a8 per D-3678: qodercli-qwen seat + my full suite -> GO-REQ
+1. SEAT-PATH-FIXES #338: 2 seats outside gpt/mimo/anthropic (door path HIGH) -> MERGE-READY again
+2. KEEPER-EVIDENCE-MERGE-HEAD #309 on GO: merge_batch HIGH batch, evidence, submit
+3. D-3681(2) omniroute: unit/docs fix or seat -> sha + verdict to prox-L1-main, DONE to routing
 ## Open
-- D-3680 ff needs 0 live spawner runs | default wait, BLOCKED to routing if no window | deadline 18:00Z
-- D-3633(1) LEG-STATE mgmt key: operator places omniroute-mgmt.key | default slice 1 + fakes | deadline none
+- BLOCKED pd#21 r4 2 new MED | default L1 Hand-Edit + delta seat | deadline none
+- BLOCKED no pytest-capable seat leg (incident) | default my suite as 3.3 record | deadline none
+- D-3684 ws ff 41e7b729->2485630d before 18:50Z | default report missed to routing | deadline 18:50Z
 ## Traps
-- J2=/home/s/.claude/jobs/3e2d7005/tmp (seat.sh, briefs); old J=/home/s/.claude/jobs/7d533977/tmp
-- Writer + Hand-Edit trailers on one commit = gated as hand-edit (50 lines, door paths): split commits
-- mimo-pro seats need NO-TOOLS header + inline diff or no VERDICT line
-- pkill -f matching your own command line kills your shell: pgrep + filter
+- J=/home/s/.claude/jobs/bfa93ec2/tmp (spawnw.sh, seat prompts, mb/ merge_batch copy); J2=/home/s/.claude/jobs/3e2d7005/tmp (seat.sh)
+- spawner route takes ONE --writer-family; Haiku seat leg runs in plan mode; opencode-go glm/qwen unavailable
+- conflicting PRs get no CI: check mergeable, union-merge CHANGELOG
+- pkill -f matching own command kills your shell/bg jobs: pgrep + filter
+- merges via tools/merge_batch.py (plangraph); plangraph-data single PR: gh pr merge --match-head-commit + ff live checkout
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-77 block)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-78 block)
