@@ -179,6 +179,11 @@ def test_windows_accounting_layout():
     assert api.cpu_seconds(42) == 3.5
 
 
+def _own(runner, proc):
+    from plangraph.spawner.proc_kill import root_identity   # #336 fail-closed reap: register the real root as ours
+    runner._owned = {'j': dict(pid=proc.pid, pid_start=root_identity(proc.pid), job_object=False)}
+
+
 def _job(tmp_path, limits):
     from plangraph.spawner.runner import SpawnerRunner, JobInfo
     from plangraph.spawner.run_watchdog import edit_signature
