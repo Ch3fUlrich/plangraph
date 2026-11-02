@@ -258,9 +258,11 @@ async def collect(runner, job_id, proc):
                 complete.append(line)
                 if is_activity(line):
                     active = True
-            if complete and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S:
+            # F3: check the unterminated tail too; a refusal line printed
+            # without a trailing newline while the child hangs must be seen.
+            if (complete or pending) and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S:
                 from .env_redact import early_refusal
-                found = early_refusal(name, ''.join(complete))
+                found = early_refusal(name, ''.join(complete) + pending)
                 if found:
                     job.refusal = scrub(found)   # only the matched line is scrubbed: no second pass over the chunk
                     refused.set()
@@ -328,14 +330,20 @@ async def collect(runner, job_id, proc):
         return await proc.communicate()
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())
+    waiters = [task, refusal_wait]
     try:
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
             delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
             if w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
-            done, _ = await asyncio.wait([task, refusal_wait], timeout=delay, return_when=asyncio.FIRST_COMPLETED)
-            if refused.is_set() and not task.done():
+            done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+            if refused.is_set() and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
+                # Q14/M9/M15: a cancel/stall/timeout verdict is never stomped;
+                # the refusal is booked (job.refusal) but the verdict stands.
+                # Drop the resolved waiter so the loop keeps sampling normally.
+                waiters = [task]
+            elif refused.is_set() and not task.done():
                 # D-3605 (a): a refused/rate-limited/credit/auth dispatch ends the run now,
                 # never 'running' until a stall rule fires; the leg loop records leg_state.
                 job.status, job.exit_code = 'failed', 7

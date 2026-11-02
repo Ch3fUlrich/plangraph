@@ -5,10 +5,11 @@ import re
 IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
 
 #: Credit/auth refusals (D-3605 a): the leg is as unusable as a rate-limited one.
+#: No bare HTTP 401/402/403 alternative: a run that merely prints those codes
+#: in prose ("HTTP 403: forbidden (expected)") is healthy, not a refusal (F1).
 CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
-    r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key'
-    r'|\bHTTP (?:401|402|403)\b', re.I)
+    r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
     r'quota reached|quota exceeded|usage limit|rate limit|resets in|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
@@ -53,10 +54,13 @@ def early_refusal(stream, complete_text):
     """First refusal line (rate limit, credits, auth, 429/402 envelope) in complete output lines.
 
     Streamed while the child still runs, so a refused dispatch ends at once
-    instead of showing 'running' until a watchdog fires (D-3605 a).  Same
-    error-shaped evidence rule as harness_limit_line; never prose.
+    instead of showing 'running' until a watchdog fires (D-3605 a).  Both
+    streams need an error-shaped line ('Error:' / 'HTTP nnn:' prefix) plus a
+    quota marker: a start-anchored retry log ('Rate limit reached, retrying')
+    or marker prose under an error shape never kills a healthy run (F1).
     """
-    for line in normalize(complete_text).splitlines():
+    lines = normalize(complete_text).splitlines()
+    for line in lines:
         text = line.strip()
         if text.startswith('{"autoos_provider_response"'):
             try:
@@ -65,8 +69,10 @@ def early_refusal(stream, complete_text):
                     return 'HTTP %s: %s' % (response['status'], str(response.get('body', ''))[:200])
             except (ValueError, TypeError, AttributeError, KeyError):
                 pass
-    return harness_limit_line(1, complete_text if stream == 'stdout' else '',
-                              complete_text if stream == 'stderr' else '')
+    for line in lines:
+        if _ERROR_SHAPED.match(line) and _QUOTA_MARKER.search(line):
+            return line.strip()
+    return None
 
 
 def unavailable_reason(exit_code, stdout, stderr):

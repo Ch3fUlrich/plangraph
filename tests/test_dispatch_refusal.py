@@ -22,6 +22,17 @@ FAKE_HARNESSES = {
     'auth error': ('stderr', 'Error: HTTP 401 Unauthorized: invalid api key'),
 }
 
+# F1: refusal-looking output from a healthy run. None of these is error-shaped
+# evidence of a refusal (start-anchored retry log / marker prose under an
+# error shape / bare 403 prose): the run must finish rc 0, never be killed.
+HEALTHY_LINES = {
+    'retrying log': ('stderr', 'Rate limit reached, retrying in 2s'),
+    'auth guard prose': ('stdout', 'Error: HTTP 403 Forbidden is returned by the auth guard'),
+    'expected 403': ('stdout', 'HTTP 403: forbidden (expected, test_fetch)'),
+}
+
+HEALTHY = "import sys,time\nsys.%s.write(%r + '\\n'); sys.%s.flush()\ntime.sleep(.5)\nprint('done', flush=True)\n"
+
 
 @pytest.mark.parametrize('name', sorted(FAKE_HARNESSES))
 def test_refused_dispatch_ends_within_10s(tmp_path, name):
@@ -55,6 +66,22 @@ def test_healthy_slow_run_stays_running(tmp_path):
         output, _ = await task
         assert b'done' in output and proc.returncode == 0
         assert getattr(job, 'refusal', None) is None
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('name', sorted(HEALTHY_LINES))
+def test_healthy_run_with_refusal_looking_prose_not_killed(tmp_path, name):
+    stream, line = HEALTHY_LINES[name]
+    script = HEALTHY % (stream, line, stream)
+
+    async def run():
+        runner, job = _job(tmp_path, LIMITS)
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        output, _ = await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
+        assert proc.returncode == 0 and job.status == 'running'
+        assert getattr(job, 'refusal', None) is None
+        assert b'done' in output
     asyncio.run(run())
 
 
@@ -102,3 +129,42 @@ def test_refusal_notifies_parent_once_with_run_leg_reason(tmp_path):
     assert len(refused) == 1
     assert refused[0]['run_id'] == record['run_id'] and refused[0]['leg'] == leg.model
     assert 'quota reached' in refused[0]['reason']
+
+
+def test_refusal_never_stomps_a_cancel_verdict(tmp_path, monkeypatch):
+    # F2 (Q14/M9/M15): a cancel/stall/timeout verdict is final. A refusal line
+    # is booked on the job but must not overwrite the verdict or fire
+    # dispatch_refused; the loop keeps observing the run normally.
+    monkeypatch.setenv('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL', '0.05')
+    script = "import time\nprint('Error: rate limit exceeded', flush=True)\ntime.sleep(3)\n"
+
+    async def run():
+        runner, job = _job(tmp_path, {'stall_min': 10, 'first_edit_min': 20, 'max_min': 0.03})
+        job.status = 'cancelled'
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
+        assert not any(e['event'] == 'dispatch_refused' for e in job.events)
+        assert job.exit_code != 7
+        assert job.status == 'cancelled'
+    asyncio.run(run())
+
+
+def test_refusal_without_trailing_newline_still_detected(tmp_path):
+    # F3: a refusal line printed without a trailing newline while the child
+    # hangs lives in the unterminated tail; it must still stop the run at once.
+    script = ("import sys, time\n"
+              "sys.stderr.write('Error: rate limit exceeded')\n"
+              "sys.stderr.flush()\n"
+              "time.sleep(40)\n")
+
+    async def run():
+        runner, job = _job(tmp_path, LIMITS)
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        started = time.time()
+        await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
+        assert time.time() - started < 10          # the child sleeps 40 s: it was stopped, not awaited
+        assert job.status == 'failed' and job.exit_code == 7
+        assert job.refusal and any(e['event'] == 'dispatch_refused' for e in job.events)
+    asyncio.run(run())
