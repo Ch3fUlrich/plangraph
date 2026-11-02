@@ -96,7 +96,7 @@ DEFAULT_LEGS = (
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
-        note="D-3355 rule 4.0: no Sol leg anywhere", expires="2026-10-31"),
+        note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
