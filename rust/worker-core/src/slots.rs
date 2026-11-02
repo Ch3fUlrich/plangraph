@@ -26,12 +26,20 @@ use crate::hosts::Role;
 use serde::{Deserialize, Serialize};
 
 mod io;
+mod liveness;
 mod policy;
+mod reclaim;
 #[cfg(test)]
 mod tests;
 
 pub use io::{with_table, SlotError};
+#[cfg(windows)]
+pub use liveness::{FileSeatLocks, JobLiveness};
+pub use liveness::{GroupLiveness, GroupState, SeatLocks};
+#[cfg(target_os = "linux")]
+pub use liveness::{LinuxLiveness, ProcSeatLocks};
 pub use policy::{decide, effective_free_mb, Decision};
+pub use reclaim::{reclaim, ReclaimPolicy, ReclaimReport};
 
 /// Which caps a slot counts against (V6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -54,7 +62,8 @@ pub struct ActiveSlot {
     /// Attempt this slot belongs to.
     pub run_id: String,
     pub pid: u32,
-    /// Process start time in epoch ms; with `pid` it guards against pid reuse.
+    /// Opaque process start time (Linux: starttime ticks, Windows: creation
+    /// FILETIME); with `pid` it guards against pid reuse (D-3705).
     pub start_time: u64,
     /// Work the run does; taken from the R1a role vocabulary.
     pub role: Role,
@@ -81,7 +90,8 @@ pub struct Ticket {
     /// Attempt this request belongs to.
     pub run_id: String,
     pub pid: u32,
-    /// Process start time in epoch ms; with `pid` it guards against pid reuse.
+    /// Opaque process start time (Linux: starttime ticks, Windows: creation
+    /// FILETIME); with `pid` it guards against pid reuse (D-3705).
     pub start_time: u64,
     /// Arrival stamp (epoch ms): the FIFO order of the queue.
     pub enqueued_ms: u64,
