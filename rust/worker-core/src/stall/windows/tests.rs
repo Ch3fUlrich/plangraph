@@ -99,7 +99,7 @@ fn write_pid(dir: &str, name: &str) {
 
 fn read_pid(dir: &Path, name: &str) -> u32 {
     std::fs::read_to_string(dir.join(name))
-        .unwrap()
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
         .trim()
         .parse()
         .unwrap()
@@ -121,7 +121,7 @@ fn process_alive(pid: u32) -> bool {
 }
 
 fn wait_until_gone(pid: u32) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if !process_alive(pid) {
             return true;
@@ -146,14 +146,17 @@ fn handle_count() -> u32 {
 fn stall_kill_takes_down_child_and_grandchild() {
     let d = tempfile::tempdir().unwrap();
     let o = Opts {
-        stall: Some(Duration::from_millis(300)),
-        timeout: Some(Duration::from_secs(3)),
+        // Under parallel load the parent can take seconds to start and to
+        // spawn its grandchild before its first output: a 300 ms window
+        // killed it before it wrote parent.pid.
+        stall: Some(Duration::from_secs(3)),
+        timeout: Some(Duration::from_secs(30)),
         ..quick()
     };
     let t = Instant::now();
     let r = supervise(helper("parent", d.path()), &o).unwrap();
     assert!(r.stalled && !r.timed_out, "{r:?}");
-    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    assert!(t.elapsed() < Duration::from_secs(15), "{:?}", t.elapsed());
     let parent = read_pid(d.path(), "parent.pid");
     let leaf = read_pid(d.path(), "leaf.pid");
     assert!(wait_until_gone(parent), "child {parent} still alive");
@@ -171,7 +174,8 @@ fn timeout_terminates_the_child() {
     let t = Instant::now();
     let r = supervise(helper("sleep", d.path()), &o).unwrap();
     assert!(r.timed_out && !r.stalled && !r.cancelled, "{r:?}");
-    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    // Slack for a loaded host (2.57 s seen in a parallel run).
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
 
 #[test]
@@ -190,7 +194,7 @@ fn cancel_terminates_the_child() {
     })
     .unwrap();
     assert!(r.cancelled && !r.stalled && !r.timed_out, "{r:?}");
-    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
 
 #[test]
