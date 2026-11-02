@@ -21,7 +21,8 @@
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
   land      merge the batch PR only if its head is the pushed head, every required check is
-            green and --approval ends in `HEAD: <sha>` (that head) and `VERDICT: PASS` lines, with
+            green and --approval ends in `HEAD: <sha>` (the batch head in full, all 40 hex
+            digits) and `VERDICT: PASS` lines, with
             no FAIL/CHANGES verdict line anywhere. Then per included PR: MERGED -> `MERGED <pr> <sha>
             <item>`; open but in the merge -> closed as `merged via batch PR #N` (after its head is
             read once more), same line; a head that moved after the build -> `NOT-MERGED <pr> head
@@ -117,7 +118,8 @@ def parser():
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--batch-pr", required=True, type=int)
     cmd.add_argument("--approval", metavar="PATH",
-                     help="seat verdict text ending in 'HEAD: <batch head sha>' and 'VERDICT: PASS' lines")
+                     help="seat verdict text ending in 'HEAD: <the batch head sha in full>' and "
+                          "'VERDICT: PASS' lines")
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")

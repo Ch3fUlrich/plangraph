@@ -18,7 +18,7 @@ BUCKETS = ("pass", "fail", "pending", "skipping", "cancel")
 #: A verdict line that says fail, whatever precedes it (quote mark, bullet, bold, underscores): it refuses the approval.
 BAD_VERDICT = re.compile(r"(?<![A-Za-z0-9])verdict[\W_]*:[\W_]*(?:fail|fix|halt|reject|change|request[\W_]*change)",
                          re.IGNORECASE)
-HEAD_LINE = re.compile(r"HEAD: ([0-9a-fA-F]{12,40})")
+HEAD_LINE = re.compile(r"HEAD: ([0-9a-fA-F]{40})")
 PASS_LINES = ("VERDICT: PASS", "VERDICT: pass")
 
 
@@ -101,7 +101,7 @@ def cmd_push(args):
 
 def check_approval(path, head):
     """The approval is seat verdict text about this very head, with a fixed ending: free text, then
-    ``HEAD: <sha>`` (the batch head, in full or 12+ hex digits), then ``VERDICT: PASS`` (or
+    ``HEAD: <sha>`` (the batch head in full: all 40 hex digits, any case), then ``VERDICT: PASS`` (or
     ``pass``) as the last non-empty line, with no prefix. A FAIL or CHANGES verdict line anywhere
     refuses it, so a quoted or bulleted ``VERDICT: pass`` cannot flip an earlier ``fix``.
     This parser is deliberately stricter than the keeper's seat tool and does not use it."""
@@ -120,9 +120,10 @@ def check_approval(path, head):
         raise MergeBatchError(f"approval file {path}: its last non-empty line must be exactly 'VERDICT: PASS' "
                               f"(no prefix), found {last[:80]!r}")
     found = HEAD_LINE.fullmatch(lines[-2]) if len(lines) > 1 else None
-    if not found or not head.startswith(found.group(1).lower()):
+    # the full sha only: a short prefix of the right head could name another commit
+    if not found or found.group(1).lower() != head.lower():
         raise MergeBatchError(f"approval file {path}: the line before the verdict must be 'HEAD: <sha>' naming "
-                              f"the batch head {head} (in full, or at least 12 hex digits)")
+                              f"the batch head {head} in full (all 40 hex digits)")
 
 
 def parse_checks(text):
@@ -188,11 +189,13 @@ def included_pr(repo, number, rec, view, merge):
     """Report one PR of the batch: ``("ok", "")`` after printing its MERGED line, ``("moved", "")`` after its
     NOT-MERGED line, or ``("problem", why)``. A PR GitHub left open is closed only after its head was read once
     more, so a push that came after ``settle`` looked is not closed as merged; a head that moved after the
-    build is neither closed nor reported merged, and its author has to update it (needs-update label)."""
+    build is neither closed nor reported merged, and its author has to update it (needs-update label). Every
+    PR is reported MERGED only when its recorded head is an ancestor of the merge commit, whatever GitHub's
+    state says."""
     num = rec["pr"]
+    if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
+        return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"  # no MERGED line
     if view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
-        if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
-            return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"
         view = gh_json("pr", "view", str(num), "--repo", repo, "--json", "state,headRefOid")
         if view["state"] == "OPEN" and view["headRefOid"] == rec["head"]:
             gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")

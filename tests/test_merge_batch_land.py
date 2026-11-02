@@ -5,9 +5,11 @@ without the real one, the tool run as a subprocess.
 
 Mutations killed: land with a moved head, a red or missing check, no or failing approval, an
 approval that is not about the batch head, an included PR not reported MERGED; a quoted or
-prefixed verdict line that flips a fail, a sha anywhere that counts as the reviewed head, an
-included PR with a new commit closed and reported MERGED, a check name that fakes a bucket, a
-check that is neither pass nor skipping read as green, a batch PR made by a dead push duplicated.
+prefixed verdict line that flips a fail, a sha anywhere that counts as the reviewed head, a
+sha prefix that counts as the reviewed head, an included PR with a new commit closed and
+reported MERGED, a PR MERGED on GitHub whose head is not in the merge reported MERGED, a
+check name that fakes a bucket, a check that is neither pass nor skipping read as green, a
+batch PR made by a dead push duplicated.
 """
 import json
 import sys
@@ -40,6 +42,8 @@ BAD_APPROVALS = {
     "no_head_line": ("looks fine\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
     "other_head": ("HEAD: " + "1" * 40 + "\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
     "short_head": ("HEAD: {h11}\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "prefix_head": ("HEAD: {h12}\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
+    "long_head": ("HEAD: {h}0\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
     "sha_elsewhere": ("{h}\nlooks fine\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
     "head_not_next_to_verdict": ("HEAD: {h}\nlooks fine\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
     "head_with_prefix": ("> HEAD: {h}\nVERDICT: PASS\n", "must be 'HEAD: <sha>'"),
@@ -89,7 +93,7 @@ def test_land_refuses_a_bad_approval(env, case):
     approval = pushed(env, prs=(1, 2))
     text, message = BAD_APPROVALS[case]
     head = head_of(env)
-    approval.write_text(text.format(h=head, h11=head[:11]))
+    approval.write_text(text.format(h=head, h11=head[:11], h12=head[:12]))
     res = land(env, approval)
     assert res.returncode == 1 and message in res.stderr and res.stdout == "", res.stderr
     assert not env.calls("pr", "merge") and env.state_file("l1").exists()
@@ -97,11 +101,11 @@ def test_land_refuses_a_bad_approval(env, case):
 
 @pytest.mark.parametrize("text", [
     "HEAD: {h}\nVERDICT: PASS\n", "HEAD: {h}\nVERDICT: pass", "notes\r\nHEAD: {h}\r\nVERDICT: PASS\r\n\r\n",
-    "VERDICT: PASS | FAIL (template)\nHEAD: {h12}\nVERDICT: PASS\n\n  \n", "HEAD: {hup}\nVERDICT: pass\n"])
+    "VERDICT: PASS | FAIL (template)\nHEAD: {hup}\nVERDICT: PASS\n\n  \n", "HEAD: {hup}\nVERDICT: pass\n"])
 def test_land_accepts_the_exact_ending(env, text):
     approval = pushed(env, prs=(1, 2))
     head = head_of(env)
-    approval.write_text(text.format(h=head, h12=head[:12], hup=head[:12].upper()))
+    approval.write_text(text.format(h=head, hup=head.upper()))  # the full sha in any case names the head
     res = land(env, approval)
     assert res.returncode == 0, res.stderr
     assert res.stdout.count("MERGED") == 2 and len(env.calls("pr", "merge")) == 1
@@ -157,7 +161,7 @@ def test_land_named_checks(env):
 def test_land_resumes_after_a_merge_made_elsewhere(env):
     approval = pushed(env, prs=(1, 2))
     head = head_of(env)
-    approval.write_text(f"HEAD: {head[:12].upper()}\nVERDICT: pass\n")  # 12 digits in any case name the head
+    approval.write_text(f"HEAD: {head.upper()}\nVERDICT: pass\n")  # the full sha in any case names the head
     done = env.run_gh("pr", "merge", "100", "--repo", "owner/proj", "--merge", "--match-head-commit", head)
     assert done.returncode == 0
     res = land(env, approval)
@@ -201,6 +205,23 @@ def test_land_reads_the_head_again_right_before_it_closes(env):
     prs = env.load()["prs"]
     assert (prs["2"]["state"], prs["2"]["headRefOid"]) == ("OPEN", late) and "closed_with" not in prs["2"]
     assert {"name": "needs-update"} in prs["2"]["labels"] and not [c for c in env.calls("pr", "close") if c[2] == "2"]
+
+
+def test_land_reports_a_merged_pr_whose_head_is_not_in_the_merge_as_a_problem(env):
+    """GitHub's MERGED is not enough: a PR is reported MERGED only when its recorded head is an ancestor
+    of the batch merge commit (I12), and such a PR gets no MERGED line at all."""
+    approval = pushed(env)
+    stray = env.branch_pr(4, {"d.txt": "d\n"})  # a commit the batch merge never took
+    st = json.loads(env.state_file("l1").read_text())
+    st["merged"][1]["head"] = stray  # the record of PR 2 names that head
+    env.state_file("l1").write_text(json.dumps(st))
+    env.load()
+    env.state["prs"]["2"].update(state="MERGED", headRefOid=stray)  # GitHub: MERGED, with exactly that head
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and "is not in merge" in res.stderr
+    assert "MERGED 2" not in res.stdout and "NOT-MERGED 2" not in res.stdout
+    assert env.state_file("l1").exists() and not [c for c in env.calls("pr", "close") if c[2] == "2"]
 
 
 @pytest.mark.parametrize("bucket, message", [("cancel", "not green"), ("pending", "not green"),
