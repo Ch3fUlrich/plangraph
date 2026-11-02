@@ -361,10 +361,9 @@ async def collect(runner, job_id, proc):
                         callback(job_id)
                 except Exception:
                     logging.getLogger(__name__).exception('refusal sample callback failed')
-                if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
-                    return await proc.communicate()
+                if job.survivors or not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
+                    task.cancel(); await asyncio.gather(task, return_exceptions=True)   # kill_incomplete: never wait on a process we may not signal
+                    return (await cancel_and_close(task, proc) or (b'', b'')) if job.survivors else await proc.communicate()
                 break
             if task in done:
                 break

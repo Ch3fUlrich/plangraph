@@ -233,3 +233,16 @@ def test_refusal_without_trailing_newline_still_detected(tmp_path):
         assert job.status == 'failed' and job.exit_code == 7
         assert job.refusal and any(e['event'] == 'dispatch_refused' for e in job.events)
     asyncio.run(run())
+
+
+def test_refusal_with_unproven_owner_returns_without_waiting(tmp_path):
+    async def run():   # #336 fail-closed: nothing signalled, survivors booked, the 40 s child is not awaited
+        runner, job = _job(tmp_path, LIMITS)
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', HANG % (('stderr', FAKE_HARNESSES['auth error'][1], 'stderr')), cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        try:
+            await asyncio.wait_for(collect(runner, 'j', proc), timeout=10)
+            assert job.status == 'failed' and job.exit_code == 7 and proc.pid in job.survivors
+        finally:
+            proc.kill(); await proc.wait()
+    asyncio.run(run())
