@@ -69,10 +69,15 @@ def test_review_role_silent_child_exempt(tmp_path):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('value', [0, -1, True, '2', math.inf, math.nan])
+@pytest.mark.parametrize('value', [-1, True, '2', math.inf, math.nan])
 def test_invalid_card_first_event_refused(value):
     with pytest.raises(SpawnRefused):
         thresholds({'first_event_s': value})
+
+
+def test_card_first_event_zero_turns_the_rule_off():
+    limits = thresholds({'first_event_s': 0})
+    assert limits['first_event_s'] is None and limits['first_event_card'] is True
 
 
 def test_invalid_env_first_event_refused(monkeypatch):

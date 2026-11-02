@@ -20,13 +20,13 @@ def is_activity(line):
 
 
 def first_event(card):
-    """(seconds or None, from_card): card ``first_event_s`` over env PLANGRAPH_SPAWN_FIRST_EVENT_S (0 = off) over 90."""
+    """(seconds or None, from_card): card ``first_event_s`` (0 = off) over env PLANGRAPH_SPAWN_FIRST_EVENT_S (0 = off) over 90."""
     from plangraph.planner.routing import SpawnRefused
     if 'first_event_s' in card:
         value = card['first_event_s']
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise SpawnRefused('invalid watchdog threshold: first_event_s')
-        return float(value), True
+        return float(value) or None, True   # 0 turns the rule off, like the env knob
     raw = os.environ.get('PLANGRAPH_SPAWN_FIRST_EVENT_S')
     try:
         value = float(raw) if raw else FIRST_EVENT_S
