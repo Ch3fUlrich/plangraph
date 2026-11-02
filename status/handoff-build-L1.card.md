@@ -1,4 +1,4 @@
-# L1 card · build-L1-0106 · 2026-11-02T14:25Z
+# L1 card · build-L1-0106 · 2026-11-02T14:45Z
 ## Goal
 - plangraph PRs: MERGE-READY to plangraph-replan-0105; sol writers via spawner only (D-3666, D-3668); plangraph-data PRs mine
 ## Keeper
@@ -28,6 +28,6 @@
 - luna inline seats fuse commentary into the VERDICT line -> parse_verdict None; mimo-flash seat printed tool_call text only
 - keeper edit refuses while claimed; L1 cannot edit 'done'; no `pg` binary
 - zsh: "$c:refs" eats :r modifier, use ${c}; never pkill -f a pattern your own shell matches
-- coding.vm cap 4 agent runs, MemAvailable >= 2000 MB; done checks = FULL suite
+- coding.vm cap 4 agent runs, MemAvailable >= 3000 MB (routing-0101 hold after OOM 14:36Z, L2s told); done checks = FULL suite
 ## Drill-down
 - handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-75 block)
