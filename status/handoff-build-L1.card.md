@@ -16,7 +16,7 @@
 - SPAWNER-DISPATCH-FAIL-DETECT #324 r2 Sonnet subagent of build-L1-0093 (resumed WIP of dead 0090 writer; brief /home/s/.claude/jobs/9d41ad45/tmp/brief-324r2.md) -> MERGE-READY to replan
 - SPAWNER-LEGS-D3605 #323 r3 (LAST) Sonnet subagent of build-L1-0093 (delta seat MED+LOW J/seat-323d.log) -> MERGE-READY to replan
 - pd#20 LE-RECYCLE-NEW-SESSION: HIGH ctx-watchdog:297 fix = L2 spawner3605-0092 W1; plangraph-data stays mine
-- plangraph-data #15 #16 #17 (RIN-PATH-REPOINT, ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS; mimo writers) are mine (replan answer a): Haiku tool seats (D-3641) running -> records /home/s/.claude/jobs/9d41ad45/tmp/seat-hpd1{5,6,7}.md; then 1 non-Claude seat (luna) -> GO-REQ routing (router merges, D-id)
+- plangraph-data #15 #16 #17 (RIN-PATH-REPOINT, ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS) mine: Haiku tool seats all RC (records /home/s/.claude/jobs/9d41ad45/tmp/seat-hpd1{5,6,7}.md) -> L2-LAUNCH build-L2-pdfix asked (brief ~/.local/share/plangraph/briefs/build-L2-pdfix.brief.md); pd#15 count/cancel-reason BLOCKED at routing *a 13:00Z
 - pd#20 91c1d77 MERGE-READY from spawner3605-0092 (Sonnet): luna tools delta seat asked of workst-L1-autoos-0088 11:3xZ -> GO-REQ routing
 - L2-LAUNCH build-L2-recycle asked (brief ~/.local/share/plangraph/briefs/build-L2-recycle.brief.md): KEEP-SUBAGENTS + HANDOFF-OPEN-ITEMS-GATE
 - build-L2-heldfix-0091 DONE (9 heads listed to replan), stopping
