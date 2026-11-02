@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R3A (D-3676, D-3685):** the per-host slot table, part 1 of 2: `lockfile` takes a non-blocking exclusive lock on a one-byte `slots.lock` (flock on Linux, LockFileEx on Windows; one-shot `try_lock` plus jittered `lock_with_retry`) and `slots` keeps `<state>/slots.json` (`SlotTable` of `ActiveSlot`/`Ticket`) rewritten atomically under that lock via `with_table`, alongside the pure `effective_free_mb` accounting formula, the per-class caps counters and a FIFO `decide` that grants an unbound slot or queues; promotion, aging and reclaim follow in R3b.
 - **PLACEMENT-R2 (D-3676, D-3685):** add the Rust host capacity probe and `pg-spawnd probe --json --host-id` CLI for Linux and Windows, without slot accounting.
 - **PLACEMENT-R1A (D-3676, D-3681):** the host registry: `HostRegistry` parses and validates one hosts file (`version`, `self`, hosts with caps, warmup, roles and per-repo roots) and rules V1-V7 refuse bad versions, name collisions, host-os-wrong or in-tree paths and stray `%SLOT%`; JSON Schema and a two-host example ship alongside.
 - **PLACEMENT-R1B (D-3676, D-3681):** card `workspace` types (`Workspace`, `WorkspaceRecord`, `DiffRef`) with per-mode validation and diff refs in `pg-worker-core`, plus the draft 2020-12 JSON Schema with per-mode examples under `docs/schemas/`.
