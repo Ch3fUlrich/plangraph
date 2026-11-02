@@ -28,8 +28,9 @@ __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_OR
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
-#: Harness names a leg may run under.
-HARNESSES = ("qodercli", "opencode", "agy")
+#: Harness names a leg may run under.  ``claude`` is the Claude subscription CLI
+#: (D-3605): review only, read-only tools, never a writer.
+HARNESSES = ("qodercli", "opencode", "agy", "claude")
 #: How a review leg reads the change: with its own tools, or only from a diff the
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
@@ -86,62 +87,44 @@ from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
+    # D-3605/D-3606: review runs free first (position = order inside a tier), then
+    # the subscription seats, claude-haiku-5-5 last.  Removed by the operator:
+    # console-anthropic legs (D-3619, no credits), glm, qwen3.8-max, gemini-4-argon
+    # and opencode-go deepseek; muse only as the contributor model (D-3613).
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
-        roles=("review", "implement")),
-    Leg("opencode-glm-5.3-flash-free", "free", "opencode",
-        "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
-        roles=("review", "implement")),
+        roles=("review",)),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
-        ("128k",), 100000, True, roles=("implement",)),
+        ("128k",), 100000, True, roles=("review",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
-        note="D-3355 rule 4.0: no Sol leg anywhere", expires="2026-10-31"),
-    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
-        tool_mode="inline-only"),
-    Leg("opencode-console-sonnet-5.5", "subscription", "opencode",
-        "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
-        180000, False, claude_family=True,
-        note="console sonnet credits; listed by opencode models --standalone, not by the "
-             "background service list; writer only, never a seat",
-        roles=("implement",), expires="2026-11-30"),
-    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
+        note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
+    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement",)),
+    _replace(_legacy["mimo-v2.6-flash"], roles=("implement",)),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
-        roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
+        roles=("implement", "orchestrate"), tool_mode="inline-only"),
     _legacy["agy-sonnet-5.5"],
-    # D-3552: opencode-go review seats, placed before the paid deepseek
-    # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
-    Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
-        "opencode-go/gemini-4-argon-contributor", "gemini", ("128k",), 100000,
-        False, roles=("review",)),
-    Leg("opencode-go-glm-5.2", "subscription", "opencode",
-        "opencode-go/glm-5.2-max", "glm", ("128k",), 100000, False,
-        roles=("review",)),
-    Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
-        "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
-        roles=("review",)),
     Leg("opencode-go-muse-spark", "subscription", "opencode",
         "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
-        False, roles=("review",)),
-    Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
-        "opencode-go/deepseek-v4-flash-max", "deepseek", ("128k",), 100000,
-        False, roles=("review",)),
+        False, roles=("review",), note="D-3613: contributor model only"),
+    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
+        tool_mode="inline-only", note="D-3613: allowed via the ChatGPT subscription (cx)"),
+    Leg("claude-haiku-5-5", "subscription", "claude", "claude-haiku-5-5", "claude",
+        ("128k",), 100000, False, claude_family=True, roles=("review",),
+        note="D-3619: Claude subscription login (claude -p), never console credits; "
+             "read-only review seat, never a writer"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
 
-# D-2683 operator writer order (free-first): the free tier leads, then
-# subscription.  agy-sonnet-5.5 is orchestrate-only and never a writer here.
+# D-3605 operator implement order: Sol, then mimo, agy only while its leg state is
+# up (it sorts last).  No free, console or Claude leg implements.
 WRITER_ORDER: tuple[str, ...] = (
-    "opencode-deepseek-v4.1-flash-free",
-    "opencode-glm-5.3-flash-free",
-    "openrouter-free",
-    "agy-gemini-3.8-flash",
+    "cx-gpt-6.1-sol",
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
-    "opencode-console-sonnet-5.5",
+    "agy-gemini-3.8-flash",
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
@@ -208,6 +191,8 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
         problems.append(f"{where}.roles: must be a non-empty subset of implement|review|orchestrate")
+    elif raw.get("harness") == "claude" and set(roles) != {"review"}:
+        problems.append(f"{where}.roles: a claude-harness leg serves review only (D-3605)")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES
