@@ -26,6 +26,12 @@ def seat_family(family):
     return _family_key(family)
 
 
+def claude_writer_fence(role, writer_set):
+    """D-3605: a claude/anthropic writer part fences every claude-family review leg (the Haiku leg)."""
+    # D-2511: a seat family must differ from every writer family, so all claude-family legs are fenced.
+    return {"claude"} if role == "review" and "anthropic" in {seat_family(w) for w in writer_set} else set()
+
+
 def writer_parts(writer_families):
     """Keeper families of the writer parts; an unknown writer refuses (``writer_key``, fail closed)."""
     from plangraph.review.family import FamilyError, writer_key
