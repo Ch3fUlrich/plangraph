@@ -9,6 +9,7 @@ fn cli(args: &[&str]) -> Output {
 
 #[test]
 #[cfg(any(target_os = "linux", windows))]
+#[ignore = "live capacity smoke test; requires host capacity access"]
 fn probe_json() {
     let output = cli(&["probe", "--json", "--host-id", "code"]);
     assert!(output.status.success());
@@ -48,6 +49,11 @@ fn invalid_arguments() {
         vec!["probe", "--json", "--host-id", "Bad"],
         vec!["probe", "--json", "--host-id", ""],
         vec!["probe", "--json", "--host-id"],
+        vec!["probe", "--host-id", "code"],
+        vec!["probe", "--json", "--host-id", "--host-id", "x"],
+        vec!["probe", "--json", "--host-id", "code", "--host-id", "x"],
+        vec!["probe", "--json", "--json", "--host-id", "code"],
+        vec![],
         vec!["probe", "--json", "--host-id", "a_b"],
         vec!["probe", "--json", "--host-id", too_long.as_str()],
         vec!["unknown"],
@@ -62,10 +68,35 @@ fn invalid_arguments() {
 
 #[test]
 fn help() {
-    let output = cli(&["--help"]);
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    assert!(String::from_utf8(output.stdout)
-        .unwrap()
-        .starts_with("Usage:"));
+    for args in [
+        vec!["--help"],
+        vec!["--help", "extra"],
+        vec!["-h"],
+        vec!["probe", "--help"],
+        vec!["unknown", "-h"],
+        vec!["probe", "--host-id", "--help"],
+    ] {
+        let output = cli(&args);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert!(String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with("Usage:"));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn non_utf8_argument_exits_two() {
+    use std::os::unix::ffi::OsStrExt;
+    for prefix in [vec![], vec!["probe", "--json", "--host-id"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            .args(prefix)
+            .arg(std::ffi::OsStr::from_bytes(&[0xff]))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert_eq!(String::from_utf8(output.stderr).unwrap().lines().count(), 1);
+    }
 }

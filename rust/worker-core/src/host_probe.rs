@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Host capacity snapshot. On Windows, swap is an estimate: total is commit
+/// limit minus physical RAM (ullTotalPageFile - ullTotalPhys), not actual
+/// pagefile size. Free swap similarly subtracts available RAM from available
+/// commit; both subtractions saturate at zero.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct HostProbe {
@@ -93,6 +97,8 @@ fn capacity() -> Result<(MemInfo, [Option<f64>; 3]), HostProbeError> {
     if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
         return Err(std::io::Error::last_os_error().into());
     }
+    // Windows pagefile counters describe commit limits, so swap below is only
+    // an estimate, not a measurement of pagefile size (including disabled files).
     let mb = 1024 * 1024;
     Ok((
         MemInfo {
@@ -159,6 +165,43 @@ mod tests {
     }
 
     #[test]
+    fn meminfo_requires_every_counter() {
+        for key in ["MemTotal:", "MemAvailable:", "SwapTotal:", "SwapFree:"] {
+            assert!(matches!(parse_meminfo(&MEM.replace(key, "Missing:")),
+                Err(HostProbeError::Invalid(missing)) if missing == key));
+        }
+    }
+
+    #[test]
+    fn meminfo_requires_exact_kb_unit() {
+        for key in ["MemTotal:", "MemAvailable:", "SwapTotal:", "SwapFree:"] {
+            for unit in ["B", "", "KB", "kB extra"] {
+                let text = MEM
+                    .lines()
+                    .map(|line| {
+                        if line.starts_with(key) {
+                            format!("{key} 1024 {unit}")
+                        } else {
+                            line.to_owned()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(parse_meminfo(&text).is_err());
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_capacity_shape() {
+        let (mem, loads) = capacity().unwrap();
+        assert!(mem.mem_total_mb > 0);
+        assert!(mem.mem_available_mb <= mem.mem_total_mb);
+        assert_eq!(loads, [None; 3]);
+    }
+
+    #[test]
     fn meminfo_rejects_garbage() {
         for value in ["garbage", "-1", "18446744073709551616"] {
             assert!(parse_meminfo(&MEM.replace("8192500", value)).is_err());
@@ -182,6 +225,7 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    #[ignore = "live /proc smoke test; requires an unrestricted Linux host"]
     fn live_host_probe() {
         let result = probe("code").unwrap();
         assert!(result.mem_available_mb <= result.mem_total_mb);
