@@ -3,7 +3,7 @@ import os
 import subprocess
 from types import SimpleNamespace
 
-from plangraph.spawner.env_redact import first_reason, harness_limit_line
+from plangraph.spawner.env_redact import first_reason, harness_limit_line, unavailable_reason
 from plangraph.spawner.git_guard import writer_launch
 from plangraph.spawner.exit_outcome import fallthrough_reason, terminal_reason
 from plangraph.routing_support.leg_state import LegStateStore
@@ -119,6 +119,45 @@ def test_routing_reads_a_bare_non_agy_leg_under_its_own_key(tmp_path):
     assert read_status(store.leg_status, 'Qwen3.8-Flash')['state'] == 'limited'
     assert read_status(store.leg_status, 'gemini-3.8-flash')['state'] == 'limited'
     assert read_status(store.leg_status, 'other-model')['state'] == 'ok'
+
+
+def test_go_usage_limit_is_harness_limit_d3676():
+    assert harness_limit_line(1, '', 'Error: Go usage limit exceeded')
+    assert harness_limit_line(1, '', 'Go usage limit exceeded')
+    assert harness_limit_line(1, '', 'Free usage limit reached')
+    assert harness_limit_line(1, '', 'Error: Free usage limit reached')
+    assert unavailable_reason(1, '', 'Error: Model unavailable: opencode-go/glm-5.2')
+
+
+def test_go_usage_limit_books_the_leg_down_d3676(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1_700_000_000.0)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    job = SimpleNamespace(exit_code=1, stdout='', stderr='Error: Go usage limit exceeded')
+    record = {}
+    reason = fallthrough_reason(SimpleNamespace(leg_reader=store),
+                                SimpleNamespace(model='qwen3.8-max'), job, record)
+    assert reason == 'harness_limit: Error: Go usage limit exceeded'
+    assert record['reason'] == 'harness_limit'
+    assert store.leg_status('qwen3.8-max')['state'] == 'limited'
+
+
+def test_model_unavailable_marks_the_leg_unavailable_d3676(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1_700_000_000.0)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    job = SimpleNamespace(exit_code=1, stdout='', stderr='Error: Model unavailable: opencode-go/glm-5.2')
+    record = {}
+    reason = fallthrough_reason(SimpleNamespace(leg_reader=store),
+                                SimpleNamespace(model='opencode-go/glm-5.2'), job, record)
+    assert reason == 'Error: Model unavailable: opencode-go/glm-5.2'
+    assert record['reason'] == 'model_unavailable'
+    assert store.leg_status('opencode-go/glm-5.2')['state'] == 'limited'
+    # The route skips a leg booked down this way until the catalog serves it.
+    from plangraph.routing_support import resolver
+    row = {'id': 'opencode-go/glm-5.2', 'available': 1, 'active': True, 'status': 'active'}
+    assert resolver.is_model_available(row, store.leg_status) is False
+    assert resolver.is_model_available(row, LegStateStore(tmp_path / 'fresh.sqlite').leg_status) is True
 
 
 def test_orphan_check_never_signals_on_windows(tmp_path, monkeypatch):

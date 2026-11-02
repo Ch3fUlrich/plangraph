@@ -89,8 +89,18 @@ def notify_leg_refused(service, record, chosen, reason):
         logging.getLogger(__name__).exception('leg refusal notify failed')
 
 
-def fallthrough_reason(service, chosen, job, record):
+def _limit_target(service):
+    """Where harness evidence is booked: the planner's store first (Q16/M8)."""
     from . import leg_state
+    target = service.leg_reader
+    if not hasattr(target, 'record_harness_limit'):
+        target = getattr(target, '__self__', None)
+    if not hasattr(target, 'record_harness_limit'):
+        target = leg_state
+    return target
+
+
+def fallthrough_reason(service, chosen, job, record):
     from .leg_probe import key as leg_key
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
@@ -98,11 +108,7 @@ def fallthrough_reason(service, chosen, job, record):
         # not in the captured output) books and notifies like any harness limit.
         line = job.refusal
     if line:
-        target = service.leg_reader
-        if not hasattr(target, 'record_harness_limit'):
-            target = getattr(target, '__self__', None)
-        if not hasattr(target, 'record_harness_limit'):
-            target = leg_state
+        target = _limit_target(service)
         # Q16/M8: one leg key shared with the probe path -- 'agy/<model>' only
         # for an agy leg's bare model.
         # D-3605 (a): every harness-limit line without a provider reset time
@@ -120,6 +126,14 @@ def fallthrough_reason(service, chosen, job, record):
         return reason
     reason = unavailable_reason(job.exit_code, job.stdout, job.stderr)
     if reason is not None:
+        # D-3676: a harness that does not serve the model is a catalog gap,
+        # not a quota: the leg is marked unavailable (reason model_unavailable)
+        # and booked down like a harness limit, so route skips it until the
+        # catalog serves the id again.
+        _limit_target(service).record_harness_limit(
+            leg_key(chosen), 'model_unavailable: ' + reason, 'spawner:harness', down_s=_booking_seconds())
+        if record.get('reason') not in TERMINAL_REASONS:
+            record['reason'] = 'model_unavailable'
         notify_leg_refused(service, record, chosen, reason)
     return reason
 

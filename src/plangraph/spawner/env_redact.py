@@ -11,7 +11,8 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|usage limit|rate limit|resets in|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
+    r'quota reached|quota exceeded|(?:free |go )?usage limit|rate limit|resets in|too many requests|\bHTTP 429\b|'
+    + CREDIT_AUTH_MARKER.pattern, re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
 
 
