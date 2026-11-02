@@ -111,15 +111,17 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     if ident is None:
         return {}
     if (platform or os.name) == 'nt':
-        found = {int(p) for p in (job_pids or ())}
-        table = (nt_table or _nt_table)() if not found else {}
-        if table.get(root) == os.getpid():
-            found.add(root)
-            grew = True
-            while grew:
-                kids = {p for p, pp in table.items() if pp in found and p not in found}
-                grew = bool(kids)
-                found |= kids
+        if job_pids is not None:   # the live Job Object is the proof; empty means the job is empty
+            return {int(p): None for p in job_pids}
+        table = (nt_table or _nt_table)()
+        if not table or table.get(root) != os.getpid():
+            raise KillIncomplete([root])   # snapshot failed / root not provably our child: fail closed
+        found = {root}
+        grew = True
+        while grew:
+            kids = {p for p, pp in table.items() if pp in found and p not in found}
+            grew = bool(kids)
+            found |= kids
         return {p: None for p in found}
     procs = _scan(proc_root)
     found = {p for p, s in procs.items() if s[0] != 'Z' and root in (s[2], s[3])}
@@ -151,24 +153,32 @@ def _winpid(pid, proc_root):
 
 
 async def kill_process_tree(pid, *, platform=None, command_factory=None, members=None,
-                            proc_root='/proc'):
-    """Terminate the isolated POSIX group or Windows process tree.
+                            proc_root='/proc', ident=None):
+    """Terminate the run's POSIX group / Windows tree; ``members`` is a pre-kill snapshot.
 
-    ``members`` is a pre-kill ``snapshot``: each member is killed individually
-    (posix: only while its start time still matches)."""
+    No signal without proof of ownership (nt: proven members, never a raw pid; posix:
+    positive pid, ``ident`` token, pid still the group leader); else KillIncomplete."""
     import signal
     if (platform or os.name) == 'nt':
+        if not members:
+            raise KillIncomplete([pid] if isinstance(pid, int) else [])
         factory = command_factory or asyncio.create_subprocess_exec
-        for target in (sorted(members) if members else [pid]):
-            proc = await factory('taskkill', '/PID', str(_winpid(target, proc_root) if members else target),
+        for target in sorted(members):
+            proc = await factory('taskkill', '/PID', str(_winpid(target, proc_root)),
                                  '/T', '/F', stdout=asyncio.subprocess.PIPE,
                                  stderr=asyncio.subprocess.PIPE)
             await proc.communicate()
         return
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass  # the run's process group is already gone
+    if type(pid) is not int or pid <= 1 or ident is None:
+        raise KillIncomplete([pid] if type(pid) is int and pid > 1 else [])
+    st = _stat(pid, proc_root)
+    if st is not None and (st[4] != ident or st[2] != pid):
+        raise KillIncomplete([pid])   # reused pid / not the group this run created
+    if st is not None:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass  # the run's process group is already gone
     for member, start in (members or {}).items():
         if alive(member, start, proc_root=proc_root):
             try:
@@ -185,24 +195,40 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None, members
 
 
 async def verify(root, ident, members, *, platform=None, job_pids=None, proc_root='/proc',
-                 wait_s=KILL_WAIT_S):
-    """Poll until every snapshot member is gone; raise KillIncomplete otherwise.
+                 wait_s=KILL_WAIT_S, live_pids=None, reterminate=None):
+    """Poll until every snapshot member is gone, re-enumerating late forks/job members each pass.
 
-    Each pass re-scans the group/session and kills late forks (pids that were
-    not in the snapshot); snapshot members are only observed."""
+    A snapshot that cannot be taken is not success: KillIncomplete."""
     import signal
+    nt = (platform or os.name) == 'nt'
     deadline = time.monotonic() + wait_s
     while True:
-        late = await asyncio.to_thread(snapshot, root, ident, platform=platform,
-                                       job_pids=job_pids, proc_root=proc_root)
+        try:
+            if nt and live_pids is not None:
+                late = {int(p): None for p in await asyncio.to_thread(live_pids)}
+            else:
+                late = await asyncio.to_thread(snapshot, root, ident, platform=platform,
+                                               job_pids=job_pids, proc_root=proc_root)
+        except KillIncomplete:
+            raise
+        except Exception:
+            raise KillIncomplete(set(members) or {root})
         left = {p for p, s in members.items() if alive(p, s, platform=platform, proc_root=proc_root)}
-        for pid, start in late.items():
-            if pid not in members and (platform or os.name) != 'nt' and alive(pid, start, proc_root=proc_root):
-                left.add(pid)
+        if nt:
+            left |= set(late)   # a live job member is alive by definition
+            if left and reterminate is not None:
                 try:
-                    os.kill(pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
+                    reterminate()
+                except Exception:
+                    pass  # still-alive members are reported at the deadline
+        else:
+            for pid, start in late.items():
+                if pid not in members and alive(pid, start, proc_root=proc_root):
+                    left.add(pid)
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
         if not left:
             return
         if time.monotonic() >= deadline:
@@ -211,10 +237,11 @@ async def verify(root, ident, members, *, platform=None, job_pids=None, proc_roo
 
 
 async def finish(root, ident, members, *, platform=None, command_factory=None,
-                 proc_root='/proc', wait_s=KILL_WAIT_S):
+                 proc_root='/proc', wait_s=KILL_WAIT_S, live_pids=None, reterminate=None):
     """After the root-level kill: kill snapshot members still alive, then prove the tree gone."""
     left = {p: s for p, s in members.items() if alive(p, s, platform=platform, proc_root=proc_root)}
-    if left:
+    if left and live_pids is None:
         await kill_process_tree(root, platform=platform, command_factory=command_factory,
-                                members=left, proc_root=proc_root)
-    await verify(root, ident, members, platform=platform, proc_root=proc_root, wait_s=wait_s)
+                                members=left, proc_root=proc_root, ident=ident)
+    await verify(root, ident, members, platform=platform, proc_root=proc_root, wait_s=wait_s,
+                 live_pids=live_pids, reterminate=reterminate)

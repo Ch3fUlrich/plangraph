@@ -65,7 +65,7 @@ def test_kills_own_tree_including_setsid_grandchild_and_spares_foreign(tmp_path)
             members = proc_kill.snapshot(root.pid, ident)
             assert set(members) >= {root.pid, *kids}   # the setsid() grandchild is reached via its parent
             assert foreign.pid not in members and not set(fkids) & set(members)
-            await proc_kill.kill_process_tree(root.pid)
+            await proc_kill.kill_process_tree(root.pid, ident=ident)
             await proc_kill.finish(root.pid, ident, members)
             assert all(_gone(p) for p in [root.pid, *kids])
             assert not any(_gone(p) for p in [foreign.pid, *fkids])   # foreign process: untouched
@@ -100,7 +100,7 @@ def test_survivors_fail_run_without_fallthrough_or_second_writer(tmp_path, monke
         return await proc_kill.finish(*args, **{**kwargs, 'wait_s': 0.3})
 
     monkeypatch.setattr(proc_kill, 'kill_process_tree', nokill)
-    monkeypatch.setattr(reap_mod, "finish", quick_finish)
+    monkeypatch.setattr(reap_mod, 'finish', quick_finish)
 
     async def run():
         service = spawn_service(SpawnerRunner(process_factory=factory, tree_killer=nokill), tmp_path,
@@ -173,3 +173,149 @@ def test_spawn_tolerates_process_without_pid(tmp_path):
         assert job.job_id not in getattr(runner, '_owned', {})
         assert job.status != 'failed'
     asyncio.run(run())
+
+
+class _Job:
+    def __init__(self, fail=None, live=()):
+        self.fail, self.live, self.calls = fail, list(live), []
+
+    def create_job(self):
+        self.calls.append('create')
+        if self.fail == 'create':
+            raise OSError('create')
+        return 7
+
+    def assign(self, handle, pid):
+        self.calls.append('assign')
+        if self.fail == 'assign':
+            raise OSError('assign')
+
+    def pids(self, handle):
+        return list(self.live)
+
+    def terminate(self, handle): self.calls.append('terminate')
+    def close(self, handle): self.calls.append('close')
+
+
+class _Fake:
+    returncode = 0
+
+    def __init__(self, pid):
+        self.pid = pid
+
+    async def communicate(self):
+        return b'', b''
+
+
+def _nt_runner(monkeypatch, api, table=None):
+    async def factory(*a, **k):
+        return _Fake(4242)
+
+    runner = SpawnerRunner(process_factory=factory)
+    runner.platform, runner.win_job_api = 'nt', api
+    monkeypatch.setattr(proc_kill, '_nt_table', lambda: table if table is not None else {4242: os.getpid()})
+    monkeypatch.setattr(proc_kill, '_nt_alive', lambda pid: pid in api.live)
+    return runner
+
+
+@pytest.mark.parametrize('step', ['create', 'assign'])
+def test_nt_job_failure_refuses_run(tmp_path, monkeypatch, step):
+    api = _Job(fail=step)
+    runner = _nt_runner(monkeypatch, api)
+    job = asyncio.run(runner.spawn('test', wait_seconds=1))
+    assert job.status == 'failed' and job.survivors == [4242]
+    assert job.job_id not in runner._tasks                 # no monitor: the run never starts
+    assert any(e['event'] == 'win_job_unavailable' for e in job.events)
+
+
+def test_unproven_ownership_never_reaches_killer(monkeypatch):
+    async def run():
+        killed = []
+        runner = SpawnerRunner(tree_killer=lambda pid: killed.append(pid))
+        runner.jobs['j'] = job = type('J', (), {'events': [], 'survivors': [], 'status': 'running', 'exit_code': 0})()
+        monkeypatch.setattr(runner_mod, 'root_identity', lambda *a, **k: None)
+        monkeypatch.setattr(reap_mod, 'alive', lambda *a, **k: True)   # a live root we cannot prove ours
+        runner._owned = {'j': dict(pid=4242, pid_start=None, job_object=False)}
+        await runner._reap_process('j', _Fake(4242))
+        return killed, job
+    killed, job = asyncio.run(run())
+    assert killed == [] and job.survivors == [4242] and job.status == 'failed'
+
+
+def test_nt_empty_snapshot_no_taskkill_kill_incomplete():
+    cmds = []
+
+    async def factory(*argv, **kw):
+        cmds.append(argv)
+    with pytest.raises(proc_kill.KillIncomplete):
+        proc_kill.snapshot(100, 'nt', platform='nt', nt_table=lambda: {})
+    with pytest.raises(proc_kill.KillIncomplete):
+        asyncio.run(proc_kill.kill_process_tree(100, platform='nt', command_factory=factory, members={}))
+    assert cmds == []
+
+
+def test_nt_snapshot_failure_in_verify_is_kill_incomplete(monkeypatch):
+    monkeypatch.setattr(proc_kill, '_nt_table', lambda: {})
+    with pytest.raises(proc_kill.KillIncomplete):
+        asyncio.run(proc_kill.verify(100, 'nt', {}, platform='nt', wait_s=0.2))
+
+    def boom():
+        raise OSError('job query')
+    with pytest.raises(proc_kill.KillIncomplete):
+        asyncio.run(proc_kill.verify(100, 'nt', {}, platform='nt', wait_s=0.2, live_pids=boom))
+
+
+def test_nt_late_job_member_is_reterminated_and_survivor_reported():
+    live = [9]
+    terminated = []
+
+    def term():
+        terminated.append(1)
+        if len(terminated) > 1:
+            live.clear()
+    asyncio.run(proc_kill.verify(100, 'nt', {}, platform='nt', wait_s=2, live_pids=lambda: live, reterminate=term))
+    assert len(terminated) == 2 and live == []             # late descendant re-enumerated and killed
+    with pytest.raises(proc_kill.KillIncomplete) as ei:
+        asyncio.run(proc_kill.verify(100, 'nt', {}, platform='nt', wait_s=0.2, live_pids=lambda: [9]))
+    assert ei.value.survivors == [9]
+
+
+def test_nt_run_level_kill_incomplete(tmp_path, monkeypatch):
+    api = _Job(live=[4242, 4243])                           # terminate never empties the job
+    runner = _nt_runner(monkeypatch, api)
+    monkeypatch.setattr(reap_mod, 'finish', lambda *a, **k: proc_kill.finish(*a, **{**k, 'wait_s': 0.3}))
+
+    async def run():
+        service = spawn_service(runner, tmp_path, keeper_sink=FileInbox(tmp_path))
+        return await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
+    record = asyncio.run(run())
+    assert record['status'] == 'failed' and record['reason'] == 'kill_incomplete'
+    assert record['survivors'] == [4242, 4243] and len(api.calls) >= 3
+
+
+def test_nt_job_create_failure_through_service_is_terminal(tmp_path, monkeypatch):
+    runner = _nt_runner(monkeypatch, _Job(fail='create'))
+    legs = []
+    orig = runner.process_factory
+
+    async def counting(*a, **k):
+        legs.append(1)
+        return await orig(*a, **k)
+    runner.process_factory = counting
+
+    async def run():
+        service = spawn_service(runner, tmp_path, keeper_sink=FileInbox(tmp_path))
+        return await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
+    record = asyncio.run(run())
+    assert record['status'] == 'failed' and record['reason'] == 'kill_incomplete' and len(legs) == 1
+
+
+def test_posix_killpg_refuses_unowned_group(monkeypatch):
+    sent = []
+    monkeypatch.setattr(os, 'killpg', lambda *a: sent.append(('pg', a)))
+    monkeypatch.setattr(os, 'kill', lambda *a: sent.append(('k', a)))
+    for pid, ident in ((0, 5), (1, 5), (-7, 5), (os.getpid(), None), (os.getpid(), 12345),
+                       (os.getppid(), proc_kill.root_identity(os.getppid()))):
+        with pytest.raises(proc_kill.KillIncomplete):
+            asyncio.run(proc_kill.kill_process_tree(pid, ident=ident))
+    assert sent == []

@@ -6,8 +6,18 @@ import time
 
 import pytest
 
+from plangraph.spawner import runner as runner_mod
 from plangraph.spawner.cli import _drain_chunks
 from plangraph.spawner.env_redact import redact_env_values
+
+
+@pytest.fixture(autouse=True)
+def _fake_pids_are_owned_roots(monkeypatch):
+    """This file's killer tests use fake pids absent from /proc; let them stand in for owned roots
+    (a real, live pid keeps its real identity). Scoped to this file: fail-closed tests live elsewhere."""
+    real = runner_mod.root_identity
+    monkeypatch.setattr(runner_mod, 'root_identity', lambda pid, **k: real(pid, **k) or (
+        None if os.path.exists('/proc/%s' % pid) else 1))
 
 
 def test_utf8_chunk_boundary_preserves_characters():

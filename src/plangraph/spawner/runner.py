@@ -299,7 +299,8 @@ class SpawnerRunner:
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self.process_factory = process_factory or asyncio.create_subprocess_exec
-        self.tree_killer = tree_killer or kill_process_tree
+        self.tree_killer = tree_killer or self._own_kill
+        self.platform = None   # tests inject 'nt'
         self.provider_responses = {}
         self._nonces = {}
         self._adapter_tokens = {}
@@ -628,14 +629,10 @@ class SpawnerRunner:
             self._nonces[job_id] = nonce
             root_pid = getattr(proc, 'pid', None)   # pid-less process objects (test fakes): nothing of ours to track or kill
             if root_pid is not None:
-                self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=root_identity(root_pid), job_object=False)}
+                self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=root_identity(root_pid, platform='nt' if self._nt() else None), job_object=False)}
 
-            # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
-            # find an exited root pid, so an orphan (`opencode serve`) would outlive
-            # the run (SPAWN-ORPHAN-REAP). Failure never fails the run: taskkill runs.
-            # Descendants started before assign() escape the job (no CREATE_SUSPENDED
-            # under asyncio); taskkill /T in _reap_process still covers them.
-            if root_pid is not None and _is_nt():
+            # F3: kill-on-close Job Object (SPAWN-ORPHAN-REAP); fail closed if unavailable.
+            if root_pid is not None and self._nt():
                 self._win_jobs = getattr(self, '_win_jobs', {})
                 try:
                     self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
@@ -646,8 +643,12 @@ class SpawnerRunner:
                         self.win_job_api.close(handle)
                         raise
                     self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
-                except Exception:
-                    job.events.append({'event': 'win_job_unavailable'})
+                except Exception as exc:
+                    job.events.append({'event': 'win_job_unavailable', 'error': type(exc).__name__})
+                    await self._reap_process(job_id, proc)
+                    job.status, job.exit_code, job.end_time = 'failed', 1, time.time()
+                    job.survivors = job.survivors or [root_pid]
+                    return job
 
             # Start background monitor
             task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
@@ -680,6 +681,22 @@ class SpawnerRunner:
                         import shutil
                         shutil.rmtree(_oc, ignore_errors=True)
                 self._tasks[job_id].add_done_callback(_sweep)
+
+    def _nt(self) -> bool:
+        return self.platform == 'nt' or _is_nt()
+
+    async def kill_recorded(self, pid):
+        try:
+            await self.tree_killer(pid)
+        except KillIncomplete:
+            pass
+
+    async def _own_kill(self, pid):
+        """Default killer: posix signals only a group this runner created; nt kills via the Job Object."""
+        if self._nt():
+            return
+        owned = next((o for o in getattr(self, '_owned', {}).values() if o.get('pid') == pid), {})
+        await kill_process_tree(pid, ident=owned.get('pid_start'))
 
     async def _reap_process(self, job_id: str, proc: Any) -> None:
         reaped = getattr(self, '_reaped_jobs', None)

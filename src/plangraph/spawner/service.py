@@ -390,7 +390,7 @@ class SpawnService(SeatSpawnMixin):
         if record.get('job_id') in self.runner.jobs:
             await self.runner.cancel(record['job_id'])
         elif record['status'] == 'running' and record.get('pid'):
-            await self.runner.tree_killer(record['pid'])
+            await self.runner.kill_recorded(record['pid'])
         task = self.tasks.get(run_id)
         if task and not task.done():
             task.cancel()
