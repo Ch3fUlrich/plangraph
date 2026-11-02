@@ -13,6 +13,8 @@ pub mod exit_class;
 pub mod exports;
 pub mod git;
 pub mod hash;
+pub mod host_probe;
+pub mod hosts;
 pub mod janitor;
 pub mod packet;
 pub mod pathjail;
@@ -21,6 +23,7 @@ pub mod redact;
 pub mod sandbox_env;
 pub mod scope;
 pub mod stall;
+pub mod workspace;
 pub mod worktree;
 pub mod wsl;
 

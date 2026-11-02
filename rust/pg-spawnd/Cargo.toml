@@ -1,0 +1,9 @@
+[package]
+name = "pg-spawnd"
+version = "0.1.0"
+edition = "2021"
+description = "Host capacity probe CLI"
+
+[dependencies]
+pg-worker-core = { path = "../worker-core" }
+serde_json = "1"

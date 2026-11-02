@@ -16,6 +16,9 @@ libc = "0.2"
 rand = "0.9"
 regex = "1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_Foundation"] }
+
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"
