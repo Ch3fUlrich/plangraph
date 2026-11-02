@@ -22,6 +22,28 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+_TOOLS = Path(__file__).resolve().parents[1] / "tools"
+
+
+@pytest.fixture
+def tools_importable():
+    """Put the repo's ``tools/`` dir on sys.path for one test only.
+
+    tests/test_decisions_render.py used to ``sys.path.insert(0, .../tools)``
+    at module import time, leaking the entry into the whole pytest session;
+    this fixture scopes the setup and removes the entry again on teardown,
+    so importing a tools/ module never mutates the session-wide sys.path.
+    """
+    tools = str(_TOOLS)
+    added = tools not in sys.path
+    if added:
+        sys.path.insert(0, tools)
+    try:
+        yield tools
+    finally:
+        if added and tools in sys.path:
+            sys.path.remove(tools)
+
 _NEUTRAL_POLICY = '{"banned_families": [], "off_families": [], "paused_harnesses": {}}'
 # Module-level route plans (computed at collection) see the same neutral route
 # policy as the per-test fixture below.
