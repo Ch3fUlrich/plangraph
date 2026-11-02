@@ -51,6 +51,15 @@ def _redact(body):
     return body[:300]
 
 
+def _reset_seconds(body):
+    """Return an explicit prose cooldown, keeping zero distinct from absent."""
+    match = re.search(r"resets?\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\s*)+)", body, re.I)
+    if match:
+        return sum(float(n) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit[0].lower()]
+                   for n, unit in re.findall(r'(\d+(?:\.\d+)?)\s*([a-z]+)', match[1], re.I))
+    return None
+
+
 def _reset(headers, body, now):
     reset = None
     for key in ("retry-after", "x-ratelimit-reset"):
@@ -75,10 +84,8 @@ def _reset(headers, body, now):
     if reset is None:
         # D-3685: OmniRoute prints "(reset after 3h 12m 5s)"; accept "reset
         # after" as well as "resets in" over the same unit parsing.
-        match = re.search(r"resets?\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\s*)+)", body, re.I)
-        if match:
-            total = sum(float(n) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit[0].lower()]
-                        for n, unit in re.findall(r'(\d+(?:\.\d+)?)\s*([a-z]+)', match[1], re.I))
+        total = _reset_seconds(body)
+        if total is not None:
             # "reset after 0s": the cooldown already elapsed, nothing to book.
             reset = now + total if total > 0 else None
     return None if reset is None else min(reset, now + RESET_CAP_S)
@@ -153,10 +160,14 @@ class LegStateStore:
     def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
+        # An explicitly elapsed cooldown is not missing reset information:
+        # neither the fallback booking nor a reset-less limit row is valid.
+        if _reset_seconds(line) == 0:
+            return
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
         if reset is None and down_s is not None:
-            reset = now + _down_seconds(down_s)   # D-3605 (a): credit/auth refusal, no provider reset time
+            reset = min(now + _down_seconds(down_s), now + RESET_CAP_S)   # D-3605 (a): no provider reset time
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
                        (leg, account, combo, 429, _redact(line),

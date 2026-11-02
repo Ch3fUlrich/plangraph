@@ -308,6 +308,13 @@ def test_probe_many_skips_a_limited_leg(tmp_path, monkeypatch):
     assert 'skipped' not in by_id['zz-ok'] and by_id['zz-ok']['ok'] is False
     assert count('agy/zz-model-b') == 1
 
+    # MCP forwards skipped rows without assuming reason/seconds exist.
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=tmp_path / 'mcp')
+    server.runner.leg_reader = store
+    payload = asyncio.run(server.call_tool('plangraph_agent_probe', {'leg': 'zz-limited'}))
+    assert payload == dict(ok=False, probes=[by_id['zz-limited']])
+
 
 def test_mcp_probe_string_leg_is_one_leg(tmp_path):
     from plangraph.spawner.mcp import MCPSpawnerServer

@@ -50,6 +50,25 @@ def test_omniroute_reset_after_is_booked(tmp_path, monkeypatch):
     assert store.leg_status('agy/zz-model', now=1000 + 11526)['state'] == 'ok'
 
 
+def test_explicit_zero_reset_books_nothing_through_fallthrough(tmp_path, monkeypatch):
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
+    monkeypatch.setenv('PLANGRAPH_LEG_DOWN_S', '1800')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    line = 'Error: [codex/zz-model] quota threshold (reset after 0s)'
+    job = SimpleNamespace(exit_code=1, stdout='', stderr=line)
+    assert fallthrough_reason(SimpleNamespace(leg_reader=store),
+                              SimpleNamespace(model='agy/zz-model'), job, {}) == 'harness_limit: ' + line
+    assert store.leg_status('agy/zz-model', now=1000)['state'] == 'ok'
+    assert not store.path.exists()  # No reset-less row or down_s fallback booking.
+
+
+def test_harness_fallback_reset_is_capped(tmp_path):
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    store.record_harness_limit('agy/model', 'error: quota threshold', 'test',
+                               now=1000, down_s=172800)
+    assert store.leg_status('agy/model', now=1000)['evidence']['reset_at'] == 87400
+
+
 def test_writer_identity_commits_with_writer_committer(tmp_path):
     subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
     for key, value in [('user.name', 'Host'), ('user.email', 'host@example.com')]:

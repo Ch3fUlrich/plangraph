@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
@@ -148,7 +149,12 @@ def main(argv=None):
                 print(json.dumps(result))
             else:
                 for row in result['probes']:
-                    print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
+                    if row.get('skipped') == 'limited':
+                        reset = row.get('reset_at')
+                        until = datetime.fromtimestamp(reset, timezone.utc).isoformat() if reset is not None else 'unknown'
+                        print(f"{row['id']} skipped=limited until {until}")
+                    else:
+                        print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
             return 0 if result['ok'] else 1
         from .bench_entry import benchmark_options
         try:
