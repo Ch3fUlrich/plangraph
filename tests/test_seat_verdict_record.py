@@ -15,7 +15,8 @@ HEAD_SHA = "d" * 40
 REVIEW = "looks good overall\nVERDICT: PASS\nTEST_GAMING: no\n"
 
 
-def record_dir(tmp_path, name, live_log=None, tail=REVIEW, writer="deepseek", **rec):
+def record_dir(tmp_path, name, live_log=None, tail=REVIEW, writer="deepseek",
+               head=HEAD_SHA, **rec):
     d = tmp_path / name
     d.mkdir()
     record = {"run_id": "run-9f2c", "role": "review", "status": "completed",
@@ -31,8 +32,11 @@ def record_dir(tmp_path, name, live_log=None, tail=REVIEW, writer="deepseek", **
     tokens = tmp_path / (name + "-tok")
     tokens.mkdir()
     (tokens / "reviewer-xiaomi.token").write_text("dummy\n")
-    return ["--key", "demo:A", "--seat-dir", str(d), "--writer-family", writer,
+    argv = ["--key", "demo:A", "--seat-dir", str(d), "--writer-family", writer,
             "--token-dir", str(tokens), "--dry-run"]
+    if head is not None:
+        argv += ["--head", head]
+    return argv
 
 
 def test_record_only_pass_posts(tmp_path, capsys):
@@ -85,7 +89,7 @@ def test_record_seat_family_over_same_writer_refused(tmp_path, capsys):
 
 
 def test_evidence_json_wins_over_record_json(tmp_path, capsys):
-    argv = record_dir(tmp_path, "i", live_log=REVIEW)
+    argv = record_dir(tmp_path, "i", live_log=REVIEW, head=None)
     seat = Path(argv[argv.index("--seat-dir") + 1])
     (seat / "evidence.json").write_text(json.dumps({
         "requested_model": "gpt-oss-120b", "served_model": "gpt-oss-120b",
@@ -144,7 +148,7 @@ def test_record_conflicting_verdict_lines_refused(tmp_path, capsys):
 
 
 def test_evidence_json_record_chosen_leg_witness_refused(tmp_path, capsys):
-    argv = record_dir(tmp_path, "m", live_log=REVIEW)
+    argv = record_dir(tmp_path, "m", live_log=REVIEW, head=None)
     seat = Path(argv[argv.index("--seat-dir") + 1])
     for served in ("unwitnessed", "mimo/mimo-v2.6-pro"):
         (seat / "evidence.json").write_text(json.dumps({
@@ -247,3 +251,32 @@ def test_head_option_matches_record_head_sha(tmp_path, capsys):
     capsys.readouterr()
     assert sv.main(argv + ["--head", "e" * 40]) == 2
     assert "head_sha" in capsys.readouterr().err
+
+
+# D-3564 slice B: --head is required for record seats and only for them.
+def test_record_seat_requires_head(tmp_path, capsys):
+    assert sv.main(record_dir(tmp_path, "q", live_log=REVIEW, head=None)) == 2
+    assert "record seats require --head" in capsys.readouterr().err
+
+
+def test_head_on_evidence_json_path_refused(tmp_path, capsys):
+    argv = record_dir(tmp_path, "q2", live_log=REVIEW, head=None)
+    seat = Path(argv[argv.index("--seat-dir") + 1])
+    (seat / "evidence.json").write_text(json.dumps({
+        "requested_model": "gpt-oss-120b", "served_model": "gpt-oss-120b",
+        "finish_reason": "stop", "test_gaming": "no", "correlation_id": "c",
+        "prompt_sha256": "ab" * 32}))
+    (seat / "review.txt").write_text(REVIEW)
+    assert sv.main(argv + ["--head", HEAD_SHA]) == 2
+    assert "--head only for record seats" in capsys.readouterr().err
+
+
+# D-3564 slice B: the CLI --writer-family list must contain the record's
+# writer_family (seat family differs so only the CLI check can refuse).
+def test_record_writer_family_not_in_cli_list_refused(tmp_path, capsys):
+    argv = record_dir(tmp_path, "w4", live_log=REVIEW, writer="qwen",
+                      writer_family="mimo",
+                      chosen_leg={"id": "leg-1", "model": "deepseek/deepseek-v3",
+                                  "family": "deepseek"})
+    assert sv.main(argv) == 2
+    assert "not in CLI writer families" in capsys.readouterr().err

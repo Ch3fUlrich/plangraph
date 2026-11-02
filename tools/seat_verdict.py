@@ -127,13 +127,16 @@ def verdict_payload(key, ok, reason):
 
 
 def build_reason(evidence, ok, text, idx, covers=None, witness=None,
-                 witness_kind="request-side-opencode-store"):
+                 witness_kind=None):
     head = (f"seat {evidence.get('served_model') or evidence.get('requested_model')}"
-            f" {'PASS' if ok else 'FIX'} corr {evidence.get('correlation_id')}"
-            f" prompt {str(evidence.get('prompt_sha256') or '')[:12]}")
+            f" {'PASS' if ok else 'FIX'}")
+    if evidence.get("correlation_id"):
+        head += f" corr {evidence['correlation_id']}"
+    if evidence.get("prompt_sha256"):
+        head += f" prompt {str(evidence['prompt_sha256'])[:12]}"
     if witness:
         # D-2905 (2): keep the request-side witness kind auditable in the keeper record.
-        head += f" witness={witness_kind} {witness}"
+        head += f" witness={witness_kind or 'request-side-opencode-store'} {witness}"
     if evidence.get("head_sha"):
         head += f" head {evidence['head_sha']}"
     if evidence.get("run_id"):
@@ -194,11 +197,13 @@ def main(argv=None):
                                   "(record-derived evidence only)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    writer_families = parse_writer_families(args.writer_family)
     from_record = False
     if not (args.seat_dir / "evidence.json").exists() and \
             (args.seat_dir / "record.json").exists():
         try:
-            evidence, text = evidence_from_record(args.seat_dir)
+            evidence, text = evidence_from_record(
+                args.seat_dir, cli_writer_families=writer_families)
         except ValueError as exc:
             print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
             return EXIT_REFUSED
@@ -213,7 +218,12 @@ def main(argv=None):
         if not isinstance(evidence, dict):
             print("seat_verdict: evidence.json is not an object", file=sys.stderr)
             return EXIT_IO
-    writer_families = parse_writer_families(args.writer_family)
+    if args.head and not from_record:
+        print("seat_verdict: refused, --head only for record seats", file=sys.stderr)
+        return EXIT_REFUSED
+    if from_record and not args.head:
+        print("seat_verdict: refused, record seats require --head", file=sys.stderr)
+        return EXIT_REFUSED
     if args.head and from_record and \
             str(evidence.get("head_sha") or "").lower() != args.head.strip().lower():
         print(f"seat_verdict: refused, record head_sha {evidence.get('head_sha')!r} "
