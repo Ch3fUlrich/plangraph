@@ -16,12 +16,16 @@
 - SPAWNER-DISPATCH-FAIL-DETECT #324 r2 Sonnet subagent of build-L1-0093 (resumed WIP of dead 0090 writer; brief /home/s/.claude/jobs/9d41ad45/tmp/brief-324r2.md) -> MERGE-READY to replan
 - SPAWNER-LEGS-D3605 #323 r3 (LAST) Sonnet subagent of build-L1-0093 (delta seat MED+LOW J/seat-323d.log) -> MERGE-READY to replan
 - pd#20 LE-RECYCLE-NEW-SESSION: HIGH ctx-watchdog:297 fix = L2 spawner3605-0092 W1; plangraph-data stays mine
+- plangraph-data #15 #16 #17 (RIN-PATH-REPOINT, ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS; mimo writers) are mine (replan answer a): Haiku tool seats (D-3641) running -> records /home/s/.claude/jobs/9d41ad45/tmp/seat-hpd1{5,6,7}.md; then 1 non-Claude seat (luna) -> GO-REQ routing (router merges, D-id)
+- pd#20 91c1d77 MERGE-READY from spawner3605-0092 (Sonnet): luna tools delta seat asked of workst-L1-autoos-0088 11:3xZ -> GO-REQ routing
+- L2-LAUNCH build-L2-recycle asked (brief ~/.local/share/plangraph/briefs/build-L2-recycle.brief.md): KEEP-SUBAGENTS + HANDOFF-OPEN-ITEMS-GATE
 - build-L2-heldfix-0091 DONE (9 heads listed to replan), stopping
 ## Planned
 1. On GO: merge #321 #325 (close #320) #326, evidence commit+ci + submit, ff spawner-main (rollback 2afe7810)
 2. #324 r2 -> workst delta tools seat; #323 delta ACCEPT -> CI -> GO-REQ; pd#20 seat -> GO-REQ routing
 3. LE-RECYCLE-KEEP-SUBAGENTS + LE-HANDOFF-OPEN-ITEMS-GATE writers (Sonnet ok D-3631, workst seats)
 ## Open
+- D-3645: SPAWNER-SESSION-NAMES closed by decision; live probe on 2 hosts at the next spawner deploy -> DONE <probe evidence> to routing
 - BLOCKED keeper tailnet bind: operator types OK in build-L1 session (D-3633(6)) | default wait | deadline none
 - D-3633(1) LEG-STATE: operator places ~/.config/plangraph/omniroute-mgmt.key | default slice 1 reader + fakes | deadline none
 ## Traps
