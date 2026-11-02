@@ -187,6 +187,21 @@ def test_odd_tracked_symlink_names_are_read_with_z(
 
 @windows_skip
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads every directory")
+def test_unreadable_explicit_routing_root_keeps_its_stat_error(ar, tmp_path: Path) -> None:
+    home = tmp_path / "h"
+    home.mkdir()
+    locked = tmp_path / "locked"
+    (locked / "routing").mkdir(parents=True)
+    locked.chmod(0)
+    try:
+        with pytest.raises(ar.RootScanError, match="PermissionError"):
+            ar.scan_all(home, routing_root=locked / "routing")
+    finally:
+        locked.chmod(0o755)
+
+
+@windows_skip
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads every directory")
 def test_unreadable_explicit_roots_are_a_scan_error(ar, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     home = tmp_path / "h"
     home.mkdir()

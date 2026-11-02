@@ -7,6 +7,7 @@ opens a secret-named file; symlinked files are followed by ``check_file``.
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 from autoos_refs_core import Hit, check_file, looks_secret
@@ -219,8 +220,13 @@ def scan_routing_tree(routing_root: Path, strict: bool = False) -> list[Hit]:
 def _scan_routing_tree(routing_root: Path, strict: bool) -> list[Hit]:
     """The routing checkout: ``ops/*.mcp.json`` (the MCP sets it launches
     sessions with) and the scripts in ``bin/``."""
-    if strict and not routing_root.is_dir():   # an explicit root that is missing or no directory is no clean scan
-        raise RootScanError(f"cannot read {routing_root}: {'not a directory' if routing_root.exists() else 'missing'}")
+    if strict:   # an explicit root that is missing, unreadable or no directory is no clean scan; keep the stat error
+        try:
+            mode = os.stat(routing_root).st_mode
+        except OSError as exc:
+            raise RootScanError(f"cannot read {routing_root}: {type(exc).__name__}") from exc
+        if not stat.S_ISDIR(mode):
+            raise RootScanError(f"cannot read {routing_root}: not a directory")
     hits: list[Hit] = []
     ops = routing_root / "ops"
     if ops.is_dir():
