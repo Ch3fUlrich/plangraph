@@ -23,7 +23,7 @@
 3. SEAT-TOOLS: writer report -> verify full suite -> Haiku seat
 ## Open
 - D-3668 no Agent-tool writers; writers = spawner runs only
-- BLOCKED SPAWNER-TIMEOUT-SALVAGE define | default a (router defines) | deadline 14:30Z
+- BLOCKED SEAT-PATH-FIXES define (3 seat-path fixes, replan FYI 15:0xZ) | *default a router defines | deadline 15:45Z
 - D-3633(1) LEG-STATE mgmt key: operator places omniroute-mgmt.key | default slice 1 + fakes | deadline none
 ## Traps
 - luna inline seats fuse commentary into the VERDICT line -> parse_verdict None; mimo-flash seat printed tool_call text only
