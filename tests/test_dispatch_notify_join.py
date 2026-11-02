@@ -39,8 +39,17 @@ def _exit_right_after_refusal(tmp_path, command, probe=None):
         "from plangraph.routing_support.leg_state import LegStateStore\n"
         "from plangraph.spawner import exit_outcome\n"
         "from plangraph.spawner.notify import FileInbox\n"
-        # registered after it, so it runs right BEFORE the join: the hook must still be pending then
-        "atexit.register(lambda: seen.update(t0=time.monotonic(), alive=sum(t.is_alive() for t in exit_outcome._PENDING_HOOKS)))\n"
+        # registered after it, so it runs right BEFORE the join: the hook must still be pending then, and every
+        # Thread.join timeout the exit join passes is recorded (the budget, proven without a wall clock)
+        "import threading\n"
+        "def _before_join():\n"
+        "    real = threading.Thread.join\n"
+        "    def join(self, timeout=None):\n"
+        "        seen.setdefault('timeouts', []).append(timeout)\n"
+        "        return real(self, timeout)\n"
+        "    threading.Thread.join = join\n"
+        "    seen.update(t0=time.monotonic(), alive=sum(t.is_alive() for t in exit_outcome._PENDING_HOOKS))\n"
+        "atexit.register(_before_join)\n"
         "tmp = sys.argv[1]\n"
         "service = SimpleNamespace(leg_reader=LegStateStore(tmp + '/legs.sqlite'), completion_sink=FileInbox(tmp))\n"
         "exit_outcome.notify_leg_refused(service, {'run_id': 'run-notifyexit'}, SimpleNamespace(model='m', harness='qodercli'),\n"
@@ -94,10 +103,11 @@ def test_a_process_exiting_right_after_the_refusal_still_delivers_the_hook(tmp_p
 
 
 def test_the_exit_join_runs_for_a_pending_hook_and_abandons_it_at_the_budget(tmp_path):
-    # F3, instrumented in the child: the hook is still pending when the exit join starts, and the join waits the
-    # 2 s budget, never the hook's 30 s (lower bound proves the join ran; the upper bound is CI-tolerant).
+    # F3, instrumented in the child: the hook is still pending when the exit join starts; the join's own timeouts
+    # add up to the 2 s budget (exact, no wall clock), and it really waited (the lower bound).
     probe = tmp_path / 'exit-join.json'
     _exit_right_after_refusal(tmp_path, _script_hook(tmp_path, "import time\ntime.sleep(30)\n"), probe=probe)
     seen = json.loads(probe.read_text())
     assert seen['alive'] == 1
-    assert 1.5 <= seen['join_s'] <= 10.0
+    assert seen['timeouts'] and all(t is not None for t in seen['timeouts']) and sum(seen['timeouts']) <= 2.0 + 1e-6
+    assert seen['join_s'] >= 1.5
