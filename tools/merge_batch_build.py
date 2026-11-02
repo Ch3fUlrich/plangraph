@@ -150,7 +150,7 @@ def recover_merging(st, skip_conflicts):
     if in_merge(wt):
         if unmerged(wt):
             return conflict(st, num, skip_conflicts)
-        git("merge", "--abort", cwd=wt)  # cut off before its commit and no conflict: undo it, merge again
+        git("merge", "--abort", cwd=wt)  # undo it and merge again; a failed abort raises here and keeps the marker
     st["merging"] = None
     save_state(st)
     return None
@@ -262,9 +262,11 @@ def cmd_build(args):
     save_state(st)  # before the worktree exists: a crash during `worktree add` leaves a state that abort cleans up
     try:
         git("worktree", "add", "--no-track", "-b", branch, str(path), f"{REMOTE}/{base}")
-    except MergeBatchError:
-        drop_state(st)
-        raise
+    except MergeBatchError as exc:
+        # the branch or the worktree may exist half made; the state stays (status "creating") so abort finds
+        # them and removes only what this build made (it verified the branch and the path absent before)
+        raise MergeBatchError(f"could not make the worktree of batch {name!r}: {exc} "
+                              f"(left for abort: run merge_batch.py abort --name {name})") from None
     st["status"] = "building"
     save_state(st)
     return run_pending(st, args.skip_conflicts)

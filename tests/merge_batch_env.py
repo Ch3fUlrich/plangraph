@@ -12,22 +12,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "merge_batch.py"
 STUB = Path(__file__).with_name("merge_batch_gh_stub.py")
-#: A `git` that kills its parent (the tool) after the n-th `git $CRASH_SUB` it runs, like an OOM kill.
+#: A `git` that interferes with the n-th `git $CRASH_SUB` it is asked to run (see Env.run): kill the parent
+#: (the tool) right after it, like an OOM kill; fail after it ran (its side effect stands); refuse it (exit
+#: non-zero without running, so it leaves no side effect behind).
 CRASH_GIT = """#!/bin/sh
-"$REAL_GIT" "$@"
-rc=$?
 sub=
 skip=0
 for arg in "$@"; do
   if [ "$skip" = 1 ]; then skip=0; continue; fi
   case "$arg" in -c) skip=1 ;; -*) ;; *) sub=$arg; break ;; esac
 done
+hit=0
 if [ "$sub" = "$CRASH_SUB" ]; then
   n=0
   [ -f "$CRASH_COUNT" ] && read n < "$CRASH_COUNT"
   n=$((n + 1))
   echo "$n" > "$CRASH_COUNT"
-  [ "$n" = "$CRASH_NTH" ] && kill -9 "$PPID"
+  [ "$n" = "$CRASH_NTH" ] && hit=1
+fi
+if [ "$hit" = 1 ] && [ "$CRASH_MODE" = "refuse" ]; then
+  exit 128
+fi
+"$REAL_GIT" "$@"
+rc=$?
+if [ "$hit" = 1 ]; then
+  if [ "$CRASH_MODE" = "fail" ]; then
+    exit 128
+  fi
+  kill -9 "$PPID"
 fi
 exit $rc
 """
@@ -148,8 +160,10 @@ class Env:
         return sha
 
     def run(self, *argv, cwd=None, crash=None, tool=None):
-        """Run the tool. ``crash=(git subcommand, n)`` kills it right after its n-th `git <subcommand>` (a
-        crash window); ``tool`` runs another copy of merge_batch.py."""
+        """Run the tool. ``crash=(git subcommand, n[, mode])`` interferes with the tool's n-th
+        `git <subcommand>`: mode ``kill`` (the default) kills the tool right after it ran (a crash window),
+        ``fail`` runs it (its side effect stands) and then makes git exit non-zero, ``refuse`` makes git
+        exit non-zero without running it. ``tool`` runs another copy of merge_batch.py."""
         env = dict(self.env)
         if crash:
             hook, count = self.tmp / "crashbin", self.tmp / "crash.count"
@@ -159,6 +173,8 @@ class Env:
             count.unlink(missing_ok=True)
             env.update(PATH=f"{hook}:{env['PATH']}", REAL_GIT=shutil.which("git"), CRASH_SUB=crash[0],
                        CRASH_NTH=str(crash[1]), CRASH_COUNT=str(count))
+            if len(crash) > 2:
+                env["CRASH_MODE"] = crash[2]
         return subprocess.run([sys.executable, str(tool or TOOL), *argv], cwd=cwd or self.repo, env=env,
                               capture_output=True, text=True, timeout=120)
 

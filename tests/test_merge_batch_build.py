@@ -2,17 +2,20 @@
 
 HERMETIC (D-852), see test_merge_batch.py. A crash is a real one: the tool runs with a `git` on its PATH
 that kills the tool right after its n-th `git <subcommand>` (merge, worktree), so the state file is
-what a build killed by the OOM killer leaves.
+what a build killed by the OOM killer leaves. The same wrapper can also make that git fail after its
+side effect, or refuse to run (see Env.run).
 
 Mutations killed: a state saved after the worktree or the merge it describes, a merge made before the
 crash recorded as "already in base" and lost, an open conflict lost, a half-made build that abort cannot
-find, an orphan that abort or status misses (or a foreign batch/* branch they take), a PR stacked on a PR
-outside the batch built against that PR's branch, a build that skips the plan rules or a --force-set
-that is not logged, a rename out of a HIGH path built with standard PRs, a union merge that changed an
-old line without a warning.
+find, a failed `worktree add` whose state is dropped so abort cannot find its leftovers, a merge made
+over an unfinished one after a failed `merge --abort` cleared the marker, an orphan that abort or status
+misses (or a foreign batch/* branch they take), a PR stacked on a PR outside the batch built against
+that PR's branch, a build that skips the plan rules or a --force-set that is not logged, a rename out of
+a HIGH path built with standard PRs, a union merge that changed an old line without a warning.
 """
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -97,6 +100,45 @@ def test_a_crash_while_the_worktree_is_made_leaves_a_state_abort_cleans(env):
     assert not wt.exists() and not env.state_file("k2").exists() and env.git("branch", "--list", "batch/k2") == ""
     assert env.git("for-each-ref", "refs/merge-batch") == ""
     assert env.run("build", "--name", "k2", "--prs", "1").returncode == 0  # the name is free again
+
+
+def test_a_worktree_add_that_fails_after_it_made_the_branch_is_left_for_abort(env):
+    """A `worktree add` that fails after its side effects (branch and directory made): the state stays
+    (status creating) so status and abort find the leftovers, the error names abort, and abort removes
+    exactly branch, worktree, PR-head refs and state (I9)."""
+    env.branch_pr(1, {"a.txt": "a\n"})
+    res = env.run("build", "--name", "w9", "--prs", "1", crash=("worktree", 1, "fail"))
+    assert res.returncode == 1 and "abort --name w9" in res.stderr, res.stderr
+    wt = wt_of(env, "w9")
+    assert read(env, "w9")["status"] == "creating"  # kept: status and abort can find what the failed add left
+    assert wt.exists() and env.git("branch", "--list", "batch/w9")
+    out = env.run("status").stdout
+    assert "w9  creating" in out and "abort --name w9" in out
+    assert env.run("abort", "--name", "w9").returncode == 0
+    assert not wt.exists() and not env.state_file("w9").exists()
+    assert env.git("branch", "--list", "batch/w9") == "" and env.git("for-each-ref", "refs/merge-batch") == ""
+    assert env.run("build", "--name", "w9", "--prs", "1").returncode == 0  # the name is free again
+
+
+def test_a_merge_abort_that_fails_keeps_the_marker_and_the_merge_state(env):
+    """Recovery undoes a merge that was cut off before its commit; when that undo fails nothing starts a
+    new merge over the unfinished one (I10): the marker and MERGE_HEAD stay for the next continue."""
+    head = env.branch_pr(1, {"a.txt": "a\n"})
+    env.branch_pr(2, {"b.txt": "b\n"})
+    assert env.run("build", "--name", "m1", "--prs", "1,2", crash=("worktree", 1)).returncode == -9
+    wt = wt_of(env, "m1")
+    env.git("merge", "--no-ff", "--no-commit", head, cwd=wt)  # a run died right here: no commit yet
+    st = read(env, "m1")
+    st.update(status="building", merging={"pr": 1, "head": head})
+    env.state_file("m1").write_text(json.dumps(st))
+    res = env.run("continue", "--name", "m1", crash=("merge", 1, "refuse"))
+    assert res.returncode == 1 and "git merge --abort failed" in res.stderr, res.stderr
+    assert read(env, "m1")["merging"] == {"pr": 1, "head": head}  # the marker stays saved
+    assert Path(env.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=wt)).exists()
+    assert env.git("rev-list", "--merges", "--count", "batch/m1") == "0"  # no new merge commit was made
+    res = env.run("continue", "--name", "m1")  # with a working git the recovery goes on as before
+    assert res.returncode == 0, res.stderr
+    assert [m["pr"] for m in read(env, "m1")["merged"]] == [1, 2]
 
 
 def test_abort_drops_a_build_that_died_right_after_a_merge(env):
