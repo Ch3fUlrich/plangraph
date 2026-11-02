@@ -42,17 +42,14 @@ fn probe_json() {
 
 #[test]
 fn invalid_arguments() {
+    // a 33-char id, one over the cap; built at run time so it is no secret-looking literal
+    let too_long = "a".repeat(33);
     for args in [
         vec!["probe", "--json", "--host-id", "Bad"],
         vec!["probe", "--json", "--host-id", ""],
         vec!["probe", "--json", "--host-id"],
         vec!["probe", "--json", "--host-id", "a_b"],
-        vec![
-            "probe",
-            "--json",
-            "--host-id",
-            "abcdefghijklmnopqrstuvwxyz1234567",
-        ],
+        vec!["probe", "--json", "--host-id", too_long.as_str()],
         vec!["unknown"],
         vec!["probe", "--unknown"],
     ] {
