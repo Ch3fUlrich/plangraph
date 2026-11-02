@@ -20,6 +20,18 @@ def _booking_seconds():
     return max(60.0, min(_down_seconds(None), 86400.0))
 
 
+def _run_hook(command, event):
+    """The hook thread's body: deliver, then leave the pending list, so a long-lived process keeps no finished threads."""
+    import threading
+    try:
+        _deliver_cmd(command, event)
+    finally:
+        try:
+            _PENDING_HOOKS.remove(threading.current_thread())
+        except ValueError:
+            pass
+
+
 def _deliver_cmd(command, event):
     """H2: command-hook delivery on a daemon thread; a failure never fails the run."""
     import logging
@@ -54,7 +66,8 @@ def notify_leg_refused(service, record, chosen, reason):
     runs on a daemon thread so it never blocks the event loop (H2).  F3: the
     process joins that thread at exit (atexit, 2 s in total), so a process
     exiting right after the refusal still delivers the hook line; the caller
-    never waits, and a hanging command is abandoned after 2 s at exit.
+    never waits, and a hanging command is abandoned after 2 s at exit.  Only a
+    forced termination (os._exit, SIGKILL) skips that join and can lose it.
     """
     import logging
     import os
@@ -69,9 +82,9 @@ def notify_leg_refused(service, record, chosen, reason):
         sink.deliver('parent', event)
         command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
         if command:
-            worker = threading.Thread(target=_deliver_cmd, args=(command, event), daemon=True)
+            worker = threading.Thread(target=_run_hook, args=(command, event), daemon=True)
+            _PENDING_HOOKS.append(worker)   # before start: the worker removes itself when done; F3 joins at exit (H2)
             worker.start()
-            _PENDING_HOOKS[:] = [t for t in _PENDING_HOOKS if t.is_alive()] + [worker]   # F3 at exit, not here (H2)
     except Exception:
         logging.getLogger(__name__).exception('leg refusal notify failed')
 
