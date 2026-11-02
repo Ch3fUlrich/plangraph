@@ -84,17 +84,62 @@ def test_reset_formats(store, headers, body, reset):
 @pytest.mark.parametrize("body, delta", [
     ("(reset after 3h 12m 5s)", 11525),
     ("(reset after 45s)", 45),
+    ("(reset after 500ms)", 0.5),
     ("reset after 0s", None),
     ("resets in 2 minutes", 120),
     ("(reset after 4d 2h)", ls.RESET_CAP_S),
 ])
 def test_reset_after_formats(store, body, delta):
     """D-3685: OmniRoute's "reset after" books like "resets in"; an elapsed
-    cooldown ("reset after 0s") books nothing and a far-future reset is capped
-    at now + 24 h."""
+    cooldown ("reset after 0s") books nothing at all and a far-future reset is
+    capped at now + 24 h."""
     store.record_provider_response("cx/zz-model", 429, body, {}, "gateway", now=100)
-    assert store.leg_status("cx/zz-model", now=101)["evidence"]["reset_at"] == (
-        None if delta is None else 100 + delta)
+    state = store.leg_status("cx/zz-model", now=101)
+    if delta is None:
+        assert state["state"] == "ok"  # no reset-less limit row was written
+    else:
+        assert state["evidence"]["reset_at"] == 100 + delta
+
+
+@pytest.mark.parametrize("text, seconds", [
+    ("reset after 500ms", 0.5),
+    ("reset after 3h 12m 5s", 11525),
+    ("resets in 2 minutes", 120),
+    ("reset after 1d", 86400),
+    ("reset after 5 parsecs", None),
+])
+def test_reset_seconds_unit_parsing(text, seconds):
+    """D-3685: units match longest-first with a word boundary -- "500ms" is
+    0.5 s, never 500 minutes -- and an unknown unit makes the whole reset
+    unparsed (None), never a misread."""
+    assert ls._reset_seconds(text) == seconds
+
+
+def test_explicit_zero_cooldown_books_nothing(store):
+    """D-3685: one shared rule for an explicitly elapsed cooldown ("reset
+    after 0s" prose, a retry-after header of 0): no booking path writes a
+    limit row or a down_s fallback for it."""
+    store.record_provider_response("cx/zero", 429, "quota reached (reset after 0s)", {}, "gw", now=1000)
+    assert store.leg_status("cx/zero", now=1001)["state"] == "ok"
+    store.record_provider_response("cx/zero2", 429, "quota", {"retry-after": "0"}, "gw", now=1000)
+    assert store.leg_status("cx/zero2", now=1001)["state"] == "ok"
+    store.record_harness_limit("cx/zero3", "error: quota reached. Resets in 0s",
+                               "test", now=1000, down_s=1800)
+    assert store.leg_status("cx/zero3", now=1001)["state"] == "ok"
+    assert not store.path.exists()  # nothing was booked at all
+
+
+def test_probe_fail_down_window_is_capped(store, monkeypatch):
+    """D-3685: "every reset is capped" holds on the probe-fail booking path
+    too: a large down_s or PLANGRAPH_LEG_DOWN_S never parks a leg for days."""
+    store.record_probe_fail("agy/zz-cap", "timeout", "leg-probe", now=1000, down_s=172800)
+    store.record_probe_fail("agy/zz-cap", "timeout", "leg-probe", now=1001, down_s=172800)
+    assert store.leg_status("agy/zz-cap", now=4600)["state"] == "down"
+    assert store.leg_status("agy/zz-cap", now=1001)["evidence"]["reset_at"] == 1001 + ls.RESET_CAP_S
+    assert store.leg_status("agy/zz-cap", now=1001 + ls.RESET_CAP_S + 1)["state"] != "down"
+    monkeypatch.setenv("PLANGRAPH_LEG_DOWN_S", "172800")
+    store.record_probe_fail("agy/zz-envcap", "timeout", "leg-probe", now=1000)
+    assert store.leg_status("agy/zz-envcap", now=1001)["evidence"]["reset_at"] == 1000 + ls.RESET_CAP_S
 
 
 def test_probe_failure_does_not_hide_active_limit(store):

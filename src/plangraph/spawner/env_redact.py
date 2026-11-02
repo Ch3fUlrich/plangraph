@@ -12,7 +12,12 @@ CREDIT_AUTH_MARKER = re.compile(
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
     r'quota reached|quota exceeded|quota threshold|exhausted their quota|usage limit|rate limit|resets in'
-    r'|\(reset after \d|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
+    r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
+#: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
+#: not quota evidence on its own: a line merely starting with it never marks a
+#: leg (prose stays out, D-3257). It counts only on an error-shaped line or
+#: next to a quota/rate-limit name.
+_RESET_AFTER = re.compile(r'\(reset after \d', re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
 
 
@@ -43,11 +48,14 @@ def harness_limit_line(exit_code, stdout, stderr):
     # leg. Agent prose on stdout only counts via its error-shaped lines.
     def quota(line):
         if _ERROR_SHAPED.match(line):
-            return _QUOTA_MARKER.search(line)
-        return _QUOTA_MARKER.match(line.strip())
+            return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
+        # Start-anchored only (D-3257): the reset-after suffix alone never
+        # marks; it needs a quota/rate-limit name alongside.
+        return _QUOTA_MARKER.match(line.strip()) or (
+            _RESET_AFTER.match(line.strip()) and _QUOTA_MARKER.search(line))
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
         line for line in normalize(stdout).splitlines()
-        if _ERROR_SHAPED.match(line) and _QUOTA_MARKER.search(line)]
+        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line))]
     return lines[0].strip() if lines else None
 
 
@@ -71,7 +79,7 @@ def early_refusal(complete_text):
             except (ValueError, TypeError, AttributeError, KeyError):
                 pass
     for line in lines:
-        if _ERROR_SHAPED.match(line) and _QUOTA_MARKER.search(line):
+        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)):
             return line.strip()
     return None
 

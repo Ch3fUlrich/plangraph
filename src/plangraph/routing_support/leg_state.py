@@ -29,14 +29,19 @@ _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL A
 
 
 def _down_seconds(down_s):
-    """Validated PLANGRAPH_LEG_DOWN_S; an invalid value falls back, never raises."""
+    """Validated PLANGRAPH_LEG_DOWN_S, capped at RESET_CAP_S; never raises.
+
+    An invalid value falls back to 1800. The 24 h cap holds on every booking
+    path (D-3685): an explicit down_s or a large PLANGRAPH_LEG_DOWN_S never
+    parks a leg for days.
+    """
     if down_s is not None:
-        return down_s
+        return min(down_s, RESET_CAP_S)
     try:
         value = float(os.environ.get('PLANGRAPH_LEG_DOWN_S', 1800))
     except (TypeError, ValueError):
         return 1800
-    return value if math.isfinite(value) and value >= 0 else 1800
+    return min(value if math.isfinite(value) and value >= 0 else 1800, RESET_CAP_S)
 
 
 class LegStateError(ValueError):
@@ -51,13 +56,51 @@ def _redact(body):
     return body[:300]
 
 
+#: D-3685: cooldown units by full word, so the match is longest-first with a
+#: word boundary ("500ms" is 0.5 s, never 500 minutes). "ms"/milliseconds are
+#: milliseconds; an unknown unit makes the whole reset unparsed (None), never
+#: a misread.
+_UNITS = {'ms': .001, 'msec': .001, 'msecs': .001,
+          'millisecond': .001, 'milliseconds': .001,
+          's': 1, 'sec': 1, 'secs': 1, 'second': 1, 'seconds': 1,
+          'm': 60, 'min': 60, 'mins': 60, 'minute': 60, 'minutes': 60,
+          'h': 3600, 'hr': 3600, 'hrs': 3600, 'hour': 3600, 'hours': 3600,
+          'd': 86400, 'day': 86400, 'days': 86400}
+
+_COOLDOWN_PREFIX = re.compile(r"resets?\s+(?:in|after)\s+", re.I)
+_COOLDOWN_PAIR = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([a-z]+)", re.I)
+
+
 def _reset_seconds(body):
     """Return an explicit prose cooldown, keeping zero distinct from absent."""
-    match = re.search(r"resets?\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\s*)+)", body, re.I)
-    if match:
-        return sum(float(n) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit[0].lower()]
-                   for n, unit in re.findall(r'(\d+(?:\.\d+)?)\s*([a-z]+)', match[1], re.I))
-    return None
+    match = _COOLDOWN_PREFIX.search(body)
+    if match is None:
+        return None
+    total, pos, seen = 0.0, match.end(), False
+    while True:
+        pair = _COOLDOWN_PAIR.match(body, pos)
+        if pair is None:
+            return total if seen else None
+        factor = _UNITS.get(pair[2].lower())
+        if factor is None:
+            return None  # unknown unit: the whole reset is unparsed
+        total += float(pair[1]) * factor
+        pos, seen = pair.end(), True
+
+
+def _elapsed_cooldown(headers, body):
+    """True for an explicitly elapsed cooldown (D-3685): nothing to book.
+
+    "reset after 0s"/"resets in 0s" prose or a retry-after header of 0 say the
+    window already passed: no writer books a limit row or a down_s fallback
+    for it (a shared rule, so the booking paths cannot drift apart).
+    """
+    try:
+        if float(headers.get('retry-after', 'nan')) == 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _reset_seconds(body) == 0
 
 
 def _reset(headers, body, now):
@@ -118,6 +161,10 @@ class LegStateStore:
             raise LegStateError("requires provider body or reset header")
         if not isinstance(leg, str) or not leg.strip():
             raise LegStateError("requires provider/model leg")
+        # D-3685: an explicitly elapsed cooldown books nothing -- no reset-less
+        # limit row that would read "limited" for REPROBE_MINUTES.
+        if _elapsed_cooldown(headers, body):
+            return
         reset = _reset(headers, body, now)
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, status, _redact(body), None if reset is None else reset - now, reset, now, caller, "provider-response"))
@@ -132,6 +179,8 @@ class LegStateStore:
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         now = time.time() if now is None else now
+        # _down_seconds is capped at RESET_CAP_S (D-3685): the booked down
+        # window never parks a leg past the 24 h reset cap.
         down_s = _down_seconds(down_s)
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
@@ -162,12 +211,14 @@ class LegStateStore:
             raise LegStateError('requires leg, quota line and caller')
         # An explicitly elapsed cooldown is not missing reset information:
         # neither the fallback booking nor a reset-less limit row is valid.
-        if _reset_seconds(line) == 0:
+        if _elapsed_cooldown({}, line):
             return
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
         if reset is None and down_s is not None:
-            reset = min(now + _down_seconds(down_s), now + RESET_CAP_S)   # D-3605 (a): no provider reset time
+            # D-3605 (a): no provider reset time; _down_seconds is capped, so
+            # the fallback stays inside RESET_CAP_S like every other booking.
+            reset = now + _down_seconds(down_s)
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
                        (leg, account, combo, 429, _redact(line),

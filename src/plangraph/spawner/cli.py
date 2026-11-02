@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
@@ -143,16 +142,15 @@ def main(argv=None):
     service = SpawnService(state=args.state)
     try:
         if args.verb == 'probe':
-            from .leg_probe import probe_many
+            from .leg_probe import probe_many, reset_iso
             result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
             if args.json:
                 print(json.dumps(result))
             else:
                 for row in result['probes']:
                     if row.get('skipped') == 'limited':
-                        reset = row.get('reset_at')
-                        until = datetime.fromtimestamp(reset, timezone.utc).isoformat() if reset is not None else 'unknown'
-                        print(f"{row['id']} skipped=limited until {until}")
+                        # reset_iso guards legacy out-of-range reset_at values.
+                        print(f"{row['id']} skipped=limited until {reset_iso(row.get('reset_at'))}")
                     else:
                         print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
             return 0 if result['ok'] else 1
