@@ -95,6 +95,11 @@ pub fn supervise(cmd: Command, opts: &Opts) -> io::Result<Supervised> {
 /// The cancel check is polled alongside stall/timeout and reuses the same kill
 /// path (SIGTERM then SIGKILL after `grace` on Unix; terminating the job object
 /// on Windows), so a cancelling caller never leaves a supervised child running.
+///
+/// The command's stdio and process setup are owned here: stdin/stdout/stderr
+/// become the shared output pipe, and on Windows caller-set creation flags are
+/// replaced by `CREATE_SUSPENDED | CREATE_NO_WINDOW` (the child is never
+/// interactive).
 pub fn supervise_with_cancel(
     mut cmd: Command,
     opts: &Opts,
@@ -115,7 +120,22 @@ pub fn supervise_with_cancel(
     let mut term_at: Option<Instant> = None;
     let mut killed = false;
     let status = loop {
-        if let Some(s) = child.try_wait()? {
+        let waited = match child.try_wait() {
+            Ok(s) => s,
+            Err(e) => {
+                // Every exit path closes the group before the reader is
+                // joined: the kill terminates the job on Windows and SIGKILLs
+                // the group on Unix, so the reader cannot block on a survivor.
+                group.kill();
+                // Dropping the Windows Group closes the job handle; the Unix
+                // one is a plain pgid, hence the lint allowance.
+                #[allow(clippy::drop_non_drop)]
+                drop(group);
+                let _ = reader.join();
+                return Err(e);
+            }
+        };
+        if let Some(s) = waited {
             break s;
         }
         let now = Instant::now();
@@ -146,6 +166,12 @@ pub fn supervise_with_cancel(
     };
     // Leave nothing behind (orphans would also keep the pipe open).
     group.kill();
+    // Close the group before the join on every exit path: closing the job
+    // handle sweeps any survivor (`KILL_ON_JOB_CLOSE`), so the reader can
+    // never block on one (the Unix Group is a plain pgid, hence the lint
+    // allowance).
+    #[allow(clippy::drop_non_drop)]
+    drop(group);
     let output = reader.join().unwrap_or_default();
     Ok(Supervised {
         code: status.code(),
