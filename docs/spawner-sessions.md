@@ -20,13 +20,17 @@ A failure result carries a scrubbed `error` and the started `session_id` when kn
 
 The config file is selected by `$PLANGRAPH_SESSIONS_CONFIG`, defaulting to
 `~/.config/plangraph/sessions.json` when that env var is unset: `cwd_roots`, `models`, `efforts`,
-`permission_modes`, `mcp_configs`, `style_text`, `compact_window`, `ctx_cap_tokens`. It fails
+`permission_modes`, `mcp_configs`, `style_text`, `compact_window`, `ctx_cap_tokens`, `session_names`. It fails
 closed - an unknown key (including the removed `style_file`, `file_roots` and `windows_launcher`),
 bad scalar or missing file refuses every action except `stop`: every action but `stop` loads and
 checks the config, and `stop` alone runs without it. There is no default model. A present key must
 carry its type and may not be `null`: `style_text` a non-empty string, `compact_window` a digit
 string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
-`compact_window` to `330000`.
+`compact_window` to `330000`. `session_names` is `role-counter` (default) or `free`: in
+`role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (next number, never
+reused); `relaunch` stops the old session (its record stays stopped), starts a new one under the next
+number (`previous_name` = old) and is refused ("superseded") while a later record of the role is live.
+`free` keeps free names and in-place relaunch.
 
 **Threat model.** The caller is the authenticated MCP principal. Other processes of the same OS
 account are trusted - they can already run `claude` themselves - so same-account file swaps are out
