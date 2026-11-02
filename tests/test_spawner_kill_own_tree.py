@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from plangraph.spawner import proc_kill, runner as runner_mod
+from plangraph.spawner import proc_kill, reap as reap_mod, runner as runner_mod
 from plangraph.spawner.notify import FileInbox
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
 
@@ -100,7 +100,7 @@ def test_survivors_fail_run_without_fallthrough_or_second_writer(tmp_path, monke
         return await proc_kill.finish(*args, **{**kwargs, 'wait_s': 0.3})
 
     monkeypatch.setattr(proc_kill, 'kill_process_tree', nokill)
-    monkeypatch.setattr(runner_mod, 'finish', quick_finish)
+    monkeypatch.setattr(reap_mod, "finish", quick_finish)
 
     async def run():
         service = spawn_service(SpawnerRunner(process_factory=factory, tree_killer=nokill), tmp_path,
