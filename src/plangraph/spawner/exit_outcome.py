@@ -1,4 +1,6 @@
 """Shared dispatch outcome policy for base and routed launches."""
+import atexit
+
 from plangraph.routing_support.leg_state import _down_seconds
 from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
@@ -28,6 +30,20 @@ def _deliver_cmd(command, event):
         logging.getLogger(__name__).exception('leg refusal command notify failed')
 
 
+#: F3 + H2: LEG_REFUSED hook threads that may still run; the caller never waits for them, the process does at exit.
+_PENDING_HOOKS = []
+
+
+@atexit.register
+def _join_pending_hooks(budget=2.0):
+    """At interpreter exit, wait up to ``budget`` seconds in total for hook threads still running, so a process
+    that exits right after a refusal keeps its hook line, while a hanging hook delays the exit by at most 2 s."""
+    import time
+    end = time.monotonic() + budget
+    for worker in list(_PENDING_HOOKS):
+        worker.join(max(0.0, end - time.monotonic()))
+
+
 def notify_leg_refused(service, record, chosen, reason):
     """D-3605 (a): tell the parent at once that a leg refused; delivery never fails the run.
 
@@ -35,10 +51,10 @@ def notify_leg_refused(service, record, chosen, reason):
     line per refused attempt (G3); a service without a completion sink stays
     silent.  The completion sink is a local file write and stays synchronous;
     only the PLANGRAPH_SPAWN_NOTIFY_CMD hook (a subprocess with a 10 s timeout)
-    runs on a daemon thread so it never blocks the event loop (H2).  F3: that
-    thread is joined for at most 2 s, so a process exiting right after the
-    refusal still delivers the hook line, while a hanging command can never
-    block the caller for more than ~2.5 s (the daemon thread is abandoned).
+    runs on a daemon thread so it never blocks the event loop (H2).  F3: the
+    process joins that thread at exit (atexit, 2 s in total), so a process
+    exiting right after the refusal still delivers the hook line; the caller
+    never waits, and a hanging command is abandoned after 2 s at exit.
     """
     import logging
     import os
@@ -55,8 +71,7 @@ def notify_leg_refused(service, record, chosen, reason):
         if command:
             worker = threading.Thread(target=_deliver_cmd, args=(command, event), daemon=True)
             worker.start()
-            # F3: bounded join -- a prompt process exit must not lose the hook.
-            worker.join(timeout=2.0)
+            _PENDING_HOOKS[:] = [t for t in _PENDING_HOOKS if t.is_alive()] + [worker]   # F3 at exit, not here (H2)
     except Exception:
         logging.getLogger(__name__).exception('leg refusal notify failed')
 
