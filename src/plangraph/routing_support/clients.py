@@ -23,7 +23,7 @@ GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
-STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode",)
+STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude")   # D-3605
 
 
 def gateway_url(env: Mapping[str, str] | None = None,
@@ -343,11 +343,11 @@ def build_standalone_fallback_command(
         return cmd
     if cname == "codex":
         return ["codex", "exec", *(["--model", model] if model else []), prompt]
-    if cname in ("claude", "gemini", "qwen"):
-        cmd = [cname, "-p", prompt]
+    if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
+        cmd = [cname, "-p", *([] if cname == "claude" else [prompt])]
         if model:
             cmd.extend(["--model", model])
-        return cmd
+        return cmd + (["--output-format", "stream-json", "--verbose", "--permission-mode", "plan"] if cname == "claude" else [])
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run", "--standalone"]
