@@ -26,11 +26,10 @@ bad scalar or missing file refuses every action except `stop`: every action but 
 checks the config, and `stop` alone runs without it. There is no default model. A present key must
 carry its type and may not be `null`: `style_text` a non-empty string, `compact_window` a digit
 string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
-`compact_window` to `330000`. `session_names` is `role-counter` (default) or `free`. In
-`role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (4 digits, next number
-per role from `_counters.json` and the records, never reused); `relaunch` stops the old session and
-starts a new one under the next number (`name` = new, `previous_name` = old). `free` keeps the legacy
-free names and in-place relaunch.
+`compact_window` to `330000`. `session_names` is `role-counter` (default) or `free`: in
+`role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (next number per role,
+never reused); `relaunch` starts a new session under the next number (`previous_name` = old). `free`
+keeps free names and in-place relaunch.
 
 **Threat model.** The caller is the authenticated MCP principal. Other processes of the same OS
 account are trusted - they can already run `claude` themselves - so same-account file swaps are out

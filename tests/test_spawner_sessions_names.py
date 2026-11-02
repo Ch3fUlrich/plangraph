@@ -3,20 +3,30 @@
 from __future__ import annotations
 
 import json
-import threading
+import os
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 from plangraph.routing_errors import ParameterRefused
-from sessions_support import UUID1, UUID2, PROMPT, FakeRun, make, go, write_config
+from sessions_support import UUID1, UUID2, PROMPT, MODEL, EFFORT, MODE, FakeRun, make, go, write_config
 from sessions_support import site  # noqa: F401
+
+
+def _mode(site, mode):
+    write_config(site.cfg, json.dumps({**json.loads(site.cfg.read_text()), "session_names": mode}))
+    return site
+
+
+def _handoff(site):
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    return hf
 
 
 @pytest.fixture
 def rc(site):  # noqa: F811
-    """The site config switched to the default role-counter mode."""
-    cfg = json.loads(site.cfg.read_text())
-    cfg["session_names"] = "role-counter"
-    write_config(site.cfg, json.dumps(cfg))
-    return site
+    return _mode(site, "role-counter")
 
 
 def _names(site):
@@ -70,20 +80,8 @@ def test_dry_run_shows_name_and_does_not_bump(rc):
 
 def test_parallel_launches_get_distinct_numbers(rc):
     s = make(rc, FakeRun(stdout="session " + UUID1))
-    got, errors = [], []
-
-    def work():
-        try:
-            got.append(go(rc, s, "gamma")["name"])
-        except Exception as exc:  # noqa: BLE001 - surfaced by the assert below
-            errors.append(exc)
-
-    threads = [threading.Thread(target=work) for _ in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert not errors
+    with ThreadPoolExecutor(8) as pool:
+        got = [f.result()["name"] for f in [pool.submit(go, rc, s, "gamma") for _ in range(8)]]
     assert sorted(got) == [f"gamma-{n:04d}" for n in range(1, 9)]
 
 
@@ -92,8 +90,7 @@ def test_relaunch_starts_a_new_numbered_session(rc):
     s = make(rc, run)
     go(rc, s, "alpha")
     sessions = rc.state / "sessions"
-    hf = rc.tmp_path / "handoff.md"
-    hf.write_text("carry on")
+    hf = _handoff(rc)
     s.mark_ready("alpha-0001", str(hf))
     run.stdout = "session " + UUID2
     res = s.relaunch("alpha-0001")
@@ -118,11 +115,8 @@ def test_relaunch_starts_a_new_numbered_session(rc):
 def test_relaunch_of_a_legacy_name_gets_a_numbered_session(rc):
     run = FakeRun(stdout="session " + UUID1)
     s = make(rc, run, now=lambda: 1000.0)
-    write_config(rc.cfg, json.dumps({**json.loads(rc.cfg.read_text()), "session_names": "free"}))
-    go(rc, s, "alpha")
-    write_config(rc.cfg, json.dumps({**json.loads(rc.cfg.read_text()), "session_names": "role-counter"}))
-    hf = rc.tmp_path / "handoff.md"
-    hf.write_text("carry on")
+    go(_mode(rc, "free"), s, "alpha")
+    hf = _handoff(_mode(rc, "role-counter"))
     res = s.relaunch("alpha", handoff=str(hf))
     assert res["name"] == "alpha-0001" and res["previous_name"] == "alpha"
     assert json.loads((rc.state / "sessions" / "alpha.json").read_text())["state"] == "stopped"
@@ -134,17 +128,14 @@ def test_free_mode_is_unchanged(site):  # noqa: F811 - the default test config i
     assert go(site, s, "alpha")["name"] == "alpha"
     dry = go(site, s, "beta-12", dry_run=True)["argv"]
     assert dry[dry.index("-n") + 1] == "beta-12"
-    hf = site.tmp_path / "handoff.md"
-    hf.write_text("carry on")
-    res = s.relaunch("alpha", handoff=str(hf))
+    res = s.relaunch("alpha", handoff=str(_handoff(site)))
     assert res["name"] == "alpha" and "previous_name" not in res
     assert not (site.state / "sessions" / "_counters.json").exists()
 
 
 def test_bad_session_names_config_refused(site):  # noqa: F811
-    write_config(site.cfg, json.dumps({**json.loads(site.cfg.read_text()), "session_names": "nope"}))
     with pytest.raises(ParameterRefused, match="session_names"):
-        go(site, make(site), "alpha")
+        go(_mode(site, "nope"), make(site), "alpha")
 
 
 def test_corrupt_counters_file_refuses(rc):
@@ -171,10 +162,6 @@ print(s.launch(name="eps", cwd=cwd, model=model, effort=effort, permission_mode=
 
 
 def test_processes_get_distinct_numbers(rc):
-    import os
-    import subprocess
-    import sys
-    from sessions_support import MODEL, EFFORT, MODE
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     procs = [subprocess.Popen(
         [sys.executable, "-c", _CHILD, str(rc.state), str(rc.cfg), str(rc.proj), str(rc.mcp),
@@ -188,22 +175,20 @@ def test_relaunch_of_a_superseded_record_is_refused(rc):
     run = FakeRun(stdout="session " + UUID1)
     s = make(rc, run)
     go(rc, s, "alpha")
-    hf = rc.tmp_path / "handoff.md"
-    hf.write_text("carry on")
+    hf = _handoff(rc)
     run.stdout = "session " + UUID2
     assert s.relaunch("alpha-0001", handoff=str(hf))["name"] == "alpha-0002"
     before = (rc.state / "sessions" / "alpha-0002.json").read_text()
-    stops, launches = len([c for c in run.calls if c[0][1:2] == ["stop"]]), len(run.launch_calls())
+    calls = len(run.calls)
     with pytest.raises(ParameterRefused, match="alpha-0001 is superseded by alpha-0002: relaunch alpha-0002"):
         s.relaunch("alpha-0001", handoff=str(hf))
     assert (rc.state / "sessions" / "alpha-0002.json").read_text() == before  # the live tip is untouched
-    assert len([c for c in run.calls if c[0][1:2] == ["stop"]]) == stops and len(run.launch_calls()) == launches
+    assert len(run.calls) == calls  # nothing stopped, nothing launched
     assert _names(rc) == ["alpha-0001", "alpha-0002"]  # no number was taken
 
 
 def test_free_mode_counters_name_does_not_block_role_counter(site):  # noqa: F811
     s = make(site, FakeRun(stdout="session " + UUID1))
     assert go(site, s, "counters")["name"] == "counters"  # a valid free name
-    write_config(site.cfg, json.dumps({**json.loads(site.cfg.read_text()), "session_names": "role-counter"}))
-    assert go(site, s, "alpha")["name"] == "alpha-0001"
+    assert go(_mode(site, "role-counter"), s, "alpha")["name"] == "alpha-0001"
     assert [x["name"] for x in s.list()["sessions"]] == ["alpha-0001", "counters"]

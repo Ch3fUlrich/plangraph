@@ -1,14 +1,7 @@
-"""Session names: ``<role>-NNNN`` counters and relaunch-as-new-session (D-3605).
-
-``_NamesMixin`` is mixed into ``Sessions``. Config ``session_names`` is
-"role-counter" (default) or "free" (legacy: the caller picks any name and a
-relaunch reuses it). In role-counter mode launch(name=<role>) assigns
-``<role>-NNNN`` (exactly 4 digits) from a per-host counter kept in
-``_counters.json`` next to the records: next = max(stored counter, highest
-NNNN among that role's records) + 1, taken under the role lock and written
-atomically before the session starts, so a number is never reused. A relaunch
-stops the old session and starts a NEW one under the next number; the old
-record stays (stopped, transcript readable).
+"""Session names (D-3605). Config ``session_names``: "role-counter" (default) or "free" (legacy).
+Role-counter: launch(name=<role>) assigns ``<role>-NNNN`` = max(``_counters.json``, highest
+NNNN of the role's records) + 1, taken under the role lock and written before the start, so a
+number is never reused. A relaunch stops the old session and starts a NEW one (next number).
 """
 from __future__ import annotations
 
@@ -66,9 +59,7 @@ class _NamesMixin:
 
     @contextlib.contextmanager
     def _counter_flock(self):
-        """Cross-process lock (_counters.lock) around "read next number ->
-        write _counters.json"; role-counter mode only. Taken after the
-        in-process role lock, never before it."""
+        """Cross-process lock around read-next -> write counters; taken after the role lock."""
         if self._names_mode() != "role-counter":
             yield
             return
@@ -84,8 +75,7 @@ class _NamesMixin:
                 os.close(fd)
 
     def _lock_key(self, name):
-        """launch's lock: the role in role-counter mode (the counter is per
-        role), the name itself in free mode."""
+        """launch's lock: the role in role-counter mode, else the name."""
         if not isinstance(name, str) or self._names_mode() != "role-counter":
             return str(name)
         m = _TAIL_RE.fullmatch(name)
@@ -98,7 +88,7 @@ class _NamesMixin:
         except FileNotFoundError:
             return {}
         except (OSError, ValueError):
-            raw = None
+            raw = None  # refused below
         if not isinstance(raw, dict) or not all(
                 isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in raw.values()):
             raise _refuse(f"{COUNTERS_FILE} is unreadable or corrupt: {path}")
@@ -122,8 +112,7 @@ class _NamesMixin:
         atomic_write_private(self._sessions / COUNTERS_FILE, json.dumps(counters, sort_keys=True) + "\n")
 
     def _launch_name(self, cfg, name):
-        """The name a launch will use. Role-counter: a role gets the next
-        number; an explicit <role>-NNNN must carry exactly that number."""
+        """Role-counter: the role's next name; an explicit <role>-NNNN must be exactly that."""
         if cfg.get("session_names", "role-counter") != "role-counter" or not isinstance(name, str):
             return name
         role, digits = self._role_of(name, strict=True)
@@ -138,8 +127,7 @@ class _NamesMixin:
             self._reserve_number(role, int(digits))  # called under the role lock
 
     def _relaunch_name(self, cfg, name):
-        """The name the relaunched session gets (reserved here, under the
-        role lock): the same name in free mode, else the role's next number."""
+        """The relaunched session's name (reserved here): the same in free mode, else the next number."""
         if cfg.get("session_names", "role-counter") != "role-counter":
             return name
         role, digits = self._role_of(name, strict=False)
@@ -154,8 +142,7 @@ class _NamesMixin:
         return f"{role}-{number:04d}"
 
     def _relaunch_record(self, rec, name, handoff_path):
-        """The record the relaunched session starts from. A new name gets its
-        own copy of the prompt file and a fresh launch clock."""
+        """The relaunched record; a new name gets its own prompt file copy and launch clock."""
         new_rec = dict(rec)
         new_rec["handoff"] = str(handoff_path) if handoff_path else None
         if name != rec.get("name"):
