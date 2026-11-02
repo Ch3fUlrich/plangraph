@@ -67,5 +67,16 @@ class WinJobApi:
             raise OSError('QueryInformationJobObject failed')
         return (info.times[0] + info.times[1]) / 1e7
 
+    def pids(self, handle):
+        """Pids of the job's current members (BasicProcessIdList)."""
+        class IdList(ctypes.Structure):
+            _fields_ = [('assigned', ctypes.c_uint32), ('listed', ctypes.c_uint32),
+                        ('ids', ctypes.c_size_t * 512)]
+        info = IdList()
+        if not self._k32.QueryInformationJobObject(ctypes.c_void_p(handle), 3,
+                ctypes.byref(info), ctypes.sizeof(info), None):
+            raise OSError('QueryInformationJobObject failed')
+        return [info.ids[i] for i in range(min(info.listed, 512))]
+
     def close(self, handle):
         self._k32.CloseHandle(ctypes.c_void_p(handle))

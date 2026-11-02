@@ -49,7 +49,7 @@ _keeper_unconfigured_last_warned = None
 from .env_redact import first_reason
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
-from .proc_kill import kill_process_tree
+from .proc_kill import KillIncomplete, finish, kill_process_tree, root_identity, snapshot
 
 
 def redact(value):
@@ -128,6 +128,7 @@ class JobInfo:
     steer_messages: list[str] = field(default_factory=list)
     cwd: str | None = None
     last_activity_ts: float | None = None
+    survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -624,6 +625,7 @@ class SpawnerRunner:
                 raise
             self._processes[job_id] = proc
             self._nonces[job_id] = nonce
+            self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=proc.pid, pid_start=root_identity(proc.pid), job_object=False)}
 
             # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
             # find an exited root pid, so an orphan (`opencode serve`) would outlive
@@ -640,7 +642,7 @@ class SpawnerRunner:
                     except Exception:
                         self.win_job_api.close(handle)
                         raise
-                    self._win_jobs[job_id] = handle
+                    self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
                 except Exception:
                     job.events.append({'event': 'win_job_unavailable'})
 
@@ -684,15 +686,23 @@ class SpawnerRunner:
         if job_id in reaped:
             return
         reaped.add(job_id)
+        job = self.jobs.get(job_id)
         # F3: kill the run's Job Object first, then pop it — taskkill /T cannot
         # find a root pid that has already exited (SPAWN-ORPHAN-REAP).
         win_job = getattr(self, '_win_jobs', {}).pop(job_id, None)
+        ident = getattr(self, '_owned', {}).get(job_id, {}).get('pid_start') or (
+            'nt' if win_job is not None and os.name == 'nt' else None)   # a Job Object proves ownership
+        members, api = {}, getattr(self, 'win_job_api', None)
+        if ident is not None and getattr(proc, 'pid', None) is not None:
+            try:   # snapshot BEFORE any signal; FakeWinJob-style stubs have no class-level pids()
+                jp = api.pids(win_job) if win_job is not None and hasattr(type(api), 'pids') else None
+                members = await asyncio.to_thread(snapshot, proc.pid, ident, job_pids=jp)
+            except Exception:
+                members = {}
         if win_job is not None:
-            api = getattr(self, 'win_job_api', None)
             try:
                 api.terminate(win_job)
             except Exception as exc:
-                job = self.jobs.get(job_id)
                 if job is not None:
                     job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
             finally:
@@ -712,7 +722,17 @@ class SpawnerRunner:
         except Exception as exc:
             # F2: never swallow a mis-kill or platform failure silently; type
             # name only, no message text or pid list. Never raise out of here.
-            job = self.jobs.get(job_id)
+            if job is not None:
+                job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
+        try:   # only a tree proven ours is killed further and verified; survivors fail the run
+            if ident is not None:
+                await finish(pid, ident, members)
+        except KillIncomplete as exc:
+            if job is not None:
+                job.survivors = exc.survivors
+                job.status, job.exit_code = 'failed', job.exit_code or 1
+                job.events.append({'event': 'kill_incomplete', 'survivors': exc.survivors})
+        except Exception as exc:
             if job is not None:
                 job.events.append({'event': 'reap_failed', 'error': type(exc).__name__})
 
@@ -1095,6 +1115,7 @@ def spawn_service(*args, **kwargs):
                         self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
+                                      **{k: bool(v) if k == 'job_object' else v for k, v in getattr(self.runner, '_owned', {}).get(job.job_id, {}).items() if k != 'pid'},
                                       writer_family=chosen.family,
                                       cwd=job.cwd or getattr(self.runner, 'default_cwd', os.getcwd()))
                         self._save(record)
@@ -1105,6 +1126,11 @@ def spawn_service(*args, **kwargs):
                                 job.status = 'cancelled'
                             elif not task.cancelled() and task.exception() is not None:
                                 raise task.exception()
+                        if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
+                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='kill_incomplete'))
+                            record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=job.survivors,
+                                events=record.get('events', []) + job.events)
+                            return
                         if self._path(run_id).with_name('cancelled').exists():   # D-3505: a CLI cancel from
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
                         stop = self.runner.provider_responses.get(job.job_id)
