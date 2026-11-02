@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "self": "code",
+  "hosts": [
+    {
+      "id": "code",
+      "aliases": ["devbox"],
+      "transport": "local",
+      "os": "linux",
+      "state_dir": "/srv/fleet/code/state",
+      "caps": {
+        "max_runs": 4,
+        "max_writers": 2,
+        "max_seats": 3,
+        "max_sessions": 8,
+        "mem_floor_mb": 512
+      },
+      "warmup": {
+        "warmup_s": 30,
+        "ramp_mb": { "implement": 256, "session": 128 }
+      },
+      "session_mb": 2048,
+      "roles": ["implement", "review", "research", "orchestrate", "session"],
+      "repos": {
+        "plangraph": {
+          "root": "/srv/fleet/code/repos/plangraph",
+          "worktrees_root": "/srv/fleet/code/worktrees/plangraph",
+          "remote": "git@placeholder.invalid:fleet/plangraph.git",
+          "python": "/srv/fleet/venvs/plangraph/bin/python",
+          "import_roots": ["rust", "docs"],
+          "cache_env": {
+            "PG_CACHE": "/srv/fleet/cache/%SLOT%",
+            "PG_INDEX": "/srv/fleet/index"
+          }
+        }
+      }
+    },
+    {
+      "id": "workstation",
+      "aliases": ["winbox"],
+      "transport": "ssh",
+      "os": "windows",
+      "state_dir": "C:\\fleet\\workstation\\state",
+      "caps": {
+        "max_runs": 2,
+        "max_writers": 1,
+        "max_seats": 2,
+        "max_sessions": 4,
+        "mem_floor_mb": 1024
+      },
+      "warmup": {
+        "warmup_s": 45,
+        "ramp_mb": { "implement": 512, "session": 256 }
+      },
+      "session_mb": 4096,
+      "roles": ["implement", "session"],
+      "repos": {
+        "plangraph": {
+          "root": "C:\\fleet\\workstation\\repos\\plangraph",
+          "worktrees_root": "C:\\fleet\\workstation\\worktrees\\plangraph",
+          "remote": "git@placeholder.invalid:fleet/plangraph.git",
+          "python": "C:\\fleet\\venvs\\plangraph\\Scripts\\python.exe",
+          "import_roots": ["rust", "docs"],
+          "cache_env": {
+            "PG_CACHE": "C:\\fleet\\cache\\%SLOT%",
+            "PG_INDEX": "C:\\fleet\\index"
+          }
+        }
+      }
+    }
+  ]
+}
