@@ -16,9 +16,9 @@ from plangraph.routing_errors import ParameterRefused
 
 # SESSION-SPAWN-MCP: Claude Code session lifecycle (docs/spawner-sessions.md).
 SESSION_TOOLS = [
-    {'name': 'plangraph_session_launch', 'description': 'Launch a background Claude Code session',
+    {'name': 'plangraph_session_launch', 'description': 'Launch a background Claude Code session; name is a role (session <role>-NNNN) in role-counter mode, a free name in free mode',
      'inputSchema': {'type': 'object', 'properties': {
-         'name': {'type': 'string'}, 'cwd': {'type': 'string'}, 'model': {'type': 'string'},
+         'name': {'type': 'string', 'description': 'the role; the session gets <role>-NNNN'}, 'cwd': {'type': 'string'}, 'model': {'type': 'string'},
          'effort': {'type': 'string'}, 'prompt': {'type': 'string'}, 'prompt_file': {'type': 'string'},
          'mcp_config': {'type': 'string'}, 'handoff': {'type': 'string'}, 'parent': {'type': 'string'},
          'permission_mode': {'type': 'string'}, 'dry_run': {'type': 'boolean'}},
@@ -26,7 +26,7 @@ SESSION_TOOLS = [
     {'name': 'plangraph_session_stop', 'description': 'Stop a Claude Code session by name or id',
      'inputSchema': {'type': 'object', 'properties': {
          'name': {'type': 'string'}, 'id': {'type': 'string'}}}},
-    {'name': 'plangraph_session_relaunch', 'description': 'Relaunch a stopped session from its handoff',
+    {'name': 'plangraph_session_relaunch', 'description': 'Stop a session and start a NEW one from its handoff; the result name is the new <role>-NNNN; refused if a later session of the role is live',
      'inputSchema': {'type': 'object', 'properties': {
          'name': {'type': 'string'}, 'handoff': {'type': 'string'}},
          'required': ['name']}},
