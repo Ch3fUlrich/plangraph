@@ -84,6 +84,7 @@ AUTH_DOOR_PATHS: tuple[str, ...] = (
     'roles*',
     'scopes*',
     'tools/seat_verdict.py*',
+    'tools/seat_record.py*',
     'ops/pg.sh*',
     'tools/ci_commit_gate.py*',
     'tools/ci_commit_exempt.txt*',
