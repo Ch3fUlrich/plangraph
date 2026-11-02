@@ -17,41 +17,40 @@ denies (stderr message, exit 2) exactly three shapes:
 1. An unquoted heredoc whose body contains a literal backtick or ``$(`` -
    the incident shape above.
 2. A `claude` invocation carrying `--bg` (background) or `-p`/`--print`
-   (non-interactive) whose double-quoted argument contains a backtick or
-   ``$(`` - the same hazard one layer up: a backgrounded or one-shot `claude`
-   call whose prompt string is built with an unquoted-feeling double-quoted
-   argument lets the CALLING shell, not claude, expand the substitution
-   before claude ever sees the text.
+   (non-interactive) whose argument contains a live backtick or ``$(``,
+   double-quoted or bare - the same hazard one layer up: a backgrounded or
+   one-shot `claude` call whose prompt string is built by the CALLING shell,
+   not by claude, which expands the substitution before claude ever sees the
+   text. Single quotes and a backslash make the text literal and are allowed.
 3. Shape 1 or 2 nested any number of layers down inside a command string
-   passed to a `bash`/`sh`/`zsh`/`dash` `-c` invocation (scanned
-   recursively by ``_find_shell_c_injection`` in ``bash_guard_rules``) -
-   a `shell -c` string is parsed and expanded by the calling shell exactly
-   like an outer command, so the same two hazards apply at every nesting
-   level.
+   passed to a `bash`/`sh`/`zsh`/`dash`/... `-c` invocation or to `eval` - a
+   `shell -c` string is parsed and expanded exactly like an outer command, so
+   the same two hazards apply at every nesting level.
+
+"Anywhere" is literal: the rules check every simple command, whether it sits
+at the top level, in a ``( )`` subshell, a ``{ }`` group, behind `if`/`then`/
+`while`/`!`/..., inside ``$( )`` or backticks, or behind a wrapper such as
+`env`, `sudo`, `nice`, `timeout`, `systemd-run` or `xargs`. Quote state
+persists across newlines, so a quote opened on one line hides nothing on the
+next.
 
 Everything else allows silently (exit 0, no output) - a guard that prints on
-every ordinary command is noise nobody will read before disabling it. A
-malformed or unexpected hook payload fails OPEN (exit 0) with one stderr
-note: this is a shell gate, not a sandbox, and a bug here must never be the
-thing that bricks an interactive session.
+every ordinary command is noise nobody will read before disabling it.
 
-Slice note (S01): ``bash_guard_rules`` imports its scanning primitives from
-``bash_guard_rules2``, which ships in the NEXT slice (S02, PR #298). Until
-#298 merges, running this hook raises ImportError at import time and the
-guard is inert - it fails open (a traceback on stderr, nothing denied) on
-every input. The import is kept as is on purpose: the deny rules are
-meaningless without their scanners.
+The guard fails CLOSED on the command: one that cannot be parsed (unbalanced
+quotes or ``$(``, absurd nesting), one over 1 MiB, and a `shell -c`/`eval`
+string nested more than three levels deep are denied with a message saying
+why. A hook payload that is not a Bash call with a string command (not JSON,
+not an object, another tool) is not a command and is allowed with one stderr
+note: Claude Code builds the payload, the model cannot shape it.
 
-The guard intentionally uses two small, independent scanners instead of a
-real shell grammar - both live in ``bash_guard_rules2``: one for heredoc
-operators (see ``bash_guard_rules2._heredoc_operators_in_line``), one for
-splitting a command into top-level simple commands to find `claude`
-invocations (see ``bash_guard_rules2._split_top_level_commands``). Both
-track quote state and `(`/`$(`/`$((`
-nesting with the same small stack idea, kept separate because they answer
-different questions and a shared "generic parser" would hide exactly the
-one-character details (`<<<` vs `<<`, `((` vs `$((`) that make the
-difference between a real hazard and `echo "a << b"`.
+This is a gate for one accident, not a sandbox: it reads the command text and
+does not model variables, aliases, functions, ``find -exec``, or a shell fed
+through a pipe or a heredoc.
+
+The scanner (``bash_guard_rules2.scan``) is one recursive-descent lexer; the
+rules (``bash_guard_rules.check_command``) run over the simple commands it
+reports.
 
 Run directly for a smoke check:
 
@@ -66,23 +65,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bash_guard_rules import check_command  # noqa: E402
 
-_MAX_INPUT_BYTES = 1024 * 1024  # 1 MiB
-
 
 # ─── hook entry point ───────────────────────────────────────────────────
 
 def main():
     try:
         if hasattr(sys.stdin, "buffer"):
-            raw_bytes = sys.stdin.buffer.read(_MAX_INPUT_BYTES + 1)
+            raw_bytes = sys.stdin.buffer.read()
         else:
-            raw_text = sys.stdin.read(_MAX_INPUT_BYTES + 1)
-            raw_bytes = raw_text.encode("utf-8", errors="replace")
-        if len(raw_bytes) > _MAX_INPUT_BYTES:
-            sys.stderr.write("bash-guard: input exceeds 1 MiB size limit, allowing\n")
-            return 0
-        raw = raw_bytes.decode("utf-8", errors="replace")
-        payload = json.loads(raw)
+            raw_bytes = sys.stdin.read().encode("utf-8", errors="replace")
+        payload = json.loads(raw_bytes.decode("utf-8", errors="replace"))
     except Exception as exc:
         sys.stderr.write(
             "bash-guard: could not parse hook input as JSON, allowing (%s)\n" % exc)
@@ -101,9 +93,9 @@ def main():
         return 0
     try:
         reason = check_command(command)
-    except Exception as exc:
-        sys.stderr.write("bash-guard: internal parse error, allowing (%s)\n" % exc)
-        return 0
+    except Exception as exc:  # check_command never raises; this is the last net
+        reason = ("bash-guard: DENIED - internal error while scanning the command "
+                  "(%s); the guard fails closed." % type(exc).__name__)
     if reason:
         sys.stderr.write(reason + "\n")
         return 2
