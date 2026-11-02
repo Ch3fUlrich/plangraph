@@ -100,7 +100,9 @@ def writer_families(store, item, ctx):
             raise Refused("writer_unknown",
                           f"no repo registered for project {key!r}{suffix}")
         try:
-            target_ref = git.repo_ref(key) if hasattr(git, "repo_ref") else "main"
+            # ``repo_ref`` is required of every adapter: an invented target
+            # ref would silently mislabel the refusal.  Any failure -> Refused.
+            target_ref = git.repo_ref(key)
             trailers = git.writer_trailers(repo, commit, target_ref)
         except Exception as exc:  # noqa: BLE001 - fail closed on any git error
             raise Refused("writer_unknown",

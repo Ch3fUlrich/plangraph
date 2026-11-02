@@ -11,11 +11,16 @@ import pytest
 from git_helpers import git_cli, git_supports_init_branch
 from plangraph.keeper.evidence_git import GitAdapter
 
-#: `git init -b main` needs git >= 2.28; presence of a git binary is not enough.
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None or not git_supports_init_branch(),
-    reason="git >= 2.28 not available (git init -b)",
-)
+@pytest.fixture(scope="module", autouse=True)
+def _require_git_init_branch():
+    """FAIL (never skip) when git is missing or < 2.28.
+
+    ``git init -b main`` needs git >= 2.28; presence of a git binary is not
+    enough.  A skip here would let the merge-head proof be silently untested
+    on old git ("no tests ran"), so this gate fails the run instead.
+    """
+    if shutil.which("git") is None or not git_supports_init_branch():
+        pytest.fail("git >= 2.28 required (git init -b)")
 
 
 def test_git_adapter_merge_commit_of_lane_merge_head(tmp_path: Path, monkeypatch) -> None:

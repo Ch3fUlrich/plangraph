@@ -23,11 +23,16 @@ from git_helpers import git_cli, git_supports_init_branch
 from keeper_seat_helpers import w  # noqa: F401 - the review world fixture
 from plangraph.keeper.evidence_git import GitAdapter
 
-#: `git init -b main` needs git >= 2.28; presence of a git binary is not enough.
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None or not git_supports_init_branch(),
-    reason="git >= 2.28 not available (git init -b)",
-)
+@pytest.fixture(scope="module", autouse=True)
+def _require_git_init_branch():
+    """FAIL (never skip) when git is missing or < 2.28.
+
+    ``git init -b main`` needs git >= 2.28; presence of a git binary is not
+    enough.  A skip here would let the merge-head proof be silently untested
+    on old git ("no tests ran"), so this gate fails the run instead.
+    """
+    if shutil.which("git") is None or not git_supports_init_branch():
+        pytest.fail("git >= 2.28 required (git init -b)")
 
 LANE_WRITERS = ["claude-opus-4 run-a", "gemini-2.5-pro run-b"]
 
@@ -104,6 +109,13 @@ def test_lane_head_with_ref_names_lane_writers_only(world, adapter):
 
 
 def test_lane_head_without_ref_keeps_old_behaviour(world, adapter):
+    """REGRESSION-DOC, not supported behaviour: the legacy ``ref=None`` path.
+
+    No production caller passes ``ref=None``: every keeper call site resolves
+    the target ref via ``repo_ref`` first.  This test only pins the pre-fix
+    main-side attribution so a change to the legacy path is seen, never
+    endorsed; new callers must pass the resolved target ref.
+    """
     repo, _git, shas = world
     got = adapter.writer_trailers(str(repo), shas["h"])
     # Documented pre-fix behaviour with ref=None: writers come from

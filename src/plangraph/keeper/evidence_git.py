@@ -587,7 +587,7 @@ class LegacyCommitVerifier:
                                     f" {project!r}", ref)
             if not ctx.git.commit_exists(repo, commit):
                 return Result(False, f"commit {commit} does not exist", ref)
-            target_ref = ctx.git.repo_ref(project) if hasattr(ctx.git, "repo_ref") else "main"
+            target_ref = ctx.git.repo_ref(project)  # required of every adapter
             if hasattr(ctx.git, "is_ancestor"):
                 is_anc = ctx.git.is_ancestor(repo, commit, target_ref)
             else:
