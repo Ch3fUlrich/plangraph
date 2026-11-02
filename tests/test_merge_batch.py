@@ -238,6 +238,30 @@ def test_union_paths_do_not_conflict(env):
     assert env.run("abort", "--name", "u1").returncode == 0 and not env.state_file("u1").with_suffix(".attrs").exists()
 
 
+def test_repo_gitattributes_stop_changelog_conflicts(env):
+    """The repo's own .gitattributes (CHANGELOG.md merge=union): two PRs that each add the first changelog
+    line conflict in a batch build without it and merge clean once the base carries it; no --union."""
+    attrs = (ROOT / ".gitattributes").read_text()
+    assert "CHANGELOG.md merge=union" in attrs.splitlines() and "tools/fleet-msg text eol=lf" in attrs.splitlines()
+    ledger = "# Changelog\n\n## Unreleased\n\n- old entry\n"
+    (env.repo / "CHANGELOG.md").write_text(ledger)
+    env.git("add", "-A")
+    env.git("commit", "-q", "-m", "changelog")
+    env.git("push", "-q", "origin", "main")
+    env.branch_pr(1, {"CHANGELOG.md": ledger.replace("\n- old", "\n- one\n- old")})
+    env.branch_pr(2, {"CHANGELOG.md": ledger.replace("\n- old", "\n- two\n- old")})
+    assert env.run("build", "--name", "g0", "--prs", "1,2").returncode == 3  # no attribute yet: a conflict
+    assert env.run("abort", "--name", "g0").returncode == 0
+    (env.repo / ".gitattributes").write_text(attrs)
+    env.git("add", ".gitattributes")
+    env.git("commit", "-q", "-m", "union the changelog")
+    env.git("push", "-q", "origin", "main")
+    res = env.run("build", "--name", "g1", "--prs", "1,2")
+    assert res.returncode == 0, res.stdout + res.stderr
+    text = (env.tmp / "repo-worktrees" / "batch-g1" / "CHANGELOG.md").read_text()
+    assert "- one\n" in text and "- two\n" in text and text.count("- old entry") == 1
+
+
 def test_skip_conflicts_labels_and_continues(env):
     conflicting(env)
     res = env.run("build", "--name", "s1", "--prs", "1,2,3", "--skip-conflicts")
