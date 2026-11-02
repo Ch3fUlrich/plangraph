@@ -7,8 +7,9 @@ from .proc_kill import KillIncomplete, alive, finish, group_members, kill_proces
 SAMPLE_S = 0.25
 
 
-async def cancel_and_close(task, proc):
-    """Cancel ``task`` and close the child's pipe transports only (never signals the process)."""
+async def cancel_and_close(task, proc, live_log=None, tail=65536):
+    """Cancel ``task`` and close the child's pipe transports only (never signals the process).
+    Returns (live-log tail, b'') so diagnostics survive the early return; None without a log."""
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
     tr = getattr(proc, '_transport', None)
@@ -19,6 +20,10 @@ async def cancel_and_close(task, proc):
                 pipe.close()
         except Exception:
             pass
+    try:
+        return (open(live_log, 'rb').read()[-tail:], b'') if live_log else None
+    except OSError:
+        return None
 
 
 async def sample_tree(seen, pid, ident):

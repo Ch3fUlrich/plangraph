@@ -241,8 +241,9 @@ def test_refusal_with_unproven_owner_returns_without_waiting(tmp_path):
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', HANG % (('stderr', FAKE_HARNESSES['auth error'][1], 'stderr')), cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         try:
-            await asyncio.wait_for(collect(runner, 'j', proc), timeout=10)
-            assert job.status == 'failed' and job.exit_code == 7 and proc.pid in job.survivors
+            out, _ = await asyncio.wait_for(collect(runner, 'j', proc), timeout=10)
+            assert job.status == 'failed' and job.exit_code == 7 and proc.pid in job.survivors and b'401' in out
+            assert all(proc._transport.get_pipe_transport(fd).is_closing() for fd in (1, 2))   # no transport leak
         finally:
             proc.kill(); await proc.wait()
     asyncio.run(run())

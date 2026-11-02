@@ -363,7 +363,7 @@ async def collect(runner, job_id, proc):
                     logging.getLogger(__name__).exception('refusal sample callback failed')
                 if job.survivors or not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
                     task.cancel(); await asyncio.gather(task, return_exceptions=True)   # kill_incomplete: never wait on a process we may not signal
-                    return (await cancel_and_close(task, proc) or (b'', b'')) if job.survivors else await proc.communicate()
+                    return (await cancel_and_close(task, proc, getattr(job, '_live_log', None)) or (b'', b'')) if job.survivors else await proc.communicate()
                 break
             if task in done:
                 break
@@ -386,7 +386,7 @@ async def collect(runner, job_id, proc):
                 logging.getLogger(__name__).info('%s %s rule=%s', job_id, job.status, event['rule'])
                 await runner._reap_process(job_id, proc)
                 if job.survivors:   # kill_incomplete: never wait on a process we may not signal
-                    return await cancel_and_close(task, proc) or (b'', b'')   # V4: no transport leak on this early return
+                    return await cancel_and_close(task, proc, getattr(job, '_live_log', None)) or (b'', b'')   # V4: no transport leak on this early return
                 if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
                     task.cancel(); await asyncio.gather(task, return_exceptions=True)
                     return await proc.communicate()
