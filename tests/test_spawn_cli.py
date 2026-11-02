@@ -6,14 +6,12 @@ import uuid
 
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
-from plangraph.spawner.runner import SpawnerRunner, kill_process_tree
+from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo
 from plangraph.spawner.runner import spawn_service
 from plangraph.spawner.leg_state import LegStateStore
-import pytest
-import sys
-import os
+import pytest, sys, os
 from pathlib import Path
-
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owned via the fake provider, never live host pids
 
 
 @pytest.fixture(autouse=True)
@@ -176,8 +174,8 @@ def test_cancel_injected_windows_killer(tmp_path):
         async def killer(pid):
             calls.append(pid)
         runner = SpawnerRunner(tree_killer=killer)
-        from plangraph.spawner.runner import JobInfo
         runner.jobs['fake'] = JobInfo('fake', 'running', '', '')
+        runner._owned = {'fake': dict(pid=123, pid_start='fake-token', job_object=False)}   # r3 V3: never a live host pid
         class Process:
             pid = 123
         runner._processes['fake'] = Process()
@@ -328,12 +326,13 @@ def test_windows_killer():
     async def run():
         calls = []
         class Process:
-            async def communicate(self):
-                return b'', b''
+            async def communicate(self): return b'', b''
         async def factory(*args, **kwargs):
             calls.append(args)
             return Process()
-        await kill_process_tree(123, platform='nt', command_factory=factory)
+        with pytest.raises(KillIncomplete): await kill_process_tree(123, platform='nt', command_factory=factory)
+        assert calls == []
+        await kill_process_tree(123, platform='nt', command_factory=factory, members={123: None})
         assert calls == [('taskkill', '/PID', '123', '/T', '/F')]
     asyncio.run(run())
 

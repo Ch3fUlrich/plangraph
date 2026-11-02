@@ -50,7 +50,8 @@ from .env_redact import first_reason
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
-from .reap import reap
+from . import proc_kill
+from .reap import kill_proven, reap, sample_tree, unproven_survivors
 
 
 def redact(value):
@@ -291,6 +292,8 @@ class NonceCapacity(RuntimeError):
 
 class SpawnerRunner:
     """Async process runner for Plangraph agent tasks."""
+
+    identity_provider = staticmethod(root_identity)   # ownership seam: tests inject a fake provider
 
     def __init__(self, default_cwd: str | None = None, *, process_factory=None, tree_killer=None):
         self.default_cwd = default_cwd or os.getcwd()
@@ -629,7 +632,11 @@ class SpawnerRunner:
             self._nonces[job_id] = nonce
             root_pid = getattr(proc, 'pid', None)   # pid-less process objects (test fakes): nothing of ours to track or kill
             if root_pid is not None:
-                self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=root_identity(root_pid, platform='nt' if self._nt() else None), job_object=False)}
+                self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=self.identity_provider(root_pid, platform='nt' if self._nt() else None), job_object=False)}
+                start = self._owned[job_id]['pid_start']
+                if start is not None and not self._nt():   # setsid() orphans: remember the tree while the root lives
+                    self._seen = {**getattr(self, '_seen', {}), job_id: {}}
+                    self._samplers = {**getattr(self, '_samplers', {}), job_id: asyncio.create_task(sample_tree(self._seen[job_id], root_pid, start))}
 
             # F3: kill-on-close Job Object (SPAWN-ORPHAN-REAP); fail closed if unavailable.
             if root_pid is not None and self._nt():
@@ -643,8 +650,16 @@ class SpawnerRunner:
                         self.win_job_api.close(handle)
                         raise
                     self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
-                except Exception as exc:
-                    job.events.append({'event': 'win_job_unavailable', 'error': type(exc).__name__})
+                    # Descendants made before assign() are not job members: record them now, kill+verify at reap.
+                    self._escapees = {**getattr(self, '_escapees', {}), job_id: proc_kill.escapees(root_pid, self.win_job_api.pids(handle) if hasattr(type(self.win_job_api), 'pids') else [])}
+                except Exception:
+                    stale = self._win_jobs.pop(job_id, None)
+                    if stale is not None:   # assigned but unverifiable: release the handle, the run does not start
+                        try:
+                            self.win_job_api.close(stale)
+                        except Exception:
+                            pass
+                    job.events.append({'event': 'win_job_unavailable'})
                     await self._reap_process(job_id, proc)
                     job.status, job.exit_code, job.end_time = 'failed', 1, time.time()
                     job.survivors = job.survivors or [root_pid]
@@ -685,18 +700,23 @@ class SpawnerRunner:
     def _nt(self) -> bool:
         return self.platform == 'nt' or _is_nt()
 
-    async def kill_recorded(self, pid):
-        try:
-            await self.tree_killer(pid)
-        except KillIncomplete:
-            pass
+    async def kill_recorded(self, pid, pid_start=None):
+        """Cancel after a service restart: prove the recorded root by its persisted start token,
+        kill its tree, verify.  Returns survivors ([] = clean); unprovable and alive = survivors."""
+        plat = 'nt' if self._nt() else None
+        if pid_start is None or plat == 'nt':   # nt: the job died with the old service
+            return unproven_survivors(pid, plat)
+        return await kill_proven(self, pid, pid_start, plat=plat) or []
 
-    async def _own_kill(self, pid):
-        """Default killer: posix signals only a group this runner created; nt kills via the Job Object."""
+    async def _own_kill(self, pid, ident=None):
+        """Default killer: posix signals only a group proven ours by (pid, starttime); nt kills via the Job Object."""
         if self._nt():
             return
-        owned = next((o for o in getattr(self, '_owned', {}).values() if o.get('pid') == pid), {})
-        await kill_process_tree(pid, ident=owned.get('pid_start'))
+        if ident is None:   # match on (pid, current starttime), never on pid alone
+            st = proc_kill._stat(pid)
+            ident = next((o['pid_start'] for o in getattr(self, '_owned', {}).values()
+                          if o.get('pid') == pid and st and o.get('pid_start') == st[4]), None)
+        await kill_process_tree(pid, ident=ident)
 
     async def _reap_process(self, job_id: str, proc: Any) -> None:
         reaped = getattr(self, '_reaped_jobs', None)

@@ -37,7 +37,9 @@ def _run_nt(monkeypatch, api, proc, timeout=None):
     """One job through the real spawn/monitor path on simulated nt (hook, never os.name)."""
     from plangraph.spawner import runner as runner_mod
     from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner import proc_kill
     monkeypatch.setattr(runner_mod, '_is_nt', lambda: True)
+    monkeypatch.setattr(proc_kill, 'escapees', lambda root, job_pids, **k: {})   # hermetic: no Toolhelp scan; root stays unproven
     if timeout:
         monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', timeout)
     killed = []
@@ -77,7 +79,7 @@ def test_win_job_assign_failure_refuses_run(monkeypatch):
     api = FakeWinJob(fail_assign=True)
     runner, job, killed = _run_nt(monkeypatch, api, FakeChild())
     assert job.status == 'failed' and job.survivors == [4242]   # fail closed: no unguarded run
-    assert any(e['event'] == 'win_job_unavailable' for e in job.events)
+    assert {'event': 'win_job_unavailable'} in job.events   # r3 (V2 LOW): exact event restored
     assert [c[0] for c in api.calls] == ['create_job', 'assign', 'close']  # handle released
     assert killed == [] and runner._win_jobs == {}
 
@@ -104,5 +106,5 @@ def test_win_job_api_constructor_failure_refuses_run(monkeypatch):
     monkeypatch.setattr(runner_mod, 'WinJobApi', no_kernel32)
     runner, job, killed = _run_nt(monkeypatch, None, FakeChild())
     assert job.status == 'failed' and job.survivors == [4242]
-    assert any(e['event'] == 'win_job_unavailable' for e in job.events)
+    assert {'event': 'win_job_unavailable'} in job.events   # r3 (V2 LOW): exact event restored
     assert killed == [] and runner._win_jobs == {}

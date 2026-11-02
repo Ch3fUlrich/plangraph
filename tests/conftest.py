@@ -175,3 +175,17 @@ def pytest_collection_modifyitems(config, items):
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
+
+
+@pytest.fixture
+def fake_ownership(monkeypatch):
+    """r3 V3: stub pids are "ours" (fixed token) and invisible in /proc, so no test depends on which
+    host pids are live; our real descendants keep their real identity.  Opt-in per file."""
+    import os
+    from plangraph.spawner import proc_kill
+    from plangraph.spawner.runner import SpawnerRunner
+    real_stat, real_identity = proc_kill._stat, proc_kill.root_identity
+
+    born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
+    monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
+    monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
