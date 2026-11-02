@@ -142,13 +142,17 @@ def main(argv=None):
     service = SpawnService(state=args.state)
     try:
         if args.verb == 'probe':
-            from .leg_probe import probe_many
+            from .leg_probe import probe_many, reset_iso
             result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
             if args.json:
                 print(json.dumps(result))
             else:
                 for row in result['probes']:
-                    print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
+                    if row.get('skipped') == 'limited':
+                        # reset_iso guards legacy out-of-range reset_at values.
+                        print(f"{row['id']} skipped=limited until {reset_iso(row.get('reset_at'))}")
+                    else:
+                        print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
             return 0 if result['ok'] else 1
         from .bench_entry import benchmark_options
         try:
