@@ -83,7 +83,15 @@ elif cmd == ["pr", "list"]:
                       and (label is None or label in [x["name"] for x in p["labels"]])
                       and (head is None or head == p["headRefName"])]))
 elif cmd == ["pr", "view"]:
-    print(json.dumps(show(pr_arg())))
+    pr = pr_arg()
+    out = show(pr)
+    move = S.get("move_after_view", {}).get(ARGV[2])  # tests: the PR gets a new commit right after this view
+    if move:
+        move["seen"] = move.get("seen", 0) + 1
+        if move["seen"] == move["after"]:
+            pr["headRefOid"] = move["to"]
+        save()
+    print(json.dumps(out))
 elif cmd == ["pr", "edit"]:  # gh 2.45 fails here for every repo: the tool must use the REST API
     die("GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience "
         "(repository.pullRequest.projectCards)")

@@ -115,10 +115,10 @@ def check_approval(path, head):
     for line in lines:
         if BAD_VERDICT.search(line):
             raise MergeBatchError(f"approval file {path} has a FAIL/CHANGES verdict line: {line.strip()[:80]!r}")
-    last = lines[-1][:80] if lines else ""
+    last = lines[-1] if lines else ""
     if last not in PASS_LINES:
         raise MergeBatchError(f"approval file {path}: its last non-empty line must be exactly 'VERDICT: PASS' "
-                              f"(no prefix), found {last!r}")
+                              f"(no prefix), found {last[:80]!r}")
     found = HEAD_LINE.fullmatch(lines[-2]) if len(lines) > 1 else None
     if not found or not head.startswith(found.group(1).lower()):
         raise MergeBatchError(f"approval file {path}: the line before the verdict must be 'HEAD: <sha>' naming "
@@ -184,6 +184,27 @@ def settle(repo, recs, wait):
         time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
 
 
+def included_pr(repo, number, rec, view, merge):
+    """Report one PR of the batch: ``("ok", "")`` after printing its MERGED line, ``("moved", "")`` after its
+    NOT-MERGED line, or ``("problem", why)``. A PR GitHub left open is closed only after its head was read once
+    more, so a push that came after ``settle`` looked is not closed as merged; a head that moved after the
+    build is neither closed nor reported merged, and its author has to update it (needs-update label)."""
+    num = rec["pr"]
+    if view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
+        if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
+            return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"
+        view = gh_json("pr", "view", str(num), "--repo", repo, "--json", "state,headRefOid")
+        if view["state"] == "OPEN" and view["headRefOid"] == rec["head"]:
+            gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
+    if view["headRefOid"] != rec["head"]:
+        print(f"NOT-MERGED {num} head moved")
+        if view["state"] == "OPEN" and not add_label(repo, num, NEEDS_UPDATE):
+            print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
+        return "moved", ""
+    print(f"MERGED {num} {merge} {','.join(rec['items']) or '-'}")
+    return "ok", ""
+
+
 def cmd_land(args):
     st = load_state(args.name)
     repo, number = st["repo"], args.batch_pr
@@ -215,21 +236,11 @@ def cmd_land(args):
     views = settle(repo, st["merged"], args.wait)
     problems, moved = [], []
     for rec in st["merged"]:
-        num, view = rec["pr"], views[rec["pr"]]
-        if view["headRefOid"] != rec["head"]:
-            # a commit was pushed after the build: the batch merged the old head, so this PR is neither
-            # closed nor reported merged, and its author has to update it
-            print(f"NOT-MERGED {num} head moved")
-            moved.append(num)
-            if view["state"] == "OPEN" and not add_label(repo, num, NEEDS_UPDATE):
-                print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
-            continue
-        if view["state"] != "MERGED":
-            if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
-                problems.append(f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}")
-                continue
-            gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
-        print(f"MERGED {num} {merge} {','.join(rec['items']) or '-'}")
+        outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge)
+        if outcome == "moved":
+            moved.append(rec["pr"])
+        elif outcome == "problem":
+            problems.append(why)
     if problems:
         raise MergeBatchError("batch PR merged, but " + "; ".join(problems) + " (state kept, land again after a fix)")
     if moved:

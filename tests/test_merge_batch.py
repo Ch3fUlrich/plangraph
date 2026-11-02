@@ -67,12 +67,16 @@ def test_plan_high_by_the_old_path_of_a_rename(env):
     env.seed({keeper: "x = 1\n"})
     env.branch_pr(1, {}, moves={keeper: "docs/store.py"})  # gh lists only docs/store.py
     env.branch_pr(2, {"c.txt": "c\n"})
-    plan = json.loads(env.run("plan", "--json").stdout)
+    fresh = env.fresh_clone()  # it has no PR head: plan has to fetch them to read the paths
+    head = env.load()["prs"]["1"]["headRefOid"]
+    assert not env.has_commit(fresh, head)
+    plan = json.loads(env.run("plan", "--json", cwd=fresh).stdout)
     rows = {row["number"]: row for row in plan["prs"]}
     assert rows[1]["paths"] == ["docs/store.py"] and rows[1]["high"] is True and rows[1]["high_paths"] == [keeper]
     assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [("HIGH", [1]), ("STANDARD", [2])]
-    assert "HIGH via " + keeper in env.run("plan").stdout
-    assert env.git("for-each-ref", "refs/merge-batch") == "" and not (env.repo / ".git" / "FETCH_HEAD").exists()
+    assert "HIGH via " + keeper in env.run("plan", cwd=fresh).stdout
+    assert env.has_commit(fresh, head)  # fetched as objects only: no ref and no FETCH_HEAD is written
+    assert env.git("for-each-ref", "refs/merge-batch", cwd=fresh) == "" and not (fresh / ".git" / "FETCH_HEAD").exists()
 
 
 def test_plan_refuses_when_it_cannot_read_the_pr_paths(env):

@@ -182,6 +182,27 @@ def test_land_reports_a_moved_head_instead_of_merged(env):
     assert "#2" in res.stderr and not env.state_file("l1").exists()
 
 
+def test_land_reads_the_head_again_right_before_it_closes(env):
+    """The head that settle read can be stale by the time land closes the PR: a push in between must not be closed
+    as merged (I2). PR 2 is still open on GitHub, its first look shows the build head, the next one a new commit."""
+    approval = pushed(env)
+    env.state["no_auto_merge"] = [2]
+    env.save()
+    old = env.load()["prs"]["2"]["headRefOid"]
+    late = env.push_commit(2, {"b.txt": "b, then more\n"})
+    env.load()["prs"]["2"]["headRefOid"] = old
+    env.state["move_after_view"] = {"2": {"after": 1, "to": late}}
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 0, res.stderr
+    merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
+    assert res.stdout.splitlines() == [f"MERGED 1 {merge} plangraph:ITEM-A", "NOT-MERGED 2 head moved",
+                                       f"MERGED 3 {merge} -"]
+    prs = env.load()["prs"]
+    assert (prs["2"]["state"], prs["2"]["headRefOid"]) == ("OPEN", late) and "closed_with" not in prs["2"]
+    assert {"name": "needs-update"} in prs["2"]["labels"] and not [c for c in env.calls("pr", "close") if c[2] == "2"]
+
+
 @pytest.mark.parametrize("bucket, message", [("cancel", "not green"), ("pending", "not green"),
                                               ("neutral", "unreadable line")])
 def test_land_a_check_is_green_only_as_pass_or_skipping(env, bucket, message):

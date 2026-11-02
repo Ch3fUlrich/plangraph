@@ -4,8 +4,9 @@
   plan      open PRs with a label (or --prs): head sha, CI on head, draft, files/lines, base.
             Stacks stay together (a PR goes after the PR it is based on); a PR touching an
             AUTH_DOOR/gate path of tools/ci_commit_gate.py or src/plangraph/keeper/ is HIGH (git
-            adds the old path of a rename; without the gate file plan refuses); HIGH PRs fill HIGH
-            batches apart from the standard ones, both cut by --max-prs and --max-lines. The
+            adds the old path of a rename, from PR heads fetched from origin as objects only, so
+            run plan in a checkout of the repo; without the gate file plan refuses); HIGH PRs fill
+            HIGH batches apart from the standard ones, both cut by --max-prs and --max-lines. The
             batch-ready label overrides draft status; red CI and the needs-update label keep a PR out.
   build     branch batch/NAME in a new worktree from origin/<default branch>, `git merge --no-ff` each
             PR head as `Merge PR #N: <title>`. Every stack root must target the default branch (a PR
@@ -22,8 +23,9 @@
   land      merge the batch PR only if its head is the pushed head, every required check is
             green and --approval ends in `HEAD: <sha>` (that head) and `VERDICT: PASS` lines, with
             no FAIL/CHANGES verdict line anywhere. Then per included PR: MERGED -> `MERGED <pr> <sha>
-            <item>`; open but in the merge -> closed as `merged via batch PR #N`, same line; a head
-            that moved after the build -> `NOT-MERGED <pr> head moved`, not closed, needs-update.
+            <item>`; open but in the merge -> closed as `merged via batch PR #N` (after its head is
+            read once more), same line; a head that moved after the build -> `NOT-MERGED <pr> head
+            moved`, not closed, needs-update.
   status    batches in progress, interrupted ones and orphans.  abort: drop a batch (worktree,
             branch, state; without a state file by branch name).
 

@@ -93,6 +93,16 @@ class Env:
         self.state["prs"][str(number)] = pr_json(number, ref, **kw)
         self.save()
 
+    def fresh_clone(self, name="fresh"):
+        """A clone that has only main: the PR heads are not in it until the tool fetches them."""
+        path = self.tmp / name
+        self.git("clone", "-q", "--no-local", "--single-branch", "--branch", "main", str(self.origin), str(path), cwd=self.tmp)
+        return path
+
+    def has_commit(self, repo, sha):
+        proc = subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo, env=self.env, capture_output=True)
+        return proc.returncode == 0
+
     def seed(self, files):
         """Commit ``files`` (path -> text) to main in the origin."""
         for rel, text in files.items():

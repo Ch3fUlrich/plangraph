@@ -99,6 +99,16 @@ def test_a_crash_while_the_worktree_is_made_leaves_a_state_abort_cleans(env):
     assert env.run("build", "--name", "k2", "--prs", "1").returncode == 0  # the name is free again
 
 
+def test_abort_drops_a_build_that_died_right_after_a_merge(env):
+    three(env)
+    assert env.run("build", "--name", "k4", "--prs", "1,2,3", crash=("merge", 2)).returncode == -9
+    assert read(env, "k4")["merging"]["pr"] == 2 and env.git("branch", "--list", "batch/k4")
+    res = env.run("abort", "--name", "k4")
+    assert res.returncode == 0, res.stderr
+    assert not wt_of(env, "k4").exists() and not env.state_file("k4").exists()
+    assert env.git("branch", "--list", "batch/k4") == "" and env.git("for-each-ref", "refs/merge-batch") == ""
+
+
 def test_status_and_abort_find_an_orphan_by_branch_name(env):
     env.branch_pr(1, {"a.txt": "a\n"})
     assert env.run("build", "--name", "o1", "--prs", "1").returncode == 0
@@ -131,6 +141,16 @@ def test_build_refuses_a_pr_stacked_on_a_pr_outside_the_batch(env):
     ok = env.run("build", "--name", "s2", "--prs", "4,5,6")  # with PR 4 in the batch they stack on a member
     assert ok.returncode == 0, ok.stderr
     assert read(env, "s2")["base"] == "main"
+
+
+def test_build_refuses_a_head_the_remote_does_not_serve_and_leaves_no_refs(env):
+    env.branch_pr(1, {"a.txt": "a\n"})
+    env.state["prs"]["1"]["headRefOid"] = "f" * 40  # GitHub shows another head than the one origin serves
+    env.save()
+    res = env.run("build", "--name", "m1", "--prs", "1")
+    assert res.returncode == 1 and "run build again" in res.stderr
+    assert not env.state_file("m1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
+    assert env.run("status").stdout == "no batch in progress\n"  # no orphan listed either
 
 
 @pytest.mark.parametrize("case, prs, message", [

@@ -198,13 +198,16 @@ def stack_base(infos, order, parent, default):
 def fetch_heads(name, base, order, infos, repo):
     """Fetch origin/<base> and each PR head into refs/merge-batch/NAME/N; the heads must be what GitHub shows."""
     refs = [f"+refs/pull/{num}/head:refs/merge-batch/{name}/{num}" for num in order]
-    git("fetch", "--quiet", REMOTE, f"+refs/heads/{base}:refs/remotes/{REMOTE}/{base}", *refs)
-    for num in order:
-        got = git("rev-parse", f"refs/merge-batch/{name}/{num}").stdout.strip()
-        if got != infos[num]["head"]:
-            drop_refs(name)
-            raise MergeBatchError(f"PR #{num} is {short(got)} in {REMOTE} but {short(infos[num]['head'])} on GitHub: "
-                                  f"run build again (is {REMOTE} the remote of {repo}?)")
+    try:
+        git("fetch", "--quiet", REMOTE, f"+refs/heads/{base}:refs/remotes/{REMOTE}/{base}", *refs)
+        for num in order:
+            got = git("rev-parse", f"refs/merge-batch/{name}/{num}").stdout.strip()
+            if got != infos[num]["head"]:
+                raise MergeBatchError(f"PR #{num} is {short(got)} in {REMOTE} but {short(infos[num]['head'])} on "
+                                      f"GitHub: run build again (is {REMOTE} the remote of {repo}?)")
+    except MergeBatchError:
+        drop_refs(name)  # a refused build leaves no refs behind for status to call an orphan
+        raise
     return {num: infos[num]["head"] for num in order}
 
 
