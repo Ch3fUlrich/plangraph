@@ -49,6 +49,16 @@ def _lines(path: Path) -> list[str]:
     return path.read_text('utf-8', errors='replace').splitlines()
 
 
+def _line_count(path: Path) -> int:
+    """Line count (\\n-separated, last unterminated line counted) in 64 KiB chunks, never the whole file in memory."""
+    count, last = 0, b''
+    with path.open('rb') as fh:
+        for chunk in iter(lambda: fh.read(65536), b''):
+            count += chunk.count(b'\n')
+            last = chunk
+    return count + (1 if last and not last.endswith(b'\n') else 0)
+
+
 def entries(card) -> list[tuple[str, int, int]]:
     """``card["context"]`` as ``(path, start, end)`` tuples; malformed entries refuse."""
     raw = card.get('context') if isinstance(card, dict) else None
@@ -165,7 +175,7 @@ def warnings(prompt: str, card, cwd) -> list[str]:
             continue
         try:
             path = _locate(root, name)
-            count = len(_lines(path))
+            count = _line_count(path)
         except (ContextError, OSError):
             continue
         if count > BIG_FILE_LINES and path not in covered:

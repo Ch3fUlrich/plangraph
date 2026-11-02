@@ -140,3 +140,11 @@ def test_run_cwd_is_repo_subdirectory(tree):
     found = context_pack.warnings("see pkg/m.py and m.py", dict(CARD), sub)
     assert any("m.py 450 lines" in w for w in found)
     assert context_pack.warnings("m.py", dict(CARD, context=["m.py:1-2"]), sub) == []
+
+
+@pytest.mark.parametrize('data', [b'', b'a', b'a\n', b'a\nb', b'a\r\nb\r\n', b'x\n' * 70000 + b'tail'])
+def test_line_count_streams_and_matches_splitlines(tmp_path, monkeypatch, data):
+    path = tmp_path / 'f.txt'
+    path.write_bytes(data)
+    monkeypatch.setattr(context_pack.Path, 'read_text', lambda *a, **k: pytest.fail('read whole file'))
+    assert context_pack._line_count(path) == len(data.decode().splitlines())
