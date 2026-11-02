@@ -29,7 +29,7 @@ __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_OR
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
 #: Harness names a leg may run under.
-HARNESSES = ("qodercli", "opencode", "agy")
+HARNESSES = ("qodercli", "opencode", "agy", "claude")
 #: How a review leg reads the change: with its own tools, or only from a diff the
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
@@ -130,6 +130,11 @@ DEFAULT_LEGS = (
         "opencode-go/deepseek-v4-flash-max", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
+    # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
+    Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
+        ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
+        tool_mode="tools",
+        note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
 # D-2683 operator writer order (free-first): the free tier leads, then

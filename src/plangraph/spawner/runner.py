@@ -172,6 +172,18 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
     return served_model, served_family
 
 
+def _claude_stream_model(text) -> str | None:
+    """Model id from the stream-json ``system``/init event of a claude -p run (D-3605)."""
+    for line in str(text or '').splitlines():
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get('type') == 'system' and isinstance(data.get('model'), str):
+            return data['model']
+    return None
+
+
 def _opencode_served_model(db_path, title) -> str | None:
     """Served model witnessed in opencode's session store for one titled session (D-2898).
 
@@ -436,6 +448,9 @@ class SpawnerRunner:
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
+        if cmd[0] == 'claude':   # D-3605: subscription login only, never an API key
+            for _k in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'):
+                child_env.pop(_k, None)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
@@ -783,6 +798,12 @@ class SpawnerRunner:
                 if denied:   # D-3226 response-side, any exit code: the gateway call log names the model
                     from .gateway_witness import witness
                     await asyncio.to_thread(witness, self, job_id, job, env)
+
+            if job.command and job.command[0] == 'claude' and exit_code == 0:   # D-3605
+                m = _claude_stream_model(stdout_text)
+                if m is not None and m == requested_model:
+                    job.request_side_model = m
+                    job.witness_kind = 'request-side-claude-stream'
 
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
