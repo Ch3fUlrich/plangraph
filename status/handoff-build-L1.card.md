@@ -13,7 +13,7 @@
 ## In flight
 - SPAWNER-DISPATCH-FAIL-DETECT #324 Sonnet fix r2 subagent of build-L1-0090 since 10:42Z next check 11:30Z (lane/spawner-kill-own-tree-3 after 1d38f485)
 - SPAWNER-LEGS-D3605 #323 6f7f1d6f luna delta s323d since 10:48Z next check 11:15Z (J/seat-323d.log)
-- LE-RECYCLE-NEW-SESSION pd#20 4f1fc0f1 workst tools seat asked since 10:59Z next check 11:30Z
+- LE-RECYCLE-NEW-SESSION pd#20 4f1fc0f1 workst luna tools RC: HIGH ctx-watchdog:297 stops old before new launch confirmed (12 fail WSL, rerun here) -> fix r via L2 spawner3605 successor since 11:05Z next check 11:45Z
 - GO-REQs #321 #325 #326 at routing since 10:50Z next check 11:15Z
 - build-L2-spawner3605 RECYCLE-READY 11:02Z, L2-LAUNCH asked; #318 r4 mimo runs ae02de39/ca9b7600; LIVENESS B waits #318 (decision A)
 ## Planned
