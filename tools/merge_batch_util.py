@@ -28,12 +28,14 @@ def first_line(text):
     return lines[0] if lines else "no output"
 
 
-def run(argv, cwd=None, ok=(0,)):
-    """Run argv; a return code outside ``ok`` raises (``ok=None`` accepts any)."""
+def run(argv, cwd=None, ok=(0,), timeout=600):
+    """Run argv; a return code outside ``ok`` raises (``ok=None`` accepts any), so does a hang."""
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace")
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace", timeout=timeout)
     except OSError as exc:
         raise MergeBatchError(f"cannot run {argv[0]}: {exc.strerror or exc}") from None
+    except subprocess.TimeoutExpired:
+        raise MergeBatchError(f"{' '.join(argv[:3])} did not finish in {timeout}s") from None
     if ok is not None and proc.returncode not in ok:
         raise MergeBatchError(f"{' '.join(argv[:3])} failed (rc {proc.returncode}): "
                               f"{first_line(proc.stderr or proc.stdout)}")

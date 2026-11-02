@@ -25,7 +25,7 @@ from merge_batch_env import ROOT, Env, pr_json
 sys.path.insert(0, str(ROOT / "tools"))
 
 from merge_batch_plan import high_patterns, plan_batches, stack_parents  # noqa: E402
-from merge_batch_util import MergeBatchError, norm_pr  # noqa: E402
+from merge_batch_util import MergeBatchError, norm_pr, run  # noqa: E402
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stubs")
 SHARED = "".join(f"line {i}\n" for i in range(1, 7))
@@ -109,6 +109,13 @@ def test_plan_excludes():
     assert why == {1: "draft", 2: "ci red", 3: "label needs-update", 4: "targets 'release', not 'main'",
                    5: "stacked on #1 (draft)", 8: "not open (closed)"}
     assert [b["prs"] for b in plan["batches"]] == [[6, 7]]
+
+
+def test_a_hung_command_is_an_error_not_a_hang():
+    with pytest.raises(MergeBatchError, match="did not finish in 1s"):
+        run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=1)
+    with pytest.raises(MergeBatchError, match="cannot run"):
+        run(["/nonexistent/merge-batch-tool"])
 
 
 def test_pr_head_must_be_a_sha():
