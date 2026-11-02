@@ -123,3 +123,37 @@ def test_service_without_completion_sink_stays_silent(tmp_path):
                                 _job(CREDIT), {'run_id': 'run-booking2'})
     assert reason.startswith('harness_limit:')
     assert not (tmp_path / 'inbox' / 'parent.jsonl').exists()
+
+
+def test_402_refusal_books_and_notifies_like_429(tmp_path, monkeypatch):
+    # F3: a confirmed 402 refusal (raw 'HTTP 402: ...' reason or the
+    # autoos_provider_response 402 envelope) books the leg down and notifies
+    # exactly like a 429 harness limit, even though the reason is not in the
+    # captured output and harness_limit_line() finds nothing.
+    from plangraph.spawner.env_redact import early_refusal
+    monkeypatch.delenv('PLANGRAPH_LEG_DOWN_S', raising=False)
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    service = _service(tmp_path, completion_sink=FileInbox(tmp_path))
+    before = time.time()
+    reason429 = fallthrough_reason(service, SimpleNamespace(model='a', harness='qodercli'),
+                                   _job(NO_RESET), {'run_id': 'run-402a'})
+    reasons = {}
+    for model, line in (('b', 'HTTP 402: Payment Required'),
+                        ('c', early_refusal('{"autoos_provider_response": {"status": 402, "body": "quota exhausted"}}'))):
+        job = SimpleNamespace(exit_code=7, stdout='', stderr='', refusal=line)   # the refusal is the only evidence
+        reasons[model] = fallthrough_reason(service, SimpleNamespace(model=model, harness='qodercli'),
+                                            job, {'run_id': 'run-402' + model})
+    after = time.time()
+    assert reason429 == 'harness_limit: ' + NO_RESET
+    assert reasons['b'] == 'harness_limit: HTTP 402: Payment Required'
+    assert reasons['c'] == 'harness_limit: HTTP 402: quota exhausted'
+    for model in ('a', 'b', 'c'):   # booked down for the same validated window as the 429
+        reset_at = store.leg_status(model)['evidence']['reset_at']
+        assert before + 1800 <= reset_at <= after + 1800
+    lines = [json.loads(line) for line in (tmp_path / 'inbox' / 'parent.jsonl').read_text().splitlines()]
+    refused = [e for e in lines if e['event'] == 'LEG_REFUSED']
+    assert len(refused) == 3        # one LEG_REFUSED per refusal, exactly like the 429
+    assert sorted(e['reason'] for e in refused) == sorted(
+        ['harness_limit: ' + NO_RESET, 'harness_limit: HTTP 402: Payment Required',
+         'harness_limit: HTTP 402: quota exhausted'])

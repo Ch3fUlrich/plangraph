@@ -19,7 +19,8 @@ def tailscale_status(run=subprocess.run):
         result = run(['tailscale', 'status', '--json'], check=True,
                      capture_output=True, text=True, timeout=5)
         value = json.loads(result.stdout)
-        if isinstance(value, dict) and isinstance(value.get('Peer'), dict):
+        if isinstance(value, dict) and (isinstance(value.get('Peer'), dict)
+                                        or isinstance(value.get('Self'), dict)):
             return value
     except (OSError, subprocess.SubprocessError, ValueError, RecursionError):
         pass
@@ -61,9 +62,21 @@ class Registry:
         """Recheck every host, including stale-online peers, on every iteration."""
         peers = status.get('Peer', {}) if isinstance(status, dict) else {}
         self.peers = peers if isinstance(peers, dict) else {}
+        # The local node is listed under 'Self', not 'Peer'; fold it into the
+        # lookup keyed by its PublicKey (the inventory node_id). A Peer entry
+        # sharing that key is stale: Self wins. self.peers keeps only peers.
+        lookup = dict(self.peers)
+        local = status.get('Self') if isinstance(status, dict) else None
+        if isinstance(status, dict) and 'Self' in status and not (
+                isinstance(local, dict) and isinstance(local.get('PublicKey'), str)):
+            # Malformed Self: the local key is unknown, so a Peer could pose as
+            # the local node. Fail closed: resolve nothing this round.
+            lookup, local = {}, None
+        elif local is not None:
+            lookup[local['PublicKey']] = local
         for host in self.hosts.values():
             host.endpoint, host.health = None, 'offline'
-            peer = self.peers.get(host.node_id)
+            peer = lookup.get(host.node_id)
             if not isinstance(peer, dict) or peer.get('Online') is not True:
                 continue
             # DNS names are routing data, not authorization. Bind trust to node ID.
@@ -73,7 +86,12 @@ class Registry:
             name = name.rstrip('.')
             if not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?', name):
                 continue
-            endpoint = f'http://{name}:{self.port}'
+            if peer is local:
+                # The keeper binds 127.0.0.1 only: the local node's endpoint
+                # is loopback, never the advertised DNS name.
+                endpoint = f'http://127.0.0.1:{self.port}'
+            else:
+                endpoint = f'http://{name}:{self.port}'
             try:
                 healthy = probe(endpoint)
             except Exception:

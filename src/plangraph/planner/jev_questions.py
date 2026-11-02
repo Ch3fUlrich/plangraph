@@ -103,6 +103,7 @@ _HARNESS_DESCRIPTIONS = {
     "qodercli": "qoder CLI harness, free tier while credits remain",
     "opencode": "opencode harness over free and subscription providers",
     "agy": "Antigravity harness, subscription quota",
+    "claude": "Claude Code harness, Haiku leg on subscription quota",
 }
 _WINDOW_DESCRIPTIONS = {
     "128k": "128k token context window class",

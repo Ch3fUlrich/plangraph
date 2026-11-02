@@ -79,6 +79,10 @@ def fallthrough_reason(service, chosen, job, record):
             record['reason'] = hang['line']
         return None
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
+    if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
+        # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
+        # not in the captured output) books and notifies like any harness limit.
+        line = job.refusal
     if line:
         target = service.leg_reader
         if not hasattr(target, 'record_harness_limit'):
