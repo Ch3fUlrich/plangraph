@@ -11,7 +11,7 @@ python -m plangraph.spawner.cli ps
 python -m plangraph.spawner.cli result run-ID
 ```
 
-Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise
+Cards may also be inline JSON; `card.context` (`path:start-end` slices) is inlined as a CONTEXT PACK for inline-only legs (cap `PLANGRAPH_CONTEXT_PACK_MAX_CHARS`, default 60000) and a brief naming a 400+ line file without a slice adds a `big_file_unsliced` warning (D-3622). `--state PATH` precedes the verb; otherwise
 `PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
 `--dry-run` plans without a child. Spawn returns a `wait_cmd`:
 `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
