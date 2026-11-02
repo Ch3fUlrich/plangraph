@@ -625,20 +625,22 @@ class SpawnerRunner:
                 raise
             self._processes[job_id] = proc
             self._nonces[job_id] = nonce
-            self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=proc.pid, pid_start=root_identity(proc.pid), job_object=False)}
+            root_pid = getattr(proc, 'pid', None)   # pid-less process objects (test fakes): nothing of ours to track or kill
+            if root_pid is not None:
+                self._owned = {**getattr(self, '_owned', {}), job_id: dict(pid=root_pid, pid_start=root_identity(root_pid), job_object=False)}
 
             # F3: confine the child to a kill-on-close Job Object; taskkill /T cannot
             # find an exited root pid, so an orphan (`opencode serve`) would outlive
             # the run (SPAWN-ORPHAN-REAP). Failure never fails the run: taskkill runs.
             # Descendants started before assign() escape the job (no CREATE_SUSPENDED
             # under asyncio); taskkill /T in _reap_process still covers them.
-            if _is_nt():
+            if root_pid is not None and _is_nt():
                 self._win_jobs = getattr(self, '_win_jobs', {})
                 try:
                     self.win_job_api = getattr(self, 'win_job_api', None) or WinJobApi()
                     handle = self.win_job_api.create_job()
                     try:
-                        self.win_job_api.assign(handle, proc.pid)
+                        self.win_job_api.assign(handle, root_pid)
                     except Exception:
                         self.win_job_api.close(handle)
                         raise

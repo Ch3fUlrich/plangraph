@@ -154,3 +154,22 @@ def test_no_shell_wrapper_in_spawner_sources():
     hits = [(p.name, rx.pattern) for p in sorted(root.glob('*.py')) for rx in banned
             if rx.search(p.read_text())]
     assert hits == []
+
+
+def test_spawn_tolerates_process_without_pid(tmp_path):
+    class NoPid:
+        returncode = 0
+
+        async def communicate(self):
+            return b'', b''
+
+    async def factory(*args, **kwargs):
+        return NoPid()
+
+    async def run():
+        runner = SpawnerRunner()
+        runner.process_factory = factory
+        job = await runner.spawn('test', wait_seconds=3)
+        assert job.job_id not in getattr(runner, '_owned', {})
+        assert job.status != 'failed'
+    asyncio.run(run())
