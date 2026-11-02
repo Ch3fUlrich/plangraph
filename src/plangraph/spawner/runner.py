@@ -1018,6 +1018,10 @@ def spawn_service(*args, **kwargs):
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
             from .run_watchdog import thresholds
+            from . import context_pack
+            # D-3605: card.context slices join the writer prompt before any routing; a bad entry refuses the dispatch.
+            cwd, brief = getattr(self.runner, 'default_cwd', os.getcwd()), prompt
+            prompt, slices = context_pack.inline_context(card, prompt, cwd, role)
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1044,6 +1048,7 @@ def spawn_service(*args, **kwargs):
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+            record.update(context_pack.notes(slices, brief, plan.legs, cwd))   # context_slices, big-file warning
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)

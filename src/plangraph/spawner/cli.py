@@ -127,6 +127,9 @@ def main(argv=None):
             p.add_argument('--no-fallthrough', action='store_true')
             p.add_argument('--seats', action='store_true',
                            help='role review: spawn every seat route picks (per writer part)')
+            p.add_argument('--context', type=_card, metavar='JSON|@FILE',
+                           help='implement: list of {path, symbol} or {path, start_line, end_line} code slices '
+                                'inlined into the writer prompt (replaces card.context)')
     commands.add_parser('ps')
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
@@ -171,6 +174,8 @@ def main(argv=None):
                 exc = SpawnRefused('spawn by card; card required')
                 service.save_refusal(exc, args.role)
                 raise exc
+            if args.context is not None and isinstance(args.card, dict):
+                args.card = dict(args.card, context=args.context)
             payload = dict(card=args.card, prompt=args.prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
                 review_scope=args.review_scope,
@@ -354,6 +359,9 @@ raise SystemExit(code)
                 if line not in seen:
                     print(line, file=sys.stderr)
                     seen.add(line)
+            if args.verb == 'spawn':
+                for warning in result.get('warnings', ()):   # D-3605 brief check (context_pack.notes)
+                    print('warning: ' + warning, file=sys.stderr)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
             if 'seats' in result:
