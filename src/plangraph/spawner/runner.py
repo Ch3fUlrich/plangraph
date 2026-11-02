@@ -15,7 +15,7 @@ import logging
 import math
 import os
 import re
-import sqlite3
+import sqlite3  # tests patch runner.sqlite3.connect (test_opencode_served_witness)
 import subprocess
 import sys
 import time
@@ -31,13 +31,12 @@ from plangraph.spawner.clients import (
     build_command,
     build_routing_envelope_headers,
 )
+from plangraph.spawner.claude_env import claude_child_env
+from plangraph.spawner.claude_stream import render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
-
-_SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
-_SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
 # D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
@@ -52,6 +51,7 @@ from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
+from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
 
 
 def redact(value):
@@ -134,70 +134,6 @@ class JobInfo:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str, str]:
-    """Extract served model and family from OmniRoute headers or JSON output."""
-    served_model = ""
-    served_family = ""
-
-    if output:
-        # Check header patterns
-        m_mod = _SELECTED_MODEL_RE.search(output)
-        if m_mod:
-            served_model = m_mod.group(1).strip()
-
-        m_fam = _SELECTED_FAMILY_RE.search(output)
-        if m_fam:
-            served_family = m_fam.group(1).strip()
-
-        # Check JSON payload if present
-        if not served_model or not served_family:
-            for line in output.splitlines():
-                line = line.strip()
-                if line.startswith("{") and line.endswith("}"):
-                    try:
-                        data = json.loads(line)
-                        if isinstance(data, dict):
-                            if not served_model and "served_model" in data:
-                                served_model = str(data["served_model"])
-                            if not served_family and "served_family" in data:
-                                served_family = str(data["served_family"])
-                    except (ValueError, TypeError):
-                        continue
-                    except Exception as exc:
-                        logging.getLogger(__name__).warning('telemetry_failed: %s', type(exc).__name__)
-                        continue
-
-    if not served_family and served_model:
-        served_family = detect_model_family(served_model)
-
-    return served_model, served_family
-
-
-def _opencode_served_model(db_path, title) -> str | None:
-    """Served model witnessed in opencode's session store for one titled session (D-2898).
-
-    Only a unanimous assistant model id counts; anything else stays unwitnessed.
-    """
-    try:
-        from urllib.parse import quote
-        # 2s timeout: a locked/busy store must never block the monitor
-        # (D-2921 F2); it just stays unwitnessed.
-        conn = sqlite3.connect('file:' + quote(str(db_path)) + '?mode=ro', uri=True, timeout=2.0)
-        try:
-            rows = conn.execute('SELECT id FROM session_v2 WHERE title = ?', (title,)).fetchall()
-            models = set()
-            for (data,) in conn.execute(
-                    "SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant'",
-                    (rows[0][0],) if len(rows) == 1 else (None,)):
-                model = json.loads(data)['model']
-                models.add(model['providerID'] + '/' + model['id'])
-        finally:
-            conn.close()
-    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
-        return None
-    return next(iter(models)) if len(models) == 1 else None
 
 
 #: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
@@ -442,6 +378,8 @@ class SpawnerRunner:
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
+        if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
+            child_env = claude_child_env(child_env)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
@@ -797,6 +735,15 @@ class SpawnerRunner:
                     from .gateway_witness import witness
                     await asyncio.to_thread(witness, self, job_id, job, env)
 
+            if job.command and job.command[0] == 'claude' and exit_code == 0:   # D-3605
+                m = _claude_stream_model(stdout_text)
+                if m is not None and m == requested_model:
+                    job.request_side_model = m
+                    job.witness_kind = 'request-side-claude-stream'
+                # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
+                await asyncio.to_thread(render_review_output, job, stdout_text,
+                                        lambda text: redact(redact_env_values(text, env)))
+
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
@@ -1057,6 +1004,8 @@ def spawn_service(*args, **kwargs):
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+            from .context_pack import annotate
+            pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
@@ -1097,7 +1046,7 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen)
+                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
@@ -1131,7 +1080,8 @@ def spawn_service(*args, **kwargs):
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
                             record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
-                                watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None), events=job.events)
+                                watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
+                                events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)
