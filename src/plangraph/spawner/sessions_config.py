@@ -19,8 +19,9 @@ from plangraph.routing_errors import ParameterRefused
 
 SESSION_CONFIG_KEYS = frozenset({
     "cwd_roots", "models", "efforts", "permission_modes", "mcp_configs",
-    "style_text", "compact_window", "ctx_cap_tokens",
+    "style_text", "compact_window", "ctx_cap_tokens", "session_names",
 })
+COUNTERS_FILE = "_counters.json"  # beside the records; no session name starts with "_" (D-3605)
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _WIN_DEVICES = frozenset({"con", "prn", "aux", "nul"})
 _WIN_PORTS_RE = re.compile(r"(?:com|lpt)[1-9]\Z")
@@ -114,6 +115,8 @@ class _ConfigMixin:
         for raw in entries:
             if not isinstance(raw, str) or not Path(raw).expanduser().resolve().is_file():
                 raise _refuse(f"config mcp_configs entry is not a regular file: {raw}")
+        if cfg.get("session_names", "role-counter") not in ("role-counter", "free"):
+            raise _refuse('config session_names must be "role-counter" or "free"')
         # Scalars: a present key must carry its type - a null is not a value.
         if "style_text" in cfg:
             style_text = cfg["style_text"]
@@ -188,7 +191,7 @@ class _ConfigMixin:
         elsewhere; here an unreadable directory must not veto every name)."""
         try:
             stems = [p.stem for p in self._sessions.glob("*.json")
-                     if not p.name.endswith(".ready.json")]
+                     if not p.name.endswith(".ready.json") and p.name != COUNTERS_FILE]
         except OSError:
             return None
         for stem in stems:

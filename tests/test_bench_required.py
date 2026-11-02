@@ -33,7 +33,8 @@ def test_missing_ranked_last_in_tier(as_list):
                        "reason": "no benchmark row"},)
     assert any(WRITERS[0].id in r and "no benchmark row" in r for r in p.reasons)
     assert [l.id for l in p.legs if l.tier == "subscription"] == [
-        "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash", "cx-gpt-6.1-sol"]
+        "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash",
+        "opencode-console-sonnet-5.5"]
     assert p.to_dict()["gaps"] == p.gaps
     assert not plan(benchmark=rows(WRITERS)).gaps
 

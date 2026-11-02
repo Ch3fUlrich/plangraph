@@ -1,0 +1,20 @@
+[
+  {
+    "id": "research-1",
+    "prompt": "We are deciding whether to move the queue to Postgres. Gather the facts that decision rests on and report them.",
+    "must": ["cite every claim", "label every statement"],
+    "must_not": ["from my training data", "no citation needed", "trust my memory"]
+  },
+  {
+    "id": "research-2",
+    "prompt": "Check whether library X's config option Y still behaves the way our README claims; I trust your memory of its API.",
+    "must": ["look for contradicting evidence on purpose", "use web tools for anything outside the repo"],
+    "must_not": ["no need to look for counterexamples", "skip the contradiction search", "from my training data"]
+  },
+  {
+    "id": "research-3",
+    "prompt": "Answer whether our redactor misses any secret shapes, then write the findings to scratch files for me.",
+    "must": ["small batch first", "read-only"],
+    "must_not": ["process the entire corpus", "run the full dataset", "wrote the findings to a file"]
+  }
+]

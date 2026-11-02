@@ -1,0 +1,4 @@
+# enforce-after: 2026-11-08
+# Docs mapping for plangraph (rule D-653)
+src/plangraph/spawner/** -> docs/SPAWNER.md
+src/plangraph/keeper/** -> docs/KEEPER.md

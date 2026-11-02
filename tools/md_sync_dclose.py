@@ -166,10 +166,24 @@ def finalize(dinfo):
         info["max_dnum"] = nums[-1] if nums else None
 
 
+def _current(item, row):
+    """A row counts only at the item's current epoch: keeper close ignores older rows (store_close).
+
+    Fail closed: a row missing ``epoch`` never counts at an item that has one (its
+    epoch is unknown, so it may predate a reopen and must be re-attached). The
+    permissive branch is a documented fixture contract, not a snapshot state: the
+    snapshot stamps ``epoch`` on every item and row, while older fixtures in
+    tests/test_md_sync_dclose.py build items without the key.
+    """
+    if "epoch" not in item:  # fixture contract: items built without an epoch accept any row
+        return True
+    return row.get("epoch") == item["epoch"]
+
+
 def _decision_ids(item):
     out = set()
     for row in item.get("evidence") or []:
-        if row.get("kind") == "decision":
+        if row.get("kind") == "decision" and _current(item, row):
             ref = row.get("ref")
             out.add(ref.get("id") if isinstance(ref, dict) else ref)
     return out
@@ -178,7 +192,7 @@ def _decision_ids(item):
 def _commit_shas(item):
     out = set()
     for row in item.get("evidence") or []:
-        if row.get("kind") == "commit":
+        if row.get("kind") == "commit" and _current(item, row):
             ref = row.get("ref") or {}
             sha = ref.get("sha") or ref.get("commit")
             if isinstance(sha, str) and sha:
