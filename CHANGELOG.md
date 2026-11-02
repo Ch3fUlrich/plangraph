@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **AUTOOS-HOOKS-INTERIM S03 (D-3516/D-3522):** `tools/hooks/context_guard.py` and `session_title.py` (plus shared `hook_common.py`), ported from the AutoOS tree (#292); Windows-safe locking, thresholds clamped, one-shot title marker written after print.
 - **AUTOOS-HOOKS-INTERIM S01 (D-3516/D-3522):** `tools/hooks/bash_guard.py` and `bash_guard_rules.py`, the Bash deny hook ported from the AutoOS tree (#292); inert (fails open) until S02 `bash_guard_rules2.py` (#298) merges.
 - **SPAWNER-SESSION-NAMES (D-3605):** spawner session names are `<role>-NNNN` (config `session_names`: `role-counter` default, `free` = legacy). `launch(name=<role>)` assigns the next 4-digit number per role (`_counters.json` plus the records, under a per-role lock, never reused); an explicit wrong or non-4-digit number is refused. `relaunch` stops the old session and starts a NEW one under the next number (old record stays stopped, prompt copied, old ready marker removed; refused while a later record of the role is live; result `name` = new, `previous_name` = old).
 - **RT-P4-SKILLS-REWRITE slice 6 (D-3583, PR #308):** 2-3 evals per skill dir (`skills/*/evals/evals.json`) plus a grounding test (`tests/test_skill_evals.py`); eval `must_not` patterns carry no home path (scrub CI).
