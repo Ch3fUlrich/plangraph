@@ -524,9 +524,8 @@ def test_ci_adapter_gh_failure_on_second_call_raises(monkeypatch):
     assert len(paths) == 2  # the failure came from the workflow-runs call
 
 
-@pytest.mark.skipif(shutil.which("git") is None or not git_supports_init_branch(),
-                    reason="git >= 2.28 not available (git init -b)")
 def test_git_adapter_merge_commit_of_real_repo(tmp_path: Path, monkeypatch) -> None:
+    assert shutil.which("git") and git_supports_init_branch(), "git >= 2.28 required (git init -b)"
     repo = tmp_path
     _git, _git_init = git_cli(tmp_path, monkeypatch)
     _git_init(repo, "-q", "-b", "main")
