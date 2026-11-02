@@ -390,7 +390,16 @@ class SpawnService(SeatSpawnMixin):
         if record.get('job_id') in self.runner.jobs:
             await self.runner.cancel(record['job_id'])
         elif record['status'] == 'running' and record.get('pid'):
-            await self.runner.kill_recorded(record['pid'])
+            survivors = await self.runner.kill_recorded(record['pid'], record.get('pid_start'))
+            if survivors:   # ownership unprovable or survivors: terminal kill_incomplete, never 'cancelled'
+                task = self.tasks.get(run_id)
+                if task and not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=survivors,
+                              ended=time.time(), events=record.get('events', []) + [{'event': 'kill_incomplete', 'survivors': survivors}])
+                self._save(record)
+                return record
         task = self.tasks.get(run_id)
         if task and not task.done():
             task.cancel()

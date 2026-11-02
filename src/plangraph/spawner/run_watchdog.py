@@ -262,6 +262,18 @@ class LiveLog:
                 pass
 
 
+def _close_pipes(proc):
+    """Close the child's pipe transports only (never signals the process)."""
+    tr = getattr(proc, '_transport', None)
+    for fd in (0, 1, 2):
+        try:
+            pipe = tr.get_pipe_transport(fd) if tr is not None else None
+            if pipe is not None:
+                pipe.close()
+        except Exception:
+            pass
+
+
 async def collect(runner, job_id, proc):
     from .runner import redact
     from .env_redact import redact_env_values
@@ -386,6 +398,7 @@ async def collect(runner, job_id, proc):
                 if job.survivors:   # kill_incomplete: never wait on a process we may not signal
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
+                    _close_pipes(proc)   # V4: the transport must not leak on this early return
                     return b'', b''
                 if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
                     task.cancel()
