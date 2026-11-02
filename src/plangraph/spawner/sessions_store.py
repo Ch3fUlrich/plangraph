@@ -210,7 +210,7 @@ class _StoreMixin:
         except OSError:
             return out
         for path in paths:
-            if path.name.endswith(".ready.json"):
+            if path.name.endswith(".ready.json") or path.name == COUNTERS_FILE:
                 continue
             try:
                 rec = json.loads(path.read_text(encoding="utf-8"))
@@ -257,7 +257,7 @@ class _StoreMixin:
         """(record, name) for a session id: the write-back name is the record
         file's stem, validated - never the record's own name field (R-26)."""
         for path in sorted(self._sessions.glob("*.json")):
-            if path.name.endswith(".ready.json"):
+            if path.name.endswith(".ready.json") or path.name == COUNTERS_FILE:
                 continue
             try:
                 rec = json.loads(path.read_text(encoding="utf-8"))
@@ -284,4 +284,4 @@ if _landing is not None and getattr(_landing, "_scrub", None) is None:
     _landing._scrub = _scrub
 
 from plangraph.spawner.sessions_agents import _ActionFailed
-from plangraph.spawner.sessions_config import NAME_RE, _refuse
+from plangraph.spawner.sessions_config import COUNTERS_FILE, NAME_RE, _refuse

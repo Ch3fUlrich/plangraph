@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import time
@@ -48,6 +47,7 @@ from plangraph.spawner.sessions_config import (
 # 2/4) and are re-exported here because callers and tests take these names
 # from this module; the import sits below the sessions_config import for the
 # cross-import-order reason documented above.
+from plangraph.spawner.sessions_names import _NamesMixin
 from plangraph.spawner.sessions_agents import (
     DETACHED, FINISHED_STATES, LAUNCH_TIMEOUT, SHORT_RE, STOP_TIMEOUT,
     TAIL_BYTES, USAGE_KEYS, UUID_RE, SID_RE, _ActionFailed, _AgentsMixin,
@@ -55,7 +55,7 @@ from plangraph.spawner.sessions_agents import (
 )
 
 
-class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
+class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
     """Launch / stop / relaunch Claude Code sessions.
 
     One injectable runner carries every subprocess call (argv list, never a
@@ -140,7 +140,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
 
     def launch(self, *, name, cwd, model, effort, permission_mode, mcp_config,
                prompt=None, prompt_file=None, handoff=None, parent=None, dry_run=False):
-        with self._name_lock(str(name)):
+        with self._name_lock(self._lock_key(name)):
             return self._action("launch", name, lambda: self._launch_inner(
                 name, cwd, model, effort, permission_mode, mcp_config,
                 prompt, prompt_file, handoff, parent, dry_run), dry=dry_run is True)
@@ -152,7 +152,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         if parent is not None and (not isinstance(parent, str) or not parent):
             raise _refuse("parent must be a non-empty string")
         cfg = self._load_config()
-        name = self._check_name(name)
+        name = self._check_name(self._launch_name(cfg, name))
         cwd_path = self._check_cwd(cwd, cfg)
         model = self._check_choice(model, cfg.get("models"), "model")
         effort = self._check_choice(effort, cfg.get("efforts"), "effort")
@@ -188,6 +188,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
             # nothing either - planned argv, cwd and env keys only.
             return {"argv": self._shown(bg_argv, prompt_arg), "cwd": str(cwd_path),
                     "env_keys": sorted(k for k in ("FLEET_SESSION_NAME", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"))}
+        self._reserve_counter(cfg, name)  # before the prompt file and the start
         prompt_path = self._sessions / f"{name}.prompt.txt"
         atomic_write_private(prompt_path, text)  # before the session starts (R-19)
         rec = {"name": name, "cwd": str(cwd_path), "model": model, "effort": effort,
@@ -346,32 +347,31 @@ class Sessions(_ConfigMixin, _AgentsMixin, _StoreMixin):
         effort = self._check_choice(rec.get("effort"), cfg.get("efforts"), "effort")
         mode = self._check_choice(rec.get("permission_mode"), cfg.get("permission_modes"), "permission_mode")
         mcp_path = self._check_mcp(rec.get("mcp"), cfg)
+        old_name, name = name, self._relaunch_name(cfg, name)  # new session name (D-3605)
         prompt_arg = (f"Restart from handoff {handoff_path}.\n\n" + text) if handoff_path else text
         style = self._style_text(cfg)
         bg_argv, env = self._build_argv(
             name, cwd_path, model, effort, mode, mcp_path, style, prompt_arg, cfg)
         self._audit_argv = self._shown(bg_argv, prompt_arg)
         # Stop + confirm the old session first (D-3193): failure refuses the relaunch.
-        stopped_sid = self._ensure_stopped(rec, name)
-        new_rec = dict(rec)
-        new_rec["handoff"] = str(handoff_path) if handoff_path else None
+        stopped_sid = self._ensure_stopped(rec, old_name)
+        new_rec = self._relaunch_record(rec, name, handoff_path)
         # The relaunch starts through _start (D-3193): its write-ahead record
         # and every outcome are _start's to write; failure leaves the old gone.
         sid, warning = self._start(name, new_rec, bg_argv, env, cwd_path, prompt_arg,
                                    exclude=stopped_sid or old_sid)
         # The ready marker is unlinked only after _start returned (R-21).
         try:
-            self._marker_path(name).unlink(missing_ok=True)
+            self._marker_path(old_name).unlink(missing_ok=True)
         except (OSError, ValueError) as exc:
             raise _ActionFailed(f"session started (id {sid}) but record write failed: {exc}",
                                 session_id=sid) from exc
         result = {"ok": True, "name": name, "session_id": sid,
                   "_audit_argv": self._shown(bg_argv, prompt_arg)}
-        warnings = []
+        if name != old_name:
+            result["previous_name"] = old_name
         if warning:
-            warnings.append(warning)
-        if warnings:
-            result["warning"] = "; ".join(warnings)
+            result["warning"] = warning
         return result
 
     def list(self):
