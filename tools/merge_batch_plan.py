@@ -98,7 +98,10 @@ def exclusions(prs, base, parent):
 
 
 def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
-    """Order PRs (stacks together, base first), tier them and cut batches by the caps."""
+    """Order PRs (stacks together, base first), tier them and cut batches by the caps.
+
+    HIGH and standard PRs fill separate batches, each under the same caps; a stack is never split.
+    """
     by_num = {pr["number"]: pr for pr in prs}
     parent = stack_parents(prs)
     why = exclusions(prs, base, parent)
@@ -113,15 +116,14 @@ def plan_batches(prs, base, max_prs=6, max_lines=1200, patterns=()):
         unit_list.append({"prs": members, "lines": sum(by_num[n]["lines"] for n in members),
                           "high": any(high_hits(by_num[n], patterns) for n in members)})
     unit_list.sort(key=lambda unit: min(unit["prs"]))
-    batches, cur = [], None
+    batches, open_batch = [], {}  # open_batch: the batch of each tier that can still take a unit
     for unit in unit_list:
-        if unit["high"]:  # a HIGH stack never shares a batch
-            batches.append({"tier": "HIGH", "prs": list(unit["prs"]), "lines": unit["lines"]})
-            continue
+        tier = "HIGH" if unit["high"] else "STANDARD"  # HIGH and standard PRs never share a batch
+        cur = open_batch.get(tier)
         if cur and (len(cur["prs"]) + len(unit["prs"]) > max_prs or cur["lines"] + unit["lines"] > max_lines):
             cur = None
         if cur is None:
-            cur = {"tier": "STANDARD", "prs": [], "lines": 0}
+            cur = open_batch[tier] = {"tier": tier, "prs": [], "lines": 0}
             batches.append(cur)
         cur["prs"] += unit["prs"]
         cur["lines"] += unit["lines"]

@@ -81,8 +81,7 @@ def test_plan_high_split():
            P(4, base="lane/p2", files=["docs/b.md"]), P(5, files=[".github/workflows/tests.yml"]),
            P(6, files=["tools/ci_commit_gate.py"])]
     plan = plan_batches(prs, "main", patterns=high_patterns())
-    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [
-        ("STANDARD", [1, 3]), ("HIGH", [2, 4]), ("HIGH", [5]), ("HIGH", [6])]
+    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [("STANDARD", [1, 3]), ("HIGH", [2, 4, 5, 6])]
     by_num = {r["number"]: r for r in plan["prs"]}
     assert by_num[4]["tier"] == "HIGH" and by_num[4]["high"] is False  # stacked on a HIGH PR
     assert by_num[2]["high_paths"] == ["src/plangraph/keeper/store.py"] and by_num[1]["high_paths"] == []
@@ -99,6 +98,20 @@ def test_plan_caps():
     plan = plan_batches(prs, "main", max_prs=2, max_lines=500)  # the 2+3 stack is never split
     assert [b["prs"] for b in plan["batches"]] == [[1], [2, 3], [4]]
     assert [b["over_cap"] for b in plan["batches"]] == [False, False, True]
+
+
+def test_plan_high_batches_obey_the_caps():
+    hi = "src/plangraph/keeper/store.py"
+    prs = [P(1, files=[hi], lines=100), P(2, files=[hi], lines=100), P(3, files=[hi], lines=100),
+           P(4, base="lane/p3", lines=100), P(5, lines=100), P(6, lines=100), P(7, files=[hi], lines=700)]
+    plan = plan_batches(prs, "main", max_prs=2, max_lines=800, patterns=high_patterns())
+    # HIGH units: 1, 2, {3,4} (a stack, never split), 7; standard units: 5, 6
+    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [
+        ("HIGH", [1, 2]), ("HIGH", [3, 4]), ("STANDARD", [5, 6]), ("HIGH", [7])]
+    assert [b["over_cap"] for b in plan["batches"]] == [False, False, False, False]
+    wide = plan_batches(prs, "main", max_lines=250, patterns=high_patterns())  # lines cap: 7 (700) is alone
+    assert [(b["tier"], b["prs"], b["over_cap"]) for b in wide["batches"]] == [
+        ("HIGH", [1, 2], False), ("HIGH", [3, 4], False), ("STANDARD", [5, 6], False), ("HIGH", [7], True)]
 
 
 def test_plan_excludes():
@@ -127,12 +140,13 @@ def test_plan_cli_label_json_and_table(env):
     env.add_pr(1, "lane/p1", files=["a.py"], lines=30)
     env.add_pr(2, "lane/p2", files=["src/plangraph/keeper/x.py"], lines=40, title="keeper change")
     env.add_pr(3, "lane/p3", labels=(), files=["c.py"])
-    env.add_pr(4, "lane/p4", draft=True, files=["d.py"])
+    env.add_pr(4, "lane/p4", ci="red", files=["d.py"])
+    env.add_pr(5, "lane/p5", files=[".github/workflows/tests.yml"], lines=20)
     res = env.run("plan", "--json")
     plan = json.loads(res.stdout)
     assert res.returncode == 0 and plan["repo"] == "owner/proj" and plan["label"] == "batch-ready"
-    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [("STANDARD", [1]), ("HIGH", [2])]
-    assert {r["number"]: r["reason"] for r in plan["prs"] if r["reason"]} == {4: "draft"}
+    assert [(b["tier"], b["prs"]) for b in plan["batches"]] == [("STANDARD", [1]), ("HIGH", [2, 5])]
+    assert {r["number"]: r["reason"] for r in plan["prs"] if r["reason"]} == {4: "ci red"}
     table = env.run("plan", "--prs", "1,2,3", "--repo", "owner/proj").stdout
     assert "#3" in table and "batch 1 STANDARD: --prs 1,3" in table and "batch 2 HIGH: --prs 2" in table
     assert "HIGH via src/plangraph/keeper/x.py" in table

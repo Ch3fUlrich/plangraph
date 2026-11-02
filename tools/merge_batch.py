@@ -3,8 +3,9 @@
 
   plan      open PRs with a label (or --prs): head sha, CI on head, draft, files/lines, base.
             Stacks stay together (a PR goes after the PR it is based on); a PR touching an
-            AUTH_DOOR/gate path of tools/ci_commit_gate.py or src/plangraph/keeper/ is HIGH and
-            gets its own batch; the rest is cut by --max-prs / --max-lines.
+            AUTH_DOOR/gate path of tools/ci_commit_gate.py or src/plangraph/keeper/ is HIGH;
+            HIGH PRs fill HIGH batches apart from the standard ones, both cut by --max-prs and
+            --max-lines.
   build     branch batch/NAME in a new worktree from origin/<base>; `git merge --no-ff` each PR
             head as `Merge PR #N: <title>`. A conflict stops with exit 3 (resolve, commit, run
             `continue`) or, with --skip-conflicts, skips the PR and labels it needs-update.
