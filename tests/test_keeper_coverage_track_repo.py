@@ -58,7 +58,7 @@ class TrackFakeGit(FakeGit):
             return dict(self.trailers_by_repo_sha[(repo, sha)])
         return super().trailers(repo, sha) if self.commit_exists(repo, sha) else {}
 
-    def writer_trailers(self, repo, sha):
+    def writer_trailers(self, repo, sha, ref=None):
         self.writer_trailers_calls.append((repo, sha))
         if self.trailers_error:
             raise self.trailers_error
@@ -84,7 +84,7 @@ class GitWithoutCommitExists(TrackFakeGit):
             return dict(self.trailers_by_repo_sha[(repo, sha)])
         return FakeGit.trailers(self, repo, sha) if self.has_trailers else {}
 
-    def writer_trailers(self, repo, sha):
+    def writer_trailers(self, repo, sha, ref=None):
         self.writer_trailers_calls.append((repo, sha))
         if self.trailers_error:
             raise self.trailers_error

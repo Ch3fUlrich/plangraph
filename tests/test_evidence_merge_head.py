@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -98,3 +99,46 @@ def test_merge_commit_of_fails_closed_on_failed_lookup(tmp_path: Path, monkeypat
     assert adapter.merge_commit_of(repo, merge, "no-such-ref") is None
     # an unknown sha never maps to a merge commit
     assert adapter.merge_commit_of(repo, "0" * 40, "main") is None
+
+
+# --------------------------------------------------------------------- #
+# every error/None branch under a failing git runner: always return None
+# --------------------------------------------------------------------- #
+
+_RSHA, _P1, _P2, _CAND = "a" * 40, "b" * 40, "c" * 40, "d" * 40
+
+
+def _scripted(monkeypatch, steps):
+    """``GitAdapter._run`` yields *steps* - ``(rc, stdout)`` or an exception -
+    in call order, so each None-returning branch is hit on its own."""
+    def _run(self, repo, args, timeout=None):
+        step = steps.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        rc, out = step
+        return subprocess.CompletedProcess(["git", *args], rc, out, "")
+    monkeypatch.setattr(GitAdapter, "_run", _run)
+
+
+@pytest.mark.parametrize("steps,label", [
+    ([(1, "")], "rev-list parents fails"),
+    ([(0, "")], "rev-list parents empty"),
+    ([(0, f"{_RSHA} {_P1} {_P2}"), (1, "")], "merge-sha rev-list fails"),
+    ([(0, f"{_RSHA} {_P1}"), (1, "")], "first-parent rev-list fails"),
+    ([(0, f"{_RSHA} {_P1}"), (0, ""), (1, "")], "ancestry-path rev-list fails"),
+    ([(0, f"{_RSHA} {_P1}"), (0, f"{_CAND}\n"), (0, f"{_CAND}\n"), (1, "")],
+     "candidate ^2 ancestry fails"),
+    ([(0, f"{_RSHA} {_P1}"), (0, f"{_CAND}\n"), (0, f"{_CAND}\n"), (0, ""),
+      (2, "")], "candidate ^1 check is not rc 1"),
+    ([(0, f"{_RSHA} {_P1}"), (0, f"{_CAND}\n"), (0, f"{_CAND}\n"), (0, ""),
+      (1, ""), (1, "")], "committer lookup fails"),
+    ([(0, f"{_RSHA} {_P1}"), (0, f"{_CAND}\n"), (0, f"{_CAND}\n"), (0, ""),
+      (1, ""), (0, "  \n")], "committer email empty"),
+    ([RuntimeError("boom")], "git runner raises"),
+])
+def test_merge_commit_of_error_branches_fail_closed(monkeypatch, steps, label):
+    script = list(steps)
+    _scripted(monkeypatch, script)
+    adapter = GitAdapter()
+    assert adapter.merge_commit_of("/repos/x", _RSHA, "main") is None, label
+    assert not script, f"unplayed git steps for {label}: {script}"

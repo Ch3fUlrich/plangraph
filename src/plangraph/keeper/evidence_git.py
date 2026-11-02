@@ -232,21 +232,22 @@ class GitAdapter:
             pass
         return None
 
+    def _commit_object(self, repo: str, sha: str) -> bool:
+        """True when *sha* names a commit OBJECT; a tag never peels to one."""
+        proc = self._run(repo, ["cat-file", "-t", "--end-of-options", sha])
+        return proc.returncode == 0 and _stdout(proc).strip() == "commit"
+
     def commit_exists(self, repo: str, sha: str) -> bool:
         if not valid_commit_ref(sha):
             return False
-        proc = self._run(repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"])
-        if proc.returncode == 0:
+        if self._commit_object(repo, sha):
             return True
         if not self._maybe_fetch(repo):
             return False
         try:
-            retry = self._run(
-                repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"]
-            )
+            return self._commit_object(repo, sha)
         except Exception:
             return False
-        return retry.returncode == 0
 
     def resolve_commit(self, repo: str, sha: str) -> str | None:
         """Resolve *sha* to a full 40-hex commit id, or None."""
@@ -420,7 +421,7 @@ class GitAdapter:
             return None
 
     def trailers(self, repo: str, sha: str) -> dict[str, str]:
-        if not valid_commit_ref(sha):
+        if not valid_commit_ref(sha) or not self._commit_object(repo, sha):
             return {}
         proc = self._run(
             repo, ["show", "-s", "--format=%(trailers)", "--end-of-options", sha]
@@ -463,7 +464,7 @@ class GitAdapter:
             trailers = dict(trailers, _writer_commit=sha)
         return trailers
 
-    def writer_trailers(self, repo: str, sha: str) -> list[dict[str, str]]:
+    def writer_trailers(self, repo: str, sha: str, ref: str | None = None) -> list[dict[str, str]]:
         """Trailer dicts of the commits that authored the change behind *sha*.
 
         L1 attaches ``commit+ci`` evidence to the PR merge commit, which carries
@@ -472,11 +473,14 @@ class GitAdapter:
         ``merge-base(parent1, parent2)..parent2``: the merge commit itself,
         main-side commits and inner merges are never consulted.  A non-merge
         commit stands for itself.  An octopus merge (3+ parents) has no single
-        second-parent range, so it returns no writers at all.  Failure returns
-        an empty list, which the keeper treats as fail-closed
-        ``writer_unknown``.
+        second-parent range, so it returns no writers at all.  With *ref* a
+        two-parent lane head ("merge main into the lane") maps through
+        :meth:`merge_commit_of` to its PR merge and takes that merge's range
+        (the lane commits, never the main side); a two-parent sha no merged PR
+        introduced yields no writers (``ref=None`` keeps the historical range
+        behaviour).  Failure returns an empty list: fail-closed writer_unknown.
         """
-        if not valid_commit_ref(sha):
+        if not valid_commit_ref(sha) or not self._commit_object(repo, sha):
             return []
         proc = self._run(
             repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]
@@ -497,6 +501,12 @@ class GitAdapter:
             return []
         if len(parents) < 2:
             return [self._writer_trailer(repo, sha)]
+        if ref is not None:
+            merged = self.merge_commit_of(repo, sha, ref)
+            if not merged:
+                return []
+            if merged[0] != sha:
+                return self.writer_trailers(repo, merged[0])
         base = self._run(
             repo, ["merge-base", "--end-of-options", parents[0], parents[1]]
         )
