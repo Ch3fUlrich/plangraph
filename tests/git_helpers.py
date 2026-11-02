@@ -18,8 +18,11 @@ from pathlib import Path
 from typing import Callable
 
 
-def git_cli(tmp_path: Path) -> tuple[Callable[..., str], Callable[..., None]]:
+def git_cli(tmp_path: Path, monkeypatch=None) -> tuple[Callable[..., str], Callable[..., None]]:
     """Return ``(git, git_init)`` runners bound to the hermetic env above.
+
+    With *monkeypatch* the same env is applied to the process, so the code
+    under test (GitAdapter runs git with the inherited env) is hermetic too.
 
     ``git(repo, *args)`` runs ``git -C repo ...`` and returns stripped stdout;
     ``git_init(repo, *args)`` runs ``git init *args repo``.
@@ -30,6 +33,11 @@ def git_cli(tmp_path: Path) -> tuple[Callable[..., str], Callable[..., None]]:
     env["GIT_CONFIG_GLOBAL"] = str(empty)
     env["GIT_CONFIG_SYSTEM"] = str(empty)
     env["HOME"] = str(tmp_path)
+    if monkeypatch is not None:
+        for key in [k for k in os.environ if k.startswith("GIT_")]:
+            monkeypatch.delenv(key)
+        for key in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "HOME"):
+            monkeypatch.setenv(key, env[key])
 
     def _git(repo: Path, *args: str) -> str:
         proc = subprocess.run(

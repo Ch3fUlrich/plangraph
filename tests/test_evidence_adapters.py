@@ -179,9 +179,9 @@ def test_semaphore_parses_json(monkeypatch, tmp_path):
 
 @pytest.mark.skipif(subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
                     reason="git not available")
-def test_git_adapter_real_repo(tmp_path):
+def test_git_adapter_real_repo(tmp_path, monkeypatch):
     repo = tmp_path / "r"
-    _git, _git_init = git_cli(tmp_path)
+    _git, _git_init = git_cli(tmp_path, monkeypatch)
     _git_init(repo, "-q")
     _git(repo, "config", "user.email", "test@example.invalid")
     _git(repo, "config", "user.name", "Tester")
@@ -526,9 +526,9 @@ def test_ci_adapter_gh_failure_on_second_call_raises(monkeypatch):
 
 @pytest.mark.skipif(shutil.which("git") is None or not git_supports_init_branch(),
                     reason="git >= 2.28 not available (git init -b)")
-def test_git_adapter_merge_commit_of_real_repo(tmp_path: Path) -> None:
+def test_git_adapter_merge_commit_of_real_repo(tmp_path: Path, monkeypatch) -> None:
     repo = tmp_path
-    _git, _git_init = git_cli(tmp_path)
+    _git, _git_init = git_cli(tmp_path, monkeypatch)
     _git_init(repo, "-q", "-b", "main")
     _git(repo, "config", "user.name", "Test User")
     _git(repo, "config", "user.email", "test@example.invalid")

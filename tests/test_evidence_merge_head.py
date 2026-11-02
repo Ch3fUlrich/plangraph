@@ -17,11 +17,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_git_adapter_merge_commit_of_lane_merge_head(tmp_path: Path) -> None:
+def test_git_adapter_merge_commit_of_lane_merge_head(tmp_path: Path, monkeypatch) -> None:
     # D-3507: a lane-side "merge main into the lane" PR head (2 parents) sits
     # on the ^2 side of the PR merge; merge_commit_of must return that merge.
     repo = tmp_path
-    _git, _git_init = git_cli(tmp_path)
+    _git, _git_init = git_cli(tmp_path, monkeypatch)
     _git_init(repo, "-q", "-b", "main")
     _git(repo, "config", "user.name", "Test User")
     _git(repo, "config", "user.email", "test@example.invalid")
@@ -75,11 +75,11 @@ def test_git_adapter_merge_commit_of_lane_merge_head(tmp_path: Path) -> None:
     assert adapter.merge_commit_of(repo, unmerged, "main") is None
 
 
-def test_merge_commit_of_fails_closed_on_failed_lookup(tmp_path: Path) -> None:
+def test_merge_commit_of_fails_closed_on_failed_lookup(tmp_path: Path, monkeypatch) -> None:
     # D-3538: a failed rev-list lookup for a merge sha must return None on its
     # own (fail closed) and never fall through to the non-merge proc_fp path.
     repo = tmp_path
-    _git, _git_init = git_cli(tmp_path)
+    _git, _git_init = git_cli(tmp_path, monkeypatch)
     _git_init(repo, "-q", "-b", "main")
     _git(repo, "config", "user.name", "Test User")
     _git(repo, "config", "user.email", "test@example.invalid")
