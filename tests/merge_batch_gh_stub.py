@@ -51,12 +51,20 @@ def save():
     json.dump(S, open(os.path.join(DIR, "state.json"), "w"))
 
 
+def follow_branch(pr):
+    """GitHub moves a PR's head with its branch: PRs created through this stub follow the origin."""
+    if pr.get("live"):
+        pr["headRefOid"] = git("rev-parse", f"refs/heads/{pr['headRefName']}").stdout.strip()
+    return pr
+
+
 def show(pr):
+    follow_branch(pr)
     return {name: pr.get(name) for name in fields(PR_FIELDS)}
 
 
 def pr_arg():
-    return S["prs"].get(ARGV[2]) or die(f"no pull request {ARGV[2]}")
+    return follow_branch(S["prs"].get(ARGV[2]) or die(f"no pull request {ARGV[2]}"))
 
 
 cmd = ARGV[:2]
@@ -102,7 +110,7 @@ elif cmd == ["pr", "create"]:
         "number": number, "title": opt("--title"), "body": open(opt("--body-file")).read(),
         "headRefName": opt("--head"), "headRefOid": head, "baseRefName": opt("--base"), "state": "OPEN",
         "isDraft": False, "isCrossRepository": False, "labels": [], "files": [], "additions": 0,
-        "deletions": 0, "statusCheckRollup": [], "mergeCommit": None}
+        "deletions": 0, "statusCheckRollup": [], "mergeCommit": None, "live": True}
     save()
     if S.get("create_noise"):  # real gh warns about uncommitted changes around the url
         print("Warning: 1 uncommitted change")

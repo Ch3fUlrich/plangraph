@@ -13,6 +13,7 @@ from merge_batch_util import (REMOTE, MergeBatchError, all_states, drop_state, f
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
+HEX_TOKEN = re.compile(r"\b[0-9a-fA-F]{12,40}\b")
 
 
 def cell(text):
@@ -67,21 +68,30 @@ def cmd_push(args):
             st.update(pr=int(found.group(1)), url=found.group(0))
     st.update(status="pushed", head=head)
     save_state(st)
-    print(f"pushed {st['branch']} {short(head)}; {st['url']}", file=sys.stderr)
+    print(f"pushed {st['branch']} {head}; {st['url']}; the approval for land must name this head", file=sys.stderr)
     print(st["pr"])
     return 0
 
 
-def check_approval(path):
-    """The approval file is seat verdict text: the last VERDICT line must be a pass."""
+def names_head(text, head):
+    """True when ``text`` names the batch head sha: in full, or as at least 12 leading hex digits."""
+    return any(head.startswith(token.lower()) for token in HEX_TOKEN.findall(text))
+
+
+def check_approval(path, head):
+    """The approval is seat verdict text about this very head: it names the sha, and its last
+    VERDICT line passes (the parser the keeper's seat tool uses)."""
     if not path:
-        raise MergeBatchError("land needs --approval PATH (seat verdict text)")
+        raise MergeBatchError("land needs --approval PATH (seat verdict text naming the batch head)")
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise MergeBatchError(f"approval file {path} cannot be read: {exc.strerror or exc}") from None
+    if not names_head(text, head):
+        raise MergeBatchError(f"approval file {path} does not name the batch head {head}: the seats must "
+                              "review that sha (in full, or at least 12 hex digits)")
     try:
-        from seat_verdict import parse_verdict  # the parser the keeper's seat tool uses
+        from seat_verdict import parse_verdict
     except ImportError:
         raise MergeBatchError("tools/seat_verdict.py is not importable: cannot read the approval") from None
     if parse_verdict(text)[0] is not True:
@@ -128,7 +138,7 @@ def cmd_land(args):
     if st["status"] != "pushed" or st.get("pr") != number:
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
-    check_approval(args.approval)
+    check_approval(args.approval, st["head"])
     fields = "state,headRefOid,isDraft,mergeCommit"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:

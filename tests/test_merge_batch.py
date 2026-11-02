@@ -295,8 +295,12 @@ def pushed(env, name="l1", prs=(1, 2, 3), checks="pass"):
     env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": checks}]
     env.save()
     approval = env.tmp / "approval.txt"
-    approval.write_text("looks fine\nVERDICT: pass\n")
+    approval.write_text(f"reviewed {head_of(env, name)}\nlooks fine\nVERDICT: pass\n")
     return approval
+
+
+def head_of(env, name="l1"):
+    return json.loads(env.state_file(name).read_text())["head"]
 
 
 def land(env, approval, *extra, name="l1", number="100"):
@@ -306,14 +310,15 @@ def land(env, approval, *extra, name="l1", number="100"):
 @pytest.mark.parametrize("case, message", [
     ("head_moved", "head moved"), ("red_check", "not green"), ("pending_check", "not green"),
     ("no_checks", "no required check"), ("no_approval", "cannot be read"), ("fix_verdict", "no passing VERDICT"),
-    ("no_verdict", "no passing VERDICT"), ("wrong_pr", "push it first"), ("draft", "draft"),
-    ("closed", "is CLOSED")])
+    ("no_verdict", "no passing VERDICT"), ("no_sha", "does not name the batch head"),
+    ("other_sha", "does not name the batch head"), ("short_sha", "does not name the batch head"),
+    ("wrong_pr", "push it first"), ("draft", "draft"), ("closed", "is CLOSED")])
 def test_land_refusals(env, case, message):
     approval = pushed(env)
     batch = env.state["prs"]["100"]
     checks = env.state["checks"]["100"][0]
     if case == "head_moved":
-        batch["headRefOid"] = "f" * 40
+        batch.update(headRefOid="f" * 40, live=False)  # GitHub shows another head than the one pushed
     elif case == "red_check":
         checks["bucket"] = "fail"
     elif case == "pending_check":
@@ -323,7 +328,10 @@ def test_land_refusals(env, case, message):
     elif case == "no_approval":
         approval.unlink()
     elif case in ("fix_verdict", "no_verdict"):
-        approval.write_text("VERDICT: fix\n" if case == "fix_verdict" else "all good\n")
+        approval.write_text(head_of(env) + ("\nVERDICT: fix\n" if case == "fix_verdict" else "\nall good\n"))
+    elif case in ("no_sha", "other_sha", "short_sha"):  # the approval must be about this very head
+        named = {"no_sha": "", "other_sha": "1" * 40, "short_sha": head_of(env)[:11]}[case]
+        approval.write_text(f"reviewed {named}\nVERDICT: pass\n")
     elif case == "draft":
         batch["isDraft"] = True
     elif case == "closed":
@@ -334,6 +342,22 @@ def test_land_refusals(env, case, message):
     assert not env.calls("pr", "merge") and env.state_file("l1").exists()
     if case == "no_approval":
         assert "--approval" in env.run("land", "--name", "l1", "--batch-pr", "100").stderr
+
+
+def test_land_refuses_an_approval_for_an_older_head(env):
+    approval = pushed(env, prs=(1, 2))
+    old_head = head_of(env)
+    wt = env.tmp / "repo-worktrees" / "batch-l1"
+    (wt / "fix.txt").write_text("a fix after the review\n")
+    env.git("add", "fix.txt", cwd=wt)
+    env.git("commit", "-q", "-m", "fix after review", cwd=wt)
+    assert env.run("push", "--name", "l1").stdout == "100\n"
+    assert head_of(env) != old_head
+    res = land(env, approval)  # the approval still names the head it reviewed
+    assert res.returncode == 1 and f"does not name the batch head {head_of(env)}" in res.stderr
+    assert not env.calls("pr", "merge")
+    approval.write_text(f"{head_of(env)}\nVERDICT: accept\n")
+    assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
 
 
 def test_land_merges_closes_unmerged_and_reports(env):
@@ -369,7 +393,8 @@ def test_land_named_checks(env):
 
 def test_land_resumes_after_a_merge_made_elsewhere(env):
     approval = pushed(env, prs=(1, 2))
-    head = json.loads(env.state_file("l1").read_text())["head"]
+    head = head_of(env)
+    approval.write_text(f"reviewed `{head[:12].upper()}`\nVERDICT: pass\n")  # 12 digits in any case name the head
     done = env.run_gh("pr", "merge", "100", "--repo", "owner/proj", "--merge", "--match-head-commit", head)
     assert done.returncode == 0
     res = land(env, approval)
