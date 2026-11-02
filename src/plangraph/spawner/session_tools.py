@@ -16,7 +16,7 @@ from plangraph.routing_errors import ParameterRefused
 
 # SESSION-SPAWN-MCP: Claude Code session lifecycle (docs/spawner-sessions.md).
 SESSION_TOOLS = [
-    {'name': 'plangraph_session_launch', 'description': 'Launch a background Claude Code session; the session is named <name>-NNNN',
+    {'name': 'plangraph_session_launch', 'description': 'Launch a background Claude Code session; name is a role (session <role>-NNNN) in role-counter mode, a free name in free mode',
      'inputSchema': {'type': 'object', 'properties': {
          'name': {'type': 'string', 'description': 'the role; the session gets <role>-NNNN'}, 'cwd': {'type': 'string'}, 'model': {'type': 'string'},
          'effort': {'type': 'string'}, 'prompt': {'type': 'string'}, 'prompt_file': {'type': 'string'},

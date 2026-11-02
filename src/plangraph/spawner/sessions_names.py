@@ -4,7 +4,7 @@
 "role-counter" (default) or "free" (legacy: the caller picks any name and a
 relaunch reuses it). In role-counter mode launch(name=<role>) assigns
 ``<role>-NNNN`` (exactly 4 digits) from a per-host counter kept in
-``counters.json`` next to the records: next = max(stored counter, highest
+``_counters.json`` next to the records: next = max(stored counter, highest
 NNNN among that role's records) + 1, taken under the role lock and written
 atomically before the session starts, so a number is never reused. A relaunch
 stops the old session and starts a NEW one under the next number; the old
@@ -22,6 +22,7 @@ from pathlib import Path
 from plangraph.routing_support.private_io import atomic_write_private
 
 _TAIL_RE = re.compile(r"(.+)-(\d+)\Z")
+_LIVE = ("launching", "running", "unknown")
 try:
     import fcntl
 except ImportError:  # Windows
@@ -65,14 +66,14 @@ class _NamesMixin:
 
     @contextlib.contextmanager
     def _counter_flock(self):
-        """Cross-process lock (counters.lock) around "read next number ->
-        write counters.json"; role-counter mode only. Taken after the
+        """Cross-process lock (_counters.lock) around "read next number ->
+        write _counters.json"; role-counter mode only. Taken after the
         in-process role lock, never before it."""
         if self._names_mode() != "role-counter":
             yield
             return
         self._sessions.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(self._sessions / "counters.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(self._sessions / "_counters.lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
             _flock(fd, True)
             yield
@@ -141,8 +142,13 @@ class _NamesMixin:
         role lock): the same name in free mode, else the role's next number."""
         if cfg.get("session_names", "role-counter") != "role-counter":
             return name
-        role, _ = self._role_of(name, strict=False)
+        role, digits = self._role_of(name, strict=False)
         with self._name_lock("role:" + role), self._counter_flock():
+            for rec in self._all_records():  # a superseded record has no lineage of its own
+                other = str(rec.get("name") or "")
+                m = re.fullmatch(re.escape(role) + r"-(\d{4})", other, re.IGNORECASE)
+                if m and int(m.group(1)) > int(digits or 0) and _state(rec) in _LIVE:
+                    raise _refuse(f"session {name} is superseded by {other}: relaunch {other}")
             number = self._next_number(role)
             self._reserve_number(role, number)
         return f"{role}-{number:04d}"
@@ -163,3 +169,4 @@ class _NamesMixin:
 # Bound last: sessions_config ends by importing sessions, which imports this
 # module - the class above must already exist when that happens.
 from plangraph.spawner.sessions_config import COUNTERS_FILE, _refuse
+from plangraph.spawner.sessions_store import _state

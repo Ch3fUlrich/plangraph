@@ -21,7 +21,7 @@ SESSION_CONFIG_KEYS = frozenset({
     "cwd_roots", "models", "efforts", "permission_modes", "mcp_configs",
     "style_text", "compact_window", "ctx_cap_tokens", "session_names",
 })
-COUNTERS_FILE = "counters.json"  # per-role counters beside the records (D-3605)
+COUNTERS_FILE = "_counters.json"  # beside the records; no session name starts with "_" (D-3605)
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _WIN_DEVICES = frozenset({"con", "prn", "aux", "nul"})
 _WIN_PORTS_RE = re.compile(r"(?:com|lpt)[1-9]\Z")
@@ -173,8 +173,6 @@ class _ConfigMixin:
             # <name>.ready.json is the ready-marker file name: a session name
             # with that suffix would collide with its own marker.
             raise _refuse("name must not end with .ready")
-        if name.casefold() == COUNTERS_FILE.removesuffix(".json"):
-            raise _refuse("name is reserved for the session counters file")
         base = name.split(".")[0].casefold()
         if base in _WIN_DEVICES or _WIN_PORTS_RE.fullmatch(base):
             # Windows resolves con/aux/nul/com1.. to devices regardless of the

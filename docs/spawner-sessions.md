@@ -28,7 +28,7 @@ carry its type and may not be `null`: `style_text` a non-empty string, `compact_
 string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
 `compact_window` to `330000`. `session_names` is `role-counter` (default) or `free`. In
 `role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (4 digits, next number
-per role from `counters.json` and the records, never reused); `relaunch` stops the old session and
+per role from `_counters.json` and the records, never reused); `relaunch` stops the old session and
 starts a new one under the next number (`name` = new, `previous_name` = old). `free` keeps the legacy
 free names and in-place relaunch.
 
