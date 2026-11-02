@@ -179,11 +179,11 @@ def test_windows_accounting_layout():
     assert api.cpu_seconds(42) == 3.5
 
 
-def _job(tmp_path, limits):
+def _job(tmp_path, limits, role='implement'):
     from plangraph.spawner.runner import SpawnerRunner, JobInfo
     from plangraph.spawner.run_watchdog import edit_signature
     runner = SpawnerRunner(default_cwd=str(tmp_path))
-    job = JobInfo('j', 'running', '', 'm', role='implement', cwd=str(tmp_path))
+    job = JobInfo('j', 'running', '', 'm', role=role, cwd=str(tmp_path))
     job._watchdog_limits = thresholds(limits)
     job._watchdog_baseline = edit_signature(tmp_path)
     job._live_log = tmp_path / 'logs' / 'live.log'

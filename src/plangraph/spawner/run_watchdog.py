@@ -5,16 +5,11 @@ import logging
 import math
 import os
 from pathlib import Path
-import re
-import subprocess
 import time
 
-from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
+from .run_activity import ANSI, HEADER, first_event, first_event_limit, hang_event, is_activity  # noqa: F401  re-exported for callers and tests
+from .run_cpu import SKIP, cpu_seconds, edit_signature, proc_scan  # noqa: F401  re-exported for callers and tests
 from .run_refusal import REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
-
-ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
-HEADER = re.compile(r'^>\s+\S+\s+·\s+\S+')
-SKIP = {'.git', '.pytest_cache', '__pycache__', '.venv', 'logs', 'output', 'node_modules', 'site'}
 LIVE_LOG_FLUSH = 16384        # batched appends: one write+fsync per 16 KB, not per line
 LIVE_LOG_MAX = 2 * 1024 * 1024
 LIVE_LOG_ERRORS = 3           # record at most this many live.log failures per run
@@ -45,6 +40,7 @@ def thresholds(card=None):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
         result[key.replace('_min', '_s')] = value * 60
+    result['first_event_s'], result['first_event_card'] = first_event(card)   # D-3622
     result['hard_max'] = False   # table max_min may carry the first-edit hold (M5)
     timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
     if timeout and 'max_min' not in card:
@@ -67,11 +63,6 @@ def thresholds(card=None):
     if not math.isfinite(result['interval']) or result['interval'] <= 0:
         raise SpawnRefused('invalid watchdog interval')
     return result
-
-
-def is_activity(line):
-    line = ANSI.sub('', line).strip()
-    return bool(line and not HEADER.match(line))
 
 
 class Watchdog:
@@ -141,34 +132,6 @@ class Watchdog:
                         **{k: self.limits[k] for k in ('stall_s', 'first_edit_s', 'max_s')})
 
 
-def edit_signature(cwd):
-    try:
-        count = size = newest = entries = 0
-        for root, dirs, files in os.walk(cwd):
-            dirs[:] = sorted(d for d in dirs if d not in SKIP)
-            entries += len(dirs)
-            if entries >= 100000:
-                break
-            for name in sorted(files):
-                entries += 1
-                if entries > 100000:
-                    break
-                try:
-                    stat = os.stat(os.path.join(root, name), follow_symlinks=False)
-                except OSError:
-                    continue
-                count += 1
-                size += stat.st_size
-                newest = max(newest, stat.st_mtime_ns)
-            if entries > 100000:
-                break
-        head = subprocess.run(['git', '-C', str(cwd), 'rev-parse', 'HEAD'],
-                              capture_output=True, timeout=10, check=False)
-        return (count, newest, size), head.stdout if head.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
 async def run_gone(proc):
     """Resolve once the run has exited. ``Process.wait()`` cannot signal this:
     asyncio resolves its waiters only after every pipe transport disconnects
@@ -233,6 +196,7 @@ async def collect(runner, job_id, proc):
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
     baseline = getattr(job, '_watchdog_baseline', None)
     w = Watchdog(limits, job.start_time, baseline, writer=job.role in ('implement', 'fix'))
+    limit = first_event_limit(job, limits)   # D-3622: no first event within this long = hung (None = rule off)
     captured = {'stdout': [], 'stderr': []}
     refused = asyncio.Event()
     seen = {'n': 0}   # activity lines seen run-wide (stdout + stderr): the first REFUSAL_MAX_LINES may speak a refusal
@@ -341,6 +305,8 @@ async def collect(runner, job_id, proc):
             delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
             if w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
+            if limit is not None and job.last_activity_ts is None:
+                delay = min(delay, max(.001, job.start_time + limit - time.time()))   # D-3622: wake at the first-event deadline
             done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
             if refused.is_set() and not task.done() and job.status in ('cancelled', 'stalled', 'timeout'):
                 # Q14/M9/M15: a cancel/stall/timeout verdict is never stomped;
@@ -360,6 +326,25 @@ async def collect(runner, job_id, proc):
                         callback(job_id)
                 except Exception:
                     logging.getLogger(__name__).exception('refusal sample callback failed')
+                if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    return await proc.communicate()
+                break
+            elif (limit is not None and job.last_activity_ts is None and not task.done()
+                    and job.status not in ('cancelled', 'stalled', 'timeout')
+                    and time.time() - job.start_time >= limit):
+                # D-3622: no harness event within first_event_s of launch: hung, end the run now.
+                job.status, job.exit_code = 'failed', 8
+                job.events.append(hang_event(limit, time.time() - job.start_time))
+                logging.getLogger(__name__).info('%s no first event within %g s', job_id, limit)
+                await runner._reap_process(job_id, proc)
+                try:
+                    callback = getattr(runner, 'on_sample', None)
+                    if callback:
+                        callback(job_id)
+                except Exception:
+                    logging.getLogger(__name__).exception('hang sample callback failed')
                 if not all(isinstance(getattr(proc, n, None), asyncio.StreamReader) for n in ('stdout', 'stderr')):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)

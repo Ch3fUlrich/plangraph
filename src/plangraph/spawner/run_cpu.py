@@ -1,8 +1,40 @@
-"""Process-tree CPU accounting for the run watchdog."""
+"""Process-tree CPU accounting and worktree sampling for the run watchdog."""
 import asyncio
 import os
+import subprocess
 import sys
 from pathlib import Path
+
+SKIP = {'.git', '.pytest_cache', '__pycache__', '.venv', 'logs', 'output', 'node_modules', 'site'}
+
+
+def edit_signature(cwd):
+    """Worktree signature (count, newest mtime, size) plus HEAD, or None when unreadable."""
+    try:
+        count = size = newest = entries = 0
+        for root, dirs, files in os.walk(cwd):
+            dirs[:] = sorted(d for d in dirs if d not in SKIP)
+            entries += len(dirs)
+            if entries >= 100000:
+                break
+            for name in sorted(files):
+                entries += 1
+                if entries > 100000:
+                    break
+                try:
+                    stat = os.stat(os.path.join(root, name), follow_symlinks=False)
+                except OSError:
+                    continue
+                count += 1
+                size += stat.st_size
+                newest = max(newest, stat.st_mtime_ns)
+            if entries > 100000:
+                break
+        head = subprocess.run(['git', '-C', str(cwd), 'rev-parse', 'HEAD'],
+                              capture_output=True, timeout=10, check=False)
+        return (count, newest, size), head.stdout if head.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
 
 
 def proc_scan():

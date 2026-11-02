@@ -1,6 +1,7 @@
 """Shared dispatch outcome policy for base and routed launches."""
 from plangraph.routing_support.leg_state import _down_seconds
 from .env_redact import first_reason, harness_limit_line, unavailable_reason
+from .run_activity import hang_down_s
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
@@ -64,6 +65,19 @@ def notify_leg_refused(service, record, chosen, reason):
 def fallthrough_reason(service, chosen, job, record):
     from . import leg_state
     from .leg_probe import key as leg_key
+    hang = next((e for e in (getattr(job, 'events', None) or ()) if e.get('event') == 'hang_no_first_event'), None)
+    if hang is not None:
+        # D-3622: a hung leg is booked down like a refused one, for hang_down_s
+        # (PLANGRAPH_LEG_HANG_DOWN_S); no fall-through leg -- the run already ended failed.
+        target = service.leg_reader
+        if not hasattr(target, 'record_harness_limit'):
+            target = getattr(target, '__self__', None)
+        if not hasattr(target, 'record_harness_limit'):
+            target = leg_state
+        target.record_harness_limit(leg_key(chosen), hang['line'], 'spawner:harness', down_s=hang_down_s())
+        if record.get('reason') not in TERMINAL_REASONS:
+            record['reason'] = hang['line']
+        return None
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
     if line:
         target = service.leg_reader
