@@ -62,6 +62,9 @@ pub(super) fn load(path: &Path) -> Result<SlotTable, SlotError> {
 }
 
 /// Write the table to the temp file and fsync it; the caller renames it.
+/// The one fixed temp name is safe here because every caller holds
+/// `slots.lock`; `slots.wake`'s temp is per-touch — it is written outside
+/// that lock and touched by every exiting holder.
 pub(super) fn write_temp(state_dir: &Path, table: &SlotTable) -> Result<PathBuf, SlotError> {
     let tmp = temp_path(state_dir);
     let json = serde_json::to_vec_pretty(table)?;

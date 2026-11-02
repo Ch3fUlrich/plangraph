@@ -173,7 +173,18 @@ fn caps_writer_counts_writer_and_run_caps() {
     // The writer cap is full even though the run cap has room ...
     let c = caps(3, 1, 3, 3, 0);
     let req = ticket(SlotClass::Writer, 0, 1);
-    assert_eq!(queue(decide(&one_writer, &req, &c, 9_999, no_rss, 2)), req);
+    assert_eq!(
+        queue(decide(
+            &one_writer,
+            &req,
+            &c,
+            9_999,
+            no_rss,
+            2,
+            &AgingPolicy::default()
+        )),
+        req
+    );
     // ... and a seat slot still fits under both its caps.
     grant(decide(
         &one_writer,
@@ -182,6 +193,7 @@ fn caps_writer_counts_writer_and_run_caps() {
         9_999,
         no_rss,
         2,
+        &AgingPolicy::default(),
     ));
     // With max_runs 1 the same writer has also spent the run cap.
     let c = caps(1, 5, 5, 5, 0);
@@ -192,6 +204,7 @@ fn caps_writer_counts_writer_and_run_caps() {
         9_999,
         no_rss,
         2,
+        &AgingPolicy::default(),
     ));
 }
 
@@ -211,6 +224,7 @@ fn caps_session_counts_only_the_session_cap() {
         9_999,
         no_rss,
         2,
+        &AgingPolicy::default(),
     ));
     // ... but the sessions hold no run, writer or seat cap at all.
     grant(decide(
@@ -220,6 +234,7 @@ fn caps_session_counts_only_the_session_cap() {
         9_999,
         no_rss,
         2,
+        &AgingPolicy::default(),
     ));
     // The counters agree with the same picture.
     assert_eq!(
@@ -243,6 +258,7 @@ fn decide_grants_an_unbound_slot() {
         4_096,
         no_rss,
         7_000,
+        &AgingPolicy::default(),
     ));
     assert_eq!(slot.run_id, req.run_id);
     assert_eq!(slot.pid, req.pid);
@@ -272,6 +288,7 @@ fn decide_queues_on_caps() {
         9_999,
         no_rss,
         700,
+        &AgingPolicy::default(),
     ));
     assert_eq!(got, req, "a queued ticket is the request, stamp included");
 }
@@ -287,6 +304,7 @@ fn decide_queues_on_the_memory_floor() {
         512,
         no_rss,
         700,
+        &AgingPolicy::default(),
     ));
     // The same request passes with a smaller reservation (312 >= 256).
     grant(decide(
@@ -296,6 +314,7 @@ fn decide_queues_on_the_memory_floor() {
         512,
         no_rss,
         700,
+        &AgingPolicy::default(),
     ));
 }
 
@@ -315,6 +334,7 @@ fn decide_queues_behind_an_older_ticket() {
         9_999,
         no_rss,
         1_000,
+        &AgingPolicy::default(),
     ));
     // A request older than everything queued takes the slot.
     grant(decide(
@@ -324,6 +344,7 @@ fn decide_queues_behind_an_older_ticket() {
         9_999,
         no_rss,
         1_000,
+        &AgingPolicy::default(),
     ));
 }
 
@@ -337,6 +358,7 @@ fn decide_queues_a_reservation_above_free_memory_with_a_zero_floor() {
         100,
         no_rss,
         700,
+        &AgingPolicy::default(),
     ));
     // Exactly the free memory passes a zero floor.
     grant(decide(
@@ -346,6 +368,7 @@ fn decide_queues_a_reservation_above_free_memory_with_a_zero_floor() {
         100,
         no_rss,
         700,
+        &AgingPolicy::default(),
     ));
 }
 
@@ -365,5 +388,6 @@ fn decide_a_queued_ticket_with_the_same_stamp_does_not_block() {
         9_999,
         no_rss,
         1_000,
+        &AgingPolicy::default(),
     ));
 }
