@@ -1,4 +1,4 @@
-# L1 card · build-L1-0106 · 2026-11-02T14:45Z
+# L1 card · build-L1-0106 · 2026-11-02T14:47Z
 ## Goal
 - plangraph PRs: MERGE-READY to plangraph-replan-0105; sol writers via spawner only (D-3666, D-3668); plangraph-data PRs mine
 ## Keeper
@@ -15,7 +15,8 @@
 - #334 fix efbc85d86 (seat-334d MED+LOW+2NIT, hand-edit 13 lines, UNPUSHED); full suite J/s334-suite.log; delta mimo-pro seat J/seat-334e.out (J=/home/s/.claude/jobs/7d533977/tmp) next check 15:00Z
 - SEAT-TOOLS sol writer: gated spawn J/spawn-st.sh -> J/r-st.json (wt seat-tools-leg-sandbox) next check 15:00Z
 - #318 fix round build-L2-spawner3605-0092 since 14:00Z next check 15:00Z
-- #309 #314 #279 build-L2-keeperfix-0102 since 12:30Z next check 15:00Z
+- #309 MERGE-READY e3e05fcc from keeperfix-0102 but PR CONFLICTING (CHANGELOG) -> L2 merging main + CI; luna TOOLS seat asked of workst-L1-autoos-0088 14:46Z (reply to me); then GO-REQ (HIGH) to routing
+- #314 #279 build-L2-keeperfix-0102 next check 15:00Z
 ## Planned
 1. #324: suite rc=0 -> push lane, gh pr ready 324, CI green -> MERGE-READY 324 to replan-0105
 2. #334: suite rc=0 + seat ACCEPT -> push, CI green -> MERGE-READY 334 efbc85d86
