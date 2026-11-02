@@ -47,7 +47,7 @@ mod wake_tests;
 pub use io::{with_table, SlotError};
 #[cfg(windows)]
 pub use liveness::{FileSeatLocks, JobLiveness};
-pub use liveness::{GroupLiveness, GroupState, SeatLocks};
+pub use liveness::{GroupLiveness, GroupState, LockState, SeatLocks};
 #[cfg(target_os = "linux")]
 pub use liveness::{LinuxLiveness, ProcSeatLocks};
 pub use policy::{decide, effective_free_mb, Decision};
