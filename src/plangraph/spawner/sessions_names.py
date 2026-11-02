@@ -64,18 +64,8 @@ class _NamesMixin:
         finally:
             os.close(fd)  # closing the descriptor releases the lock
 
-    @contextlib.contextmanager
-    def _relaunch_locks(self, name):
-        """Role lock then counters flock (launch's order), held across the whole
-        relaunch so a concurrent one sees this one's record (role-counter mode)."""
-        if not isinstance(name, str) or self._names_mode() != "role-counter":
-            yield
-            return
-        with self._name_lock("role:" + self._role_of(name, False)[0]), self._counter_flock():
-            yield
-
     def _lock_key(self, name):
-        """launch's lock: the role in role-counter mode, else the name."""
+        """Lock for launch, relaunch, stop, mark_ready: the role (role-counter mode) or the name."""
         if not isinstance(name, str) or self._names_mode() != "role-counter":
             return str(name)
         m = _TAIL_RE.fullmatch(name)
@@ -94,21 +84,18 @@ class _NamesMixin:
             raise _refuse(f"{COUNTERS_FILE} is unreadable or corrupt: {path}")
         return raw
 
+    def _role_records(self, role):
+        tail = re.compile(re.escape(role) + r"-(\d{4})", re.IGNORECASE)
+        return [(int(m.group(1)), rec) for rec in self._all_records() if (m := tail.fullmatch(rec["name"]))]
+
     def _next_number(self, role):
-        key = role.casefold()
-        top = self._counters().get(key, 0)
-        tail = re.compile(re.escape(key) + r"-(\d{4})\Z")
-        for rec in self._all_records():
-            m = tail.fullmatch(str(rec.get("name") or "").casefold())
-            if m:
-                top = max(top, int(m.group(1)))
+        top = max([self._counters().get(role.casefold(), 0)] + [n for n, _ in self._role_records(role)])
         if top >= 9999:
             raise _refuse(f"role {role} has used all numbers up to 9999")
         return top + 1
 
     def _reserve_number(self, role, number):
-        counters = self._counters()
-        counters[role.casefold()] = number
+        counters = {**self._counters(), role.casefold(): number}
         atomic_write_private(self._sessions / COUNTERS_FILE, json.dumps(counters, sort_keys=True) + "\n")
 
     def _launch_name(self, cfg, name):
@@ -131,19 +118,16 @@ class _NamesMixin:
         if cfg.get("session_names", "role-counter") != "role-counter":
             return name
         role, digits = self._role_of(name, strict=False)
-        for rec in self._all_records() if digits else ():  # legacy digit-less names never are superseded
-            other = rec["name"]
-            m = re.fullmatch(re.escape(role) + r"-(\d{4})", other, re.IGNORECASE)
-            if m and int(m.group(1)) > int(digits) and _state(rec) in _LIVE:
-                raise _refuse(f"session {name} is superseded by {other}: relaunch {other}")
+        for n, rec in self._role_records(role) if digits else ():  # digit-less legacy names are never superseded
+            if n > int(digits) and _state(rec) in _LIVE:
+                raise _refuse(f"session {name} is superseded by {rec['name']}: relaunch {rec['name']}")
         number = self._next_number(role)  # the caller holds the role lock and flock
         self._reserve_number(role, number)
         return f"{role}-{number:04d}"
 
     def _relaunch_record(self, rec, name, handoff_path):
         """The relaunched record; a new name gets its own prompt copy and launch clock."""
-        new_rec = dict(rec)
-        new_rec["handoff"] = str(handoff_path) if handoff_path else None
+        new_rec = {**rec, "handoff": str(handoff_path) if handoff_path else None}
         if name != rec.get("name"):
             prompt_path = self._sessions / f"{name}.prompt.txt"
             atomic_write_private(prompt_path, Path(rec["prompt_file"]).read_text(encoding="utf-8"))
@@ -152,7 +136,6 @@ class _NamesMixin:
         return new_rec
 
 
-# Bound last: sessions_config ends by importing sessions, which imports this
-# module - the class above must already exist when that happens.
+# Bound last: sessions_config imports sessions, which imports this module (class above first).
 from plangraph.spawner.sessions_config import COUNTERS_FILE, _refuse
 from plangraph.spawner.sessions_store import _state

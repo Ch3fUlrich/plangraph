@@ -213,7 +213,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
                 _, key = self._find_record_by_id(session_id)
             except (ParameterRefused, OSError):
                 key = None
-        with self._name_lock(str(key or session_id or "")):
+        with self._name_lock(self._lock_key(key or session_id or "")):
             return self._action("stop", name or session_id or "", lambda: self._stop_inner(name, session_id))
 
     def _stop_inner(self, name, session_id):
@@ -306,7 +306,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         return sid
 
     def mark_ready(self, name, handoff, card=None):
-        with self._name_lock(str(name)):  # serializes with launch/relaunch
+        with self._name_lock(self._lock_key(name)):  # serializes with launch/relaunch
             return self._action("mark_ready", name, lambda: self._mark_ready_inner(name, handoff, card))
 
     def _mark_ready_inner(self, name, handoff, card):
@@ -324,7 +324,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         return {"ok": True, "name": name, "handoff": str(handoff_path)}
 
     def relaunch(self, name, handoff=None):
-        with self._name_lock(str(name)), self._relaunch_locks(name):
+        with self._name_lock(self._lock_key(name)), self._counter_flock():
             return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
 
     def _relaunch_inner(self, name, handoff):

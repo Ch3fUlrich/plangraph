@@ -27,10 +27,10 @@ checks the config, and `stop` alone runs without it. There is no default model. 
 carry its type and may not be `null`: `style_text` a non-empty string, `compact_window` a digit
 string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
 `compact_window` to `330000`. `session_names` is `role-counter` (default) or `free`: in
-`role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (next number per role,
-never reused); `relaunch` stops the old session (its record stays stopped) and starts a new one under
-the next number (`previous_name` = old), and is refused ("superseded") while a later `<role>-NNNN` record is
-live. `free` keeps free names and in-place relaunch.
+`role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (next number, never
+reused); `relaunch` stops the old session (its record stays stopped), starts a new one under the next
+number (`previous_name` = old) and is refused ("superseded") while a later record of the role is live.
+`free` keeps free names and in-place relaunch.
 
 **Threat model.** The caller is the authenticated MCP principal. Other processes of the same OS
 account are trusted - they can already run `claude` themselves - so same-account file swaps are out

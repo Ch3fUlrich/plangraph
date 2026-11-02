@@ -123,8 +123,7 @@ def site(tmp_path, monkeypatch):
     # the tests keep writing their handoff/prompt fixtures under tmp_path.
     write_config(cfg, json.dumps({
         "cwd_roots": [str(root), str(tmp_path)], "models": [MODEL], "efforts": [EFFORT],
-        "permission_modes": [MODE], "mcp_configs": [str(mcp)], "ctx_cap_tokens": 300000,
-        "session_names": "free"}))
+        "permission_modes": [MODE], "mcp_configs": [str(mcp)], "ctx_cap_tokens": 300000, "session_names": "free"}))
     return types.SimpleNamespace(tmp_path=tmp_path, home=home, root=root, proj=proj,
                                  mcp=mcp, cfg=cfg, state=tmp_path / "state")
 
