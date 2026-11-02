@@ -11,7 +11,7 @@
 - 11-02T15:00Z #324 f90855f0 pushed (CHANGELOG union after #328), gh pr ready
 ## In flight
 - #334 CI on ae309f39 (bg watch) -> green: MERGE-READY 334 ae309f39 to replan-0105
-- #324 D-3677(1): re-cut lane/spawner-kill-own-tree-4 from f90855f0 tree, move commit with Test-Removal: D-3677 + Hand-Edit, new PR replaces #324, no force-push
+- #336 replaces #324 (closed): lane/spawner-kill-own-tree-4 f93d5ea0 (Test-Removal D-3677 on move commit; no Hand-Edit: 251 lines > cap), CI run 41469288358 -> green: MERGE-READY 336 to replan-0105
 - #309 f0bde3a8 MERGE-READY (CI 41464942877 green); luna TOOLS seat queued to workst-L1-autoos successor; none by 15:20Z -> ask routing; ACCEPT -> GO-REQ
 - SEAT-PATH-FIXES sol writer spawned 15:10Z (brief incl. (4) 25 min review cap, approved D-3677): J/spawn-spf.sh -> J/r-spf.json/.wait (wt seat-path-fixes)
 - pd#20 91c1d775 MERGE-READY from spawner3605 (RC fix): mimo-pro delta seat J/seat-pd20.out; local router tests 61 passed; HIGH -> also tools seat (workst luna) -> GO-REQ
