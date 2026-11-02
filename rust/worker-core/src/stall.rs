@@ -1,15 +1,29 @@
-//! Supervise a child process: own process group, stall watchdog, overall timeout.
+//! Supervise a child process: own process tree, stall watchdog, overall timeout.
 //!
 //! stdout and stderr share one pipe, so any output on either counts as activity.
-//! On stall or timeout the whole group gets SIGTERM, then SIGKILL after a grace.
+//! On stall or timeout the whole tree dies: on Unix the child leads its own
+//! process group, which gets SIGTERM and then SIGKILL after the grace; on
+//! Windows the child and its descendants run in a job object with
+//! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which is terminated as a whole. The
+//! group mechanics live in the `unix` and `windows` child modules; this file
+//! keeps the loop portable.
 
 use std::io::{self, Read};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+mod unix;
+#[cfg(windows)]
+mod windows;
+
+#[cfg(unix)]
+use self::unix as platform;
+#[cfg(windows)]
+use self::windows as platform;
 
 #[derive(Debug, Clone)]
 pub struct Opts {
@@ -17,7 +31,9 @@ pub struct Opts {
     pub stall: Option<Duration>,
     /// Kill when the child runs this long overall.
     pub timeout: Option<Duration>,
-    /// Delay between SIGTERM and SIGKILL.
+    /// Delay between SIGTERM and SIGKILL. Unix only: on Windows there is no
+    /// SIGTERM, a kill terminates the whole job object at once and `grace` is
+    /// unused.
     pub grace: Duration,
     /// Keep at most this many trailing bytes of combined output.
     pub max_output: usize,
@@ -37,20 +53,15 @@ impl Default for Opts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Supervised {
     pub code: Option<i32>,
+    /// The fatal signal that stopped the child (Unix); always `None` on
+    /// Windows, where kills are job terminations with an exit code.
     pub signal: Option<i32>,
     pub stalled: bool,
     pub timed_out: bool,
-    /// The caller's cancel closure fired, so we terminated the group early.
+    /// The caller's cancel closure fired, so we terminated the tree early.
     pub cancelled: bool,
     /// Trailing combined stdout+stderr.
     pub output: Vec<u8>,
-}
-
-fn killpg(pgid: i32, sig: i32) {
-    // SAFETY: plain syscall; errors (e.g. ESRCH when the group is gone) are ignored.
-    unsafe {
-        libc::killpg(pgid, sig);
-    }
 }
 
 fn read_tail(mut r: impl Read, start: Instant, last: &AtomicU64, max: usize) -> Vec<u8> {
@@ -81,9 +92,9 @@ pub fn supervise(cmd: Command, opts: &Opts) -> io::Result<Supervised> {
 
 /// Like [`supervise`], but also stops the child when `cancelled` reports true.
 ///
-/// The cancel check is polled alongside stall/timeout and reuses the same
-/// SIGTERM-then-SIGKILL-after-grace path, so a cancelling caller never leaves a
-/// supervised child running.
+/// The cancel check is polled alongside stall/timeout and reuses the same kill
+/// path (SIGTERM then SIGKILL after `grace` on Unix; terminating the job object
+/// on Windows), so a cancelling caller never leaves a supervised child running.
 pub fn supervise_with_cancel(
     mut cmd: Command,
     opts: &Opts,
@@ -92,11 +103,9 @@ pub fn supervise_with_cancel(
     let (reader, writer) = io::pipe()?;
     cmd.stdin(Stdio::null())
         .stdout(writer.try_clone()?)
-        .stderr(writer)
-        .process_group(0);
-    let mut child = spawn_retrying(&mut cmd)?;
+        .stderr(writer);
+    let (group, mut child) = platform::Group::spawn(&mut cmd)?;
     drop(cmd); // closes our copies of the write end so the reader sees EOF
-    let pgid = child.id() as i32;
     let start = Instant::now();
     let last = Arc::new(AtomicU64::new(0));
     let (last2, max) = (last.clone(), opts.max_output);
@@ -123,12 +132,12 @@ pub fn supervise_with_cancel(
                     cancelled_flag = true;
                 }
                 if timed_out || stalled || cancelled_flag {
-                    killpg(pgid, libc::SIGTERM);
+                    group.terminate();
                     term_at = Some(now);
                 }
             }
             Some(t) if !killed && now - t >= opts.grace => {
-                killpg(pgid, libc::SIGKILL);
+                group.kill();
                 killed = true;
             }
             Some(_) => {}
@@ -136,11 +145,11 @@ pub fn supervise_with_cancel(
         thread::sleep(Duration::from_millis(10));
     };
     // Leave nothing behind (orphans would also keep the pipe open).
-    killpg(pgid, libc::SIGKILL);
+    group.kill();
     let output = reader.join().unwrap_or_default();
     Ok(Supervised {
         code: status.code(),
-        signal: status.signal(),
+        signal: platform::exit_signal(&status),
         stalled,
         timed_out,
         cancelled: cancelled_flag,
@@ -176,6 +185,7 @@ fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
