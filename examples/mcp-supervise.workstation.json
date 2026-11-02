@@ -8,13 +8,6 @@
       "scope": "host"
     },
     {
-      "name": "autoos-agent",
-      "port": 8101,
-      "cmd": ["python", "-m", "autoos.agent.mcp_server"],
-      "env": {},
-      "scope": "host"
-    },
-    {
       "name": "serena-plangraph",
       "port": 8102,
       "cmd": ["uvx", "--from", "serena-agent==1.7.0", "serena", "start-mcp-server", "--context", "claude-code", "--project", "C:/path/to/plangraph"],

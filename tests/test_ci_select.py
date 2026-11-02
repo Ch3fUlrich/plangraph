@@ -115,6 +115,9 @@ def test_workflow_gate_needs_every_always_job():
         + "' && github.event.before || github.event_name == 'pull_request' "
         "&& 'origin/main' || 'HEAD~1' }}")
     assert wf["jobs"]["file-size"]["steps"][0]["with"]["fetch-depth"] == 0
+    cl_base = [s for s in wf["jobs"]["changelog-docs"]["steps"] if "env" in s][0]["env"]
+    assert cl_base["CHANGELOG_BASE"] == base["FILESIZE_REQUIRE_BASE"]
+    assert wf["jobs"]["changelog-docs"]["steps"][0]["with"]["fetch-depth"] == 0
 
 
 def test_skill_page_change_runs_pytest():
@@ -197,6 +200,7 @@ def test_gate_all_selected_success():
         },
         "scrub": {"result": "success"},
         "file-size": {"result": "success"},
+        "changelog-docs": {"result": "success"},
         "pytest": {"result": "success"},
         "pytest-postgres": {"result": "success"},
         "rust": {"result": "success"},
@@ -214,6 +218,7 @@ def test_gate_selected_suite_skipped():
         },
         "scrub": {"result": "skipped"},
         "file-size": {"result": "success"},
+        "changelog-docs": {"result": "success"},
     }
     assert gate(needs) == ["scrub: skipped"]
 
@@ -226,6 +231,7 @@ def test_gate_selected_suite_failure():
         },
         "scrub": {"result": "failure"},
         "file-size": {"result": "success"},
+        "changelog-docs": {"result": "success"},
     }
     assert gate(needs) == ["scrub: failure"]
 
@@ -244,6 +250,7 @@ def test_gate_unselected_suite_skipped():
         },
         "scrub": {"result": "success"},
         "file-size": {"result": "success"},
+        "changelog-docs": {"result": "success"},
         "pytest": {"result": "skipped"},
         "pytest-postgres": {"result": "skipped"},
     }
@@ -270,6 +277,7 @@ def test_gate_missing_output_value_counts_as_selected():
         },
         "scrub": {"result": "success"},
         "file-size": {"result": "success"},
+        "changelog-docs": {"result": "success"},
         "pytest": {"result": "failure"},
     }
     problems = gate(needs)
@@ -291,6 +299,7 @@ def test_gate_docs_only_selection_passes():
         },
         "scrub": {"result": "success"},
         "file-size": {"result": "success"},
+        "changelog-docs": {"result": "success"},
     }
     assert gate(needs) == []
 
@@ -337,7 +346,7 @@ def test_cli_gate_bad_json(capsys):
 def test_cli_gate_success(capsys):
     needs_json = (
         '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
-        '"scrub": {"result": "success"}, "file-size": {"result": "success"}}'
+        '"scrub": {"result": "success"}, "file-size": {"result": "success"}, "changelog-docs": {"result": "success"}}'
     )
     ret = main(["gate", "--needs", needs_json])
     assert ret == 0
@@ -348,7 +357,7 @@ def test_cli_gate_success(capsys):
 def test_cli_gate_problems(capsys):
     needs_json = (
         '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
-        '"scrub": {"result": "failure"}, "file-size": {"result": "success"}}'
+        '"scrub": {"result": "failure"}, "file-size": {"result": "success"}, "changelog-docs": {"result": "success"}}'
     )
     ret = main(["gate", "--needs", needs_json])
     assert ret == 1
