@@ -2,37 +2,48 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from tools.autoos_refs_check import (
-    SECRET_KEYWORDS,
-    has_autoos,
-    looks_secret,
-    main,
-    scan_all,
+    RepoScanError, has_autoos, looks_secret, main, scan_all,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = REPO_ROOT / "tools" / "autoos_refs_check.py"
 
+# Symlink creation is not portable (it needs privileges on Windows), so no
+# test creates one without this guard.
+windows_skip = pytest.mark.skipif(
+    sys.platform == "win32", reason="symlink creation needs privileges on Windows"
+)
 
+
+def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), *args], capture_output=True, text=True
+    )
+
+
+def write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+@windows_skip
 def test_fixture_home_hits(tmp_path: Path) -> None:
     fixture_home = tmp_path / "fixture_home"
     fixture_home.mkdir()
+    claude_dir = fixture_home / ".claude"
 
     # 1. settings.json hook pointing at /home/x/code/AutoOS/tools/hooks/bash_guard.py
-    claude_dir = fixture_home / ".claude"
-    claude_dir.mkdir(parents=True)
-    settings_file = claude_dir / "settings.json"
-    settings_file.write_text(
-        '{\n  "hooks": {\n    "PreToolUse": [\n'
-        '      {"command": "/home/x/code/AutoOS/tools/hooks/bash_guard.py"}\n'
-        "    ]\n  }\n}\n",
-        encoding="utf-8",
-    )
+    write(claude_dir / "settings.json",
+          '{\n  "hooks": {\n    "PreToolUse": [\n'
+          '      {"command": "/home/x/code/AutoOS/tools/hooks/bash_guard.py"}\n'
+          "    ]\n  }\n}\n")
 
     # 2. symlinked skill into AutoOS
     skills_dir = claude_dir / "skills"
@@ -41,28 +52,17 @@ def test_fixture_home_hits(tmp_path: Path) -> None:
     skill_link.symlink_to("/home/x/code/AutoOS/skills/guard_skill")
 
     # 3. systemd unit with AutoOS
-    systemd_dir = fixture_home / ".config" / "systemd" / "user"
-    systemd_dir.mkdir(parents=True)
-    unit_file = systemd_dir / "autoos.service"
-    unit_file.write_text(
-        "[Unit]\nDescription=Test AutoOS Service\n\n"
-        "[Service]\nExecStart=/home/x/code/AutoOS/bin/daemon\n",
-        encoding="utf-8",
-    )
+    write(fixture_home / ".config" / "systemd" / "user" / "autoos.service",
+          "[Unit]\nDescription=Test AutoOS Service\n\n"
+          "[Service]\nExecStart=/home/x/code/AutoOS/bin/daemon\n")
 
     # 4. secret-looking file containing 'AutoOS' that must not be opened
-    secret_dir = fixture_home / ".local" / "share" / "plangraph"
-    secret_dir.mkdir(parents=True)
-    secret_file = secret_dir / "secret_launch.json"
+    secret_file = fixture_home / ".local" / "share" / "plangraph" / "secret_launch.json"
     secret_content = "SUPER_SECRET_PAYLOAD_NEVER_PRINT_12345 /home/x/code/AutoOS/db"
-    secret_file.write_text(secret_content, encoding="utf-8")
+    write(secret_file, secret_content)
 
     # Run check via CLI subprocess
-    proc = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--home", str(fixture_home)],
-        capture_output=True,
-        text=True,
-    )
+    proc = run_cli("--home", str(fixture_home))
 
     assert proc.returncode == 1, f"Expected rc 1 on hits, got {proc.returncode}"
     out = proc.stdout
@@ -86,17 +86,15 @@ def test_fixture_home_hits(tmp_path: Path) -> None:
         assert len(parts) == 3, f"Line must have <kind>\\t<path>\\t<detail>: {line}"
 
 
+@windows_skip
 def test_clean_home_returns_zero(tmp_path: Path) -> None:
     clean_home = tmp_path / "clean_home"
     clean_home.mkdir()
+    claude_dir = clean_home / ".claude"
 
     # Clean settings.json
-    claude_dir = clean_home / ".claude"
-    claude_dir.mkdir(parents=True)
-    (claude_dir / "settings.json").write_text(
-        '{"hooks": {"PreToolUse": [{"command": "/usr/local/bin/safe_hook.py"}]}}',
-        encoding="utf-8",
-    )
+    write(claude_dir / "settings.json",
+          '{"hooks": {"PreToolUse": [{"command": "/usr/local/bin/safe_hook.py"}]}}')
 
     # Clean skill symlink
     skills_dir = claude_dir / "skills"
@@ -104,28 +102,22 @@ def test_clean_home_returns_zero(tmp_path: Path) -> None:
     (skills_dir / "clean_skill").symlink_to("/usr/local/share/skills/clean")
 
     # Clean systemd unit
-    systemd_dir = clean_home / ".config" / "systemd" / "user"
-    systemd_dir.mkdir(parents=True)
-    (systemd_dir / "clean.service").write_text(
-        "[Unit]\nDescription=Clean Service\n[Service]\nExecStart=/usr/bin/daemon\n",
-        encoding="utf-8",
-    )
+    write(clean_home / ".config" / "systemd" / "user" / "clean.service",
+          "[Unit]\nDescription=Clean Service\n[Service]\nExecStart=/usr/bin/daemon\n")
 
     # Clean plangraph spec
-    pg_dir = clean_home / ".local" / "share" / "plangraph"
-    pg_dir.mkdir(parents=True)
-    (pg_dir / "clean_spec.json").write_text('{"target": "/opt/clean"}', encoding="utf-8")
+    write(clean_home / ".local" / "share" / "plangraph" / "clean_spec.json",
+          '{"target": "/opt/clean"}')
 
     # Clean bin router script
-    bin_dir = clean_home / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
-    (bin_dir / "clean_router").write_text("#!/bin/sh\necho clean\n", encoding="utf-8")
+    write(clean_home / ".local" / "bin" / "clean_router", "#!/bin/sh\necho clean\n")
 
-    proc = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--home", str(clean_home)],
-        capture_output=True,
-        text=True,
-    )
+    # Clean instruction files (merged spotless scenario)
+    write(claude_dir / "AGENTS.md", "See /usr/share/docs\n")
+    write(claude_dir / "CLAUDE.md", "# Notes\nnothing here\n")
+    write(clean_home / ".config" / "opencode" / "AGENTS.md", "clean\n")
+
+    proc = run_cli("--home", str(clean_home))
 
     assert proc.returncode == 0, f"Expected rc 0 on clean home, got {proc.returncode}"
     assert proc.stdout == ""
@@ -135,21 +127,13 @@ def test_clean_home_returns_zero(tmp_path: Path) -> None:
 def test_secret_keywords_never_opened(tmp_path: Path) -> None:
     home = tmp_path / "secrets_home"
     pg_dir = home / ".local" / "share" / "plangraph"
-    pg_dir.mkdir(parents=True)
 
     filenames = [
-        "my_token.json",
-        "secret.txt",
-        "credentials.env",
-        ".env",
-        "id_rsa",
-        "cert.pem",
-        "password.conf",
-        "signing.key",
+        "my_token.json", "secret.txt", "credentials.env", ".env",
+        "id_rsa", "cert.pem", "password.conf", "signing.key",
     ]
     for fn in filenames:
-        p = pg_dir / fn
-        p.write_text(f"PRIVATE_DATA_{fn} /AutoOS/something", encoding="utf-8")
+        write(pg_dir / fn, f"PRIVATE_DATA_{fn} /AutoOS/something")
 
     hits = scan_all(home)
     assert len(hits) == len(filenames)
@@ -159,6 +143,7 @@ def test_secret_keywords_never_opened(tmp_path: Path) -> None:
         assert looks_secret(p)
 
 
+@windows_skip
 def test_tracked_repo_symlink(tmp_path: Path) -> None:
     home = tmp_path / "home_empty"
     home.mkdir()
@@ -186,29 +171,21 @@ def test_tracked_repo_symlink(tmp_path: Path) -> None:
     assert detail == "/home/x/code/AutoOS/tools/helper.sh"
 
 
+@windows_skip
 def test_router_bin_and_mcp_configs(tmp_path: Path) -> None:
     home = tmp_path / "extra_home"
     bin_dir = home / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
 
     # Symlink in bin
+    write(bin_dir / "tool_script",
+          "#!/bin/bash\nexec /AutoOS/bin/real_tool \"$@\"\n")
     (bin_dir / "tool_symlink").symlink_to("/AutoOS/bin/tool")
-    # Script in bin
-    (bin_dir / "tool_script").write_text(
-        "#!/bin/bash\nexec /AutoOS/bin/real_tool \"$@\"\n", encoding="utf-8"
-    )
 
     # MCP configs
-    (home / ".claude.json").write_text(
-        '{"mcpServers": {"test": {"command": "/AutoOS/mcp/srv"}}}\n',
-        encoding="utf-8",
-    )
-    claude_dir = home / ".claude"
-    claude_dir.mkdir(parents=True)
-    (claude_dir / ".mcp.json").write_text(
-        '{"server": "AutoOS/node_modules/srv"}\n',
-        encoding="utf-8",
-    )
+    write(home / ".claude.json",
+          '{"mcpServers": {"test": {"command": "/AutoOS/mcp/srv"}}}\n')
+    write(home / ".claude" / ".mcp.json",
+          '{"server": "AutoOS/node_modules/srv"}\n')
 
     hits = scan_all(home)
     assert len(hits) == 4
@@ -226,14 +203,12 @@ def test_instruction_files_scanned(tmp_path: Path) -> None:
     opencode = home / ".config" / "opencode"
     opencode.mkdir(parents=True)
 
-    (claude / "AGENTS.md").write_text("Root: /home/x/code/AutoOS\n", encoding="utf-8")
-    (claude / "CLAUDE.md").write_text("See /home/x/code/AutoOS/docs\n", encoding="utf-8")
-    (claude / "notes.md").write_text("unit autoos-litellm.service restarts\n", encoding="utf-8")
-    (opencode / "CLAUDE.md").write_text("%h/code/AutoOS\n", encoding="utf-8")
+    write(claude / "AGENTS.md", "Root: /home/x/code/AutoOS\n")
+    write(claude / "CLAUDE.md", "See /home/x/code/AutoOS/docs\n")
+    write(claude / "notes.md", "unit autoos-litellm.service restarts\n")
+    write(opencode / "CLAUDE.md", "%h/code/AutoOS\n")
     # Skill markdown is only reached by the skill walker, not the instruction walker.
-    (claude / "skills" / "s1" / "SKILL.md").write_text(
-        "/home/x/code/AutoOS/skills/x\n", encoding="utf-8"
-    )
+    write(claude / "skills" / "s1" / "SKILL.md", "/home/x/code/AutoOS/skills/x\n")
 
     hits = scan_all(home)
     assert len(hits) == 5
@@ -248,12 +223,8 @@ def test_instruction_files_scanned(tmp_path: Path) -> None:
 
 def test_has_autoos_case_insensitive() -> None:
     for text in (
-        "/home/x/code/AutoOS/tools",
-        "AUTOOS/x",
-        "autoos-litellm.service",
-        "x-autoos-litellm.timer",
-        "%h/code/autoos",
-        "/var/AutoOS/",
+        "/home/x/code/AutoOS/tools", "AUTOOS/x", "autoos-litellm.service",
+        "x-autoos-litellm.timer", "%h/code/autoos", "/var/AutoOS/",
     ):
         assert has_autoos(text), text
     for text in ("autoosx", "xautoos", "myautoostuff"):
@@ -264,17 +235,9 @@ def test_secret_names_token_boundaries(tmp_path: Path) -> None:
     for name in ("monkey", "keyboard", "monkey_patch.sh", "keyword.txt", "keyboards.json"):
         assert not looks_secret(tmp_path / name), name
     for name in (
-        "api_key.json",
-        "apikey.txt",
-        "my_token.json",
-        "passwd",
-        "credentials.json",
-        "id_rsa",
-        "id_ed25519.pub",
-        "cert.pem",
-        "x.key",
-        "y.p12",
-        ".env",
+        "api_key.json", "apikey.txt", "my_token.json", "passwd",
+        "credentials.json", "id_rsa", "id_ed25519.pub", "cert.pem",
+        "x.key", "y.p12", ".env",
     ):
         assert looks_secret(tmp_path / name), name
 
@@ -282,26 +245,17 @@ def test_secret_names_token_boundaries(tmp_path: Path) -> None:
 def test_redaction_on_matching_line(tmp_path: Path) -> None:
     home = tmp_path / "redact_home"
     claude = home / ".claude"
-    (claude / "hooks").mkdir(parents=True)
-    (claude / "settings.json").write_text(
-        '{"hooks": {"PreToolUse": [{"command": "/home/x/code/AutoOS/h.py", '
-        '"token": "sk-'
-        'live-SECRETVALUE1234", '
-        '"authorization": "Bearer abc.def.GHIJK"}]}}\n',
-        encoding="utf-8",
-    )
-    (claude / "hooks" / "hook.sh").write_text(
-        "#!/bin/sh\nexec /home/x/code/AutoOS/bin/run sk-live-ZZZZ9999 "
-        + "A" * 400
-        + "\n",
-        encoding="utf-8",
-    )
+    write(claude / "settings.json",
+          '{"hooks": {"PreToolUse": [{"command": "/home/x/code/AutoOS/h.py", '
+          '"token": "sk-'
+          'live-SECRETVALUE1234", '
+          '"authorization": "Bearer abc.def.GHIJK"}]}}\n')
+    write(claude / "hooks" / "hook.sh",
+          "#!/bin/sh\nexec /home/x/code/AutoOS/bin/run sk-live-ZZZZ9999 "
+          + "A" * 400
+          + "\n")
 
-    proc = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--home", str(home)],
-        capture_output=True,
-        text=True,
-    )
+    proc = run_cli("--home", str(home))
     assert proc.returncode == 1
     out = proc.stdout
     for secret in ("SECRETVALUE1234", "abc.def.GHIJK", "ZZZZ9999"):
@@ -316,28 +270,18 @@ def test_redaction_on_matching_line(tmp_path: Path) -> None:
 
 def test_backups_and_jobs_excluded(tmp_path: Path) -> None:
     home = tmp_path / "excl_home"
-    pg = home / ".local" / "share" / "plangraph"
-    (pg / "backups").mkdir(parents=True)
-    (pg / "backups" / "snap.json").write_text(
-        '{"cmd": "/home/x/code/AutoOS/bin"}\n', encoding="utf-8"
-    )
-    jobs = home / ".claude" / "jobs" / "j1"
-    jobs.mkdir(parents=True)
-    (jobs / ".mcp.json").write_text(
-        '{"server": "/home/x/code/AutoOS/srv"}\n', encoding="utf-8"
-    )
+    write(home / ".local" / "share" / "plangraph" / "backups" / "snap.json",
+          '{"cmd": "/home/x/code/AutoOS/bin"}\n')
+    write(home / ".claude" / "jobs" / "j1" / ".mcp.json",
+          '{"server": "/home/x/code/AutoOS/srv"}\n')
 
     assert scan_all(home) == []
 
 
 def test_timer_unit_flagged(tmp_path: Path) -> None:
     home = tmp_path / "timer_home"
-    user = home / ".config" / "systemd" / "user"
-    user.mkdir(parents=True)
-    (user / "autoos-litellm.timer").write_text(
-        "[Unit]\nDescription=Timer\n[Timer]\nExecStart=%h/code/AutoOS/bin/tick.sh\n",
-        encoding="utf-8",
-    )
+    write(home / ".config" / "systemd" / "user" / "autoos-litellm.timer",
+          "[Unit]\nDescription=Timer\n[Timer]\nExecStart=%h/code/AutoOS/bin/tick.sh\n")
 
     hits = scan_all(home)
     assert len(hits) == 1
@@ -347,21 +291,105 @@ def test_timer_unit_flagged(tmp_path: Path) -> None:
     assert "%h/code/AutoOS/bin/tick.sh" in detail
 
 
-def test_clean_home_exit_code_zero(tmp_path: Path) -> None:
-    home = tmp_path / "spotless_home"
-    claude = home / ".claude"
-    claude.mkdir(parents=True)
-    opencode = home / ".config" / "opencode"
-    opencode.mkdir(parents=True)
-    (claude / "AGENTS.md").write_text("See /usr/share/docs\n", encoding="utf-8")
-    (claude / "CLAUDE.md").write_text("# Notes\nnothing here\n", encoding="utf-8")
-    (opencode / "AGENTS.md").write_text("clean\n", encoding="utf-8")
+def test_missing_home_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--home", str(tmp_path / "absent")]) == 2
+    assert "error" in capsys.readouterr().err
 
-    proc = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--home", str(home)],
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0
-    assert proc.stdout == ""
-    assert scan_all(home) == []
+
+def test_repo_git_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    home, bad_repo = tmp_path / "h", tmp_path / "not_a_repo"
+    home.mkdir()
+    bad_repo.mkdir()
+    assert main(["--home", str(home), "--repo", str(bad_repo)]) == 2
+    assert "git" in capsys.readouterr().err
+    with pytest.raises(RepoScanError):
+        scan_all(home, repo=bad_repo)
+    with pytest.raises(RepoScanError):
+        scan_all(home, repo=tmp_path / "missing_repo")
+
+
+def test_apikey_values_redacted(tmp_path: Path) -> None:
+    home = tmp_path / "h"
+    # Fragment-built so no synthetic token-shaped literal lands in the source.
+    secret_a = "AAAA" + "1111"
+    secret_b = "CCCC" + "3333"
+    write(home / ".claude" / "settings.json",
+          f'{{"cmd": "/home/x/code/AutoOS/run", "apikey": "{secret_a}", '
+          f'"OPENAI_API_KEY": "{secret_b}"}}\n')
+    proc = run_cli("--home", str(home))
+    assert proc.returncode == 1
+    out = proc.stdout
+    assert secret_a not in out and secret_b not in out
+    assert out.count("<redacted>") >= 2
+
+
+def test_settings_local_json_scanned(tmp_path: Path) -> None:
+    home = tmp_path / "h"
+    write(home / ".claude" / "settings.local.json",
+          '{"hooks": {"cmd": "/home/x/code/AutoOS/h.py"}}\n')
+    hits = scan_all(home)
+    assert len(hits) == 1 and hits[0][0] == "claude-settings"
+
+
+@windows_skip
+def test_systemd_dropins_and_wants(tmp_path: Path) -> None:
+    home = tmp_path / "h"
+    user = home / ".config" / "systemd" / "user"
+    write(user / "autoos.service.d" / "override.conf",
+          "[Service]\nExecStart=/home/x/code/AutoOS/bin/x\n")
+    (user / "multi-user.target.wants").mkdir(parents=True)
+    (user / "multi-user.target.wants" / "autoos.service").symlink_to(
+        "/home/x/code/AutoOS/units/autoos.service")
+    hits = scan_all(home)
+    assert len(hits) == 2 and {h[0] for h in hits} == {"systemd"}
+
+
+@windows_skip
+def test_symlinked_skill_dir_traversed(tmp_path: Path) -> None:
+    home = tmp_path / "h"
+    skills = home / ".claude" / "skills"
+    skills.mkdir(parents=True)
+    real = tmp_path / "real_skill"
+    write(real / "SKILL.md", "/home/x/code/AutoOS/skills/x\n")
+    (skills / "linked").symlink_to(real, target_is_directory=True)
+    # A link cycle must not loop or duplicate hits (resolved dirs are seen once).
+    (skills / "loop").symlink_to(skills, target_is_directory=True)
+    hits = scan_all(home)
+    assert len(hits) == 1 and hits[0][2] == "/home/x/code/AutoOS/skills/x"
+
+
+def test_repo_symlink_regular_file_fallback(tmp_path: Path) -> None:
+    home = tmp_path / "h"
+    home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True)
+    write(repo / "link", "/home/x/code/AutoOS/tools/h.sh\n")
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "-w", "link"],
+        check=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "--add",
+         "--cacheinfo", f"120000,{blob},link"],
+        check=True, capture_output=True)
+    hits = scan_all(home, repo=repo)
+    assert len(hits) == 1 and hits[0][1] == str(repo / "link")
+    assert "/home/x/code/AutoOS/tools/h.sh" in hits[0][2]
+
+
+def test_tabs_flattened_in_report(tmp_path: Path) -> None:
+    home = tmp_path / "h"
+    write(home / ".claude" / "CLAUDE.md", "/home/x/code/AutoOS/x\ttabbed\tline\r\n")
+    hits = scan_all(home)
+    assert len(hits) == 1
+    assert "\t" not in hits[0][2] and "\r" not in hits[0][2]
+    out = run_cli("--home", str(home)).stdout
+    assert all(len(line.split("\t")) == 3 for line in out.strip().splitlines())
+
+
+def test_secret_path_only_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    home = tmp_path / "h"
+    write(home / ".local" / "share" / "plangraph" / "launch_token.json",
+          "/home/x/code/AutoOS/db\n")
+    assert main(["--home", str(home)]) == 3
+    assert "SECRET-PATH" in capsys.readouterr().out
