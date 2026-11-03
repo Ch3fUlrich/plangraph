@@ -7,11 +7,10 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::os::windows::io::AsRawHandle;
 use std::time::{Duration, Instant};
-use windows_sys::Win32::Foundation::{LocalFree, HANDLE, HLOCAL};
-use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security::{
-    CheckTokenMembership, GetAce, GetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACL,
-    DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    CheckTokenMembership, GetAce, GetKernelObjectSecurity, GetSecurityDescriptorDacl,
+    ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 static PIPE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -106,7 +105,7 @@ fn initialize_blocking(file: &mut std::fs::File) -> serde_json::Value {
 
 #[test]
 fn pipe_name_includes_user_name_and_serves() {
-    let _lock = PIPE_TEST.lock().unwrap();
+    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let name = pipe_name();
     assert!(name.starts_with(r"\\.\pipe\plangraph-spawnd-"), "{name}");
     assert!(name.ends_with(&user_name()), "{name}");
@@ -122,7 +121,7 @@ fn pipe_name_includes_user_name_and_serves() {
 
 #[test]
 fn second_serve_on_live_pipe_exits_two() {
-    let _lock = PIPE_TEST.lock().unwrap();
+    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let name = pipe_name();
     let _guard = spawn_serve();
     let _file = wait_connect(&name);
@@ -137,26 +136,34 @@ fn second_serve_on_live_pipe_exits_two() {
 
 #[test]
 fn pipe_dacl_grants_only_current_user() {
-    let _lock = PIPE_TEST.lock().unwrap();
+    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let name = pipe_name();
     let _guard = spawn_serve();
     let file = wait_connect(&name);
     unsafe {
-        let mut owner: PSID = std::ptr::null_mut();
-        let mut group: PSID = std::ptr::null_mut();
-        let mut dacl: *mut ACL = std::ptr::null_mut();
-        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-        let status = GetSecurityInfo(
-            file.as_raw_handle() as HANDLE,
-            SE_FILE_OBJECT,
+        // GetKernelObjectSecurity takes no object type (GetSecurityInfo with
+        // SE_FILE_OBJECT answered 87 on a pipe client handle); the client
+        // handle carries READ_CONTROL through GENERIC_READ.
+        let handle = file.as_raw_handle() as HANDLE;
+        let mut needed = 0u32;
+        GetKernelObjectSecurity(
+            handle,
             DACL_SECURITY_INFORMATION,
-            &mut owner,
-            &mut group,
-            &mut dacl,
             std::ptr::null_mut(),
-            &mut descriptor,
+            0,
+            &mut needed,
         );
-        assert_eq!(status, 0, "GetSecurityInfo failed");
+        assert!(needed > 0, "no security descriptor size");
+        let mut buf = vec![0u8; needed as usize];
+        let descriptor = buf.as_mut_ptr() as PSECURITY_DESCRIPTOR;
+        let ok = GetKernelObjectSecurity(
+            handle,
+            DACL_SECURITY_INFORMATION,
+            descriptor,
+            needed,
+            &mut needed,
+        );
+        assert_ne!(ok, 0, "GetKernelObjectSecurity failed");
         let mut present: i32 = 0;
         let mut defaulted: i32 = 0;
         let mut acl: *mut ACL = std::ptr::null_mut();
@@ -178,13 +185,12 @@ fn pipe_dacl_grants_only_current_user() {
             0
         );
         assert_ne!(is_member, 0, "current user must hold the ACE");
-        LocalFree(descriptor as HLOCAL);
     }
 }
 
 #[test]
 fn disconnected_pipe_probe_leaves_server_alive() {
-    let _lock = PIPE_TEST.lock().unwrap();
+    let _lock = PIPE_TEST.lock().unwrap_or_else(|e| e.into_inner());
     let _guard = spawn_serve();
     let name = pipe_name();
     drop(wait_connect(&name));
