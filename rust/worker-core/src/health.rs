@@ -1,6 +1,11 @@
 //! Pure row-derived health. Provider reset values and overlays belong to RL10b.
-use crate::{hosts::Role, outcome::Class};
+use crate::{
+    hosts::Role,
+    outcome::{Class, Scope},
+};
 
+#[cfg(test)]
+mod nonverdict_tests;
 #[cfg(test)]
 mod tests;
 
@@ -193,32 +198,55 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
         attempts
             .into_iter()
             .filter(|r| {
-                r.leg_key == leg_key
-                    && r.route_key == route_key
-                    && (r.role == role || r.outcome != Class::Ok)
+                if r.route_key != route_key {
+                    return false;
+                }
+                match r.outcome.scope() {
+                    Scope::Route => true,
+                    Scope::LegReview => {
+                        role == Role::Review && r.leg_key == format!("{leg_key}#review")
+                    }
+                    _ => r.leg_key == leg_key && (r.outcome != Class::Ok || r.role == role),
+                }
             })
             .collect(),
     );
     let mut health = Health::default();
     let mut success = None;
+    let mut killed = Vec::new();
     for row in rows {
         health.advance(row.ts);
         let class = row.outcome;
         if class == Class::Ok {
             health = Health::default();
             success = Some(row.ts);
+            killed.clear();
             continue;
         }
         if class.is_neutral() {
+            if health.state == State::HalfOpen {
+                health.non_verdict_count += 1;
+                if health.non_verdict_count == 3 {
+                    health.open(class, row.ts);
+                } else {
+                    health.until_s = Some(row.ts.saturating_add(reprobe_gap_s()));
+                    health.until_src = Some(UntilSrc::Row);
+                }
+            }
             continue;
         }
         health.non_verdict_count = 0;
         health.strikes = health.strikes.saturating_add(1);
+        let reached = if class == Class::KilledExternal {
+            killed.retain(|ts| row.ts.saturating_sub(*ts) <= 3600);
+            killed.push(row.ts);
+            killed.len() >= trip(class) as usize
+        } else {
+            health.strikes >= trip(class)
+        };
         let probe = health.state == State::HalfOpen;
         let recent_success = success.is_some_and(|ts| row.ts.saturating_sub(ts) < 86400);
-        if class.carries_reset()
-            || ((probe || health.strikes >= trip(class)) && !(probe && recent_success))
-        {
+        if class.carries_reset() || ((probe || reached) && !(probe && recent_success)) {
             health.open(class, row.ts);
         }
     }

@@ -2,7 +2,12 @@ use super::*;
 
 pub(super) fn row(class: Class, ts: i64) -> Row {
     Row {
-        leg_key: "leg".into(),
+        leg_key: if class.scope() == Scope::LegReview {
+            "leg#review"
+        } else {
+            "leg"
+        }
+        .into(),
         route_key: "route".into(),
         ts,
         role: Role::Review,
