@@ -9,12 +9,12 @@ fn monitor(limits: Limits, mode: Mode) -> Monitor {
         Modes {
             first: mode,
             silent: mode,
-            milestone: mode,
+            milestone: Mode::Off,
         },
         0,
     )
 }
-fn signal(m: &mut Monitor, kind: Kind, ts_ms: u64) {
+pub(super) fn signal(m: &mut Monitor, kind: Kind, ts_ms: u64) {
     m.feed(Signal {
         kind,
         ts_ms,
@@ -22,9 +22,17 @@ fn signal(m: &mut Monitor, kind: Kind, ts_ms: u64) {
     });
 }
 fn tick(m: &mut Monitor, now: u64) -> Option<Decision> {
+    let d = raw_tick(m, now);
+    if d.is_some_and(|d| matches!(d.act, Act::Warn | Act::WouldWarn)) {
+        raw_tick(m, now)
+    } else {
+        d
+    }
+}
+pub(super) fn raw_tick(m: &mut Monitor, now: u64) -> Option<Decision> {
     m.tick(now, Ctx::default())
 }
-fn decision(d: Decision, rule: Rule, outcome: KillOutcome, open: u32, seconds: u64) {
+pub(super) fn decision(d: Decision, rule: Rule, outcome: KillOutcome, open: u32, seconds: u64) {
     assert_eq!(d.rule, rule);
     assert_eq!(d.outcome, outcome);
     assert_eq!(d.open_tools, open);
@@ -203,4 +211,120 @@ fn per_rule_modes_are_independent() {
     assert_eq!(d.act, Act::Kill);
     decision(d, Silent, HangSilent, 0, 600);
     assert_eq!(m.state(), State::Ended(Silent));
+}
+
+#[test]
+fn f_warns_once_at_80_percent() {
+    let mut m = monitor(Limits::default(), Mode::On);
+    assert_eq!(raw_tick(&mut m, 143_999), None);
+    let d = raw_tick(&mut m, 144_000).unwrap();
+    decision(d, FirstActivity, HangNoActivity, 0, 600);
+    assert_eq!((d.act, d.kill_at_ms), (Act::Warn, Some(183_000)));
+    assert_eq!(m.state(), State::Pending);
+    assert_eq!(raw_tick(&mut m, 182_999), None);
+    assert_eq!(raw_tick(&mut m, 183_000).unwrap().act, Act::Kill);
+}
+
+#[test]
+fn s_warns_once_at_80_percent_of_s_eff() {
+    for open in [false, true] {
+        let mut m = monitor(Limits::default(), Mode::On);
+        signal(&mut m, Kind::Content, 1000);
+        if open {
+            tool(&mut m, Phase::Start, 1000);
+        }
+        let seconds = if open { 1800 } else { 600 };
+        let warn_at = 1000 + seconds * 800;
+        let kill_at = 1000 + (seconds + 3) * 1000;
+        assert_eq!(raw_tick(&mut m, warn_at - 1), None);
+        let d = raw_tick(&mut m, warn_at).unwrap();
+        decision(d, Silent, HangSilent, u32::from(open), seconds);
+        assert_eq!((d.act, d.kill_at_ms), (Act::Warn, Some(kill_at)));
+        assert_eq!(m.state(), State::Active);
+        assert_eq!(raw_tick(&mut m, kill_at - 1), None);
+        assert_eq!(raw_tick(&mut m, kill_at).unwrap().act, Act::Kill);
+    }
+}
+
+#[test]
+fn request_in_confirm_window_cancels_f_kill() {
+    for at in [182_000, 182_999] {
+        let mut m = monitor(Limits::default(), Mode::On);
+        assert_eq!(raw_tick(&mut m, 144_000).unwrap().act, Act::Warn);
+        signal(&mut m, Kind::Request, at);
+        assert_eq!(raw_tick(&mut m, 183_000), None);
+        assert_eq!(m.state(), State::Active);
+    }
+}
+
+#[test]
+fn strong_in_confirm_window_cancels_s_kill_and_rearms_warn() {
+    for kind in [Kind::Content, Kind::Weak, Kind::Request] {
+        let mut m = monitor(Limits::default(), Mode::On);
+        signal(&mut m, Kind::Content, 0);
+        assert_eq!(raw_tick(&mut m, 480_000).unwrap().act, Act::Warn);
+        signal(&mut m, kind, 602_999);
+        assert_eq!(raw_tick(&mut m, 603_000), None);
+        assert_eq!(m.state(), State::Active);
+        assert_eq!(raw_tick(&mut m, 1_082_998), None);
+        assert_eq!(raw_tick(&mut m, 1_082_999).unwrap().act, Act::Warn);
+    }
+}
+
+#[test]
+fn late_tick_gives_warn_then_kill_and_carries_kill_at() {
+    for active in [false, true] {
+        for mode in [Mode::On, Mode::Shadow] {
+            let mut m = monitor(Limits::default(), mode);
+            if active {
+                signal(&mut m, Kind::Content, 0);
+            }
+            let before = m.state();
+            let d = raw_tick(&mut m, 900_000).unwrap();
+            let shadow = mode == Mode::Shadow;
+            assert_eq!(d.act, if shadow { Act::WouldWarn } else { Act::Warn });
+            assert_eq!(d.kill_at_ms, Some(if active { 603_000 } else { 183_000 }));
+            assert_eq!(m.state(), before);
+            let kill = raw_tick(&mut m, 900_000).unwrap();
+            assert_eq!(kill.act, if shadow { Act::WouldKill } else { Act::Kill });
+            assert_eq!(kill, Decision { act: kill.act, ..d });
+            assert_eq!(raw_tick(&mut m, 900_001), None);
+            if shadow {
+                assert_eq!(m.state(), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn off_mode_error_signal_and_ended_monitor_give_no_warn() {
+    let mut off = monitor(Limits::default(), Mode::Off);
+    assert_eq!(raw_tick(&mut off, u64::MAX), None);
+    signal(&mut off, Kind::Content, 0);
+    assert_eq!(raw_tick(&mut off, u64::MAX), None);
+    let mut m = monitor(Limits::default(), Mode::On);
+    signal(&mut m, Kind::Error, 1000);
+    assert_eq!(raw_tick(&mut m, 1000), None);
+    assert_eq!(m.state(), State::Pending);
+    assert_eq!(raw_tick(&mut m, 183_000).unwrap().act, Act::Warn);
+    assert_eq!(raw_tick(&mut m, 183_000).unwrap().act, Act::Kill);
+    signal(&mut m, Kind::Content, 184_000);
+    assert_eq!(raw_tick(&mut m, u64::MAX), None);
+}
+
+pub(super) fn progress(mode: Mode) -> Monitor {
+    let mut m = monitor(Limits::default(), mode);
+    m.modes.milestone = mode;
+    signal(&mut m, Kind::Content, 1000);
+    m
+}
+pub(super) fn progress_tick(m: &mut Monitor, now: u64, safe_alt: bool) -> Option<Decision> {
+    signal(m, Kind::Content, now);
+    m.tick(
+        now,
+        Ctx {
+            edited: false,
+            safe_alt,
+        },
+    )
 }
