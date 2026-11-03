@@ -162,6 +162,20 @@ fn transition_table_and_sticky_end() {
 #[test]
 fn failures_and_events() {
     let dir = tempdir().unwrap();
+    for code in [Value::Null, json!(0)] {
+        let mut r = RunRecord::create(
+            dir.path(),
+            "run-a",
+            "fixture",
+            Map::new(),
+            Status::Queued,
+            1.0,
+        )
+        .unwrap();
+        r.set("exit_code", code);
+        r.transition(Status::Failed, 2.0).unwrap();
+        assert_eq!(r.get("exit_code"), Some(&json!(1)));
+    }
     for (code, expected) in [
         (Value::Null, json!(1)),
         (json!(0), json!(1)),
