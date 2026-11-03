@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 
 #[cfg(unix)]
 use self::unix as platform;
@@ -199,7 +199,7 @@ const SPAWN_TRIES: u32 = 6;
 /// ETXTBSY. That condition clears in milliseconds once the writer closes its
 /// fd; any other error is returned at once. The one spawn point for every
 /// supervised child, so user scripts need no retry of their own.
-fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
+pub(crate) fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
     let mut tries = 1;
     loop {
         match cmd.spawn() {

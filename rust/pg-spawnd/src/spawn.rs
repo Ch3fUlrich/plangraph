@@ -111,7 +111,8 @@ pub(crate) fn spawn(state: &Path, args: &Args) -> Result<Value, ToolError> {
         )?;
         return Err(error);
     }
-    let plan = placement::route(state, args)?;
+    let plan: Value = serde_json::from_str(&placement::route(state, args)?)
+        .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
     let leg = &plan["first_leg"];
     if !plan["legs"].is_array()
         || !leg.is_object()

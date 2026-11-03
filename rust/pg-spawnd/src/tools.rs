@@ -69,9 +69,7 @@ pub(crate) fn call_tool(
             _ => crate::placement::route(state, &args),
         }
         .map_err(crate::errors::ToolError::into_error_data)?;
-        return Ok(CallToolResult::success(vec![ContentBlock::text(
-            payload.to_string(),
-        )]));
+        return Ok(CallToolResult::success(vec![ContentBlock::text(payload)]));
     }
     if matches!(
         name,

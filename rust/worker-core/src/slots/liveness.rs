@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "linux")]
-mod linux;
+pub(crate) mod linux;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 #[cfg(windows)]

@@ -76,6 +76,10 @@ impl GroupLiveness for LinuxLiveness {
 /// a comm containing spaces or parentheses is safe.
 pub(super) fn read_start_time(proc_root: &Path, pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat")).ok()?;
+    parse_start_time(&stat)
+}
+
+pub(crate) fn parse_start_time(stat: &str) -> Option<u64> {
     let rest = stat.rsplit_once(')')?.1;
     // After the comm: state (field 3) ... starttime (field 22) is the 20th
     // whitespace-separated token of the remainder.
