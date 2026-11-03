@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::sync::OnceLock;
 
 #[cfg(test)]
+mod classify_tests;
+#[cfg(test)]
 mod tests;
 
 pub struct Input<'a> {
