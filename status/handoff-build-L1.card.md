@@ -1,30 +1,29 @@
-# L1 card · build-L1-0139 · 2026-11-03T09:02Z
+# L1 card · build-L1-0144 · 2026-11-03T09:53Z
 ## Goal
-- D-3722 order: SPAWNER-DEEPSEEK-REVIEW-LEG -> KEEPER-SNAP-S0 -> SEAT-PATH-FIXES (#309+#338, HOLD D-3736); D-3721 no Claude writers/seats until 11-05 00:00Z; omniroute 2nd seat for prox-L1-main (D-3681(2))
+- HOLD D-3746 until 2026-11-05T11:00Z (no new lane/seat/run, no polling); then D-3745 sol-first writer, D-3722 order: #377 -> #380 -> SEAT-PATH-FIXES (#309+#338)
 ## Keeper
-- claimed (leases 10:47Z): KEEPER-SNAP-S0-TIMINGS ep1, SEAT-PATH-FIXES ep4, KEEPER-EVIDENCE-MERGE-HEAD ep3, SPAWNER-LEG-GROK ep2, SPAWNER-DEEPSEEK-REVIEW-LEG ep1
-- ready next: SPAWNER-LEGS-D3605 (after #338)
+- claimed (leases 10:47Z, will lapse in hold): KEEPER-SNAP-S0-TIMINGS ep1, SEAT-PATH-FIXES ep4, KEEPER-EVIDENCE-MERGE-HEAD ep3, SPAWNER-LEG-GROK ep2, SPAWNER-DEEPSEEK-REVIEW-LEG ep1
+- ready next: SPAWNER-SOL-FIRST-WRITER (define asked of routing), SPAWNER-LEGS-D3605 (after #338)
 ## Done
-- 11-03T07:40Z MD-SYNC-SNAPSHOT-TIMEOUT cbd41dce PR#343 merged GO D-3734, evidence 57f03473 D-3736, seat run-00db1226, keeper done
-- 11-03T06:45Z D-3724 - cleanup: 14 target/ + 163 worktrees removed, plangraph-worktrees 37G->15G
-- 11-03T07:16Z D-3724 - routerctl units fixed: restored live-stall 5d7873c6 + live-liveness 31331e80, reset-failed
-- 11-03T08:00Z D-3681 9b4daa73 omniroute r3+r4 pushed, seat run-19fc555f ACCEPT, 4 LOW fixed
-- 11-03T09:00Z KEEPER-SNAP-S0-TIMINGS bd4bb6c4 PR#380 r1 run-2cec602d fixed 6 findings, my 3072 passed
+- 11-03T09:24Z KEEPER-SNAP-S0-TIMINGS bd4bb6c4 PR#380 delta seat deepseek run-401695f0 ACCEPT, 0 findings
+- 11-03T09:35Z D-3744 cbd41dceb md-sync live on wt md-sync-cbd41dce, drop-in z9-md-sync-cbd41dce.conf, 221 passed, run Result=success
+- 11-03T09:45Z SPAWNER-DEEPSEEK-REVIEW-LEG 08cf1334 PR#377 r1 writer 178ffd72 + Hand-Edit eca511fd, 1375 passed, seat run-06897295 ACCEPT
 ## In flight
-- SPAWNER-DEEPSEEK-REVIEW-LEG run-2f9f2fe0 since 07:45Z next check 09:30Z (J/r-w377r2b.wait) -> verify, push, delta seat
-- SEAT-PATH-FIXES hourly leg probe since 07:40Z next check 09:40Z (bg; first ok leg -> tool seats #338/#380/omniroute)
+- D-3681 omniroute r5 writer mimo-pro run-1171c1f1 since 09:40Z next check 11-05T11:00Z (waiter stopped; commits locally, no push)
+- SPAWNER-LEG-GROK writer mimo-pro run-a2b11fd3 since 09:47Z next check 11-05T11:00Z (lane/spawner-leg-grok from 08cf1334)
+- SPAWNER-SOL-FIRST-WRITER writer sol run-c58e5bc6 since 09:50Z next check 11-05T11:00Z (lane/sol-first-writer from 442912995)
 ## Planned
-1. KEEPER-SNAP-S0-TIMINGS delta seat deepseek on 97cbee49..bd4bb6c4 (check 1 removed assert), then 2nd family + judge
-2. SPAWNER-LEG-GROK respawn writer after #377 (brief K/brief-catr3.md) - unblocks HIGH 2nd family
-3. SEAT-PATH-FIXES tool seat on r3 delta 94334676 when a leg answers, judge, GO, batch #309+#338
+1. On resume: verify the 3 writer commits (spawner result <run>), push; r5 sha to prox-L1-main + check omp.ts:52 dir fix; deepseek delta seats
+2. SPAWNER-SOL-FIRST-WRITER seat + merge, then ff live spawner-main (D-3745)
+3. #377/#380/#338 HIGH tools seat when a leg serves or Haiku returns 11-05 (D-3736)
 ## Open
-- BLOCKED #338/#380/omniroute 2nd tool seat: qoder credit, opencode free limit, Go unavailable | default hold D-3736 | deadline none
-- BLOCKED HOST-DISK-GUARD-REAPER leaf define (skip systemd/live-* paths) | default routing defines | deadline none
-- BLOCKED ff spawner-main 6aabc772->78c5f776 no 0-run window | default routing 10-min pause | deadline none
-- BLOCKED pd#15/16/17/21 final-round MEDs | default r6 exception or L1 Hand-Edit | deadline none
+- BLOCKED #377/#380/#338/omniroute HIGH tools seat | default hold D-3736 | deadline 11-05
+- BLOCKED SPAWNER-SOL-FIRST-WRITER keeper define (JSON sent) | default routing defines as sent | deadline none
+- BLOCKED ff spawner-main 6aabc772 (live route mimo>flash>sonnet>sol) | default 10-min spawner pause | deadline none
+- BLOCKED HOST-DISK-GUARD-REAPER define; pd#15/16/17/21 MEDs | default routing | deadline none
 ## Traps
-- J=/home/s/.claude/jobs/666c38f5/tmp, K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79; seat2.sh/spawnw2.sh PYPATH J/smoke/wt/src; spawnw wait 1h too short -> re-wait run id
-- paid deepseek leg text-only: NO-TOOLS prompt + inline diff (K/seat-*nt.md); routing answers socket messages faster than routing.jsonl
-- no tools/prepush.py in plangraph; bash-guard denies unquoted heredoc with $(...): quote or use Write; worktree reaper must skip unit paths
+- J=/home/s/.claude/jobs/666c38f5/tmp, K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79; spawnw2.sh/seat2.sh; hourly probe loop killed (D-3746)
+- deepseek leg text-only: NO-TOOLS prompt + inline diff; spawner steer = unknown job for CLI runs
+- routing.py baseline 470 lines: no growth; non-review routes keep main order (#377 Hand-Edit)
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-81 block)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-82 block)
