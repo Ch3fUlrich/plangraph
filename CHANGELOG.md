@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-3D (D-3676, D-3685):** add the Python launch-spec adapter, reusing launch preparation without starting a harness; private per-run config isolation and stale-directory cleanup, with child secrets returned only on stdout.
 - **PLACEMENT-R6A-0 Windows tests (D-3676, D-3711):** the first Windows run of `pg-worker-core` (251 passed, 2 failed) is fixed: the Linux-only `system_ro` test is `cfg(unix)`, and the failed-spawn handle-leak test samples in a helper child process (warm-up plus three failed spawns), so neither one-time setup nor parallel sibling tests read as a leak; the grandchild start deadline is 20 s.
 - **PLACEMENT-R6A-2A (D-3676, D-3685):** add shared Rust run records with Python-compatible defaults, sticky terminal transitions, unknown-field preservation and private atomic persistence; no process startup or daemon integration.
 
