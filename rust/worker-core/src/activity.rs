@@ -75,6 +75,7 @@ pub struct Decision {
     pub outcome: KillOutcome,
     pub open_tools: u32,
     pub s_eff_s: Option<u64>,
+    pub kill_at_ms: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ctx {
@@ -123,6 +124,8 @@ pub struct Monitor {
     strong_since_request: bool,
     first_reported: bool,
     silent_reported: bool,
+    first_warned: bool,
+    silent_warned: bool,
 }
 impl Monitor {
     pub fn new(role: Role, limits: &Limits, modes: Modes, t0_ms: u64) -> Self {
@@ -139,6 +142,8 @@ impl Monitor {
             strong_since_request: false,
             first_reported: false,
             silent_reported: false,
+            first_warned: false,
+            silent_warned: false,
         }
     }
     pub fn state(&self) -> State {
@@ -168,6 +173,7 @@ impl Monitor {
         let next = Some(self.last_signal_ms.map_or(ts_ms, |old| old.max(ts_ms)));
         if next != self.last_signal_ms {
             self.silent_reported = false;
+            self.silent_warned = false;
         }
         self.last_signal_ms = next;
     }
@@ -205,13 +211,14 @@ impl Monitor {
         }
     }
     pub fn tick(&mut self, now_ms: u64, _ctx: Ctx) -> Option<Decision> {
-        let (rule, mode, start, limit, reported, outcome) = match self.state {
+        let (rule, mode, start, limit, reported, warned, outcome) = match self.state {
             State::Pending => (
                 Rule::FirstActivity,
                 self.modes.first,
                 self.t0_ms,
                 self.limits.first_activity_s,
                 &mut self.first_reported,
+                &mut self.first_warned,
                 KillOutcome::HangNoActivity,
             ),
             State::Active => (
@@ -220,22 +227,37 @@ impl Monitor {
                 self.last_signal_ms?,
                 self.s_eff_s(),
                 &mut self.silent_reported,
+                &mut self.silent_warned,
                 KillOutcome::HangSilent,
             ),
             State::Ended(_) => return None,
         };
-        let threshold = limit?
+        let limit = limit?;
+        let threshold = limit
             .saturating_add(self.limits.confirm_s.unwrap_or(0))
             .saturating_mul(1000);
-        if mode == Mode::Off || *reported || now_ms.saturating_sub(start) < threshold {
+        let age = now_ms.saturating_sub(start);
+        if mode == Mode::Off || *reported || age < limit.saturating_mul(800) {
             return None;
         }
-        *reported = true;
-        let act = if mode == Mode::On {
-            self.state = State::Ended(rule);
-            Act::Kill
+        let act = if !*warned {
+            *warned = true;
+            if mode == Mode::On {
+                Act::Warn
+            } else {
+                Act::WouldWarn
+            }
         } else {
-            Act::WouldKill
+            if age < threshold {
+                return None;
+            }
+            *reported = true;
+            if mode == Mode::On {
+                self.state = State::Ended(rule);
+                Act::Kill
+            } else {
+                Act::WouldKill
+            }
         };
         Some(Decision {
             rule,
@@ -243,6 +265,7 @@ impl Monitor {
             outcome,
             open_tools: self.open_tools,
             s_eff_s: self.s_eff_s(),
+            kill_at_ms: Some(start.saturating_add(threshold)),
         })
     }
 }
