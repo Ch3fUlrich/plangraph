@@ -192,9 +192,6 @@ fn status_steer_refusals_and_stub_slices() {
         "KeyError",
     );
     for (tool, slice) in [
-        ("agent_route", "R6a-3b"),
-        ("agent_probe", "R6a-3b"),
-        ("agent_spawn", "R6a-3b"),
         ("agent_cancel", "R6a-3c"),
         ("agent_query_catalog", "R11"),
         ("session_list", "R9"),
@@ -210,4 +207,20 @@ fn status_steer_refusals_and_stub_slices() {
             format!("not implemented in pg-spawnd yet ({slice})")
         );
     }
+}
+
+#[test]
+fn fifo_record_is_invalid_without_blocking() {
+    let state = TempDir::new();
+    let dir = state.path().join("runs/run-fifo");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path =
+        std::ffi::CString::new(dir.join("record.json").as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let (_guard, mut client) = start(&state);
+    error(
+        call(&mut client, "agent_result", json!({"run_id":"run-fifo"})),
+        "invalid run record",
+        "ValueError",
+    );
 }
