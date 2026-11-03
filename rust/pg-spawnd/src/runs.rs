@@ -36,15 +36,35 @@ impl Runs {
         role: Value,
         plan: Value,
     ) -> Result<Value, ToolError> {
+        self.spawn_using(state, args, host, role, plan, |state, request| {
+            crate::launch::LaunchAdapter::from_env().request(
+                state,
+                request,
+                Duration::from_secs(30),
+            )
+        })
+    }
+    fn spawn_using(
+        &self,
+        state: &Path,
+        args: &Args,
+        host: &str,
+        role: Value,
+        plan: Value,
+        launch: impl FnOnce(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
+    ) -> Result<Value, ToolError> {
         let run_id = new_run_id();
         let job_id = new_job_id();
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
-        let launch = crate::launch::LaunchAdapter::from_env().request(state, &json!({
-            "run_id":run_id,"job_id":job_id,"role":role,"dry_run":false,"leg":leg,
-            "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
-        }), Duration::from_secs(30))?;
+        let launch = launch(
+            state,
+            &json!({
+                "run_id":run_id,"job_id":job_id,"role":role,"dry_run":false,"leg":leg,
+                "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
+            }),
+        )?;
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
@@ -82,19 +102,13 @@ impl Runs {
                 base["exit_code"] = json!(2);
                 return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
             }
+            Err(SupervisorError::DuplicateRun) => {
+                return Err(internal("run id already started by this supervisor"));
+            }
             Err(_) => return Err(internal("could not start run")),
         }
         self.jobs.lock().unwrap().insert(job_id, run_id.clone());
-        wait(
-            state,
-            &run_id,
-            Duration::from_secs_f64(
-                args.get("wait_seconds")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0)
-                    .min(3600.0),
-            ),
-        )
+        wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 }
 fn internal(message: &str) -> ToolError {
@@ -136,4 +150,18 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[cfg(all(test, unix))]
+#[path = "runs_tests.rs"]
+mod tests;
+
+fn wait_duration(value: Option<&Value>) -> Duration {
+    #[allow(clippy::manual_clamp)]
+    let seconds = value
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .max(0.0)
+        .min(3600.0);
+    Duration::from_secs_f64(seconds)
 }

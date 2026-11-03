@@ -8,6 +8,13 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new(command: &str, stdin: Value, extra: &[&str]) -> Self {
+        Self::configured(command, stdin, extra, false)
+    }
+    #[allow(dead_code)]
+    pub fn missing_launch() -> Self {
+        Self::configured("", Value::Null, &[], true)
+    }
+    fn configured(command: &str, stdin: Value, extra: &[&str], missing: bool) -> Self {
         let state = TempDir::new();
         let route = state.path().join("route");
         let launch = state.path().join("launch");
@@ -29,16 +36,19 @@ impl Fixture {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let socket = state.path().join("socket");
-        let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
-            .args(["serve", "--no-scope", "--socket"])
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
+        cmd.args(["serve", "--no-scope", "--socket"])
             .arg(&socket)
             .arg("--state")
             .arg(state.path())
             .args(extra)
             .env("PG_SPAWND_ADAPTER", route)
-            .env("PG_SPAWND_LAUNCH_CMD", launch)
-            .spawn()
-            .unwrap();
+            .env("PG_SPAWND_LAUNCH_CMD", launch);
+        if missing {
+            cmd.env_remove("PG_SPAWND_LAUNCH_CMD")
+                .env("PG_SPAWND_PYTHON", state.path().join("missing"));
+        }
+        let child = cmd.spawn().unwrap();
         let guard = ChildGuard { child };
         let mut client = McpClient::connect(&socket);
         client.initialize();
