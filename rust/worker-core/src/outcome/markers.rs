@@ -75,14 +75,14 @@ fn quota(text: &str) -> bool {
 }
 
 fn event_words(v: &Value) -> bool {
-    match v {
-        Value::String(s) => ["usage limit", "usagelimit", "credit", "daily limit"]
-            .iter()
-            .any(|word| s.to_lowercase().contains(word)),
-        Value::Array(a) => a.iter().any(event_words),
-        Value::Object(o) => o.values().any(event_words),
-        _ => false,
-    }
+    [&v["message"], &v["rate_limit_info"]["message"]]
+        .iter()
+        .filter_map(|value| value.as_str())
+        .any(|s| {
+            ["usage limit", "usagelimit", "credit", "daily limit"]
+                .iter()
+                .any(|word| s.to_lowercase().contains(word))
+        })
 }
 
 fn structured(line: &str) -> Option<Marker> {
@@ -144,15 +144,16 @@ pub fn scan(i: &Input<'_>) -> Option<Hit> {
             .replace("\r\n", "\n")
             .replace('\r', "\n");
         for line in normalized.lines() {
-            let event = serde_json::from_str::<Value>(line)
-                .ok()
-                .is_some_and(|v| v.is_object() && v["type"] == "rate_limit_event");
+            let event = line.starts_with('{')
+                && serde_json::from_str::<Value>(line)
+                    .ok()
+                    .is_some_and(|v| v.is_object() && v["type"] == "rate_limit_event");
             let lower = line.to_lowercase();
             let agy =
                 lower.contains("agy_error") && lower.contains("429") && lower.contains("resets in");
             let mut candidates = Vec::new();
-            if !stderr {
-                candidates.extend(structured(line.trim_start()));
+            if !stderr || event {
+                candidates.extend(structured(line));
             }
             if agy && !event {
                 candidates.push(Marker::Quota);
