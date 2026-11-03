@@ -9,9 +9,37 @@ use std::future::Future;
 use std::io::{Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn connect_timeout_is_two_seconds() {
+        assert_eq!(super::CONNECT_TIMEOUT, std::time::Duration::from_secs(2));
+    }
+}
+
+async fn connect_with_deadline<T>(
+    connect: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let override_ms = std::env::var("PG_SPAWND_CONNECT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok());
+    let deadline = override_ms
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(CONNECT_TIMEOUT);
+    tokio::time::timeout(deadline, async {
+        if override_ms.is_some() {
+            // Explicit diagnostic hook exercises a connect that never completes.
+            std::future::pending::<()>().await;
+        }
+        connect.await
+    })
+    .await
+    .map_err(|_| "timed out connecting to pg-spawnd".to_string())?
+}
 
 fn runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_current_thread()
@@ -25,19 +53,18 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 pub(crate) fn run(socket: Option<String>) -> Result<(), String> {
     let path = crate::transport_unix::resolve_socket_path(socket.as_deref())?;
     runtime()?.block_on(async {
-        let stream = tokio::time::timeout(CONNECT_TIMEOUT, crate::transport_unix::connect(&path))
-            .await
-            .map_err(|_| format!("timed out connecting to {}", path.display()))??;
+        let stream = connect_with_deadline(crate::transport_unix::connect(&path)).await?;
         bridge(stream).await
     })
 }
 
 #[cfg(windows)]
-pub(crate) fn run(_socket: Option<String>) -> Result<(), String> {
+pub(crate) fn run(socket: Option<String>) -> Result<(), String> {
+    if socket.is_some() {
+        return Err("--socket is unsupported; use the per-user pg-spawnd pipe".into());
+    }
     runtime()?.block_on(async {
-        let stream = tokio::time::timeout(CONNECT_TIMEOUT, crate::transport_windows::connect())
-            .await
-            .map_err(|_| "timed out connecting to the pg-spawnd pipe".to_string())??;
+        let stream = connect_with_deadline(crate::transport_windows::connect()).await?;
         bridge(stream).await
     })
 }
@@ -52,10 +79,17 @@ where
     let mut stdout = BlockingStdout::default();
     tokio::select! {
         result = tokio::io::copy(&mut stdin, &mut socket_write) => {
-            result.map(|_| ()).map_err(|e| format!("stdin copy failed: {e}"))
+            result.map_err(|e| format!("stdin copy failed: {e}"))?;
+            socket_write.shutdown().await.map_err(|e| e.to_string())?;
+            // Complete any write started by the cancelled copy before reusing stdout.
+            stdout.flush().await.map_err(|e| e.to_string())?;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5),
+                tokio::io::copy(&mut socket_read, &mut stdout)).await;
+            stdout.flush().await.map_err(|e| e.to_string())
         }
         result = tokio::io::copy(&mut socket_read, &mut stdout) => {
-            result.map(|_| ()).map_err(|e| format!("socket copy failed: {e}"))
+            result.map_err(|e| format!("socket copy failed: {e}"))?;
+            stdout.flush().await.map_err(|e| e.to_string())
         }
     }
 }

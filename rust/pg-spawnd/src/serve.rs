@@ -61,15 +61,16 @@ async fn serve_unix(path: &std::path::Path) -> Result<(), String> {
             .map_err(|e| format!("accept failed: {e}"))?;
         // Handshake failures (liveness probes that connect and close) are not
         // fatal to the server.
-        if let Ok(service) = rmcp::serve_server(SpawndServer, stream).await {
-            let _ = service.waiting().await;
-        }
+        spawn_session(stream);
     }
 }
 
 /// Serve MCP connections on the per-user named pipe until the process is killed.
 #[cfg(windows)]
-pub(crate) fn run(_socket: Option<String>) -> Result<(), String> {
+pub(crate) fn run(socket: Option<String>) -> Result<(), String> {
+    if socket.is_some() {
+        return Err("--socket is unsupported; use the per-user pg-spawnd pipe".into());
+    }
     runtime()?.block_on(serve_windows())
 }
 
@@ -79,9 +80,29 @@ async fn serve_windows() -> Result<(), String> {
     loop {
         let server = crate::transport_windows::create_pipe_server(first_instance)?;
         first_instance = false;
-        server.connect().await.map_err(|e| e.to_string())?;
-        if let Ok(service) = rmcp::serve_server(SpawndServer, server).await {
-            let _ = service.waiting().await;
+        if server.connect().await.is_err() {
+            eprintln!("pipe connection closed before session started");
+            continue;
         }
+        spawn_session(server);
     }
+}
+
+fn spawn_session<S>(stream: S)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            rmcp::serve_server(SpawndServer, stream),
+        )
+        .await
+        {
+            Ok(Ok(service)) => {
+                let _ = service.waiting().await;
+            }
+            _ => eprintln!("client initialization failed or timed out"),
+        }
+    });
 }

@@ -7,6 +7,8 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ListToolsResult, Tool,
 };
 use rmcp::ErrorData as McpError;
+use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// Committed copy of `plangraph.spawner.mcp.TOOLS_METADATA` (regenerate via the
 /// command in the R6a-1 brief when the Python metadata changes).
@@ -15,7 +17,22 @@ pub(crate) const TOOLS_JSON: &str = include_str!("tools_list.json");
 pub(crate) const NOT_IMPLEMENTED_MSG: &str = "not implemented in pg-spawnd yet (R6a-3)";
 
 pub(crate) fn tools() -> Vec<Tool> {
-    serde_json::from_str(TOOLS_JSON).expect("tools_list.json must be a tool array")
+    static TOOLS: OnceLock<Vec<Tool>> = OnceLock::new();
+    TOOLS
+        .get_or_init(|| {
+            serde_json::from_str(TOOLS_JSON).expect("tools_list.json must be a tool array")
+        })
+        .clone()
+}
+
+fn tool_names() -> &'static HashSet<String> {
+    static NAMES: OnceLock<HashSet<String>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        tools()
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
+            .collect()
+    })
 }
 
 pub(crate) fn list_tools() -> ListToolsResult {
@@ -44,13 +61,13 @@ pub(crate) fn call_tool(request: &CallToolRequestParams) -> Result<CallToolResul
         "plangraph_agent_health" => Ok(CallToolResult::success(vec![ContentBlock::text(
             health_json(),
         )])),
-        other if tools().iter().any(|tool| tool.name == other) => {
+        other if tool_names().contains(other) => {
             Ok(CallToolResult::error(vec![ContentBlock::text(
                 NOT_IMPLEMENTED_MSG,
             )]))
         }
         _ => Err(McpError::new(
-            ErrorCode::METHOD_NOT_FOUND,
+            ErrorCode::INVALID_PARAMS,
             format!("unknown tool: {name}"),
             None,
         )),
@@ -71,6 +88,12 @@ mod tests {
         let fixture: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("fixture");
         assert_eq!(serde_json::to_value(&listed).expect("tools"), fixture);
         assert_eq!(listed.len(), 15);
+    }
+
+    #[test]
+    fn tool_names_are_cached() {
+        assert!(std::ptr::eq(tool_names(), tool_names()));
+        assert_eq!(tool_names().len(), tools().len());
     }
 
     #[test]
@@ -107,7 +130,7 @@ mod tests {
     #[test]
     fn unknown_tool_is_protocol_error_naming_no_internals() {
         let error = call_tool(&request("no_such_tool")).expect_err("unknown tool");
-        assert_eq!(error.code, ErrorCode::METHOD_NOT_FOUND);
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(error.message, "unknown tool: no_such_tool");
     }
 }

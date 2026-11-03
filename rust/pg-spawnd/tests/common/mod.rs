@@ -1,7 +1,7 @@
 //! Shared helpers for pg-spawnd CLI integration tests.
 #![allow(dead_code)] // each test binary uses a different subset
 
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -13,13 +13,19 @@ pub(crate) struct TempDir(PathBuf);
 
 impl TempDir {
     pub(crate) fn new() -> TempDir {
+        use std::hash::{BuildHasher, Hasher};
+        let random = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
         let base = std::env::temp_dir().join(format!(
             "pg-spawnd-it-{}-{}",
-            std::process::id(),
+            random,
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
-        std::fs::create_dir_all(&base).expect("create temp dir");
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&base)
+            .expect("exclusive temp dir");
         TempDir(base)
     }
 
@@ -68,6 +74,46 @@ impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+pub(crate) fn output(command: &mut std::process::Command) -> std::process::Output {
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut guard = ChildGuard {
+        child: command.spawn().expect("spawn"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if guard.child.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "child exit deadline");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    use std::io::Read;
+    let status = guard.child.wait().unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    guard
+        .child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut stdout)
+        .unwrap();
+    guard
+        .child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_end(&mut stderr)
+        .unwrap();
+    std::process::Output {
+        status,
+        stdout,
+        stderr,
     }
 }
 

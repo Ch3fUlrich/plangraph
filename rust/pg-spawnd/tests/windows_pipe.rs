@@ -14,6 +14,7 @@ use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+static PIPE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // Declared locally: the windows-sys feature that carries it reads as
 // high-entropy to the public-repo scrub (as in worker-core stall/windows.rs).
 #[link(name = "advapi32")]
@@ -75,6 +76,16 @@ fn wait_connect(name: &str) -> std::fs::File {
 }
 
 fn initialize(file: &mut std::fs::File) -> serde_json::Value {
+    let mut file = file.try_clone().expect("clone pipe");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        tx.send(initialize_blocking(&mut file)).ok();
+    });
+    rx.recv_timeout(Duration::from_secs(2))
+        .expect("bounded initialize")
+}
+
+fn initialize_blocking(file: &mut std::fs::File) -> serde_json::Value {
     let request = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
@@ -95,6 +106,7 @@ fn initialize(file: &mut std::fs::File) -> serde_json::Value {
 
 #[test]
 fn pipe_name_includes_user_name_and_serves() {
+    let _lock = PIPE_TEST.lock().unwrap();
     let name = pipe_name();
     assert!(name.starts_with(r"\\.\pipe\plangraph-spawnd-"), "{name}");
     assert!(name.ends_with(&user_name()), "{name}");
@@ -110,6 +122,7 @@ fn pipe_name_includes_user_name_and_serves() {
 
 #[test]
 fn second_serve_on_live_pipe_exits_two() {
+    let _lock = PIPE_TEST.lock().unwrap();
     let name = pipe_name();
     let _guard = spawn_serve();
     let _file = wait_connect(&name);
@@ -124,6 +137,7 @@ fn second_serve_on_live_pipe_exits_two() {
 
 #[test]
 fn pipe_dacl_grants_only_current_user() {
+    let _lock = PIPE_TEST.lock().unwrap();
     let name = pipe_name();
     let _guard = spawn_serve();
     let file = wait_connect(&name);
@@ -165,5 +179,32 @@ fn pipe_dacl_grants_only_current_user() {
         );
         assert_ne!(is_member, 0, "current user must hold the ACE");
         LocalFree(descriptor as HLOCAL);
+    }
+}
+
+#[test]
+fn disconnected_pipe_probe_leaves_server_alive() {
+    let _lock = PIPE_TEST.lock().unwrap();
+    let _guard = spawn_serve();
+    let name = pipe_name();
+    drop(wait_connect(&name));
+    let mut file = wait_connect(&name);
+    assert_eq!(
+        initialize(&mut file)["result"]["serverInfo"]["name"],
+        "pg-spawnd"
+    );
+}
+
+#[test]
+fn socket_flag_is_rejected_for_per_user_pipe() {
+    for verb in ["serve", "shim"] {
+        let output = std::process::Command::new(bin())
+            .args([verb, "--socket", "unused"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(error.lines().count(), 1);
+        assert!(error.contains("per-user"));
     }
 }

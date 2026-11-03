@@ -10,7 +10,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, GENERIC_ALL, HAN
 use windows_sys::Win32::Security::{
     AddAccessAllowedAce, GetLengthSid, GetTokenInformation, InitializeAcl,
     InitializeSecurityDescriptor, SetSecurityDescriptorDacl, TokenUser, ACCESS_ALLOWED_ACE, ACL,
-    ACL_REVISION, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    ACL_REVISION, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -37,7 +37,22 @@ pub(crate) fn pipe_name() -> Result<String, String> {
     Ok(format!(r"\\.\pipe\plangraph-spawnd-{name}"))
 }
 
-fn current_user_sid() -> Result<*mut std::ffi::c_void, String> {
+struct OwnedSid {
+    buffer: Vec<u8>,
+}
+
+impl OwnedSid {
+    fn psid(&self) -> *mut std::ffi::c_void {
+        // The token header contains a pointer into this owned allocation.
+        unsafe {
+            ptr::read_unaligned(self.buffer.as_ptr().cast::<TOKEN_USER>())
+                .User
+                .Sid
+        }
+    }
+}
+
+fn current_user_sid() -> Result<OwnedSid, String> {
     unsafe {
         let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
@@ -64,19 +79,18 @@ fn current_user_sid() -> Result<*mut std::ffi::c_void, String> {
             ));
         }
         // `buffer` is a byte vector, so read the header without alignment assumptions.
-        let user = std::ptr::read_unaligned(buffer.as_ptr() as *const TOKEN_USER);
-        Ok(user.User.Sid)
+        Ok(OwnedSid { buffer })
     }
 }
 
-/// Build a self-relative security descriptor whose DACL allows only the current
+/// Build an absolute security descriptor whose DACL allows only the current
 /// user's SID, then run `f` with a `SECURITY_ATTRIBUTES` pointing at it.
 fn with_user_security_descriptor<T>(
     f: impl FnOnce(*mut std::ffi::c_void) -> Result<T, String>,
 ) -> Result<T, String> {
     unsafe {
         let sid = current_user_sid()?;
-        let sid_len = GetLengthSid(sid) as usize;
+        let sid_len = GetLengthSid(sid.psid()) as usize;
         let acl_len =
             size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>() + sid_len;
         let mut acl_buf = vec![0u8; acl_len];
@@ -84,14 +98,14 @@ fn with_user_security_descriptor<T>(
         if InitializeAcl(acl, acl_len as u32, ACL_REVISION) == 0 {
             return Err(format!("InitializeAcl failed (win32 {})", GetLastError()));
         }
-        if AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, sid) == 0 {
+        if AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, sid.psid()) == 0 {
             return Err(format!(
                 "AddAccessAllowedAce failed (win32 {})",
                 GetLastError()
             ));
         }
-        let mut descriptor = [0u64; 4];
-        let sd = descriptor.as_mut_ptr() as *mut std::ffi::c_void;
+        let mut descriptor: SECURITY_DESCRIPTOR = std::mem::zeroed();
+        let sd = (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast();
         if InitializeSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION) == 0 {
             return Err(format!(
                 "InitializeSecurityDescriptor failed (win32 {})",
@@ -149,5 +163,38 @@ pub(crate) async fn connect() -> Result<tokio::net::windows::named_pipe::NamedPi
             }
             Err(e) => return Err(format!("cannot connect to pipe {name}: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_sid_points_into_live_allocation() {
+        let sid = current_user_sid().unwrap();
+        let start = sid.buffer.as_ptr() as usize;
+        let pointer = sid.psid() as usize;
+        assert!(pointer >= start);
+        let length = unsafe { GetLengthSid(sid.psid()) } as usize;
+        assert!(length > 0);
+        assert!(pointer + length <= start + sid.buffer.len());
+    }
+
+    #[test]
+    fn descriptor_is_valid_with_current_user_acl() {
+        with_user_security_descriptor(|attrs| {
+            let attrs = unsafe { &*attrs.cast::<SECURITY_ATTRIBUTES>() };
+            assert_ne!(
+                unsafe {
+                    windows_sys::Win32::Security::IsValidSecurityDescriptor(
+                        attrs.lpSecurityDescriptor,
+                    )
+                },
+                0
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 }

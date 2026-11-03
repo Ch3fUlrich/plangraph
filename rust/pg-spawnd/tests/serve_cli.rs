@@ -36,7 +36,7 @@ impl McpClient {
     fn connect(socket: &Path) -> McpClient {
         let stream = wait_connect(socket, Duration::from_secs(5));
         stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("read timeout");
         McpClient {
             stream: BufReader::new(stream),
@@ -88,6 +88,83 @@ impl McpClient {
         }));
         response
     }
+}
+
+#[test]
+fn concurrent_idle_and_disconnected_clients_do_not_block() {
+    let tmp = TempDir::new();
+    let socket = tmp.path().join("spawnd.sock");
+    let _guard = spawn_serve(&socket);
+    let idle = McpClient::connect(&socket);
+    let mut first = McpClient::connect(&socket);
+    assert!(first.initialize()["result"].is_object());
+    let mut second = McpClient::connect(&socket);
+    assert!(second.initialize()["result"].is_object());
+    drop(idle);
+    first.stream.get_mut().write_all(b"{\"jsonrpc\":").unwrap();
+    drop(first);
+    assert!(second.request("tools/list", serde_json::json!({}))["result"].is_object());
+}
+
+fn refused(socket: &Path) {
+    let mut guard = spawn_serve(socket);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = guard.child.try_wait().unwrap() {
+            assert_eq!(status.code(), Some(2));
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "serve did not refuse path"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn serve_refuses_group_readable_dir() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new();
+    for mode in [0o750, 0o705] {
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        refused(&tmp.path().join("spawnd.sock"));
+    }
+}
+
+#[test]
+fn serve_refuses_dir_owned_by_other_user() {
+    extern "C" {
+        fn geteuid() -> u32;
+        fn chown(path: *const std::ffi::c_char, owner: u32, group: u32) -> i32;
+    }
+    // Changing ownership requires root; unprivileged runs cannot exercise this.
+    if unsafe { geteuid() } != 0 {
+        return;
+    }
+    use std::os::unix::ffi::OsStrExt;
+    let tmp = TempDir::new();
+    let path = std::ffi::CString::new(tmp.path().as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { chown(path.as_ptr(), 1, 1) }, 0);
+    refused(&tmp.path().join("spawnd.sock"));
+}
+
+#[test]
+fn serve_refuses_regular_file_at_socket_path() {
+    let tmp = TempDir::new();
+    let socket = tmp.path().join("spawnd.sock");
+    std::fs::write(&socket, b"keep me").unwrap();
+    refused(&socket);
+    assert_eq!(std::fs::read(socket).unwrap(), b"keep me");
+}
+
+#[test]
+fn serve_refuses_symlinked_dir_and_relative_path() {
+    let tmp = TempDir::new();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(tmp.path(), &link).unwrap();
+    refused(&link.join("spawnd.sock"));
+    refused(Path::new("spawnd.sock"));
 }
 
 #[test]
@@ -221,14 +298,11 @@ fn second_serve_on_live_socket_exits_two() {
     let socket = tmp.path().join("spawnd.sock");
     let _guard = spawn_serve(&socket);
     let _client = McpClient::connect(&socket);
-    let output = std::process::Command::new(bin())
-        .args([
-            OsStr::new("serve"),
-            OsStr::new("--socket"),
-            socket.as_os_str(),
-        ])
-        .output()
-        .expect("second serve");
+    let output = common::output(std::process::Command::new(bin()).args([
+        OsStr::new("serve"),
+        OsStr::new("--socket"),
+        socket.as_os_str(),
+    ]));
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf-8");
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
@@ -236,11 +310,11 @@ fn second_serve_on_live_socket_exits_two() {
 
 #[test]
 fn serve_without_socket_or_env_exits_two() {
-    let output = std::process::Command::new(bin())
-        .args([OsStr::new("serve")])
-        .env_remove("XDG_RUNTIME_DIR")
-        .output()
-        .expect("serve without socket");
+    let output = common::output(
+        std::process::Command::new(bin())
+            .args([OsStr::new("serve")])
+            .env_remove("XDG_RUNTIME_DIR"),
+    );
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf-8");
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
