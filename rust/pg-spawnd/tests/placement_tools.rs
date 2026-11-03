@@ -10,6 +10,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new(output: &str, code: i32, stderr: &str) -> Self {
+        Self::with_host(output, code, stderr, "invalid_host")
+    }
+    fn with_host(output: &str, code: i32, stderr: &str, host: &str) -> Self {
         let state = TempDir::new();
         let script = state.path().join("adapter");
         std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'/argv\nprintf '%s' '{}'\nprintf '%s\\n' '{}' >&2\nexit {}\n",state.path().display(),output,stderr,code)).unwrap();
@@ -21,6 +24,7 @@ impl Fixture {
             .arg(&socket)
             .arg("--state")
             .arg(state.path())
+            .env("PLANGRAPH_HOST", host)
             .env("PG_SPAWND_ADAPTER", script)
             .spawn()
             .unwrap();
@@ -87,7 +91,7 @@ fn exit_mapping() {
     assert!(f.call("probe", json!({}))["result"].is_object());
 }
 #[test]
-fn validation_and_spawn_stub() {
+fn route_probe_validation() {
     let mut f = Fixture::new("{}", 0, "");
     for (verb, args, message) in [
         ("route", json!({}), "'card'"),
@@ -126,10 +130,169 @@ fn validation_and_spawn_stub() {
         assert_eq!(r["error"]["code"], -32602);
         assert_eq!(r["error"]["message"], message);
     }
-    let r = f.call("spawn", json!({}));
-    assert_eq!(r["result"]["isError"], true);
+}
+
+fn records(f: &Fixture) -> Vec<Value> {
+    std::fs::read_dir(f.state.path().join("runs"))
+        .into_iter()
+        .flatten()
+        .map(|e| {
+            serde_json::from_slice(&std::fs::read(e.unwrap().path().join("record.json")).unwrap())
+                .unwrap()
+        })
+        .collect()
+}
+#[test]
+fn spawn_validation_records() {
+    let mut cases = vec![
+        (json!({}), "'prompt'".to_string(), "KeyError", 1, "failed"),
+        (
+            json!({"prompt":"p"}),
+            "spawn by card; card required".into(),
+            "ParameterRefused",
+            2,
+            "refused",
+        ),
+    ];
+    for (key, value, message) in [
+        ("card", json!({}), "spawn by card; card required"),
+        ("card", json!(null), "spawn by card; card required"),
+        ("prompt", json!(1), "prompt must be a string"),
+        ("card", json!([1]), "card must be an object"),
+        (
+            "role",
+            json!("orchestrate"),
+            "role must be implement or review",
+        ),
+        ("dry_run", json!(1), "dry_run must be a bool"),
+        (
+            "writer_families",
+            json!(1),
+            "writer_families must be an array of strings",
+        ),
+        ("require_bench", json!(1), "require_bench must be a bool"),
+        ("bench_db", json!(1), "bench_db must be a string"),
+        ("review_of", json!(1), "review_of must be a string"),
+        (
+            "wait_seconds",
+            json!(-1),
+            "wait_seconds must be a number >= 0",
+        ),
+    ] {
+        let mut a = json!({"prompt":"p","card":{"x":1}});
+        a[key] = value;
+        cases.push((a, message.into(), "ParameterRefused", 2, "refused"));
+    }
+    for option in [
+        "seats",
+        "model_or_combo",
+        "override_reason",
+        "review_scope",
+        "card.findings",
+    ] {
+        let mut a = json!({"prompt":"p","card":{"x":1},"role":"review"});
+        if option == "card.findings" {
+            a["card"]["findings"] = json!([1]);
+        } else {
+            a[option] = if option == "seats" {
+                json!(true)
+            } else {
+                json!("value")
+            };
+        }
+        cases.push((
+            a,
+            format!("{option} is not supported by pg-spawnd yet; use the Python spawner"),
+            "ParameterRefused",
+            2,
+            "refused",
+        ));
+    }
+    for (args, message, kind, exit, status) in cases {
+        let mut f = Fixture::new("{}", 0, "");
+        let role = args.get("role").cloned().unwrap_or(json!("implement"));
+        let r = f.call("spawn", args);
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+        assert_eq!(r["error"]["message"], message);
+        assert_eq!(r["error"]["data"]["type"], kind);
+        let all = records(&f);
+        assert_eq!(all.len(), 1);
+        let row = &all[0];
+        assert_eq!(row["host"], "local");
+        assert_eq!(row["error"], message);
+        assert_eq!(row["status"], status);
+        assert_eq!(row["exit_code"], exit);
+        assert_eq!(row["refusal"], kind);
+        assert_eq!(row["role"], role);
+        assert!(row["ended"].is_number());
+        assert_eq!(row["legs"], json!([]));
+        assert_eq!(row["evidence"], json!([]));
+    }
+}
+#[test]
+fn spawn_dry_run_and_no_launch() {
+    let plan = json!({"legs":[],"first_leg":{"id":"leg","harness":"h","model":"m","family":"f"}});
+    let mut f = Fixture::new(&plan.to_string(), 0, "");
+    let mut args = json!({"prompt":"p","card":{"x":1},"dry_run":true,"writer_families":["writer"],"review_of":"run-a","risk":"high","no_fallthrough":true});
+    let r = f.call("spawn", args.clone());
+    let row: Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(records(&f), vec![row.clone()]);
+    assert_eq!(row["status"], "dry_run");
+    assert!(row["ended"].is_number());
+    assert_eq!(row["plan"], plan);
+    assert_eq!(row["chosen_leg"], plan["first_leg"]);
+    assert_eq!(row["role"], "implement");
+    assert_eq!(row["exit_code"], 0);
+    for key in ["request_side_model", "witness_kind"] {
+        assert!(row[key].is_null());
+    }
+    for key in ["writer_family", "served_family"] {
+        assert_eq!(row[key], "f");
+    }
+    assert_eq!(row["served_model"], "m");
     assert_eq!(
-        r["result"]["content"][0]["text"],
-        "not implemented in pg-spawnd yet (R6a-3b)"
+        row["cwd"],
+        std::env::current_dir().unwrap().to_string_lossy().as_ref()
     );
+    let tail = "[dry-run] Planned leg: leg via h m";
+    assert_eq!(row["stdout_tail"], tail);
+    assert_eq!(
+        row["attempts"],
+        json!([{"leg":plan["first_leg"],"status":"dry_run","served_model":"m","served_family":"f","served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg","request_side_model":null,"witness_kind":null,"skip_reason":null,"provider_response":null,"stdout_tail":tail,"stderr_tail":""}])
+    );
+    use sha2::{Digest, Sha256};
+    assert_eq!(
+        row["card_hash"],
+        format!("{:x}", Sha256::digest(b"{\"x\": 1}"))
+    );
+    let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
+    assert!(argv.contains("--writer-family\nwriter\n--review-of\nrun-a\n"));
+    args["dry_run"] = json!(false);
+    let r = f.call("spawn", args);
+    assert_eq!(
+        r["error"]["message"],
+        "launching is not available yet (R6a-3c)"
+    );
+    assert_eq!(records(&f).len(), 1);
+}
+#[test]
+fn adapter_failures_never_duplicate_records() {
+    for (out, code, message) in [
+        ("{}", 2, "reason"),
+        ("{}", 3, "reason"),
+        ("{}", 0, "route adapter returned no leg"),
+    ] {
+        let mut f = Fixture::new(out, code, "reason");
+        let r = f.call("spawn", json!({"prompt":"p","card":{"x":1},"dry_run":true}));
+        assert_eq!(r["error"]["message"], message);
+        assert!(records(&f).is_empty());
+    }
+}
+
+#[test]
+fn valid_host_is_saved() {
+    let mut f = Fixture::with_host("{}", 0, "", "test-host");
+    f.call("spawn", json!({}));
+    assert_eq!(records(&f)[0]["host"], "test-host");
 }

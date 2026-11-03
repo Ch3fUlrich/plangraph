@@ -475,6 +475,7 @@ dependencies = [
  "libc",
  "pg-worker-core",
  "rmcp",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",

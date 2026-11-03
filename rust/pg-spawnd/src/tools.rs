@@ -58,9 +58,13 @@ pub(crate) fn call_tool(
     state: &std::path::Path,
 ) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
-    if matches!(name, "plangraph_agent_route" | "plangraph_agent_probe") {
+    if matches!(
+        name,
+        "plangraph_agent_route" | "plangraph_agent_probe" | "plangraph_agent_spawn"
+    ) {
         let args = request.arguments.clone().unwrap_or_default();
         let payload = match name {
+            "plangraph_agent_spawn" => crate::spawn::spawn(state, &args),
             "plangraph_agent_probe" => crate::placement::probe(state, &args),
             _ => crate::placement::route(state, &args),
         }
@@ -122,7 +126,6 @@ pub(crate) fn call_tool(
             Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "not implemented in pg-spawnd yet ({})",
                 match other {
-                    "plangraph_agent_spawn" => "R6a-3b",
                     "plangraph_agent_cancel" => "R6a-3c",
                     "plangraph_agent_query_catalog" => "R11",
                     _ => "R9",
