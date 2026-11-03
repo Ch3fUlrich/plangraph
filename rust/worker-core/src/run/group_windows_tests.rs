@@ -1,4 +1,7 @@
-use super::{group::*, group_windows::creation_time};
+use super::{
+    group::*,
+    group_windows::{creation_time, SetLastError},
+};
 use std::{
     ffi::OsString,
     io::Read,
@@ -41,12 +44,20 @@ fn fake_child() {
                 unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut inside) },
                 0
             );
+            // Keep the child live until the parent has checked job membership.
+            let mut input = String::new();
+            std::io::stdin().read_to_string(&mut input).unwrap();
             println!("injob={inside}");
         }
         _ => panic!("unknown fake mode"),
     }
 }
-fn launch(unit: &str, mode: &str, missing: bool, piped: bool) -> Result<Grouped, LaunchError> {
+fn launch(
+    unit: &str,
+    mode: &str,
+    missing: bool,
+    piped: bool,
+) -> Result<(Grouped, tempfile::TempDir), LaunchError> {
     let dir = tempfile::tempdir().unwrap();
     let program = if missing {
         dir.path().join("missing.exe")
@@ -64,7 +75,9 @@ fn launch(unit: &str, mode: &str, missing: bool, piped: bool) -> Result<Grouped,
         ("SystemRoot".into(), std::env::var_os("SystemRoot").unwrap()),
         ("PATH".into(), std::env::var_os("PATH").unwrap_or_default()),
     ];
-    SystemLauncher.launch(
+    // SAFETY: updates only this thread's last-error slot before launch.
+    unsafe { SetLastError(ERROR_ALREADY_EXISTS) };
+    let grouped = SystemLauncher.launch(
         unit,
         &LaunchSpec {
             program: program.as_os_str(),
@@ -78,7 +91,8 @@ fn launch(unit: &str, mode: &str, missing: bool, piped: bool) -> Result<Grouped,
             memory_max: Some("1".into()),
             tasks_max: Some(1),
         },
-    )
+    )?;
+    Ok((grouped, dir))
 }
 fn named(unit: &str) -> bool {
     let wide: Vec<_> = std::ffi::OsStr::new(&job_name(unit))
@@ -102,7 +116,7 @@ fn named(unit: &str) -> bool {
     }
 }
 fn until(mut predicate: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(2);
     while !predicate() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(10));
@@ -124,7 +138,7 @@ fn gone(pid: u32) -> bool {
 #[test]
 fn name_lifetime_collision_and_drop() {
     let unit = "pg-win-lifetime";
-    let mut g = launch(unit, "sleep", false, false).unwrap();
+    let (mut g, _dir) = launch(unit, "sleep", false, false).unwrap();
     assert_eq!(
         g.group.identity().group.as_deref(),
         Some(job_name(unit).as_str())
@@ -145,17 +159,15 @@ fn name_lifetime_collision_and_drop() {
 }
 #[test]
 fn descendants_and_stop() {
-    let mut g = launch("pg-win-tree", "spawn-sleep", false, false).unwrap();
+    let (mut g, _dir) = launch("pg-win-tree", "spawn-sleep", false, false).unwrap();
     until(|| g.group.members().unwrap().len() == 2);
     let pids = g.group.members().unwrap();
     assert!(pids.contains(&g.child.id()));
     assert_eq!(
-        stop_group(&*g.group, Duration::ZERO, Duration::from_secs(3)),
+        stop_group(&*g.group, Duration::ZERO, Duration::from_secs(2)),
         StopOutcome::Empty
     );
-    for pid in pids {
-        until(|| gone(pid));
-    }
+    assert!(pids.iter().all(|&pid| gone(pid)));
     g.child.wait().unwrap();
 }
 #[test]
@@ -165,8 +177,15 @@ fn pipes_exit_and_assignment() {
         ("injob", "injob=1"),
         ("exit3", ""),
     ] {
-        let mut g = launch("pg-win-pipes", mode, false, true).unwrap();
+        let (mut g, _dir) = launch("pg-win-pipes", mode, false, true).unwrap();
+        if mode == "injob" {
+            assert!(g.group.members().unwrap().contains(&g.child.id()));
+        }
+        assert!(_dir.path().exists());
         assert!(g.child.stdin.is_some());
+        if mode == "injob" {
+            drop(g.child.stdin.take());
+        }
         assert!(g.child.stderr.is_some());
         let mut text = String::new();
         g.child

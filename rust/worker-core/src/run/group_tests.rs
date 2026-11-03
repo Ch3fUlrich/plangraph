@@ -187,6 +187,10 @@ fn fake_cgroup() {
     std::fs::write(dir.path().join("cgroup.procs"), "").unwrap();
     assert_eq!(group.members().unwrap(), vec![child.child.id()]);
     std::fs::remove_file(nested.join("cgroup.procs")).unwrap();
+    assert!(group.members().unwrap().is_empty());
+    std::fs::create_dir(nested.join("cgroup.procs")).unwrap();
+    assert!(group.members().is_err());
+    std::fs::remove_dir(nested.join("cgroup.procs")).unwrap();
     std::fs::remove_dir(nested).unwrap();
     std::fs::write(
         dir.path().join("cgroup.procs"),
@@ -200,7 +204,7 @@ fn fake_cgroup() {
         "1"
     );
     std::fs::remove_file(dir.path().join("cgroup.procs")).unwrap();
-    assert!(group.members().is_err());
+    assert!(group.members().unwrap().is_empty());
     std::fs::create_dir(dir.path().join("cgroup.procs")).unwrap();
     assert!(group.members().is_err());
 }

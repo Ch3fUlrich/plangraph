@@ -19,6 +19,11 @@ use crate::stall::windows::{
     CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 
+#[link(name = "kernel32")]
+extern "system" {
+    pub(super) fn SetLastError(error: u32);
+}
+
 fn own(handle: HANDLE) -> io::Result<OwnedHandle> {
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
@@ -42,15 +47,19 @@ pub fn spawn_grouped(
         .encode_wide()
         .chain(Some(0))
         .collect();
-    // SAFETY: terminated name and default security attributes are valid.
-    let raw = unsafe { CreateJobObjectW(ptr::null(), wide.as_ptr()) };
-    let error = io::Error::last_os_error();
+    // SAFETY: thread-local error slot and terminated name are valid.
+    let raw = unsafe {
+        SetLastError(0);
+        CreateJobObjectW(ptr::null(), wide.as_ptr())
+    };
+    let error = (!raw.is_null()).then(io::Error::last_os_error);
     let job = own(raw).map_err(|_| LaunchError::JobUnavailable)?;
-    if error.raw_os_error() == Some(ERROR_ALREADY_EXISTS as i32) {
+    if error.and_then(|e| e.raw_os_error()) == Some(ERROR_ALREADY_EXISTS as i32) {
         return Err(LaunchError::JobExists);
     }
     // SAFETY: all-zero limit information is valid before setting the sole flag.
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { mem::zeroed() };
+    // Open: daemon death closes the job, unlike Linux; R7e must reconcile restarts.
     info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     // SAFETY: owned job and correctly sized, initialized information buffer.
     if unsafe {
@@ -64,6 +73,7 @@ pub fn spawn_grouped(
     {
         return Err(LaunchError::JobUnavailable);
     }
+    // Open: deduplicate suspended-spawn/assign/resume shared with stall.
     let mut cmd = Command::new(spec.program);
     cmd.args(spec.args)
         .env_clear()

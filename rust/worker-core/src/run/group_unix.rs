@@ -177,7 +177,7 @@ pub fn launch(
             )
         }
     };
-    let mut child = crate::stall::spawn_retrying(&mut cmd)?;
+    let mut child = spawn_retrying(|| cmd.spawn())?;
     let pid = child.id();
     let start_time = proc_start_time(&roots.proc, pid);
     let mut group = None;
@@ -195,6 +195,17 @@ pub fn launch(
             roots: roots.clone(),
         }),
     })
+}
+pub(super) fn spawn_retrying(mut spawn: impl FnMut() -> io::Result<Child>) -> io::Result<Child> {
+    for attempt in 1..=6 {
+        match spawn() {
+            Err(e) if crate::stall::is_text_busy(&e) && attempt < 6 => {
+                thread::sleep(Duration::from_millis(20 * attempt));
+            }
+            result => return result,
+        }
+    }
+    unreachable!()
 }
 pub(super) fn enter_scope(
     child: &mut Child,
@@ -255,8 +266,8 @@ impl UnixGroup {
                 }
             }
         }
-        if self.identity.start_time.is_some()
-            && proc_start_time(&self.roots.proc, self.identity.pid) == self.identity.start_time
+        if self.identity.start_time.is_none()
+            || proc_start_time(&self.roots.proc, self.identity.pid) == self.identity.start_time
         {
             signal(self.identity.pid, sig, true);
         }
@@ -270,9 +281,7 @@ impl RunGroup for UnixGroup {
         let pids: Vec<u32> = if let Some(dir) = &self.identity.group {
             match scope_members(Path::new(dir)) {
                 Ok(pids) => pids,
-                Err(e) if e.kind() == io::ErrorKind::NotFound && !Path::new(dir).exists() => {
-                    return Ok(vec![])
-                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
                 Err(e) => return Err(e),
             }
         } else {
@@ -308,14 +317,28 @@ impl RunGroup for UnixGroup {
 /// Unlike slot liveness's current flat-scope assumption, stopping must include
 /// nested cgroups and must not mistake an unreadable subtree for emptiness.
 fn scope_members(dir: &Path) -> io::Result<Vec<u32>> {
-    let mut pids = fs::read_to_string(dir.join("cgroup.procs"))?
+    let text = match fs::read_to_string(dir.join("cgroup.procs")) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
+    let mut pids = text
         .split_whitespace()
         .filter_map(|p| p.parse().ok())
         .collect::<Vec<_>>();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            pids.extend(scope_members(&entry.path())?);
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let kind = match entry.and_then(|entry| Ok((entry.file_type()?, entry.path()))) {
+            Ok(value) => value,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        if kind.0.is_dir() {
+            pids.extend(scope_members(&kind.1)?);
         }
     }
     Ok(pids)

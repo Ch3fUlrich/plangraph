@@ -187,7 +187,16 @@ fn timeout_terminates_the_child() {
     let t = Instant::now();
     let r = supervise(helper("sleep", d.path()), &o).unwrap();
     assert!(r.timed_out && !r.stalled && !r.cancelled, "{r:?}");
-    assert!(wait_until_gone(read_pid(d.path(), "sleep.pid")));
+    if d.path().join("sleep.pid").exists() {
+        assert!(wait_until_gone(read_pid(d.path(), "sleep.pid")));
+    } else {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            assert!(!d.path().join("sleep.pid").exists());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!d.path().join("sleep.pid").exists());
+    }
     // Slack for a loaded host (2.57 s seen in a parallel run).
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
@@ -198,15 +207,25 @@ fn cancel_terminates_the_child() {
     let d = tempfile::tempdir().unwrap();
     let flag = Arc::new(AtomicBool::new(false));
     let f = flag.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+    let pid_file = d.path().join("sleep.pid");
+    let cancel = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !pid_file.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let raised = Instant::now();
         f.store(true, Ordering::Relaxed);
+        (raised, pid_file.exists())
     });
-    let t = Instant::now();
     let r = supervise_with_cancel(helper("sleep", d.path()), &quick(), &|| {
         flag.load(Ordering::Relaxed)
     })
     .unwrap();
+    let (t, published) = cancel.join().unwrap();
+    assert!(
+        published,
+        "child never published sleep.pid before cancellation"
+    );
     assert!(r.cancelled && !r.stalled && !r.timed_out, "{r:?}");
     assert!(wait_until_gone(read_pid(d.path(), "sleep.pid")));
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());

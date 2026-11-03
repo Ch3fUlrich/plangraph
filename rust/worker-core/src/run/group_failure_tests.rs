@@ -1,32 +1,20 @@
 use super::*;
-use std::{fs, os::unix::fs::PermissionsExt, process::Command, thread};
+use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
 #[test]
 fn launch_retries_text_busy() {
-    use std::io::Write;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("busy.sh");
-    let mut writer = fs::File::create(&path).unwrap();
-    writer.write_all(b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-    let closer = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(70));
-        drop(writer);
-    });
-    let result = SystemLauncher.launch(
-        "pg-test",
-        &LaunchSpec {
-            program: path.as_os_str(),
-            args: &[],
-            cwd: dir.path(),
-            env: &[],
-            stdin_piped: false,
-        },
-        &Confinement::Plain,
-        &RunLimits::default(),
-    );
-    closer.join().unwrap();
-    assert!(result.unwrap().child.wait().unwrap().success());
+    let mut attempts = 0;
+    let mut child = spawn_retrying(|| {
+        attempts += 1;
+        if attempts == 1 {
+            Err(io::Error::from_raw_os_error(libc::ETXTBSY))
+        } else {
+            Command::new("sh").args(["-c", "exit 0"]).spawn()
+        }
+    })
+    .unwrap();
+    assert_eq!(attempts, 2);
+    assert!(child.wait().unwrap().success());
 }
 
 #[test]
@@ -70,6 +58,7 @@ fn scope_entry_timeout() {
 #[test]
 fn members_permission_denied() {
     // Root bypasses mode bits, so this assertion cannot be exercised as root.
+    // SAFETY: geteuid has no arguments and only reads the effective uid.
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
@@ -89,4 +78,31 @@ fn members_permission_denied() {
         group.members().unwrap_err().kind(),
         io::ErrorKind::PermissionDenied
     );
+}
+
+#[test]
+fn kill_without_start_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = plain("exec sleep 30", dir.path(), false);
+    let group = UnixGroup {
+        identity: Identity {
+            pid: child.child.id(),
+            start_time: None,
+            group: None,
+        },
+        roots: Roots {
+            proc: dir.path().join("unreadable"),
+            cgroup: dir.path().into(),
+        },
+    };
+    group.kill();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while child.child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.child.kill().unwrap();
+            child.child.wait().unwrap();
+            panic!("group kill did not signal the child");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
