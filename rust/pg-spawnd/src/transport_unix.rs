@@ -139,8 +139,8 @@ mod tests {
             .create(&base)
             .unwrap();
         let path = base.join("socket");
-        // Drop credentials in the child before binding/listening, so peer_cred
-        // reports the foreign uid while the verified directory stays ours.
+        // The child switches to another uid before it binds and listens, so the
+        // peer check sees the foreign uid while the verified directory stays ours.
         std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o777)).unwrap();
         use std::os::unix::process::CommandExt;
         let mut command = std::process::Command::new("python3");
