@@ -10,6 +10,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - **SPAWNER-RL9B part 1b (D-3676, D-3714):** add outcome-classification tests pinning role-aware usability, the class scope/neutral and carries_reset tables, class names, redacted capped descriptions and raw non-finite reset copies; no caller or switch, rollback by revert.
 - **SPAWNER-RL9B part 1 (D-3676, D-3714):** add pure structured outcome classification, role-aware usability, raw reset propagation and redacted descriptions; no caller or switch, rollback by git revert.
 
+- md-sync: keeper snapshot reads use their own 60 s timeout (MD-SYNC-SNAPSHOT-TIMEOUT)
 - **PLACEMENT-R6A-2F2 (D-3676, D-3685):** pin the run supervisor's queued records, QueueFull and BadCap limits, failed-start rollback, cancel outcomes and survivor accounting with gated, bounded tests; placement remains off.
 - **PLACEMENT-R6A-2F (D-3676, D-3685):** add daemon-owned run registry and replaceable fixed-cap FIFO admission; placement remains off.
 
