@@ -1,6 +1,7 @@
 //! Named, kill-on-close execution groups. No caller integration until R6a-2e.
 use super::group::*;
 use std::{
+    collections::HashMap,
     io, mem,
     os::windows::{
         ffi::OsStrExt,
@@ -9,6 +10,7 @@ use std::{
     },
     process::{Command, Stdio},
     ptr,
+    sync::Mutex,
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -22,6 +24,7 @@ use crate::stall::windows::{
 #[link(name = "kernel32")]
 extern "system" {
     pub(super) fn SetLastError(error: u32);
+    pub(super) fn IsProcessInJob(process: HANDLE, job: HANDLE, result: *mut i32) -> i32;
 }
 
 fn own(handle: HANDLE) -> io::Result<OwnedHandle> {
@@ -34,6 +37,7 @@ fn own(handle: HANDLE) -> io::Result<OwnedHandle> {
 pub struct JobGroup {
     job: OwnedHandle,
     identity: Identity,
+    observed: Mutex<HashMap<u32, OwnedHandle>>,
 }
 pub fn spawn_grouped(
     unit: &str,
@@ -110,7 +114,11 @@ pub fn spawn_grouped(
     };
     Ok(Grouped {
         child,
-        group: Box::new(JobGroup { job, identity }),
+        group: Box::new(JobGroup {
+            job,
+            identity,
+            observed: Mutex::new(HashMap::new()),
+        }),
     })
 }
 pub(super) fn creation_time(pid: u32) -> Option<u64> {
@@ -178,6 +186,10 @@ impl RunGroup for JobGroup {
         &self.identity
     }
     fn members(&self) -> io::Result<Vec<u32>> {
+        let mut observed = self
+            .observed
+            .lock()
+            .map_err(|_| io::Error::other("job process tracking lock poisoned"))?;
         let mut capacity = 1024;
         for _ in 0..4 {
             // usize storage supplies the alignment required by the pid-list header.
@@ -211,7 +223,60 @@ impl RunGroup for JobGroup {
             }
             // SAFETY: successful query supplied count pids within the allocated buffer.
             let pids = unsafe { std::slice::from_raw_parts(list.ProcessIdList.as_ptr(), count) };
-            return Ok(pids.iter().map(|&p| p as u32).collect());
+            let mut members: Vec<u32> = pids.iter().map(|&p| p as u32).collect();
+            for &pid in &members {
+                if observed.contains_key(&pid) {
+                    continue;
+                }
+                // SAFETY: numeric pid; query and wait rights only, owned on success.
+                let Ok(process) = own(unsafe {
+                    OpenProcess(
+                        PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                        0,
+                        pid,
+                    )
+                }) else {
+                    // The job still lists this pid even if opening it races with exit.
+                    continue;
+                };
+                let mut inside = 0;
+                // SAFETY: both handles are open and inside is writable. Verify the
+                // process belongs to this job before retaining a possibly reused pid.
+                if unsafe {
+                    IsProcessInJob(
+                        process.as_raw_handle(),
+                        self.job.as_raw_handle(),
+                        &mut inside,
+                    )
+                } == 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                if inside != 0 {
+                    observed.insert(pid, process);
+                }
+            }
+            let mut wait_error = None;
+            observed.retain(|&pid, process| {
+                // SAFETY: retained process handle has synchronization access.
+                match unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } {
+                    WAIT_OBJECT_0 => false,
+                    WAIT_FAILED => {
+                        wait_error = Some(io::Error::last_os_error());
+                        true
+                    }
+                    _ => {
+                        if !members.contains(&pid) {
+                            members.push(pid);
+                        }
+                        true
+                    }
+                }
+            });
+            if let Some(error) = wait_error {
+                return Err(error);
+            }
+            return Ok(members);
         }
         Err(io::Error::from_raw_os_error(ERROR_MORE_DATA as i32))
     }

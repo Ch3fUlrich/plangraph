@@ -1,6 +1,6 @@
 use super::{
     group::*,
-    group_windows::{creation_time, SetLastError},
+    group_windows::{creation_time, IsProcessInJob, SetLastError},
 };
 use std::{
     ffi::OsString,
