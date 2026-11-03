@@ -88,6 +88,7 @@ fn appended_size(metadata: io::Result<u64>, written: usize) -> u64 {
 mod tests {
     #[test]
     fn metadata_failure_after_append_is_not_a_strike() {
+        // Reduced probe: a metadata failure right after a good append cannot be forced hermetically.
         assert_eq!(
             super::appended_size(Err(std::io::ErrorKind::PermissionDenied.into()), 7),
             7
