@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from plangraph.planner.routing import DEFAULT_LEGS, SpawnRefused
+from plangraph.planner.legs import leg_active
 from . import context_pack, runner
 from .git_guard import writer_launch
 from .inline_diff import InlineDiffError
@@ -72,7 +73,7 @@ def _sweep(service, current):
             try:
                 status = json.loads(service._path(path.name).read_text())['status']
                 remove = status not in ('queued', 'running')
-            except FileNotFoundError:
+            except (OSError, ValueError, KeyError, TypeError):
                 remove = time.time() - path.stat().st_mtime > 86400
             if remove:
                 shutil.rmtree(path)
@@ -85,6 +86,10 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in DEFAULT_LEGS if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
+    if not leg_active(leg):
+        raise LaunchRefused('leg_inactive', 'leg expired')
+    if request['role'] not in leg.roles:
+        raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])
     service.runner.default_cwd = request['cwd']
     service.runner._child_envs = _LaunchOwned()
@@ -157,6 +162,8 @@ def main(stdin, stdout, stderr) -> int:
             raise InvalidRequest('json') from None
         result = build(request)
         output = json.dumps(result)
+        stdout.write(output + '\n')
+        return 0
     except InvalidRequest as exc:
         stderr.write(f'launch-spec failed: invalid request ({exc})\n')
         return 1
@@ -170,5 +177,3 @@ def main(stdin, stdout, stderr) -> int:
     except Exception as exc:
         stderr.write(f'launch-spec failed: {type(exc).__name__}\n')
         return 1
-    stdout.write(output + '\n')
-    return 0

@@ -21,7 +21,7 @@ def request_data(tmp_path, monkeypatch):
     monkeypatch.setattr(spec, 'admitted_by_render', lambda model: True)
     base = dict(PATH=str(tmp_path), SystemRoot='system', COMSPEC='cmd', TEMP=str(tmp_path))
     monkeypatch.setattr(runner, 'build_child_env', lambda *a, **kw: dict(base, **(a[0] or {})))
-    return dict(run_id='run-' + 'a' * 32, job_id='external-job', role='implement',
+    return dict(run_id='run-' + 'a' * 32, job_id='external-job', role='review',
                 dry_run=False, leg={'id': 'qodercli-qwen3.8-flash'}, prompt='do work',
                 card={}, cwd=str(tmp_path), state=str(tmp_path / 'state'))
 
@@ -63,19 +63,21 @@ def test_unknown(request_data):
 @pytest.mark.parametrize('role', ['implement', 'review'])
 def test_tools(request_data, role, tmp_path):
     from plangraph.spawner.runner import IMPLEMENT_HEADER
-    exe = tmp_path / 'qodercli'
+    leg_id = 'mimo-v2.6-flash' if role == 'implement' else request_data['leg']['id']
+    exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
     exe.chmod(0o700)
-    request_data.update(role=role, leg={'id': request_data['leg']['id'], 'model': 'untrusted'})
+    request_data.update(role=role, leg={'id': leg_id, 'model': 'untrusted'})
     code, out, err = invoke(request_data)
     assert (code, err) == (0, '')
     result = json.loads(out)
     assert result['argv'][0] == str(exe)
-    assert result['stdin'] is None and result['cwd'] == str(tmp_path)
+    assert result['cwd'] == str(tmp_path)
+    prompt = result['stdin'] or ' '.join(result['argv'])
     assert ('GIT_AUTHOR_NAME' in result['env']) == (role == 'implement')
     assert ('GIT_AUTHOR_EMAIL' in result['env']) == (role == 'implement')
-    assert (IMPLEMENT_HEADER in ' '.join(result['argv'])) == (role == 'implement')
-    assert ('End every commit message' in ' '.join(result['argv'])) == (role == 'implement')
+    assert (IMPLEMENT_HEADER in prompt) == (role == 'implement')
+    assert ('End every commit message' in prompt) == (role == 'implement')
     assert result['events'][-2]['event'] == 'admitted_by_render'
 
 
@@ -145,6 +147,80 @@ def test_windows(request_data, monkeypatch):
     assert invoke(request_data) == (1, '', 'launch-spec failed: windows env incomplete (PATHEXT)\n')
 
 
+def test_windows_lowercase(request_data, monkeypatch):
+    monkeypatch.setattr(spec.runner, '_is_nt', lambda: True)
+    monkeypatch.setattr(spec.runner, 'build_child_env', lambda *a, **kw: dict(
+        pathext='.EXE', systemroot='system', comspec='cmd', temp=request_data['cwd']))
+    request_data['dry_run'] = True
+    code, out, err = invoke(request_data)
+    assert (code, err) == (0, '')
+    assert json.loads(out)['env']['pathext'] == '.EXE'
+
+
+@pytest.mark.parametrize('error', [BrokenPipeError, OSError])
+def test_response_write(request_data, error):
+    class BrokenOutput:
+        def write(self, output):
+            raise error('private details')
+    err = io.StringIO()
+    assert spec.main(io.BytesIO(json.dumps(request_data).encode()), BrokenOutput(), err) == 1
+    assert err.getvalue() == f'launch-spec failed: {error.__name__}\n'
+
+
+def test_response_serialization(request_data, monkeypatch):
+    monkeypatch.setattr(spec, 'build', lambda req: {'env': object()})
+    assert invoke(request_data) == (1, '', 'launch-spec failed: TypeError\n')
+
+
+@pytest.mark.parametrize('kind', ['leg_inactive', 'leg_role'])
+def test_leg_eligibility(request_data, monkeypatch, kind):
+    from dataclasses import replace
+    leg = next(leg for leg in spec.DEFAULT_LEGS if leg.id == request_data['leg']['id'])
+    if kind == 'leg_inactive':
+        monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, expires='2000-01-01'),))
+        reason = 'leg expired'
+    else:
+        request_data['role'] = 'implement'
+        reason = 'role implement not in leg roles'
+    assert invoke(request_data) == (2, '', f'{kind}: {reason}\n')
+
+
+def test_cwd_normalized(request_data, tmp_path):
+    (tmp_path / 'sub').mkdir()
+    request_data['cwd'] = str(tmp_path) + '/./sub/..'
+    code, out, err = invoke(request_data)
+    assert (code, err) == (0, '')
+    assert json.loads(out)['cwd'] == str(tmp_path)
+
+
+def test_launch_spec_doc_status():
+    from pathlib import Path
+    doc = (Path(__file__).resolve().parents[1] / 'docs' / 'SPAWNER.md').read_text()
+    assert '(placement R6a-3d; nothing calls it yet)' in doc
+    assert 'PLACEMENT=off' not in doc
+
+
+@pytest.mark.parametrize('record', ['invalid_name', '{}', 'bad json', '[]', 'unreadable'])
+@pytest.mark.parametrize('aged', [False, True])
+def test_sweep_unusable(request_data, record, aged):
+    from pathlib import Path
+    root = Path(request_data['state'])
+    name = 'run-x!' if record == 'invalid_name' else 'run-' + 'b' * 32
+    path = root / 'launch' / name
+    path.mkdir(parents=True)
+    if record != 'invalid_name':
+        target = root / 'runs' / name / 'record.json'
+        target.parent.mkdir(parents=True)
+        if record == 'unreadable':
+            target.mkdir()  # Reading a directory raises OSError even as root.
+        else:
+            target.write_text(record)
+    if aged:
+        os.utime(path, (time.time() - 90000,) * 2)
+    assert invoke(request_data)[0] == 0
+    assert path.exists() is not aged
+
+
 def test_sweep(request_data):
     from pathlib import Path
     root = Path(request_data['state'])
@@ -173,16 +249,20 @@ def test_secret(request_data, monkeypatch, tmp_path):
     assert all(secret.encode() not in p.read_bytes() for p in tmp_path.rglob('*') if p.is_file())
 
 
-@pytest.mark.parametrize('unknown,expected', [(False, 0), (True, 2)])
+@pytest.mark.parametrize('unknown,expected', [(False, 0), (True, 2), ('bad', 1)])
 def test_cli(request_data, monkeypatch, unknown, expected):
     from plangraph.spawner import cli
-    if unknown:
+    if unknown is True:
         request_data['leg'] = {'id': 'unknown'}
-    monkeypatch.setattr(cli.sys, 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(request_data).encode())))
+    raw = b'bad' if unknown == 'bad' else json.dumps(request_data).encode()
+    monkeypatch.setattr(cli.sys, 'stdin', io.TextIOWrapper(io.BytesIO(raw)))
     monkeypatch.setattr(cli.sys, 'stdout', io.StringIO())
     monkeypatch.setattr(cli.sys, 'stderr', io.StringIO())
     monkeypatch.setattr(cli, 'SpawnService', lambda **kw: pytest.fail('constructed before dispatch'))
     assert cli.main(['--state', 'ignored', 'launch-spec']) == expected
+    if unknown == 'bad':
+        assert cli.sys.stdout.getvalue() == ''
+        assert cli.sys.stderr.getvalue() == 'launch-spec failed: invalid request (json)\n'
 
 
 def test_events_warnings_and_current(request_data, monkeypatch):
