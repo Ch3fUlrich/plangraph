@@ -8,6 +8,7 @@ mod placement;
 mod pyjson;
 mod records;
 mod serve;
+mod serve_options;
 mod shim;
 mod spawn;
 mod state;

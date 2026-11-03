@@ -5,16 +5,7 @@ use crate::{
 use pg_worker_core::run::record::{new_run_id, RunRecord, Status};
 use serde_json::{json, Value};
 use std::path::Path;
-fn save(state: &Path, base: Value, status: Status) -> Result<Value, ToolError> {
-    let host = std::env::var("PLANGRAPH_HOST")
-        .ok()
-        .filter(|s| {
-            (1..=32).contains(&s.len())
-                && s.as_bytes()[0].is_ascii_lowercase()
-                && s.bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        })
-        .unwrap_or_else(|| "local".into());
+fn save(state: &Path, host: &str, base: Value, status: Status) -> Result<Value, ToolError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -24,7 +15,7 @@ fn save(state: &Path, base: Value, status: Status) -> Result<Value, ToolError> {
     RunRecord::create(
         state,
         &id,
-        &host,
+        host,
         base.as_object().unwrap().clone(),
         status,
         now,
@@ -103,7 +94,12 @@ fn truthy(value: &Value) -> bool {
         Value::Object(m) => !m.is_empty(),
     }
 }
-fn record_validation_error(state: &Path, role: Value, error: &ToolError) -> Result<(), ToolError> {
+fn record_validation_error(
+    state: &Path,
+    host: &str,
+    role: Value,
+    error: &ToolError,
+) -> Result<(), ToolError> {
     let (name, message, code, status) = match error {
         ToolError::Key(key) => ("KeyError", format!("'{key}'"), 1, Status::Failed),
         ToolError::Refused {
@@ -115,19 +111,20 @@ fn record_validation_error(state: &Path, role: Value, error: &ToolError) -> Resu
     };
     save(
         state,
+        host,
         json!({"role":role,"refusal":name,"error":message,"exit_code":code,"legs":[],"evidence":[]}),
         status,
     )?;
     Ok(())
 }
-pub(crate) fn spawn(state: &Path, args: &Args) -> Result<String, ToolError> {
-    serde_json::to_string_pretty(&spawn_value(state, args)?)
+pub(crate) fn spawn(state: &Path, args: &Args, host: &str) -> Result<String, ToolError> {
+    serde_json::to_string_pretty(&spawn_value(state, args, host)?)
         .map_err(|_| ToolError::Internal("could not encode run record".into()))
 }
-fn spawn_value(state: &Path, args: &Args) -> Result<Value, ToolError> {
+fn spawn_value(state: &Path, args: &Args, host: &str) -> Result<Value, ToolError> {
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     if let Err(error) = validate(args) {
-        record_validation_error(state, role, &error)?;
+        record_validation_error(state, host, role, &error)?;
         return Err(error);
     }
     let plan: Value = serde_json::from_str(&placement::route(state, args)?)
@@ -156,6 +153,7 @@ fn spawn_value(state: &Path, args: &Args) -> Result<Value, ToolError> {
         .map_err(|_| ToolError::Internal("could not read current directory".into()))?;
     save(
         state,
+        host,
         json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,"plan":plan,"chosen_leg":leg,"request_side_model":null,"witness_kind":null,"writer_family":leg["family"],"served_model":leg["model"],"served_family":leg["family"],"cwd":cwd.to_string_lossy(),"exit_code":0,"stdout_tail":tail,"attempts":[{"leg":leg,"status":"dry_run","served_model":leg["model"],"served_family":leg["family"],"served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg","request_side_model":null,"witness_kind":null,"skip_reason":null,"provider_response":null,"stdout_tail":tail,"stderr_tail":""}]}),
         Status::DryRun,
     )
@@ -168,18 +166,18 @@ mod tests {
     fn unexpected_validation_error_is_unrecorded() {
         let state = std::env::temp_dir().join(format!("pg-spawnd-validation-{}", new_run_id()));
         let error = ToolError::Internal("validation failed".into());
-        assert!(record_validation_error(&state, json!("implement"), &error).is_ok());
+        assert!(record_validation_error(&state, "local", json!("implement"), &error).is_ok());
         let refused = ToolError::Refused {
             kind: crate::errors::RefusalKind::Spawn,
             message: "no leg".into(),
             legs: vec![],
         };
-        assert!(record_validation_error(&state, json!("implement"), &refused).is_ok());
+        assert!(record_validation_error(&state, "local", json!("implement"), &refused).is_ok());
         let answer = error.into_error_data();
         assert_eq!(answer.message, "validation failed");
         assert!(!state.exists());
         let key = ToolError::Key("card".into());
-        assert!(record_validation_error(&state, json!("review"), &key).is_ok());
+        assert!(record_validation_error(&state, "local", json!("review"), &key).is_ok());
         let rows = crate::records::list_runs(&state);
         std::fs::remove_dir_all(&state).unwrap();
         assert_eq!(rows.len(), 1);
