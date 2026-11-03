@@ -190,10 +190,11 @@ pub fn create_record(rt: &Runtime, spec: &mut RunSpec) -> Result<RunRecord, Star
     Ok(record)
 }
 pub fn launch_error(record: &mut RunRecord, error: LaunchError) {
+    let mut detail = None;
     let name = match error {
         LaunchError::Io(e) => format!("{:?}", e.kind()),
         LaunchError::ScopeUnavailable(msg) => {
-            let _ = record.push_event(json!({"event":"scope_unavailable", "detail":msg}));
+            detail = Some(msg);
             "ScopeUnavailable".into()
         }
         LaunchError::ScopeNotEntered => "ScopeNotEntered".into(),
@@ -208,6 +209,9 @@ pub fn launch_error(record: &mut RunRecord, error: LaunchError) {
         json!({"event":"spawn_failed", "error":name})
     };
     let _ = record.push_event(event);
+    if let Some(detail) = detail {
+        let _ = record.push_event(json!({"event":"scope_unavailable", "detail":detail}));
+    }
     record.set("error", json!(format!("spawn failed: {name}")));
     record.set("reason", json!(format!("spawn failed: {name}")));
 }

@@ -36,7 +36,8 @@ impl Scrubber {
                     values.extend(
                         value
                             .split([
-                                '\n', '\r', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}',
+                                '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}',
+                                '\u{85}', '\u{2028}', '\u{2029}',
                             ])
                             .filter(|s| s.chars().count() >= 8)
                             .map(str::to_owned),
@@ -44,9 +45,8 @@ impl Scrubber {
                 }
             }
         }
-        // Byte-length ordering differs from Python's character count only in tie
-        // order; longest-containing-value-first replacement remains correct.
-        values.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+        // Longest first by character count, as Python's sorted(key=len); ties by bytes.
+        values.sort_by_key(|v| (std::cmp::Reverse(v.chars().count()), v.clone()));
         values.dedup();
         Self(values)
     }
@@ -56,5 +56,32 @@ impl Scrubber {
             text = text.replace(value, REDACTED);
         }
         redact(&text)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::Scrubber;
+    fn scrubber(env: &[(&str, &str)]) -> Scrubber {
+        Scrubber::from_env(
+            &env.iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect::<Vec<_>>(),
+        )
+    }
+    #[test]
+    fn python_splitlines_separators_and_char_count_order() {
+        for sep in ['\u{1c}', '\u{1d}', '\u{1e}'] {
+            let value = format!("aaaa\n{sep}xxxxxxxx");
+            let out = scrubber(&[("API_TOKEN", &value)]).scrub("<xxxxxxxx>");
+            assert!(!out.contains("xxxxxxxx"), "{sep:?}: {out}");
+        }
+        // 8 chars (16 bytes) against 12 chars overlapping by one: Python replaces the longer first.
+        let (short, long) = ("é".repeat(8), format!("é{}", "b".repeat(11)));
+        let s = scrubber(&[("A_TOKEN", &short), ("B_TOKEN", &long)]);
+        let out = s.scrub(&format!("{}{}", "é".repeat(7), long));
+        assert!(
+            !out.contains('b') && out.starts_with(&"é".repeat(7)),
+            "{out}"
+        );
     }
 }

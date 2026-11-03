@@ -261,14 +261,14 @@ fn launch_failure_table() {
         assert_eq!(v["error"], format!("spawn failed: {name}"));
         assert_eq!(v["reason"], v["error"]);
         let mut expected = vec![];
-        if name == "ScopeUnavailable" {
-            expected.push(json!({"event":"scope_unavailable","detail":"unavailable"}));
-        }
         expected.push(if event == "spawn_failed" {
             json!({"event":event,"error":name})
         } else {
             json!({"event":event})
         });
+        if name == "ScopeUnavailable" {
+            expected.push(json!({"event":"scope_unavailable","detail":"unavailable"}));
+        }
         assert_eq!(v["events"], json!(expected));
         assert!(v.get("pid").is_none());
         assert!(v.get("live_log").is_none());
