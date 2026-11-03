@@ -3,6 +3,8 @@ use super::{event_object, unknown_event, ChannelHealth, EventParser, Framer, Lin
 use crate::activity::{Kind, Phase, Signal, ToolClass};
 
 #[cfg(test)]
+mod capture_tests;
+#[cfg(test)]
 mod fixtures;
 #[cfg(test)]
 mod tests;

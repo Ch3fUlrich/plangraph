@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **SPAWNER-RL5B (D-3676, D-3714):** record closed-stdin opencode 2.1.0 live arrivals and replay read progress, version drift and payload-retention checks; no wiring or pin change.
 - **SPAWNER-RL5B (D-3676, D-3714):** map opencode events to receive-time activity with seven sanitized historical replays; no caller or switch, rollback by git revert.
 
 - **PLACEMENT-R6A-2F2 (D-3676, D-3685):** pin the run supervisor's queued records, QueueFull and BadCap limits, failed-start rollback, cancel outcomes and survivor accounting with gated, bounded tests; placement remains off.
