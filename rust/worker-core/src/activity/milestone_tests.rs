@@ -179,3 +179,24 @@ fn m_runs_without_s_and_late_unsafe_warn_is_once() {
         }
     }
 }
+
+#[test]
+fn milestone_after_w_warn_cancels_the_pending_m_kill() {
+    let mut m = progress(Mode::On);
+    assert_eq!(progress_tick(&mut m, 361_000, true).unwrap().act, Act::Warn);
+    m.feed(Signal {
+        kind: Kind::Tool,
+        ts_ms: 400_000,
+        tool: Some((ToolClass::Edit, Phase::End)),
+    });
+    assert_eq!(progress_tick(&mut m, 601_000, true), None);
+    assert_eq!(m.state(), State::Active);
+}
+
+#[test]
+fn huge_milestone_s_saturates_without_a_decision() {
+    let mut m = progress(Mode::On);
+    m.limits.milestone_s = Some(u64::MAX);
+    assert_eq!(progress_tick(&mut m, u64::MAX, true), None);
+    assert_eq!(m.state(), State::Active);
+}

@@ -254,6 +254,11 @@ impl Monitor {
         if !m_enabled || m_limit.is_none_or(|s| m_age < s.saturating_mul(600)) {
             return None;
         }
+        // Before any state change: a missing value can never drop a Decision mid-update.
+        let kill_at_ms = self
+            .first_activity_ms
+            .zip(m_limit)
+            .map(|(t, s)| t.saturating_add(s.saturating_mul(1000)));
         let act = if !self.milestone_warned {
             self.milestone_warned = true;
             if self.modes.milestone == Mode::On {
@@ -278,10 +283,7 @@ impl Monitor {
             outcome: KillOutcome::NoProgress,
             open_tools: self.open_tools,
             s_eff_s: self.s_eff_s(),
-            kill_at_ms: Some(
-                self.first_activity_ms?
-                    .saturating_add(m_limit?.saturating_mul(1000)),
-            ),
+            kill_at_ms,
         })
     }
     fn tick_activity(&mut self, now_ms: u64) -> Option<Decision> {
