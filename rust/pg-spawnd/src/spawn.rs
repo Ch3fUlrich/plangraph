@@ -139,24 +139,7 @@ pub(crate) fn spawn(
     {
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
-    if args.get("dry_run") == Some(&json!(true)) {
-        let tail = format!(
-            "[dry-run] Planned leg: {} via {} {}",
-            leg["id"].as_str().unwrap(),
-            leg["harness"].as_str().unwrap(),
-            leg["model"].as_str().unwrap()
-        );
-        let cwd = std::env::current_dir()
-            .map_err(|_| ToolError::Internal("could not read current directory".into()))?;
-        save(
-            state,
-            host,
-            json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,"plan":plan,"chosen_leg":leg,"request_side_model":null,"witness_kind":null,"writer_family":leg["family"],"served_model":leg["model"],"served_family":leg["family"],"cwd":cwd.to_string_lossy(),"exit_code":0,"stdout_tail":tail,"attempts":[{"leg":leg,"status":"dry_run","served_model":leg["model"],"served_family":leg["family"],"served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg","request_side_model":null,"witness_kind":null,"skip_reason":null,"provider_response":null,"stdout_tail":tail,"stderr_tail":""}]}),
-            Status::DryRun,
-        )
-    } else {
-        runs.spawn(state, args, host, role, plan)
-    }
+    runs.spawn(state, args, host, role, plan)
 }
 
 #[cfg(test)]
