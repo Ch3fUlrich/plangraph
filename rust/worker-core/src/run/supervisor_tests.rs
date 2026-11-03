@@ -74,3 +74,23 @@ fn cap_and_fifo() {
     );
     assert_eq!(s.max_held_seen(), 2);
 }
+
+#[test]
+fn queue_full_counts_only_runs_that_would_wait() {
+    // (held, reserved, max_runs, max_queued, full): a reserved run that a free
+    // permit will promote is not waiting, so a burst of starts is not refused early.
+    for (held, reserved, cap, queue, full) in [
+        (0, 1, 2, 1, false),
+        (0, 2, 1, 2, false),
+        (1, 2, 1, 2, true),
+        (0, 0, 1, 0, false),
+        (0, 1, 1, 0, true),
+        (1, 0, 1, 0, true),
+    ] {
+        assert_eq!(
+            queue_full(held, reserved, cap, queue),
+            full,
+            "{held} {reserved} {cap} {queue}"
+        );
+    }
+}

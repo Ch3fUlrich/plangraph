@@ -98,6 +98,12 @@ impl Admission for Gate {
         }
     }
 }
+/// A start is refused when its run would wait beyond `max_queued`: held permits plus
+/// reserved places (a reserved run that a free permit will promote is not waiting)
+/// already fill `max_runs + max_queued`. `max_queued` 0 = no waiting run.
+pub(crate) fn queue_full(held: usize, reserved: usize, max_runs: usize, max_queued: usize) -> bool {
+    held + reserved >= max_runs + max_queued
+}
 pub struct Supervisor {
     runtime: Arc<Runtime>,
     gate: Arc<Gate>,
@@ -133,13 +139,7 @@ impl Supervisor {
         self.sweep(&mut runs);
         let (lock, changed) = &*self.gate.state;
         let mut s = lock.lock().unwrap();
-        // A zero-length waiting queue still permits immediate admission.
-        let full = if self.max_queued == 0 {
-            s.held + s.queue.len() >= self.gate.max_runs
-        } else {
-            s.queue.len() >= self.max_queued
-        };
-        if full {
+        if queue_full(s.held, s.queue.len(), self.gate.max_runs, self.max_queued) {
             return Err(SupervisorError::QueueFull);
         }
         let id = spec.run_id.clone();
