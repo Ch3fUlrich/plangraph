@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 pub(crate) struct SpawndServer {
     state: std::path::PathBuf,
-    supervisor: Arc<Supervisor>,
     host: String,
+    runs: Arc<crate::runs::Runs>,
 }
 
 impl ServerHandler for SpawndServer {
@@ -36,13 +36,15 @@ impl ServerHandler for SpawndServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
-        {
-            let _supervisor = &self.supervisor;
-            std::future::ready(crate::tools::call_tool_with_host(
-                &request,
-                &self.state,
-                &self.host,
-            ))
+        let state = self.state.clone();
+        let host = self.host.clone();
+        let runs = self.runs.clone();
+        async move {
+            tokio::task::spawn_blocking(move || {
+                crate::tools::dispatch(&request, &state, &host, Some(&runs))
+            })
+            .await
+            .map_err(|_| McpError::internal_error("tool task failed", None))?
         }
     }
 }
@@ -77,6 +79,7 @@ async fn serve_unix(
     host: String,
 ) -> Result<(), String> {
     let listener = crate::transport_unix::bind_listener(path)?;
+    let runs = Arc::new(crate::runs::Runs::new(supervisor.clone()));
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let listener = tokio::net::UnixListener::from_std(listener).map_err(|e| e.to_string())?;
     loop {
@@ -90,7 +93,7 @@ async fn serve_unix(
         };
         // Handshake failures (liveness probes that connect and close) are not
         // fatal to the server.
-        spawn_session(stream, state.clone(), supervisor.clone(), host.clone());
+        spawn_session(stream, state.clone(), host.clone(), runs.clone());
     }
 }
 
@@ -117,31 +120,29 @@ async fn serve_windows(
     host: String,
 ) -> Result<(), String> {
     let mut first_instance = true;
+    let runs = Arc::new(crate::runs::Runs::new(supervisor.clone()));
     loop {
         let server = crate::transport_windows::create_pipe_server(first_instance)?;
         first_instance = false;
         if server.connect().await.is_err() {
             continue;
         }
-        spawn_session(server, state.clone(), supervisor.clone(), host.clone());
+        spawn_session(server, state.clone(), host.clone(), runs.clone());
     }
 }
 
-fn spawn_session<S>(stream: S, state: std::path::PathBuf, supervisor: Arc<Supervisor>, host: String)
-where
+fn spawn_session<S>(
+    stream: S,
+    state: std::path::PathBuf,
+    host: String,
+    runs: Arc<crate::runs::Runs>,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         if let Ok(Ok(service)) = tokio::time::timeout(
             handshake_timeout(),
-            rmcp::serve_server(
-                SpawndServer {
-                    state,
-                    supervisor,
-                    host,
-                },
-                stream,
-            ),
+            rmcp::serve_server(SpawndServer { state, host, runs }, stream),
         )
         .await
         {

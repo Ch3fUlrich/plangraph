@@ -117,11 +117,12 @@ fn record_validation_error(
     )?;
     Ok(())
 }
-pub(crate) fn spawn(state: &Path, args: &Args, host: &str) -> Result<String, ToolError> {
-    serde_json::to_string_pretty(&spawn_value(state, args, host)?)
-        .map_err(|_| ToolError::Internal("could not encode run record".into()))
-}
-fn spawn_value(state: &Path, args: &Args, host: &str) -> Result<Value, ToolError> {
+pub(crate) fn spawn(
+    state: &Path,
+    args: &Args,
+    host: &str,
+    runs: &crate::runs::Runs,
+) -> Result<Value, ToolError> {
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     if let Err(error) = validate(args) {
         record_validation_error(state, host, role, &error)?;
@@ -138,25 +139,24 @@ fn spawn_value(state: &Path, args: &Args, host: &str) -> Result<Value, ToolError
     {
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
-    if args.get("dry_run") != Some(&json!(true)) {
-        return Err(ToolError::Internal(
-            "launching is not available yet (R6a-3c)".into(),
-        ));
+    if args.get("dry_run") == Some(&json!(true)) {
+        let tail = format!(
+            "[dry-run] Planned leg: {} via {} {}",
+            leg["id"].as_str().unwrap(),
+            leg["harness"].as_str().unwrap(),
+            leg["model"].as_str().unwrap()
+        );
+        let cwd = std::env::current_dir()
+            .map_err(|_| ToolError::Internal("could not read current directory".into()))?;
+        save(
+            state,
+            host,
+            json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,"plan":plan,"chosen_leg":leg,"request_side_model":null,"witness_kind":null,"writer_family":leg["family"],"served_model":leg["model"],"served_family":leg["family"],"cwd":cwd.to_string_lossy(),"exit_code":0,"stdout_tail":tail,"attempts":[{"leg":leg,"status":"dry_run","served_model":leg["model"],"served_family":leg["family"],"served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg","request_side_model":null,"witness_kind":null,"skip_reason":null,"provider_response":null,"stdout_tail":tail,"stderr_tail":""}]}),
+            Status::DryRun,
+        )
+    } else {
+        runs.spawn(state, args, host, role, plan)
     }
-    let tail = format!(
-        "[dry-run] Planned leg: {} via {} {}",
-        leg["id"].as_str().unwrap(),
-        leg["harness"].as_str().unwrap(),
-        leg["model"].as_str().unwrap()
-    );
-    let cwd = std::env::current_dir()
-        .map_err(|_| ToolError::Internal("could not read current directory".into()))?;
-    save(
-        state,
-        host,
-        json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,"plan":plan,"chosen_leg":leg,"request_side_model":null,"witness_kind":null,"writer_family":leg["family"],"served_model":leg["model"],"served_family":leg["family"],"cwd":cwd.to_string_lossy(),"exit_code":0,"stdout_tail":tail,"attempts":[{"leg":leg,"status":"dry_run","served_model":leg["model"],"served_family":leg["family"],"served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg","request_side_model":null,"witness_kind":null,"skip_reason":null,"provider_response":null,"stdout_tail":tail,"stderr_tail":""}]}),
-        Status::DryRun,
-    )
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ mod launch;
 mod placement;
 mod pyjson;
 mod records;
+mod runs;
 mod serve;
 mod serve_options;
 mod shim;

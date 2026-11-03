@@ -274,7 +274,7 @@ fn spawn_validation_records() {
 fn spawn_dry_run_and_no_launch() {
     let plan = json!({"legs":[],"first_leg":{"id":"leg","harness":"h","model":"m","family":"f"}});
     let mut f = Fixture::new(&plan.to_string(), 0, "");
-    let mut args = json!({"prompt":"p","card":{"x":1},"dry_run":true,"writer_families":["writer"],"review_of":"run-a","risk":"high","no_fallthrough":true});
+    let args = json!({"prompt":"p","card":{"x":1},"dry_run":true,"writer_families":["writer"],"review_of":"run-a","risk":"high","no_fallthrough":true});
     let r = f.call("spawn", args.clone());
     let text = r["result"]["content"][0]["text"].as_str().unwrap();
     let row: Value = serde_json::from_str(text).unwrap();
@@ -322,13 +322,6 @@ fn spawn_dry_run_and_no_launch() {
     );
     let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
     assert!(argv.contains("--writer-family\nwriter\n--review-of\nrun-a\n"));
-    args["dry_run"] = json!(false);
-    let r = f.call("spawn", args);
-    assert_eq!(
-        r["error"]["message"],
-        "launching is not available yet (R6a-3c)"
-    );
-    assert_eq!(records(&f).len(), 1);
 }
 #[test]
 fn adapter_failures_never_duplicate_records() {

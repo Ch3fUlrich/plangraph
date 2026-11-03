@@ -61,10 +61,19 @@ pub(crate) fn call_tool(
     call_tool_with_host(request, state, "local")
 }
 
+#[cfg(test)]
 pub(crate) fn call_tool_with_host(
     request: &CallToolRequestParams,
     state: &std::path::Path,
     host: &str,
+) -> Result<CallToolResult, McpError> {
+    dispatch(request, state, host, None)
+}
+pub(crate) fn dispatch(
+    request: &CallToolRequestParams,
+    state: &std::path::Path,
+    host: &str,
+    runs: Option<&crate::runs::Runs>,
 ) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
     if matches!(
@@ -73,7 +82,20 @@ pub(crate) fn call_tool_with_host(
     ) {
         let args = request.arguments.clone().unwrap_or_default();
         let payload = match name {
-            "plangraph_agent_spawn" => crate::spawn::spawn(state, &args, host),
+            "plangraph_agent_spawn" => {
+                let runs = runs.ok_or_else(|| {
+                    crate::errors::ToolError::Internal("supervisor unavailable".into())
+                        .into_error_data()
+                })?;
+                let record = crate::spawn::spawn(state, &args, host, runs)
+                    .map_err(crate::errors::ToolError::into_error_data)?;
+                if let Some(error) = crate::errors::refused_record_error(&record) {
+                    return Err(error);
+                }
+                serde_json::to_string_pretty(&record).map_err(|_| {
+                    crate::errors::ToolError::Internal("could not encode run record".into())
+                })
+            }
             "plangraph_agent_probe" => crate::placement::probe(state, &args),
             _ => crate::placement::route(state, &args),
         }
