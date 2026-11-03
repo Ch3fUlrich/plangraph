@@ -49,22 +49,32 @@ fn read(s: &Supervisor, n: usize) -> serde_json::Value {
 fn cap_and_fifo() {
     let d = tempfile::tempdir().unwrap();
     let s = Supervisor::new(config(d.path(), 2, 64)).unwrap();
-    // Ensure the first shell has recorded its launch before filling the second slot:
-    // permit FIFO cannot impose scheduling order on two concurrently launched shells.
-    s.start(spec(d.path(), 0, "echo 0 >> order; sleep .2"))
-        .unwrap();
-    until(|| d.path().join("order").exists());
-    for n in 1..5 {
-        s.start(spec(d.path(), n, &format!("echo {n} >> order; sleep .2")))
-            .unwrap();
+    for n in 0..5 {
+        s.start(spec(d.path(), n, HOLD)).unwrap();
     }
-    until(|| s.counts().running == 2);
-    assert_eq!(s.counts().queued, 3);
     until(|| {
-        assert!(s.counts().running <= 2);
-        s.counts().running == 0 && s.counts().queued == 0
+        let c = s.counts();
+        c.running == 2 && c.queued == 3
+    });
+    std::fs::write(d.path().join("go"), "").unwrap();
+    until(|| {
+        let c = s.counts();
+        assert!(c.running <= 2);
+        c.running == 0 && c.queued == 0
     });
     for n in 0..5 {
+        assert!(s.wait_finished(&format!("run-{n}"), Duration::from_secs(1)));
+        assert_eq!(read(&s, n)["status"], "completed");
+    }
+    assert_eq!(s.max_held_seen(), 2);
+
+    // With one permit, each append finishes before the next grant.
+    let s = Supervisor::new(config(d.path(), 1, 64)).unwrap();
+    for n in 5..10 {
+        let script = format!("{HOLD}; echo {} >> order", n - 5);
+        s.start(spec(d.path(), n, &script)).unwrap();
+    }
+    for n in 5..10 {
         assert!(s.wait_finished(&format!("run-{n}"), Duration::from_secs(1)));
         assert_eq!(read(&s, n)["status"], "completed");
     }
@@ -72,7 +82,6 @@ fn cap_and_fifo() {
         std::fs::read_to_string(d.path().join("order")).unwrap(),
         "0\n1\n2\n3\n4\n"
     );
-    assert_eq!(s.max_held_seen(), 2);
 }
 
 #[test]
@@ -93,4 +102,31 @@ fn queue_full_counts_only_runs_that_would_wait() {
             "{held} {reserved} {cap} {queue}"
         );
     }
+}
+
+const HOLD: &str = "i=0; while [ ! -e go ] && [ $i -lt 400 ]; do sleep .01; i=$((i+1)); done";
+
+#[test]
+fn duplicate_run_preserves_live_and_finished_ownership() {
+    let d = tempfile::tempdir().unwrap();
+    let s = Supervisor::new(config(d.path(), 1, 0)).unwrap();
+    s.start(spec(d.path(), 0, HOLD)).unwrap();
+    until(|| read(&s, 0)["status"] == "running");
+    let record = read(&s, 0);
+    let counts = s.counts();
+    assert!(matches!(
+        s.start(spec(d.path(), 0, "exit 0")),
+        Err(SupervisorError::DuplicateRun)
+    ));
+    assert_eq!(read(&s, 0), record);
+    assert_eq!(s.counts(), counts);
+    assert_eq!(s.cancel("run-0"), CancelOutcome::Requested);
+    assert!(s.wait_finished("run-0", Duration::from_secs(1)));
+    assert_eq!(read(&s, 0)["status"], "cancelled");
+    let counts = s.counts();
+    assert!(matches!(
+        s.start(spec(d.path(), 0, "exit 0")),
+        Err(SupervisorError::DuplicateRun)
+    ));
+    assert_eq!(s.counts(), counts);
 }
