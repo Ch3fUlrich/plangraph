@@ -125,6 +125,52 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires root to create a foreign-uid socket peer"]
+    async fn foreign_uid_peer_is_refused() {
+        if unsafe { geteuid() } != 0 {
+            return;
+        }
+        extern "C" {
+            fn setuid(uid: u32) -> i32;
+        }
+        let base = std::env::temp_dir().join(format!("pg-spawnd-peer-{}", std::process::id()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&base)
+            .unwrap();
+        let path = base.join("socket");
+        // The child switches to another uid before it binds and listens, so the
+        // peer check sees the foreign uid while the verified directory stays ours.
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o777)).unwrap();
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("python3");
+        command.args(["-c", "import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); time.sleep(3)"]).arg(&path);
+        unsafe {
+            command.pre_exec(|| {
+                if setuid(1) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !path.exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = connect(&path).await;
+        child.kill().unwrap();
+        child.wait().unwrap();
+        std::fs::remove_dir_all(base).unwrap();
+        assert!(result
+            .unwrap_err()
+            .contains("peer is owned by another user"));
+    }
+
+    #[tokio::test]
     async fn shim_refuses_accessible_and_symlinked_directories() {
         let base = std::env::temp_dir().join(format!("pg-spawnd-connect-{}", std::process::id()));
         std::fs::DirBuilder::new()
@@ -163,13 +209,18 @@ mod tests {
             .unwrap();
         let path = base.join("socket");
         drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        let mut replacement = None;
         let winner = bind_checked(&path, || {
+            std::fs::remove_file(&path).unwrap();
             assert!(bind_listener(&path).is_err());
+            replacement = Some(std::os::unix::net::UnixListener::bind(&path).unwrap());
         })
         .unwrap();
+        // Pin the foreign replacement socket, not the flock winner's socket.
         let identity = std::fs::metadata(&path).unwrap().ino();
         assert!(bind_listener(&path).is_err());
         assert_eq!(std::fs::metadata(&path).unwrap().ino(), identity);
+        drop(replacement);
         drop(winner);
         std::fs::remove_dir_all(base).unwrap();
     }

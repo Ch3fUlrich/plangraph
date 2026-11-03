@@ -4,13 +4,55 @@
 #[cfg(unix)]
 mod common;
 
-use common::{assert_mode_eventually, wait_connect, ChildGuard, TempDir};
+use common::{assert_mode_eventually, ChildGuard, McpClient, TempDir};
 use std::ffi::OsStr;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
 const FIXTURE: &str = include_str!("../src/tools_list.json");
+
+#[test]
+fn state_is_required_and_never_created() {
+    let tmp = TempDir::new();
+    let socket = tmp.path().join("socket");
+    let output = common::output(
+        std::process::Command::new(bin())
+            .args([
+                OsStr::new("serve"),
+                OsStr::new("--socket"),
+                socket.as_os_str(),
+            ])
+            .env_remove("HOME")
+            .env_remove("USERPROFILE")
+            .env_remove("XDG_STATE_HOME")
+            .env_remove("PLANGRAPH_SPAWN_STATE"),
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(String::from_utf8(output.stderr).unwrap().lines().count(), 1);
+    let state = tmp.path().join("absent");
+    let _guard = ChildGuard::spawn(
+        bin(),
+        &[
+            OsStr::new("serve"),
+            OsStr::new("--socket"),
+            socket.as_os_str(),
+            OsStr::new("--state"),
+            state.as_os_str(),
+        ],
+    );
+    let mut client = McpClient::connect(&socket);
+    client.initialize();
+    let response = client.request(
+        "tools/call",
+        serde_json::json!({"name":"plangraph_agent_ps"}),
+    );
+    assert_eq!(
+        response["result"]["content"][0]["text"],
+        "{\n  \"runs\": []\n}"
+    );
+    assert!(!state.exists());
+}
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_pg-spawnd")
@@ -25,69 +67,6 @@ fn spawn_serve(socket: &Path) -> ChildGuard {
             socket.as_os_str(),
         ],
     )
-}
-
-struct McpClient {
-    stream: BufReader<std::os::unix::net::UnixStream>,
-    next_id: i64,
-}
-
-impl McpClient {
-    fn connect(socket: &Path) -> McpClient {
-        let stream = wait_connect(socket, Duration::from_secs(5));
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .expect("read timeout");
-        McpClient {
-            stream: BufReader::new(stream),
-            next_id: 0,
-        }
-    }
-
-    fn send(&mut self, message: &serde_json::Value) {
-        let mut line = serde_json::to_string(message).expect("serialize");
-        line.push('\n');
-        self.stream
-            .get_mut()
-            .write_all(line.as_bytes())
-            .expect("write request");
-    }
-
-    fn recv(&mut self) -> serde_json::Value {
-        let mut line = String::new();
-        self.stream.read_line(&mut line).expect("read response");
-        assert!(!line.is_empty(), "server closed the connection");
-        serde_json::from_str(line.trim_end_matches('\n')).expect("parse response")
-    }
-
-    fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
-        self.next_id += 1;
-        let id = self.next_id;
-        self.send(&serde_json::json!({
-            "jsonrpc": "2.0", "id": id, "method": method, "params": params,
-        }));
-        loop {
-            let response = self.recv();
-            if response.get("id") == Some(&serde_json::json!(id)) {
-                return response;
-            }
-        }
-    }
-
-    fn initialize(&mut self) -> serde_json::Value {
-        let response = self.request(
-            "initialize",
-            serde_json::json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "test-suite", "version": "0"},
-            }),
-        );
-        self.send(&serde_json::json!({
-            "jsonrpc": "2.0", "method": "notifications/initialized",
-        }));
-        response
-    }
 }
 
 #[test]
@@ -258,7 +237,7 @@ fn not_implemented_tool_is_error_naming_r6a_3() {
         .as_str()
         .expect("text");
     assert!(
-        text.contains("not implemented in pg-spawnd yet (R6a-3)"),
+        text.contains("not implemented in pg-spawnd yet (R9)"),
         "{text}"
     );
 }
