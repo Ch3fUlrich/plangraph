@@ -26,12 +26,26 @@ fn real_run_and_failure() {
         assert_eq!(r["writer_family"], "f");
         assert_eq!(r["warnings"], json!(["warning"]));
         assert_eq!(r["events"][0]["event"], "adapter");
+        assert_eq!(
+            r["attempts"][0],
+            json!({
+                "leg":r["plan"]["first_leg"], "status":status,
+                "served_model":"unwitnessed", "served_family":"unwitnessed",
+                "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
+                "request_side_model":null, "witness_kind":null, "provider_response":null,
+                "skip_reason":if status == "completed" { Value::Null } else { r["reason"].clone() },
+                "stdout_tail":r["stdout_tail"], "stderr_tail":r["stderr_tail"]
+            })
+        );
+        assert_eq!(r["attempts"][0]["status"], status);
+        assert_eq!(r["attempts"][0]["served_model"], "unwitnessed");
         if status == "completed" {
             assert_eq!(r["stdout_tail"], "hi\n");
             assert_eq!(r["stderr_tail"], "err\n");
-            assert!(r["chosen_leg"].is_null());
+            assert_eq!(r["chosen_leg"], r["plan"]["first_leg"]);
         } else {
             assert!(r["chosen_leg"].is_null());
+            assert_eq!(r["attempts"][0]["skip_reason"], r["reason"]);
         }
         let dir = f
             .state
@@ -125,4 +139,46 @@ fn queue_full_and_nonblocking_wait() {
     assert_eq!(row["exit_code"], 2);
     assert_eq!(row["error"], "run queue full");
     std::thread::sleep(std::time::Duration::from_millis(1100));
+}
+#[test]
+fn dry_command_text() {
+    for stdin in [Value::Null, json!("payload")] {
+        let mut f = Fixture::new("echo hi", stdin.clone(), &[]);
+        let r = payload(f.call("spawn", json!({"prompt":"p","card":{"x":1},"dry_run":true})));
+        let suffix = if stdin.is_null() {
+            ""
+        } else {
+            " [stdin: 7 bytes]"
+        };
+        assert_eq!(
+            r["stdout_tail"],
+            format!("[dry-run] Planned command: /bin/sh -c echo hi{suffix}")
+        );
+        assert_eq!(r["stdout_tail"], r["attempts"][0]["stdout_tail"]);
+        assert!(r["pid"].is_null());
+        assert!(r["job_id"].is_string());
+    }
+}
+
+#[test]
+fn launch_errors_do_not_create_records() {
+    for dry in [false, true] {
+        for (body, code, message) in [
+            ("echo 'Spawn: denied' >&2; exit 2", -32000, "Spawn: denied"),
+            ("exit 1", -32603, "launch adapter failed (exit 1)"),
+            ("exit 124", -32603, "launch adapter failed (exit 124)"),
+            ("", -32603, "launch adapter returned an invalid launch spec"),
+        ] {
+            let mut f = Fixture::new("exit 0", Value::Null, &[]);
+            std::fs::write(
+                f.state.path().join("launch"),
+                format!("#!/bin/sh\ncat >/dev/null\n{body}\n"),
+            )
+            .unwrap();
+            let reply = f.call("spawn", json!({"prompt":"p","card":{"x":1},"dry_run":dry}));
+            assert_eq!(reply["error"]["code"], code, "{reply}");
+            assert_eq!(reply["error"]["message"], message);
+            assert!(!f.state.path().join("runs").exists());
+        }
+    }
 }

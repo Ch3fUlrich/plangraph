@@ -17,6 +17,9 @@ impl Fixture {
         let script = state.path().join("adapter");
         std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'/argv\nprintf '%s' '{}'\nprintf '%s\\n' '{}' >&2\nexit {}\n",state.path().display(),output,stderr,code)).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let launch = state.path().join("launch");
+        std::fs::write(&launch, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{{\"argv\":[\"/bin/true\"],\"cwd\":\"{}\",\"env\":{{}},\"stdin\":null}}'\n", std::env::current_dir().unwrap().display())).unwrap();
+        std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
         let socket = state.path().join("socket");
         let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
             .arg("serve")
@@ -27,6 +30,7 @@ impl Fixture {
             .arg(state.path())
             .env("PLANGRAPH_HOST", host)
             .env("PG_SPAWND_ADAPTER", script)
+            .env("PG_SPAWND_LAUNCH_CMD", launch)
             .spawn()
             .unwrap();
         let guard = ChildGuard { child };
@@ -274,7 +278,7 @@ fn spawn_validation_records() {
 fn spawn_dry_run_and_no_launch() {
     let plan = json!({"legs":[],"first_leg":{"id":"leg","harness":"h","model":"m","family":"f"}});
     let mut f = Fixture::new(&plan.to_string(), 0, "");
-    let args = json!({"prompt":"p","card":{"x":1},"dry_run":true,"writer_families":["writer"],"review_of":"run-a","risk":"high","no_fallthrough":true});
+    let mut args = json!({"prompt":"p","card":{"x":1},"dry_run":true,"writer_families":["writer"],"review_of":"run-a","risk":"high","no_fallthrough":true});
     let r = f.call("spawn", args.clone());
     let text = r["result"]["content"][0]["text"].as_str().unwrap();
     let row: Value = serde_json::from_str(text).unwrap();
@@ -282,7 +286,7 @@ fn spawn_dry_run_and_no_launch() {
     let id = row["run_id"].as_str().unwrap();
     let file = std::fs::read_to_string(f.state.path().join("runs").join(id).join("record.json"));
     assert_eq!(text, file.unwrap());
-    keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host plan request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd witness_kind writer_family");
+    keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host job_id pid plan request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd witness_kind writer_family");
     keys(&row["attempts"][0], "leg provider_response request_side_model served_family served_model served_witness_reason skip_reason status stderr_tail stdout_tail witness_kind");
     keys(&row["plan"], "first_leg legs");
     for leg in [
@@ -309,7 +313,7 @@ fn spawn_dry_run_and_no_launch() {
         row["cwd"],
         std::env::current_dir().unwrap().to_string_lossy().as_ref()
     );
-    let tail = "[dry-run] Planned leg: leg via h m";
+    let tail = "[dry-run] Planned command: /bin/true";
     assert_eq!(row["stdout_tail"], tail);
     assert_eq!(
         row["attempts"],
@@ -322,6 +326,14 @@ fn spawn_dry_run_and_no_launch() {
     );
     let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
     assert!(argv.contains("--writer-family\nwriter\n--review-of\nrun-a\n"));
+    args["dry_run"] = json!(false);
+    args["wait_seconds"] = json!(2);
+    let r = f.call("spawn", args);
+    assert!(r.get("error").is_none(), "{r}");
+    let row: Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(row["status"], "completed");
+    assert_eq!(records(&f).len(), 2);
 }
 #[test]
 fn adapter_failures_never_duplicate_records() {

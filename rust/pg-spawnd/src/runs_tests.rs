@@ -10,6 +10,15 @@ impl Drop for Dir {
 
 #[test]
 fn real_spawn_registers_job() {
+    registered_job(false);
+}
+
+#[test]
+fn dry_spawn_registers_job() {
+    registered_job(true);
+}
+
+fn registered_job(dry: bool) {
     let dir = Dir(std::env::temp_dir().join(new_run_id()));
     std::fs::create_dir(&dir.0).unwrap();
     let runs = Runs::new(Arc::new(
@@ -20,7 +29,7 @@ fn real_spawn_registers_job() {
         }))
         .unwrap(),
     ));
-    let args = json!({"prompt":"p","card":{},"wait_seconds":1});
+    let args = json!({"prompt":"p","card":{},"wait_seconds":1,"dry_run":dry});
     let result = runs
         .spawn_using(
             &dir.0,
@@ -48,6 +57,12 @@ fn real_spawn_registers_job() {
         Some(&result["run_id"].as_str().unwrap().to_string())
     );
     assert!(terminal(&result));
+    if dry {
+        let id = runs.jobs.lock().unwrap()[result["job_id"].as_str().unwrap()].clone();
+        let saved = crate::records::read_record(&dir.0, &json!(id))
+            .unwrap_or_else(|_| panic!("missing dry record"));
+        assert_eq!(saved["status"], "dry_run");
+    }
 }
 
 #[test]
