@@ -90,6 +90,37 @@ fn server_payload_for_assert() -> Vec<u8> {
     (0..=255u8).cycle().take(4096).collect()
 }
 
+#[test]
+fn stalled_stdout_after_eof_has_bounded_exit() {
+    let tmp = TempDir::new();
+    let socket = tmp.path().join("socket");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let mut guard = spawn_shim(&socket);
+    listener.set_nonblocking(true).unwrap();
+    let start = std::time::Instant::now();
+    let mut stream = loop {
+        if let Ok((stream, _)) = listener.accept() {
+            break stream;
+        }
+        assert!(start.elapsed() < Duration::from_secs(2));
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    stream.set_nonblocking(true).unwrap();
+    // Keep stdout's pipe open without reading; fill it and pin a blocking write.
+    let _ = stream.write_all(&vec![b'x'; 1024 * 1024]);
+    drop(guard.child.stdin.take());
+    let eof = std::time::Instant::now();
+    loop {
+        if let Some(status) = guard.child.try_wait().unwrap() {
+            assert_eq!(status.code(), Some(0));
+            assert!(eof.elapsed() >= Duration::from_millis(4800));
+            break;
+        }
+        assert!(eof.elapsed() < Duration::from_millis(5500));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn pending_connect_times_out_without_retry() {

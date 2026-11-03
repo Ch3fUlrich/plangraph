@@ -14,8 +14,6 @@ use std::sync::OnceLock;
 /// command in the R6a-1 brief when the Python metadata changes).
 pub(crate) const TOOLS_JSON: &str = include_str!("tools_list.json");
 
-pub(crate) const NOT_IMPLEMENTED_MSG: &str = "not implemented in pg-spawnd yet (R6a-3)";
-
 pub(crate) fn tools() -> Vec<Tool> {
     static TOOLS: OnceLock<Vec<Tool>> = OnceLock::new();
     TOOLS
@@ -55,16 +53,71 @@ fn health_json() -> String {
 ///
 /// Unknown tool names are a JSON-RPC protocol error that reveals nothing about
 /// the daemon internals; listed-but-unbuilt tools return an MCP tool error.
-pub(crate) fn call_tool(request: &CallToolRequestParams) -> Result<CallToolResult, McpError> {
+pub(crate) fn call_tool(
+    request: &CallToolRequestParams,
+    state: &std::path::Path,
+) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
+    if matches!(
+        name,
+        "plangraph_agent_ps"
+            | "plangraph_agent_result"
+            | "plangraph_agent_status"
+            | "plangraph_agent_steer"
+    ) {
+        let args = request.arguments.clone().unwrap_or_default();
+        let required = |key: &str| {
+            args.get(key)
+                .ok_or_else(|| crate::errors::ToolError::Key(key.into()))
+        };
+        let payload = (|| {
+            use serde_json::json;
+            match name {
+                "plangraph_agent_ps" => Ok(json!({"runs": crate::records::list_runs(state)})),
+                "plangraph_agent_result" => crate::records::read_record(state, required("run_id")?),
+                "plangraph_agent_status" if args.contains_key("run_id") => {
+                    crate::records::read_record(state, required("run_id")?)
+                }
+                "plangraph_agent_status" => {
+                    if let Some(id) = args.get("job_id") {
+                        return Err(crate::errors::ToolError::Key(format!(
+                            "Job {} not found",
+                            python_str(id)
+                        )));
+                    }
+                    Ok(json!({"jobs":[]}))
+                }
+                _ => {
+                    let _job = python_str(required("job_id")?);
+                    let _message = python_str(required("message")?);
+                    Ok(json!({"ok":false,"steered":false,"error":"unknown job"}))
+                }
+            }
+        })()
+        .map_err(crate::errors::ToolError::into_error_data)?;
+        if let Some(error) = crate::errors::refused_record_error(&payload) {
+            return Err(error);
+        }
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string_pretty(&payload)
+                .map_err(|e| crate::errors::ToolError::Internal(e.to_string()).into_error_data())?,
+        )]));
+    }
     match name {
         "plangraph_agent_health" => Ok(CallToolResult::success(vec![ContentBlock::text(
             health_json(),
         )])),
         other if tool_names().contains(other) => {
-            Ok(CallToolResult::error(vec![ContentBlock::text(
-                NOT_IMPLEMENTED_MSG,
-            )]))
+            Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "not implemented in pg-spawnd yet ({})",
+                match other {
+                    "plangraph_agent_route" | "plangraph_agent_probe" | "plangraph_agent_spawn" =>
+                        "R6a-3b",
+                    "plangraph_agent_cancel" => "R6a-3c",
+                    "plangraph_agent_query_catalog" => "R11",
+                    _ => "R9",
+                }
+            ))]))
         }
         _ => Err(McpError::new(
             ErrorCode::INVALID_PARAMS,
@@ -74,9 +127,76 @@ pub(crate) fn call_tool(request: &CallToolRequestParams) -> Result<CallToolResul
     }
 }
 
+fn python_str(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "None".into(),
+        serde_json::Value::Bool(true) => "True".into(),
+        serde_json::Value::Bool(false) => "False".into(),
+        serde_json::Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(python_repr)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        serde_json::Value::Object(values) => format!(
+            "{{{}}}",
+            values
+                .iter()
+                .map(|(key, value)| format!(
+                    "{}: {}",
+                    python_repr(&serde_json::Value::String(key.clone())),
+                    python_repr(value)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        _ => value.to_string(),
+    }
+}
+
+fn python_repr(value: &serde_json::Value) -> String {
+    if let serde_json::Value::String(text) = value {
+        let quote = if text.contains('\'') && !text.contains('"') {
+            '"'
+        } else {
+            '\''
+        };
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+            .replace(quote, &format!("\\{quote}"));
+        format!("{quote}{escaped}{quote}")
+    } else {
+        python_str(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_string_coercion() {
+        for (value, expected) in [
+            (serde_json::json!(12), "12"),
+            (serde_json::json!(true), "True"),
+            (serde_json::json!(false), "False"),
+            (serde_json::json!(null), "None"),
+            (serde_json::json!("text"), "text"),
+            (
+                serde_json::json!(["text", null, true]),
+                "['text', None, True]",
+            ),
+            (serde_json::json!({"a":false}), "{'a': False}"),
+        ] {
+            assert_eq!(python_str(&value), expected);
+        }
+    }
 
     fn request(name: &str) -> CallToolRequestParams {
         serde_json::from_value(serde_json::json!({ "name": name })).expect("request")
@@ -98,7 +218,11 @@ mod tests {
 
     #[test]
     fn health_payload_shape() {
-        let result = call_tool(&request("plangraph_agent_health")).expect("health");
+        let result = call_tool(
+            &request("plangraph_agent_health"),
+            std::path::Path::new("unused"),
+        )
+        .expect("health");
         assert_eq!(result.is_error, Some(false));
         let text = result.content[0].as_text().expect("text").text.clone();
         let payload: serde_json::Value = serde_json::from_str(&text).expect("payload");
@@ -121,15 +245,20 @@ mod tests {
 
     #[test]
     fn not_implemented_is_tool_error_naming_r6a_3() {
-        let result = call_tool(&request("plangraph_session_list")).expect("tool error");
+        let result = call_tool(
+            &request("plangraph_session_list"),
+            std::path::Path::new("unused"),
+        )
+        .expect("tool error");
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0].as_text().expect("text").text.clone();
-        assert!(text.contains("not implemented in pg-spawnd yet (R6a-3)"));
+        assert!(text.contains("not implemented in pg-spawnd yet (R9)"));
     }
 
     #[test]
     fn unknown_tool_is_protocol_error_naming_no_internals() {
-        let error = call_tool(&request("no_such_tool")).expect_err("unknown tool");
+        let error = call_tool(&request("no_such_tool"), std::path::Path::new("unused"))
+            .expect_err("unknown tool");
         assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(error.message, "unknown tool: no_such_tool");
     }

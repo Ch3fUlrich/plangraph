@@ -53,10 +53,14 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 #[cfg(unix)]
 pub(crate) fn run(socket: Option<String>) -> Result<(), String> {
     let path = crate::transport_unix::resolve_socket_path(socket.as_deref())?;
-    runtime()?.block_on(async {
+    let runtime = runtime()?;
+    let result = runtime.block_on(async {
         let stream = connect_with_deadline(crate::transport_unix::connect(&path)).await?;
         bridge(stream).await
-    })
+    });
+    // A stalled stdout writer must not extend the bounded EOF drain forever.
+    runtime.shutdown_timeout(std::time::Duration::ZERO);
+    result
 }
 
 #[cfg(windows)]
@@ -64,10 +68,13 @@ pub(crate) fn run(socket: Option<String>) -> Result<(), String> {
     if socket.is_some() {
         return Err("--socket is unsupported; use the per-user pg-spawnd pipe".into());
     }
-    runtime()?.block_on(async {
+    let runtime = runtime()?;
+    let result = runtime.block_on(async {
         let stream = connect_with_deadline(crate::transport_windows::connect()).await?;
         bridge(stream).await
-    })
+    });
+    runtime.shutdown_timeout(std::time::Duration::ZERO);
+    result
 }
 
 /// Copy bytes both ways until either direction hits EOF.
