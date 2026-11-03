@@ -64,10 +64,9 @@ impl Group {
     /// then resume its main thread. A failed assignment or resume terminates
     /// the child and returns the error; a failed spawn only drops the job.
     ///
-    /// The creation flags belong to the supervisor and `cmd`'s own flags are
-    /// **replaced** by `CREATE_SUSPENDED | CREATE_NO_WINDOW` (a supervised
-    /// child is never interactive), so caller-set creation flags do not
-    /// survive this call.
+    /// `CommandExt::creation_flags` assigns, rather than adds, flags. The
+    /// supervisor assigns the OR of CREATE_SUSPENDED and CREATE_NO_WINDOW,
+    /// replacing caller flags so the child is never interactive.
     pub(super) fn spawn(cmd: &mut Command) -> io::Result<(Group, Child)> {
         let job = Job(Cell::new(create_job()?));
         cmd.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
@@ -192,8 +191,8 @@ extern "system" {
 }
 
 /// Resume every thread `pid` owns. A process spawned suspended has exactly its
-/// main thread; resuming through a thread snapshot needs no thread handle from
-/// the spawn itself. The snapshot walks every thread on the system (`pid` is
+/// main thread; std::process::Child exposes no main-thread handle, so a
+/// snapshot is needed. The snapshot walks every thread on the system (`pid` is
 /// filtered in userspace): a whole-system walk of a few milliseconds per
 /// supervised spawn, accepted as is.
 fn resume_threads_of(pid: u32) -> io::Result<()> {

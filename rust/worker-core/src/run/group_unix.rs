@@ -65,17 +65,6 @@ pub fn scope_command(
     }
     c
 }
-fn spawn(c: &mut Command) -> io::Result<Child> {
-    for attempt in 1..=6 {
-        match c.spawn() {
-            Err(e) if crate::stall::is_text_busy(&e) && attempt < 6 => {
-                thread::sleep(Duration::from_millis(20 * attempt))
-            }
-            result => return result,
-        }
-    }
-    unreachable!()
-}
 static PROBES: OnceLock<Mutex<HashMap<String, Result<(), String>>>> = OnceLock::new();
 pub fn scope_available(slice: &str) -> bool {
     probe(slice).is_ok()
@@ -88,51 +77,54 @@ fn probe(slice: &str) -> Result<(), String> {
     cache
         .entry(slice.into())
         .or_insert_with(|| {
-            // Read concurrently so even a noisy failure cannot fill the stderr pipe.
-            let mut child = Command::new("systemd-run")
+            let mut command = Command::new("systemd-run");
+            command
                 .args(["--user", "--scope", "--quiet", "--collect"])
                 .arg(format!("--slice={slice}"))
-                .args(["--", "true"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .process_group(0)
-                .spawn()
-                .map_err(|_| "cannot spawn scope probe".to_string())?;
-            let stderr = child.stderr.take().unwrap();
-            let reader = thread::spawn(move || {
-                use std::io::Read;
-                let mut text = String::new();
-                let _ = stderr.take(4096).read_to_string(&mut text);
-                text
-            });
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let success = loop {
-                match child.try_wait() {
-                    Ok(Some(s)) => break s.success(),
-                    Ok(None) if Instant::now() < deadline => {
-                        thread::sleep(Duration::from_millis(10))
-                    }
-                    _ => {
-                        signal(child.id(), libc::SIGKILL, true);
-                        let _ = child.wait();
-                        break false;
-                    }
-                }
-            };
-            let text = reader.join().unwrap_or_default();
-            if success {
-                Ok(())
-            } else {
-                Err(
-                    crate::redact::redact(text.lines().next().unwrap_or("scope probe failed"))
-                        .chars()
-                        .take(200)
-                        .collect(),
-                )
-            }
+                .args(["--", "true"]);
+            probe_command(&mut command, Duration::from_secs(5))
         })
         .clone()
+}
+pub(super) fn probe_command(command: &mut Command, timeout: Duration) -> Result<(), String> {
+    // Read concurrently so even a noisy failure cannot fill the stderr pipe.
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|_| "cannot spawn scope probe".to_string())?;
+    let stderr = child.stderr.take().unwrap();
+    let reader = thread::spawn(move || {
+        use std::io::Read;
+        let mut text = String::new();
+        let _ = stderr.take(4096).read_to_string(&mut text);
+        text
+    });
+    let deadline = Instant::now() + timeout;
+    let success = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s.success(),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => {
+                signal(child.id(), libc::SIGKILL, true);
+                let _ = child.wait();
+                break false;
+            }
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    if success {
+        Ok(())
+    } else {
+        Err(
+            crate::redact::redact(text.lines().next().unwrap_or("scope probe failed"))
+                .chars()
+                .take(200)
+                .collect(),
+        )
+    }
 }
 /// The cgroup v2 line prefix of /proc/<pid>/cgroup ("0", then two colons),
 /// spelled in parts so the public-repo scrub does not read it as an IPv6
@@ -185,36 +177,12 @@ pub fn launch(
             )
         }
     };
-    let mut child = spawn(&mut cmd)?;
+    let mut child = crate::stall::spawn_retrying(&mut cmd)?;
     let pid = child.id();
     let start_time = proc_start_time(&roots.proc, pid);
     let mut group = None;
     if matches!(confinement, Confinement::Scope { .. }) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(path) = fs::read_to_string(roots.proc.join(pid.to_string()).join("cgroup"))
-                .ok()
-                .and_then(|t| parse_cgroup_path(&t, unit))
-            {
-                group = Some(
-                    roots
-                        .cgroup
-                        .join(path.strip_prefix("/").unwrap())
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-                break;
-            }
-            if matches!(child.try_wait(), Ok(Some(_))) {
-                break;
-            }
-            if Instant::now() >= deadline {
-                signal(pid, libc::SIGKILL, true);
-                let _ = child.wait();
-                return Err(LaunchError::ScopeNotEntered);
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+        group = enter_scope(&mut child, unit, roots, Duration::from_secs(5))?;
     }
     Ok(Grouped {
         child,
@@ -227,6 +195,39 @@ pub fn launch(
             roots: roots.clone(),
         }),
     })
+}
+pub(super) fn enter_scope(
+    child: &mut Child,
+    unit: &str,
+    roots: &Roots,
+    timeout: Duration,
+) -> Result<Option<String>, LaunchError> {
+    let pid = child.id();
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(path) = fs::read_to_string(roots.proc.join(pid.to_string()).join("cgroup"))
+            .ok()
+            .and_then(|t| parse_cgroup_path(&t, unit))
+        {
+            return Ok(Some(
+                roots
+                    .cgroup
+                    .join(path.strip_prefix("/").unwrap())
+                    .to_string_lossy()
+                    .into_owned(),
+            ));
+        }
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            signal(pid, libc::SIGKILL, true);
+            let _ = child.wait();
+            return Err(LaunchError::ScopeNotEntered);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Ok(None)
 }
 pub struct UnixGroup {
     pub identity: Identity,

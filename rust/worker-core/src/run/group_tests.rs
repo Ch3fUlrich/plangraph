@@ -306,3 +306,6 @@ fn parsers() {
     assert_eq!(start, proc_start_time(Path::new("/proc"), pid));
     assert_eq!(proc_start_time(Path::new("/proc"), u32::MAX), None);
 }
+
+#[path = "group_failure_tests.rs"]
+mod failures;
