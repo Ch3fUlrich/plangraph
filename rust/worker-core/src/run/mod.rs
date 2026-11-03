@@ -13,6 +13,9 @@ pub mod group_windows;
 #[cfg(all(test, windows))]
 mod group_windows_tests;
 pub mod livelog;
+mod monitor;
+#[cfg(all(test, unix))]
+mod process_tests;
 pub mod record;
 pub mod record_io;
 pub mod scrub;
