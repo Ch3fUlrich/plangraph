@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-2E1 (D-3676, D-3685):** add run supervisor types, validation and synthetic record finalization, plus capture parity fixes; no process startup, placement remains off.
+
 - **PLACEMENT-R6A-2D (D-3676, D-3685):** add named Windows execution Job Objects with suspended assignment, kill-on-close lifetime, member queries and termination; no caller integration (PLACEMENT remains off).
 
 - **PLACEMENT-R6A-3A (D-3676, D-3685):** add Python-compatible JSON-RPC errors and shared read-only run records for `pg-spawnd` ps/result/status/steer, plus `serve --state` resolution; placement remains off and launch tools remain staged stubs.

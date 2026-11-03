@@ -60,7 +60,7 @@ impl LiveLog {
             append_private(&self.path, text.as_bytes())?;
             let size = match self.size {
                 Some(n) => n + text.len() as u64,
-                None => fs::metadata(&self.path)?.len(),
+                None => appended_size(fs::metadata(&self.path).map(|m| m.len()), text.len()),
             };
             self.size = Some(size);
             if size > self.cfg.max as u64 {
@@ -79,5 +79,19 @@ impl LiveLog {
             self.errors += 1;
             e.kind()
         })
+    }
+}
+fn appended_size(metadata: io::Result<u64>, written: usize) -> u64 {
+    metadata.unwrap_or(written as u64)
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn metadata_failure_after_append_is_not_a_strike() {
+        assert_eq!(
+            super::appended_size(Err(std::io::ErrorKind::PermissionDenied.into()), 7),
+            7
+        );
+        assert_eq!(super::appended_size(Ok(19), 7), 19);
     }
 }

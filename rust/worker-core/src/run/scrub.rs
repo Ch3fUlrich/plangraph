@@ -32,16 +32,20 @@ impl Scrubber {
                     .contains(&value.to_ascii_lowercase().as_str())
             {
                 values.push(value.to_string());
-                if value.contains('\n') {
+                {
                     values.extend(
                         value
-                            .lines()
+                            .split([
+                                '\n', '\r', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}',
+                            ])
                             .filter(|s| s.chars().count() >= 8)
                             .map(str::to_owned),
                     );
                 }
             }
         }
+        // Byte-length ordering differs from Python's character count only in tie
+        // order; longest-containing-value-first replacement remains correct.
         values.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
         values.dedup();
         Self(values)
