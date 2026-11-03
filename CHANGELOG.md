@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **SPAWNER-RL5A (D-3676, D-3714):** add bounded event framing, the parser interface and sticky channel health with synthetic tests; no caller or switch yet, rollback by git revert.
+
 - **PLACEMENT-R6A-3B2 r1:** Pin exact spawn record keys, preserve Python findings truthiness, safely handle validation errors, and batch refusal fixtures.
 - **PLACEMENT-R6A-3B2 r2:** Card hashes escape DEL like Python's ensure_ascii, and the dry-run spawn answer is the exact text of the saved record.
 
