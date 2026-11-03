@@ -6,6 +6,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 - **PLACEMENT-R6A-2F (D-3676, D-3685):** add daemon-owned run registry and replaceable fixed-cap FIFO admission; placement remains off.
 
+- **SPAWNER-RL9A r1:** reject Unicode reset digits, cache fixed parsing patterns, flag non-finite fold clamps, and decouple day units from the clamp.
+- **SPAWNER-RL9A (D-3676, D-3714):** add pure raw reset capture with response-Date clock-skew conversion and a separate row-time fold clamp; no caller integration or switch (rollback by revert).
 - **SPAWNER-RL5A (D-3676, D-3714):** add bounded event framing, the parser interface and sticky channel health with synthetic tests; no caller or switch yet, rollback by git revert.
 - **PLACEMENT-R6A-2E2 (D-3676, D-3685):** add single-run admission, launch, capture, cancellation and group-sweeping supervision with survivor-held permits; placement remains off.
 
