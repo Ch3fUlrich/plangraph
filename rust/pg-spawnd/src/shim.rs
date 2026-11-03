@@ -13,6 +13,17 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// PG_SPAWND_SHIM_FLUSH_MS exists for tests only; production defaults to 5000 ms.
+fn flush_deadline() -> std::time::Duration {
+    std::time::Duration::from_millis(
+        std::env::var("PG_SPAWND_SHIM_FLUSH_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|ms| (50..=60000).contains(ms))
+            .unwrap_or(5000),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -82,6 +93,7 @@ async fn bridge<S>(stream: S) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let flush_deadline = flush_deadline();
     let (mut socket_read, mut socket_write) = tokio::io::split(stream);
     let mut stdin = BlockingStdin::default();
     let mut stdout = BlockingStdout::default();
@@ -90,7 +102,7 @@ where
             result.map_err(|e| format!("stdin copy failed: {e}"))?;
             socket_write.shutdown().await.map_err(|e| e.to_string())?;
             // Complete any write started by the cancelled copy before reusing stdout.
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let _ = tokio::time::timeout(flush_deadline, async {
                 stdout.flush().await?;
                 tokio::io::copy(&mut socket_read, &mut stdout).await?;
                 stdout.flush().await

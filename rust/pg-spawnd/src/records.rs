@@ -3,7 +3,38 @@
 use crate::errors::ToolError;
 use pg_worker_core::run::record::{run_dir, valid_run_id};
 use serde_json::Value;
+use std::io::Read;
 use std::path::Path;
+
+const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
+
+fn read_record_file(path: &Path) -> Result<Value, ToolError> {
+    let invalid = || ToolError::Value("invalid run record".into());
+    let read = || -> std::io::Result<Vec<u8>> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
+            return Err(std::io::Error::other("invalid run record"));
+        }
+        let file = std::fs::File::open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::other("invalid run record"));
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    };
+    let bytes = read().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ToolError::Value("unknown run id".into())
+        } else {
+            invalid()
+        }
+    })?;
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err(invalid());
+    }
+    serde_json::from_slice(&bytes).map_err(|_| invalid())
+}
 
 pub(crate) fn read_record(state: &Path, run_id: &Value) -> Result<Value, ToolError> {
     let id = run_id
@@ -11,17 +42,7 @@ pub(crate) fn read_record(state: &Path, run_id: &Value) -> Result<Value, ToolErr
         .filter(|id| valid_run_id(id))
         .ok_or_else(|| ToolError::Value("unknown run id".into()))?;
     let path = run_dir(state, id).map_err(|_| ToolError::Value("unknown run id".into()))?;
-    let bytes = std::fs::read(path.join("record.json")).map_err(|e| {
-        ToolError::Value(
-            if e.kind() == std::io::ErrorKind::NotFound {
-                "unknown run id"
-            } else {
-                "invalid run record"
-            }
-            .into(),
-        )
-    })?;
-    serde_json::from_slice(&bytes).map_err(|_| ToolError::Value("invalid run record".into()))
+    read_record_file(&path.join("record.json"))
 }
 
 pub(crate) fn list_runs(state: &Path) -> Vec<Value> {
@@ -35,10 +56,7 @@ pub(crate) fn list_runs(state: &Path) -> Vec<Value> {
     paths.sort();
     let mut runs = Vec::new();
     for path in paths {
-        let Some(mut record) = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        else {
+        let Ok(mut record) = read_record_file(&path) else {
             continue;
         };
         if !record.is_object() || !record["run_id"].is_string() {

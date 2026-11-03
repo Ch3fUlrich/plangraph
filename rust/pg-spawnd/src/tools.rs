@@ -153,7 +153,25 @@ fn python_str(value: &serde_json::Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        serde_json::Value::Number(n) if n.is_f64() => python_float(n.as_f64().unwrap()),
         _ => value.to_string(),
+    }
+}
+
+fn python_float(value: f64) -> String {
+    // Rust's shortest round-trip formatter supplies the digits; Python chooses
+    // scientific notation at different thresholds and pads signed exponents.
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific.split_once('e').unwrap();
+    let exponent: i32 = exponent.parse().unwrap();
+    if !(-4..16).contains(&exponent) {
+        format!("{mantissa}e{exponent:+03}")
+    } else {
+        let mut decimal = value.to_string();
+        if !decimal.contains('.') {
+            decimal.push_str(".0");
+        }
+        decimal
     }
 }
 
@@ -179,6 +197,22 @@ fn python_repr(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_float_coercion() {
+        for (value, expected) in [
+            (1e30, "1e+30"),
+            (1.5, "1.5"),
+            (1e-5, "1e-05"),
+            (0.0001, "0.0001"),
+            (1e16, "1e+16"),
+            (123.0, "123.0"),
+            (-0.5, "-0.5"),
+            (12345678901234567.0, "1.2345678901234568e+16"),
+        ] {
+            assert_eq!(python_str(&serde_json::json!(value)), expected);
+        }
+    }
 
     #[test]
     fn python_string_coercion() {

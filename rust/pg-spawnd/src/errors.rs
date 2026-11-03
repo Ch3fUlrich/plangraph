@@ -60,6 +60,7 @@ pub(crate) fn refused_record_error(value: &Value) -> Option<ErrorData> {
     }
     let refusal = value
         .get("refusal")
+        .filter(|v| python_truthy(v))
         .cloned()
         .unwrap_or(json!("SpawnRefused"));
     let code = match refusal.as_str() {
@@ -88,5 +89,43 @@ fn python_truthy(value: &Value) -> bool {
         Value::String(v) => !v.is_empty(),
         Value::Array(v) => !v.is_empty(),
         Value::Object(v) => !v.is_empty(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refusal_uses_python_truthiness() {
+        for refusal in [
+            None,
+            Some(Value::Null),
+            Some(json!("")),
+            Some(json!(false)),
+            Some(json!(0)),
+            Some(json!([])),
+            Some(json!({})),
+            Some(json!("ParameterRefused")),
+        ] {
+            let mut record = json!({"status":"refused"});
+            if let Some(value) = refusal {
+                record["refusal"] = value;
+            }
+            let error = refused_record_error(&record).unwrap();
+            let parameter = record["refusal"] == "ParameterRefused";
+            assert_eq!(
+                error.data.unwrap()["type"],
+                if parameter {
+                    "ParameterRefused"
+                } else {
+                    "SpawnRefused"
+                }
+            );
+            assert_eq!(
+                error.code,
+                ErrorCode(if parameter { -32602 } else { -32000 })
+            );
+        }
     }
 }

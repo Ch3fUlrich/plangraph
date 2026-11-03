@@ -95,7 +95,18 @@ fn stalled_stdout_after_eof_has_bounded_exit() {
     let tmp = TempDir::new();
     let socket = tmp.path().join("socket");
     let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-    let mut guard = spawn_shim(&socket);
+    let deadline_ms = 300;
+    let child = std::process::Command::new(bin())
+        .arg("shim")
+        .arg("--socket")
+        .arg(&socket)
+        .env("PG_SPAWND_SHIM_FLUSH_MS", deadline_ms.to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut guard = ChildGuard { child };
     listener.set_nonblocking(true).unwrap();
     let start = std::time::Instant::now();
     let mut stream = loop {
@@ -113,10 +124,10 @@ fn stalled_stdout_after_eof_has_bounded_exit() {
     loop {
         if let Some(status) = guard.child.try_wait().unwrap() {
             assert_eq!(status.code(), Some(0));
-            assert!(eof.elapsed() >= Duration::from_millis(4800));
+            assert!(eof.elapsed() >= Duration::from_millis(deadline_ms - 50));
             break;
         }
-        assert!(eof.elapsed() < Duration::from_millis(5500));
+        assert!(eof.elapsed() < Duration::from_millis(deadline_ms + 1500));
         std::thread::sleep(Duration::from_millis(10));
     }
 }

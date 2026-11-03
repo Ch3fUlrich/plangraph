@@ -216,9 +216,11 @@ mod tests {
             replacement = Some(std::os::unix::net::UnixListener::bind(&path).unwrap());
         })
         .unwrap();
+        // Pin the foreign replacement socket, not the flock winner's socket.
         let identity = std::fs::metadata(&path).unwrap().ino();
         assert!(bind_listener(&path).is_err());
         assert_eq!(std::fs::metadata(&path).unwrap().ino(), identity);
+        drop(replacement);
         drop(winner);
         std::fs::remove_dir_all(base).unwrap();
     }
