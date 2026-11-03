@@ -22,7 +22,12 @@ pub mod scrub;
 pub mod supervise;
 #[cfg(test)]
 mod supervise_tests;
+pub mod supervisor;
+#[cfg(all(test, unix))]
+mod supervisor_tests;
 pub mod tail;
+#[cfg(all(test, unix))]
+pub(crate) mod testutil;
 
 #[cfg(test)]
 mod capture_tests;
