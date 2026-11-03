@@ -127,6 +127,8 @@ pub fn supervise_with_cancel(
                 // joined: the kill terminates the job on Windows and SIGKILLs
                 // the group on Unix, so the reader cannot block on a survivor.
                 group.kill();
+                // Concrete std::process::Child offers no try_wait error injection.
+                let _ = child.wait();
                 // Dropping the Windows Group closes the job handle; the Unix
                 // one is a plain pgid, hence the lint allowance.
                 #[allow(clippy::drop_non_drop)]
