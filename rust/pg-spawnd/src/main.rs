@@ -1,6 +1,13 @@
 mod cli;
+#[cfg(test)]
+mod error_tests;
+mod errors;
+mod records;
 mod serve;
 mod shim;
+mod state;
+#[cfg(test)]
+mod state_tests;
 mod tools;
 #[cfg(unix)]
 mod transport_unix;

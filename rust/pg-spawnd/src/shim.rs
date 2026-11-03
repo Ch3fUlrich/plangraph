@@ -13,6 +13,17 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// PG_SPAWND_SHIM_FLUSH_MS exists for tests only; production defaults to 5000 ms.
+fn flush_deadline() -> std::time::Duration {
+    std::time::Duration::from_millis(
+        std::env::var("PG_SPAWND_SHIM_FLUSH_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|ms| (50..=60000).contains(ms))
+            .unwrap_or(5000),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -53,10 +64,14 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 #[cfg(unix)]
 pub(crate) fn run(socket: Option<String>) -> Result<(), String> {
     let path = crate::transport_unix::resolve_socket_path(socket.as_deref())?;
-    runtime()?.block_on(async {
+    let runtime = runtime()?;
+    let result = runtime.block_on(async {
         let stream = connect_with_deadline(crate::transport_unix::connect(&path)).await?;
         bridge(stream).await
-    })
+    });
+    // A stalled stdout writer must not extend the bounded EOF drain forever.
+    runtime.shutdown_timeout(std::time::Duration::ZERO);
+    result
 }
 
 #[cfg(windows)]
@@ -64,10 +79,13 @@ pub(crate) fn run(socket: Option<String>) -> Result<(), String> {
     if socket.is_some() {
         return Err("--socket is unsupported; use the per-user pg-spawnd pipe".into());
     }
-    runtime()?.block_on(async {
+    let runtime = runtime()?;
+    let result = runtime.block_on(async {
         let stream = connect_with_deadline(crate::transport_windows::connect()).await?;
         bridge(stream).await
-    })
+    });
+    runtime.shutdown_timeout(std::time::Duration::ZERO);
+    result
 }
 
 /// Copy bytes both ways until either direction hits EOF.
@@ -75,6 +93,7 @@ async fn bridge<S>(stream: S) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let flush_deadline = flush_deadline();
     let (mut socket_read, mut socket_write) = tokio::io::split(stream);
     let mut stdin = BlockingStdin::default();
     let mut stdout = BlockingStdout::default();
@@ -83,7 +102,7 @@ where
             result.map_err(|e| format!("stdin copy failed: {e}"))?;
             socket_write.shutdown().await.map_err(|e| e.to_string())?;
             // Complete any write started by the cancelled copy before reusing stdout.
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let _ = tokio::time::timeout(flush_deadline, async {
                 stdout.flush().await?;
                 tokio::io::copy(&mut socket_read, &mut stdout).await?;
                 stdout.flush().await
