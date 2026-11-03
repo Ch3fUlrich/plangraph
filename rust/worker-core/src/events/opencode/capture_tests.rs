@@ -40,7 +40,6 @@ fn version_drift_is_blind() {
 fn no_payload_retained() {
     let secret = ["sk", "-", "fake", "-", "private"].concat();
     let mut p = OpencodeParser::new(0, Some(180), CAPTURE_VERSION, CAPTURE_VERSION);
-    let state_size = std::mem::size_of_val(&p);
     for _ in 0..32 {
         let text = secret.repeat(1024);
         let line = format!("{{\"type\":\"text\",\"part\":{{\"text\":\"{text}\"}}}}\n");
@@ -53,6 +52,27 @@ fn no_payload_retained() {
     assert!(p.feed(&vec![b'x'; MAX_LINE + 1], 2).is_empty());
     assert!(p.end(2).is_empty());
     assert!(p.end(2).is_empty());
-    assert_eq!(std::mem::size_of_val(&p), state_size);
     assert_eq!(p.health().lines(), 33);
+
+    // The projected capture has only "OK" text, so supplement it with unique payloads.
+    const EXTRA: &str = "{\"type\":\"text\",\"part\":{\"text\":\"rl5b-text-payload-7c93\",\"reasoning\":\"rl5b-reasoning-payload-a821\",\"state\":{\"output\":\"rl5b-tool-output-payload-f604\"}}}\n";
+    let mut parser = OpencodeParser::new(0, Some(180), CAPTURE_VERSION, CAPTURE_VERSION);
+    for (line, ms) in CLOSED_STDIN
+        .split_inclusive('\n')
+        .zip(ARRIVAL_MS.iter().copied())
+        .chain(std::iter::once((EXTRA, 27000)))
+    {
+        let signals = parser.feed(line.as_bytes(), ms);
+        let state = format!("{parser:?}");
+        let signals = format!("{signals:?}");
+        for payload in [
+            "OK",
+            "rl5b-text-payload-7c93",
+            "rl5b-reasoning-payload-a821",
+            "rl5b-tool-output-payload-f604",
+        ] {
+            assert!(!state.contains(payload), "parser retained {payload}");
+            assert!(!signals.contains(payload), "signals retained {payload}");
+        }
+    }
 }

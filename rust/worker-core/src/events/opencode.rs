@@ -9,6 +9,7 @@ mod fixtures;
 #[cfg(test)]
 mod tests;
 
+#[derive(Debug)]
 pub struct OpencodeParser {
     framer: Framer,
     health: ChannelHealth,
