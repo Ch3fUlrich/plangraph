@@ -94,7 +94,10 @@ fn validate(args: &Args) -> Result<(), ToolError> {
     placement::route_args(args)?;
     Ok(())
 }
-pub(crate) fn spawn(state: &Path, args: &Args) -> Result<Value, ToolError> {
+pub(crate) fn spawn(state: &Path, args: &Args) -> Result<String, ToolError> {
+    spawn_value(state, args).map(|value| value.to_string())
+}
+fn spawn_value(state: &Path, args: &Args) -> Result<Value, ToolError> {
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     if let Err(error) = validate(args) {
         let (name, message, code, status) = match &error {
