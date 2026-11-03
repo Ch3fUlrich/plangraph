@@ -1,8 +1,11 @@
 //! Pure classification of structured attempt facts; no caller integration yet.
 use crate::{activity::KillOutcome, hosts::Role, redact::redact, reset::Reset};
+pub mod markers;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod usable_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Terminal {

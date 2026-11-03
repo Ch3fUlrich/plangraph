@@ -64,7 +64,7 @@ def test_md_sync_archive_requires_url_before_any_io(tmp_path, monkeypatch):
     assert "cannot read" not in err.getvalue()
 
 
-def _raise_unreachable(self, verb):
+def _raise_unreachable(self, verb, **kw):
     raise apply_batch.ApiError("unreachable", "URLError")
 
 
@@ -114,7 +114,7 @@ def test_md_sync_archive_url_from_flag_still_works(tmp_path, monkeypatch):
     assert rc == 2 and "cannot read the live graph" in err.getvalue()
 
 
-def _fake_snapshot(self, verb):
+def _fake_snapshot(self, verb, **kw):
     return {"items": [], "aliases": {"old:G": "new:G"}}
 
 

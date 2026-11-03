@@ -37,15 +37,17 @@ pub(crate) fn list_tools() -> ListToolsResult {
     ListToolsResult::with_all_items(tools())
 }
 
-fn health_json() -> String {
+fn health_json(total: u64, running: usize) -> String {
     format!(
         concat!(
             r#"{{"status":"healthy","daemon":"pg-spawnd","#,
             r#""spawner_version":"pg-spawnd {version}","placement":"off","#,
-            r#""runner_jobs_total":0,"active_jobs_count":0,"#,
+            r#""runner_jobs_total":{total},"active_jobs_count":{running},"#,
             r#""catalog_models_count":0,"gateway_default_url":""}}"#
         ),
-        version = env!("CARGO_PKG_VERSION")
+        version = env!("CARGO_PKG_VERSION"),
+        total = total,
+        running = running
     )
 }
 
@@ -53,18 +55,73 @@ fn health_json() -> String {
 ///
 /// Unknown tool names are a JSON-RPC protocol error that reveals nothing about
 /// the daemon internals; listed-but-unbuilt tools return an MCP tool error.
+#[cfg(test)]
 pub(crate) fn call_tool(
     request: &CallToolRequestParams,
     state: &std::path::Path,
 ) -> Result<CallToolResult, McpError> {
+    call_tool_with_host(request, state, "local")
+}
+
+#[cfg(test)]
+pub(crate) fn call_tool_with_host(
+    request: &CallToolRequestParams,
+    state: &std::path::Path,
+    host: &str,
+) -> Result<CallToolResult, McpError> {
+    dispatch(request, state, host, None)
+}
+pub(crate) fn dispatch(
+    request: &CallToolRequestParams,
+    state: &std::path::Path,
+    host: &str,
+    runs: Option<&crate::runs::Runs>,
+) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
+    if matches!(
+        name,
+        "plangraph_agent_cancel" | "plangraph_agent_steer" | "plangraph_agent_status"
+    ) && !(name == "plangraph_agent_status"
+        && request
+            .arguments
+            .as_ref()
+            .is_some_and(|a| a.contains_key("run_id")))
+    {
+        if let Some(runs) = runs {
+            let payload = runs
+                .job_tool(state, name, &request.arguments.clone().unwrap_or_default())
+                .map_err(crate::errors::ToolError::into_error_data)?;
+            if let Some(error) = crate::errors::refused_record_error(&payload) {
+                return Err(error);
+            }
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&payload).expect("JSON value"),
+            )]));
+        }
+        return Err(
+            crate::errors::ToolError::Internal("no run registry attached".into()).into_error_data(),
+        );
+    }
     if matches!(
         name,
         "plangraph_agent_route" | "plangraph_agent_probe" | "plangraph_agent_spawn"
     ) {
         let args = request.arguments.clone().unwrap_or_default();
         let payload = match name {
-            "plangraph_agent_spawn" => crate::spawn::spawn(state, &args),
+            "plangraph_agent_spawn" => {
+                let runs = runs.ok_or_else(|| {
+                    crate::errors::ToolError::Internal("supervisor unavailable".into())
+                        .into_error_data()
+                })?;
+                let record = crate::spawn::spawn(state, &args, host, runs)
+                    .map_err(crate::errors::ToolError::into_error_data)?;
+                if let Some(error) = crate::errors::refused_record_error(&record) {
+                    return Err(error);
+                }
+                serde_json::to_string_pretty(&record).map_err(|_| {
+                    crate::errors::ToolError::Internal("could not encode run record".into())
+                })
+            }
             "plangraph_agent_probe" => crate::placement::probe(state, &args),
             _ => crate::placement::route(state, &args),
         }
@@ -117,14 +174,14 @@ pub(crate) fn call_tool(
         )]));
     }
     match name {
-        "plangraph_agent_health" => Ok(CallToolResult::success(vec![ContentBlock::text(
-            health_json(),
-        )])),
+        "plangraph_agent_health" => Ok(CallToolResult::success(vec![ContentBlock::text({
+            let (total, running) = runs.map(|r| r.health_counts(state)).unwrap_or_default();
+            health_json(total, running)
+        })])),
         other if tool_names().contains(other) => {
             Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "not implemented in pg-spawnd yet ({})",
                 match other {
-                    "plangraph_agent_cancel" => "R6a-3c",
                     "plangraph_agent_query_catalog" => "R11",
                     _ => "R9",
                 }
@@ -138,7 +195,7 @@ pub(crate) fn call_tool(
     }
 }
 
-fn python_str(value: &serde_json::Value) -> String {
+pub(crate) fn python_str(value: &serde_json::Value) -> String {
     // Known deviation: integer tokens beyond u64/i64 become f64, losing digits.
     // Keep this behavior rather than enabling workspace-wide arbitrary_precision.
     match value {
@@ -210,6 +267,19 @@ fn python_repr(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_tools_require_registry() {
+        for verb in ["cancel", "steer", "status"] {
+            let request: CallToolRequestParams = serde_json::from_value(serde_json::json!({
+                "name":format!("plangraph_agent_{verb}"), "arguments":{}
+            }))
+            .unwrap();
+            let error = dispatch(&request, std::path::Path::new("."), "local", None).unwrap_err();
+            assert_eq!(error.message, "no run registry attached");
+            assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        }
+    }
 
     #[test]
     fn python_float_coercion() {
