@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **SPAWNER-RL4 part 2 (D-3676, D-3714):** add milestone progress warnings and safe-alternative kills, sticky edit/verdict milestones, shadow decisions and nullable M disablement; no caller or switch, rollback by revert.
 - **SPAWNER-RL4 part 1 (D-3676, D-3714):** add first/silent warn-before-kill decisions, absolute kill deadlines, confirm-window cancellation and shadow warnings; milestone rules unchanged, no caller or switch, rollback by revert.
 
 - **PLACEMENT-R6A-3B2 r1:** Pin exact spawn record keys, preserve Python findings truthiness, safely handle validation errors, and batch refusal fixtures.
