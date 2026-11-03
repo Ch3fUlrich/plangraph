@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-3B2 r1:** Pin exact spawn record keys, preserve Python findings truthiness, safely handle validation errors, and batch refusal fixtures.
+
 - **PLACEMENT-R6A-3B (D-3676, D-3685):** R6a-3b2 adds spawn validation/refusal records and dry-run planning with Python-compatible card hashes; real launching remains unavailable until R6a-3c.
 - **PLACEMENT-R6A-3B1 r1:** pin guarded record opens, validate typed route options before card size, preserve route/probe stdout, and bound adapter pipe-reader waits.
 

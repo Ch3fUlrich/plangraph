@@ -96,7 +96,10 @@ mod tests {
                 json!({"stall_min":5,"note":"é","estimate_tokens":1000}),
                 r#"{"estimate_tokens": 1000, "note": "\u00e9", "stall_min": 5}"#,
             ),
-            (json!("\u{0}\u{8}\u{c}\r\t/\u{7f}"), r#""\u0000\b\f\r\t/""#),
+            (
+                json!("\u{0}\u{8}\u{c}\r\t/\u{7f}"),
+                concat!(r#""\u0000\b\f\r\t/"#, "\u{7f}", "\""),
+            ),
         ] {
             assert_eq!(text(&input), expected);
             assert_eq!(

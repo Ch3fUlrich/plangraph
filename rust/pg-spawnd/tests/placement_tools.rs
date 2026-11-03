@@ -227,6 +227,7 @@ fn spawn_validation_records() {
         let mut a = json!({"prompt":"p","card":{"x":1},"role":"review"});
         if option == "card.findings" {
             a["card"]["findings"] = json!([1]);
+            a["role"] = json!("implement");
         } else {
             a[option] = if option == "seats" {
                 json!(true)
@@ -242,16 +243,21 @@ fn spawn_validation_records() {
             "refused",
         ));
     }
+    let mut f = Fixture::new("{}", 0, "");
     for (args, message, kind, exit, status) in cases {
-        let mut f = Fixture::new("{}", 0, "");
+        let before: Vec<_> = records(&f).iter().map(|r| r["run_id"].clone()).collect();
         let role = args.get("role").cloned().unwrap_or(json!("implement"));
         let r = f.call("spawn", args);
         assert_eq!(r["error"]["code"], -32602, "{r}");
         assert_eq!(r["error"]["message"], message);
         assert_eq!(r["error"]["data"]["type"], kind);
-        let all = records(&f);
+        let all: Vec<_> = records(&f)
+            .into_iter()
+            .filter(|r| !before.contains(&r["run_id"]))
+            .collect();
         assert_eq!(all.len(), 1);
         let row = &all[0];
+        keys(row, "attempts ended error events evidence exit_code host legs refusal role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd");
         assert_eq!(row["host"], "local");
         assert_eq!(row["error"], message);
         assert_eq!(row["status"], status);
@@ -272,6 +278,16 @@ fn spawn_dry_run_and_no_launch() {
     let row: Value =
         serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(records(&f), vec![row.clone()]);
+    keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host plan request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd witness_kind writer_family");
+    keys(&row["attempts"][0], "leg provider_response request_side_model served_family served_model served_witness_reason skip_reason status stderr_tail stdout_tail witness_kind");
+    keys(&row["plan"], "first_leg legs");
+    for leg in [
+        &row["chosen_leg"],
+        &row["plan"]["first_leg"],
+        &row["attempts"][0]["leg"],
+    ] {
+        keys(leg, "family harness id model");
+    }
     assert_eq!(row["status"], "dry_run");
     assert!(row["ended"].is_number());
     assert_eq!(row["plan"], plan);
@@ -329,4 +345,37 @@ fn valid_host_is_saved() {
     let mut f = Fixture::with_host("{}", 0, "", "test-host");
     f.call("spawn", json!({}));
     assert_eq!(records(&f)[0]["host"], "test-host");
+}
+
+fn keys(value: &Value, expected: &str) {
+    let mut actual: Vec<_> = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    actual.sort_unstable();
+    assert_eq!(actual, expected.split_whitespace().collect::<Vec<_>>());
+}
+#[test]
+fn findings_python_truthiness() {
+    let plan = json!({"legs":[],"first_leg":{"id":"leg","harness":"h","model":"m","family":"f"}});
+    let mut f = Fixture::new(&plan.to_string(), 0, "");
+    for (findings, role, refused) in [
+        (json!(false), "implement", false),
+        (json!(0), "implement", false),
+        (json!(0.0), "implement", false),
+        (json!(""), "implement", false),
+        (json!([]), "implement", false),
+        (json!({}), "implement", false),
+        (json!(null), "implement", false),
+        (json!(["x"]), "implement", true),
+        (json!(["x"]), "review", false),
+    ] {
+        let r = f.call(
+            "spawn",
+            json!({"prompt":"p","card":{"findings":findings},"role":role,"dry_run":true}),
+        );
+        assert_eq!(r.get("error").is_some(), refused, "{r}");
+    }
 }

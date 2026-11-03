@@ -77,12 +77,13 @@ fn validate(args: &Args) -> Result<(), ToolError> {
     ] {
         let unsupported = match option {
             "seats" => args.get(option) == Some(&json!(true)),
-            "card.findings" => args["card"].get("findings").is_some_and(|v| {
-                !v.is_null()
-                    && v.as_array().is_none_or(|a| !a.is_empty())
-                    && v.as_object().is_none_or(|m| !m.is_empty())
-                    && v.as_str() != Some("")
-            }),
+            "card.findings" => {
+                args.get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("implement")
+                    == "implement"
+                    && args["card"].get("findings").is_some_and(truthy)
+            }
             _ => args.get(option).is_some_and(|v| !v.is_null()),
         };
         if unsupported {
@@ -94,24 +95,40 @@ fn validate(args: &Args) -> Result<(), ToolError> {
     placement::route_args(args)?;
     Ok(())
 }
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64() != Some(0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(m) => !m.is_empty(),
+    }
+}
+fn record_validation_error(state: &Path, role: Value, error: &ToolError) -> Result<(), ToolError> {
+    let (name, message, code, status) = match error {
+        ToolError::Key(key) => ("KeyError", format!("'{key}'"), 1, Status::Failed),
+        ToolError::Refused {
+            kind: crate::errors::RefusalKind::Parameter,
+            message,
+            ..
+        } => ("ParameterRefused", message.clone(), 2, Status::Refused),
+        _ => return Ok(()),
+    };
+    save(
+        state,
+        json!({"role":role,"refusal":name,"error":message,"exit_code":code,"legs":[],"evidence":[]}),
+        status,
+    )?;
+    Ok(())
+}
 pub(crate) fn spawn(state: &Path, args: &Args) -> Result<String, ToolError> {
     spawn_value(state, args).map(|value| value.to_string())
 }
 fn spawn_value(state: &Path, args: &Args) -> Result<Value, ToolError> {
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     if let Err(error) = validate(args) {
-        let (name, message, code, status) = match &error {
-            ToolError::Key(_) => ("KeyError", "'prompt'".to_string(), 1, Status::Failed),
-            ToolError::Refused { message, .. } => {
-                ("ParameterRefused", message.clone(), 2, Status::Refused)
-            }
-            _ => unreachable!(),
-        };
-        save(
-            state,
-            json!({"role":role,"refusal":name,"error":message,"exit_code":code,"legs":[],"evidence":[]}),
-            status,
-        )?;
+        record_validation_error(state, role, &error)?;
         return Err(error);
     }
     let plan: Value = serde_json::from_str(&placement::route(state, args)?)
@@ -143,4 +160,18 @@ fn spawn_value(state: &Path, args: &Args) -> Result<Value, ToolError> {
         json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,"plan":plan,"chosen_leg":leg,"request_side_model":null,"witness_kind":null,"writer_family":leg["family"],"served_model":leg["model"],"served_family":leg["family"],"cwd":cwd.to_string_lossy(),"exit_code":0,"stdout_tail":tail,"attempts":[{"leg":leg,"status":"dry_run","served_model":leg["model"],"served_family":leg["family"],"served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg","request_side_model":null,"witness_kind":null,"skip_reason":null,"provider_response":null,"stdout_tail":tail,"stderr_tail":""}]}),
         Status::DryRun,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unexpected_validation_error_is_unrecorded() {
+        let state = std::path::PathBuf::from("nonexistent-validation-state");
+        let error = ToolError::Internal("validation failed".into());
+        assert!(record_validation_error(&state, json!("implement"), &error).is_ok());
+        let answer = error.into_error_data();
+        assert_eq!(answer.message, "validation failed");
+        assert!(!state.exists());
+    }
 }
