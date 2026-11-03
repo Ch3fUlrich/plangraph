@@ -83,6 +83,10 @@ mod tests {
         for (flag, value, valid) in [
             ("--host-id", "local-1", true),
             ("--host-id", "Bad", false),
+            ("--host-id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true),
+            ("--host-id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false),
+            ("--host-id", "loCal", false),
+            ("--host-id", "a_b", false),
             ("--host-id", "", false),
             ("--max-runs", "1", true),
             ("--max-runs", "0", false),
@@ -109,5 +113,20 @@ mod tests {
         let cfg = Options::default().resolve_with(|_| None).unwrap();
         assert_eq!(cfg.run.host, "local");
         assert_eq!((cfg.max_runs, cfg.max_queued), (3, 64));
+        assert!(matches!(cfg.run.confinement, Confinement::Scope { .. }));
+    }
+
+    #[test]
+    fn resolved_limits_and_plain_confinement() {
+        let mut options = Options {
+            no_scope: true,
+            ..Options::default()
+        };
+        options.set("--max-runs", "5").unwrap();
+        options.set("--max-queued", "0").unwrap();
+        let cfg = options.resolve_with(|_| None).unwrap();
+        assert_eq!(cfg.max_runs, 5);
+        assert_eq!(cfg.max_queued, 0);
+        assert!(matches!(cfg.run.confinement, Confinement::Plain));
     }
 }

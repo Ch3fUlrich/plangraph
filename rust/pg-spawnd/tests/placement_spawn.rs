@@ -6,6 +6,16 @@ use placement::{payload, Fixture};
 use serde_json::{json, Value};
 
 #[test]
+fn missing_launch_program_writes_no_record() {
+    let mut f = Fixture::missing_launch();
+    let reply = f.spawn(0.0);
+    assert_eq!(reply["error"]["code"], -32603);
+    assert_eq!(reply["error"]["message"], "launch adapter could not start");
+    let runs = f.state.path().join("runs");
+    assert!(!runs.exists() || std::fs::read_dir(runs).unwrap().next().is_none());
+}
+
+#[test]
 fn real_run_and_failure() {
     for (command, status) in [("echo hi; echo err >&2", "completed"), ("exit 7", "failed")] {
         let mut f = Fixture::new(command, json!("payload"), &[]);
@@ -16,6 +26,17 @@ fn real_run_and_failure() {
         assert_eq!(r["writer_family"], "f");
         assert_eq!(r["warnings"], json!(["warning"]));
         assert_eq!(r["events"][0]["event"], "adapter");
+        assert_eq!(
+            r["attempts"][0],
+            json!({
+                "leg":r["plan"]["first_leg"], "status":status,
+                "served_model":"unwitnessed", "served_family":"unwitnessed",
+                "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
+                "request_side_model":null, "witness_kind":null, "provider_response":null,
+                "skip_reason":if status == "completed" { Value::Null } else { r["reason"].clone() },
+                "stdout_tail":r["stdout_tail"], "stderr_tail":r["stderr_tail"]
+            })
+        );
         assert_eq!(r["attempts"][0]["status"], status);
         assert_eq!(r["attempts"][0]["served_model"], "unwitnessed");
         if status == "completed" {
@@ -41,10 +62,57 @@ fn real_run_and_failure() {
         let request: Value =
             serde_json::from_slice(&std::fs::read(f.state.path().join("request")).unwrap())
                 .unwrap();
-        assert_eq!(request["prompt"], "verbatim\nprompt");
-        assert!(request.get("env").is_none());
-        assert_eq!(request.as_object().unwrap().len(), 9);
+        assert_eq!(
+            request,
+            json!({
+                "run_id":r["run_id"], "job_id":r["job_id"], "role":r["role"],
+                "dry_run":false, "leg":r["plan"]["first_leg"],
+                "prompt":"verbatim\nprompt", "card":{"x":1},
+                "cwd":std::env::current_dir().unwrap().to_string_lossy(),
+                "state":f.state.path().to_string_lossy()
+            })
+        );
     }
+}
+
+#[test]
+fn waiting_spawn_does_not_block_second_connection() {
+    let f = Fixture::new("/bin/sleep 2.5", Value::Null, &[]);
+    let socket = f.state.path().join("socket");
+    let mut waiter = common::McpClient::connect(&socket);
+    waiter
+        .stream
+        .get_mut()
+        .set_read_timeout(Some(std::time::Duration::from_secs(4)))
+        .unwrap();
+    waiter.initialize();
+    let thread = std::thread::spawn(move || {
+        waiter.request(
+            "tools/call",
+            json!({
+                "name":"plangraph_agent_spawn", "arguments":{
+                    "prompt":"p", "card":{"x":1}, "wait_seconds":2
+                }
+            }),
+        )
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !f.state.path().join("request").exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let began = std::time::Instant::now();
+    let mut other = common::McpClient::connect(&socket);
+    other.initialize();
+    let reply = other.request(
+        "tools/call",
+        json!({"name":"plangraph_agent_health","arguments":{}}),
+    );
+    assert!(reply.get("result").is_some());
+    assert!(began.elapsed() < std::time::Duration::from_secs(1));
+    assert!(!thread.is_finished());
+    thread.join().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(600));
 }
 #[test]
 fn queue_full_and_nonblocking_wait() {

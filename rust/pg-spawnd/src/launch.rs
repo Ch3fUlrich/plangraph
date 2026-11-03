@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) struct LaunchAdapter(Option<std::ffi::OsString>);
+pub(crate) struct LaunchAdapter(Option<std::ffi::OsString>, std::ffi::OsString);
 #[cfg(all(test, unix))]
 #[path = "launch_tests.rs"]
 mod tests;
@@ -77,7 +77,14 @@ fn drain(mut reader: impl Read, cap: usize) -> Vec<u8> {
 }
 impl LaunchAdapter {
     pub(crate) fn from_env() -> Self {
-        Self(std::env::var_os("PG_SPAWND_LAUNCH_CMD").filter(|s| !s.is_empty()))
+        Self::from_lookup(&|key| std::env::var_os(key))
+    }
+    fn from_lookup(lookup: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Self {
+        Self(
+            lookup("PG_SPAWND_LAUNCH_CMD").filter(|s| !s.is_empty()),
+            lookup("PG_SPAWND_PYTHON")
+                .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
+        )
     }
     pub(crate) fn request(
         &self,
@@ -91,10 +98,7 @@ impl LaunchAdapter {
             }
             Command::new(program)
         } else {
-            let mut cmd = Command::new(
-                std::env::var_os("PG_SPAWND_PYTHON")
-                    .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
-            );
+            let mut cmd = Command::new(&self.1);
             cmd.args(["-m", "plangraph.spawner.cli", "--state"])
                 .arg(state)
                 .arg("launch-spec");
@@ -143,6 +147,11 @@ impl LaunchAdapter {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
+        // Descendants must not keep the output pipes open after the adapter exits.
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(child.id() as i32, libc::SIGKILL);
+        }
         let deadline = Instant::now() + Duration::from_secs(1);
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         for _ in 0..2 {
@@ -156,7 +165,10 @@ impl LaunchAdapter {
             }
         }
         let status = status.ok_or_else(|| internal("launch adapter timed out"))?;
-        match status.code().unwrap_or(-1) {
+        let code = status
+            .code()
+            .ok_or_else(|| internal("launch adapter killed by a signal"))?;
+        match code {
             0 if stdout.len() <= 16 * 1024 * 1024 => parse(&stdout),
             0 => Err(invalid()),
             2 => {
