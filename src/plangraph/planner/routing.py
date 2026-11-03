@@ -173,8 +173,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                 w_idx = len(WRITER_ORDER)
             return (tier_idx, w_idx, pos)
         eligible.sort(key=sort_key)
-    else:
-        eligible.sort(key=lambda t: (t[0], t[1]))
+    else:  # D-3605: claude legs sort last (haiku last-resort); lifted paid deepseek stays ahead (D-3700)
+        eligible.sort(key=lambda t: (t[2].claude_family, t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
     level, seats = _review(tags)
     return Route(window_class=window_class, harness=plan[0].harness, legs=plan,

@@ -196,6 +196,24 @@ def test_model_unavailable_marks_the_leg_unavailable_d3676(tmp_path, monkeypatch
     assert resolver.is_model_available(row, LegStateStore(tmp_path / 'fresh.sqlite').leg_status) is True
 
 
+def test_usage_limit_prose_never_marks_a_leg_d3257(tmp_path, monkeypatch):
+    # D-3257: the usage-limit family counts only on an error-shaped line or
+    # start-anchored (same rule as the reset-after suffix); prose never marks
+    # a leg, whatever stream it arrives on.
+    assert harness_limit_line(1, '', 'the usage limit docs') is None
+    assert harness_limit_line(1, 'the usage limit docs', '') is None
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1_700_000_000.0)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    job = SimpleNamespace(exit_code=1, stdout='', stderr='the usage limit docs')
+    record = {}
+    reason = fallthrough_reason(SimpleNamespace(leg_reader=store),
+                                SimpleNamespace(model='qwen3.8-max'), job, record)
+    assert reason is None
+    assert record == {}
+    assert store.leg_status('qwen3.8-max')['state'] != 'limited'
+
+
 def test_orphan_check_never_signals_on_windows(tmp_path, monkeypatch):
     """os.kill(pid, 0) is TerminateProcess on Windows: the orphan check must not call it."""
     from plangraph.spawner import exit_outcome

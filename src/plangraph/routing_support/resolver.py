@@ -40,32 +40,18 @@ from plangraph.routing_support.risk import (
 
 # Role multiplier for intelligence gain above I_min
 ROLE_ALPHA: dict[str, float] = {
-    "implement": 1.0,
-    "worker": 1.0,
-    "l2-worker": 1.0,
-    "drive": 1.1,
-    "driver": 1.1,
-    "l3-driver": 1.1,
-    "orchestrate": 1.1,
-    "l1-orchestrator": 1.1,
-    "review": 1.2,
-    "reviewer": 1.2,
-    "l2-reviewer": 1.2,
+    "implement": 1.0, "worker": 1.0, "l2-worker": 1.0,
+    "drive": 1.1, "driver": 1.1, "l3-driver": 1.1,
+    "orchestrate": 1.1, "l1-orchestrator": 1.1,
+    "review": 1.2, "reviewer": 1.2, "l2-reviewer": 1.2,
 }
 
 # Role trajectory factor: buffers multi-turn conversation growth before price cliff
 ROLE_TRAJECTORY_FACTORS: dict[str, float] = {
-    "implement": 1.5,
-    "worker": 1.5,
-    "l2-worker": 1.5,
-    "drive": 1.3,
-    "driver": 1.3,
-    "l3-driver": 1.3,
-    "orchestrate": 1.3,
-    "l1-orchestrator": 1.3,
-    "review": 1.1,
-    "reviewer": 1.1,
-    "l2-reviewer": 1.1,
+    "implement": 1.5, "worker": 1.5, "l2-worker": 1.5,
+    "drive": 1.3, "driver": 1.3, "l3-driver": 1.3,
+    "orchestrate": 1.3, "l1-orchestrator": 1.3,
+    "review": 1.1, "reviewer": 1.1, "l2-reviewer": 1.1,
 }
 
 # Try importing CatalogDB from catalog_db; fallback gracefully if unavailable.
@@ -207,6 +193,18 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "available": 1,
         "context_window": 128000,
         "combos": ["l2-worker", "l3-driver"],
+    },
+    {
+        "id": "opencode-go/glm-5.2",
+        "family": "glm",
+        "aa_intelligence": 45.1,
+        "verified_tok_per_s": 90.0,
+        "cost_per_task_usd": 0.35,
+        "pool_burn_weight": 1.0,
+        "tier": "subscription",
+        "available": 1,
+        "context_window": 128000,
+        "combos": ["l2-worker", "l2-reviewer"],
     },
     {
         "id": "agy/gemini-3.8-flash-tiered-high",

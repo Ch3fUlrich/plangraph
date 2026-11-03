@@ -108,6 +108,20 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
     from .seats import seat_family
     if any(seat_family(f) == "kimi" for f in review_allowed):
         problems.append("review_allowed_families: kimi is never a seat (D-3084)")
+    # D-3700: lifted model ids are validated at load like the family lists:
+    # kimi is never liftable (D-3084) and a typo'd id must fail here instead
+    # of silently no-oping at route time.  The admission door is the resolver
+    # catalog plus the registered legs (validate_model's door).
+    from plangraph.routing_support.resolver import (get_catalog_models, detect_model_family,
+                                             OPERATOR_REMOVED_MODELS)
+    from .legs import DEFAULT_LEGS
+    known = ({row["id"] for row in get_catalog_models()}
+             | {leg.model for leg in DEFAULT_LEGS}) - OPERATOR_REMOVED_MODELS
+    for model in lifted_models:
+        if detect_model_family(model) == "kimi":
+            problems.append(f"lifted_models: kimi is never liftable (D-3084): {model}")
+        elif model not in known:
+            problems.append(f"lifted_models: unknown model id {model!r}")
     paused: dict[str, tuple[str, ...]] = {}
     raw = doc.get("paused_harnesses", {})
     if not isinstance(raw, Mapping):

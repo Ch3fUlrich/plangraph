@@ -202,6 +202,11 @@ def test_lifted_model_routes_for_implement_and_review():
         plan = plan_spawn(CARD, role=role, writer_families=("mimo",))
         assert paid.id in [leg.id for leg in plan.legs]
         assert paid.id not in {s["leg"] for s in plan.skipped}
+        if role == "review":
+            # D-3605: haiku stays the last review leg; the lifted paid leg
+            # sorts before it whatever its tier.
+            ids = [leg.id for leg in plan.legs]
+            assert ids.index("deepseek") < ids.index("claude-haiku-5.5")
 
 
 def test_lift_covers_only_the_named_model():
@@ -224,12 +229,17 @@ def test_kimi_model_is_never_lifted():
 def test_lifted_models_validates_like_banned_families(tmp_path):
     path = tmp_path / "p.json"
     for doc in ({"lifted_models": "omniroute/deepseek-direct-flash"},
-                {"lifted_models": [""]}, {"lifted_models": [1]}):
+                {"lifted_models": [""]}, {"lifted_models": [1]},
+                # D-3700: a typo'd id and kimi fail at load, not silently at
+                # route time (kimi is never liftable, D-3084).
+                {"lifted_models": ["a/m"]}, {"lifted_models": ["opencode-go/kimi-k3"]}):
         path.write_text(json.dumps(doc))
         with pytest.raises(ValueError):
             load_route_policy(path)
-    path.write_text(json.dumps({"lifted_models": ["a/m", "b/n"]}))
-    assert load_route_policy(path).lifted_models == ("a/m", "b/n")
+    path.write_text(json.dumps({"lifted_models": ["opencode-go/glm-5.2",
+                                                  "deepseek/deepseek-v4-flash-max"]}))
+    assert load_route_policy(path).lifted_models == ("opencode-go/glm-5.2",
+                                                     "deepseek/deepseek-v4-flash-max")
 
 
 def test_model_lift_keeps_paused_and_no_verdict_checks():

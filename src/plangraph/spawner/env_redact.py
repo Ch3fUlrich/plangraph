@@ -11,8 +11,13 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|quota threshold|exhausted their quota|(?:free |go )?usage limit|rate limit|resets in'
+    r'quota reached|quota exceeded|quota threshold|exhausted their quota|rate limit|resets in'
     r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
+#: D-3257: the usage-limit family (go/free plan lines and the bare phrase) is
+#: quota evidence only on an error-shaped line or next to a quota/rate-limit
+#: name (start-anchored on its own line); prose ("the usage limit docs") never
+#: marks a leg.  Same D-3257 rule as _RESET_AFTER below.
+_USAGE_LIMIT = re.compile(r'(?:free |go )?usage limit', re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
 #: leg (prose stays out, D-3257). It counts only on an error-shaped line or
@@ -47,15 +52,21 @@ def harness_limit_line(exit_code, stdout, stderr):
     # a mid-line mention in prose, a traceback or a retry log never marks a
     # leg. Agent prose on stdout only counts via its error-shaped lines.
     def quota(line):
+        text = line.strip()
         if _ERROR_SHAPED.match(line):
-            return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
+            return (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
+                    or _USAGE_LIMIT.search(line))
         # Start-anchored only (D-3257): the reset-after suffix alone never
-        # marks; it needs a quota/rate-limit name alongside.
-        return _QUOTA_MARKER.match(line.strip()) or (
-            _RESET_AFTER.match(line.strip()) and _QUOTA_MARKER.search(line))
+        # marks; it needs a quota/rate-limit name alongside.  The usage-limit
+        # family counts the same way: start-anchored on its own line, or next
+        # to a quota/rate-limit name.
+        return (_QUOTA_MARKER.match(text) or _USAGE_LIMIT.match(text) or (
+            (_RESET_AFTER.match(text) or _USAGE_LIMIT.search(text))
+            and _QUOTA_MARKER.search(line)))
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
         line for line in normalize(stdout).splitlines()
-        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line))]
+        if _ERROR_SHAPED.match(line) and (
+            _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _USAGE_LIMIT.search(line))]
     return lines[0].strip() if lines else None
 
 
@@ -79,7 +90,8 @@ def early_refusal(complete_text):
             except (ValueError, TypeError, AttributeError, KeyError):
                 pass
     for line in lines:
-        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)):
+        if _ERROR_SHAPED.match(line) and (
+                _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _USAGE_LIMIT.search(line)):
             return line.strip()
     return None
 
