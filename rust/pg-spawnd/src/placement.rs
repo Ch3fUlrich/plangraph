@@ -70,7 +70,7 @@ fn run(
         ))),
     }
 }
-pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
+pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
     let card = args
         .get("card")
         .ok_or_else(|| ToolError::Key("card".into()))?
@@ -117,7 +117,10 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
         return Err(parameter("card too large for the route adapter"));
     }
     argv.push("--json".into());
-    run(state, argv, Duration::from_secs(30), false)
+    Ok(argv)
+}
+pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
+    run(state, route_args(args)?, Duration::from_secs(30), false)
 }
 pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
     let mut argv = vec!["probe".into()];

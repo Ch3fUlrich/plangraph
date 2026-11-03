@@ -192,7 +192,6 @@ fn status_steer_refusals_and_stub_slices() {
         "KeyError",
     );
     for (tool, slice) in [
-        ("agent_spawn", "R6a-3b"),
         ("agent_cancel", "R6a-3c"),
         ("agent_query_catalog", "R11"),
         ("session_list", "R9"),

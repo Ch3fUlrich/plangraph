@@ -4,9 +4,11 @@ mod cli;
 mod error_tests;
 mod errors;
 mod placement;
+mod pyjson;
 mod records;
 mod serve;
 mod shim;
+mod spawn;
 mod state;
 #[cfg(test)]
 mod state_tests;
