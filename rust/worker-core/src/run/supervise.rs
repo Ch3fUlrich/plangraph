@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -190,10 +190,11 @@ pub fn create_record(rt: &Runtime, spec: &mut RunSpec) -> Result<RunRecord, Star
     Ok(record)
 }
 pub fn launch_error(record: &mut RunRecord, error: LaunchError) {
+    let mut detail = None;
     let name = match error {
         LaunchError::Io(e) => format!("{:?}", e.kind()),
         LaunchError::ScopeUnavailable(msg) => {
-            let _ = record.push_event(json!({"event":"scope_unavailable", "detail":msg}));
+            detail = Some(msg);
             "ScopeUnavailable".into()
         }
         LaunchError::ScopeNotEntered => "ScopeNotEntered".into(),
@@ -208,6 +209,34 @@ pub fn launch_error(record: &mut RunRecord, error: LaunchError) {
         json!({"event":"spawn_failed", "error":name})
     };
     let _ = record.push_event(event);
+    if let Some(detail) = detail {
+        let _ = record.push_event(json!({"event":"scope_unavailable", "detail":detail}));
+    }
     record.set("error", json!(format!("spawn failed: {name}")));
     record.set("reason", json!(format!("spawn failed: {name}")));
+}
+
+pub fn start(rt: &Arc<Runtime>, mut spec: RunSpec) -> Result<RunHandle, StartError> {
+    let record = create_record(rt, &mut spec)?;
+    let id = spec.run_id.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (runtime, flag) = (rt.clone(), cancel.clone());
+    // Keep ownership available to the caller if the OS refuses the thread.
+    let pending = Arc::new(Mutex::new(Some((spec, record))));
+    let work = pending.clone();
+    let thread = thread::Builder::new()
+        .name(id.clone())
+        .spawn(move || {
+            let (spec, record) = work.lock().unwrap().take().unwrap();
+            super::monitor::monitor(runtime, spec, record, flag);
+        })
+        .map_err(|e| {
+            if let Some((mut spec, mut r)) = pending.lock().unwrap().take() {
+                r.set("error", json!("monitor thread failed"));
+                r.set("reason", json!("monitor thread failed"));
+                finalize::finish(&mut r, &mut spec.finish, 1, false, StopOutcome::Empty, None);
+            }
+            StartError::Spawn(e)
+        })?;
+    Ok(RunHandle { id, cancel, thread })
 }
