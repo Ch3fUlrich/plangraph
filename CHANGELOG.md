@@ -3,11 +3,28 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **SPAWNER-RL5B (D-3676, D-3714):** record closed-stdin opencode 2.1.0 live arrivals and replay read progress, version drift and payload-retention checks; no wiring or pin change.
+- **SPAWNER-RL5B (D-3676, D-3714):** map opencode events to receive-time activity with seven sanitized historical replays; no caller or switch, rollback by git revert.
+- **SPAWNER-RL9B part 2b (D-3676, D-3714):** add marker-to-outcome classification tests covering provider failures, quota and rate limits, raw reset propagation, evidence, and exit-status guards; no caller or switch, rollback by revert.
+- **SPAWNER-RL9B part 2 (D-3676, D-3714):** add guarded provider-marker scanning and raw one-shot reset capture; no caller or switch, rollback by git revert.
 
 - **SPAWNER-LIFT-DEEPSEEK-BAN (D-3700):** route policy `lifted_models` (list of model ids) lifts the named model over the banned/off-family rules for every role its leg serves, so the paid `omniroute/deepseek-direct-flash` leg routes for implement and review (its roles extended to both) while the free `deepseek-v4.1-flash-free` and `opencode-go` deepseek legs stay banned for implement; kimi is never liftable and `paused_harnesses` / `no_verdict_seat` still apply to a lifted model. `tests/test_registry_route.py`, `tests/test_review_legs_d3552.py`.
 
 - **SPAWNER-GO-CATALOG-IDS (D-3676):** the three stale `opencode-go` model ids match the live model list (`gemini-4-argon-contributor` -> `gemini-4-argon`, `glm-5.2-max` -> `glm-5.2`, `deepseek-v4-flash-max` -> `deepseek-v4.1-flash`, leg names unchanged); "Go usage limit exceeded" books the leg down like any harness limit (bare `Go usage limit exceeded` / `Free usage limit reached` lines are start-anchored quota evidence, the error-shaped rule unchanged) and "Model unavailable: <id>" marks the leg unavailable (`model_unavailable`, booked down via `unavailable_reason`) so the route skips it until the catalog serves the id again.
 
+- **PLACEMENT-R6A-3C4 (D-3676, D-3685):** Add owned-run cancellation, process-local job status and steering responses, and live supervisor health counts; only catalog and session tools remain stubs.
+
+- **PLACEMENT-R6A-3C3b (D-3676, D-3685):** Finish local records with attempt attribution and route dry runs through the launch adapter without starting a process.
+
+- **PLACEMENT-R6A-3C3a (D-3676, D-3685):** Start adapter-specified local runs with bounded admission, refusal records, job registration and optional terminal waits.
+
+- **PLACEMENT-R6A-3C2 (D-3676, D-3685):** Validate local serve admission flags and share one worker-core supervisor across connections.
+
+- **PLACEMENT-R6A-3C1 (D-3676, D-3685):** add bounded operator launch adapter and validated pipe-only launch specs; no spawn wiring yet.
+- **SPAWNER-RL9B part 1b (D-3676, D-3714):** add outcome-classification tests pinning role-aware usability, the class scope/neutral and carries_reset tables, class names, redacted capped descriptions and raw non-finite reset copies; no caller or switch, rollback by revert.
+- **SPAWNER-RL9B part 1 (D-3676, D-3714):** add pure structured outcome classification, role-aware usability, raw reset propagation and redacted descriptions; no caller or switch, rollback by git revert.
+
+- md-sync: keeper snapshot reads use their own 60 s timeout (MD-SYNC-SNAPSHOT-TIMEOUT)
 - **PLACEMENT-R6A-2F2 (D-3676, D-3685):** pin the run supervisor's queued records, QueueFull and BadCap limits, failed-start rollback, cancel outcomes and survivor accounting with gated, bounded tests; placement remains off.
 - **PLACEMENT-R6A-2F (D-3676, D-3685):** add daemon-owned run registry and replaceable fixed-cap FIFO admission; placement remains off.
 
