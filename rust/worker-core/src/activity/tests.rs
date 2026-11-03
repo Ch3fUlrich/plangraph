@@ -169,3 +169,38 @@ fn off_shadow_and_on_episode_semantics() {
     assert_eq!(m.first_activity_ms(), None);
     assert_eq!(tick(&mut m, u64::MAX), None);
 }
+#[test]
+fn stale_first_signal_clamps_to_t0_and_huge_limits_never_kill() {
+    let modes = Modes {
+        first: Mode::On,
+        silent: Mode::On,
+        milestone: Mode::On,
+    };
+    let mut m = Monitor::new(Role::Implement, &Limits::default(), modes, 10_000);
+    signal(&mut m, Kind::Content, 5);
+    assert_eq!(m.first_activity_ms(), Some(10_000));
+    let huge = Limits {
+        first_activity_s: Some(u64::MAX),
+        silence_s: Some(u64::MAX),
+        ..Limits::default()
+    };
+    let mut m = Monitor::new(Role::Implement, &huge, modes, u64::MAX - 1);
+    assert_eq!(tick(&mut m, u64::MAX), None);
+    signal(&mut m, Kind::Content, u64::MAX);
+    assert_eq!(tick(&mut m, u64::MAX), None);
+}
+#[test]
+fn per_rule_modes_are_independent() {
+    let modes = Modes {
+        first: Mode::Off,
+        silent: Mode::On,
+        milestone: Mode::Off,
+    };
+    let mut m = Monitor::new(Role::Implement, &Limits::default(), modes, 0);
+    assert_eq!(tick(&mut m, 1_000_000), None);
+    signal(&mut m, Kind::Content, 1_000_000);
+    let d = tick(&mut m, 1_603_000).unwrap();
+    assert_eq!(d.act, Act::Kill);
+    decision(d, Silent, HangSilent, 0, 600);
+    assert_eq!(m.state(), State::Ended(Silent));
+}

@@ -181,7 +181,7 @@ impl Monitor {
                 return;
             }
             self.state = State::Active;
-            self.first_activity_ms = Some(s.ts_ms);
+            self.first_activity_ms = Some(s.ts_ms.max(self.t0_ms));
             self.refresh(s.ts_ms);
         }
         if strong {
