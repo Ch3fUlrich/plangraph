@@ -200,9 +200,50 @@ fn http_codes_have_word_boundaries() {
 }
 
 #[test]
-fn no_status_event_reads_nested_values_not_keys() {
+fn no_status_event_reads_only_message_fields() {
     let key = r#"{"type":"rate_limit_event","credit":"nothing"}"#;
     assert!(scan(&input(key, "")).is_none());
     let value = r#"{"type":"rate_limit_event","nested":[{"message":"daily limit reached"}]}"#;
-    assert_eq!(scan(&input(value, "")).unwrap().marker, Marker::Quota);
+    assert!(scan(&input(value, "")).is_none());
+}
+
+#[test]
+fn stderr_exceeded_event_is_quota_on_either_exit() {
+    let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"exceeded"},"message":"quota exceeded"}"#;
+    let mut i = input("", line);
+    for exit in [0, 1] {
+        i.exit = exit;
+        assert_eq!(scan(&i).unwrap().marker, Marker::Quota);
+    }
+}
+
+#[test]
+fn indented_json_is_not_structured() {
+    for line in [
+        r#"  {"type":"error","error":{"status":429}}"#,
+        r#"  {"type":"rate_limit_event","rate_limit_info":{"status":"exceeded"}}"#,
+    ] {
+        let mut i = input(line, "");
+        i.exit = 0;
+        assert!(scan(&i).is_none());
+    }
+}
+
+#[test]
+fn no_status_event_ignores_note_and_reads_daily_limit_messages() {
+    for (line, expected) in [
+        (r#"{"type":"rate_limit_event","note":"credit"}"#, None),
+        (
+            r#"{"type":"rate_limit_event","message":"daily limit reached"}"#,
+            Some(Marker::Quota),
+        ),
+        (
+            r#"{"type":"rate_limit_event","rate_limit_info":{"message":"daily limit reached"}}"#,
+            Some(Marker::Quota),
+        ),
+    ] {
+        for i in [input(line, ""), input("", line)] {
+            assert_eq!(scan(&i).map(|hit| hit.marker), expected);
+        }
+    }
 }
