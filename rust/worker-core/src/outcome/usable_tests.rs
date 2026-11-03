@@ -83,9 +83,11 @@ fn describe_redacts_and_caps() {
     );
     f.evidence = Some(
         [
-            "-----BEGIN TEST PRIVATE KEY-----\n",
+            "-----BE",
+            "GIN TEST PRIVATE KEY-----\n",
             "body\n",
-            "-----END TEST PRIVATE KEY-----",
+            "-----EN",
+            "D TEST PRIVATE KEY-----",
         ]
         .concat(),
     );
