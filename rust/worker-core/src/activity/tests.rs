@@ -9,12 +9,12 @@ fn monitor(limits: Limits, mode: Mode) -> Monitor {
         Modes {
             first: mode,
             silent: mode,
-            milestone: mode,
+            milestone: Mode::Off,
         },
         0,
     )
 }
-fn signal(m: &mut Monitor, kind: Kind, ts_ms: u64) {
+pub(super) fn signal(m: &mut Monitor, kind: Kind, ts_ms: u64) {
     m.feed(Signal {
         kind,
         ts_ms,
@@ -29,10 +29,10 @@ fn tick(m: &mut Monitor, now: u64) -> Option<Decision> {
         d
     }
 }
-fn raw_tick(m: &mut Monitor, now: u64) -> Option<Decision> {
+pub(super) fn raw_tick(m: &mut Monitor, now: u64) -> Option<Decision> {
     m.tick(now, Ctx::default())
 }
-fn decision(d: Decision, rule: Rule, outcome: KillOutcome, open: u32, seconds: u64) {
+pub(super) fn decision(d: Decision, rule: Rule, outcome: KillOutcome, open: u32, seconds: u64) {
     assert_eq!(d.rule, rule);
     assert_eq!(d.outcome, outcome);
     assert_eq!(d.open_tools, open);
@@ -310,4 +310,21 @@ fn off_mode_error_signal_and_ended_monitor_give_no_warn() {
     assert_eq!(raw_tick(&mut m, 183_000).unwrap().act, Act::Kill);
     signal(&mut m, Kind::Content, 184_000);
     assert_eq!(raw_tick(&mut m, u64::MAX), None);
+}
+
+pub(super) fn progress(mode: Mode) -> Monitor {
+    let mut m = monitor(Limits::default(), mode);
+    m.modes.milestone = mode;
+    signal(&mut m, Kind::Content, 1000);
+    m
+}
+pub(super) fn progress_tick(m: &mut Monitor, now: u64, safe_alt: bool) -> Option<Decision> {
+    signal(m, Kind::Content, now);
+    m.tick(
+        now,
+        Ctx {
+            edited: false,
+            safe_alt,
+        },
+    )
 }
