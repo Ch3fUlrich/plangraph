@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-3C4 (D-3676, D-3685):** Add owned-run cancellation, process-local job status and steering responses, and live supervisor health counts; only catalog and session tools remain stubs.
+
 - **PLACEMENT-R6A-3C3b (D-3676, D-3685):** Finish local records with attempt attribution and route dry runs through the launch adapter without starting a process.
 
 - **PLACEMENT-R6A-3C3a (D-3676, D-3685):** Start adapter-specified local runs with bounded admission, refusal records, job registration and optional terminal waits.
