@@ -73,6 +73,8 @@ def test_tools(request_data, role, tmp_path):
     result = json.loads(out)
     assert result['argv'][0] == str(exe)
     assert result['cwd'] == str(tmp_path)
+    # opencode (implement) takes the prompt on stdin; qodercli (review) in argv with stdin null.
+    assert (result['stdin'] is None) == (role == 'review')
     prompt = result['stdin'] or ' '.join(result['argv'])
     assert ('GIT_AUTHOR_NAME' in result['env']) == (role == 'implement')
     assert ('GIT_AUTHOR_EMAIL' in result['env']) == (role == 'implement')
