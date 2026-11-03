@@ -27,8 +27,9 @@ impl Formatter for PythonFormatter {
         w: &mut W,
         fragment: &str,
     ) -> io::Result<()> {
+        // Python's ensure_ascii escapes everything outside ' '..='~', DEL included.
         for c in fragment.chars() {
-            if c.is_ascii() {
+            if (' '..='~').contains(&c) {
                 w.write_all(&[c as u8])?;
             } else {
                 for unit in c.encode_utf16(&mut [0; 2]) {
@@ -98,7 +99,7 @@ mod tests {
             ),
             (
                 json!("\u{0}\u{8}\u{c}\r\t/\u{7f}"),
-                concat!(r#""\u0000\b\f\r\t/"#, "\u{7f}", "\""),
+                concat!(r#""\u0000\b\f\r\t/"#, "\\u007f", "\""),
             ),
         ] {
             assert_eq!(text(&input), expected);

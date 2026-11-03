@@ -20,6 +20,7 @@ fn save(state: &Path, base: Value, status: Status) -> Result<Value, ToolError> {
         .unwrap_or_default()
         .as_secs_f64();
     let id = new_run_id();
+    // The saved fields themselves, not a re-parse: serde_json float parsing may drift 1 ULP.
     RunRecord::create(
         state,
         &id,
@@ -28,8 +29,8 @@ fn save(state: &Path, base: Value, status: Status) -> Result<Value, ToolError> {
         status,
         now,
     )
-    .map_err(|_| ToolError::Internal("could not save run record".into()))?;
-    crate::records::read_record(state, &json!(id))
+    .map(|record| record.to_value())
+    .map_err(|_| ToolError::Internal("could not save run record".into()))
 }
 fn validate(args: &Args) -> Result<(), ToolError> {
     if !args.contains_key("prompt") {
@@ -78,10 +79,7 @@ fn validate(args: &Args) -> Result<(), ToolError> {
         let unsupported = match option {
             "seats" => args.get(option) == Some(&json!(true)),
             "card.findings" => {
-                args.get("role")
-                    .and_then(Value::as_str)
-                    .unwrap_or("implement")
-                    == "implement"
+                args.get("role").is_none_or(|role| role == "implement")
                     && args["card"].get("findings").is_some_and(truthy)
             }
             _ => args.get(option).is_some_and(|v| !v.is_null()),
@@ -123,7 +121,8 @@ fn record_validation_error(state: &Path, role: Value, error: &ToolError) -> Resu
     Ok(())
 }
 pub(crate) fn spawn(state: &Path, args: &Args) -> Result<String, ToolError> {
-    spawn_value(state, args).map(|value| value.to_string())
+    serde_json::to_string_pretty(&spawn_value(state, args)?)
+        .map_err(|_| ToolError::Internal("could not encode run record".into()))
 }
 fn spawn_value(state: &Path, args: &Args) -> Result<Value, ToolError> {
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
@@ -167,11 +166,25 @@ mod tests {
     use super::*;
     #[test]
     fn unexpected_validation_error_is_unrecorded() {
-        let state = std::path::PathBuf::from("nonexistent-validation-state");
+        let state = std::env::temp_dir().join(format!("pg-spawnd-validation-{}", new_run_id()));
         let error = ToolError::Internal("validation failed".into());
         assert!(record_validation_error(&state, json!("implement"), &error).is_ok());
+        let refused = ToolError::Refused {
+            kind: crate::errors::RefusalKind::Spawn,
+            message: "no leg".into(),
+            legs: vec![],
+        };
+        assert!(record_validation_error(&state, json!("implement"), &refused).is_ok());
         let answer = error.into_error_data();
         assert_eq!(answer.message, "validation failed");
         assert!(!state.exists());
+        let key = ToolError::Key("card".into());
+        assert!(record_validation_error(&state, json!("review"), &key).is_ok());
+        let rows = crate::records::list_runs(&state);
+        std::fs::remove_dir_all(&state).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["refusal"], "KeyError");
+        assert_eq!(rows[0]["error"], "'card'");
+        assert_eq!(rows[0]["role"], "review");
     }
 }
