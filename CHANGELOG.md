@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **KEEPER-SNAP-S0-TIMINGS:** one stderr timing line per keeper snapshot build (per-phase ms plus item, decision-id and byte counts only, never ids or texts) and one per anchor write that reached `submit()`; the decisions file is parsed once per build behind an `(mtime_ns, size)` cache used only by the snapshot `decision_text` read path (write-path enforcement re-reads every call), and `tools/bench_keeper_snapshot.py` gains `--decisions` seeding of decision rows plus citing evidence and prints the per-phase split.
+
 - **PLACEMENT-R6A-2D (D-3676, D-3685):** add named Windows execution Job Objects with suspended assignment, kill-on-close lifetime, member queries and termination; no caller integration (PLACEMENT remains off).
 
 - **PLACEMENT-R6A-3A (D-3676, D-3685):** add Python-compatible JSON-RPC errors and shared read-only run records for `pg-spawnd` ps/result/status/steer, plus `serve --state` resolution; placement remains off and launch tools remain staged stubs.

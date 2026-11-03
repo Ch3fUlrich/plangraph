@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-__all__ = ["DecisionsAdapter", "DECISION_LINE_RE"]
+__all__ = ["DecisionsAdapter", "DECISION_LINE_RE", "snapshot_texts"]
 
 DECISION_LINE_RE = re.compile(r"^\| D-([0-9]+) \|")
 _ASCII_DIGITS_RE = re.compile(r"[0-9]+\Z")
@@ -93,11 +93,28 @@ def _prose_lines(text: str):
         yield line
 
 
+def _text_from_rows(rows: dict[str, list[str]], decision_id) -> str | None:
+    """``text()`` semantics on a given row map: the first non-empty DECISION cell."""
+    canonical = DecisionsAdapter._canonical(decision_id)
+    if canonical is None:
+        return None
+    hits = rows.get(canonical)
+    if not hits:
+        return None
+    for row in hits:
+        collapsed = _WS_RE.sub(" ", _decision_cell(row)).strip()
+        if collapsed:
+            return collapsed
+    return ""
+
+
 class DecisionsAdapter:
     """Read-only view of one decisions document, injected via ``ctx.decisions``."""
 
     def __init__(self, path: str | Path | None) -> None:
         self._path = Path(path) if path else None
+        self._cache_stamp = None
+        self._cache_rows: dict[str, list[str]] = {}
 
     def _rows(self) -> dict[str, list[str]]:
         """Prose table rows keyed by normalised id (empty when unreadable)."""
@@ -112,6 +129,32 @@ class DecisionsAdapter:
             match = DECISION_LINE_RE.match(line)
             if match:
                 rows.setdefault(f"D-{int(match.group(1))}", []).append(line)
+        return rows
+
+    def _stamp(self):
+        """``(mtime_ns, size)`` of the decisions file, or ``None`` (never cached)."""
+        if self._path is None:
+            return None
+        try:
+            st = self._path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _cached_rows(self) -> dict[str, list[str]]:
+        """``_rows()`` cached on ``(mtime_ns, size)`` - SNAPSHOT READ PATH ONLY.
+
+        ``store_read._decision_text`` (via ``snapshot_texts``) is the sole
+        caller: the write-path enforcement methods (``has``, ``text``,
+        ``waives``, ``closes``) must never read through this - a missed
+        same-size edit would mis-authorise closes and waivers, so every one of
+        them re-reads the file on every call.
+        """
+        stamp = self._stamp()
+        if stamp is not None and stamp == self._cache_stamp:
+            return self._cache_rows
+        rows = self._rows()
+        self._cache_stamp, self._cache_rows = stamp, rows
         return rows
 
     def decisions(self) -> set[str]:
@@ -136,17 +179,7 @@ class DecisionsAdapter:
 
     def text(self, decision_id: str) -> str | None:
         """The DECISION cell of *decision_id*'s row, whitespace-collapsed."""
-        canonical = self._canonical(decision_id)
-        if canonical is None:
-            return None
-        rows = self._rows().get(canonical)
-        if not rows:
-            return None
-        for row in rows:
-            collapsed = _WS_RE.sub(" ", _decision_cell(row)).strip()
-            if collapsed:
-                return collapsed
-        return ""
+        return _text_from_rows(self._rows(), decision_id)
 
     def _scoped_tokens(self, decision_id: str, pattern: re.Pattern) -> set[str]:
         """The whole tokens in the DECISION cell of *decision_id*'s rows.
@@ -258,3 +291,34 @@ class DecisionsAdapter:
 
     def __repr__(self) -> str:  # pragma: no cover - convenience only
         return "DecisionsAdapter()"
+
+
+def snapshot_texts(adapter, ids):
+    """``{id: cell text}`` for the ids the snapshot ``decision_text`` cites.
+
+    The snapshot read path only (``store_read._decision_text``): a real
+    :class:`DecisionsAdapter` parses the decisions file once per file version
+    through ``_cached_rows`` (stamped on ``(mtime_ns, size)``) and answers every
+    id from that one parse, while the write-path enforcement methods stay
+    uncached; any other adapter (a test fake) keeps the per-id ``text()`` loop.
+    Same rules as ``text()`` plus the snapshot's 600-char cap.
+    """
+    if isinstance(adapter, DecisionsAdapter):
+        rows = adapter._cached_rows()
+
+        def lookup(did):
+            return _text_from_rows(rows, did)
+    else:
+        lookup = getattr(adapter, "text", None)
+        if not callable(lookup):
+            return {}
+    result: dict[str, str] = {}
+    for did in ids:
+        try:
+            value = lookup(did)
+        except Exception:  # noqa: BLE001 - one bad row skips
+            continue
+        if not isinstance(value, str) or not value:
+            continue
+        result[did] = value[:600]
+    return result
