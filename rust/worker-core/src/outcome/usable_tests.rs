@@ -62,6 +62,51 @@ fn scope_and_neutral_flags_match_the_table() {
     }
 }
 #[test]
+fn carries_reset_matches_literal_class_set() {
+    for class in [
+        Class::Ok,
+        Class::HangNoActivity,
+        Class::HangSilent,
+        Class::NoProgress,
+        Class::MaxTime,
+        Class::KilledExternal,
+        Class::Empty,
+        Class::Crash,
+        Class::ToolCallOnly,
+        Class::NoVerdict,
+        Class::ModelUnavailable,
+        Class::ProviderUnavailable,
+        Class::Quota,
+        Class::RateLimit,
+        Class::Auth,
+        Class::Neutral(Terminal::CallerFault),
+        Class::Neutral(Terminal::Cancelled),
+        Class::Neutral(Terminal::Orphaned),
+        Class::Neutral(Terminal::GitConfigMutated),
+        Class::Neutral(Terminal::WriterNoChanges),
+        Class::Neutral(Terminal::KillIncomplete),
+        Class::Neutral(Terminal::ProofFailure),
+    ] {
+        assert_eq!(
+            class.carries_reset(),
+            expected_carries_reset(class),
+            "{class:?}"
+        );
+    }
+}
+
+fn expected_carries_reset(class: Class) -> bool {
+    [
+        Class::Quota,
+        Class::RateLimit,
+        Class::Auth,
+        Class::ModelUnavailable,
+        Class::ProviderUnavailable,
+    ]
+    .contains(&class)
+}
+
+#[test]
 fn reset_carried_only_by_hard_fact_classes() {
     for marker in [
         None,
@@ -81,8 +126,11 @@ fn reset_carried_only_by_hard_fact_classes() {
             });
             f.evidence = Some("raw evidence".into());
             let o = classify(&f);
-            assert_eq!(o.reset_at, o.class.carries_reset().then_some(259_300.0));
-            assert_eq!(o.reset_clamped, o.class.carries_reset());
+            assert_eq!(
+                o.reset_at,
+                expected_carries_reset(o.class).then_some(259_300.0)
+            );
+            assert_eq!(o.reset_clamped, expected_carries_reset(o.class));
             assert_eq!(o.evidence, f.evidence);
         }
     }
