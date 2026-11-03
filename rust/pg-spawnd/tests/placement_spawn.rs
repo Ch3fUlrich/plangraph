@@ -26,6 +26,17 @@ fn real_run_and_failure() {
         assert_eq!(r["writer_family"], "f");
         assert_eq!(r["warnings"], json!(["warning"]));
         assert_eq!(r["events"][0]["event"], "adapter");
+        assert_eq!(
+            r["attempts"][0],
+            json!({
+                "leg":r["plan"]["first_leg"], "status":status,
+                "served_model":"unwitnessed", "served_family":"unwitnessed",
+                "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
+                "request_side_model":null, "witness_kind":null, "provider_response":null,
+                "skip_reason":if status == "completed" { Value::Null } else { r["reason"].clone() },
+                "stdout_tail":r["stdout_tail"], "stderr_tail":r["stderr_tail"]
+            })
+        );
         assert_eq!(r["attempts"][0]["status"], status);
         assert_eq!(r["attempts"][0]["served_model"], "unwitnessed");
         if status == "completed" {

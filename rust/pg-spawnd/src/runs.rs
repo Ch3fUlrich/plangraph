@@ -127,7 +127,6 @@ impl Runs {
                 }
                 Err(_) => return Err(internal("could not start run")),
             }
-
         }
         self.jobs.lock().unwrap().insert(job_id, run_id.clone());
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
