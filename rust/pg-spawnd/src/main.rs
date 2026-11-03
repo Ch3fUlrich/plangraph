@@ -3,6 +3,7 @@ mod cli;
 #[cfg(test)]
 mod error_tests;
 mod errors;
+mod launch;
 mod placement;
 mod pyjson;
 mod records;
