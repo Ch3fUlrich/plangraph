@@ -10,7 +10,7 @@ import json
 
 from .. import views
 from ..views_progress import progress
-from . import auth, jev_report
+from . import auth, evidence_decisions, jev_report, snapshot_timing
 from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
@@ -214,17 +214,20 @@ class ReadMixin:
         return created, done, reviewed, merged
 
     def _snapshot(self, now):
-        items = self._all_items()
+        timer = snapshot_timing.SnapshotTimer()
+        items = timer.run("items", self._all_items)
         corrected, fixed = {}, {}
         for item in items:
             if item["corrects"]:
                 corrected.setdefault(item["corrects"], []).append(item["key"])
             if item.get("fixes"):
                 fixed.setdefault(item["fixes"], []).append(item["key"])
-        created_ts, done_ts, reviewed_keys, merged_keys = self._snapshot_run_meta()
-        answers = self.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
-        evidence = self._evidence_by_key()      # set-based: one query each, not one per item
-        verdicts = self._verdicts_by_key()
+        timer.lap("edges")
+        created_ts, done_ts, reviewed_keys, merged_keys = timer.run(
+            "meta", self._snapshot_run_meta)
+        answers = timer.run("answers", self.answer_map)   # SYNC-MD-IMPORT: the page's Answers list
+        evidence = timer.run("evidence", self._evidence_by_key)      # set-based: one query each, not one per item
+        verdicts = timer.run("verdicts", self._verdicts_by_key)
         out = []
         for item in items:
             reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
@@ -270,15 +273,19 @@ class ReadMixin:
                             "decision_id": answers[item["key"]]["decision_id"]}
                            if item["key"] in answers else None),
             })
+        timer.lap("shape")
         head = self.conn.execute(
             "SELECT hash, seq FROM events ORDER BY seq DESC LIMIT 1").fetchone()
-        return {"generated": self._iso(now), "head": head[0] if head else None,
+        snap = {"generated": self._iso(now), "head": head[0] if head else None,
                 "head_seq": head[1] if head else 0,   # PG-LOCAL-COPY: readers refuse an older copy
                 "items": out,
-                "aliases": {a["old"]: a["new"] for a in self._aliases()},
-                "activity": self._activity(now),
-                "decision_text": self._decision_text(items, now, evidence),
-                "progress": progress(out)}   # PROGRESS-PANEL: the page's static panel
+                "aliases": {a["old"]: a["new"] for a in timer.run("aliases", self._aliases)},
+                "activity": timer.run("activity", self._activity, now),
+                "decision_text": timer.run("decision", self._decision_text,
+                                           items, now, evidence, timing=timer),
+                "progress": timer.run("progress", progress, out)}   # PROGRESS-PANEL: the page's static panel
+        timer.finish(snap)   # KEEPER-SNAP-S0-TIMINGS: one stderr line (ms + counts only)
+        return snap
 
     def _activity(self, now):
         """Compact ``events`` feed for the last 31 days, oldest first."""
@@ -312,7 +319,7 @@ class ReadMixin:
         except Exception:  # noqa: BLE001 - snapshot never raises
             return []
 
-    def _decision_text(self, items, now, evidence=None):
+    def _decision_text(self, items, now, evidence=None, timing=None):
         """Map of decision id -> cell text for ids cited by item evidence."""
         try:
             wanted: list[str] = []
@@ -328,25 +335,15 @@ class ReadMixin:
                     if isinstance(did, str) and did and did not in seen:
                         seen.add(did)
                         wanted.append(did)
+            if timing is not None:
+                timing.count("decision_ids", len(wanted))     # count only, never the ids
             if not wanted or not items:
                 return {}
             try:
                 adapter = self._ctx(items[0], now).decisions
             except Exception:  # noqa: BLE001 - snapshot never raises
                 return {}
-            text_fn = getattr(adapter, "text", None)
-            if not callable(text_fn):
-                return {}
-            result: dict[str, str] = {}
-            for did in wanted:
-                try:
-                    value = text_fn(did)
-                except Exception:  # noqa: BLE001 - one bad row skips
-                    continue
-                if not isinstance(value, str) or not value:
-                    continue
-                result[did] = value[:600]
-            return result
+            return evidence_decisions.snapshot_texts(adapter, wanted)
         except Exception:  # noqa: BLE001 - snapshot never raises
             return {}
 

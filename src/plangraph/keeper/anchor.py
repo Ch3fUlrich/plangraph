@@ -24,7 +24,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from . import anchord
+from . import anchord, snapshot_timing
 
 __all__ = ["AnchorError", "enabled", "read_records", "latest", "submit", "check_start",
            "verify", "append_only", "Anchorer", "HOURLY_S", "DONE_TYPES", "RETRY_AFTER_S"]
@@ -244,14 +244,19 @@ class Anchorer:
         if reason != "start" and self.clock() < self.retry_at:
             return None                        # back off: a down service must not stall requests
         rec = {"v": 1, "seq": seq, "head": head, "ts": _iso(self.clock()), "reason": reason}
+        start = self.clock()
         try:
             answer = submit(self.cfg, rec)
         except AnchorError as exc:
+            snapshot_timing.anchor_line(self.clock() - start,
+                                        self.clock() - start, False, err=self.err)
             if str(exc) != self.error:
                 self.err.write(f"keeper: anchor not written: {exc}\n")
             self.error = str(exc)
             self.retry_at = self.clock() + RETRY_AFTER_S
             return None
+        snapshot_timing.anchor_line(self.clock() - start,
+                                    self.clock() - start, True, err=self.err)
         self.error, self.retry_at = None, 0.0
         self.last_seq, self.last_ts = seq, self.clock()
         if not self.cfg.get("anchor_socket"):

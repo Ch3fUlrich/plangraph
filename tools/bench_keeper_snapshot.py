@@ -10,7 +10,10 @@ write followed by the snapshot rewrite) and --reads ``GET /v1/snapshot``.  Print
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
+import re
 import statistics
 import tempfile
 import threading
@@ -20,7 +23,10 @@ import uuid
 from pathlib import Path
 
 from plangraph.keeper import api, auth, config, db as kdb
+from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.store import Store
+
+_SPLIT_RE = re.compile(r"^keeper: snapshot_timing (.+)$", re.MULTILINE)
 
 
 def _items(n, offset=0):
@@ -45,7 +51,7 @@ def _pct(xs, p):
     return xs[min(len(xs) - 1, int(len(xs) * p))]
 
 
-def run(backend, n, writes, reads, extra=None):
+def run(backend, n, writes, reads, decisions=0, extra=None):
     tmp = Path(tempfile.mkdtemp(prefix="bench-snap-"))
     cfg_doc = {"db": str(tmp / "keeper.db"), "snapshot": str(tmp / "plan.snapshot.json"),
                "bind": "127.0.0.1:0", "reap_interval": 3600, **(extra or {})}
@@ -71,6 +77,17 @@ def run(backend, n, writes, reads, extra=None):
     for r in range(4):                                  # event churn (events >> items, like live)
         for i in range(0, n, max(1, n // 100)):
             store.set_priority(who, f"bench:L{i}", r)
+    if decisions > 0:                                   # seed evidence + decision rows
+        dec_path = tmp / "decisions.md"
+        dec_path.write_text("".join(f"| D-{i + 1} | bench | seeded decision text {i + 1} |\n"
+                                    for i in range(decisions)), encoding="utf-8")
+        store.ctx = {"decisions": DecisionsAdapter(dec_path)}
+        worker = auth.authenticate(
+            conn, auth.add_principal(conn, "benchworker", "worker", ["bench"]))
+        for i in range(min(decisions, n)):
+            epoch = store.claim(worker, f"bench:L{i}")["epoch"]
+            store.add_evidence(worker, f"bench:L{i}", epoch, "decision",
+                               {"id": f"D-{i + 1}"})
     server = api.make_server(store, cfg, host="127.0.0.1", port=0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
@@ -89,9 +106,14 @@ def run(backend, n, writes, reads, extra=None):
         rd.append((time.perf_counter() - t) * 1000)
     server.shutdown()
     server.server_close()
+    capture = io.StringIO()                             # one build's per-phase split (stderr line)
+    with contextlib.redirect_stderr(capture):
+        store.snapshot(who)
+    match = _SPLIT_RE.search(capture.getvalue())
     conn.close()
     return {"n": n, "w_p50": statistics.median(lat), "w_p95": _pct(lat, 0.95), "w_max": max(lat),
-            "r_p50": statistics.median(rd), "bytes": (tmp / "plan.snapshot.json").stat().st_size}
+            "r_p50": statistics.median(rd), "bytes": (tmp / "plan.snapshot.json").stat().st_size,
+            "split": match.group(1) if match else ""}
 
 
 def main(argv=None):
@@ -100,13 +122,17 @@ def main(argv=None):
     ap.add_argument("--sizes", default="100,400,1000,2000")
     ap.add_argument("--writes", type=int, default=60)
     ap.add_argument("--reads", type=int, default=5)
+    ap.add_argument("--decisions", type=int, default=5,
+                    help="decision rows + decision evidence rows to seed per run")
     args = ap.parse_args(argv)
     print(f"| backend | items | write p50 ms | write p95 ms | write max ms | GET snapshot p50 ms | snapshot bytes |")
     print("|---|---|---|---|---|---|---|")
     for n in (int(s) for s in args.sizes.split(",")):
-        r = run(args.backend, n, args.writes, args.reads)
+        r = run(args.backend, n, args.writes, args.reads, decisions=args.decisions)
         print(f"| {args.backend} | {r['n']} | {r['w_p50']:.0f} | {r['w_p95']:.0f} | {r['w_max']:.0f} | "
               f"{r['r_p50']:.0f} | {r['bytes']} |", flush=True)
+        if r["split"]:                                  # KEEPER-SNAP-S0-TIMINGS: the phase split
+            print(f"split {r['n']}: {r['split']}", flush=True)
 
 
 if __name__ == "__main__":
