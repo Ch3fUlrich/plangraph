@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-2F (D-3676, D-3685):** add daemon-owned run registry and replaceable fixed-cap FIFO admission; placement remains off.
+
 - **PLACEMENT-R6A-2E2 (D-3676, D-3685):** add single-run admission, launch, capture, cancellation and group-sweeping supervision with survivor-held permits; placement remains off.
 
 - **PLACEMENT-R6A-2E1 (D-3676, D-3685):** add run supervisor types, validation and synthetic record finalization, plus capture parity fixes; no process startup, placement remains off.
