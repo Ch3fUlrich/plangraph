@@ -1,3 +1,4 @@
+use super::testutil::{Count, Survivors};
 use super::{group::*, record::RunRecord, supervise::*};
 use serde_json::Value;
 use std::{
@@ -284,7 +285,6 @@ fn launcher_panic_is_terminal() {
         serde_json::json!([{"event":"monitor_failed","error":"panic"}])
     );
 }
-use super::testutil::{Count, Survivors};
 #[test]
 fn survivors_hold_permit_until_empty() {
     let (_d, rt, s) = setup("exit 0");

@@ -37,6 +37,8 @@ pub enum SupervisorError {
     BadCap,
     #[error("local queue full")]
     QueueFull,
+    #[error("run id already started by this supervisor")]
+    DuplicateRun,
     #[error(transparent)]
     Start(#[from] StartError),
 }
@@ -139,10 +141,16 @@ impl Supervisor {
         self.sweep(&mut runs);
         let (lock, changed) = &*self.gate.state;
         let mut s = lock.lock().unwrap();
+        let id = spec.run_id.clone();
+        if runs.contains_key(&id)
+            || s.queue.contains(&id)
+            || self.finished.lock().unwrap().contains(&id)
+        {
+            return Err(SupervisorError::DuplicateRun);
+        }
         if queue_full(s.held, s.queue.len(), self.gate.max_runs, self.max_queued) {
             return Err(SupervisorError::QueueFull);
         }
-        let id = spec.run_id.clone();
         s.queue.push_back(id.clone());
         match supervise::start(&self.runtime, spec) {
             Ok(handle) => {
@@ -151,7 +159,7 @@ impl Supervisor {
                 Ok(())
             }
             Err(e) => {
-                // Remove only this reservation (an existing id may fail record creation).
+                // Return this reservation when record creation or thread spawn fails.
                 if let Some(pos) = s.queue.iter().rposition(|key| key == &id) {
                     s.queue.remove(pos);
                 }
