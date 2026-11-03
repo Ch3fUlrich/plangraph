@@ -75,7 +75,7 @@ impl State {
                     offset = end;
                     match e.error_len() {
                         Some(n) => {
-                            input.pending.push('\u{fffd}');
+                            input.pending.extend(std::iter::repeat_n('\u{fffd}', n));
                             offset += n;
                         }
                         None if finish => {
