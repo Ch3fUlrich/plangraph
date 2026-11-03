@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sqlite3
 import subprocess
 from types import SimpleNamespace
 
@@ -31,6 +32,41 @@ def test_quota_state_and_compound_reset(tmp_path, monkeypatch):
     # Agent prose on stdout never marks a leg; an error-shaped stdout line does.
     assert harness_limit_line(1, 'I added the rate limit parser; quota reached handling', '') is None
     assert harness_limit_line(1, 'error: ' + QUOTA, '') == 'error: ' + QUOTA
+
+
+def test_omniroute_reset_after_is_booked(tmp_path, monkeypatch):
+    """D-3685: OmniRoute's '(reset after 3h 12m 5s)' books the parsed reset,
+    which wins over the 1800 s down_s default."""
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    line = 'Error: [codex/zz-model] quota threshold (reset after 3h 12m 5s)'
+    job = SimpleNamespace(exit_code=1, stdout='', stderr='\x1b[0m\n' + line)
+    reason = fallthrough_reason(SimpleNamespace(leg_reader=store),
+                                SimpleNamespace(model='agy/zz-model'), job, {})
+    assert reason == 'harness_limit: ' + line
+    assert sqlite3.connect(str(store.path)).execute(
+        'SELECT source, reset_at FROM leg_events').fetchall() == [('harness-stderr', 1000 + 11525)]
+    assert store.leg_status('agy/zz-model', now=1000 + 3600)['state'] == 'limited'
+    assert store.leg_status('agy/zz-model', now=1000 + 11526)['state'] == 'ok'
+
+
+def test_explicit_zero_reset_books_nothing_through_fallthrough(tmp_path, monkeypatch):
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
+    monkeypatch.setenv('PLANGRAPH_LEG_DOWN_S', '1800')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    line = 'Error: [codex/zz-model] quota threshold (reset after 0s)'
+    job = SimpleNamespace(exit_code=1, stdout='', stderr=line)
+    assert fallthrough_reason(SimpleNamespace(leg_reader=store),
+                              SimpleNamespace(model='agy/zz-model'), job, {}) == 'harness_limit: ' + line
+    assert store.leg_status('agy/zz-model', now=1000)['state'] == 'ok'
+    assert not store.path.exists()  # No reset-less row or down_s fallback booking.
+
+
+def test_harness_fallback_reset_is_capped(tmp_path):
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    store.record_harness_limit('agy/model', 'error: quota threshold', 'test',
+                               now=1000, down_s=172800)
+    assert store.leg_status('agy/model', now=1000)['evidence']['reset_at'] == 87400
 
 
 def test_writer_identity_commits_with_writer_committer(tmp_path):
