@@ -284,58 +284,7 @@ fn launcher_panic_is_terminal() {
         serde_json::json!([{"event":"monitor_failed","error":"panic"}])
     );
 }
-struct Guard(Arc<AtomicUsize>);
-impl Drop for Guard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-struct Count(Arc<AtomicUsize>);
-impl Admission for Count {
-    fn acquire(&self, _: &str, _: &AtomicBool) -> Admit {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Admit::Granted(Permit::new(Guard(self.0.clone())))
-    }
-}
-struct FakeGroup {
-    identity: Identity,
-    empty: Arc<AtomicBool>,
-}
-impl RunGroup for FakeGroup {
-    fn identity(&self) -> &Identity {
-        &self.identity
-    }
-    fn members(&self) -> std::io::Result<Vec<u32>> {
-        Ok(if self.empty.load(Ordering::SeqCst) {
-            vec![]
-        } else {
-            vec![7, 3]
-        })
-    }
-    fn terminate(&self) {}
-    fn kill(&self) {}
-}
-struct Survivors(Arc<AtomicBool>);
-impl Launcher for Survivors {
-    fn launch(
-        &self,
-        unit: &str,
-        spec: &LaunchSpec<'_>,
-        c: &Confinement,
-        l: &RunLimits,
-    ) -> Result<Grouped, LaunchError> {
-        let mut g = SystemLauncher.launch(unit, spec, c, l)?;
-        g.group = Box::new(FakeGroup {
-            identity: Identity {
-                pid: g.child.id(),
-                start_time: None,
-                group: None,
-            },
-            empty: self.0.clone(),
-        });
-        Ok(g)
-    }
-}
+use super::testutil::{Count, Survivors};
 #[test]
 fn survivors_hold_permit_until_empty() {
     let (_d, rt, s) = setup("exit 0");
