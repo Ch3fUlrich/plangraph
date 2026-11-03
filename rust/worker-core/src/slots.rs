@@ -32,7 +32,7 @@ use crate::hosts::Role;
 use serde::{Deserialize, Serialize};
 
 mod io;
-mod liveness;
+pub(crate) mod liveness;
 mod policy;
 mod promote;
 #[cfg(test)]

@@ -5,6 +5,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## Unreleased
 
 - **SPAWNER-RL9A (D-3676, D-3714):** add pure raw reset capture with response-Date clock-skew conversion and a separate row-time fold clamp; no caller integration or switch (rollback by revert).
+- **PLACEMENT-R6A-2D (D-3676, D-3685):** add named Windows execution Job Objects with suspended assignment, kill-on-close lifetime, member queries and termination; no caller integration (PLACEMENT remains off).
 
 - **PLACEMENT-R6A-3A (D-3676, D-3685):** add Python-compatible JSON-RPC errors and shared read-only run records for `pg-spawnd` ps/result/status/steer, plus `serve --state` resolution; placement remains off and launch tools remain staged stubs.
 - **PLACEMENT-R6A-3D r1:** guard launch-spec response writes, refuse expired and role-ineligible legs, and reclaim aged launch directories with unusable records; pin Windows env casing, cwd normalization and CLI error handling.

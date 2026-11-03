@@ -87,7 +87,11 @@ impl Launcher for SystemLauncher {
         {
             super::group_unix::launch(unit, spec, confinement, limits, &Default::default())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            super::group_windows::spawn_grouped(unit, spec, confinement, limits)
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             let _ = (unit, spec, confinement, limits);
             Err(LaunchError::Unsupported)
@@ -165,10 +169,77 @@ mod tests {
         for s in ["a", "AZaz09_-", &"a".repeat(100)] {
             assert!(validate_unit(s).is_ok());
         }
-        for s in ["", "a.b", "a/b", "é", &"a".repeat(101)] {
+        for s in ["", "a.b", "a/b", "a\\b", "a b", "é", &"a".repeat(101)] {
             assert!(matches!(validate_unit(s), Err(LaunchError::BadUnit)));
         }
         assert_eq!(unit_name("run"), "pg-run");
         assert_eq!(job_name("pg-run"), "Local\\pg-run");
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Fake {
+        identity: Identity,
+        signals: AtomicUsize,
+        mode: u8,
+    }
+    impl RunGroup for Fake {
+        fn identity(&self) -> &Identity {
+            &self.identity
+        }
+        fn members(&self) -> io::Result<Vec<u32>> {
+            match self.mode {
+                0 => Ok(vec![]),
+                1 => Ok(vec![self.identity.pid]),
+                _ => Err(io::Error::other("unknown")),
+            }
+        }
+        fn terminate(&self) {
+            self.signals.fetch_add(1, Ordering::SeqCst);
+        }
+        fn kill(&self) {
+            self.signals.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[test]
+    fn empty_and_unknown_stop() {
+        for mode in 0..3 {
+            let f = Fake {
+                identity: Identity {
+                    pid: 42,
+                    start_time: None,
+                    group: None,
+                },
+                signals: AtomicUsize::new(0),
+                mode,
+            };
+            let start = Instant::now();
+            let outcome = stop_group(&f, Duration::from_millis(30), Duration::from_millis(30));
+            if mode == 0 {
+                assert_eq!(outcome, StopOutcome::Empty);
+                assert_eq!(f.signals.load(Ordering::SeqCst), 0);
+                assert!(start.elapsed() < Duration::from_millis(100));
+            } else {
+                assert_eq!(outcome, StopOutcome::Survivors(vec![42]));
+                assert!(start.elapsed() >= Duration::from_millis(60));
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_kill_and_zero_grace() {
+        let f = Fake {
+            identity: Identity {
+                pid: 42,
+                start_time: None,
+                group: None,
+            },
+            signals: AtomicUsize::new(0),
+            mode: 1,
+        };
+        assert_eq!(
+            stop_group(&f, Duration::ZERO, Duration::from_millis(2200)),
+            StopOutcome::Survivors(vec![42])
+        );
+        assert_eq!(f.signals.load(Ordering::SeqCst), 2);
     }
 }
