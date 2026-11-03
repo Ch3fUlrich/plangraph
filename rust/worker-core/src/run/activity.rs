@@ -1,6 +1,8 @@
 //! Activity excludes terminal decorations and the opencode model banner.
 use regex::Regex;
 use std::{borrow::Cow, sync::OnceLock};
+/// OSC ends at the first terminator, per the spec; Python's greedy BEL pattern
+/// instead swallows embedded ESC-backslash and following text up to a BEL.
 pub(crate) fn strip_ansi(text: &str) -> Cow<'_, str> {
     static ANSI: OnceLock<Regex> = OnceLock::new();
     ANSI.get_or_init(|| {

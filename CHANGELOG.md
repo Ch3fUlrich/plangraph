@@ -5,6 +5,30 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## Unreleased
 
 - md-sync: keeper snapshot reads use their own 60 s timeout (MD-SYNC-SNAPSHOT-TIMEOUT)
+- **PLACEMENT-R6A-2F2 (D-3676, D-3685):** pin the run supervisor's queued records, QueueFull and BadCap limits, failed-start rollback, cancel outcomes and survivor accounting with gated, bounded tests; placement remains off.
+- **PLACEMENT-R6A-2F (D-3676, D-3685):** add daemon-owned run registry and replaceable fixed-cap FIFO admission; placement remains off.
+
+- **SPAWNER-RL4 part 2 (D-3676, D-3714):** add milestone progress warnings and safe-alternative kills, sticky edit/verdict milestones, shadow decisions and nullable M disablement; no caller or switch, rollback by revert.
+- **SPAWNER-RL4 part 1 (D-3676, D-3714):** add first/silent warn-before-kill decisions, absolute kill deadlines, confirm-window cancellation and shadow warnings; milestone rules unchanged, no caller or switch, rollback by revert.
+- **SPAWNER-RL9A r1:** reject Unicode reset digits, cache fixed parsing patterns, flag non-finite fold clamps, and decouple day units from the clamp.
+- **SPAWNER-RL9A (D-3676, D-3714):** add pure raw reset capture with response-Date clock-skew conversion and a separate row-time fold clamp; no caller integration or switch (rollback by revert).
+- **SPAWNER-RL5A (D-3676, D-3714):** add bounded event framing, the parser interface and sticky channel health with synthetic tests; no caller or switch yet, rollback by git revert.
+- **PLACEMENT-R6A-2E2 (D-3676, D-3685):** add single-run admission, launch, capture, cancellation and group-sweeping supervision with survivor-held permits; placement remains off.
+
+- **PLACEMENT-R6A-2E1 (D-3676, D-3685):** add run supervisor types, validation and synthetic record finalization, plus capture parity fixes; no process startup, placement remains off.
+
+- **PLACEMENT-R6A-3B2 r1:** Pin exact spawn record keys, preserve Python findings truthiness, safely handle validation errors, and batch refusal fixtures.
+- **PLACEMENT-R6A-3B2 r2:** Card hashes escape DEL like Python's ensure_ascii, and the dry-run spawn answer is the exact text of the saved record.
+
+- **PLACEMENT-R6A-3B (D-3676, D-3685):** R6a-3b2 adds spawn validation/refusal records and dry-run planning with Python-compatible card hashes; real launching remains unavailable until R6a-3c.
+- **PLACEMENT-R6A-3B1 r1:** pin guarded record opens, validate typed route options before card size, preserve route/probe stdout, and bound adapter pipe-reader waits.
+
+- **PLACEMENT-R6A-3B (D-3676, D-3685):** R6a-3b1 adds the bounded Python route adapter and route/probe tools; hardens record opens and documents integer coercion; placement remains off, spawn remains a stub.
+- **PLACEMENT-R6A-2D (D-3676, D-3685):** add named Windows execution Job Objects with suspended assignment, kill-on-close lifetime, member queries and termination; no caller integration (PLACEMENT remains off).
+
+- **SPAWNER-RL3 (D-3676, D-3714):** add the pure Rust per-attempt activity core with first/silent clocks, tool-aware silence limits, request/weak signal handling and per-rule modes; no caller wiring yet, rollback by revert.
+- **SPAWNER-RL3 seat LOWs:** first_activity never precedes t0 for a stale first signal; tests pin huge-limit saturation and per-rule mode independence.
+- **PLACEMENT-R6A-3A (D-3676, D-3685):** add Python-compatible JSON-RPC errors and shared read-only run records for `pg-spawnd` ps/result/status/steer, plus `serve --state` resolution; placement remains off and launch tools remain staged stubs.
 - **PLACEMENT-R6A-3D r1:** guard launch-spec response writes, refuse expired and role-ineligible legs, and reclaim aged launch directories with unusable records; pin Windows env casing, cwd normalization and CLI error handling.
 - **PLACEMENT-R6A-3D (D-3676, D-3685):** add the Python launch-spec adapter, reusing launch preparation without starting a harness; private per-run config isolation and stale-directory cleanup, with child secrets returned only on stdout.
 - **PLACEMENT-R6A-2C (D-3676, D-3685):** add portable execution groups, Linux scopes and plain process groups with bounded stop escalation; reap the stall supervisor child on wait errors. No caller integration.

@@ -163,3 +163,67 @@ fn temp_dir_creation_is_exclusive_and_private() {
         std::io::ErrorKind::AlreadyExists
     );
 }
+
+use std::io::{BufRead, BufReader, Write};
+pub(crate) struct McpClient {
+    pub(crate) stream: BufReader<std::os::unix::net::UnixStream>,
+    next_id: i64,
+}
+
+impl McpClient {
+    pub(crate) fn connect(socket: &Path) -> McpClient {
+        let stream = wait_connect(socket, Duration::from_secs(5));
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("read timeout");
+        McpClient {
+            stream: BufReader::new(stream),
+            next_id: 0,
+        }
+    }
+
+    pub(crate) fn send(&mut self, message: &serde_json::Value) {
+        let mut line = serde_json::to_string(message).expect("serialize");
+        line.push('\n');
+        self.stream
+            .get_mut()
+            .write_all(line.as_bytes())
+            .expect("write request");
+    }
+
+    pub(crate) fn recv(&mut self) -> serde_json::Value {
+        let mut line = String::new();
+        self.stream.read_line(&mut line).expect("read response");
+        assert!(!line.is_empty(), "server closed the connection");
+        serde_json::from_str(line.trim_end_matches('\n')).expect("parse response")
+    }
+
+    pub(crate) fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": method, "params": params,
+        }));
+        loop {
+            let response = self.recv();
+            if response.get("id") == Some(&serde_json::json!(id)) {
+                return response;
+            }
+        }
+    }
+
+    pub(crate) fn initialize(&mut self) -> serde_json::Value {
+        let response = self.request(
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test-suite", "version": "0"},
+            }),
+        );
+        self.send(&serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/initialized",
+        }));
+        response
+    }
+}
