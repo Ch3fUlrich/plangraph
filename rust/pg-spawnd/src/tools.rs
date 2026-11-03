@@ -98,6 +98,9 @@ pub(crate) fn dispatch(
                 serde_json::to_string_pretty(&payload).expect("JSON value"),
             )]));
         }
+        return Err(
+            crate::errors::ToolError::Internal("no run registry attached".into()).into_error_data(),
+        );
     }
     if matches!(
         name,
@@ -264,6 +267,19 @@ fn python_repr(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_tools_require_registry() {
+        for verb in ["cancel", "steer", "status"] {
+            let request: CallToolRequestParams = serde_json::from_value(serde_json::json!({
+                "name":format!("plangraph_agent_{verb}"), "arguments":{}
+            }))
+            .unwrap();
+            let error = dispatch(&request, std::path::Path::new("."), "local", None).unwrap_err();
+            assert_eq!(error.message, "no run registry attached");
+            assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        }
+    }
 
     #[test]
     fn python_float_coercion() {

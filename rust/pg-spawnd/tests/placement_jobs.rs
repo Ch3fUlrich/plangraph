@@ -84,10 +84,11 @@ fn cancel_errors_and_foreign_pid_are_safe() {
         assert_eq!(r["error"]["code"], -32602);
         assert_eq!(r["error"]["message"], message);
     }
-    assert_eq!(
-        f.call("cancel", json!({"run_id":null,"job_id":"x"}))["error"]["code"],
-        -32602
-    );
+    let error = f.call("cancel", json!({"run_id":null,"job_id":"x"}));
+    assert_eq!(error["error"]["code"], -32602);
+    assert_eq!(error["error"]["message"], "unknown run id");
+    let numeric = f.call("cancel", json!({"run_id":5}));
+    assert_eq!(numeric["error"]["message"], "unknown run id");
     assert_eq!(
         f.call("status", json!({"job_id":"x"}))["error"]["message"],
         "'Job x not found'"

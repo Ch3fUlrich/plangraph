@@ -18,7 +18,7 @@ impl Runs {
         if crate::runs::terminal(&record) {
             return Ok(record);
         }
-        let id = id.as_str().unwrap(); // read_record validated the id
+        let id = id.as_str().ok_or_else(|| ToolError::Key("run_id".into()))?;
         if !self.supervisor.is_owned(id) {
             return Err(ToolError::Refused {
                 kind: crate::errors::RefusalKind::Spawn,
