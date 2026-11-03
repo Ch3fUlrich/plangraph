@@ -50,13 +50,13 @@ fn patterns() -> &'static Patterns {
         Patterns {
             ansi: re(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"),
             error: re(r"(?i)^\s*(?:error:|HTTP \d{3}:)"),
-            error_json: re(r#""error"\s*:"#),
+            error_json: re(r#"^\s*(?:\{.*"error"\s*:|"error"\s*:)"#),
             words: [
                 re(r"(?i)credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key"),
                 re(r"(?i)model unavailable|not served|unknown model|not_served_on_host"),
-                re(r"(?i)service temporarily unavailable|all targets were skipped|circuit breaker is open|HTTP 50[234]|overloaded|bad gateway"),
+                re(r"(?i)service temporarily unavailable|all targets were skipped|circuit breaker is open|\bHTTP 50[234]\b|overloaded|bad gateway"),
                 re(r"(?i)quota|usage limit|usagelimit|credit|daily limit"),
-                re(r"(?i)rate limit|too many requests|HTTP 429"),
+                re(r"(?i)rate limit|too many requests|\bHTTP 429\b"),
             ],
         }
     })
@@ -72,6 +72,17 @@ const ORDER: [Marker; 5] = [
 
 fn quota(text: &str) -> bool {
     patterns().words[3].is_match(text)
+}
+
+fn event_words(v: &Value) -> bool {
+    match v {
+        Value::String(s) => ["usage limit", "usagelimit", "credit", "daily limit"]
+            .iter()
+            .any(|word| s.to_lowercase().contains(word)),
+        Value::Array(a) => a.iter().any(event_words),
+        Value::Object(o) => o.values().any(event_words),
+        _ => false,
+    }
 }
 
 fn structured(line: &str) -> Option<Marker> {
@@ -96,12 +107,7 @@ fn structured(line: &str) -> Option<Marker> {
         "rate_limit_event" => match v["rate_limit_info"]["status"].as_str() {
             Some(s) if s.starts_with("allowed") => None,
             Some(_) => Some(Marker::Quota),
-            None if ["usage limit", "usagelimit", "credit", "daily limit"]
-                .iter()
-                .any(|word| line.to_lowercase().contains(word)) =>
-            {
-                Some(Marker::Quota)
-            }
+            None if event_words(&v) => Some(Marker::Quota),
             None => None,
         },
         _ => None,
@@ -111,12 +117,17 @@ fn structured(line: &str) -> Option<Marker> {
 fn text_marker(line: &str, stderr: bool) -> Option<Marker> {
     let p = patterns();
     let shaped = p.error.is_match(line);
+    let candidate = shaped
+        || (stderr
+            && p.words
+                .iter()
+                .any(|re| re.find(line.trim_start()).is_some_and(|m| m.start() == 0)));
     p.words.iter().enumerate().find_map(|(n, re)| {
-        let found = re.find(line)?;
+        re.find(line)?;
         let accepted = if n == 1 {
             stderr || shaped || p.error_json.is_match(line)
         } else {
-            shaped || (stderr && found.start() == line.len() - line.trim_start().len())
+            candidate
         };
         accepted.then_some(ORDER[n])
     })
@@ -133,17 +144,20 @@ pub fn scan(i: &Input<'_>) -> Option<Hit> {
             .replace("\r\n", "\n")
             .replace('\r', "\n");
         for line in normalized.lines() {
+            let event = serde_json::from_str::<Value>(line)
+                .ok()
+                .is_some_and(|v| v.is_object() && v["type"] == "rate_limit_event");
             let lower = line.to_lowercase();
             let agy =
                 lower.contains("agy_error") && lower.contains("429") && lower.contains("resets in");
             let mut candidates = Vec::new();
             if !stderr {
-                candidates.extend(structured(line));
+                candidates.extend(structured(line.trim_start()));
             }
-            if agy {
+            if agy && !event {
                 candidates.push(Marker::Quota);
             }
-            if i.exit != 0 {
+            if i.exit != 0 && !event {
                 candidates.extend(text_marker(line, stderr));
             }
             for marker in candidates {
@@ -154,8 +168,8 @@ pub fn scan(i: &Input<'_>) -> Option<Hit> {
                 {
                     continue;
                 }
+                let reset = reset::capture(i.headers, line, i.response_date, i.ts);
                 let line: String = line.chars().take(300).collect();
-                let reset = reset::capture(i.headers, &line, i.response_date, i.ts);
                 best = Some(Hit {
                     marker,
                     line,

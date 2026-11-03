@@ -12,6 +12,7 @@ pub(super) fn input<'a>(stdout: &'a str, stderr: &'a str) -> Input<'a> {
 }
 
 pub(super) const FREE: &str = r#"{"type":"error","error":{"type":"provider.quota","message":"Rate limit exceeded. Please try again later.","status":429}}"#;
+// Synthetic: no recorded stream has a quota-free 429.
 pub(super) const TRANSIENT: &str = r#"{"type":"error","error":{"type":"provider.error","message":"Rate limit exceeded. Please try again later.","status":429}}"#;
 
 #[test]
@@ -116,7 +117,7 @@ fn hit_line_cut_at_300_chars() {
     let hit = scan(&input(&line, "")).unwrap();
     assert_eq!(hit.line.chars().count(), 300);
     assert!(hit.line.ends_with('é'));
-    assert!(hit.reset.is_none());
+    assert_eq!(hit.reset.unwrap().reset_at, 8200.0);
 }
 
 #[test]
@@ -139,4 +140,69 @@ fn claude_status_and_missing_status_guards() {
         let line = format!(r#"{{"type":"rate_limit_event","message":"{text}"}}"#);
         assert_eq!(scan(&input(&line, "")).is_some(), hit);
     }
+}
+
+const DEEPSEEK: &str = r#"{"type":"error","timestamp":1792335123172,"sessionID":"ses_synthetic002","error":{"type":"provider.quota","message":"Rate limit exceeded. Please try again later.","status":429,"response":{"body":"{\"type\":\"error\",\"error\":{\"type\":\"FreeUsageLimitError\",\"message\":\"Rate limit exceeded. Please try again later.\"}}"}}}"#;
+
+#[test]
+fn deepseek_recording_is_quota() {
+    assert_eq!(scan(&input(DEEPSEEK, "")).unwrap().marker, Marker::Quota);
+}
+
+#[test]
+fn text_candidacy_precedes_whole_line_priority() {
+    for (line, marker) in [
+        ("HTTP 429 quota exceeded", Marker::Quota),
+        (
+            "rate limit reached; bad gateway",
+            Marker::ProviderUnavailable,
+        ),
+    ] {
+        assert_eq!(scan(&input("", line)).unwrap().marker, marker);
+    }
+}
+
+#[test]
+fn error_json_must_start_the_stdout_line() {
+    assert!(scan(&input(
+        r#"Docs say "error": "unknown model" is returned"#,
+        ""
+    ))
+    .is_none());
+    for line in [
+        r#"  "error": "unknown model""#,
+        r#" {"nested":0,"error":"unknown model"}"#,
+    ] {
+        assert_eq!(
+            scan(&input(line, "")).unwrap().marker,
+            Marker::ModelUnavailable
+        );
+    }
+}
+
+#[test]
+fn allowed_events_never_fall_through_to_text() {
+    let line = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"error":"model unavailable"}"#;
+    assert!(scan(&input(line, "")).is_none());
+    assert!(scan(&input("", line)).is_none());
+}
+
+#[test]
+fn http_codes_have_word_boundaries() {
+    for line in [
+        "HTTP 4290 limit",
+        "HTTP 5030 limit",
+        "HTTP 502x",
+        "HTTP 5040",
+    ] {
+        assert!(scan(&input("", line)).is_none());
+    }
+}
+
+#[test]
+fn no_status_event_reads_nested_values_not_keys() {
+    let key = r#"{"type":"rate_limit_event","credit":"nothing"}"#;
+    assert!(scan(&input(key, "")).is_none());
+    let value = r#"{"type":"rate_limit_event","nested":[{"message":"daily limit reached"}]}"#;
+    assert_eq!(scan(&input(value, "")).unwrap().marker, Marker::Quota);
 }
