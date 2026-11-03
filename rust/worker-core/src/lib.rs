@@ -10,6 +10,7 @@ pub mod check;
 pub mod config;
 pub mod confine;
 pub mod diffscan;
+pub mod events;
 pub mod exit_class;
 pub mod exports;
 pub mod git;
