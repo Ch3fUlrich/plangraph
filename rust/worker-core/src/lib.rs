@@ -21,6 +21,7 @@ pub mod packet;
 pub mod pathjail;
 pub mod probe;
 pub mod redact;
+pub mod run;
 pub mod sandbox_env;
 pub mod scope;
 pub mod slots;
