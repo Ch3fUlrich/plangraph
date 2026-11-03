@@ -41,6 +41,40 @@ impl Fixture {
     }
 }
 #[test]
+fn printed_object_is_unchanged() {
+    let printed = r#"{"b":1,"a":2,"f":1e-07}"#;
+    for (verb, code) in [("route", 0), ("probe", 0), ("probe", 1)] {
+        let mut f = Fixture::new(&format!(" \n{printed}\n "), code, "");
+        let r = f.call(verb, json!({"card":{}}));
+        assert_eq!(r["result"]["content"][0]["text"], printed);
+    }
+}
+
+#[test]
+fn typed_options_precede_card_size() {
+    let mut f = Fixture::new("{}", 0, "");
+    for (key, value, message) in [
+        (
+            "role",
+            json!("bad"),
+            "role must be implement, review or orchestrate",
+        ),
+        (
+            "writer_families",
+            json!(1),
+            "writer_families must be an array of strings",
+        ),
+        ("review_of", json!(1), "review_of must be a string"),
+        ("require_bench", json!(1), "require_bench must be a bool"),
+        ("bench_db", json!(1), "bench_db must be a string"),
+    ] {
+        let mut args = json!({"card":"x".repeat(24001)});
+        args[key] = value;
+        assert_eq!(f.call("route", args)["error"]["message"], message);
+    }
+}
+
+#[test]
 fn argv_and_passthrough() {
     let mut f = Fixture::new(r#"{"ok":false,"plan":1}"#, 0, "skip leg: reason");
     let r=f.call("route",json!({"card":{"x":1},"role":"review","writer_families":["a","b"],"review_of":"run-a","require_bench":true,"bench_db":"db"}));

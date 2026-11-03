@@ -40,15 +40,17 @@ fn run(
     argv: Vec<String>,
     timeout: Duration,
     probe: bool,
-) -> Result<Value, ToolError> {
+) -> Result<String, ToolError> {
     let (code, bytes, line) = Adapter(state).run(&argv, timeout)?;
     let object = serde_json::from_slice::<Value>(&bytes)
         .ok()
         .filter(Value::is_object);
+    let printed = || String::from_utf8_lossy(&bytes).trim().to_owned();
     match code {
         0 => object
+            .map(|_| printed())
             .ok_or_else(|| ToolError::Internal("route adapter returned invalid output".into())),
-        1 if probe => object.ok_or_else(|| parameter(line)),
+        1 if probe => object.map(|_| printed()).ok_or_else(|| parameter(line)),
         1 => Err(ToolError::Value(line)),
         2 | 3 => Err(ToolError::Refused {
             kind: if code == 2 {
@@ -68,14 +70,11 @@ fn run(
         ))),
     }
 }
-pub(crate) fn route(state: &Path, args: &Args) -> Result<Value, ToolError> {
+pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
     let card = args
         .get("card")
         .ok_or_else(|| ToolError::Key("card".into()))?
         .to_string();
-    if card.len() > 24000 {
-        return Err(parameter("card too large for the route adapter"));
-    }
     let role = args
         .get("role")
         .and_then(Value::as_str)
@@ -90,7 +89,7 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<Value, ToolError> {
     let mut argv = vec![
         "route".into(),
         "--card".into(),
-        card,
+        card.clone(),
         "--role".into(),
         role.into(),
     ];
@@ -114,10 +113,13 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<Value, ToolError> {
                 .into(),
         ]);
     }
+    if card.len() > 24000 {
+        return Err(parameter("card too large for the route adapter"));
+    }
     argv.push("--json".into());
     run(state, argv, Duration::from_secs(30), false)
 }
-pub(crate) fn probe(state: &Path, args: &Args) -> Result<Value, ToolError> {
+pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
     let mut argv = vec!["probe".into()];
     strings(args, "leg", "--leg", &mut argv)?;
     boolean(args, "all_writers", "--all-writers", &mut argv)?;

@@ -51,8 +51,14 @@ impl Adapter<'_> {
             .map_err(|_| ToolError::Internal("route adapter could not start".into()))?;
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
-        let out = std::thread::spawn(move || drain(stdout, 4 * 1024 * 1024));
-        let err = std::thread::spawn(move || drain(stderr, 8192));
+        let (send, receive) = std::sync::mpsc::channel();
+        let out_send = send.clone();
+        std::thread::spawn(move || {
+            let _ = out_send.send((true, drain(stdout, 4 * 1024 * 1024)));
+        });
+        std::thread::spawn(move || {
+            let _ = send.send((false, drain(stderr, 8192)));
+        });
         let start = Instant::now();
         let status = loop {
             if let Ok(Some(status)) = child.try_wait() {
@@ -70,8 +76,20 @@ impl Adapter<'_> {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
-        let stdout = out.join().unwrap_or_default();
-        let stderr = err.join().unwrap_or_default();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        for _ in 0..2 {
+            // Detach blocked readers: escaped descendants can keep their pipes open.
+            let (is_stdout, bytes) = receive
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| ToolError::Internal("route adapter timed out".into()))?;
+            if is_stdout {
+                stdout = bytes;
+            } else {
+                stderr = bytes;
+            }
+        }
         let status = status.ok_or_else(|| ToolError::Internal("route adapter timed out".into()))?;
         let line = pg_worker_core::redact::redact(
             String::from_utf8_lossy(&stderr)
@@ -120,6 +138,38 @@ mod tests {
             .unwrap();
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
         assert_eq!(drain(&b"abcdef"[..], 3), b"abc");
+        for timeout in [Duration::from_secs(30), Duration::from_millis(300)] {
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nsetsid sleep 30 &\necho $! > '{}'\nprintf '{{}}'\n{}\n",
+                    dir.join("escaped-pid").display(),
+                    if timeout.as_secs() == 30 {
+                        "exit 0"
+                    } else {
+                        "sleep 30"
+                    }
+                ),
+            )
+            .unwrap();
+            std::env::set_var("PG_SPAWND_ADAPTER", &script);
+            let start = Instant::now();
+            let result = Adapter(&dir).run(&[], timeout);
+            std::env::remove_var("PG_SPAWND_ADAPTER");
+            let elapsed = start.elapsed();
+            let pid: i32 = std::fs::read_to_string(dir.join("escaped-pid"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            assert!(
+                matches!(result, Err(ToolError::Internal(ref s)) if s == "route adapter timed out")
+            );
+            assert!(elapsed < Duration::from_secs(4));
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
