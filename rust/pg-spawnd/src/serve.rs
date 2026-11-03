@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 pub(crate) struct SpawndServer {
     state: std::path::PathBuf,
-    supervisor: Arc<Supervisor>,
     host: String,
     runs: Arc<crate::runs::Runs>,
 }
@@ -37,14 +36,15 @@ impl ServerHandler for SpawndServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
-        {
-            let _supervisor = &self.supervisor;
-            std::future::ready(crate::tools::dispatch(
-                &request,
-                &self.state,
-                &self.host,
-                Some(&self.runs),
-            ))
+        let state = self.state.clone();
+        let host = self.host.clone();
+        let runs = self.runs.clone();
+        async move {
+            tokio::task::spawn_blocking(move || {
+                crate::tools::dispatch(&request, &state, &host, Some(&runs))
+            })
+            .await
+            .map_err(|_| McpError::internal_error("tool task failed", None))?
         }
     }
 }
@@ -93,13 +93,7 @@ async fn serve_unix(
         };
         // Handshake failures (liveness probes that connect and close) are not
         // fatal to the server.
-        spawn_session(
-            stream,
-            state.clone(),
-            supervisor.clone(),
-            host.clone(),
-            runs.clone(),
-        );
+        spawn_session(stream, state.clone(), host.clone(), runs.clone());
     }
 }
 
@@ -133,20 +127,13 @@ async fn serve_windows(
         if server.connect().await.is_err() {
             continue;
         }
-        spawn_session(
-            server,
-            state.clone(),
-            supervisor.clone(),
-            host.clone(),
-            runs.clone(),
-        );
+        spawn_session(server, state.clone(), host.clone(), runs.clone());
     }
 }
 
 fn spawn_session<S>(
     stream: S,
     state: std::path::PathBuf,
-    supervisor: Arc<Supervisor>,
     host: String,
     runs: Arc<crate::runs::Runs>,
 ) where
@@ -155,15 +142,7 @@ fn spawn_session<S>(
     tokio::spawn(async move {
         if let Ok(Ok(service)) = tokio::time::timeout(
             handshake_timeout(),
-            rmcp::serve_server(
-                SpawndServer {
-                    state,
-                    supervisor,
-                    host,
-                    runs,
-                },
-                stream,
-            ),
+            rmcp::serve_server(SpawndServer { state, host, runs }, stream),
         )
         .await
         {
