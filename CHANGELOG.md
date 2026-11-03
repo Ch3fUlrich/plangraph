@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **SPAWNER-RL9B part 2b (D-3676, D-3714):** add marker-to-outcome classification tests covering provider failures, quota and rate limits, raw reset propagation, evidence, and exit-status guards; no caller or switch, rollback by revert.
 - **SPAWNER-RL9B part 2 (D-3676, D-3714):** add guarded provider-marker scanning and raw one-shot reset capture; no caller or switch, rollback by git revert.
 
 - **SPAWNER-RL9B part 1 (D-3676, D-3714):** add pure structured outcome classification, role-aware usability, raw reset propagation and redacted descriptions; no caller or switch, rollback by git revert.
