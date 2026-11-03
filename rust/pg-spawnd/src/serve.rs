@@ -1,6 +1,7 @@
 //! `pg-spawnd serve`: local MCP server with health and shared record readers.
-//! State is read-only; launch and supervisor tools remain staged stubs.
+//! One supervisor is shared across every connection.
 
+use pg_worker_core::run::supervisor::{Supervisor, SupervisorCfg};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, InitializeResult, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerInfo,
@@ -8,9 +9,12 @@ use rmcp::model::{
 use rmcp::service::{MaybeSendFuture, RequestContext};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use std::future::Future;
+use std::sync::Arc;
 
 pub(crate) struct SpawndServer {
     state: std::path::PathBuf,
+    supervisor: Arc<Supervisor>,
+    host: String,
 }
 
 impl ServerHandler for SpawndServer {
@@ -32,7 +36,14 @@ impl ServerHandler for SpawndServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
-        std::future::ready(crate::tools::call_tool(&request, &self.state))
+        {
+            let _supervisor = &self.supervisor;
+            std::future::ready(crate::tools::call_tool_with_host(
+                &request,
+                &self.state,
+                &self.host,
+            ))
+        }
     }
 }
 
@@ -46,13 +57,25 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 
 /// Serve MCP connections until the process is killed.
 #[cfg(unix)]
-pub(crate) fn run(socket: Option<String>, state: std::path::PathBuf) -> Result<(), String> {
+pub(crate) fn run(
+    socket: Option<String>,
+    state: std::path::PathBuf,
+    mut cfg: SupervisorCfg,
+) -> Result<(), String> {
+    cfg.run.state_dir = state.clone();
+    let host = cfg.run.host.clone();
+    let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);
     let path = crate::transport_unix::resolve_socket_path(socket.as_deref())?;
-    runtime()?.block_on(serve_unix(&path, state))
+    runtime()?.block_on(serve_unix(&path, state, supervisor, host))
 }
 
 #[cfg(unix)]
-async fn serve_unix(path: &std::path::Path, state: std::path::PathBuf) -> Result<(), String> {
+async fn serve_unix(
+    path: &std::path::Path,
+    state: std::path::PathBuf,
+    supervisor: Arc<Supervisor>,
+    host: String,
+) -> Result<(), String> {
     let listener = crate::transport_unix::bind_listener(path)?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let listener = tokio::net::UnixListener::from_std(listener).map_err(|e| e.to_string())?;
@@ -67,21 +90,32 @@ async fn serve_unix(path: &std::path::Path, state: std::path::PathBuf) -> Result
         };
         // Handshake failures (liveness probes that connect and close) are not
         // fatal to the server.
-        spawn_session(stream, state.clone());
+        spawn_session(stream, state.clone(), supervisor.clone(), host.clone());
     }
 }
 
 /// Serve MCP connections on the per-user named pipe until the process is killed.
 #[cfg(windows)]
-pub(crate) fn run(socket: Option<String>, state: std::path::PathBuf) -> Result<(), String> {
+pub(crate) fn run(
+    socket: Option<String>,
+    state: std::path::PathBuf,
+    mut cfg: SupervisorCfg,
+) -> Result<(), String> {
+    cfg.run.state_dir = state.clone();
+    let host = cfg.run.host.clone();
+    let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);
     if socket.is_some() {
         return Err("--socket is unsupported; use the per-user pg-spawnd pipe".into());
     }
-    runtime()?.block_on(serve_windows(state))
+    runtime()?.block_on(serve_windows(state, supervisor, host))
 }
 
 #[cfg(windows)]
-async fn serve_windows(state: std::path::PathBuf) -> Result<(), String> {
+async fn serve_windows(
+    state: std::path::PathBuf,
+    supervisor: Arc<Supervisor>,
+    host: String,
+) -> Result<(), String> {
     let mut first_instance = true;
     loop {
         let server = crate::transport_windows::create_pipe_server(first_instance)?;
@@ -89,18 +123,25 @@ async fn serve_windows(state: std::path::PathBuf) -> Result<(), String> {
         if server.connect().await.is_err() {
             continue;
         }
-        spawn_session(server, state.clone());
+        spawn_session(server, state.clone(), supervisor.clone(), host.clone());
     }
 }
 
-fn spawn_session<S>(stream: S, state: std::path::PathBuf)
+fn spawn_session<S>(stream: S, state: std::path::PathBuf, supervisor: Arc<Supervisor>, host: String)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         if let Ok(Ok(service)) = tokio::time::timeout(
             handshake_timeout(),
-            rmcp::serve_server(SpawndServer { state }, stream),
+            rmcp::serve_server(
+                SpawndServer {
+                    state,
+                    supervisor,
+                    host,
+                },
+                stream,
+            ),
         )
         .await
         {

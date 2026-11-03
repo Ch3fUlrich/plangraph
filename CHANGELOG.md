@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-3C2 (D-3676, D-3685):** Validate local serve admission flags and share one worker-core supervisor across connections.
+
 - **PLACEMENT-R6A-3C1 (D-3676, D-3685):** add bounded operator launch adapter and validated pipe-only launch specs; no spawn wiring yet.
 
 - **PLACEMENT-R6A-2F (D-3676, D-3685):** add daemon-owned run registry and replaceable fixed-cap FIFO admission; placement remains off.

@@ -58,9 +58,18 @@ fn parse_probe(
 fn parse_serve(args: std::vec::IntoIter<String>) -> Result<(), String> {
     let mut socket: Option<String> = None;
     let mut state: Option<String> = None;
+    let mut options = crate::serve_options::Options::default();
+    let mut seen = std::collections::HashSet::new();
     let mut args = args;
     while let Some(arg) = args.next() {
+        if !seen.insert(arg.clone()) {
+            return Err("unknown or duplicate flag".into());
+        }
         match arg.as_str() {
+            "--host-id" | "--max-runs" | "--max-queued" | "--placement" => {
+                options.set(&arg, &args.next().ok_or("missing flag value")?)?;
+            }
+            "--no-scope" => options.no_scope = true,
             "--state" if state.is_none() => {
                 state = Some(args.next().ok_or("missing or invalid --state")?);
             }
@@ -71,7 +80,7 @@ fn parse_serve(args: std::vec::IntoIter<String>) -> Result<(), String> {
         }
     }
     let state = crate::state::resolve_state(state.as_deref(), |key| std::env::var_os(key))?;
-    crate::serve::run(socket, state)
+    crate::serve::run(socket, state, options.resolve()?)
 }
 
 fn parse_shim(args: std::vec::IntoIter<String>) -> Result<(), String> {

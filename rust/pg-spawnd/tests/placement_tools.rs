@@ -10,7 +10,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new(output: &str, code: i32, stderr: &str) -> Self {
-        Self::with_host(output, code, stderr, "invalid_host")
+        Self::with_host(output, code, stderr, "local")
     }
     fn with_host(output: &str, code: i32, stderr: &str, host: &str) -> Self {
         let state = TempDir::new();
@@ -20,6 +20,7 @@ impl Fixture {
         let socket = state.path().join("socket");
         let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
             .arg("serve")
+            .arg("--no-scope")
             .arg("--socket")
             .arg(&socket)
             .arg("--state")

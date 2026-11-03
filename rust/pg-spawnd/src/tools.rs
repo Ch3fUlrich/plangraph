@@ -53,9 +53,18 @@ fn health_json() -> String {
 ///
 /// Unknown tool names are a JSON-RPC protocol error that reveals nothing about
 /// the daemon internals; listed-but-unbuilt tools return an MCP tool error.
+#[cfg(test)]
 pub(crate) fn call_tool(
     request: &CallToolRequestParams,
     state: &std::path::Path,
+) -> Result<CallToolResult, McpError> {
+    call_tool_with_host(request, state, "local")
+}
+
+pub(crate) fn call_tool_with_host(
+    request: &CallToolRequestParams,
+    state: &std::path::Path,
+    host: &str,
 ) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
     if matches!(
@@ -64,7 +73,7 @@ pub(crate) fn call_tool(
     ) {
         let args = request.arguments.clone().unwrap_or_default();
         let payload = match name {
-            "plangraph_agent_spawn" => crate::spawn::spawn(state, &args),
+            "plangraph_agent_spawn" => crate::spawn::spawn(state, &args, host),
             "plangraph_agent_probe" => crate::placement::probe(state, &args),
             _ => crate::placement::route(state, &args),
         }

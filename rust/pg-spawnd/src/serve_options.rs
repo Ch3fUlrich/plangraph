@@ -1,0 +1,113 @@
+//! Validated local-only admission configuration.
+use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
+
+#[derive(Default)]
+pub(crate) struct Options {
+    host: Option<String>,
+    placement: Option<String>,
+    max_runs: Option<usize>,
+    max_queued: Option<usize>,
+    pub no_scope: bool,
+}
+pub(crate) fn valid_host(s: &str) -> bool {
+    (1..=32).contains(&s.len())
+        && s.as_bytes()[0].is_ascii_lowercase()
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+impl Options {
+    pub fn set(&mut self, flag: &str, value: &str) -> Result<(), String> {
+        match flag {
+            "--host-id" => self.host = Some(value.into()),
+            "--placement" => self.placement = Some(value.into()),
+            "--max-runs" | "--max-queued" => {
+                let n = value
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid {flag}"))?;
+                if flag == "--max-runs" {
+                    if !(1..=64).contains(&n) {
+                        return Err("invalid --max-runs".into());
+                    }
+                    self.max_runs = Some(n);
+                } else {
+                    if n > 1024 {
+                        return Err("invalid --max-queued".into());
+                    }
+                    self.max_queued = Some(n);
+                }
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+    pub fn resolve(self) -> Result<SupervisorCfg, String> {
+        self.resolve_with(|key| std::env::var(key).ok())
+    }
+    fn resolve_with(self, env: impl Fn(&str) -> Option<String>) -> Result<SupervisorCfg, String> {
+        let host = self
+            .host
+            .or_else(|| env("PLANGRAPH_HOST"))
+            .unwrap_or("local".into());
+        if !valid_host(&host) {
+            return Err("invalid --host-id or PLANGRAPH_HOST".into());
+        }
+        let placement = self
+            .placement
+            .or_else(|| env("PLANGRAPH_PLACEMENT"))
+            .unwrap_or("off".into());
+        if placement != "off" {
+            return Err("placement mode not implemented: off only".into());
+        }
+        let mut cfg = SupervisorCfg::new(Config {
+            host,
+            ..Config::default()
+        });
+        if self.no_scope {
+            cfg.run.confinement = Confinement::Plain;
+        }
+        if let Some(n) = self.max_runs {
+            cfg.max_runs = n;
+        }
+        if let Some(n) = self.max_queued {
+            cfg.max_queued = n;
+        }
+        Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn flags_table() {
+        for (flag, value, valid) in [
+            ("--host-id", "local-1", true),
+            ("--host-id", "Bad", false),
+            ("--host-id", "", false),
+            ("--max-runs", "1", true),
+            ("--max-runs", "0", false),
+            ("--max-runs", "65", false),
+            ("--max-runs", "abc", false),
+            ("--max-queued", "0", true),
+            ("--max-queued", "1025", false),
+            ("--placement", "off", true),
+            ("--placement", "shadow", false),
+            ("--placement", "on", false),
+            ("--placement", "bogus", false),
+        ] {
+            let mut options = Options::default();
+            let result = options
+                .set(flag, value)
+                .and_then(|()| options.resolve_with(|_| None));
+            assert_eq!(result.is_ok(), valid, "{flag} {value}");
+        }
+        for (key, value) in [("PLANGRAPH_HOST", "Bad"), ("PLANGRAPH_PLACEMENT", "on")] {
+            assert!(Options::default()
+                .resolve_with(|k| (k == key).then(|| value.into()))
+                .is_err());
+        }
+        let cfg = Options::default().resolve_with(|_| None).unwrap();
+        assert_eq!(cfg.run.host, "local");
+        assert_eq!((cfg.max_runs, cfg.max_queued), (3, 64));
+    }
+}
