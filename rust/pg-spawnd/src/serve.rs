@@ -55,10 +55,14 @@ async fn serve_unix(path: &std::path::Path) -> Result<(), String> {
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let listener = tokio::net::UnixListener::from_std(listener).map_err(|e| e.to_string())?;
     loop {
-        let (stream, _peer) = listener
-            .accept()
-            .await
-            .map_err(|e| format!("accept failed: {e}"))?;
+        let (stream, _peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) if retryable_accept(&e) => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                continue;
+            }
+            Err(e) => return Err(format!("accept failed: {e}")),
+        };
         // Handshake failures (liveness probes that connect and close) are not
         // fatal to the server.
         spawn_session(stream);
@@ -81,7 +85,6 @@ async fn serve_windows() -> Result<(), String> {
         let server = crate::transport_windows::create_pipe_server(first_instance)?;
         first_instance = false;
         if server.connect().await.is_err() {
-            eprintln!("pipe connection closed before session started");
             continue;
         }
         spawn_session(server);
@@ -93,16 +96,55 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+        if let Ok(Ok(service)) = tokio::time::timeout(
+            handshake_timeout(),
             rmcp::serve_server(SpawndServer, stream),
         )
         .await
         {
-            Ok(Ok(service)) => {
-                let _ = service.waiting().await;
-            }
-            _ => eprintln!("client initialization failed or timed out"),
+            let _ = service.waiting().await;
         }
     });
+}
+
+fn handshake_timeout() -> std::time::Duration {
+    std::env::var("PG_SPAWND_CONNECT_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|ms| *ms != u64::MAX)
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(std::time::Duration::from_secs(10))
+}
+
+#[cfg(unix)]
+fn retryable_accept(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::ConnectionAborted
+    ) || matches!(error.raw_os_error(), Some(23 | 24))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn transient_accept_errors_are_retryable() {
+        for code in [23, 24] {
+            assert!(super::retryable_accept(&std::io::Error::from_raw_os_error(
+                code
+            )));
+        }
+        for kind in [
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::ConnectionAborted,
+        ] {
+            assert!(super::retryable_accept(&std::io::Error::from(kind)));
+        }
+        assert!(!super::retryable_accept(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
+    }
 }

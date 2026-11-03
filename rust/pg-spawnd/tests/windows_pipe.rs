@@ -4,7 +4,7 @@
 #![cfg(windows)]
 
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::os::windows::io::AsRawHandle;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::HANDLE;
@@ -45,7 +45,7 @@ struct ChildGuard {
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = bounded_wait(&mut self.child);
     }
 }
 
@@ -75,16 +75,6 @@ fn wait_connect(name: &str) -> std::fs::File {
 }
 
 fn initialize(file: &mut std::fs::File) -> serde_json::Value {
-    let mut file = file.try_clone().expect("clone pipe");
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        tx.send(initialize_blocking(&mut file)).ok();
-    });
-    rx.recv_timeout(Duration::from_secs(2))
-        .expect("bounded initialize")
-}
-
-fn initialize_blocking(file: &mut std::fs::File) -> serde_json::Value {
     let request = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
@@ -96,10 +86,34 @@ fn initialize_blocking(file: &mut std::fs::File) -> serde_json::Value {
     let mut line = serde_json::to_string(&request).expect("serialize");
     line.push('\n');
     file.write_all(line.as_bytes()).expect("write request");
+    let deadline = Instant::now() + Duration::from_secs(2);
     let mut response = String::new();
-    BufReader::new(&mut *file)
-        .read_line(&mut response)
-        .expect("read response");
+    loop {
+        let mut available = 0;
+        assert_ne!(
+            unsafe {
+                PeekNamedPipe(
+                    file.as_raw_handle() as HANDLE,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        if available > 0 {
+            let mut byte = [0];
+            file.read_exact(&mut byte).unwrap();
+            response.push(byte[0] as char);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "pipe read deadline");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     serde_json::from_str(response.trim_end_matches('\n')).expect("parse response")
 }
 
@@ -125,10 +139,7 @@ fn second_serve_on_live_pipe_exits_two() {
     let name = pipe_name();
     let _guard = spawn_serve();
     let _file = wait_connect(&name);
-    let output = std::process::Command::new(bin())
-        .args(["serve"])
-        .output()
-        .expect("second serve");
+    let output = output(std::process::Command::new(bin()).args(["serve"]));
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf-8");
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
@@ -204,13 +215,67 @@ fn disconnected_pipe_probe_leaves_server_alive() {
 #[test]
 fn socket_flag_is_rejected_for_per_user_pipe() {
     for verb in ["serve", "shim"] {
-        let output = std::process::Command::new(bin())
-            .args([verb, "--socket", "unused"])
-            .output()
-            .unwrap();
+        let output = output(std::process::Command::new(bin()).args([verb, "--socket", "unused"]));
         assert_eq!(output.status.code(), Some(2));
         let error = String::from_utf8(output.stderr).unwrap();
         assert_eq!(error.lines().count(), 1);
         assert!(error.contains("per-user"));
+    }
+}
+
+#[link(name = "kernel32")]
+#[allow(non_snake_case)]
+extern "system" {
+    fn PeekNamedPipe(
+        handle: HANDLE,
+        buffer: *mut std::ffi::c_void,
+        size: u32,
+        read: *mut u32,
+        available: *mut u32,
+        left: *mut u32,
+    ) -> i32;
+}
+fn bounded_wait(child: &mut std::process::Child) -> std::process::ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("child exit deadline");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+fn output(command: &mut std::process::Command) -> std::process::Output {
+    let mut guard = ChildGuard {
+        child: command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    };
+    let status = bounded_wait(&mut guard.child);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    guard
+        .child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut stdout)
+        .unwrap();
+    guard
+        .child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_end(&mut stderr)
+        .unwrap();
+    std::process::Output {
+        status,
+        stdout,
+        stderr,
     }
 }

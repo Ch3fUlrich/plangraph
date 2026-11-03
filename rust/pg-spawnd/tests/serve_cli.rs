@@ -133,6 +133,7 @@ fn serve_refuses_group_readable_dir() {
 }
 
 #[test]
+#[ignore = "requires root to change directory ownership"]
 fn serve_refuses_dir_owned_by_other_user() {
     extern "C" {
         fn geteuid() -> u32;
@@ -164,7 +165,12 @@ fn serve_refuses_symlinked_dir_and_relative_path() {
     let link = tmp.path().join("link");
     std::os::unix::fs::symlink(tmp.path(), &link).unwrap();
     refused(&link.join("spawnd.sock"));
-    refused(Path::new("spawnd.sock"));
+    let result = common::output(
+        std::process::Command::new(bin())
+            .args(["serve", "--socket", "spawnd.sock"])
+            .current_dir(tmp.path()),
+    );
+    assert_eq!(result.status.code(), Some(2));
 }
 
 #[test]
@@ -337,4 +343,29 @@ fn serve_with_env_default_socket_path() {
     let mut client = McpClient::connect(&socket);
     let response = client.initialize();
     assert_eq!(response["result"]["serverInfo"]["name"], "pg-spawnd");
+}
+
+#[test]
+fn idle_handshake_times_out_and_server_accepts_again() {
+    use std::io::Read;
+    let tmp = TempDir::new();
+    let socket = tmp.path().join("spawnd.sock");
+    let _guard = ChildGuard {
+        child: std::process::Command::new(bin())
+            .args([
+                std::ffi::OsStr::new("serve"),
+                std::ffi::OsStr::new("--socket"),
+                socket.as_os_str(),
+            ])
+            .env("PG_SPAWND_CONNECT_TIMEOUT_MS", "100")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    };
+    let mut idle = common::wait_connect(&socket, Duration::from_secs(2));
+    idle.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    assert_eq!(idle.read(&mut [0]).unwrap(), 0);
+    let mut next = McpClient::connect(&socket);
+    assert!(next.initialize()["result"].is_object());
 }

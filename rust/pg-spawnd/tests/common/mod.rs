@@ -22,10 +22,7 @@ impl TempDir {
             random,
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&base)
-            .expect("exclusive temp dir");
+        create_private_dir(&base).expect("exclusive temp dir");
         TempDir(base)
     }
 
@@ -73,7 +70,10 @@ impl ChildGuard {
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -93,7 +93,7 @@ pub(crate) fn output(command: &mut std::process::Command) -> std::process::Outpu
         std::thread::sleep(Duration::from_millis(10));
     }
     use std::io::Read;
-    let status = guard.child.wait().unwrap();
+    let status = guard.child.try_wait().unwrap().unwrap();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     guard
@@ -144,4 +144,22 @@ pub(crate) fn assert_mode_eventually(path: &Path, expected: u32) {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::DirBuilder::new().mode(0o700).create(path)
+}
+#[test]
+fn temp_dir_creation_is_exclusive_and_private() {
+    let parent = TempDir::new();
+    let path = parent.path().join("exclusive");
+    create_private_dir(&path).unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        create_private_dir(&path).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
 }

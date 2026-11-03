@@ -28,10 +28,11 @@ async fn connect_with_deadline<T>(
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
     let deadline = override_ms
+        .filter(|ms| *ms != u64::MAX)
         .map(std::time::Duration::from_millis)
         .unwrap_or(CONNECT_TIMEOUT);
     tokio::time::timeout(deadline, async {
-        if override_ms.is_some() {
+        if override_ms == Some(u64::MAX) {
             // Explicit diagnostic hook exercises a connect that never completes.
             std::future::pending::<()>().await;
         }
@@ -82,10 +83,12 @@ where
             result.map_err(|e| format!("stdin copy failed: {e}"))?;
             socket_write.shutdown().await.map_err(|e| e.to_string())?;
             // Complete any write started by the cancelled copy before reusing stdout.
-            stdout.flush().await.map_err(|e| e.to_string())?;
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5),
-                tokio::io::copy(&mut socket_read, &mut stdout)).await;
-            stdout.flush().await.map_err(|e| e.to_string())
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                stdout.flush().await?;
+                tokio::io::copy(&mut socket_read, &mut stdout).await?;
+                stdout.flush().await
+            }).await;
+            Ok(())
         }
         result = tokio::io::copy(&mut socket_read, &mut stdout) => {
             result.map_err(|e| format!("socket copy failed: {e}"))?;

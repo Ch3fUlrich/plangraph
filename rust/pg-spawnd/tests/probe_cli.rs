@@ -1,10 +1,7 @@
 use std::process::{Command, Output};
 
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
-        .args(args)
-        .output()
-        .unwrap()
+    output(Command::new(env!("CARGO_BIN_EXE_pg-spawnd")).args(args))
 }
 
 #[test]
@@ -104,13 +101,52 @@ fn help() {
 fn non_utf8_argument_exits_two() {
     use std::os::unix::ffi::OsStrExt;
     for prefix in [vec![], vec!["probe", "--json", "--host-id"]] {
-        let output = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
-            .args(prefix)
-            .arg(std::ffi::OsStr::from_bytes(&[0xff]))
-            .output()
-            .unwrap();
+        let output = output(
+            Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+                .args(prefix)
+                .arg(std::ffi::OsStr::from_bytes(&[0xff])),
+        );
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         assert_eq!(String::from_utf8(output.stderr).unwrap().lines().count(), 1);
+    }
+}
+
+fn output(command: &mut Command) -> Output {
+    use std::io::Read;
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("child deadline");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut stdout)
+        .unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_end(&mut stderr)
+        .unwrap();
+    Output {
+        status,
+        stdout,
+        stderr,
     }
 }

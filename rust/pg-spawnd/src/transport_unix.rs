@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 extern "C" {
     fn geteuid() -> u32;
+    fn flock(fd: i32, operation: i32) -> i32;
 }
 
 /// `--socket <path>` wins; otherwise `$XDG_RUNTIME_DIR/plangraph/spawnd.sock`.
@@ -72,6 +73,12 @@ fn bind_checked(
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     let identity = verify_socket_dir(dir)?;
+    // Serialize probe/remove/bind across processes without leaving a lock file.
+    use std::os::fd::AsRawFd;
+    let directory = std::fs::File::open(dir).map_err(|e| e.to_string())?;
+    if unsafe { flock(directory.as_raw_fd(), 2 | 4) } != 0 {
+        return Err("already serving or binding socket directory".into());
+    }
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if !meta.file_type().is_socket() {
             return Err("refusing non-socket file at socket path".into());
@@ -99,14 +106,73 @@ fn bind_checked(
 }
 
 pub(crate) async fn connect(path: &Path) -> Result<tokio::net::UnixStream, String> {
-    tokio::net::UnixStream::connect(path)
+    let dir = path.parent().ok_or("socket path has no parent")?;
+    let identity = verify_socket_dir(dir)?;
+    let stream = tokio::net::UnixStream::connect(path)
         .await
-        .map_err(|e| format!("cannot connect to {}: {e}", path.display()))
+        .map_err(|e| format!("cannot connect to {}: {e}", path.display()))?;
+    if verify_socket_dir(dir)? != identity {
+        return Err("socket directory changed during connect".into());
+    }
+    if stream.peer_cred().map_err(|e| e.to_string())?.uid() != unsafe { geteuid() } {
+        return Err("socket peer is owned by another user".into());
+    }
+    Ok(stream)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shim_refuses_accessible_and_symlinked_directories() {
+        let base = std::env::temp_dir().join(format!("pg-spawnd-connect-{}", std::process::id()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&base)
+            .unwrap();
+        let dir = base.join("dir");
+        std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        let path = dir.join("socket");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        for mode in [0o750, 0o707] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(connect(&path).await.unwrap_err().contains("mode"));
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(connect(&link.join("socket"))
+            .await
+            .unwrap_err()
+            .contains("symlink"));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn concurrent_bind_cannot_replace_live_socket() {
+        let base = std::env::temp_dir().join(format!("pg-spawnd-bind-{}", std::process::id()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&base)
+            .unwrap();
+        let path = base.join("socket");
+        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        let winner = bind_checked(&path, || {
+            assert!(bind_listener(&path).is_err());
+        })
+        .unwrap();
+        let identity = std::fs::metadata(&path).unwrap().ino();
+        assert!(bind_listener(&path).is_err());
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), identity);
+        drop(winner);
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn directory_identity_change_after_bind_is_refused() {

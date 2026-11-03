@@ -102,7 +102,7 @@ fn pending_connect_times_out_without_retry() {
             OsStr::new("--socket"),
             socket.as_os_str(),
         ])
-        .env("PG_SPAWND_CONNECT_TIMEOUT_MS", "2000")
+        .env("PG_SPAWND_CONNECT_TIMEOUT_MS", u64::MAX.to_string())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
