@@ -42,6 +42,8 @@ impl Fixture {
             .arg("--state")
             .arg(state.path())
             .args(extra)
+            // Keep dispatch non-blocking probes valid even on a multi-thread runtime.
+            .env("TOKIO_WORKER_THREADS", "1")
             .env("PG_SPAWND_ADAPTER", route)
             .env("PG_SPAWND_LAUNCH_CMD", launch);
         if missing {

@@ -77,6 +77,8 @@ fn real_run_and_failure() {
 
 #[test]
 fn waiting_spawn_does_not_block_second_connection() {
+    // serve uses a current-thread runtime; Fixture also pins Tokio's worker
+    // count to one so an inline dispatch cannot hide on a second worker.
     let f = Fixture::new("/bin/sleep 2.5", Value::Null, &[]);
     let socket = f.state.path().join("socket");
     let mut waiter = common::McpClient::connect(&socket);
