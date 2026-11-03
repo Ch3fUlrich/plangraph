@@ -12,7 +12,11 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    System::{Diagnostics::ToolHelp::*, JobObjects::*, Threading::*},
+    System::{JobObjects::*, Threading::*},
+};
+// The thread walk reuses stall's own kernel32 declarations (no extra windows-sys feature).
+use crate::stall::windows::{
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 
 fn own(handle: HANDLE) -> io::Result<OwnedHandle> {

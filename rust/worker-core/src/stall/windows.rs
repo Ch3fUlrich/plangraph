@@ -166,17 +166,17 @@ fn create_job() -> io::Result<HANDLE> {
 
 /// Snapshot flag: list every thread on the system. The thread walk is declared
 /// here directly against kernel32, with its own entry layout.
-const TH32CS_SNAPTHREAD: u32 = 0x4;
+pub(crate) const TH32CS_SNAPTHREAD: u32 = 0x4;
 
 /// One row of the thread snapshot; `dwSize` must be set to its size before the
 /// walk.
 #[repr(C)]
 #[allow(non_snake_case, clippy::upper_case_acronyms)]
-struct THREADENTRY32 {
-    dwSize: u32,
+pub(crate) struct THREADENTRY32 {
+    pub(crate) dwSize: u32,
     cntUsage: u32,
-    th32ThreadID: u32,
-    th32OwnerProcessID: u32,
+    pub(crate) th32ThreadID: u32,
+    pub(crate) th32OwnerProcessID: u32,
     tpBasePri: i32,
     tpDeltaPri: i32,
     dwFlags: u32,
@@ -185,9 +185,9 @@ struct THREADENTRY32 {
 #[link(name = "kernel32")]
 #[allow(non_snake_case)]
 extern "system" {
-    fn CreateToolhelp32Snapshot(dwflags: u32, th32processid: u32) -> HANDLE;
-    fn Thread32First(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
-    fn Thread32Next(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
+    pub(crate) fn CreateToolhelp32Snapshot(dwflags: u32, th32processid: u32) -> HANDLE;
+    pub(crate) fn Thread32First(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
+    pub(crate) fn Thread32Next(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
 }
 
 /// Resume every thread `pid` owns. A process spawned suspended has exactly its

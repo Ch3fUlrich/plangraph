@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 
 #[cfg(unix)]
 use self::unix as platform;
