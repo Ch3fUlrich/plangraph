@@ -3,6 +3,8 @@ use crate::{activity::KillOutcome, hosts::Role, redact::redact, reset::Reset};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod usable_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Terminal {
