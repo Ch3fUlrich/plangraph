@@ -3,11 +3,17 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **SPAWNER-RL5B (D-3676, D-3714):** map opencode events to receive-time activity with seven sanitized historical replays; no caller or switch, rollback by git revert.
+- **SPAWNER-RL9B part 2b (D-3676, D-3714):** add marker-to-outcome classification tests covering provider failures, quota and rate limits, raw reset propagation, evidence, and exit-status guards; no caller or switch, rollback by revert.
+- **SPAWNER-RL9B part 2 (D-3676, D-3714):** add guarded provider-marker scanning and raw one-shot reset capture; no caller or switch, rollback by git revert.
 
 - **PLACEMENT-R6A-3C2 (D-3676, D-3685):** Validate local serve admission flags and share one worker-core supervisor across connections.
 
 - **PLACEMENT-R6A-3C1 (D-3676, D-3685):** add bounded operator launch adapter and validated pipe-only launch specs; no spawn wiring yet.
+- **SPAWNER-RL9B part 1b (D-3676, D-3714):** add outcome-classification tests pinning role-aware usability, the class scope/neutral and carries_reset tables, class names, redacted capped descriptions and raw non-finite reset copies; no caller or switch, rollback by revert.
+- **SPAWNER-RL9B part 1 (D-3676, D-3714):** add pure structured outcome classification, role-aware usability, raw reset propagation and redacted descriptions; no caller or switch, rollback by git revert.
 
+- md-sync: keeper snapshot reads use their own 60 s timeout (MD-SYNC-SNAPSHOT-TIMEOUT)
 - **PLACEMENT-R6A-2F2 (D-3676, D-3685):** pin the run supervisor's queued records, QueueFull and BadCap limits, failed-start rollback, cancel outcomes and survivor accounting with gated, bounded tests; placement remains off.
 - **PLACEMENT-R6A-2F (D-3676, D-3685):** add daemon-owned run registry and replaceable fixed-cap FIFO admission; placement remains off.
 

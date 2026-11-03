@@ -19,6 +19,7 @@ pub mod host_probe;
 pub mod hosts;
 pub mod janitor;
 pub mod lockfile;
+pub mod outcome;
 pub mod packet;
 pub mod pathjail;
 pub mod probe;

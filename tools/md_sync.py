@@ -286,7 +286,7 @@ def main(argv=None, out=None, err=None):
         decisions = mp.parse_decisions(decisions_text)
         session = apply_batch.Session(opts.url, token)
         try:
-            snapshot = session.get("snapshot")
+            snapshot = session.snapshot()
             items = snapshot.get("items") or []
             aliases = snapshot.get("aliases") or {}
         except apply_batch.ApiError as exc:
