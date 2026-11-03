@@ -2,6 +2,8 @@ use crate::hosts::Role;
 use serde::Deserialize;
 
 #[cfg(test)]
+mod milestone_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
