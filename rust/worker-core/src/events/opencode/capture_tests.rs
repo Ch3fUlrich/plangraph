@@ -47,11 +47,14 @@ fn no_payload_retained() {
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].kind, Kind::Content);
         assert!(!format!("{signals:?}").contains(&secret));
+        assert!(p.framer.buf.is_empty());
         assert!(p.framer.finish().is_none());
     }
     assert!(p.feed(&vec![b'x'; MAX_LINE + 1], 2).is_empty());
     assert!(p.end(2).is_empty());
+    assert!(p.framer.buf.is_empty());
     assert!(p.end(2).is_empty());
+    assert!(p.framer.buf.is_empty());
     assert_eq!(p.health().lines(), 33);
 
     // The projected capture has only "OK" text, so supplement it with unique payloads.
@@ -63,6 +66,7 @@ fn no_payload_retained() {
         .chain(std::iter::once((EXTRA, 27000)))
     {
         let signals = parser.feed(line.as_bytes(), ms);
+        assert!(parser.framer.buf.is_empty());
         let state = format!("{parser:?}");
         let signals = format!("{signals:?}");
         for payload in [
@@ -73,6 +77,13 @@ fn no_payload_retained() {
         ] {
             assert!(!state.contains(payload), "parser retained {payload}");
             assert!(!signals.contains(payload), "signals retained {payload}");
+            if payload != "OK" {
+                let bytes = format!("{:?}", payload.as_bytes());
+                let bytes = &bytes[1..bytes.len() - 1];
+                assert!(!state.contains(bytes), "parser retained bytes of {payload}");
+            }
         }
     }
+    assert!(parser.end(27000).is_empty());
+    assert!(parser.framer.buf.is_empty());
 }
