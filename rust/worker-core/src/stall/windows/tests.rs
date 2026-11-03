@@ -1,6 +1,7 @@
-//! Windows supervisor tests. Every test here is `#[serial]` (serial_test):
-//! they share one process-wide handle table with their siblings, so no test
-//! may hold a job handle while another samples handle counts.
+//! Windows supervisor tests. Every test here is `#[serial]` (serial_test).
+//! The handle-leak check samples the process-wide handle count in a child
+//! that runs only the helper, because the other tests of this binary run in
+//! parallel and move that count both ways.
 
 use super::*;
 use std::path::Path;
@@ -55,12 +56,33 @@ fn windows_supervise_helper() {
         "sleep" => {}
         "exit" => std::process::exit(7),
         "leaf" => write_pid(&dir, "leaf.pid"),
+        "leak" => {
+            assert!(!dir.is_empty(), "the leak helper needs {HELPER_DIR}");
+            let missing = || Command::new(Path::new(&dir).join("no-such-program.exe"));
+            // Only growth per failed spawn is caught; a one-time cost of the
+            // first failed spawn is accepted (documented in the PR).
+            // The first failed spawn may pay one-time process setup.
+            assert!(supervise(missing(), &quick()).is_err());
+            let before = handle_count();
+            for _ in 0..3 {
+                assert!(supervise(missing(), &quick()).is_err());
+            }
+            let now = handle_count();
+            std::fs::write(
+                Path::new(&dir).join("handles"),
+                format!("{before} -> {now}"),
+            )
+            .unwrap();
+            std::process::exit(if now == before { 0 } else { 3 });
+        }
         "parent" => {
             // The grandchild is killed with the job; waiting on it would
             // block until exactly that.
             #[allow(clippy::zombie_processes)]
             let _grandchild = helper("leaf", Path::new(&dir)).spawn().unwrap();
-            let deadline = Instant::now() + Duration::from_secs(3);
+            // A loaded host can take seconds to start a third test binary;
+            // this budget fits inside the caller's 25 s elapsed bound.
+            let deadline = Instant::now() + Duration::from_secs(10);
             while !Path::new(&dir).join("leaf.pid").exists() {
                 assert!(Instant::now() < deadline, "grandchild never started");
                 println!("waiting"); // keeps the stall window open
@@ -81,7 +103,7 @@ fn write_pid(dir: &str, name: &str) {
 
 fn read_pid(dir: &Path, name: &str) -> u32 {
     std::fs::read_to_string(dir.join(name))
-        .unwrap()
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
         .trim()
         .parse()
         .unwrap()
@@ -103,7 +125,7 @@ fn process_alive(pid: u32) -> bool {
 }
 
 fn wait_until_gone(pid: u32) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if !process_alive(pid) {
             return true;
@@ -117,9 +139,8 @@ fn handle_count() -> u32 {
     let mut n = 0u32;
     // SAFETY: the pseudo-handle of the running process; the count is
     // written into a local and the pseudo-handle is never closed.
-    unsafe {
-        GetProcessHandleCount(GetCurrentProcess(), &mut n);
-    }
+    let ok = unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut n) };
+    assert!(ok != 0 && n > 0, "GetProcessHandleCount failed");
     n
 }
 
@@ -128,14 +149,17 @@ fn handle_count() -> u32 {
 fn stall_kill_takes_down_child_and_grandchild() {
     let d = tempfile::tempdir().unwrap();
     let o = Opts {
-        stall: Some(Duration::from_millis(300)),
-        timeout: Some(Duration::from_secs(3)),
+        // Under parallel load the parent can take seconds to start and to
+        // spawn its grandchild before its first output: a 300 ms window
+        // killed it before it wrote parent.pid.
+        stall: Some(Duration::from_secs(3)),
+        timeout: Some(Duration::from_secs(30)),
         ..quick()
     };
     let t = Instant::now();
     let r = supervise(helper("parent", d.path()), &o).unwrap();
     assert!(r.stalled && !r.timed_out, "{r:?}");
-    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    assert!(t.elapsed() < Duration::from_secs(25), "{:?}", t.elapsed());
     let parent = read_pid(d.path(), "parent.pid");
     let leaf = read_pid(d.path(), "leaf.pid");
     assert!(wait_until_gone(parent), "child {parent} still alive");
@@ -153,7 +177,8 @@ fn timeout_terminates_the_child() {
     let t = Instant::now();
     let r = supervise(helper("sleep", d.path()), &o).unwrap();
     assert!(r.timed_out && !r.stalled && !r.cancelled, "{r:?}");
-    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    // Slack for a loaded host (2.57 s seen in a parallel run).
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
 
 #[test]
@@ -172,7 +197,7 @@ fn cancel_terminates_the_child() {
     })
     .unwrap();
     assert!(r.cancelled && !r.stalled && !r.timed_out, "{r:?}");
-    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
 
 #[test]
@@ -188,15 +213,16 @@ fn normal_exit_reports_the_exit_code() {
 #[test]
 #[serial]
 fn failed_spawn_errors_without_leaking_a_job_handle() {
+    // One warm-up and three sampled failed spawns, in a child process that
+    // runs only the helper (see the module doc).
     let d = tempfile::tempdir().unwrap();
-    let missing = Command::new(d.path().join("no-such-program.exe"));
-    // Every test in this module is #[serial], so no sibling holds a job
-    // handle across the sample and the count must come back to exactly its
-    // starting value: any slack would mask a leaked handle.
-    let before = handle_count();
-    assert!(supervise(missing, &quick()).is_err());
-    let now = handle_count();
-    assert_eq!(now, before, "job handle leaked: {before} -> {now}");
+    let status = helper("leak", d.path()).status().unwrap();
+    let counts = std::fs::read_to_string(d.path().join("handles")).unwrap_or_default();
+    match status.code() {
+        Some(0) => {}
+        Some(3) => panic!("handles leaked over 3 failed spawns: {counts}"),
+        _ => panic!("leak helper broke before measuring ({status}): {counts}"),
+    }
 }
 
 /// The child harness must get libtest's `--nocapture` (a misspelling makes
