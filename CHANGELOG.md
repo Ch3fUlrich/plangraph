@@ -4,6 +4,9 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-3B1 r1:** pin guarded record opens, validate typed route options before card size, preserve route/probe stdout, and bound adapter pipe-reader waits.
+
+- **PLACEMENT-R6A-3B (D-3676, D-3685):** R6a-3b1 adds the bounded Python route adapter and route/probe tools; hardens record opens and documents integer coercion; placement remains off, spawn remains a stub.
 - **PLACEMENT-R6A-2D (D-3676, D-3685):** add named Windows execution Job Objects with suspended assignment, kill-on-close lifetime, member queries and termination; no caller integration (PLACEMENT remains off).
 
 - **PLACEMENT-R6A-3A (D-3676, D-3685):** add Python-compatible JSON-RPC errors and shared read-only run records for `pg-spawnd` ps/result/status/steer, plus `serve --state` resolution; placement remains off and launch tools remain staged stubs.
