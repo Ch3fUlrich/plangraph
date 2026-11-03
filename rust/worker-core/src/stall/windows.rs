@@ -64,10 +64,9 @@ impl Group {
     /// then resume its main thread. A failed assignment or resume terminates
     /// the child and returns the error; a failed spawn only drops the job.
     ///
-    /// The creation flags belong to the supervisor and `cmd`'s own flags are
-    /// **replaced** by `CREATE_SUSPENDED | CREATE_NO_WINDOW` (a supervised
-    /// child is never interactive), so caller-set creation flags do not
-    /// survive this call.
+    /// `CommandExt::creation_flags` assigns, rather than adds, flags. The
+    /// supervisor assigns the OR of CREATE_SUSPENDED and CREATE_NO_WINDOW,
+    /// replacing caller flags so the child is never interactive.
     pub(super) fn spawn(cmd: &mut Command) -> io::Result<(Group, Child)> {
         let job = Job(Cell::new(create_job()?));
         cmd.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
@@ -167,17 +166,17 @@ fn create_job() -> io::Result<HANDLE> {
 
 /// Snapshot flag: list every thread on the system. The thread walk is declared
 /// here directly against kernel32, with its own entry layout.
-const TH32CS_SNAPTHREAD: u32 = 0x4;
+pub(crate) const TH32CS_SNAPTHREAD: u32 = 0x4;
 
 /// One row of the thread snapshot; `dwSize` must be set to its size before the
 /// walk.
 #[repr(C)]
 #[allow(non_snake_case, clippy::upper_case_acronyms)]
-struct THREADENTRY32 {
-    dwSize: u32,
+pub(crate) struct THREADENTRY32 {
+    pub(crate) dwSize: u32,
     cntUsage: u32,
-    th32ThreadID: u32,
-    th32OwnerProcessID: u32,
+    pub(crate) th32ThreadID: u32,
+    pub(crate) th32OwnerProcessID: u32,
     tpBasePri: i32,
     tpDeltaPri: i32,
     dwFlags: u32,
@@ -186,14 +185,14 @@ struct THREADENTRY32 {
 #[link(name = "kernel32")]
 #[allow(non_snake_case)]
 extern "system" {
-    fn CreateToolhelp32Snapshot(dwflags: u32, th32processid: u32) -> HANDLE;
-    fn Thread32First(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
-    fn Thread32Next(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
+    pub(crate) fn CreateToolhelp32Snapshot(dwflags: u32, th32processid: u32) -> HANDLE;
+    pub(crate) fn Thread32First(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
+    pub(crate) fn Thread32Next(hsnapshot: HANDLE, lpte: *mut THREADENTRY32) -> i32;
 }
 
 /// Resume every thread `pid` owns. A process spawned suspended has exactly its
-/// main thread; resuming through a thread snapshot needs no thread handle from
-/// the spawn itself. The snapshot walks every thread on the system (`pid` is
+/// main thread; std::process::Child exposes no main-thread handle, so a
+/// snapshot is needed. The snapshot walks every thread on the system (`pid` is
 /// filtered in userspace): a whole-system walk of a few milliseconds per
 /// supervised spawn, accepted as is.
 fn resume_threads_of(pid: u32) -> io::Result<()> {
