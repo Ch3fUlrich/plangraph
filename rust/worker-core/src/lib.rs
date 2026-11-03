@@ -4,6 +4,7 @@
 //! checks, confinement, exit classification, retry policy and process
 //! supervision.
 
+pub mod activity;
 pub mod budget;
 pub mod check;
 pub mod config;

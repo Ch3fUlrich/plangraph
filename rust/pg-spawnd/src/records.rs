@@ -8,6 +8,70 @@ use std::path::Path;
 
 const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guarded_open_rejects_fifo_without_blocking() {
+        let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("record.json");
+        let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(open_record(&path).is_err());
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(2));
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn guarded_open_rejects_symlink_and_accepts_regular() {
+        let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("record.json");
+        std::fs::write(&path, b"{}").unwrap();
+        assert!(open_record(&path).is_ok());
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(path, &link).unwrap();
+        let rejected = open_record(&link).is_err();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(rejected);
+    }
+}
+
+fn open_record(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(std::io::Error::other("invalid run record"));
+        }
+    }
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("invalid run record"));
+    }
+    Ok(file)
+}
+
 fn read_record_file(path: &Path) -> Result<Value, ToolError> {
     let invalid = || ToolError::Value("invalid run record".into());
     let read = || -> std::io::Result<Vec<u8>> {
@@ -15,10 +79,7 @@ fn read_record_file(path: &Path) -> Result<Value, ToolError> {
         if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
             return Err(std::io::Error::other("invalid run record"));
         }
-        let file = std::fs::File::open(path)?;
-        if !file.metadata()?.is_file() {
-            return Err(std::io::Error::other("invalid run record"));
-        }
+        let file = open_record(path)?;
         let mut bytes = Vec::new();
         file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
         Ok(bytes)
