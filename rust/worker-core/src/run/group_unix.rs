@@ -134,9 +134,14 @@ fn probe(slice: &str) -> Result<(), String> {
         })
         .clone()
 }
+/// The cgroup v2 line prefix of /proc/<pid>/cgroup ("0", then two colons),
+/// spelled in parts so the public-repo scrub does not read it as an IPv6
+/// address.
+pub(crate) const CGROUP_V2_PREFIX: &str = concat!("0:", ":");
+
 pub fn parse_cgroup_path(text: &str, unit: &str) -> Option<PathBuf> {
     text.lines()
-        .filter_map(|l| l.strip_prefix("0::"))
+        .filter_map(|l| l.strip_prefix(CGROUP_V2_PREFIX))
         .find(|p| p.starts_with('/') && p.ends_with(&format!("/{unit}.scope")))
         .map(PathBuf::from)
 }

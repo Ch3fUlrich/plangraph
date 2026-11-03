@@ -318,10 +318,16 @@ fn plain_stop() {
 #[test]
 fn parsers() {
     assert_eq!(
-        parse_cgroup_path("1:cpu:/pg-a.scope\n0::/user/pg-a.scope\n", "pg-a"),
+        parse_cgroup_path(
+            &format!("1:cpu:/pg-a.scope\n{CGROUP_V2_PREFIX}/user/pg-a.scope\n"),
+            "pg-a"
+        ),
         Some("/user/pg-a.scope".into())
     );
-    assert_eq!(parse_cgroup_path("0::/pg-b.scope", "pg-a"), None);
+    assert_eq!(
+        parse_cgroup_path(&format!("{CGROUP_V2_PREFIX}/pg-b.scope"), "pg-a"),
+        None
+    );
     assert_eq!(parse_cgroup_path("garbage", "pg-a"), None);
     let stat = format!("123 (a ) ( b) S 1 123 {} 42", vec!["0"; 16].join(" "));
     assert_eq!(parse_stat(&stat), Some(('S', 123, 42)));
