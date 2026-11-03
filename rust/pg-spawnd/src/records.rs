@@ -15,7 +15,28 @@ fn read_record_file(path: &Path) -> Result<Value, ToolError> {
         if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
             return Err(std::io::Error::other("invalid run record"));
         }
-        let file = std::fs::File::open(path)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options.open(path)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(std::io::Error::other("invalid run record"));
+            }
+        }
         if !file.metadata()?.is_file() {
             return Err(std::io::Error::other("invalid run record"));
         }

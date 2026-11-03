@@ -58,6 +58,17 @@ pub(crate) fn call_tool(
     state: &std::path::Path,
 ) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
+    if matches!(name, "plangraph_agent_route" | "plangraph_agent_probe") {
+        let args = request.arguments.clone().unwrap_or_default();
+        let payload = match name {
+            "plangraph_agent_probe" => crate::placement::probe(state, &args),
+            _ => crate::placement::route(state, &args),
+        }
+        .map_err(crate::errors::ToolError::into_error_data)?;
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            payload.to_string(),
+        )]));
+    }
     if matches!(
         name,
         "plangraph_agent_ps"
@@ -111,8 +122,7 @@ pub(crate) fn call_tool(
             Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "not implemented in pg-spawnd yet ({})",
                 match other {
-                    "plangraph_agent_route" | "plangraph_agent_probe" | "plangraph_agent_spawn" =>
-                        "R6a-3b",
+                    "plangraph_agent_spawn" => "R6a-3b",
                     "plangraph_agent_cancel" => "R6a-3c",
                     "plangraph_agent_query_catalog" => "R11",
                     _ => "R9",
@@ -128,6 +138,8 @@ pub(crate) fn call_tool(
 }
 
 fn python_str(value: &serde_json::Value) -> String {
+    // Known deviation: integer tokens beyond u64/i64 become f64, losing digits.
+    // Keep this behavior rather than enabling workspace-wide arbitrary_precision.
     match value {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Null => "None".into(),
@@ -200,6 +212,8 @@ mod tests {
 
     #[test]
     fn python_float_coercion() {
+        let large = serde_json::from_str("123456789012345678901234567890").unwrap();
+        assert_eq!(python_str(&large), "1.2345678901234568e+29");
         for (value, expected) in [
             (1e30, "1e+30"),
             (1.5, "1.5"),
