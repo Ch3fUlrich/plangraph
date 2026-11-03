@@ -150,7 +150,7 @@ pub fn parse_stat(text: &str) -> Option<(char, u32, u64)> {
     Some((
         f.first()?.chars().next()?,
         f.get(2)?.parse().ok()?,
-        f.get(19)?.parse().ok()?,
+        crate::slots::liveness::linux::parse_start_time(text)?,
     ))
 }
 fn stat(root: &Path, pid: u32) -> Option<(char, u32, u64)> {
@@ -244,11 +244,21 @@ fn signal(pid: u32, sig: i32, group: bool) {
 impl UnixGroup {
     fn send(&self, sig: i32) {
         if let Ok(pids) = self.members() {
-            for pid in pids {
-                signal(pid, sig, false);
+            let snapshot: Vec<_> = pids
+                .into_iter()
+                .filter_map(|pid| proc_start_time(&self.roots.proc, pid).map(|start| (pid, start)))
+                .collect();
+            for (pid, start) in snapshot {
+                if proc_start_time(&self.roots.proc, pid) == Some(start) {
+                    signal(pid, sig, false);
+                }
             }
         }
-        signal(self.identity.pid, sig, true);
+        if self.identity.start_time.is_some()
+            && proc_start_time(&self.roots.proc, self.identity.pid) == self.identity.start_time
+        {
+            signal(self.identity.pid, sig, true);
+        }
     }
 }
 impl RunGroup for UnixGroup {
@@ -257,12 +267,11 @@ impl RunGroup for UnixGroup {
     }
     fn members(&self) -> io::Result<Vec<u32>> {
         let pids: Vec<u32> = if let Some(dir) = &self.identity.group {
-            match fs::read_to_string(Path::new(dir).join("cgroup.procs")) {
-                Ok(s) => s
-                    .split_whitespace()
-                    .filter_map(|p| p.parse().ok())
-                    .collect(),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+            match scope_members(Path::new(dir)) {
+                Ok(pids) => pids,
+                Err(e) if e.kind() == io::ErrorKind::NotFound && !Path::new(dir).exists() => {
+                    return Ok(vec![])
+                }
                 Err(e) => return Err(e),
             }
         } else {
@@ -293,4 +302,20 @@ impl RunGroup for UnixGroup {
         }
         self.send(libc::SIGKILL);
     }
+}
+
+/// Unlike slot liveness's current flat-scope assumption, stopping must include
+/// nested cgroups and must not mistake an unreadable subtree for emptiness.
+fn scope_members(dir: &Path) -> io::Result<Vec<u32>> {
+    let mut pids = fs::read_to_string(dir.join("cgroup.procs"))?
+        .split_whitespace()
+        .filter_map(|p| p.parse().ok())
+        .collect::<Vec<_>>();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            pids.extend(scope_members(&entry.path())?);
+        }
+    }
+    Ok(pids)
 }
