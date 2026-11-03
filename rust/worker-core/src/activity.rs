@@ -2,6 +2,8 @@ use crate::hosts::Role;
 use serde::Deserialize;
 
 #[cfg(test)]
+mod milestone_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +77,7 @@ pub struct Decision {
     pub outcome: KillOutcome,
     pub open_tools: u32,
     pub s_eff_s: Option<u64>,
+    pub kill_at_ms: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ctx {
@@ -123,6 +126,11 @@ pub struct Monitor {
     strong_since_request: bool,
     first_reported: bool,
     silent_reported: bool,
+    first_warned: bool,
+    silent_warned: bool,
+    milestone: bool,
+    milestone_warned: bool,
+    milestone_reported: bool,
 }
 impl Monitor {
     pub fn new(role: Role, limits: &Limits, modes: Modes, t0_ms: u64) -> Self {
@@ -139,6 +147,11 @@ impl Monitor {
             strong_since_request: false,
             first_reported: false,
             silent_reported: false,
+            first_warned: false,
+            silent_warned: false,
+            milestone: false,
+            milestone_warned: false,
+            milestone_reported: false,
         }
     }
     pub fn state(&self) -> State {
@@ -168,6 +181,7 @@ impl Monitor {
         let next = Some(self.last_signal_ms.map_or(ts_ms, |old| old.max(ts_ms)));
         if next != self.last_signal_ms {
             self.silent_reported = false;
+            self.silent_warned = false;
         }
         self.last_signal_ms = next;
     }
@@ -176,6 +190,9 @@ impl Monitor {
             return;
         }
         let strong = s.kind.is_strong();
+        self.milestone |= s.kind == Kind::Verdict
+            || (s.kind == Kind::Tool
+                && matches!(s.tool, Some((ToolClass::Edit, Phase::End | Phase::Done))));
         if self.state == State::Pending {
             if !strong && s.kind != Kind::Request {
                 return;
@@ -204,14 +221,80 @@ impl Monitor {
             self.strong_since_request = false;
         }
     }
-    pub fn tick(&mut self, now_ms: u64, _ctx: Ctx) -> Option<Decision> {
-        let (rule, mode, start, limit, reported, outcome) = match self.state {
+    pub fn tick(&mut self, now_ms: u64, ctx: Ctx) -> Option<Decision> {
+        self.milestone |= ctx.edited;
+        let m_limit = self.limits.milestone_s;
+        let m_age = now_ms.saturating_sub(self.first_activity_ms.unwrap_or(now_ms));
+        let m_enabled = self.state == State::Active
+            && !self.milestone
+            && (!self.milestone_reported || !self.milestone_warned)
+            && self.modes.milestone != Mode::Off;
+        let m_due = m_enabled
+            && !self.milestone_reported
+            && m_limit.is_some_and(|s| m_age >= s.saturating_mul(1000));
+        // Latch safety at the first M deadline, even if S wins this tick.
+        if m_due && !ctx.safe_alt {
+            self.milestone_reported = true;
+        }
+        let s_kill_due = self.modes.silent != Mode::Off
+            && self.silent_warned
+            && !self.silent_reported
+            && self.s_eff_s().is_some_and(|s| {
+                now_ms.saturating_sub(self.last_signal_ms.unwrap_or(now_ms))
+                    >= s.saturating_add(self.limits.confirm_s.unwrap_or(0))
+                        .saturating_mul(1000)
+            });
+        // Kills precede warnings; S wins ties. Do not consume an undelivered S warn.
+        let m_kill_first = m_due && ctx.safe_alt && self.milestone_warned && !s_kill_due;
+        if !m_kill_first {
+            if let Some(d) = self.tick_activity(now_ms) {
+                return Some(d);
+            }
+        }
+        if !m_enabled || m_limit.is_none_or(|s| m_age < s.saturating_mul(600)) {
+            return None;
+        }
+        // Before any state change: a missing value can never drop a Decision mid-update.
+        let kill_at_ms = self
+            .first_activity_ms
+            .zip(m_limit)
+            .map(|(t, s)| t.saturating_add(s.saturating_mul(1000)));
+        let act = if !self.milestone_warned {
+            self.milestone_warned = true;
+            if self.modes.milestone == Mode::On {
+                Act::Warn
+            } else {
+                Act::WouldWarn
+            }
+        } else if m_due && ctx.safe_alt {
+            self.milestone_reported = true;
+            if self.modes.milestone == Mode::On {
+                self.state = State::Ended(Rule::Milestone);
+                Act::Kill
+            } else {
+                Act::WouldKill
+            }
+        } else {
+            return None;
+        };
+        Some(Decision {
+            rule: Rule::Milestone,
+            act,
+            outcome: KillOutcome::NoProgress,
+            open_tools: self.open_tools,
+            s_eff_s: self.s_eff_s(),
+            kill_at_ms,
+        })
+    }
+    fn tick_activity(&mut self, now_ms: u64) -> Option<Decision> {
+        let (rule, mode, start, limit, reported, warned, outcome) = match self.state {
             State::Pending => (
                 Rule::FirstActivity,
                 self.modes.first,
                 self.t0_ms,
                 self.limits.first_activity_s,
                 &mut self.first_reported,
+                &mut self.first_warned,
                 KillOutcome::HangNoActivity,
             ),
             State::Active => (
@@ -220,22 +303,37 @@ impl Monitor {
                 self.last_signal_ms?,
                 self.s_eff_s(),
                 &mut self.silent_reported,
+                &mut self.silent_warned,
                 KillOutcome::HangSilent,
             ),
             State::Ended(_) => return None,
         };
-        let threshold = limit?
+        let limit = limit?;
+        let threshold = limit
             .saturating_add(self.limits.confirm_s.unwrap_or(0))
             .saturating_mul(1000);
-        if mode == Mode::Off || *reported || now_ms.saturating_sub(start) < threshold {
+        let age = now_ms.saturating_sub(start);
+        if mode == Mode::Off || *reported || age < limit.saturating_mul(800) {
             return None;
         }
-        *reported = true;
-        let act = if mode == Mode::On {
-            self.state = State::Ended(rule);
-            Act::Kill
+        let act = if !*warned {
+            *warned = true;
+            if mode == Mode::On {
+                Act::Warn
+            } else {
+                Act::WouldWarn
+            }
         } else {
-            Act::WouldKill
+            if age < threshold {
+                return None;
+            }
+            *reported = true;
+            if mode == Mode::On {
+                self.state = State::Ended(rule);
+                Act::Kill
+            } else {
+                Act::WouldKill
+            }
         };
         Some(Decision {
             rule,
@@ -243,6 +341,7 @@ impl Monitor {
             outcome,
             open_tools: self.open_tools,
             s_eff_s: self.s_eff_s(),
+            kill_at_ms: Some(start.saturating_add(threshold)),
         })
     }
 }
