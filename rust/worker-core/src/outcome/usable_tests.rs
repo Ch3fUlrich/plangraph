@@ -4,11 +4,28 @@ use super::*;
 #[test]
 fn ok_by_role() {
     for role in ROLES {
-        let mut f = facts(role, 0);
-        f.tree_changed = true;
-        f.verdict_usable = true;
-        f.content = true;
-        assert_eq!(classify(&f).class, Class::Ok);
+        for fact in 0..3 {
+            let mut f = facts(role, 0);
+            f.tree_changed = fact == 0;
+            f.verdict_usable = fact == 1;
+            f.content = fact == 2;
+            let own_fact = match role {
+                Role::Implement => 0,
+                Role::Review => 1,
+                Role::Orchestrate | Role::Research | Role::Session => 2,
+            };
+            let expected = if fact == own_fact {
+                Class::Ok
+            } else if fact != 2 {
+                Class::Empty
+            } else if role == Role::Implement {
+                Class::Neutral(Terminal::WriterNoChanges)
+            } else {
+                Class::NoVerdict
+            };
+            assert_eq!(usable(&f), fact == own_fact, "{role:?}, fact {fact}");
+            assert_eq!(classify(&f).class, expected, "{role:?}, fact {fact}");
+        }
     }
 }
 #[test]
@@ -92,4 +109,73 @@ fn describe_redacts_and_caps() {
         .concat(),
     );
     assert_eq!(classify(&f).describe(), "CRASH: [REDACTED]");
+}
+
+#[test]
+fn class_names_match_the_table() {
+    for (class, name) in [
+        (Class::Ok, "OK"),
+        (Class::HangNoActivity, "HANG_NO_ACTIVITY"),
+        (Class::HangSilent, "HANG_SILENT"),
+        (Class::NoProgress, "NO_PROGRESS"),
+        (Class::MaxTime, "MAX_TIME"),
+        (Class::KilledExternal, "KILLED_EXTERNAL"),
+        (Class::Empty, "EMPTY"),
+        (Class::Crash, "CRASH"),
+        (Class::ToolCallOnly, "TOOL_CALL_ONLY"),
+        (Class::NoVerdict, "NO_VERDICT"),
+        (Class::ModelUnavailable, "MODEL_UNAVAILABLE"),
+        (Class::ProviderUnavailable, "PROVIDER_UNAVAILABLE"),
+        (Class::Quota, "QUOTA"),
+        (Class::RateLimit, "RATE_LIMIT"),
+        (Class::Auth, "AUTH"),
+        (Class::Neutral(Terminal::CallerFault), "caller_fault"),
+        (Class::Neutral(Terminal::Cancelled), "cancelled"),
+        (Class::Neutral(Terminal::Orphaned), "orphaned"),
+        (
+            Class::Neutral(Terminal::GitConfigMutated),
+            "git_config_mutated",
+        ),
+        (
+            Class::Neutral(Terminal::WriterNoChanges),
+            "writer_no_changes",
+        ),
+        (Class::Neutral(Terminal::KillIncomplete), "kill_incomplete"),
+        (Class::Neutral(Terminal::ProofFailure), "proof_failure"),
+    ] {
+        assert_eq!(class.as_str(), name, "{class:?}");
+    }
+}
+
+#[test]
+fn describe_redacts_secret_spanning_char_cut() {
+    let prefix = "é".repeat(290) + " ";
+    let secret = ["sk", "-", &"z".repeat(24)].concat();
+    let mut f = facts(Role::Orchestrate, 1);
+    f.evidence = Some(format!("{prefix}{secret}"));
+    let description = classify(&f).describe();
+    let expected: String = format!("{prefix}[REDACTED]").chars().take(300).collect();
+    assert_eq!(description, format!("CRASH: {expected}"));
+    assert!(!description.contains(&["sk", "-"].concat()));
+    assert!(!description.contains('z'));
+}
+
+#[test]
+fn non_finite_resets_are_copied_raw() {
+    for reset_at in [f64::NAN, f64::INFINITY] {
+        for clamped in [false, true] {
+            let mut f = facts(Role::Orchestrate, 1);
+            f.marker = Some(Marker::RateLimit);
+            f.reset = Some(Reset { reset_at, clamped });
+            let outcome = classify(&f);
+            assert_eq!(outcome.class, Class::RateLimit);
+            let actual = outcome.reset_at.expect("reset is carried");
+            if reset_at.is_nan() {
+                assert!(actual.is_nan());
+            } else {
+                assert_eq!(actual, f64::INFINITY);
+            }
+            assert_eq!(outcome.reset_clamped, clamped);
+        }
+    }
 }
