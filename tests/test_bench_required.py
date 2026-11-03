@@ -49,7 +49,7 @@ def test_absent_explicit_operator_order():
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*opencode-deepseek-v4.1-flash-free"):
+    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*cx-gpt-6.1-sol"):  # D-3745
         plan(benchmark=data, strict=True)
 
 

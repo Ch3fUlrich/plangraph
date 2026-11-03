@@ -137,10 +137,9 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-2683 operator writer order (free-first): the free tier leads, then
-# subscription.  agy-sonnet-5.5 is orchestrate-only and never a writer here.
+# D-3745: the lead writer precedes every tier; others retain D-2683 tier/order.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3666/D-3667: tuple head; tier-first sort (D-2683) keeps it behind the free tier
+    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
     "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free",
     "openrouter-free",
@@ -149,6 +148,7 @@ WRITER_ORDER: tuple[str, ...] = (
     "mimo-v2.6-flash",
     "opencode-console-sonnet-5.5",
 )
+LEAD_WRITER = WRITER_ORDER[0]
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",

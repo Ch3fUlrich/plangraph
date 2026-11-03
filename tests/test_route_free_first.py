@@ -1,8 +1,8 @@
-"""Free legs lead every route (SPAWNER-ROUTE-FREE-FIRST).
+"""D-3745: Sol leads implement; other legs retain SPAWNER-ROUTE-FREE-FIRST.
 
 For a public standard card ``spawner.cli route`` lists the serving free legs
-(opencode/*-free, openrouter-free) before the subscription legs, for implement
-and review alike; free legs the route policy bans stay skipped; agy is skipped
+(opencode/*-free, openrouter-free) before other subscription legs; review is
+unchanged; free legs the route policy bans stay skipped; agy is skipped
 while out of quota (leg_state); the one claude writer leg for implement is the
 console Sonnet writer (never a seat); agy-sonnet-5.5 is orchestrate-only.
 """
@@ -24,7 +24,7 @@ def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
                  "--role", "implement", "--json"]) == 0
     plan = json.loads(capsys.readouterr().out)
     ids = [leg["id"] for leg in plan["legs"]]
-    assert ids == FREE + SUBS + ["deepseek"]
+    assert ids == SUBS[:1] + FREE + SUBS[1:] + ["deepseek"]  # D-3745
     assert "agy-sonnet-5.5" not in ids
     assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == [
         "opencode-console-sonnet-5.5"]
@@ -41,7 +41,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     path.write_text(json.dumps({"banned_families": ["deepseek"], "off_families": ["glm"]}))
     monkeypatch.setenv("PLANGRAPH_ROUTE_POLICY", str(path))
     imp = plan_spawn(CARD, role="implement")
-    assert [leg.id for leg in imp.legs] == ["openrouter-free"] + SUBS
+    assert [leg.id for leg in imp.legs] == SUBS[:1] + ["openrouter-free"] + SUBS[1:]  # D-3745
     reasons = {s["leg"]: s["reason"] for s in imp.skipped}
     assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
     assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
@@ -56,7 +56,7 @@ def test_agy_skipped_while_out_of_quota():
                 "evidence": {"unavailable_until": 1000} if limited else None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
     ids = [leg.id for leg in plan.legs]
-    assert ids == FREE + ["cx-gpt-6.1-sol", "mimo-v2.6-pro", "mimo-v2.6-flash",
+    assert ids == ["cx-gpt-6.1-sol"] + FREE + ["mimo-v2.6-pro", "mimo-v2.6-flash",  # D-3745
                           "opencode-console-sonnet-5.5", "deepseek"]
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in plan.skipped}["agy-gemini-3.8-flash"] == "limited"
@@ -68,3 +68,12 @@ def test_cli_route_review_free_first(tmp_path, capsys):
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
     assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]]
     assert ids.index("agy-gemini-3.8-flash") > 2
+
+
+def test_route_sol_unavailable_keeps_tier_writer_order():
+    # D-3745: an ineligible lead does not change the fallback ordering.
+    def reader(model, **kwargs):
+        return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol" else "available", "evidence": None}
+    plan = plan_spawn(CARD, role="implement", leg_reader=reader)
+    assert [leg.id for leg in plan.legs] == FREE + SUBS[1:] + ["deepseek"]
+    assert {s["leg"]: s["reason"] for s in plan.skipped}[SUBS[0]] == "down"

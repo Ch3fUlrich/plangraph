@@ -175,7 +175,7 @@ def test_route_skips_paused_harness_per_role():
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
-    assert writer.first_leg.id == "openrouter-free"
+    assert writer.first_leg.id == "cx-gpt-6.1-sol"  # D-3745: eligible lead precedes free tier
 
 
 def test_explicit_policy_argument_wins():

@@ -23,7 +23,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
-from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg, leg_active
+from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
@@ -113,7 +113,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                overflow: bool = False, role: str | None = None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
 
-    ``role`` falls back to ``card["role"]``; implement sorts tier first, WRITER_ORDER inside it.
+    ``role`` falls back to ``card["role"]``; implement leads with LEAD_WRITER, then tier/order.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
@@ -171,7 +171,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                 w_idx = WRITER_ORDER.index(leg.id)
             except ValueError:
                 w_idx = len(WRITER_ORDER)
-            return (tier_idx, w_idx, pos)
+            return (leg.id != LEAD_WRITER, tier_idx, w_idx, pos)
         eligible.sort(key=sort_key)
     else:
         eligible.sort(key=lambda t: (t[0], t[1]))
