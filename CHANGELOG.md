@@ -7,6 +7,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - **SPAWNER-RL9B part 2b (D-3676, D-3714):** add marker-to-outcome classification tests covering provider failures, quota and rate limits, raw reset propagation, evidence, and exit-status guards; no caller or switch, rollback by revert.
 - **SPAWNER-RL9B part 2 (D-3676, D-3714):** add guarded provider-marker scanning and raw one-shot reset capture; no caller or switch, rollback by git revert.
 
+- **PLACEMENT-R6A-3C4 (D-3676, D-3685):** Add owned-run cancellation, process-local job status and steering responses, and live supervisor health counts; only catalog and session tools remain stubs.
+
 - **PLACEMENT-R6A-3C3b (D-3676, D-3685):** Finish local records with attempt attribution and route dry runs through the launch adapter without starting a process.
 
 - **PLACEMENT-R6A-3C3a (D-3676, D-3685):** Start adapter-specified local runs with bounded admission, refusal records, job registration and optional terminal waits.
