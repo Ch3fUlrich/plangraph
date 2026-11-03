@@ -2,6 +2,86 @@ use super::*;
 
 const TS: f64 = 1_800_000_000.0;
 
+#[test]
+fn unicode_digits_are_unparsed_and_sources_fall_through() {
+    for digit in ['\u{660}', '\u{ff11}'] {
+        for value in [format!("1{digit}"), format!("1{digit}s")] {
+            check(
+                &[("x-ratelimit-reset", &value)],
+                "resets in 2s",
+                Some(TS),
+                2.0,
+            );
+        }
+        check(
+            &[
+                ("retry-after", &format!("1{digit}")),
+                ("x-ratelimit-reset", "7"),
+            ],
+            "",
+            Some(TS),
+            7.0,
+        );
+        for field in ["resetsAt", "retryAfterMs"] {
+            check(
+                &[],
+                &format!("\"{field}\":1{digit}, resets in 2s"),
+                Some(TS),
+                2.0,
+            );
+        }
+        assert_eq!(
+            capture(&[], &format!("resets in {digit}h"), Some(TS), TS),
+            None
+        );
+        for date in [
+            "Sun, 06 Nov 1994 08:49:37 GMT",
+            "2026-11-03T04:00:00.1+01:00",
+        ] {
+            for (index, ch) in date.char_indices().filter(|(_, ch)| ch.is_ascii_digit()) {
+                let mut invalid = date.to_owned();
+                invalid.replace_range(index..index + ch.len_utf8(), &digit.to_string());
+                assert_eq!(http_date(&invalid), None, "{invalid}");
+                check(
+                    &[("x-ratelimit-reset", &invalid)],
+                    "resets in 2s",
+                    Some(TS),
+                    2.0,
+                );
+            }
+        }
+    }
+    assert_eq!(
+        capture(
+            &[("x-ratelimit-reset", "2026-11-03T04:00:00+0\u{660}:00")],
+            "",
+            Some(TS),
+            TS
+        ),
+        None
+    );
+    assert_eq!(capture(&[], "resets in \u{661}h", Some(TS), TS), None);
+}
+
+#[test]
+fn nonfinite_clamp_is_flagged() {
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(clamp_until(value, TS), (TS + CLAMP_S, true));
+    }
+}
+
+#[test]
+fn fixed_patterns_are_cached_and_day_unit_is_independent() {
+    let source = include_str!("../reset.rs");
+    assert!(!source.contains(r"\d"));
+    assert_eq!(source.matches("Regex::new").count(), 7);
+    assert_eq!(source.matches("LazyLock::new").count(), 7);
+    let functions = source.split("fn duration(").nth(1).unwrap();
+    assert!(!functions.contains("Regex::new"));
+    assert!(source.contains("\"d\" | \"day\" | \"days\" => 86_400.0"));
+    check(&[("x-ratelimit-reset", "2d")], "", None, 172_800.0);
+}
+
 fn check(headers: &[(&str, &str)], body: &str, date: Option<f64>, delta: f64) {
     assert_eq!(
         capture(headers, body, date, TS),

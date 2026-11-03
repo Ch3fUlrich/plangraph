@@ -3,6 +3,33 @@
 //! live `rateLimitedUntil` parsing and must not apply the one-shot clamp.
 
 use regex::Regex;
+use std::sync::LazyLock;
+
+static PAIR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-z]+)").unwrap());
+static COMPACT_PAIR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^([0-9]+(?:\.[0-9]+)?)([a-z]+)").unwrap());
+static RESETS_AT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#""resetsAt"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\s*[,}\]]|\s*$)"#)
+        .unwrap()
+});
+static RETRY_AFTER_MS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#""retryAfterMs"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\s*[,}\]]|\s*$)"#,
+    )
+    .unwrap()
+});
+static PREFIX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)resets?\s+(?:in|after)\s+").unwrap());
+static IMF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^[A-Za-z]{3}, ([0-9]{2}) ([A-Za-z]{3}) ([0-9]{4}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) GMT$",
+    )
+    .unwrap()
+});
+static ISO: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2}(?:\.[0-9]+)?)(Z|[+-][0-9]{2}:[0-9]{2})$").unwrap()
+});
 
 #[cfg(test)]
 mod tests;
@@ -17,7 +44,8 @@ pub struct Reset {
 
 /// Clamp using the row's receive time, never the fold's current time.
 pub fn clamp_until(reset_at: f64, ts: f64) -> (f64, bool) {
-    (reset_at.min(ts + CLAMP_S), reset_at > ts + CLAMP_S)
+    let clamped = !reset_at.is_finite() || reset_at > ts + CLAMP_S;
+    (if clamped { ts + CLAMP_S } else { reset_at }, clamped)
 }
 
 fn number(value: &str) -> Option<f64> {
@@ -34,14 +62,12 @@ fn absolute(value: f64, date: Option<f64>, ts: f64) -> Option<f64> {
 }
 
 fn duration(value: &str, compact: bool) -> Option<f64> {
-    let pair = Regex::new(r"(?i)^\s*(\d+(?:\.\d+)?)\s*([a-z]+)").unwrap();
     // Compact headers allow adjacent pairs, so their unit ends at the next digit.
-    let compact_pair = Regex::new(r"(?i)^(\d+(?:\.\d+)?)([a-z]+)").unwrap();
     let mut rest = value;
     let mut total = 0.0;
     let mut seen = false;
     loop {
-        let re = if compact { &compact_pair } else { &pair };
+        let re = if compact { &COMPACT_PAIR } else { &PAIR };
         let Some(c) = re.captures(rest) else {
             return (seen && (!compact || rest.is_empty())).then_some(total);
         };
@@ -50,7 +76,7 @@ fn duration(value: &str, compact: bool) -> Option<f64> {
             "s" | "sec" | "secs" | "second" | "seconds" => 1.0,
             "m" | "min" | "mins" | "minute" | "minutes" => 60.0,
             "h" | "hr" | "hrs" | "hour" | "hours" => 3600.0,
-            "d" | "day" | "days" => CLAMP_S,
+            "d" | "day" | "days" => 86_400.0,
             _ => return None,
         };
         total += number(&c[1])? * factor;
@@ -108,11 +134,7 @@ pub fn capture(
             return Some(finish(at));
         }
     }
-    for field in ["resetsAt", "retryAfterMs"] {
-        let re = Regex::new(&format!(
-            r#""{field}"\s*:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?:\s*[,}}\]]|\s*$)"#
-        ))
-        .unwrap();
+    for (field, re) in [("resetsAt", &RESETS_AT), ("retryAfterMs", &RETRY_AFTER_MS)] {
         if let Some(c) = re.captures(body) {
             if let Some(n) = number(&c[1]) {
                 let at = if field == "retryAfterMs" {
@@ -126,21 +148,13 @@ pub fn capture(
             }
         }
     }
-    let prefix = Regex::new(r"(?i)resets?\s+(?:in|after)\s+").unwrap();
-    let start = prefix.find(body)?.end();
+    let start = PREFIX.find(body)?.end();
     duration(&body[start..], false).map(|n| finish(ts + n))
 }
 
 /// Parse IMF-fixdate or RFC 3339 to epoch seconds; weekday is not cross-checked.
 pub fn http_date(value: &str) -> Option<f64> {
-    let imf =
-        Regex::new(r"^[A-Za-z]{3}, (\d{2}) ([A-Za-z]{3}) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$")
-            .unwrap();
-    let iso = Regex::new(
-        r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})$",
-    )
-    .unwrap();
-    let (year, month, day, hour, minute, second, offset) = if let Some(c) = imf.captures(value) {
+    let (year, month, day, hour, minute, second, offset) = if let Some(c) = IMF.captures(value) {
         let month = [
             "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
         ]
@@ -157,7 +171,7 @@ pub fn http_date(value: &str) -> Option<f64> {
             0,
         )
     } else {
-        let c = iso.captures(value)?;
+        let c = ISO.captures(value)?;
         let zone = &c[7];
         let offset = if zone == "Z" {
             0
