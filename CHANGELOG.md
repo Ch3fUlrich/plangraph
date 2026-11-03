@@ -5,6 +5,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## Unreleased
 
 - **SPAWNER-RL4 part 1 (D-3676, D-3714):** add first/silent warn-before-kill decisions, absolute kill deadlines, confirm-window cancellation and shadow warnings; milestone rules unchanged, no caller or switch, rollback by revert.
+- **PLACEMENT-R6A-2E2 (D-3676, D-3685):** add single-run admission, launch, capture, cancellation and group-sweeping supervision with survivor-held permits; placement remains off.
+
 - **PLACEMENT-R6A-2E1 (D-3676, D-3685):** add run supervisor types, validation and synthetic record finalization, plus capture parity fixes; no process startup, placement remains off.
 
 - **PLACEMENT-R6A-3B2 r1:** Pin exact spawn record keys, preserve Python findings truthiness, safely handle validation errors, and batch refusal fixtures.
