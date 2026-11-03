@@ -14,6 +14,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - **PLACEMENT-R6A-2D (D-3676, D-3685):** add named Windows execution Job Objects with suspended assignment, kill-on-close lifetime, member queries and termination; no caller integration (PLACEMENT remains off).
 
 - **SPAWNER-RL3 (D-3676, D-3714):** add the pure Rust per-attempt activity core with first/silent clocks, tool-aware silence limits, request/weak signal handling and per-rule modes; no caller wiring yet, rollback by revert.
+- **SPAWNER-RL3 seat LOWs:** first_activity never precedes t0 for a stale first signal; tests pin huge-limit saturation and per-rule mode independence.
 - **PLACEMENT-R6A-3A (D-3676, D-3685):** add Python-compatible JSON-RPC errors and shared read-only run records for `pg-spawnd` ps/result/status/steer, plus `serve --state` resolution; placement remains off and launch tools remain staged stubs.
 - **PLACEMENT-R6A-3D r1:** guard launch-spec response writes, refuse expired and role-ineligible legs, and reclaim aged launch directories with unusable records; pin Windows env casing, cwd normalization and CLI error handling.
 - **PLACEMENT-R6A-3D (D-3676, D-3685):** add the Python launch-spec adapter, reusing launch preparation without starting a harness; private per-run config isolation and stale-directory cleanup, with child secrets returned only on stdout.

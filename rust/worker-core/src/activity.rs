@@ -113,28 +113,32 @@ impl Default for Limits {
 pub struct Monitor {
     pub(crate) _role: Role,
     limits: Limits,
-    _modes: Modes,
-    _t0_ms: u64,
+    modes: Modes,
+    t0_ms: u64,
     state: State,
     first_activity_ms: Option<u64>,
     last_signal_ms: Option<u64>,
     last_strong_ms: Option<u64>,
     open_tools: u32,
     strong_since_request: bool,
+    first_reported: bool,
+    silent_reported: bool,
 }
 impl Monitor {
     pub fn new(role: Role, limits: &Limits, modes: Modes, t0_ms: u64) -> Self {
         Self {
             _role: role,
             limits: *limits,
-            _modes: modes,
-            _t0_ms: t0_ms,
+            modes,
+            t0_ms,
             state: State::Pending,
             first_activity_ms: None,
             last_signal_ms: None,
             last_strong_ms: None,
             open_tools: 0,
             strong_since_request: false,
+            first_reported: false,
+            silent_reported: false,
         }
     }
     pub fn state(&self) -> State {
@@ -162,6 +166,9 @@ impl Monitor {
     }
     fn refresh(&mut self, ts_ms: u64) {
         let next = Some(self.last_signal_ms.map_or(ts_ms, |old| old.max(ts_ms)));
+        if next != self.last_signal_ms {
+            self.silent_reported = false;
+        }
         self.last_signal_ms = next;
     }
     pub fn feed(&mut self, s: Signal) {
@@ -174,7 +181,7 @@ impl Monitor {
                 return;
             }
             self.state = State::Active;
-            self.first_activity_ms = Some(s.ts_ms);
+            self.first_activity_ms = Some(s.ts_ms.max(self.t0_ms));
             self.refresh(s.ts_ms);
         }
         if strong {
@@ -197,7 +204,45 @@ impl Monitor {
             self.strong_since_request = false;
         }
     }
-    pub fn tick(&mut self, _now_ms: u64, _ctx: Ctx) -> Option<Decision> {
-        None
+    pub fn tick(&mut self, now_ms: u64, _ctx: Ctx) -> Option<Decision> {
+        let (rule, mode, start, limit, reported, outcome) = match self.state {
+            State::Pending => (
+                Rule::FirstActivity,
+                self.modes.first,
+                self.t0_ms,
+                self.limits.first_activity_s,
+                &mut self.first_reported,
+                KillOutcome::HangNoActivity,
+            ),
+            State::Active => (
+                Rule::Silent,
+                self.modes.silent,
+                self.last_signal_ms?,
+                self.s_eff_s(),
+                &mut self.silent_reported,
+                KillOutcome::HangSilent,
+            ),
+            State::Ended(_) => return None,
+        };
+        let threshold = limit?
+            .saturating_add(self.limits.confirm_s.unwrap_or(0))
+            .saturating_mul(1000);
+        if mode == Mode::Off || *reported || now_ms.saturating_sub(start) < threshold {
+            return None;
+        }
+        *reported = true;
+        let act = if mode == Mode::On {
+            self.state = State::Ended(rule);
+            Act::Kill
+        } else {
+            Act::WouldKill
+        };
+        Some(Decision {
+            rule,
+            act,
+            outcome,
+            open_tools: self.open_tools,
+            s_eff_s: self.s_eff_s(),
+        })
     }
 }
