@@ -5,17 +5,29 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn fixture() -> (std::path::PathBuf, Value) {
+struct TestDir(std::path::PathBuf);
+impl std::ops::Deref for TestDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+fn fixture() -> (TestDir, Value) {
     let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
     std::fs::create_dir(&dir).unwrap();
     let spec = json!({"argv":["sh"],"cwd":dir,"env":{},"stdin":null});
-    (dir, spec)
+    (TestDir(dir), spec)
 }
 fn script(dir: &std::path::Path, body: &str) -> LaunchAdapter {
     let path = dir.join("launch");
     std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-    LaunchAdapter(Some(path.into_os_string()))
+    LaunchAdapter(Some(path.into_os_string()), "python3".into())
 }
 #[test]
 fn contract_table() {
@@ -64,7 +76,6 @@ fn contract_table() {
     let spec = parse(&serde_json::to_vec(&good).unwrap()).ok().unwrap();
     assert_eq!(spec.warnings.unwrap(), ["warning"]);
     assert_eq!(spec.events.unwrap()[0]["event"], "ready");
-    std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]
 fn request_pipe_and_exits() {
@@ -74,7 +85,7 @@ fn request_pipe_and_exits() {
         &dir,
         &format!("cat > '{0}/request'\ncat '{0}/spec'", dir.display()),
     );
-    let request = json!({"run_id":"run","job_id":"job","role":"implement","dry_run":false,"leg":{},"prompt":" verbatim\n","card":{},"cwd":dir,"state":dir});
+    let request = json!({"run_id":"run","job_id":"job","role":"implement","dry_run":false,"leg":{},"prompt":" verbatim\n","card":{},"cwd":dir.0,"state":dir.0});
     assert!(adapter
         .request(&dir, &request, Duration::from_secs(1))
         .is_ok());
@@ -88,6 +99,7 @@ fn request_pipe_and_exits() {
             "SpawnRefused: nope",
         ),
         ("exit 1", "launch adapter failed (exit 1)"),
+        ("kill -9 $$", "launch adapter killed by a signal"),
         (
             "echo broken",
             "launch adapter returned an invalid launch spec",
@@ -100,7 +112,6 @@ fn request_pipe_and_exits() {
             .into_error_data();
         assert_eq!(error.message, expected);
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]
 fn timeout_kills_group() {
@@ -123,5 +134,71 @@ fn timeout_kills_group() {
         .parse()
         .unwrap();
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
-    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn exited_adapter_closes_descendant_pipes() {
+    let (dir, valid) = fixture();
+    std::fs::write(dir.join("spec"), serde_json::to_vec(&valid).unwrap()).unwrap();
+    let adapter = script(&dir, &format!("cat '{}/spec'\n(sleep 5 &)", dir.display()));
+    let start = Instant::now();
+    assert!(adapter
+        .request(&dir, &json!({}), Duration::from_secs(1))
+        .is_ok());
+    assert!(start.elapsed() < Duration::from_millis(900));
+}
+
+#[test]
+fn lookup_rules_and_missing_program() {
+    let (dir, _) = fixture();
+    let default = LaunchAdapter::from_lookup(&|_| None);
+    assert!(default.0.is_none());
+    assert_eq!(default.1, "python3");
+    let adapter = LaunchAdapter::from_lookup(&|key| match key {
+        "PG_SPAWND_LAUNCH_CMD" => Some("".into()),
+        "PG_SPAWND_PYTHON" => Some(dir.join("missing").into_os_string()),
+        _ => None,
+    });
+    assert!(adapter.0.is_none());
+    assert_eq!(adapter.1, dir.join("missing").into_os_string());
+    let relative = LaunchAdapter::from_lookup(&|_| Some("relative".into()));
+    for adapter in [adapter, relative] {
+        assert_eq!(
+            adapter
+                .request(&dir, &json!({}), Duration::from_secs(1))
+                .err()
+                .unwrap()
+                .into_error_data()
+                .message,
+            "launch adapter could not start"
+        );
+    }
+}
+
+#[test]
+fn refusal_redaction_truncation_and_empty_line() {
+    let (dir, _) = fixture();
+    let secret = ["sk-", &"x".repeat(40)].concat();
+    let line = format!("{secret} {}", "z ".repeat(200));
+    let expected: String = pg_worker_core::redact::redact(&line)
+        .chars()
+        .take(300)
+        .collect();
+    assert!(!expected.contains(&secret));
+    assert_eq!(expected.chars().count(), 300);
+    for (line, expected) in [
+        (line.as_str(), expected.as_str()),
+        ("\nignored", "launch refused"),
+    ] {
+        let adapter = script(&dir, &format!("printf '%s\\n' '{line}' >&2; exit 2"));
+        assert_eq!(
+            adapter
+                .request(&dir, &json!({}), Duration::from_secs(1))
+                .err()
+                .unwrap()
+                .into_error_data()
+                .message,
+            expected
+        );
+    }
 }
