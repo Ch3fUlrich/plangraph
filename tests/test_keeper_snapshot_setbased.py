@@ -112,7 +112,7 @@ def test_snapshot_bytes_equal_the_per_item_path(tmp_path):
     world, _ = _busy_world(tmp_path, 8)
     try:
         now = world.store.now()
-        new = json.dumps(world.store._snapshot(now)).encode()
+        new = json.dumps(world.store._snapshot(now)[0]).encode()
         old = json.dumps(_legacy_snapshot(world.store, now)).encode()
         assert new == old
         assert any(i["reviews"] for i in json.loads(new)["items"]), "fixture needs a verdict"

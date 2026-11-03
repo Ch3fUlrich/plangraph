@@ -94,7 +94,7 @@ class ReadMixin:
     def _progress_in(self, principal, project, now):
         if isinstance(principal, auth.OversightPrincipal) and project is not None:
             self._require_project(principal, project)
-        return progress(self._snapshot(now)["items"], project=project)
+        return progress(self._snapshot(now)[0]["items"], project=project)
 
     def whoami(self, principal):
         return self._run(principal, "whoami", None,
@@ -191,8 +191,10 @@ class ReadMixin:
 
     # ---------------------------------------------------------- snapshot
     def snapshot(self, principal):
-        return self._run(principal, "snapshot", None,
-                         lambda now: self._snapshot(now))
+        return self.snapshot_body(principal)[0]
+
+    def snapshot_body(self, principal):
+        return self._run(principal, "snapshot", None, lambda now: self._snapshot(now))
 
     def _snapshot_run_meta(self):
         """One grouped query for done/reviewed/created timestamps + merged."""
@@ -284,8 +286,8 @@ class ReadMixin:
                 "decision_text": timer.run("decision", self._decision_text,
                                            items, now, evidence, timing=timer),
                 "progress": timer.run("progress", progress, out)}   # PROGRESS-PANEL: the page's static panel
-        timer.finish(snap)   # KEEPER-SNAP-S0-TIMINGS: one stderr line (ms + counts only)
-        return snap
+        body = timer.finish(snap)   # one timing line; body is reused by the writer
+        return snap, body
 
     def _activity(self, now):
         """Compact ``events`` feed for the last 31 days, oldest first."""

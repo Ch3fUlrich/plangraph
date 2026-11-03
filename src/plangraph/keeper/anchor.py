@@ -248,15 +248,15 @@ class Anchorer:
         try:
             answer = submit(self.cfg, rec)
         except AnchorError as exc:
-            snapshot_timing.anchor_line(self.clock() - start,
-                                        self.clock() - start, False, err=self.err)
+            now = self.clock()             # r1: one read for both ms values
+            snapshot_timing.anchor_line(now - start, now - start, False, err=self.err)
             if str(exc) != self.error:
                 self.err.write(f"keeper: anchor not written: {exc}\n")
             self.error = str(exc)
             self.retry_at = self.clock() + RETRY_AFTER_S
             return None
-        snapshot_timing.anchor_line(self.clock() - start,
-                                    self.clock() - start, True, err=self.err)
+        now = self.clock()
+        snapshot_timing.anchor_line(now - start, now - start, True, err=self.err)
         self.error, self.retry_at = None, 0.0
         self.last_seq, self.last_ts = seq, self.clock()
         if not self.cfg.get("anchor_socket"):

@@ -27,7 +27,11 @@ def write_snapshot(server, principal) -> None:
     # role-agnostic, so it is built as the system principal, as the reaper does.
     from .auth import RunPrincipal
     who = server.system if isinstance(principal, RunPrincipal) else principal
-    body = json.dumps(server.store.snapshot(who)).encode("utf-8")
+    # r1: reuse the body the build already dumped (one serialise per write).
+    build = getattr(server.store, "snapshot_body", None)
+    snap, body = (build(who) if build is not None
+                  else (server.store.snapshot(who), None))
+    body = body if body is not None else json.dumps(snap).encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     key = getattr(server.config, "signing_key", None)
     if key:   # M2B: signature then snapshot; a reader in the gap retries once. A crash between the

@@ -25,6 +25,7 @@ by a non-space) do not act as boundaries.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -132,17 +133,20 @@ class DecisionsAdapter:
         return rows
 
     def _stamp(self):
-        """``(mtime_ns, size)`` of the decisions file, or ``None`` (never cached)."""
+        """Cheap content digest of the decisions file, or ``None`` (never cached).
+
+        Keys the cache - not ``(mtime_ns, size)``, which repeats across same-size
+        edits on a coarse-mtime filesystem - and is far cheaper than parsing."""
         if self._path is None:
             return None
         try:
-            st = self._path.stat()
+            data = self._path.read_bytes()
         except OSError:
             return None
-        return (st.st_mtime_ns, st.st_size)
+        return hashlib.blake2b(data, digest_size=8).digest()
 
     def _cached_rows(self) -> dict[str, list[str]]:
-        """``_rows()`` cached on ``(mtime_ns, size)`` - SNAPSHOT READ PATH ONLY.
+        """``_rows()`` cached on a cheap content digest - SNAPSHOT READ PATH ONLY.
 
         ``store_read._decision_text`` (via ``snapshot_texts``) is the sole
         caller: the write-path enforcement methods (``has``, ``text``,
@@ -298,13 +302,13 @@ def snapshot_texts(adapter, ids):
 
     The snapshot read path only (``store_read._decision_text``): a real
     :class:`DecisionsAdapter` parses the decisions file once per file version
-    through ``_cached_rows`` (stamped on ``(mtime_ns, size)``) and answers every
+    through ``_cached_rows`` (keyed on a cheap content digest) and answers every
     id from that one parse, while the write-path enforcement methods stay
-    uncached; any other adapter (a test fake) keeps the per-id ``text()`` loop.
-    Same rules as ``text()`` plus the snapshot's 600-char cap.
+    uncached; any other adapter (a test fake or subclass) keeps the per-id
+    ``text()`` loop.  Same rules as ``text()`` plus the snapshot's 600-char cap.
     """
-    if isinstance(adapter, DecisionsAdapter):
-        rows = adapter._cached_rows()
+    if type(adapter) is DecisionsAdapter:   # exact type: a subclass overriding
+        rows = adapter._cached_rows()       # text() must keep its own loop
 
         def lookup(did):
             return _text_from_rows(rows, did)

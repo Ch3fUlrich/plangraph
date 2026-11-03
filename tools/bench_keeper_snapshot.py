@@ -13,6 +13,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import re
 import statistics
 import tempfile
@@ -52,12 +53,12 @@ def _pct(xs, p):
 
 
 def run(backend, n, writes, reads, decisions=0, extra=None):
+    os.environ.setdefault("PLANGRAPH_SNAPSHOT_TIMING", "1")   # the bench wants the split
     tmp = Path(tempfile.mkdtemp(prefix="bench-snap-"))
     cfg_doc = {"db": str(tmp / "keeper.db"), "snapshot": str(tmp / "plan.snapshot.json"),
                "bind": "127.0.0.1:0", "reap_interval": 3600, **(extra or {})}
     opts = {}
     if backend == "postgres":
-        import os
         opts = {"backend": "postgres", "dsn": os.environ["PG_DSN"],
                 "schema": "b" + uuid.uuid4().hex[:10]}
         cfg_doc.update(backend="postgres", dsn=opts["dsn"], pg_schema=opts["schema"])
@@ -89,23 +90,27 @@ def run(backend, n, writes, reads, decisions=0, extra=None):
             store.add_evidence(worker, f"bench:L{i}", epoch, "decision",
                                {"id": f"D-{i + 1}"})
     server = api.make_server(store, cfg, host="127.0.0.1", port=0)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
-    lat = []
-    for i in range(writes):
-        t = time.perf_counter()
-        _call(base, token, "POST", "/v1/set_priority", {"key": f"bench:L{i % n}", "n": i % 5})
-        lat.append((time.perf_counter() - t) * 1000)
-    flush = getattr(server, "flush_snapshot", None)
-    if flush:
-        flush()
-    rd = []
-    for _ in range(reads):
-        t = time.perf_counter()
-        _call(base, token, "GET", "/v1/snapshot")
-        rd.append((time.perf_counter() - t) * 1000)
-    server.shutdown()
-    server.server_close()
+    try:
+        lat = []
+        for i in range(writes):
+            t = time.perf_counter()
+            _call(base, token, "POST", "/v1/set_priority", {"key": f"bench:L{i % n}", "n": i % 5})
+            lat.append((time.perf_counter() - t) * 1000)
+        flush = getattr(server, "flush_snapshot", None)
+        if flush:
+            flush()
+        rd = []
+        for _ in range(reads):
+            t = time.perf_counter()
+            _call(base, token, "GET", "/v1/snapshot")
+            rd.append((time.perf_counter() - t) * 1000)
+    finally:                                   # explicit shutdown: no live server behind
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
     capture = io.StringIO()                             # one build's per-phase split (stderr line)
     with contextlib.redirect_stderr(capture):
         store.snapshot(who)

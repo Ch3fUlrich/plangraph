@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import io
 import re
-import sys
 from pathlib import Path
 
 from keeper_snap_s0_util import SENTINELS, build
@@ -19,7 +18,8 @@ LINE_RE = re.compile(r"^keeper: ([a-z_]+_timing)((?: [a-z_]+=[0-9]+)+)$")
 
 
 # (e) the timing line contains no item key, decision id or decision text
-def test_snapshot_timing_line_carries_counts_and_no_secrets(tmp_path, capsys):
+def test_snapshot_timing_line_carries_counts_and_no_secrets(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_SNAPSHOT_TIMING", "1")   # r1: lines are opt-in
     w, _ = build(tmp_path)
     w.store.snapshot(w.p("router"))
     lines = [line for line in capsys.readouterr().err.splitlines()
@@ -40,7 +40,8 @@ def test_snapshot_timing_line_carries_counts_and_no_secrets(tmp_path, capsys):
     assert not any(sentinel in lines[0] for sentinel in SENTINELS + ("demo",))
 
 
-def test_anchor_timing_line_for_a_tick_that_did_work(tmp_path):
+def test_anchor_timing_line_for_a_tick_that_did_work(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_SNAPSHOT_TIMING", "1")   # r1: lines are opt-in
     w = World(tmp_path)
     (key,) = seed(w, [("A", [])])
     err = io.StringIO()
@@ -64,8 +65,9 @@ def test_anchor_timing_line_for_a_tick_that_did_work(tmp_path):
 
 
 # (f) the bench runs with seeded rows and prints the per-phase split
-def test_bench_seeds_rows_and_prints_the_phase_split(capsys):
-    sys.path.insert(0, str(ROOT / "tools"))
+def test_bench_seeds_rows_and_prints_the_phase_split(capsys, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "tools"))       # r1: restored after the test
+    monkeypatch.setenv("PLANGRAPH_SNAPSHOT_TIMING", "1")
     import bench_keeper_snapshot as bench
     bench.main(["--backend", "sqlite", "--sizes", "12", "--writes", "1",
                 "--reads", "1", "--decisions", "5"])

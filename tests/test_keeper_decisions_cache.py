@@ -1,9 +1,9 @@
 """KEEPER-SNAP-S0-TIMINGS: the decisions file is parsed once per snapshot build.
 
-``_cached_rows`` (stamped on ``(mtime_ns, size)``) backs the snapshot
+``_cached_rows`` (keyed on a cheap content digest) backs the snapshot
 ``decision_text`` read path only; the write-path enforcement methods
 (``has``/``text``/``waives``/``closes``) must re-read the file on every call,
-so a missed same-size edit can never mis-authorise a close or a waiver.
+so a missed edit can never mis-authorise a close or a waiver.
 """
 from __future__ import annotations
 
@@ -53,14 +53,14 @@ def test_cache_invalidated_on_mtime_or_size_change(tmp_path, monkeypatch):
     st = path.stat()
     edited = DECISIONS_DOC.replace("second row text for 210",
                                    "second row text for 211")
-    # same size, new mtime -> re-parse (the mtime is part of the key)
+    # new content -> re-parse (the content digest is the cache key)
     path.write_text(edited)
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
     snap = _snap(w)
     assert snap["decision_text"]["D-210"] == "second row text for 211"
     assert len(calls) == 2
-    # same (cached) mtime, new size -> re-parse (the size is part of the key):
-    # only a cited id can show the re-parse, so change D-210's text by one char
+    # new content again -> re-parse; only a cited id can show the re-parse,
+    # so change D-210's text and add an uncited row
     path.write_text(edited.replace("second row text for 211",
                                    "second row text for 2111")
                     + "| D-700 | demo | size changed text |\n")
@@ -80,14 +80,28 @@ def test_enforcement_re_reads_after_a_same_size_edit(tmp_path):
     path.write_text(DECISIONS_DOC.replace("| D-209 | demo | sentinel decision text |",
                                           "| D-301 | demo | sentinel decision text |"))
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))   # same size AND same mtime
-    # the snapshot cache is blind to that edit (documented: read path only) ...
-    assert snapshot_texts(adapter, ["D-209"]) == {"D-209": "sentinel decision text"}
-    # ... but enforcement never reads the cache: it re-reads every call
+    # the content-hash cache key sees through the identical stat stamp ...
+    assert snapshot_texts(adapter, ["D-209"]) == {}
+    assert snapshot_texts(adapter, ["D-301"]) == {"D-301": "sentinel decision text"}
+    # ... and enforcement never reads the cache: it re-reads every call
     assert adapter.has("D-209") is False
     assert adapter.has("D-301") is True
     assert adapter.text("D-209") is None
     assert adapter.text("D-301") == "sentinel decision text"
     assert adapter.closes("D-301") == set()
+
+
+# (c2) two same-size edits at one identical (mtime_ns, size) stamp each show fresh text
+def test_cache_key_catches_two_same_size_edits_at_identical_stamp(tmp_path):
+    w, _ = build(tmp_path)
+    path = tmp_path / "decisions.md"
+    st = path.stat()
+    _snap(w)                                           # warm the snapshot cache
+    for repl in ("4rx", "4qx"):                        # same size, coarse mtime
+        path.write_text(DECISIONS_DOC.replace("second row text for 210",
+                                              f"second row text {repl} 210"))
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))   # the stamp repeats
+        assert _snap(w)["decision_text"]["D-210"] == f"second row text {repl} 210"
 
 
 # (d) unfiltered snapshot body byte-identical to the pre-change code path
@@ -114,3 +128,16 @@ def test_fake_adapter_keeps_the_per_id_text_loop():
         pass
 
     assert snapshot_texts(NoText(), ["D-1"]) == {}
+
+
+def test_subclass_overriding_text_keeps_its_own_text_loop():
+    calls = []
+
+    class MyAdapter(DecisionsAdapter):
+        def text(self, did):
+            calls.append(did)
+            return f"sub {did}"
+
+    sub = MyAdapter(None)
+    assert snapshot_texts(sub, ["D-1"]) == {"D-1": "sub D-1"}
+    assert calls == ["D-1"]
