@@ -108,8 +108,11 @@ impl Adapter<'_> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    // PG_SPAWND_ADAPTER is process-global: the tests that set it run one at a time.
+    static ADAPTER_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
     fn timeout_kills_group_and_bounds_capture() {
+        let _env = ADAPTER_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
         std::fs::create_dir(&dir).unwrap();
         let script = dir.join("adapter");
@@ -138,7 +141,14 @@ mod tests {
             .unwrap();
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
         assert_eq!(drain(&b"abcdef"[..], 3), b"abc");
-        for timeout in [Duration::from_secs(30), Duration::from_millis(300)] {
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    fn escaped_descendant_is_bounded(timeout: Duration) {
+        let _env = ADAPTER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+        std::fs::create_dir(&dir).unwrap();
+        let script = dir.join("adapter");
+        {
             std::fs::write(
                 &script,
                 format!(
@@ -152,6 +162,7 @@ mod tests {
                 ),
             )
             .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             std::env::set_var("PG_SPAWND_ADAPTER", &script);
             let start = Instant::now();
             let result = Adapter(&dir).run(&[], timeout);
@@ -171,5 +182,13 @@ mod tests {
             assert!(elapsed < Duration::from_secs(4));
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn escaped_descendant_after_exit_is_bounded() {
+        escaped_descendant_is_bounded(Duration::from_secs(30));
+    }
+    #[test]
+    fn escaped_descendant_after_timeout_is_bounded() {
+        escaped_descendant_is_bounded(Duration::from_millis(300));
     }
 }
