@@ -1,7 +1,9 @@
+mod adapter;
 mod cli;
 #[cfg(test)]
 mod error_tests;
 mod errors;
+mod placement;
 mod records;
 mod serve;
 mod shim;

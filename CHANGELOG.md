@@ -4,6 +4,9 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **PLACEMENT-R6A-3B1 r1:** pin guarded record opens, validate typed route options before card size, preserve route/probe stdout, and bound adapter pipe-reader waits.
+
+- **PLACEMENT-R6A-3B (D-3676, D-3685):** R6a-3b1 adds the bounded Python route adapter and route/probe tools; hardens record opens and documents integer coercion; placement remains off, spawn remains a stub.
 - **PLACEMENT-R6A-2D (D-3676, D-3685):** add named Windows execution Job Objects with suspended assignment, kill-on-close lifetime, member queries and termination; no caller integration (PLACEMENT remains off).
 
 - **SPAWNER-RL3 (D-3676, D-3714):** add the pure Rust per-attempt activity core with first/silent clocks, tool-aware silence limits, request/weak signal handling and per-rule modes; no caller wiring yet, rollback by revert.
