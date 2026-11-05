@@ -149,3 +149,40 @@ fn switches_env_file_default_per_role_hot_reload_warn_log_only() {
     assert_eq!(mode(Some("invalid"), &path, "review"), LegRefMode::Off);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn configured_switch_names_and_precedence() {
+    const CHILD: &str = "PG_LEG_REF_SWITCH_TEST";
+    if std::env::var_os(CHILD).is_some() {
+        let root = std::path::PathBuf::from(std::env::var_os("XDG_CONFIG_HOME").unwrap());
+        let path = root.join("plangraph/reliability.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"leg_ref":"on"}"#).unwrap();
+        let expected = match std::env::var("PLANGRAPH_RELIABILITY_LEG_REF")
+            .ok()
+            .as_deref()
+        {
+            Some("warn") => LegRefMode::Warn,
+            Some("invalid") => LegRefMode::Off,
+            _ => LegRefMode::On,
+        };
+        assert_eq!(configured_mode("implement"), expected);
+        return;
+    }
+    let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    for value in [None, Some("warn"), Some("invalid")] {
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "leg_ref::tests::configured_switch_names_and_precedence",
+        ])
+        .env(CHILD, "1")
+        .env("XDG_CONFIG_HOME", &root)
+        .env_remove("PLANGRAPH_RELIABILITY_LEG_REF");
+        if let Some(value) = value {
+            cmd.env("PLANGRAPH_RELIABILITY_LEG_REF", value);
+        }
+        assert!(cmd.output().unwrap().status.success());
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -102,6 +102,27 @@ pub(crate) enum LegRefMode {
     Warn,
     On,
 }
+pub(crate) fn configured_mode(role: &str) -> LegRefMode {
+    let root = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "APPDATA" } else { "HOME" }).map(|p| {
+                if cfg!(windows) {
+                    p.into()
+                } else {
+                    std::path::PathBuf::from(p).join(".config")
+                }
+            })
+        })
+        .unwrap_or_default();
+    mode(
+        std::env::var("PLANGRAPH_RELIABILITY_LEG_REF")
+            .ok()
+            .as_deref(),
+        &root.join("plangraph/reliability.json"),
+        role,
+    )
+}
 // No process environment mutation; callers inject lookup and platform config path.
 pub(crate) fn mode(env: Option<&str>, path: &Path, role: &str) -> LegRefMode {
     let file = std::fs::read(path)
@@ -249,11 +270,7 @@ pub(crate) fn admit(
         .get("role")
         .and_then(|v| v.as_str())
         .unwrap_or("implement");
-    let mode = mode(
-        std::env::var("PLANGRAPH_LEG_REF").ok().as_deref(),
-        &state.join("config.json"),
-        role,
-    );
+    let mode = configured_mode(role);
     let mut admitted = args.clone();
     if mode != LegRefMode::Off && ["leg", "model"].iter().any(|k| args.contains_key(*k)) {
         // Reject malformed refs before even invoking the catalog adapter.

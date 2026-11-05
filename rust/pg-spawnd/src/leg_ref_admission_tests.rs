@@ -178,6 +178,14 @@ fn wired_adapter_case(invalid: bool) {
         let spawn = crate::spawn::spawn(&state, &a, "local", &runs);
         assert_eq!(route.is_err(), invalid);
         assert_eq!(spawn.is_err(), invalid);
+        let rows = crate::records::list_runs(&state);
+        assert_eq!(rows.len(), 1);
+        if invalid {
+            assert_eq!(rows[0]["refusal"], "ParameterRefused");
+        } else {
+            assert_eq!(rows[0]["host"], "local");
+            assert_eq!(rows[0]["chosen_leg"]["id"], "registered");
+        }
         return;
     }
     use std::os::unix::fs::PermissionsExt;
@@ -190,13 +198,20 @@ fn wired_adapter_case(invalid: bool) {
 printf '%s\n' "$*" >> "$PG_LEG_REF_STATE/calls"
 case "$3" in
 catalog) printf '[{"id":"registered","model":"provider/model","roles":["implement"]}]';;
-route|spawn) printf '{}';;
+route) printf '{"legs":[{"id":"registered","harness":"test","model":"provider/model","family":"test"}],"first_leg":{}}';;
 *) exit 9;;
 esac
 "#,
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let launch = temp.join("launch.sh");
+    std::fs::write(
+        &launch,
+        "#!/bin/sh\nprintf '{\"argv\":[\"true\"],\"cwd\":\".\",\"env\":{},\"stdin\":null}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o700)).unwrap();
     let name = if invalid {
         "invalid_ref_never_calls_adapter_in_on"
     } else {
@@ -206,7 +221,8 @@ esac
         .args(["--exact", &format!("leg_ref::admission_tests::{name}")])
         .env(CHILD, "1")
         .env("PG_LEG_REF_STATE", &temp)
-        .env("PLANGRAPH_LEG_REF", "on")
+        .env("PLANGRAPH_RELIABILITY_LEG_REF", "on")
+        .env("PG_SPAWND_LAUNCH_CMD", &launch)
         .env("PG_SPAWND_ADAPTER", &script)
         .output()
         .unwrap();
@@ -223,9 +239,7 @@ esac
         assert_eq!(calls.lines().filter(|l| l.ends_with("catalog")).count(), 1);
         let route = calls.lines().find(|l| l.contains(" route ")).unwrap();
         assert!(!route.contains("--leg"));
-        assert!(calls.lines().any(|l| l.contains(" spawn ")
-            && l.contains("--leg registered")
-            && l.contains("--dry-run")));
+        assert!(!calls.lines().any(|l| l.contains(" spawn ")));
     }
     std::fs::remove_dir_all(temp).unwrap();
 }
@@ -238,4 +252,12 @@ fn mcp_route_and_spawn_override_share_resolver() {
 #[test]
 fn invalid_ref_never_calls_adapter_in_on() {
     wired_adapter_case(true);
+}
+
+#[test]
+fn omitted_role_with_diff_ref_refused() {
+    for mode in [LegRefMode::Off, LegRefMode::Warn, LegRefMode::On] {
+        let mut a = args(json!({"card":{"diff_ref":"change"},"dry_run":true}));
+        assert!(admit_ref(&mut a, &catalog(), mode).is_err());
+    }
 }
