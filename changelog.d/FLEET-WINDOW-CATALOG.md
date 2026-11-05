@@ -1,2 +1,1 @@
-- **FLEET-WINDOW-CATALOG:** Add read-only versioned window capture with explicit unknowns, override provenance and proved served coverage; no lifecycle or threshold changes.
-- Preserve evidence with a separate clock watermark; retain typed served proofs, reject identical duplicates, and distinguish missing fields from declared unknowns.
+- **FLEET-WINDOW-CATALOG:** Add read-only versioned window capture with explicit unknowns, override provenance, validated served proof evidence and a separate clock watermark; preserve identical duplicates with distinct findings, alarm on absent entries, and reject invalid units before expiry; no lifecycle or threshold changes.

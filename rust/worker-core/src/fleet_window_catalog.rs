@@ -73,10 +73,10 @@ fn window(v: &Value, now: i64) -> Result<Window, &'static str> {
     if v.is_null() {
         return Err("missing_field");
     }
-    time(v, now)?;
     if v["unit"] != "tokens" {
         return Err("invalid_unit");
     }
+    time(v, now)?;
     match serde_json::from_value::<Window>(v["window"].clone()) {
         Ok(Window::Known(n)) if n > 0 => Ok(Window::Known(n)),
         Ok(Window::Unknown(s)) if !s.trim().is_empty() => Ok(Window::Unknown(s)),
@@ -111,7 +111,7 @@ pub fn validate(evidence: Value, now_s: i64) -> Capture {
     } else {
         None
     };
-    let Some(entries) = evidence["entries"].as_array() else {
+    let Some(entries) = evidence["entries"].as_array().filter(|e| !e.is_empty()) else {
         let w = alarm(
             &mut out,
             &Value::Null,
@@ -132,7 +132,14 @@ pub fn validate(evidence: Value, now_s: i64) -> Capture {
         let duplicate = entries
             .iter()
             .enumerate()
-            .any(|(j, other)| j != i && other["identity"] == *id);
+            .any(|(j, other)| j != i && other["identity"] == *id && other != entry);
+        if entries
+            .iter()
+            .enumerate()
+            .any(|(j, other)| j != i && other == entry)
+        {
+            alarm(&mut out, id, &source, "duplicate_identical");
+        }
         let invalid_id = ["role", "model", "harness"].iter().any(|k| !text(&id[k]));
         let selected = if entry.get("override").is_some() {
             "override"
@@ -266,14 +273,60 @@ mod tests {
         assert_eq!(out["records"][0]["coverage"][0], expected);
     }
     #[test]
-    fn identical_duplicates_conflict() {
+    fn identical_duplicates_preserve_windows() {
         let mut v = fixture();
         let duplicate = v["entries"][0].clone();
         v["entries"].as_array_mut().unwrap().push(duplicate);
         let out = validate(v, 20);
-        unknown(&out, "duplicate_conflict");
+        assert_eq!(out.records[0].window, Window::Known(32000));
+        assert_eq!(out.findings.len(), 2);
+        assert!(out
+            .findings
+            .iter()
+            .all(|f| f.reason == "duplicate_identical"));
         assert_eq!(out.records[2].window, out.records[0].window);
         assert_eq!(out.records[1].window, Window::Known(900000));
+    }
+    #[test]
+    fn unit_precedes_expiry() {
+        let mut v = fixture();
+        v["entries"][0]["base"]["unit"] = json!("bytes");
+        v["entries"][0]["base"]["expires_at"] = json!(15);
+        unknown(&validate(v, 20), "invalid_unit");
+    }
+    #[test]
+    fn empty_entries_alarm() {
+        let out = validate(
+            json!({"schema_version":1,"observed_at":20,"entries":[]}),
+            20,
+        );
+        assert_eq!(out.records.len(), 1);
+        assert_eq!(out.records[0].identity, Value::Null);
+        unknown(&out, "missing_entries");
+    }
+    #[test]
+    fn missing_served_alarms() {
+        for served in [None, Some(json!([]))] {
+            let mut v = fixture();
+            v["entries"][0].as_object_mut().unwrap().remove("served");
+            if let Some(served) = served {
+                v["entries"][0]["served"] = served;
+            }
+            let out = validate(v, 20);
+            assert_eq!(
+                out.records[0].coverage[0].window,
+                Window::Unknown("missing_coverage".into())
+            );
+            assert_eq!(out.findings[0].reason, "missing_coverage");
+            assert_eq!(out.records[1].window, Window::Known(900000));
+        }
+    }
+    #[test]
+    fn changelog_is_one_accurate_line() {
+        let note = include_str!("../../../changelog.d/FLEET-WINDOW-CATALOG.md");
+        assert_eq!(note.lines().count(), 1);
+        assert!(note.starts_with("- **FLEET-WINDOW-CATALOG:**"));
+        assert!(!note.contains("typed"));
     }
     #[test]
     fn missing_fields_and_declared_unknown() {
