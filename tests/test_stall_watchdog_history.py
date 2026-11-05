@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -38,6 +40,40 @@ def test_live_evidence(tmp_path, monkeypatch):
     assert w.probe_run(tmp_path, runs[0], 600000)['rule'] == 'run-orphan'
 
 
+@pytest.mark.parametrize('value,age,expected', [
+    ('999999999', 604800, 1), ('999999999', 604801, 0),
+    ('bad', 86400, 1), ('bad', 86401, 0)])
+def test_horizon_setting(tmp_path, monkeypatch, value, age, expected):
+    monkeypatch.setenv('PLANGRAPH_PROBE_HORIZON_S', value)
+    runs = records(tmp_path, status='failed', role='implement',
+                   reason='writer_no_changes', ended=1000000 - age)
+    assert len(w.tick(runs, [], lambda _: None, now=1000000, state=tmp_path)) == expected
+
+
+def test_bad_cap_survives_restart(tmp_path, monkeypatch):
+    records(tmp_path, 30, status='running', started=0, pid=None)
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_MAX_PER_TICK', 'bad')
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    script = '''
+from plangraph.spawner import stall_watchdog as w, runner
+from types import SimpleNamespace
+runner.spawn_service = lambda **kw: SimpleNamespace(retry_completions=lambda: None)
+w.read_claims = lambda: []
+raise SystemExit(w.main(['tick']))
+'''
+    first = None
+    for expected in (25, 30):
+        subprocess.run([sys.executable, '-c', script], check=True, capture_output=True)
+        events = [json.loads(p.read_text()) for p in (tmp_path / 'watchdog/outbox').glob('*')]
+        findings = {e['run_id']: e for e in events if e['rule'] == 'unknown'}
+        assert len(findings) == expected
+        assert sum(e['rule'] == 'findings-capped' for e in events) == 1
+        if first is not None:
+            assert all(findings[key] == event for key, event in first.items())
+        first = findings
+
+
 def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):
     from plangraph.spawner import runner
     records(tmp_path, 30, status='running', started=0, pid=123)
@@ -54,7 +90,21 @@ def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):
     def snapshot():
         return {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
     before = snapshot()
-    assert w.main(['tick', '--dry-run']) == 0
+    with monkeypatch.context() as dry:
+        dry.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["notify"]')
+        dry.setattr(w, 'flush_outbox', lambda *a, **kw: pytest.fail('notify called'))
+        dry.setattr(w, 'deliver_event', lambda *a, **kw: pytest.fail('mailbox called'))
+        from plangraph.spawner import private_io
+        dry.setattr(private_io, 'atomic_write_private',
+                    lambda *a, **kw: pytest.fail('state write called'))
+        class DryService:
+            def retry_completions(self):
+                pytest.fail('retry_completions called')
+        dry.setattr(runner, 'spawn_service', lambda **kw: DryService())
+        assert w.main(['tick', '--dry-run']) == 0
+    assert not (tmp_path / 'watchdog/outbox').exists()
+    assert not (tmp_path / 'watchdog/alerts').exists()
+    assert not (tmp_path / 'watchdog/status.txt').exists()
     assert snapshot() == before
     output = capsys.readouterr().out
     assert 'unknown: 30' in output and 'run-silent: 1' in output
