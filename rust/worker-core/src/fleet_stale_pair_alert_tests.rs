@@ -46,7 +46,10 @@ fn zero_compaction_age_boundary() {
     assert!(f.new_alarm);
     assert_eq!(f.reasons, ["stale"]);
     assert_eq!(f.elapsed_compactions, Some(0));
-    assert_eq!(f.evidence.unwrap().members[0].freshness, Some(100));
+    assert_eq!(
+        f.evidence.unwrap().members.map(|m| m.freshness),
+        [Some(100); 2]
+    );
     let f = run(&mut state, pair(100, 100, 0), 11);
     assert_eq!(f.ages, [Some(11); 2]);
     assert!(!f.new_alarm);
@@ -58,6 +61,11 @@ fn coherent_boundaries_rearm() {
     run(&mut state, pair(100, 100, 0), 0);
     let f = run(&mut state, pair(102, 100, 2), 2);
     assert!(f.reasons.is_empty());
+    assert_eq!(f.divergence, Some(2));
+    assert_eq!(
+        f.evidence.unwrap().members.map(|m| m.freshness),
+        [Some(102), Some(100)]
+    );
     assert_eq!(f.elapsed_compactions, Some(2));
     let mut mismatch = pair(102, 100, 3);
     mismatch.members[1].revision = "other".into();
@@ -66,6 +74,11 @@ fn coherent_boundaries_rearm() {
     assert!(f.new_alarm);
     let f = run(&mut state, pair(110, 100, 4), 10);
     assert_eq!(f.reasons, ["stale", "divergence", "compaction cap"]);
+    assert_eq!(f.divergence, Some(10));
+    assert_eq!(
+        f.evidence.unwrap().members.map(|m| m.freshness),
+        [Some(110), Some(100)]
+    );
     assert_eq!(f.episode, Some(1));
     assert!(!f.new_alarm);
     assert_eq!(run(&mut state, pair(111, 111, 5), 11).episode, None);
@@ -122,14 +135,24 @@ fn clock_faults_unknown_and_immutable_source() {
 }
 #[test]
 fn dark_json_has_no_actions() {
-    let f = run(&mut State::default(), pair(90, 90, 0), 0);
+    let mut state = State::default();
+    let f = run(&mut state, pair(90, 90, 0), 0);
     let json = serde_json::to_value(f).unwrap();
     assert!(json["new_alarm"].as_bool().unwrap());
     for forbidden in ["stop", "recycle", "pause", "timer", "delivery"] {
         assert!(json.get(forbidden).is_none());
     }
-    let lib = include_str!("lib.rs");
-    assert_eq!(lib.matches("pub mod fleet_stale_pair_alert;").count(), 1);
+    for tick in [0, 1] {
+        let next = run(&mut state, pair(90, 90, 0), tick);
+        assert!(!next.new_alarm);
+        assert_eq!(next.episode, Some(1));
+        assert_eq!(next.ages, [Some(10 + tick); 2]);
+        assert_eq!(next.reasons, ["stale"]);
+        let next_json = serde_json::to_value(next).unwrap();
+        for forbidden in ["stop", "recycle", "pause", "timer", "delivery"] {
+            assert!(next_json.get(forbidden).is_none());
+        }
+    }
 }
 #[test]
 fn zero_tolerance_is_invalid() {
