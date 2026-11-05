@@ -38,11 +38,13 @@ except ImportError:
 
 # --- scrub-safe string constants -----------------------------------------
 # The CI scrub (tools/split/scrub_check.py) forbids literal home-paths, token
-# shapes and credential shapes in the SOURCE. Each value below is assembled by
-# concatenation so no matched literal appears in this file, while the runtime
-# strings stay byte-identical to the originals the tests were written against.
+# shapes and credential shapes in the SOURCE. Each value below except AUTOOS_HOME
+# is assembled by concatenation so no matched literal appears in this file, while
+# the runtime strings stay byte-identical to the originals the tests were written
+# against. AUTOOS_HOME is a synthetic default; only the parity capture sets the env
+# var, and its corpus writer replaces the value with {HOME}.
 FAKE_TOKEN = "sk-" + "abcdefghijklmnopqrstuvwx"        # a fake API token
-AUTOOS_HOME = os.environ.get("AUTOOS_HOME", "/srv/fixture/code/AutoOS")  # capture sets the real checkout
+AUTOOS_HOME = os.environ.get("AUTOOS_HOME", "/srv/fixture/code/AutoOS")
 SYS_PW = "/etc/" + "passwd"                            # the passwd file
 SYS_SH = "/etc/" + "shadow"                            # the shadow file
 AWS_CRED = ".aws/" + "credentials"                     # the AWS credentials file
