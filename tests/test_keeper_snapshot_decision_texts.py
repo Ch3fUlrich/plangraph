@@ -121,5 +121,61 @@ def test_anchored_read_call_pins():
         hits = {p.name for p in root.glob("*.py")
                 if re.search(pattern, p.read_text(), re.MULTILINE)}
         assert hits == expected
-        assert not re.search(pattern, 'def build(log, since, titles, decision_texts, head):')
-        assert not re.search(pattern, '__all__ = ["decision_book", "decision_texts"]')
+    source = '\n'.join(p.read_text() for p in root.glob("*.py"))
+    calls = re.findall(r"\b(?:context_sources|src)\.(decision_texts|decision_book)\(", source)
+    assert sorted(calls) == ["decision_book", "decision_texts", "decision_texts"]
+
+
+@pytest.mark.parametrize("path_kind", ["none", "text_only", "unreadable", "row", "canonical"])
+def test_decision_text_failure_paths(tmp_path, monkeypatch, path_kind):
+    world = World(tmp_path, backend="sqlite")
+    path = tmp_path / "decisions.md"
+    path.write_text("| D-1 | scope | first |\n| D-2 | scope | second |\n")
+    adapter = DecisionsAdapter(path)
+    expected = {"D-1": "first", "D-2": "second"}
+    if path_kind == "none":
+        adapter, expected = None, {}
+    elif path_kind == "text_only":
+        adapter = SimpleNamespace(text=lambda did: expected[did])
+    elif path_kind == "unreadable":
+        path.unlink()
+        expected = {}
+    else:
+        # Warm the book: inject failures in the text view, not book construction.
+        context_sources.decision_book(adapter)
+        if path_kind == "row":
+            original = context_sources._decision_cell
+
+            def cell(row):
+                if "D-1" in row:
+                    raise ValueError("bad row")
+                return original(row)
+
+            monkeypatch.setattr(context_sources, "_decision_cell", cell)
+        else:
+            original = DecisionsAdapter._canonical
+
+            def canonical(did):
+                if did == "D-1":
+                    raise ValueError("bad id")
+                return original(did)
+
+            monkeypatch.setattr(DecisionsAdapter, "_canonical", staticmethod(canonical))
+        expected = {"D-2": "second"}
+    world.store.ctx = SimpleNamespace(decisions=adapter)
+    try:
+        world.store.create_items(world.p("router"), [defn("A", kind="goal")])
+        for did in ("D-1", "D-2"):
+            world.conn.execute("INSERT INTO evidence(key, kind, ref) VALUES (?, ?, ?)",
+                               ("demo:A", "decision", json.dumps({"id": did})))
+        world.conn.commit()
+        assert context_sources.decision_texts(adapter, ["D-1", "D-2"]) == expected
+        assert world.store._snapshot(world.store.now())["decision_text"] == expected
+        log = [{"seq": 1, "type": "closed", "key": "demo:A",
+                "payload": {"decision_id": "D-1"}, "ts": "2026-01-01"}]
+        monkeypatch.setattr(events, "read_events", lambda conn: log)
+        monkeypatch.setattr(changelog, "referenced_decisions", lambda log: ["D-1", "D-2"])
+        assert world.store._changelog("0") == changelog.build(
+            log, "0", {"demo:A": "title A"}, expected, 1)
+    finally:
+        world.close()

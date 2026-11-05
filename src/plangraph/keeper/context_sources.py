@@ -280,13 +280,25 @@ def decision_texts(decisions, ids):
     Preserve reference spelling and the adapter's first nonempty, whitespace-
     collapsed cell semantics, including retired decisions. Enforcement must
     continue reading the adapter directly, never this best-effort read view.
+    Same-size, same-mtime rewrites may leave decision_book stale; enforcement stays fresh.
     """
     rows = decision_book(decisions)["rows"]
     texts = {}
     for did in ids:
-        canonical = DecisionsAdapter._canonical(did)
+        try:
+            if decisions is not None and not hasattr(decisions, "_rows"):
+                text = decisions.text(did)
+                if text:
+                    texts[did] = text
+                continue
+            canonical = DecisionsAdapter._canonical(did)
+        except Exception:
+            continue
         for row in rows.get(canonical, ()):
-            text = re.sub(r"\s+", " ", _decision_cell(row)).strip()
+            try:
+                text = re.sub(r"\s+", " ", _decision_cell(row)).strip()
+            except Exception:
+                continue
             if text:
                 texts[did] = text
                 break
