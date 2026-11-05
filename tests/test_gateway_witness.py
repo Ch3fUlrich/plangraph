@@ -6,7 +6,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pid 123 is never a live host pid
+from fake_pid import FAKE_PID
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID exceeds the host PID range; no live process can match
 
 from plangraph.spawner import gateway_witness as gw
 
@@ -131,7 +132,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
         async def communicate():
             return b'VERDICT: ACCEPT', b''
-        return SimpleNamespace(pid=123, returncode=returncode, communicate=communicate)
+        return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():
         job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6-luna', role='review',
