@@ -14,7 +14,7 @@
 - drift-mail r1 run-d394ea19c82b4133b3cdf677608b5b94 since 13:05Z next check 14:15Z
 - omniroute r7 orr7b.sh (sol) gated since 13:40Z next check 14:15Z; send run id to prox-L1-main (J/r-orr7s.json)
 ## Planned
-1. #377 send run-through: HIGH ruling (D-3782) pending, free seat result, agy gemini tests seat ~11-06T13:43Z (K/seat-377d3t.md)
+1. #377 HIGH refuted (D-3783); free seat result, agy gemini tests seat ~11-06T13:43Z (K/seat-377d3t.md)
 2. omniroute r7 run id to prox, then seats; any MED -> list to prox, stop; clean -> sha to prox
 3. drift-mail push, seat, sha to prox, MERGE-READY routing-0101
 4. #380 and #338 merge main (conflicts), then tools seats
@@ -23,7 +23,7 @@
 - Workstation spawner ff to f5b4d4b0a waits for OS-WS-AUTOOS-START (D-3780)
 - BLOCKED #383 ruling on deepseek MED + keeper define + GO | default dismiss MED, define as sent | deadline none
 - BLOCKED grok: Authentication required; opencode.jsonc baseline refused push | default operator enables gc, D-id for baseline | deadline none
-- BLOCKED #377 3.3 (D-3782, no waiver, no D-2511 exception): HIGH answer sent (test:260, resolver:236-245, legs:120-121); no qwen rerun (sandbox is Rust item) | *agy gemini tests seat ~11-06T13:43Z | deadline none
+- BLOCKED #377 3.3 (D-3782, D-3783: HIGH refuted, no exception): needs test-running non-writer seat | *agy gemini tests seat ~11-06T13:43Z | deadline none
 - BLOCKED omnigraph pin edits need a D-id | default agent-skills Dockerfile + live worktrees only | deadline none
 - BLOCKED HOST-DISK-GUARD-REAPER undefined | default routing defines | deadline none
 - D-3772 sol hang cause unknown (0 tokens 12:38-13:18Z; no sol 429 in gateway log 13:16-13:21Z per prox; Retry-After unsupported, mimo queue does not fit); probe ok 13:26:47Z; D-3778 stopped, leg_hung fold via replan; on next hang capture process tree, sockets, last log lines before cancel
