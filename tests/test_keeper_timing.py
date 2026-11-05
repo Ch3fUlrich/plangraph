@@ -257,3 +257,29 @@ def test_context_set_failure_never_outputs_under_lock(meter, monkeypatch):
     with timing.RequestTimer(threading.Lock()):
         timing.measured("snapshot_timing")(lambda: clock.advance(.300))()
         assert out.getvalue() == ""
+    assert out.getvalue() == ""
+
+
+@pytest.mark.parametrize("sample", range(1, 6))
+@pytest.mark.parametrize("body_error", [False, True])
+def test_failed_clock_drops_dependent_lines(sample, body_error, meter, monkeypatch):
+    clock, out = meter
+    calls, lock = 0, threading.Lock()
+    def now():
+        nonlocal calls
+        calls += 1
+        if calls == sample:
+            raise RuntimeError("clock")
+        return calls * .300
+    monkeypatch.setattr(timing, "clock", now)
+    try:
+        with timing.RequestTimer(lock):
+            timing.measured("snapshot_timing", "build_ms")(lambda: None)()
+            assert out.getvalue() == ""
+            if body_error:
+                raise ValueError("original")
+    except ValueError as error:
+        assert str(error) == "original"
+    assert out.getvalue() == ""
+    assert lock.acquire(blocking=False)
+    lock.release()

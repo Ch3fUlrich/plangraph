@@ -16,18 +16,20 @@ def _now():
     try:
         return clock()
     except Exception:
-        return 0.0
+        return None
 
 
 def _ms(start, end):
+    if start is None or end is None:
+        return None
     return max(0, round((end - start) * 1000))
 
 
-def _sample(fallback=0.0):
+def _sample():
     try:
         return _now()
     except Exception:
-        return fallback
+        return None
 
 
 class _Parts(dict):
@@ -78,20 +80,23 @@ class RequestTimer:
     def __enter__(self):
         self.start = _sample()
         self.lock.acquire()
-        self.held = _sample(self.start)
+        self.held = _sample()
         self.parts = _Parts()
         self.parts.pending = []
         self.token = _context(self.parts)
         return self
 
     def __exit__(self, *exc):
-        end = _sample(self.held)
+        end = _sample()
         try:
             self.lock.release()
         finally:
             try:
-                _emit(self.event, self.kind, _ms(self.start, self.held),
-                      _ms(self.held, end), self.parts)
+                if self.token is not None and None not in (self.start, self.held, end):
+                    _emit(self.event, self.kind, _ms(self.start, self.held),
+                          _ms(self.held, end), self.parts)
+                else:
+                    self.parts.pending.clear()
             except Exception:
                 pass
             finally:
@@ -117,9 +122,12 @@ def measured(event=None, part=None):
                 return fn(*args, **kwargs)
             finally:
                 try:
-                    elapsed = _ms(start, _sample(start))
+                    elapsed = _ms(start, _sample())
                     if part and parts is not None:
-                        parts[part] = parts.get(part, 0) + elapsed
+                        previous = parts.get(part, 0)
+                        parts[part] = None if elapsed is None or previous is None else previous + elapsed
+                        if elapsed is None and parent is not None:
+                            parent[part] = None
                     if event and token is not None:
                         _emit(event, "other", 0, elapsed, parts)
                 except Exception:
