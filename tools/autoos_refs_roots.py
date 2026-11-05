@@ -234,6 +234,8 @@ def _scan_routing_tree(routing_root: Path, strict: bool) -> list[Hit]:
         ops_mode = os.stat(ops).st_mode if strict else 0
     except FileNotFoundError:
         ops_mode = 0
+    except OSError as exc:
+        raise RootScanError(f"cannot read {ops}: {type(exc).__name__}") from exc
     if stat.S_ISDIR(ops_mode) if strict else ops.is_dir():
         for p in _listing(ops, strict):
             if p.name.endswith(".mcp.json"):
@@ -246,6 +248,8 @@ def _scan_routing_tree(routing_root: Path, strict: bool) -> list[Hit]:
             bin_mode = os.stat(bin_dir).st_mode
         except FileNotFoundError:
             bin_mode = 0
+        except OSError as exc:
+            raise RootScanError(f"cannot read {bin_dir}: {type(exc).__name__}") from exc
         if stat.S_ISDIR(bin_mode):
             _listing(bin_dir, True)  # an unreadable bin/ must not look clean
     hits.extend(scan_bin_dir(bin_dir, "routing-bin"))

@@ -92,6 +92,9 @@ _use_tmpfs_tempdir()
 def hermetic_writer_env(monkeypatch):
     """Writer identity/config must not override a test's own setup."""
     for name in (
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
         "GIT_COMMITTER_EMAIL",
         "OPENCODE_DISABLE_PROJECT_CONFIG",
         "OPENCODE_DISABLE_CLAUDE_CODE",
