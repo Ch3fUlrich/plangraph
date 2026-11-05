@@ -69,7 +69,8 @@ class CI:
             raise Failure("checkout is dirty")
         before = git("rev-parse", "HEAD")
         if base != "main":
-            self.gh("pr", "edit", str(args.pr), "--base", "main")
+            # REST: `gh pr edit` fails on gh 2.45 with a GraphQL error on the sunset classic Projects field.
+            self.call(["gh", "api", "-X", "PATCH", f"repos/{self.repo}/pulls/{args.pr}", "--raw-field", "base=main"])
         git("fetch", "origin", "main")
         result = self.runner(["git", "merge", "--no-edit", "origin/main"], cwd=args.checkout)
         if result.returncode:

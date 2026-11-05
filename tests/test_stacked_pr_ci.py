@@ -73,8 +73,8 @@ def pr(number=7, base="main", mergeable="MERGEABLE", head="a" * 40):
 
 
 def writes(fake):
-    return [a[2] for a, _ in fake.calls if a[:2] == ["gh", "pr"]
-            and a[2] in ("edit", "close", "reopen")]
+    return ["edit" if "PATCH" in a else a[2] for a, _ in fake.calls
+            if "PATCH" in a or (a[:2] == ["gh", "pr"] and a[2] in ("close", "reopen"))]
 
 
 @pytest.mark.parametrize("counts,expected,code", [([1], ["edit"], 0),
@@ -260,3 +260,11 @@ def no_dangerous_calls():
         assert "--force" not in argv
         assert "rebase" not in argv
         assert not (argv[:2] == ["git", "push"] and "-f" in argv)
+
+
+def test_base_edit_goes_through_rest():
+    fake = Fake()
+    assert invoke(fake) == 0
+    calls = [a for a, _ in fake.calls]
+    assert ["gh", "api", "-X", "PATCH", "repos/owner/project/pulls/7", "--raw-field", "base=main"] in calls
+    assert not any(a[:3] == ["gh", "pr", "edit"] for a in calls)
