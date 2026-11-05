@@ -101,8 +101,19 @@ fn role_rule_precedes_adapter_and_dry_run() {
     if std::env::var_os(CHILD).is_some() {
         let state = std::env::var_os("PG_LEG_REF_STATE").unwrap();
         for dry_run in [false, true] {
-            let a = args(json!({"card":{"diff_ref":"change"}, "dry_run":dry_run}));
-            assert!(crate::placement::route(Path::new(&state), &a).is_err());
+            for mut a in [
+                args(json!({"card":{"diff_ref":"change"}})),
+                args(json!({"card":{}, "diff_ref":"change"})),
+            ] {
+                a.insert("dry_run".into(), json!(dry_run));
+                let error = crate::placement::route(Path::new(&state), &a)
+                    .unwrap_err()
+                    .into_error_data();
+                assert_eq!(
+                    error.message,
+                    "diff_ref requires role review; role implement is refused"
+                );
+            }
         }
         return;
     }
@@ -117,7 +128,7 @@ fn role_rule_precedes_adapter_and_dry_run() {
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "leg_ref::admission_tests::role_rule_precedes_adapter_and_dry_run",
@@ -126,9 +137,16 @@ fn role_rule_precedes_adapter_and_dry_run() {
         .env("PG_LEG_REF_STATE", &temp)
         .env("PG_LEG_REF_MARKER", &marker)
         .env("PG_SPAWND_ADAPTER", &script)
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")));
     let called = marker.exists();
     std::fs::remove_dir_all(&temp).unwrap();
     assert!(!called, "refusal must not invoke the adapter");
