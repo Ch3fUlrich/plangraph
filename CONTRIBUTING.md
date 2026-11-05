@@ -64,7 +64,7 @@ Install the pre-push scrub gate (scans the files changed in the pushed commits w
 ```bash
 git config core.hooksPath tools/hooks        # per clone; undo: git config --unset core.hooksPath
 ```
-Or run `python3 tools/check_push_gate.py --install PATH`; audit with `python3 tools/check_push_gate.py --root DIR`.
+Or set `PLANGRAPH_PUBLIC_REPO` to `owner/name` and run `python3 tools/check_push_gate.py --install PATH`; audit with `python3 tools/check_push_gate.py --root DIR` (unset: all remotes are public).
 
 The private word list is never stored in the repo: point the hook at it via environment,
 `PLANGRAPH_SCRUB_WORDS=<path to words.txt>` (optional extra allowances: `PLANGRAPH_SCRUB_RULES=<path to rules.toml>`).
