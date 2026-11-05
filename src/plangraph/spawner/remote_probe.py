@@ -43,6 +43,14 @@ def poll(hosts, command, state):
                            text=True, check=True, timeout=20)
             entry['seen'].append(key)
             save()
+    def flush(entry):
+        for key, event in list(entry.setdefault('pending', {}).items()):
+            try:
+                notify(key, event, entry)
+                del entry['pending'][key]
+                save()
+            except (OSError, subprocess.SubprocessError):
+                continue
     for host in hosts:
         entry = saved.setdefault(host, dict(failures=0, outage=0, down=False, seen=[], acks=[]))
         try:
@@ -53,6 +61,7 @@ def poll(hosts, command, state):
                 raise ValueError('invalid probe entry')
         except (ValueError, TypeError, KeyError):
             entry = saved[host] = dict(failures=0, outage=0, down=False, seen=[], acks=[])
+        pending = entry.setdefault('pending', {})
         try:
             code = ('import json; from plangraph.spawner.remote_probe import exchange; '
                     'print(json.dumps(exchange(' + repr(entry['acks']) + ')))')
@@ -68,23 +77,19 @@ def poll(hosts, command, state):
         except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             entry['failures'] += 1
             if entry['failures'] >= 2:
-                if not entry['down'] and entry['failures'] == 2:
+                if not entry['down']:
                     entry['outage'] += 1
                     entry['episode'] = uuid.uuid4().hex
-                save()
-                try:
-                    notify('down-' + entry.get('episode', str(entry['outage'])), dict(rule='host-unreachable', host=host), entry)
                     entry['down'] = True
-                except (OSError, subprocess.SubprocessError):
-                    pass
+                    pending['down-' + entry['episode']] = dict(rule='host-unreachable', host=host)
             save()
+            flush(entry)
             continue
-        try:
-            if entry['down']:
-                notify('up-' + entry.get('episode', str(entry['outage'])), dict(rule='host-recovered', host=host), entry)
-            entry.update(failures=0, down=False)
-        except (OSError, subprocess.SubprocessError):
-            pass
+        if entry['down']:
+            pending['up-' + entry.get('episode', str(entry['outage']))] = dict(rule='host-recovered', host=host)
+        entry.update(failures=0, down=False)
+        save()
+        flush(entry)
         entry['acks'] = []
         for key, event in events.items():
             try:

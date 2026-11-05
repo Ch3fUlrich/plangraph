@@ -34,6 +34,45 @@ def test_poison_notify_does_not_starve_events_or_hosts(tmp_path, monkeypatch, re
     assert calls.count('a') == 4
     if recovery:
         assert calls.count('host-recovered') == 2
+        entry = json.loads((tmp_path / 'remote-probe.json').read_text())['first']
+        assert entry['failures'] == 0 and not entry['down']
+
+
+def test_recovery_pending_across_blips_and_restart(tmp_path, monkeypatch):
+    calls, reachable, poison = [], False, True
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            if not reachable:
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0, '{}')
+        event = json.loads(kwargs['input'])
+        calls.append(event)
+        if poison:
+            raise subprocess.CalledProcessError(1, argv)
+    monkeypatch.setattr(subprocess, 'run', run)
+    def once():
+        poll(['fixture'], 'notify', tmp_path)
+        return json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']
+    once()
+    once()
+    reachable = True
+    entry = once()
+    assert entry['failures'] == 0 and not entry['down']
+    recovery = [e for e in calls if e['rule'] == 'host-recovered']
+    assert len(recovery) == 1
+    reachable = False
+    entry = once()
+    assert entry['failures'] == 1 and entry['outage'] == 1
+    poison = False
+    once()
+    reachable = True
+    once()
+    once()
+    recoveries = [e['event_id'] for e in calls if e['rule'] == 'host-recovered']
+    assert recoveries[:3] == [recovery[0]['event_id']] * 3
+    assert len(set(recoveries)) == 2 and len(recoveries) == 4
+    assert len({e['event_id'] for e in calls if e['rule'] == 'host-unreachable'}) == 2
+    assert not once()['pending']
 
 
 def test_exchange_bad_ack_does_not_stop_others(tmp_path, monkeypatch):
@@ -137,7 +176,7 @@ def test_outage_notify_retry(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, 'run', run)
     for _ in range(2):
         poll(['fixture'], 'notify', tmp_path)
-    assert not json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['down']
+    assert json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['down']
     poll(['fixture'], 'notify', tmp_path)
     poll(['fixture'], 'notify', tmp_path)
     assert calls == ['notify', 'notify']
