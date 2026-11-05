@@ -149,11 +149,19 @@ def main() -> int:
         # Launch-time, session-local private destination, alongside handoff/hard.
         path = doc.get("handoff_path")
         if HANDOFF_PATH_ENV and isinstance(path, str) and path and "\x00" not in path:
-            os.environ[HANDOFF_PATH_ENV] = path
+            try:
+                os.environ[HANDOFF_PATH_ENV] = path
+            except (UnicodeEncodeError, ValueError):
+                pass  # An unusable destination must not suppress the guard.
+        thresholds = {key: doc[key] for key in ("handoff", "hard")
+                      if isinstance(doc.get(key), int) and not isinstance(doc[key], bool)}
+        if (any(val <= 0 for val in thresholds.values()) or
+                ("handoff" in thresholds and "hard" in thresholds and
+                 thresholds["hard"] <= thresholds["handoff"])):
+            thresholds = {}
         for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
-            val = doc.get(key)
-            if isinstance(val, int) and not isinstance(val, bool):
-                os.environ[var] = str(val)
+            if key in thresholds:
+                os.environ[var] = str(thresholds[key])
     try:
         spec = importlib.util.spec_from_file_location("context_guard", GUARD)
         guard = importlib.util.module_from_spec(spec)

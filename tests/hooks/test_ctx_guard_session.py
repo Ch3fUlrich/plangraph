@@ -175,6 +175,24 @@ class SettingsLayers(WrapperCase):
 
 
 class Plumbing(WrapperCase):
+    def test_surrogate_destination_uses_default_guidance(self):
+        self.write(usage_line(read=275000))
+        self.set_override({"handoff_path": "\ud800"})
+        text = self.line(self.guard())
+        self.assertIn("HANDOFF-NOW ctx=275k >= 270k", text)
+        self.assertIn("your private handoff path", text)
+
+    def test_invalid_file_thresholds_use_defaults(self):
+        for n, doc in enumerate(({"handoff": 0, "hard": 5}, {"handoff": -1, "hard": 5},
+                                 {"handoff": 5, "hard": 5}, {"handoff": 6, "hard": 5},
+                                 {"handoff": 0}, {"hard": -1})):
+            sid = "invalid%d" % n
+            self.set_override(doc, sid=sid)
+            self.write(usage_line(read=60000))
+            self.assert_silent(self.guard(self.payload(sid=sid)))
+            self.write(usage_line(read=301000))
+            self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid=sid))))
+
     def test_nul_destination_uses_default_guidance(self):
         self.write(usage_line(read=301000))
         self.set_override({"handoff_path": "/a\x00b"})
@@ -236,7 +254,7 @@ class Plumbing(WrapperCase):
         self.assert_silent(self.guard())
         self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid="other"))))
         self.set_override({"handoff": 290000, "hard": 1})
-        self.assertIn("HARD-CAP ctx=301k >= 290k", self.line(self.guard()))
+        self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard()))
         self.set_override("{broken", sid="garbled")
         self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid="garbled"))))
 
