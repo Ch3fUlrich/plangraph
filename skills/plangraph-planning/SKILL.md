@@ -50,9 +50,8 @@ Two plan-graph item kinds per layer: a **phase item** (kind `planning` or `work`
   would touch the same file, merge them into one task (consolidation, not locking).
 - Implementers work in their own worktree/branch; the phase agent merges. No repo-wide git
   operations while agents run (`git reset --hard`, `clean`, `stash`, `gc`, `worktree prune`).
-- The caller must put lint, test and format commands, repository coding rules and files in
-  scope in the brief. `src/plangraph/spawner/seat_spawn.py:SeatSpawnMixin._leg_prompt`
-  returns tool-enabled prompts unchanged; it does not discover a toolchain.
+- The spawner provides the toolchain in the brief: lint, test and format commands, the coding
+  rules from `coding-principles`, and the files in scope. Agents do not discover them.
 
 ### Small-fix rule (D-1272, operator 2026-10-13)
 

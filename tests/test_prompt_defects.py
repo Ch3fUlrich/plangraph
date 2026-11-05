@@ -1,5 +1,6 @@
 """Hermetic guards for actionable prompt text and public repository pointers."""
 from pathlib import Path
+import subprocess
 import re
 import pytest
 
@@ -66,6 +67,10 @@ def test_keeper_scan_rejects_instructions(tmp_path, monkeypatch, name):
 def test_tail_standing_question(mode):
     from plangraph.review.prompt import assemble_all, assemble_diff
     text = (ROOT / 'src/plangraph/review/tail.md').read_text()
+    tails = subprocess.check_output(['git', 'ls-files', '*tail.md'], cwd=ROOT, text=True).splitlines()
+    assert tails == ['src/plangraph/review/tail.md']  # load_tail reads this sole source.
+    from plangraph.review.prompt import load_tail
+    assert load_tail() == text
     assert 'Does the change game tests' in text
     prompts = (assemble_all(['check'], {'src/example.py': 'value = 1\n'})
                if mode == 'files' else assemble_diff(['check'],
@@ -83,7 +88,7 @@ def test_claude_skill_pointers():
     assert pointers
     assert all((ROOT / pointer).is_file() for pointer in pointers)
     assert 'AGENTS.md' not in text
-    assert 'fleet decisions file' not in text
+    assert not re.search(r'(?:[\w.-]+/)+[\w.-]*DECISIONS[\w.-]*', text, re.I)
 
 
 def test_no_missing_protocol_pointer():
@@ -109,14 +114,28 @@ def test_skill_card_pointers():
     assert all((skill.parent / pointer).is_file() for pointer in pointers)
 
 
-def test_toolchain_is_callers_responsibility():
+def test_toolchain_provision_not_version_claim():
     text = (ROOT / 'skills/plangraph-planning/SKILL.md').read_text()
-    assert 'The caller must put lint, test and format commands' in text
-    assert 'The spawner provides the toolchain' not in text
+    assert 'The spawner provides the toolchain in the brief' in text
+    assert '_leg_prompt' not in text
 
 
 def test_l3_question_channel():
     text = (ROOT / 'skills/unattended-orchestration/SKILL.md').read_text()
     row = next(line for line in text.splitlines() if line.startswith('| **L3**'))
     assert 'never' not in row
-    assert 'NEEDS_INPUT' in row
+    assert 'PG_QUESTION:' in row
+    assert 'rust/worker/src/question.rs:QUESTION_PREFIX' in row
+    code = (ROOT / 'rust/worker/src/question.rs').read_text()
+    assert 'pub const QUESTION_PREFIX: &str = "PG_QUESTION:";' in code
+
+
+def test_report_lead_in_and_retry_pointers():
+    text = (ROOT / 'skills/implement/SKILL.md').read_text()
+    assert 'End with these, and no claim without evidence:\n\n- `commits:`' in text
+    text = (ROOT / 'docs/SPAWNER.md').read_text()
+    for pointer in ('ReviewMethod.max_rounds', 'ATTEMPT_BUDGET', 'plan.legs', 'no_fallthrough'):
+        assert pointer in text
+    assert 'no numeric\nfallthrough constant' in text
+    assert all(len(line) <= 100 for line in text.splitlines() if
+               'render_fixer_brief` numbers' in line or 'checklist or use' in line)

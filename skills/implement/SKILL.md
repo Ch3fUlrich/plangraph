@@ -37,8 +37,6 @@ You are the implementer. You do the brief and nothing else.
 
 ## Report
 
-End with these, and no claim without evidence:
-
 `not done:` reports an unfinished item with its reason; it does not request a
 retry. In `src/plangraph/spawner/service.py`, `_continue_writer` gives a successful
 implement report with a nonempty `Remaining gaps` section or unchecked checklist
@@ -46,6 +44,8 @@ one automatic continuation on the same sandbox and selected leg; that child
 cannot continue again. Nonzero exits and non-implement runs do not continue.
 For a decision stop, use the dedicated decision exit once it exists, not
 `Remaining gaps`; until then, report the decision needed under `not done:`.
+
+End with these, and no claim without evidence:
 
 - `commits:` sha and subject of each, or `none`;
 - `test:` the verbatim summary line of each verification command, with the command;

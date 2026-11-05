@@ -27,7 +27,7 @@ rules. Depth and model tier are independent axes.
 | **L0** router | the operator's own session: routes intent, tracks PAUSE/resume, and is the only path to the operator; never executes project work, cleanups, or setup — hands them to the L1 coordinator | L1, when L1's status timestamp stays quiet >25 min from its handoff (R-coord-08) | is the operator |
 | **L1** coordinator | one per run: launches L2s, merges lanes into main, pushes, cleans up | L2, past its context cap (R-coord-06); or a busy L2 whose status timestamp stays quiet >25 min from its handoff (R-coord-08) | never directly — appends `question: … \| options: …` to L0's inbox |
 | **L2** orchestrator | one per track/plan: owns a worktree + branch, spawns and reviews L3 | L3, never resuming a no-change stop (R-orch-06) | never directly — same channel, via L1 |
-| **L3** worker / reviewer | one closed task with an explicit return contract (cards/worker.md, cards/reviewer.md) | nothing (R-worker-06) | via the card's NEEDS_INPUT question channel, not directly |
+| **L3** worker / reviewer | one closed task with an explicit return contract (cards/worker.md, cards/reviewer.md) | nothing (R-worker-06) | via a `PG_QUESTION:` line (`rust/worker/src/question.rs:QUESTION_PREFIX`), not directly |
 
 Relaunch is a watch: each level reads the status timestamp the level below rewrites
 and relaunches — never resumes — a busy child quiet >25 min from its handoff
