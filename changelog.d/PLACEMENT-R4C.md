@@ -1,0 +1,1 @@
+Added non-mutating Rust workspace pre-launch verification with unforgeable identity snapshots, linked-worktree and revision checks, effective Git config checks, and supervised Python import canaries. No launch or lifecycle caller is wired. Refreshed base: a252e4a5 (origin/main).

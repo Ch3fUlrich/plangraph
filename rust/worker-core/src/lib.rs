@@ -37,6 +37,7 @@ pub mod slots;
 pub mod stall;
 pub mod workspace;
 pub mod workspace_resolver;
+pub mod workspace_verify;
 pub mod worktree;
 pub mod wsl;
 
