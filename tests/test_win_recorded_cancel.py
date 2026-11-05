@@ -36,6 +36,7 @@ def test_foreign_identity_and_stale_parent(monkeypatch):
     with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as foreign:
         try:
             token = win.creation(foreign.pid)
+            monkeypatch.setattr(proc_kill, '_nt_table', lambda: {foreign.pid: os.getpid()})
             assert type(token) is int
             for legacy in (None, 'nt'):
                 assert asyncio.run(SpawnerRunner().kill_recorded(foreign.pid, legacy)) == [foreign.pid]
@@ -62,6 +63,8 @@ def test_dead_root_and_unreadable_children(monkeypatch):
             assert asyncio.run(win.kill(root.pid, token)) == [0]
             root.wait(timeout=5)
             monkeypatch.setattr(proc_kill, '_nt_table', lambda: {0: root.pid})
-            assert asyncio.run(win.kill(root.pid, token)) == [0]  # dead root is not tree proof
+            assert asyncio.run(win.kill(root.pid, token)) == [root.pid]
+            monkeypatch.setattr(proc_kill, '_nt_table', lambda: {0: 123456789})
+            assert asyncio.run(win.kill(root.pid, token)) == [root.pid]  # dead intermediate, live grandchild
         finally:
             root.kill()
