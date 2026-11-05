@@ -7,12 +7,17 @@ use crate::{
 use std::{io, process::ExitStatus};
 
 #[cfg(test)]
+#[path = "watch_blind_tests.rs"]
+mod blind_tests;
+#[path = "watch_supervise.rs"]
+mod supervise;
+#[cfg(test)]
 #[path = "watch_tests.rs"]
 mod tests;
 #[path = "watch_unix.rs"]
 #[cfg(unix)]
-#[allow(dead_code)] // RL12 supervisor integration follows in a separate slice.
 mod unix;
+pub use supervise::supervise_events;
 
 pub struct Hooks<'a> {
     pub parser: &'a mut dyn EventParser,

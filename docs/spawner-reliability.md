@@ -1,26 +1,47 @@
 # Spawner reliability
 
-## RL12: backend/API foundation (partial)
+## RL12: Unix event supervisor (P-R6)
 
-The Unix-only `watch` module defines metadata-only hooks and results, an owned
-child backend, and a clock-driven termination state machine. It is not called
-by the harness. Commands are passed intact to the backend, which adds a fresh
-process group and reuses the stall supervisor's spawn and signalling policy.
-The stop path sends TERM once, escalates once after grace, reaps the root
-without blocking, and requires ESRCH for emptiness. Permission errors cannot
-prove a kill. Two seconds after escalation, unproven emptiness is `Survivors`.
+`watch::supervise_events` accepts the already confined, jail-wrapped `Command`.
+It does not reconstruct argv or environment and has no harness caller until
+RL14. This is a host supervision slice, not Temporal worker adoption.
+Rollback is `git revert`.
 
-This foundation does **not** complete SPAWNER-RL12-WATCH-SUPERVISE. Pending work:
-bounded separate pipe draining and stdin delivery, the event loop and channel
-aggregation, Blind shadow evaluation, source-priority selection, tree/CPU
-sampling, calibration, EOF handling, and the required real-process matrix.
-Owned groups remain signallable after leader reaping: Linux cannot reuse the
-pgid while the group exists. Every signal first probes the guarded group;
-the first ESRCH permanently latches emptiness, preventing later signalling.
-EPERM is an error, not proof. Adopted children (RL29) retain identity checks.
-`Survivors` carries the first signal, reap, or probe error kind, if any.
-No production caller is enabled.
+Separate bounded stdout/stderr readers run concurrently with the stdin writer;
+EOF closes the prompt pipe. Only stdout enters the event parser. Both streams
+refresh the byte clock and contribute to the capped private output tail. A
+bounded queue and bounded drain prevent a producer from starving supervision.
+No pipe thread is joined: escaped pipe holders cannot block the return beyond
+the two-second drain deadline. Detached workers retain only bounded chunks and
+the supplied prompt until their pipe closes; no payload enters result metadata.
 
-The remaining behavior and tests require a follow-up size allocation, rather
-than removal of tests to meet the 400-production-line limit. Rollback is
-`git revert`; RL14 must not call this partial API.
+The supervisor drains pending signals before ticking the monitor every 10 ms.
+The monitor supplies warning/confirm-window decisions. Cancellation wins over
+wall timeout, then Blind byte stall and event decisions. Provider errors and
+I/O cleanup use the same Stop path. Once selected, a reason is never replaced;
+signals during teardown are calibration only (`late_signal_ms`). Tree hooks
+are sampled at start and every 30 seconds; callers supply writer-only sampling.
+CPU hooks provide signals, never a separate liveness bypass.
+
+Aggregate channel health mirrors parser counter deltas without parsing payloads
+again. Its first Blind reason is sticky; `blind_events = 1` is the single RL14
+`CHANNEL_BLIND` handoff. Blind decisions become would-warn/would-kill, and only
+Blind channels arm `Opts.stall` (None disables it). A parsing silent tool never
+arms the byte deadline. RL14 supplies the configured 600-second default;
+`Opts::default` deliberately does not change. Plain mode-off callers continue
+using `stall`.
+
+The owned backend captures a fresh pgid at spawn, guards every signal with a
+zero-signal probe, and permanently latches ESRCH. EPERM never proves emptiness.
+Root reaping does not lose ownership of surviving descendants. Stop probes at
+signal points and its final proof deadline, not every tick: TERM once, grace,
+KILL once, then a bounded proof interval (production: 2000 ms). Survivors is
+terminal kill-incomplete, never permission to fall through. Natural root exits
+also clean up surviving group members. Adopted identity validation belongs RL29.
+
+Tests use synthetic parsers and local sh children, scaled integer-second event
+limits, and 1.5-second scheduler slack in the F+confirm+grace+proof bound.
+They cover bounded prompt/output handling, Blind behavior, silent tools,
+termination escalation, descendant ownership, and escaped pipe teardown.
+Notifications, outcome persistence, CPU sampling implementation, and safe
+fall-through remain RL14/RL17, RL13, and RL15 respectively; none is wired here.

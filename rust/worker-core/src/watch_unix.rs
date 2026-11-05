@@ -8,7 +8,7 @@ use std::{
 };
 
 pub(crate) struct UnixChild {
-    child: std::process::Child,
+    pub(super) child: std::process::Child,
     pgid: i32,
     gone: bool,
 }
