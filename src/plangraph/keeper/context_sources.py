@@ -20,11 +20,11 @@ import re
 import threading
 import time
 
-from .evidence_decisions import _decision_cell
+from .evidence_decisions import DecisionsAdapter, _decision_cell
 from .evidence_git import valid_ref
 from .evidence_types import valid_commit_ref
 
-__all__ = ["plan_item_commits", "open_lanes", "decision_ids", "decision_book",
+__all__ = ["plan_item_commits", "open_lanes", "decision_ids", "decision_book", "decision_texts",
            "decisions_naming", "superseded_map", "COMMIT_LIMIT"]
 
 COMMIT_LIMIT = 5
@@ -272,6 +272,25 @@ def decision_book(decisions):
             del _BOOKS[next(iter(_BOOKS))]
         _BOOKS[stamp] = book
     return book
+
+
+def decision_texts(decisions, ids):
+    """Nonempty DECISION cells for cited ids; state lives only in decision_book.
+
+    Preserve reference spelling and the adapter's first nonempty, whitespace-
+    collapsed cell semantics, including retired decisions. Enforcement must
+    continue reading the adapter directly, never this best-effort read view.
+    """
+    rows = decision_book(decisions)["rows"]
+    texts = {}
+    for did in ids:
+        canonical = DecisionsAdapter._canonical(did)
+        for row in rows.get(canonical, ()):
+            text = re.sub(r"\s+", " ", _decision_cell(row)).strip()
+            if text:
+                texts[did] = text
+                break
+    return texts
 
 
 def _read_rows(decisions):
