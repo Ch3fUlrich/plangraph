@@ -2,23 +2,30 @@
 import os
 from pathlib import Path
 import pytest
-from conftest import hermetic_writer_env
+
+WRITER_VARIABLES = (
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "OPENCODE_DISABLE_PROJECT_CONFIG",
+    "OPENCODE_DISABLE_CLAUDE_CODE",
+    "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+)
 
 
-def test_writer_variables_are_removed_before_test(monkeypatch):
-    names = (
-        "GIT_AUTHOR_NAME",
-        "GIT_AUTHOR_EMAIL",
-        "GIT_COMMITTER_NAME",
-        "GIT_COMMITTER_EMAIL",
-        "OPENCODE_DISABLE_PROJECT_CONFIG",
-        "OPENCODE_DISABLE_CLAUDE_CODE",
-        "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
-    )
-    for name in names:
-        monkeypatch.setenv(name, "writer-sentinel")
-    hermetic_writer_env.__wrapped__(monkeypatch)
-    for name in names:
+@pytest.fixture(scope="module")
+def seeded_writer_env():
+    """Module scope sets up before the function-scoped autouse scrub in tests/conftest.py."""
+    patch = pytest.MonkeyPatch()
+    for name in WRITER_VARIABLES:
+        patch.setenv(name, "writer-sentinel")
+    yield
+    patch.undo()
+
+
+def test_writer_variables_are_removed_before_test(seeded_writer_env):
+    for name in WRITER_VARIABLES:
         assert name not in os.environ, name
 
 
