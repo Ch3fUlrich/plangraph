@@ -6,6 +6,8 @@ The `select` job (`tools/ci_select.py`) maps changed paths to suites: `scrub`, `
 
 The `ci-gate` job fails if any selected suite failed, was skipped, or was cancelled.
 
+A non-doc change satisfies the changelog check with a new or edited direct-child `changelog.d/<ITEM-KEY>.md` fragment that adds an entry line against the merge-base (excluding README.md), or with a line added under `## Unreleased`; `tools/changelog_fold.py` folds fragments before release.
+
 Branch protection on `main` requires only the `ci-gate` check — no review requirement, admins not enforced. Rollback: delete the protection.
 
 A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a non-Claude `Writer:` trailer — the Writer may name a Claude model only as `claude-<model> <run|session|uuid id> [(note)]` (shape-only check; `claude-<model>` and the run-hex id are lowercase only, a uuid may be any case; the optional note is one parenthesised span that may not contain `)` (so no nested parens), a newline, or a second `Writer:` marker in any case) — and a `Test-Removal:` trailer when tests are removed. Exempt shas are listed in `tools/ci_commit_exempt.txt`.
