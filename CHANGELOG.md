@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **SPAWNER-HOST-DOCTOR (D-3755, D-3762):** add independent host readiness checks with real MCP stdio handshakes and opt-in liveness probes.
 - **SPAWNER-MCP-STDIO-GUARD (D-3753):** ignore notifications, compact MCP ps records, and guard stdio reply sizes with ReplyTooLarge errors.
 - **SPAWNER-GIT-GUARD-FLAKE (D-3739):** stub both synchronous and async host-probe entry points in tests and fail closed on unmarked binary probes.
 - **SPAWNER-RL5B (D-3676, D-3714):** record closed-stdin opencode 2.1.0 live arrivals and replay read progress, version drift and payload-retention checks; no wiring or pin change.
