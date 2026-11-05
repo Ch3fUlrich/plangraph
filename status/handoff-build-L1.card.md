@@ -1,26 +1,24 @@
-# L1 card · build-L1-0172 · 2026-11-05T16:02Z
+# L1 card · build-L1-0172 · 2026-11-05T16:24Z
 ## Goal
-- D-3797 ff spawner-main after replan merges #394 #388 #390 #392 #393 #395 #397; D-3798 RIN-* via L2; omniroute tarball; watchdog ruling
+- D-3797 ff spawner-main after replan merges #394 #388 #390 #392 #393 #395 #397; D-3798 RIN-* via L2; watchdog ruling
 ## Keeper
 - claimed: plangraph:RIN-LEDGER-VIEWS (ep4), plangraph:RIN-PATH-REPOINT (ep4), plangraph:WATCHDOG-RECYCLE-DOUBLE-LAUNCH (ep1), plangraph:SEAT-PATH-FIXES (ep5), plangraph:SPAWNER-DEEPSEEK-REVIEW-LEG (ep2), plangraph:KEEPER-SNAP-S0-TIMINGS, plangraph:SPAWNER-LEG-GROK (ep3)
 - ready next: SPAWNER-ORPHAN-REAP (after #377)
 ## Done
+- 11-05T16:25Z D-3763 5fdef18952 omniroute tarball on dell-build sha256 93ef0332, pack check rc=0, sent to prox
 - 11-05T16:02Z D-3763 5fdef18952 omniroute tag v3.8.53-autoos.6, digest sha256:9f720cfaa948, seat run-36f24c41 ACCEPT, sent to prox
 - 11-05T14:39Z SEAT-PATH-FIXES 6ed5be77b hand-edit for qwen run-5c03f10d, 111 passed, pushed
 - 11-05T15:20Z D-3763 f9840b048c omniroute r10 66 passed, typecheck rc=0; seats REQUEST_CHANGES (MED only), list to prox
 - 11-05T15:05Z WATCHDOG-RECYCLE-DOUBLE-LAUNCH afe7b75 r1+r2+r2b pushed, 114 passed; seats REQUEST_CHANGES
-- 11-05T15:10Z D-3763 8e8636721 drift-mail merged by server-L1-main into improve, schedule off
 ## In flight
 - L2-LAUNCH build-L2-rin sent to routing 15:42Z, brief K/brief-L2-rin.md
 - none in spawner
 ## Planned
-1. prox answer on tarball -> build, path + sha256 to prox (image + tag already sent)
 2. routing ruling on WATCHDOG r3 d187ac9 (BLOCKED 15:40Z) -> slice, seats, GO-REQ
 3. D-3797 ff when replan DONE: tests, re-read HEAD, rollback sha, smoke, DONE with sha; supersedes D-3786 target
 4. #338 delta seat on 6ed5be77b; tests seats for #338 #380 #377 on agy ~11-06T13:43Z
 5. SPAWNER-ORPHAN-REAP (D-3771) after #377
 ## Open
-- BLOCKED omniroute tarball: next build OOM on code host | *dell-build node:24 container, ws self-build, image only | waits prox
 - BLOCKED WATCHDOG r3 cap: 2 HIGH + 5 MED, lists K/swd3q.out K/swd3d.out | *replan one slice | waits routing
 - BLOCKED #377 #338 #380 3.3 (D-3782, D-3783): test-running non-writer seat | *agy gemini tests seat ~11-06T13:43Z | deadline none
 - BLOCKED #383 ruling on deepseek MED + keeper define + GO | default dismiss MED, define as sent | deadline none
