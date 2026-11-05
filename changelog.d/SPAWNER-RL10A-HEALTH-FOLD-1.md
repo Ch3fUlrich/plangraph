@@ -1,0 +1,1 @@
+- **SPAWNER-RL10A (D-3676, D-3714):** Add the pure row-health core, incident folding and row-anchored expiry tests.
