@@ -42,6 +42,7 @@ def test_request_really_held_lock(meter):
             lock.acquire()
 
         def release(self):
+            clock.advance(.100)  # release overhead is not lock hold time
             lock.release()
 
     def request():
@@ -105,9 +106,12 @@ def test_threshold_only_read_write_and_finally(meter):
             clock.advance(.249)
     assert len(lines(out)) == 1
     assert "kind=other" in lines(out)[0]
+    lock = threading.Lock()
     with pytest.raises(ValueError, match="original"):
-        with timing.RequestTimer(threading.Lock()):
+        with timing.RequestTimer(lock):
             raise ValueError("original")
+    assert lock.acquire(blocking=False)
+    lock.release()
     assert len(lines(out)) == 2
 
 
@@ -130,7 +134,7 @@ def test_snapshot_bytes_writer_parts_and_closed_stderr(meter, tmp_path, monkeypa
         assert writer._write_locked()
         expected = server.config.snapshot.read_bytes()
         assert any("writer_timing" in line and "write_ms=20" in line for line in lines(out))
-        assert any("snapshot_timing" in line for line in lines(out))
+        assert not any("snapshot_timing" in line for line in lines(out))
         out.close()
         snapshot_io.write_snapshot(server, server.system)
         assert server.config.snapshot.read_bytes() == expected
@@ -145,6 +149,8 @@ def test_snapshot_bytes_writer_parts_and_closed_stderr(meter, tmp_path, monkeypa
         with pytest.raises(ValueError, match="original"):
             with timing.RequestTimer(server.lock):
                 raise ValueError("original")
+        assert server.lock.acquire(blocking=False)
+        server.lock.release()
     finally:
         world.close()
 
@@ -155,15 +161,58 @@ def test_reaper_tick_record_submit_and_changelog(meter, tmp_path, monkeypatch):
     try:
         seed(world, [("A", [])])
         def append(*args):
-            clock.advance(.030)
+            clock.advance(.300)
             return "ok"
         monkeypatch.setattr(anchor.anchord, "append", append)
         anchorer = anchor.Anchorer({"anchor_file": str(tmp_path / "anchor")},
                                   clock=lambda: 10000, last=None)
         assert anchorer.tick(world.conn) == "ok"
         line = next(line for line in lines(out) if "reaper_timing" in line)
-        assert "tick_ms=30 record_ms=30 submit_ms=30" in line
+        assert "tick_ms=300 record_ms=300 submit_ms=300" in line
+        before = out.getvalue()
         world.store._changelog(0)
-        assert "changelog_timing" in lines(out)[-1]
+        assert out.getvalue() == before
     finally:
         world.close()
+
+
+@pytest.mark.parametrize("event", ["snapshot_timing", "changelog_timing", "reaper_timing"])
+@pytest.mark.parametrize("fast", [True, False])
+def test_threshold_and_deferred_output(event, fast, meter, monkeypatch):
+    clock, out = meter
+    lock = threading.Lock()
+    class CheckedOutput(io.StringIO):
+        def write(self, text):
+            assert not lock.locked()
+            return super().write(text)
+    checked = CheckedOutput()
+    monkeypatch.setattr(timing.sys, "stderr", checked)
+    if fast:
+        timing.measured(event)(lambda: clock.advance(.249))()
+        assert checked.getvalue() == ""
+        return
+    with timing.RequestTimer(lock):
+        timing.measured(event)(lambda: clock.advance(.300))()
+        assert checked.getvalue() == ""
+    assert event in lines(checked)[0]
+    assert "request_timing" in lines(checked)[1]
+
+
+@pytest.mark.parametrize("failure", ["set", "reset", "get"])
+def test_context_failures_do_not_escape_or_leak(failure, meter, monkeypatch):
+    original = timing._parts
+    class BrokenContext:
+        def __getattr__(self, name):
+            if name == failure:
+                return lambda *a: (_ for _ in ()).throw(RuntimeError("instrumentation"))
+            return getattr(original, name)
+    monkeypatch.setattr(timing, "_parts", BrokenContext())
+    lock = threading.Lock()
+    with pytest.raises(ValueError, match="original"):
+        with timing.RequestTimer(lock):
+            timing.measured("snapshot_timing")(lambda: None)()
+            raise ValueError("original")
+    assert lock.acquire(blocking=False)
+    lock.release()
+    monkeypatch.setattr(timing, "_parts", original)
+    original.set(None)

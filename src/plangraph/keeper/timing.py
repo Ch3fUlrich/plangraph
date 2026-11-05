@@ -5,6 +5,7 @@ import sys
 import time
 
 clock = time.monotonic
+THRESHOLD_MS = 250
 _parts = ContextVar("keeper_timing_parts", default=None)
 _fields = ("build_ms", "encode_ms", "sign_ms", "write_ms", "tick_ms", "record_ms", "submit_ms")
 _events = {"request_timing", "writer_timing", "reaper_timing", "snapshot_timing",
@@ -22,11 +23,30 @@ def _ms(start, end):
     return max(0, round((end - start) * 1000))
 
 
+class _Parts(dict):
+    pending = None
+
+
+def _context(value=None, token=None, get=False):
+    try:
+        return _parts.get() if get else (_parts.reset(token) if token is not None else _parts.set(value))
+    except Exception:
+        return None
+
+
+def _output(line):
+    try:
+        print(line, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 def _emit(event, kind, wait, hold, parts):
     try:
         if event not in _events or kind not in {"read", "write", "other"}:
             return
-        if event == "request_timing" and kind in {"read", "write"} and wait + hold < 250:
+        if (event in {"snapshot_timing", "changelog_timing", "reaper_timing"}
+                or event == "request_timing" and kind in {"read", "write"}) and wait + hold < THRESHOLD_MS:
             return
         values = (wait, hold, *(parts.get(field, 0) for field in _fields))
         if any(type(value) is not int or value < 0 for value in values):
@@ -34,13 +54,16 @@ def _emit(event, kind, wait, hold, parts):
         names = ("wait_ms", "hold_ms", *_fields)
         line = f"keeper: {event} kind={kind} " + " ".join(
             f"{name}={value}" for name, value in zip(names, values))
-        print(line, file=sys.stderr, flush=True)
+        if getattr(parts, "pending", None) is not None:
+            parts.pending.append(line)
+        else:
+            _output(line)
     except Exception:
         pass  # closed stderr (or broken instrumentation) must never affect the operation
 
 
 class RequestTimer:
-    """Own the lock: wait starts at acquire, hold ends only after release."""
+    """Own the lock: wait starts at acquire, hold ends before release."""
 
     def __init__(self, lock, kind="other", event="request_timing"):
         self.lock, self.kind, self.event = lock, kind, event
@@ -49,21 +72,27 @@ class RequestTimer:
         self.start = _now()
         self.lock.acquire()
         self.held = _now()
-        self.parts = {}
-        self.token = _parts.set(self.parts)
+        self.parts = _Parts()
+        self.parts.pending = []
+        self.token = _context(self.parts)
         return self
 
     def __exit__(self, *exc):
+        end = _now()
         try:
             self.lock.release()
         finally:
             try:
                 _emit(self.event, self.kind, _ms(self.start, self.held),
-                      _ms(self.held, _now()), self.parts)
+                      _ms(self.held, end), self.parts)
             except Exception:
                 pass
             finally:
-                _parts.reset(self.token)
+                if self.token is not None:
+                    _context(token=self.token)
+                pending, self.parts.pending = self.parts.pending, None
+                for line in pending:
+                    _output(line)
 
 
 def measured(event=None, part=None):
@@ -71,9 +100,11 @@ def measured(event=None, part=None):
     def decorate(fn):
         @wraps(fn)
         def run(*args, **kwargs):
-            parent = _parts.get()
-            parts = {} if event else parent
-            token = _parts.set(parts)
+            parent = _context(get=True)
+            parts = _Parts() if event else parent
+            if event:
+                parts.pending = getattr(parent, "pending", None)
+            token = _context(parts)
             start = _now()
             try:
                 return fn(*args, **kwargs)
@@ -87,7 +118,8 @@ def measured(event=None, part=None):
                 except Exception:
                     pass
                 finally:
-                    _parts.reset(token)
+                    if token is not None:
+                        _context(token=token)
         return run
     return decorate
 
