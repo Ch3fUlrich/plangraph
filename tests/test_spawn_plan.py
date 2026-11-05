@@ -45,14 +45,16 @@ def test_override(tmp_path):
 
 
 def test_seats_and_impossible_fence():
-    p = plan_spawn(CARD, role="review", writer_families=("gpt",))
+    legs = tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l
+                 for l in DEFAULT_LEGS)
+    p = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs)
     assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
     assert all(l.family != "claude" for l in p.legs if l.id != "claude-haiku-5.5")  # D-3605 Haiku leg
     assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
     # D-3084 per-part: with six writer parts a qwen seat covers the five others
     # and a deepseek seat covers the qwen part.
     p = plan_spawn(CARD, role="review",
-                   writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"))
+                   writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
     assert [l.family for l in p.review_seats] == ["qwen", "deepseek"] and not p.error
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
@@ -100,6 +102,7 @@ def test_non_provider_stops_do_not_mark(tmp_path, status, body):
 @pytest.mark.parametrize("roles", [[], ["worker"], "implement", [["review"]], ["review", "review"]])
 def test_load_legs_bad_roles(tmp_path, roles):
     raw = dataclasses.asdict(DEFAULT_LEGS[0])
+    raw["disabled"] = None
     raw["roles"] = roles
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [raw]}))

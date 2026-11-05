@@ -182,6 +182,7 @@ def test_leg_eligibility(request_data, monkeypatch, kind):
         monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, expires='2000-01-01'),))
         reason = 'leg expired'
     else:
+        monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled=None),))
         request_data['role'] = 'implement'
         reason = 'role implement not in leg roles'
     assert invoke(request_data) == (2, '', f'{kind}: {reason}\n')
