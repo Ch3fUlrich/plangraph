@@ -326,6 +326,7 @@ class SpawnService(SeatSpawnMixin):
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
                     record['pid'] = process.pid if process else None
+                    record['pid_start'] = getattr(self.runner, '_owned', {}).get(job.job_id, {}).get('pid_start')   # a CLI cancel proves the root by it
                     self._save(record)
                     task = self.runner._tasks.get(job.job_id)
                     if task:

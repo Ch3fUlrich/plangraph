@@ -21,6 +21,7 @@ import pytest
 
 import plangraph.spawner.runner as runner_module
 from plangraph.spawner.runner import IMPLEMENT_HEADER, SpawnerRunner
+from fake_pid import FAKE_PID
 
 
 def _sent(prompt):
@@ -53,7 +54,7 @@ def test_opencode_prompt_via_stdin_and_not_in_argv(monkeypatch):
 
         proc = AsyncMock()
         proc.returncode = 0
-        proc.pid = 9999
+        proc.pid = FAKE_PID
         proc.communicate = AsyncMock(return_value=(b"done", b""))
 
         factory_calls = []
@@ -221,7 +222,7 @@ def test_timeout_path_with_stdin_kills_and_records_124(monkeypatch):
         )
 
         proc = AsyncMock()
-        proc.pid = 4321
+        proc.pid = FAKE_PID + 1
         proc.returncode = 0
 
         communicate_calls = []

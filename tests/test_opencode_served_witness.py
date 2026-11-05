@@ -11,7 +11,7 @@ from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
-
+from fake_pid import FAKE_PID
 REQUESTED = 'opencode/glm-5.3-flash-free'
 
 
@@ -47,7 +47,7 @@ def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=
         seed(argv[argv.index('--title') + 1], data_home)
         async def communicate():
             return b'ok', b''
-        return SimpleNamespace(pid=123, returncode=exit_code, communicate=communicate)
+        return SimpleNamespace(pid=FAKE_PID, returncode=exit_code, communicate=communicate)
 
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 
@@ -431,7 +431,7 @@ def test_cancelled_monitor_task_removes_ocdata_dir(tmp_path, monkeypatch):
     async def factory(*args, **kwargs):
         async def communicate(*a, **k):
             await asyncio.Event().wait()
-        return SimpleNamespace(pid=123, returncode=None, communicate=communicate)
+        return SimpleNamespace(pid=FAKE_PID, returncode=None, communicate=communicate)
 
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 
@@ -492,7 +492,7 @@ def test_locked_store_read_does_not_stall_the_monitor_loop(tmp_path, monkeypatch
 
         async def communicate():
             return b'ok', b''
-        return SimpleNamespace(pid=123, returncode=0, communicate=communicate)
+        return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
 
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 

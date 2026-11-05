@@ -160,7 +160,7 @@ def grep_fanout(repo: str | Path | None, symbol: str) -> int | None:
         proc = subprocess.run(
             ["git", "-C", str(repo_path), "grep", "-w", "-c", "-F", "-e", symbol],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode == 1:
             return 0

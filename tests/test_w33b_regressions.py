@@ -45,6 +45,7 @@ def test_empty_success_is_unknown_and_admitted(monkeypatch, stdout):
     assert r.served_models('{}') is None
 
 
+@pytest.mark.real_probe
 def test_empty_success_cached_for_thirty_seconds(monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: calls.append(kw) or SimpleNamespace(returncode=0, stdout=''))
