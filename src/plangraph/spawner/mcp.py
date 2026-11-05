@@ -12,9 +12,11 @@ from __future__ import annotations
 from plangraph.routing_errors import ParameterRefused
 
 import asyncio
+import concurrent.futures
 import copy
 import json
 import sys
+import threading
 from typing import Any, Mapping
 
 from plangraph.spawner.clients import effective_child_base_url
@@ -354,18 +356,33 @@ async def stdio_reply(server, line: bytes) -> str | None:
     return encode_reply(resp)
 
 
+def _read_line(stdin) -> asyncio.Future:
+    """Read one line on a daemon thread, so a blocked read never delays process exit.
+
+    An executor thread would: asyncio.run and interpreter exit both join those.
+    """
+    done = concurrent.futures.Future()
+    done.set_running_or_notify_cancel()
+
+    def read() -> None:
+        try:
+            done.set_result(stdin.readline())
+        except Exception as exc:
+            done.set_exception(exc)
+
+    threading.Thread(target=read, daemon=True, name='mcp-stdin').start()
+    return asyncio.wrap_future(done)
+
+
 async def run_stdio_server() -> None:
     """Run MCP server over standard input and output."""
     server = MCPSpawnerServer()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    loop = asyncio.get_running_loop()
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    # connect_read_pipe cannot serve an inherited stdin on Windows: the Proactor loop fails inside
+    # a transport callback and the awaiting reader hangs forever. A private reader, not
+    # sys.stdin.buffer, because a daemon thread holding that lock can abort interpreter shutdown.
+    stdin = open(sys.stdin.fileno(), 'rb', closefd=False)
 
-    while not reader.at_eof():
-        line = await reader.readline()
-        if not line:
-            break
+    while line := await _read_line(stdin):
         reply = await stdio_reply(server, line)
         if reply is not None:
             sys.stdout.write(reply + '\n')

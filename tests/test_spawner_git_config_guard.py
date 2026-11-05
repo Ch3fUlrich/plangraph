@@ -8,10 +8,11 @@ import pytest
 from plangraph.spawner import git_guard
 from plangraph.spawner.git_guard import check_guard, init_guard, writer_launch
 from plangraph.spawner.runner import SpawnerRunner
+from fake_pid import FAKE_PID
 
 
 class FakeProcess:
-    pid = 1234
+    pid = FAKE_PID
 
     def __init__(self, returncode: int = 0, stdout: bytes = b"", stderr: bytes = b""):
         self.returncode = returncode

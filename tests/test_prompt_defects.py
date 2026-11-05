@@ -37,13 +37,29 @@ def test_fixer_terminal_report_gate(tmp_path):
 
 
 def test_no_unresolvable_keeper_instruction():
-    historical = {}  # No historical mentions currently need an exception/reason.
+    # Main documents this exact token as jargon to avoid, not an instruction.
+    explanatory = {
+        'skills/plangraph-planning/references/task-contract.md':
+            '| Fleet jargon an agent cannot resolve (`TEST-SPEED-AFFECTED`, bare D-ids) | It cannot look them up |',
+    }
     for folder in ('skills', 'docs', 'src'):
         for path in (ROOT / folder).rglob('*'):
             if path.is_file():
                 text = path.read_bytes().decode('utf-8', errors='replace')
-                if 'TEST-SPEED-AFFECTED' in text:
-                    assert historical.get(path.relative_to(ROOT).as_posix())
+                for line in text.splitlines():
+                    if 'TEST-SPEED-AFFECTED' in line:
+                        assert line == explanatory.get(path.relative_to(ROOT).as_posix())
+
+
+@pytest.mark.parametrize('name', ['docs/brief.md',
+    'skills/plangraph-planning/references/task-contract.md'])
+def test_keeper_scan_rejects_instructions(tmp_path, monkeypatch, name):
+    monkeypatch.setitem(globals(), 'ROOT', tmp_path)
+    path = tmp_path / name
+    path.parent.mkdir(parents=True)
+    path.write_text('Run affected tests only; follow TEST-SPEED-AFFECTED.\n')
+    with pytest.raises(AssertionError):
+        test_no_unresolvable_keeper_instruction()
 
 
 @pytest.mark.parametrize('mode', ['files', 'diff'])

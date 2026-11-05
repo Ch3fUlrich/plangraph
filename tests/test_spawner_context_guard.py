@@ -199,6 +199,22 @@ def test_symlink_loops_fail_closed_not_with_a_runtime_error(tree):
 
 # --- I5: one line convention; a range past EOF warns ---------------------------------------------------------
 
+
+def test_dangling_and_missing_context_paths_stay_not_a_file(tree):
+    (tree / "dangling.py").symlink_to("missing.py")
+    for name in ("dangling.py", "missing.py"):
+        with pytest.raises(ContextError, match="is not a file in the run cwd"):
+            pack_for(tree, name + ":1-1")
+
+
+@pytest.mark.parametrize("cycle", [False, True])
+def test_looped_run_cwd_has_specific_resolution_error(tmp_path, cycle):
+    (tmp_path / "one").symlink_to("two" if cycle else "one")
+    if cycle:
+        (tmp_path / "two").symlink_to("one")
+    with pytest.raises(ContextError, match=r"cannot be resolved \(symlink loop or unreadable\)"):
+        context_pack.build("", {}, tmp_path / "one")
+
 CONVENTION_INPUTS = [
     b"", b"a", b"a\n", b"a\nb", b"a\r\nb\r\n", b"a\rb\rc", b"a\r\rb\n", b"\r", b"\n\n", b"a\r\n\r\nb",
     b"a\x0cb\nc\n", b"a\x0bb\x1cc\nd", "a b\nc\n".encode(), b"a\xc2\x85b\nc", b"a\x85b\nc\n", b"x" * 70000 + b"\r\n" + b"y",

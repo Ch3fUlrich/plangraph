@@ -23,7 +23,7 @@ from plangraph.routing_support.opencode_render import (
     render_gateway_providers,
 )
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
-
+from fake_pid import FAKE_PID
 
 @pytest.fixture(autouse=True)
 def clean_gateway_env(monkeypatch):
@@ -244,7 +244,7 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
         proc.communicate = AsyncMock(return_value=(
             ("out " + sentinel).encode(), ("err " + sentinel).encode()))
         proc.returncode = 0
-        proc.pid = 999
+        proc.pid = FAKE_PID
         return proc
 
     runner = SpawnerRunner(process_factory=fake_factory)
@@ -391,7 +391,7 @@ def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch):
         proc = AsyncMock()
         proc.communicate = AsyncMock(return_value=(b"ok", b""))
         proc.returncode = 0
-        proc.pid = 999
+        proc.pid = FAKE_PID
         return proc
 
     runner = SpawnerRunner(process_factory=fake_factory)

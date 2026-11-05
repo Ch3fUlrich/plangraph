@@ -1,0 +1,1 @@
+- **SPAWNER-RL6 (D-3676, D-3714):** Add receive-time Claude and Qodercli stream activity parsing with pinned capture evidence; no caller or switch yet, rollback by git revert.

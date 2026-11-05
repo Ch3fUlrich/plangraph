@@ -1,0 +1,1 @@
+- **OPERATOR-STEP-PROBE (D-3773):** flag unprobed operator commands, missing host guards and stale gates on important work; render shared shell guards.

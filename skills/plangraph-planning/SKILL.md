@@ -20,24 +20,24 @@ the layers fit together.
 ## 1. The hierarchy (expandable and collapsible in the page)
 
 ```
-Layer 1  PROJECT        one agent, Opus 5.5, medium effort
+Layer 1  PROJECT        one agent; the route table decides
   |                     owns the intent/description; orchestrates phases; talks to the operator
-  +- Layer 2  PLANNING phase (0..n, at times the operator chooses), Opus 5.5, high effort
-  |    Layer 3 agents:  1. research x3-10   (Sonnet 5.5, mixed model families, in parallel)
+  +- Layer 2  PLANNING phase (at times the operator chooses); the route table decides
+  |    Layer 3 agents:  1. research          (the route table decides; different providers)
   |                     2. synthesis        (planner merges research into one plan)
-  |                     3. plan review x3    (different lenses, at least one other family)
+  |                     3. plan review       (the route table decides; independent family)
   |                     4. refinement        (planner revises; no new agents)
-  +- Layer 2  WORK phase (0..n, one per slice of an approved plan), Sonnet 5.5, high effort
-       Layer 3 agents:  1. detail research x0-2 (optional, subagent-driven, fetch specifics)
+  +- Layer 2  WORK phase (one per slice of an approved plan); the route table decides
+       Layer 3 agents:  1. detail research      (optional; the route table decides)
                         2. refinement           (phase agent tightens task contracts)
                         3. implementers         (cheap but capable; independent tasks in parallel)
-                        4. reviewers x1-3       (very cheap; other family than the implementer)
+                        4. reviewers            (the route table decides; other family)
                         5. fix-tasks            (a new implementer per failure, section 8)
 ```
 
 Mapping to `unattended-orchestration` levels: Layer 1 is the coordinator/orchestrator role for the
 project, Layer 2 is the L2 orchestrator, Layer 3 is the L3 worker/reviewer. Layer 3 agents never
-spawn (R-worker-06). Model names are *tier aliases* (`model_routing`), not pinned ids.
+spawn (R-worker-06). The route table decides model selection, not this skill.
 
 Two plan-graph item kinds per layer: a **phase item** (kind `planning` or `work`) with child
 **task items**; both carry `layer`, `role`, `agent_id` and `state`.
@@ -147,14 +147,20 @@ ops:
 
 ## 5. Phases in detail
 
-**Planning phase (Layer 2, high effort).**
-1. Pose the questions; spawn 3-10 research agents by card via plangraph-spawn (default 3-5; max 10 by R-orch-30), varying
-   model family and prompt angle so findings diverge. Each returns a schema'd report, not a
-   transcript.
-2. Merge into one plan with phases, tasks, edges and risks.
-3. Three reviewers with different lenses (correctness/feasibility, risk/security,
-   simplicity/cost), at least one from a different model family than the planner.
-4. Refine; record what was accepted and rejected. Output: an approved plan in the plan graph,
+**Planning phase (Layer 2).** Effort is medium unless the operator asks otherwise.
+0. Read the plan graph first: the item text and the docs it names; ask only what the plan leaves open.
+1. Ask an operator question batch covering scope, acceptance, constraints and risks.
+   Give each question options, default first; do not ask again for facts already in the plan graph.
+   Run one follow-up round on conflicts before research; record unresolved conflicts as blockers.
+2. Spawn researchers by card via plangraph-spawn in the route table's order, from different providers.
+   Use 2-3 prompt angles; each researcher returns at most 15 bullets plus sources, not a transcript.
+   Put a static token cap on the card; use the registry policy block and `docs/PLANNER-KIT.md` for budgets.
+   These output limits do not replace the registry's staffing or routing policy.
+3. Merge into one plan with phases, tasks, edges and risks.
+   Briefs say why the work exists, what it unblocks and what the last attempt did.
+   State retries as facts only; use the Wording guide in `references/task-contract.md`.
+4. Include one review seat of a non-Claude family different from the writer; routing stays with the keeper.
+5. Refine; record what was accepted and rejected. Output: an approved plan in the plan graph,
    delivered ONLY as a plan-graph batch (`data/updates/<date>-<name>.yaml`, create/edit/priority
    ops, applied by the plangraph L1 after a router OK) carrying **tasks + cards** — every task
    item's card in that same batch (section 4). Prose plans are input; the batch is the output, and
@@ -162,12 +168,12 @@ ops:
    gate refuses come back through the planner queue as questions (section 6) and are re-emitted
    with the next batch.
 
-**Work phase (Layer 2, high effort).**
-1. Optional: 1-2 detail researchers for facts the plan lacks.
+**Work phase (Layer 2).** Effort is medium unless the operator asks otherwise.
+1. Optional: detail researchers for facts the plan lacks, using the research rules above.
 2. Refine task contracts against section 3; keep each card in sync with its contract.
 3. Spawn implementers by card via plangraph-spawn (`python3 tools/plangraph-spawn.py spawn --card @card.json --role implement ...`): independent tasks in parallel, dependent ones in order.
-4. Spawn 1-3 reviewers per task or batch by card via plangraph-spawn (`--role review --review-of RUN_ID`),
-   very cheap models, **a different family from the implementer**.
+4. Spawn reviewers per task or batch by card via plangraph-spawn (`--role review --review-of RUN_ID`),
+   using the route table; include a non-Claude family different from the writer.
 5. Any failure creates a fix-task (section 8). The phase ends when every task is done and
    reviewed; the phase agent sends a digest upward (section 9).
 
@@ -228,7 +234,7 @@ claiming cross-family coverage.
 ## 11. Checklist
 
 - [ ] Intent written at Layer 1; planning phase(s) scheduled by the operator
-- [ ] Research 3-10, mixed families; plan reviewed by 3 lenses; refinement recorded
+- [ ] Plan graph read first; question batch and conflict follow-up before routed research; refinement recorded
 - [ ] Every task passes the section 3 contract; file scopes disjoint; toolchain in each brief
 - [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
 - [ ] One agent per task; implementers parallel only when independent

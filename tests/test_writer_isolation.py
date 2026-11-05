@@ -13,7 +13,8 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
-pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pid 123 is never a live host pid
+from fake_pid import FAKE_PID
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID exceeds the host PID range; no live process can match
 
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner
@@ -43,7 +44,7 @@ def _run_writer(tmp_path, monkeypatch, work, *, act=lambda work: None, role='imp
         act(work)
         async def communicate():
             return b'done', b''
-        return SimpleNamespace(pid=123, returncode=0, communicate=communicate)
+        return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(work), process_factory=factory)
     async def run():
         job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6.1-sol', role=role,
