@@ -20,13 +20,18 @@ def config(path, *args):
     return git(path, "config", *args, "--get", "core.hooksPath", optional=True).decode().strip()
 
 
+def public_patterns():
+    return [p.strip().lower() for p in
+            os.environ.get("PLANGRAPH_PUBLIC_REMOTES", "").split(",") if p.strip()]
+
+
 def public_remote(path):
-    public = os.environ.get("PLANGRAPH_PUBLIC_REPO", "").lower()
+    public = public_patterns()
     for name in git(path, "remote").decode().splitlines():
         urls = git(path, "remote", "get-url", "--all", name)
         urls += git(path, "remote", "get-url", "--push", "--all", name)
         for url in urls.decode().splitlines():
-            if not public or public in url.lower():
+            if not public or any(p in url.lower() for p in public):
                 # Both URL and scp forms: discard all userinfo, query and fragment.
                 if "://" in url:
                     u = urlsplit(url)
@@ -35,12 +40,13 @@ def public_remote(path):
     return None
 
 
-def gated(path):
+def gated(path, value=None):
     path = Path(os.fsdecode(git(path, "rev-parse", "--show-toplevel")).strip())
     if not git(path, "ls-tree", "HEAD", "--", HOOK):
         return False
     expected = git(path, "show", "HEAD:" + HOOK)
-    value = config(path, "--path")
+    if value is None:
+        value = config(path, "--path")
     if value:
         hook = path / value / "pre-push"
         if hook.is_file() and os.access(hook, os.X_OK):
@@ -58,8 +64,8 @@ def main():
     args = parser.parse_args()
     if args.install and (args.root or args.paths) or args.force and not args.install:
         parser.error("--install accepts only --force")
-    if args.install and not os.environ.get("PLANGRAPH_PUBLIC_REPO"):
-        print("--install requires PLANGRAPH_PUBLIC_REPO")
+    if args.install and not public_patterns():
+        print("--install requires PLANGRAPH_PUBLIC_REMOTES")
         return 1
     paths = [args.install] if args.install else args.paths[:]
     failed = False
@@ -88,7 +94,7 @@ def main():
                     return 1
                 continue
             if args.install:
-                if not git(path, "ls-tree", "HEAD", "--", HOOK):
+                if not gated(path, "tools/hooks"):
                     return 1
                 old = config(path)
                 if old and old != "tools/hooks" and not args.force:
@@ -96,8 +102,6 @@ def main():
                 if args.force and config(path, "--local"):
                     git(path, "config", "--unset-all", "core.hooksPath", optional=True)
                 git(path, "config", "core.hooksPath", "tools/hooks")
-                if not gated(path):
-                    return 1
             elif not gated(path):
                 if common not in reported:
                     print(f"NO-GATE {path} {remote}")

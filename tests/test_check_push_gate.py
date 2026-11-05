@@ -23,7 +23,7 @@ def repo(tmp_path, monkeypatch):
             monkeypatch.delenv(key)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "global"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("PLANGRAPH_PUBLIC_REPO", "fixture/public")
+    monkeypatch.setenv("PLANGRAPH_PUBLIC_REMOTES", "fixture/public")
     r = tmp_path / "repo"
     r.mkdir()
     git(r, "init", "-qb", "main")
@@ -123,7 +123,7 @@ def test_installed_real_push(repo, tmp_path, monkeypatch, shape):
     bare = tmp_path / "public.git"
     git(tmp_path, "init", "-q", "--bare", str(bare))
     git(repo, "remote", "set-url", "origin", str(bare))
-    monkeypatch.setenv("PLANGRAPH_PUBLIC_REPO", str(bare))
+    monkeypatch.setenv("PLANGRAPH_PUBLIC_REMOTES", str(bare))
     git(repo, "push", "-q", "origin", "main")
     assert run("--install", repo).returncode == 0
     word = "synthetic" + "privateword"
@@ -140,21 +140,45 @@ def test_installed_real_push(repo, tmp_path, monkeypatch, shape):
         assert "scrub hit" in result.stderr
 
 
-def test_unset_repo_is_conservative(repo, monkeypatch):
-    monkeypatch.delenv("PLANGRAPH_PUBLIC_REPO")
+@pytest.mark.parametrize("value", [None, "", ", ,"])
+def test_unset_remotes_is_conservative(repo, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("PLANGRAPH_PUBLIC_REMOTES")
+    else:
+        monkeypatch.setenv("PLANGRAPH_PUBLIC_REMOTES", value)
     git(repo, "remote", "set-url", "origin", "https://example.invalid/other")
     before = (repo / ".git/config").read_bytes()
     result = run("--install", repo, "--force")
-    assert result.returncode == 1 and "PLANGRAPH_PUBLIC_REPO" in result.stdout
+    assert result.returncode == 1 and "PLANGRAPH_PUBLIC_REMOTES" in result.stdout
     assert (repo / ".git/config").read_bytes() == before
     assert run(repo).returncode == 1
 
 
-def test_install_checks_bytes(repo):
-    (repo / "tools/hooks/pre-push").write_text("#!/bin/sh\nexit 0\n")
+@pytest.mark.parametrize("damage", ["bytes", "mode"])
+def test_install_checks_bytes(repo, damage):
+    hook = repo / "tools/hooks/pre-push"
+    if damage == "bytes":
+        hook.write_text("#!/bin/sh\nexit 0\n")
+    else:
+        hook.chmod(0o644)
+    before = (repo / ".git/config").read_bytes()
     assert run("--install", repo).returncode == 1
+    assert config_unset(repo)
+    assert (repo / ".git/config").read_bytes() == before
 
 
 def test_subdirectory_gate(repo):
     assert run("--install", repo).returncode == 0
     assert run(repo / "tools").returncode == 0
+
+
+def config_unset(repo):
+    return subprocess.run(["git", "-C", str(repo), "config", "--get", "core.hooksPath"],
+                          capture_output=True).returncode == 1
+
+
+def test_remote_substring_list(repo, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_PUBLIC_REMOTES", ",nomatch, /public, ,")
+    assert run(repo).returncode == 1
+    assert run("--install", repo).returncode == 0
+    assert run(repo).returncode == 0
