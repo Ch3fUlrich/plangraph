@@ -5,6 +5,27 @@ from pathlib import Path
 
 MESSAGE = "bare test run on this host: use pgtest <command> (runs in agent-tests.slice)"
 
+# Only separate option operands need skipping; --option=value is one word.
+_VALUE_OPTIONS = {
+    "env": "-u --unset -C --chdir -S --split-string --argv0",
+    "time": "-f --format -o --output",
+    "nice": "-n --adjustment",
+    "sudo": "-u --user -g --group -h --host -p --prompt -C --close-from "
+            "-T --command-timeout -R --chroot -D --chdir -r --role -t --type",
+    "timeout": "-s --signal -k --kill-after",
+    "stdbuf": "-i --input -o --output -e --error",
+    "exec": "-a",
+    "ionice": "-c --class -n --classdata -p --pid -P --pgid -u --uid",
+    "systemd-run": "--unit --description --slice -p --property --working-directory "
+                   "--service-type --uid --gid --nice -E --setenv --expand-environment "
+                   "--on-active --on-boot --on-startup --on-unit-active "
+                   "--on-unit-inactive --on-calendar --on-clock-change "
+                   "--on-timezone-change --timer-property --path-property "
+                   "--socket-property -H --host -M --machine --background --job-mode",
+    "xargs": "-a --arg-file -d --delimiter -E -I --replace -L --max-lines "
+             "-n --max-args -P --max-procs -s --max-chars --process-slot-var",
+}
+
 
 def tests_required():
     """Unreadable or missing marker files do not opt a host in."""
@@ -12,7 +33,7 @@ def tests_required():
         root = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
         with (root / "plangraph" / "pgtest-required").open("rb"):
             return True
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         return False
 
 
@@ -39,11 +60,17 @@ def check_bare_tests(pos_words, wrapped_in_slice) -> str | None:
             if name in ("pytest", "py.test"):
                 return None if any(a in ("--version", "--collect-only") for a in args) else MESSAGE
             if re.fullmatch(r"python(?:3(?:\.\d+)?)?", name):
-                for j, arg in enumerate(args[:-1]):
-                    if arg == "-m" and args[j + 1] == "pytest":
-                        return check_bare_tests(pos_words[i + j + 2:], False)
-                    if not arg.startswith("-"):
+                j = 0
+                while j < len(args):
+                    arg = args[j]
+                    if arg == "-m":
+                        return (check_bare_tests(pos_words[i + j + 2:], False)
+                                if args[j + 1:j + 2] == ["pytest"] else None)
+                    if arg in ("-c", "--") or not arg.startswith("-"):
                         break
+                    j += 2 if arg in ("-W", "-X", "--check-hash-based-pycs") else 1
+            if name == "cargo" and args and args[0].startswith("+"):
+                args = args[1:]
             if name == "cargo" and args and args[0] in ("test", "nextest"):
                 return MESSAGE
             return None
@@ -64,7 +91,6 @@ def check_bare_tests(pos_words, wrapped_in_slice) -> str | None:
             if wrapper == "systemd-run" and (arg == "--slice=agent-tests.slice" or
                     (arg == "--slice" and words[i + 1:i + 2] == ["agent-tests.slice"])):
                 return None
-            takes_value = arg in ("-n", "-u", "-g", "-p", "--slice", "--property",
-                                  "-s", "-k", "--signal", "--kill-after", "-C")
+            takes_value = arg in _VALUE_OPTIONS.get(wrapper, "").split()
             i += 2 if takes_value else 1
     return None
