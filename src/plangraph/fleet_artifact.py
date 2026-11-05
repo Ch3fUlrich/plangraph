@@ -94,24 +94,28 @@ def put(store, args):
         tree = store.git("mktree", data=b"100644 blob " + blob + b"\t" + name.encode() + b"\n").stdout.decode().strip()
         commit = store.commit(tree, pointer + "\n")
         result = store.git("push", store.remote, commit + ":" + full, allow=True)
-        if result.returncode and not store.exists(full):
-            raise Failure(3, "fleet-artifact: push failed")
+        if result.returncode:
+            if not store.exists(full):
+                raise Failure(3, "fleet-artifact: push failed")
+            load(store, pointer)
+    else:
+        load(store, pointer)
     print(pointer)
 
 
-def get(store, args):
+def load(store, pointer):
     store.marker()
-    match = re.fullmatch(LINE, args.pointer)
+    match = re.fullmatch(LINE, pointer)
     if match:
         name, digest, lines, size, ref, prefix, refname, _ = match.groups()
         if name != refname or not digest.startswith(prefix):
             raise Failure(4, "fleet-artifact: invalid pointer")
     else:
-        bare = re.fullmatch(REF, args.pointer)
+        bare = re.fullmatch(REF, pointer)
         if not bare:
             raise Failure(4, "fleet-artifact: invalid pointer")
         prefix, name = bare.groups()
-        ref, digest, lines, size = args.pointer, None, None, None
+        ref, digest, lines, size = pointer, None, None, None
     if not valid_name(name):
         raise Failure(4, "fleet-artifact: invalid name")
     store.git("fetch", "--depth", "1", store.remote, "refs/heads/" + ref)
@@ -127,6 +131,11 @@ def get(store, args):
     if (not actual.startswith(prefix) or (digest and actual != digest)
             or (lines is not None and (int(lines) != count or int(size) != length))):
         raise Failure(4, "fleet-artifact: integrity mismatch")
+    return name, data, actual, count, length
+
+
+def get(store, args):
+    name, data, actual, count, length = load(store, args.pointer)
     directory = Path(args.out)
     target = directory / name
     if target.exists():

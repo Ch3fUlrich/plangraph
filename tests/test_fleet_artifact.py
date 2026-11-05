@@ -21,7 +21,7 @@ def store(tmp_path, monkeypatch):
     return tmp_path, remote, run
 
 
-@pytest.mark.parametrize('data', [b'document-sentinel\r\nnext\r\n', b'\xff\xfe\n', b'document-sentinel', b''])
+@pytest.mark.parametrize('data', [b'document-sentinel\r\nnext\r\n', b'\xff\xfe\n', b'document-sentinel', b'', b'\0\r\n\x80', 'multilingual: é漢字\n'.encode()])
 def test_roundtrip(store, data):
     root, remote, run = store
     source = root / 'brief'
@@ -37,7 +37,9 @@ def test_roundtrip(store, data):
     (root / 'out/brief').write_bytes(b'other')
     run('get', pointer, '--out', root / 'out', code=5)
     assert (root / 'out/brief').read_bytes() == b'other'
-    for bad in (pointer[:30], pointer.replace('bytes=', 'bytes=9')):
+    for bad in (pointer[:30], pointer.replace('bytes=', 'bytes=9'),
+                pointer.replace('lines=', 'lines=9'), pointer.replace('ARTIFACT brief', 'ARTIFACT other'),
+                pointer.replace('sha256:', 'sha256:f', 1)):
         run('get', bad, '--out', root / 'bad', code=4)
         assert not (root / 'bad').exists()
     source.write_bytes(data + b'new')
@@ -96,5 +98,8 @@ def test_hostile_tree(store, kind):
                GIT_AUTHOR_EMAIL='test@artifact.invalid', GIT_COMMITTER_EMAIL='test@artifact.invalid')
     commit = subprocess.check_output(['git', '--git-dir', str(remote), 'commit-tree', tree.decode()], input=b'test\n', env=env).strip()
     git('update-ref', ref, commit.decode())
+    before = git('show-ref')
+    run('put', source, code=4)
+    assert git('show-ref') == before
     run('get', pointer, '--out', root / 'out', code=4)
     assert not (root / 'out').exists()
