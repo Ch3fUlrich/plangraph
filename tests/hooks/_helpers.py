@@ -41,8 +41,8 @@ except ImportError:
 # shapes and credential shapes in the SOURCE. Each value below except AUTOOS_HOME
 # is assembled by concatenation so no matched literal appears in this file, while
 # the runtime strings stay byte-identical to the originals the tests were written
-# against. AUTOOS_HOME is a synthetic default; only the parity capture sets the env
-# var, and its corpus writer replaces the value with {HOME}.
+# against. AUTOOS_HOME defaults to a synthetic path; the parity capture sets the env
+# var to the real checkout, whose value must not reach the recorded corpus.
 FAKE_TOKEN = "sk-" + "abcdefghijklmnopqrstuvwx"        # a fake API token
 AUTOOS_HOME = os.environ.get("AUTOOS_HOME", "/srv/fixture/code/AutoOS")
 SYS_PW = "/etc/" + "passwd"                            # the passwd file
