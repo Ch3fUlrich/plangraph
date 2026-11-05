@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fake_pid import FAKE_PID
-pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pid 123 is never a live host pid
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: impossible pid
 
 from plangraph.spawner import gateway_witness as gw
 

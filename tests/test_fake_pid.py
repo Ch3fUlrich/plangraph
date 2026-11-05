@@ -17,11 +17,23 @@ ALLOW = {
         'Injected _reap only records the PID; no process lookup.',
     ('test_spawner_kill_r3.py', '_Child'):
         '_nt_table and _nt_alive patched to synthetic state in every caller.',
+    ('test_spawner_kill_own_tree.py', '_nt_runner.factory'):
+        '_Fake(4242): _nt_alive and _nt_table patched to synthetic state.',
+    ('test_spawner_kill_own_tree.py', 'test_unproven_ownership_never_reaches_killer.run'):
+        '_Fake(4242): reap.alive patched; ownership refusal must not call killer.',
+    ('test_spawner_kill_own_tree.py', 'test_unproven_pid_timeout_ends_kill_incomplete_without_blocking.run'):
+        'Hanging(4242): reap.alive patched; injected killer only records PID.',
+    ('test_mcp_supervise_proc.py', 'TestChildIsolation.test_children_start_in_their_own_session'):
+        'Popen and write_pid_file patched; PID is bookkeeping only.',
+    ('test_mcp_supervise_recover.py', 'TestProjectDirIsEnforced.test_existing_project_dir_becomes_the_cwd'):
+        'Popen and write_pid_file patched; PID is bookkeeping only.',
+    ('test_mcp_supervise_recover.py', 'TestProxyResolvedOnce.test_version_probe_runs_once_not_per_restart'):
+        'Popen and write_pid_file patched; PID is bookkeeping only.',
+    ('test_spawn_cli.py', 'test_windows_killer.run'):
+        'taskkill uses injected command_factory and synthetic members only.',
+    ('test_mcp_supervise_recover.py', 'TestKillResult._taskkill'):
+        'subprocess.run and pid_alive patched; no host process operation.',
 }
-# Other retained literals: kill_own_tree._Fake/Hanging(4242) patch reap.alive
-# or _nt_alive; mcp_supervise_{proc,recover} patch write_pid_file (bookkeeping);
-# spawn_cli taskkill literals and kill_own_tree NT tables use command_factory
-# and synthetic members/tables, not real processes.
 
 
 def offenders(source):
@@ -31,16 +43,30 @@ def offenders(source):
             scope = (*scope, node.name)
             in_class = isinstance(node, ast.ClassDef)
         values = []
-        if in_class and isinstance(node, ast.Assign):
+        def pid_target(target):
+            return (isinstance(target, ast.Name) and target.id == 'pid' and in_class
+                    or isinstance(target, ast.Attribute) and target.attr == 'pid')
+        if isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == 'pid':
+                if pid_target(target):
                     values.append(node.value)
                 if isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple):
                     values.extend(v for t, v in zip(target.elts, node.value.elts)
-                                  if isinstance(t, ast.Name) and t.id == 'pid')
-        if in_class and isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == 'pid':
+                                  if pid_target(t))
+        if isinstance(node, ast.AnnAssign):
+            if pid_target(node.target):
                 values.append(node.value)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args
+            values.extend(v for a, v in zip((*args.posonlyargs, *args.args)[-len(args.defaults):], args.defaults)
+                          if a.arg == 'pid')
+            values.extend(v for a, v in zip(args.kwonlyargs, args.kw_defaults) if a.arg == 'pid')
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == 'type' and len(node.args) == 3 and isinstance(node.args[2], ast.Dict):
+                values.extend(v for k, v in zip(node.args[2].keys, node.args[2].values)
+                              if isinstance(k, ast.Constant) and k.value == 'pid')
+            if node.func.id in {'_Fake', 'Hanging', 'kill_process_tree'} and node.args:
+                values.append(node.args[0])
         if isinstance(node, ast.Call) and (
                 isinstance(node.func, ast.Name) and node.func.id == 'SimpleNamespace'
                 or isinstance(node.func, ast.Attribute) and node.func.attr == 'SimpleNamespace'):
@@ -67,9 +93,21 @@ def test_no_small_fake_pid_literals():
     'class Child:\n pid, returncode = 1234, 0',
     'proc = SimpleNamespace(pid=1234)',
     'proc = types.SimpleNamespace(pid=1234)',
+    'class C:\n def __init__(self):\n  self.pid = 1234',
+    'def __init__(self, pid=1234): pass',
+    'def f(*, pid=1234): pass',
+    'self.pid: int = 1234',
+    'self.pid, self.returncode = 1234, 0',
+    "proc = type('P', (), {'pid': 1234})()",
 ])
 def test_guard_catches_new_offender(source):
     assert offenders(source)
+
+
+@pytest.mark.parametrize('name', ['gateway_witness', 'w36_regressions', 'writer_isolation'])
+def test_stub_comment_describes_impossible_pid(name):
+    source = Path(__file__).with_name('test_' + name + '.py').read_text()
+    assert 'impossible pid' in next(line for line in source.splitlines() if line.startswith('pytestmark'))
 
 
 @pytest.mark.parametrize('old_pid', [1234, 999])
