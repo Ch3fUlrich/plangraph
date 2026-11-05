@@ -23,10 +23,10 @@ class SeatSpawnMixin:
             return prompt
         from . import context_pack
         prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
-        if role != 'review':
-            return prompt
-        from .inline_diff import inline_diff_prompt
-        return inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3)
+        if role == 'review':
+            from .inline_diff import inline_diff_prompt
+            prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3)
+        return context_pack.bound_prompt(prompt, leg.max_request_tokens)
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
                            **options):
