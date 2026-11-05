@@ -3,7 +3,7 @@ import json
 from dataclasses import replace
 from datetime import date
 import pytest
-from plangraph.planner.legs import DEFAULT_LEGS, leg_active, load_legs
+from plangraph.planner.legs import DEFAULT_LEGS, WRITER_ORDER, leg_active, load_legs
 from plangraph.planner.routing import plan_spawn
 LEG_ID = "cx-gpt-6.1-sol"
 CARD = {"estimate_tokens": 20000, "risk_tags": []}
@@ -11,6 +11,7 @@ def _leg():
     return replace(next(leg for leg in DEFAULT_LEGS if leg.id == LEG_ID), expires="2026-11-30")
 
 def test_d3605_sol_routes_implement_never_review():
+    assert WRITER_ORDER[0] == 'cx-gpt-6.1-sol'
     card = {"estimate_tokens": 20000, "risk_tags": []}
     implement = plan_spawn(card, role="implement")
     review = plan_spawn(card, role="review", writer_families=("mimo",))
@@ -18,6 +19,11 @@ def test_d3605_sol_routes_implement_never_review():
     assert "cx-gpt-6.1-sol" not in [leg.id for leg in review.legs]
     sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
     assert leg_active(sol) and not sol.expires   # D-3605: operator implement leg again
+    ids = [leg.id for leg in implement.legs]
+    for free_id in ('opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free', 'openrouter-free'):
+        for sub_id in WRITER_ORDER:
+            if next(l for l in DEFAULT_LEGS if l.id == sub_id).tier == 'subscription':
+                assert ids.index(free_id) < ids.index(sub_id)
 
 
 def test_leg_active_utc_end_of_day():
@@ -66,4 +72,3 @@ def test_override_cannot_spawn_an_expired_leg(tmp_path, monkeypatch):
     with pytest.raises(SpawnRefused, match="^leg expired: " + LEG_ID.replace(".", r"\.") + "$"):
         asyncio.run(svc.spawn(card=CARD, prompt="x", role="implement", leg=LEG_ID,
                               override_reason="operator selection", dry_run=True))
-

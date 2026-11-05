@@ -56,6 +56,7 @@ class Leg:
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     expires: str = ""
+    review_head: bool = False
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -102,7 +103,7 @@ DEFAULT_LEGS = (
         tool_mode="inline-only"),
     Leg("cx-gpt-6.1-terra", "subscription", "opencode", "omniroute/cx-gpt-6.1-terra",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
-        tool_mode="inline-only",
+        tool_mode="inline-only", review_head=True,
         note="D-3817: operator review leg; on a gpt writer it needs one non-gpt seat"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
@@ -221,7 +222,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
-    for key in ("trains_on_data", "claude_family"):
+    for key in ("trains_on_data", "claude_family", "review_head"):
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:

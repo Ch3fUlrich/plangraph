@@ -12,6 +12,7 @@ and its data dir (auth, git); review adds its own store and tool deny.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -32,7 +33,7 @@ def close_config_layers(child_env):
 
 
 def tree_state(work_dir):
-    """Hash HEAD, status, and shared local branches; None outside a git work tree.
+    """Hash HEAD and status; None outside a git work tree.
 
     An unborn HEAD (fresh repo) hashes as ``unborn``: the status still counts.
     """
@@ -42,11 +43,8 @@ def tree_state(work_dir):
     try:
         status = git('status', '--porcelain=v1', '-uall').stdout
         head = git('rev-parse', '--verify', '-q', 'HEAD', check=False)
-        # Linked worktree commits move shared heads, not this cwd's HEAD/status.
-        # Remote-tracking refs are deliberately absent: a fetch is not writer work.
-        heads = git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads').stdout
         return hashlib.sha256((head.stdout if head.returncode == 0 else b'unborn')
-                              + b'\0' + status + b'\0' + heads).hexdigest()
+                              + b'\0' + status).hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -81,6 +79,22 @@ def fail_unchanged_writer(job, work_dir):
     if (job.role not in WRITER_ROLES or base is None or job.status != 'completed'
             or UNCHECKED in job.events or tree_state(work_dir) != base):
         return
+    email = getattr(job, 'writer_email', None)
+    if email:
+        try:
+            # Extended regex escaping makes the launch identity literal; angle
+            # brackets anchor it to the full author email, not a run-id prefix.
+            result = subprocess.run(
+                ['git', '-C', str(work_dir), 'log', '-1', '--all', '--format=%H',
+                 '--extended-regexp', '--author=<' + re.escape(email) + '>$',
+                 '--since=@' + str(int(job.start_time))],
+                capture_output=True, timeout=30, check=True)
+        except (OSError, subprocess.SubprocessError):
+            job.events.append({'event': 'writer_change_unchecked',
+                               'reason': 'writer commit lookup failed'})
+            return
+        if result.stdout.strip():
+            return
     job.status = 'failed'
     job.exit_code = WRITER_NO_CHANGES_EXIT
     job.events.append({'event': 'writer_no_changes'})

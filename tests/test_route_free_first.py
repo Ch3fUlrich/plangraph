@@ -1,8 +1,8 @@
-"""Free legs lead every route (SPAWNER-ROUTE-FREE-FIRST).
+"""Free legs lead implement routes; Terra heads eligible review routes.
 
 For a public standard card ``spawner.cli route`` lists the serving free legs
 (opencode/*-free, openrouter-free) before the subscription legs, for implement
-and review alike; free legs the route policy bans stay skipped; agy is skipped
+and behind Terra for review; free legs the route policy bans stay skipped; agy is skipped
 while out of quota (leg_state); no claude-family leg implements; agy-sonnet-5.5 is orchestrate-only.
 """
 from __future__ import annotations
@@ -28,9 +28,15 @@ def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
 
 
 def test_review_free_first():
+    # Without diff_ref Terra (inline-only) is skipped, so the old order still passes.
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
     assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]] and ids[3] == "agy-gemini-3.8-flash"
+    assert {s['leg']: s['reason'] for s in plan.skipped}['cx-gpt-6.1-terra'] == 'inline_only_needs_diff'
+    review = plan_spawn(dict(CARD, diff_ref={'repo': '/srv/repo', 'base': 'a1', 'head': 'b2'}),
+                        role='review', writer_families=('claude',))
+    # openrouter-free is implement-only; the eligible free review tier follows Terra.
+    assert [l.id for l in review.legs][:4] == ['cx-gpt-6.1-terra', 'qodercli-qwen3.8-flash', *FREE[:2]]
 
 
 def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):

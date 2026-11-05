@@ -66,7 +66,7 @@ def pick_seats(ordered, writer_families, *, high):
     seats, families = [], []
     for leg in ordered:
         fam = seat_family(leg.family)
-        if fam in families or (leg.id != "cx-gpt-6.1-terra" and writers and all(fam == w for w in writers)):
+        if fam in families or (not leg.review_head and writers and all(fam == w for w in writers)):
             continue
         open_parts = uncovered(writers, families, need=need, sensitive=high)
         if len(families) >= 2 and not any(fam != w for w in open_parts):

@@ -174,7 +174,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             return (tier_idx, w_idx, pos)
         eligible.sort(key=sort_key)
     elif effective_role == "review":
-        eligible.sort(key=lambda t: (t[2].id != "cx-gpt-6.1-terra", t[0], t[1]))
+        eligible.sort(key=lambda t: (not t[2].review_head, t[0], t[1]))
     else:
         eligible.sort(key=lambda t: (t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
@@ -326,7 +326,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     excluded = family_spellings(set(exclude_families) | claude_writer_fence(role, writer_set), legs)
     same_writer = family_spellings(writer_set, legs) if role == "review" and len(writer_set) == 1 else set()
     same_writer_legs = {l.id for l in candidates if l.family in same_writer
-                        and l.id != "cx-gpt-6.1-terra"}
+                        and not l.review_head}
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:

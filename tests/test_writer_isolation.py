@@ -48,7 +48,8 @@ def _run_writer(tmp_path, monkeypatch, work, *, act=lambda work: None, role='imp
     runner = SpawnerRunner(default_cwd=str(work), process_factory=factory)
     async def run():
         job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6.1-sol', role=role,
-                                 client='opencode', cwd=str(work), wait_seconds=3)
+                                 client='opencode', cwd=str(work), wait_seconds=3,
+                                 extra_env={'GIT_AUTHOR_EMAIL': 'run-test@writer.plangraph.invalid'})
         await runner._tasks[job.job_id]
         return job
     return asyncio.run(run()), seen['env']
@@ -163,7 +164,7 @@ def test_config_layers_close_independent_of_platform_home(env):
 
 
 @pytest.mark.writer_change_check
-@pytest.mark.parametrize('change', ['commit', 'none', 'fetch'])
+@pytest.mark.parametrize('change', ['commit', 'other', 'none', 'fetch', 'pushed_deleted'])
 def test_writer_shared_local_refs(tmp_path, monkeypatch, change):
     work = _git_repo(tmp_path / 'work')
     linked = tmp_path / 'linked'
@@ -171,15 +172,41 @@ def test_writer_shared_local_refs(tmp_path, monkeypatch, change):
     remote = _git_repo(tmp_path / 'remote')
     subprocess.run(['git', '-C', str(work), 'fetch', '-q', str(remote), 'HEAD:refs/remotes/test/main'], check=True)
     def act(_):
-        if change == 'commit':
-            subprocess.run(['git', '-C', str(linked), 'commit', '-q', '--allow-empty', '-m', 'writer work'], check=True)
+        if change in ('commit', 'other', 'pushed_deleted'):
+            email = ('run-other' if change == 'other' else 'run-test') + '@writer.plangraph.invalid'
+            subprocess.run(['git', '-C', str(linked), '-c', 'user.email=' + email,
+                            'commit', '-q', '--allow-empty', '-m', 'writer work'], check=True)
+            if change == 'pushed_deleted':
+                subprocess.run(['git', '-C', str(linked), 'push', '-q', str(remote),
+                                'HEAD:refs/heads/saved'], check=True)
+                subprocess.run(['git', '-C', str(linked), 'checkout', '-q', '--detach'], check=True)
+                subprocess.run(['git', '-C', str(work), 'branch', '-D', 'writer'], check=True)
+                subprocess.run(['git', '-C', str(work), 'fetch', '-q', str(remote),
+                                'refs/heads/saved:refs/remotes/test/saved'], check=True)
         elif change == 'fetch':
             subprocess.run(['git', '-C', str(remote), 'commit', '-q', '--allow-empty', '-m', 'remote work'], check=True)
             subprocess.run(['git', '-C', str(work), 'fetch', '-q', str(remote), 'HEAD:refs/remotes/test/main'], check=True)
     job, _ = _run_writer(tmp_path, monkeypatch, work, act=act)
-    assert (job.status, job.exit_code) == (('completed', 0) if change == 'commit' else ('failed', 5))
+    assert (job.status, job.exit_code) == (('completed', 0) if change in ('commit', 'pushed_deleted') else ('failed', 5))
 
 
 def test_tree_state_outside_worktree(tmp_path):
     from plangraph.spawner.opencode_isolation import tree_state
     assert tree_state(tmp_path) is None
+
+
+def test_writer_commit_lookup_error_is_unchecked(tmp_path, monkeypatch):
+    from plangraph.spawner import opencode_isolation as isolation
+    work = _git_repo(tmp_path / 'work')
+    job = SimpleNamespace(role='implement', status='completed', exit_code=0, stderr='',
+                          writer_email='run-test@writer.plangraph.invalid', start_time=0,
+                          events=[{'event': 'writer_baseline', 'state': isolation.tree_state(work)}])
+    real_run = subprocess.run
+    def broken_log(args, **kwargs):
+        if 'log' in args:
+            raise subprocess.CalledProcessError(128, args)
+        return real_run(args, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', broken_log)
+    isolation.fail_unchanged_writer(job, work)
+    assert (job.status, job.exit_code) == ('completed', 0)
+    assert job.events[-1] == {'event': 'writer_change_unchecked', 'reason': 'writer commit lookup failed'}

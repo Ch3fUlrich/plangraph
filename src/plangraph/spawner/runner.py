@@ -116,6 +116,7 @@ class JobInfo:
     risk: str = "normal"
     command: list[str] = field(default_factory=list)
     start_time: float = field(default_factory=time.time)
+    writer_email: str | None = None
     end_time: float | None = None
     exit_code: int | None = None
     stdout: str = ""
@@ -496,6 +497,7 @@ class SpawnerRunner:
                 command=cmd,
                 dry_run=False,
                 cwd=work_dir,
+                writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
             self.jobs[job_id] = job
             from .run_watchdog import thresholds, edit_signature
