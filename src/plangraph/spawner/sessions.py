@@ -272,7 +272,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
                                       "stopped_ts": self._now(), "session_id": sid})
             return sid
         proc = self._run(self._claude_head() + ["stop", self._stop_token(row, sid)],
-                         capture_output=True, text=True, timeout=STOP_TIMEOUT)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=STOP_TIMEOUT)
         if proc.returncode != 0:
             if row is None and not any(r.get("sessionId") == sid
                                        for r in self._agents_rows_strict()):

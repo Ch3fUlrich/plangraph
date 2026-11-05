@@ -77,7 +77,7 @@ class CommandSink:
 
     def deliver(self, recipient, event):
         subprocess.run(self.command + [recipient], input=json.dumps(event) + '\n',
-                       text=True, check=True, timeout=10, stdout=subprocess.DEVNULL)
+                       text=True, encoding="utf-8", errors="replace", check=True, timeout=10, stdout=subprocess.DEVNULL)
 
 
 class KeeperNotConfigured(ValueError):
@@ -116,7 +116,7 @@ def completion_event(record, cwd):
     from .runner import redact
     try:
         head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
-                                       text=True, stderr=subprocess.DEVNULL).strip()
+                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
         head = None
     rc = record.get('exit_code')
