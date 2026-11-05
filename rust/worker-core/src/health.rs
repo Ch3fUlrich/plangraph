@@ -1,8 +1,5 @@
 //! Pure row-derived health. Provider reset values and overlays belong to RL10b.
-use crate::{
-    hosts::Role,
-    outcome::{Class, Scope},
-};
+use crate::{hosts::Role, outcome::Class};
 
 #[cfg(test)]
 mod nonverdict_tests;
@@ -208,23 +205,7 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
         }
     }
     attempts.extend(observations);
-    let rows = incidents(
-        attempts
-            .into_iter()
-            .filter(|r| {
-                if r.route_key != route_key {
-                    return false;
-                }
-                match r.outcome.scope() {
-                    Scope::Route => true,
-                    Scope::LegReview => {
-                        role == Role::Review && r.leg_key == format!("{leg_key}#review")
-                    }
-                    _ => r.leg_key == leg_key && (r.outcome != Class::Ok || r.role == role),
-                }
-            })
-            .collect(),
-    );
+    let rows = incidents(attempts);
     let mut health = Health::default();
     let mut success = None;
     let mut killed = Vec::new();

@@ -108,12 +108,7 @@ fn recent_success_probe_exception_and_open_escalation() {
 
 pub(super) fn row(class: Class, ts: i64) -> Row {
     Row {
-        leg_key: if class.scope() == Scope::LegReview {
-            "leg#review"
-        } else {
-            "leg"
-        }
-        .into(),
+        leg_key: "leg".into(),
         route_key: "route".into(),
         ts,
         role: Role::Review,

@@ -77,10 +77,8 @@ fn scope_and_observations() {
     ] {
         let mut r = row(class, 1);
         r.leg_key = "sibling".into();
-        assert_eq!(
-            health(&[r.clone()], 1).state == State::Open,
-            class.scope() == Scope::Route
-        );
+        // Class metadata does not widen the fold's explicit scope.
+        assert_eq!(health(&[r.clone()], 1), Health::default());
         r.route_key = "elsewhere".into();
         assert_eq!(health(&[r], 1), Health::default());
     }
@@ -152,11 +150,13 @@ fn stability_shuffle_and_keeper_1103() {
 }
 
 #[test]
-fn duplicates_last_row_wins() {
+fn duplicates_use_stable_tuple_order() {
     let a = row(Class::RateLimit, 1);
     let mut b = row(Class::Ok, 0);
     b.run_id = a.run_id.clone();
-    assert_eq!(health(&[a, b], 2), Health::default());
+    let expected = health(&[a.clone()], 2);
+    assert_eq!(health(&[a.clone(), b.clone()], 2), expected);
+    assert_eq!(health(&[b, a], 2), expected);
 }
 
 fn assert_open_with_until(class: Class, rows: &[Row], now_s: i64) {
