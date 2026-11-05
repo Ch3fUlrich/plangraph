@@ -172,29 +172,28 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
 }
 
 /// Fold one leg and route. Times are integral Unix seconds supplied by the caller.
-/// Duplicate attempts use the last input row, as in the append-only evidence file.
+/// Only the requested leg, route and role contribute, for successes and failures alike.
+/// Duplicate attempts keep the greatest (timestamp, class, duration) tuple;
+/// remaining fields are observation metadata and do not affect this fold.
 pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64) -> Health {
     let mut attempts: Vec<Row> = Vec::new();
-    for row in rows.iter().filter(|r| r.kind.is_none()) {
+    for row in rows.iter().filter(|r| {
+        r.kind.is_none() && r.leg_key == leg_key && r.route_key == route_key && r.role == role
+    }) {
         if let Some(old) = attempts
             .iter_mut()
             .find(|r| r.run_id == row.run_id && r.attempt == row.attempt)
         {
-            *old = row.clone();
+            if (row.ts, row.outcome.as_str(), row.duration_s)
+                > (old.ts, old.outcome.as_str(), old.duration_s)
+            {
+                *old = row.clone();
+            }
         } else {
             attempts.push(row.clone());
         }
     }
-    let rows = incidents(
-        attempts
-            .into_iter()
-            .filter(|r| {
-                r.leg_key == leg_key
-                    && r.route_key == route_key
-                    && (r.role == role || r.outcome != Class::Ok)
-            })
-            .collect(),
-    );
+    let rows = incidents(attempts);
     let mut health = Health::default();
     let mut success = None;
     for row in rows {
@@ -212,6 +211,8 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
         health.strikes = health.strikes.saturating_add(1);
         let probe = health.state == State::HalfOpen;
         let recent_success = success.is_some_and(|ts| row.ts.saturating_sub(ts) < 86400);
+        // A recent success suppresses non-reset probe failures for 24 hours.
+        // Further incidents while OPEN intentionally escalate n and restart the deadline.
         if class.carries_reset()
             || ((probe || health.strikes >= trip(class)) && !(probe && recent_success))
         {
