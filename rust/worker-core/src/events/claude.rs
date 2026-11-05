@@ -4,6 +4,8 @@ use crate::activity::{Kind, Phase, Signal, ToolClass};
 use std::collections::HashMap;
 
 #[cfg(test)]
+mod more_tests;
+#[cfg(test)]
 mod tests;
 
 pub const RECORDED_CLAUDE: &[&str] = &["2.1.318"];
