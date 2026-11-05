@@ -334,3 +334,54 @@ fn ambiguous_diagnostic_is_distinct_from_unknown() {
         "ambiguous reference; candidates: another, registered"
     );
 }
+
+#[test]
+fn ambiguous_filtered_candidates_omit_suffix() {
+    let rows: Vec<_> = ["unsafe!a", "unsafe!b"]
+        .into_iter()
+        .map(|id| LegRef {
+            id: id.into(),
+            model: "shared".into(),
+            roles: vec!["implement".into()],
+        })
+        .collect();
+    let error = admit_ref(&mut args(json!({"model":"shared"})), &rows, LegRefMode::On)
+        .unwrap_err()
+        .into_error_data();
+    assert_eq!(error.message, "ambiguous reference");
+}
+
+#[test]
+fn warn_catalog_failure_logs_once() {
+    const CHILD: &str = "PG_LEG_REF_WARN_ONCE_TEST";
+    if std::env::var_os(CHILD).is_some() {
+        struct Failed;
+        impl LegCatalog for Failed {
+            fn legs(&self) -> Result<Vec<LegRef>, crate::errors::ToolError> {
+                Err(crate::placement::parameter("catalog unavailable"))
+            }
+        }
+        let a = args(json!({"model":"shared"}));
+        for _ in 0..2 {
+            assert_eq!(admit(&Failed, &a).ok().unwrap(), a);
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "leg_ref::admission_tests::warn_catalog_failure_logs_once",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("PLANGRAPH_RELIABILITY_LEG_REF", "warn")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr)
+            .matches("leg_ref: catalog unavailable (observation only)")
+            .count(),
+        1
+    );
+}

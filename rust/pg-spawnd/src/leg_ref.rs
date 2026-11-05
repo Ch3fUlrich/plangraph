@@ -204,7 +204,9 @@ pub(crate) fn admit_ref(
                                         })
                                 })
                                 .collect();
-                            if ambiguous {
+                            if ambiguous && hints.is_empty() {
+                                "ambiguous reference".into()
+                            } else if ambiguous {
                                 format!("ambiguous reference; candidates: {}", hints.join(", "))
                             } else if hints.is_empty() {
                                 "unknown leg/reference".into()
@@ -303,7 +305,9 @@ pub(crate) fn admit(
             match rows {
                 Ok(rows) => admit_ref(&mut admitted, &rows, mode)?,
                 Err(_) if mode == LegRefMode::Warn => {
-                    eprintln!("leg_ref: catalog unavailable (observation only)")
+                    static WARNING: std::sync::Once = std::sync::Once::new();
+                    WARNING
+                        .call_once(|| eprintln!("leg_ref: catalog unavailable (observation only)"));
                 }
                 Err(error) => return Err(error),
             }
