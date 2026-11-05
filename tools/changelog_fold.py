@@ -2,9 +2,9 @@
 """changelog_fold.py - fold changelog.d fragments into CHANGELOG.md (D-3732).
 
 Each fragment holds entry lines in the form used under '## Unreleased'. Fold
-inserts every non-empty fragment under '## Unreleased', newest first by the
-fragment's first-commit date with the file name as tie-break, then deletes the
-fragment files. A second run changes nothing; --check writes nothing and exits
+inserts entry lines under '## Unreleased': uncommitted fragments first by
+mtime, then committed fragments by first-commit date, newest first with filename
+ties. Only folded fragments are deleted; empty fragments remain and are reported. A second run changes nothing; --check writes nothing and exits
 1 while fragments remain.
 """
 from __future__ import annotations
@@ -49,16 +49,17 @@ def fragments(root: Path) -> list[Path]:
     return sorted(
         path
         for path in directory.glob("*.md")
-        if path.name.lower() != "readme.md"
+        if path.is_file() and path.name.lower() != "readme.md"
     )
 
 
-def first_commit_date(root: Path, path: Path) -> int:
-    """Committer timestamp of the commit that first added the fragment (0 if untracked)."""
+def first_commit_date(root: Path, path: Path) -> tuple[int, float]:
+    """Uncommitted fragments are newest by mtime; otherwise use first commit."""
     rel = path.relative_to(root).as_posix()
     run = git(root, "log", "--diff-filter=A", "--format=%ct", "--", rel)
     stamps = [int(value) for value in run.stdout.split() if value.isdigit()]
-    return min(stamps) if stamps else 0
+    changed = git(root, "status", "--porcelain", "--", rel).stdout.strip()
+    return (1, path.stat().st_mtime_ns) if changed or not stamps else (0, min(stamps))
 
 
 def entry_lines(path: Path) -> list[str]:
@@ -100,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
         lines = entry_lines(path)
         if lines:
             items.append((first_commit_date(root, path), path.name, lines))
-    items.sort(key=lambda item: (-item[0], item[1]))
+        else:
+            print(f"changelog-fold: no entry lines; leaving {path.relative_to(root)}")
+    items.sort(key=lambda item: (-item[0][0], -item[0][1], item[1]))
     entries = [line for _, _, block in items for line in block]
 
     changelog_path = root / CHANGELOG
@@ -118,9 +121,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if entries:
         changelog_path.write_text(updated, encoding="utf-8")
-    for path in pending:
-        path.unlink()
-    print(f"changelog-fold: folded {len(items)} fragment(s), deleted {len(pending)} file(s)")
+    for _, name, _ in items:
+        (root / FRAGMENT_DIR / name).unlink()
+    print(f"changelog-fold: folded {len(items)} fragment(s), deleted {len(items)} file(s)")
     return 0
 
 

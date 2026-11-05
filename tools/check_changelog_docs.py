@@ -23,7 +23,6 @@ SKIP_TRAILER_RE = re.compile(
     r"^\s*changelog\s*:\s*skip(?:\s*\((.*?)\))?\s*$", re.IGNORECASE
 )
 UNRELEASED_RE = re.compile(r"^##\s+\[?unreleased\]?\s*$", re.IGNORECASE)
-FRAGMENT_DIR = "changelog.d/"
 
 
 def git(root: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -137,15 +136,18 @@ def unreleased_lines(changelog: str) -> collections.Counter[str]:
     return found
 
 
-def fragment_entry_added(root: str, paths: list[str], head: str) -> bool:
-    """True when a changed, non-README *.md fragment at head holds an entry line."""
+def fragment_entry_added(root: str, paths: list[str], merge_base: str, head: str) -> bool:
+    """True when a direct-child fragment adds an entry against the merge-base."""
     for path in paths:
-        if not path.startswith(FRAGMENT_DIR) or not path.endswith(".md"):
+        if not re.fullmatch(r"changelog\.d/[^/]*\.md", path):
             continue
         if path.rsplit("/", 1)[-1].lower() == "readme.md":
             continue
         run = git(root, "show", f"{head}:{path}")
-        if run.returncode == 0 and unreleased_lines("## Unreleased\n" + run.stdout):
+        before = git(root, "show", f"{merge_base}:{path}")
+        entries = lambda text: collections.Counter(line.strip() for line in text.splitlines()
+                                                   if line.strip() and not line.strip().startswith("#"))
+        if run.returncode == 0 and entries(run.stdout) - entries(before.stdout):
             return True
     return False
 
@@ -301,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     has_non_doc = any(not is_doc_path(p) for p in raw_paths)
     entry_added = (
         changelog_entry_added(root, merge_base, head_sha)
-        or fragment_entry_added(root, raw_paths, head_sha)
+        or fragment_entry_added(root, raw_paths, merge_base, head_sha)
     )
 
     if entry_added:

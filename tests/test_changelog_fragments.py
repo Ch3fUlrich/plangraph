@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from tests.changelog_docs_util import ROOT, commit_files, git, run_check, test_repo  # noqa: F401
 
 FOLD = ROOT / "tools" / "changelog_fold.py"
@@ -48,18 +50,23 @@ def test_gate_accepts_new_fragment_alone(test_repo):
     assert "changelog yes" in res.stdout
 
 
-def test_gate_accepts_edited_fragment(test_repo):
+@pytest.mark.parametrize("content,accepted", [
+    ("- first entry\n- added entry\n", True),
+    (" \n  - first entry  \n", False),
+    ("", False),
+])
+def test_gate_accepts_edited_fragment(test_repo, content, accepted):
     repo, _ = test_repo
     base = commit_files(repo, {
-        "changelog.d/PG-EXAMPLE.md": "- **PG-EXAMPLE (D-1):** first wording\n",
+        "changelog.d/PG-EXAMPLE.md": "- first entry\n",
     }, "seed fragment")
     commit_files(repo, {
         "src/app.py": "print('hello')\n",
-        "changelog.d/PG-EXAMPLE.md": "- **PG-EXAMPLE (D-1):** better wording\n",
+        "changelog.d/PG-EXAMPLE.md": content,
     }, "edit fragment and app")
     res = run_check(repo, base)
-    assert res.returncode == 0, res.stdout
-    assert "changelog yes" in res.stdout
+    assert res.returncode == (0 if accepted else 1), res.stdout
+    assert f"changelog {'yes' if accepted else 'no'}" in res.stdout
 
 
 def test_gate_refuses_change_with_neither_fragment_nor_unreleased_line(test_repo):
@@ -72,11 +79,18 @@ def test_gate_refuses_change_with_neither_fragment_nor_unreleased_line(test_repo
     assert "requires a line added under '## Unreleased'" in res.stdout
 
 
-def test_gate_refuses_empty_fragment(test_repo):
+@pytest.mark.parametrize("path,content", [
+    ("changelog.d/PG-EMPTY.md", "\n# no entry yet\n"),
+    ("changelog.d/PG-SPACE.md", " \n\t\n"),
+    ("other/PG-OUTSIDE.md", "- outside entry\n"),
+    ("changelog.d/extra/PG.md", "- nested entry\n"),
+    ("changelog.d/ReadMe.md", "- readme entry\n"),
+])
+def test_gate_refuses_empty_fragment(test_repo, path, content):
     repo, base = test_repo
     commit_files(repo, {
         "src/app.py": "print('hello')\n",
-        "changelog.d/PG-EMPTY.md": "\n# no entry yet\n",
+        path: content,
     }, "add app with empty fragment")
     res = run_check(repo, base)
     assert res.returncode == 1, res.stdout
@@ -188,3 +202,64 @@ def test_fold_check_writes_nothing(test_repo):
     assert res.returncode == 1
     assert (repo / "CHANGELOG.md").read_text(encoding="utf-8") == before
     assert (repo / "changelog.d" / "PG-ONE.md").exists()
+
+
+@pytest.mark.parametrize("content", ["", "# heading\n", " \n\t\n"])
+@pytest.mark.parametrize("with_entry", [False, True])
+def test_fold_preserves_and_reports_fragments_without_entries(test_repo, content, with_entry):
+    repo, _ = test_repo
+    repo_with_changelog(repo)
+    files = {"changelog.d/PG-EMPTY.md": content}
+    if with_entry:
+        files["changelog.d/PG-REAL.md"] = "- real entry\n"
+    commit_files(repo, files, "seed fragments")
+    before = (repo / "CHANGELOG.md").read_bytes()
+    checked = run_fold(repo, "--check")
+    assert checked.returncode == 1
+    assert (repo / "CHANGELOG.md").read_bytes() == before
+    assert all((repo / path).exists() for path in files)
+    folded = run_fold(repo)
+    assert folded.returncode == 0
+    assert "no entry lines; leaving changelog.d/PG-EMPTY.md" in folded.stdout
+    assert (repo / "changelog.d/PG-EMPTY.md").read_text() == content
+    if with_entry:
+        assert not (repo / "changelog.d/PG-REAL.md").exists()
+        assert "- real entry" in (repo / "CHANGELOG.md").read_text()
+    else:
+        assert (repo / "CHANGELOG.md").read_bytes() == before
+    after = (repo / "CHANGELOG.md").read_bytes()
+    assert run_fold(repo).returncode == 0
+    assert (repo / "CHANGELOG.md").read_bytes() == after
+
+
+@pytest.mark.parametrize("state", ["untracked", "staged", "edited"])
+def test_fold_uncommitted_fragments_sort_newest_by_mtime_then_name(test_repo, state):
+    repo, _ = test_repo
+    repo_with_changelog(repo)
+    commit_dated(repo, {"changelog.d/old.md": "- committed entry\n"},
+                 "committed", "2026-03-01T12:00:00+0000")
+    if state == "edited":
+        commit_files(repo, {f"changelog.d/{name}.md": "- original\n"
+                            for name in ("a", "b", "z")}, "seed edited fragments")
+    for name, stamp in [("a", 1), ("b", 2), ("z", 2)]:
+        path = repo / "changelog.d" / f"{name}.md"
+        path.write_text(f"- {name} entry\n")
+        os.utime(path, ns=(stamp, stamp))
+        if state == "staged":
+            assert git(repo, "add", str(path)).returncode == 0
+    assert run_fold(repo).returncode == 0
+    text = (repo / "CHANGELOG.md").read_text()
+    ordered = ["- b entry", "- z entry", "- a entry", "- committed entry"]
+    assert [text.index(entry) for entry in ordered] == sorted(text.index(entry) for entry in ordered)
+
+
+def test_fold_ignores_nested_outside_and_readme_fragments(test_repo):
+    repo, _ = test_repo
+    repo_with_changelog(repo)
+    files = {path: "- ignored entry\n" for path in (
+        "changelog.d/extra/PG.md", "other/PG.md", "changelog.d/ReadMe.md")}
+    commit_files(repo, files, "non-fragments")
+    assert run_fold(repo, "--check").returncode == 0
+    assert run_fold(repo).returncode == 0
+    assert (repo / "CHANGELOG.md").read_text() == CHANGELOG
+    assert all((repo / path).read_text() == content for path, content in files.items())

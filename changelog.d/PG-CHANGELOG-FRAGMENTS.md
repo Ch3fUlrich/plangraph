@@ -1,1 +1,0 @@
-- **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.
