@@ -57,3 +57,22 @@ def test_foreign_identity_and_stale_parent(monkeypatch):
                     root.kill()
         finally:
             foreign.kill()
+
+
+def test_dead_root_and_unreadable_children(monkeypatch):
+    from plangraph.spawner import win_recorded as win
+    with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as root:
+        try:
+            token = win.creation(root.pid)
+            monkeypatch.setattr(proc_kill, '_nt_table', lambda: {root.pid: os.getpid(), 0: root.pid})
+            original = win.creation
+            monkeypatch.setattr(win, 'creation', lambda pid, handle=None: None if pid == 0 else original(pid, handle))
+            monkeypatch.setattr(proc_kill, 'alive', lambda pid, start, **kw: pid == 0)
+            assert asyncio.run(win.kill(root.pid, token)) == [0]
+            root.wait(timeout=5)  # unreadable live child did not block proven root
+            monkeypatch.setattr(proc_kill, '_nt_table', lambda: {0: root.pid})
+            assert asyncio.run(win.kill(root.pid, token)) == [0]  # dead root is not tree proof
+            monkeypatch.setattr(proc_kill, 'alive', lambda *a, **kw: False)
+            assert asyncio.run(win.kill(root.pid, token)) == []
+        finally:
+            root.kill()
