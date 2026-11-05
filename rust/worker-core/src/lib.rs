@@ -15,6 +15,8 @@ pub mod exit_class;
 pub mod exports;
 pub mod fleet_cap_resolver;
 pub mod fleet_owner_lease;
+pub mod fleet_owner_transition;
+pub mod fleet_router_hysteresis;
 pub mod fleet_router_signals;
 pub mod fleet_seat_supply;
 pub mod fleet_window_catalog;

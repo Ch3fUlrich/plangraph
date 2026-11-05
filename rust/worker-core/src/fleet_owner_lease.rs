@@ -112,7 +112,7 @@ impl Record {
             .filter(|l| now_s >= l.expires_at)
             .collect()
     }
-    fn validate(&self, now_s: i64) -> Result<(), Refusal> {
+    pub(crate) fn validate(&self, now_s: i64) -> Result<(), Refusal> {
         if self.schema_version != 1 || !valid_id(&self.session_id) || !valid_id(&self.run_id) {
             return Err(Refusal::Invalid);
         }
@@ -152,7 +152,7 @@ impl Record {
         }
         Ok(())
     }
-    fn clear(&self) -> bool {
+    pub(crate) fn clear(&self) -> bool {
         self.pending == State::Free
             && self.pause == State::Free
             && self.finalizer == State::Free
