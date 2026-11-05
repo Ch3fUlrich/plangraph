@@ -26,7 +26,7 @@ def test_unavailable_pidfd_reports_real_survivor(monkeypatch):
     try:
         start = proc_kill.root_identity(child.pid)
         monkeypatch.delattr(os, 'pidfd_open')
-        proc_kill.signal_recorded(child.pid, start)
+        proc_kill.signal_recorded(child.pid, start + 1)  # fallback must reject reused identity
         with pytest.raises(proc_kill.KillIncomplete) as error:
             asyncio.run(proc_kill.verify(child.pid, start, {child.pid: start}, wait_s=0))
         assert error.value.survivors == [child.pid]

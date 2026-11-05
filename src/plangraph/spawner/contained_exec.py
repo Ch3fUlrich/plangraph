@@ -4,6 +4,12 @@ import os
 import subprocess
 import sys
 import asyncio
+import signal
+import time
+from pathlib import Path
+
+ORPHAN_GRACE_S = 10.0
+CONTAINMENT_MARKER = 'plangraph: containment_unavailable'
 
 
 async def create_subprocess_exec(*argv, **kwargs):
@@ -31,24 +37,61 @@ def supervisor(pid, start, proc_root='/proc'):
         return False
 
 
-def main():
+def main(grace=ORPHAN_GRACE_S):
     # Refuse launch rather than create an uncontained run on restricted Linux.
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
-        sys.stderr.write('containment unavailable: PR_SET_CHILD_SUBREAPER denied\n')
+        sys.stderr.write(CONTAINMENT_MARKER + '\n')
         return 125
-    child = subprocess.Popen(sys.argv[1:])
+    deadline = None
+    child = None
+
+    def forward(sig, _frame):
+        nonlocal deadline
+        if deadline is None:
+            deadline = time.monotonic() + grace
+        if child is not None:
+            try:
+                os.killpg(child.pid, sig)
+            except ProcessLookupError:
+                pass
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, forward)
+    child = subprocess.Popen(sys.argv[1:], start_new_session=True)
     # Only this process's children are waited on: unrelated service children are
     # never adopted here. Keep the ownership anchor alive until all orphans reap.
     code = 0
+    kill_deadline = None
     while True:
         try:
-            pid, status = os.waitpid(-1, 0)
+            pid, status = os.waitpid(-1, os.WNOHANG)
         except ChildProcessError:
             return code
         if pid == child.pid:
             code = os.waitstatus_to_exitcode(status)
             if code < 0:
                 code = 128 - code
+            if deadline is None:
+                deadline = time.monotonic() + grace
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            # Only direct children of this private subreaper, including adopted
+            # setsid daemons. Repeat as killed parents release their children.
+            for path in Path('/proc/self/task').glob('*/children'):
+                try:
+                    children = path.read_text().split()
+                except OSError:
+                    continue
+                for target in children:
+                    try:
+                        os.kill(int(target), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            if kill_deadline is None:
+                kill_deadline = now + 1.0
+            if now >= kill_deadline:
+                return code
+        time.sleep(0.01)
 
 
 if __name__ == '__main__':

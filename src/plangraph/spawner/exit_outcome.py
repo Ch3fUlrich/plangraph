@@ -151,6 +151,10 @@ def terminal_reason(record):
     """
     if record.get('reason') == 'kill_incomplete':
         return   # survivors outrank every other verdict: the run failed
+    from .contained_exec import CONTAINMENT_MARKER
+    if CONTAINMENT_MARKER in record.get('stderr_tail', '').splitlines():
+        record.update(status='failed', reason='containment_unavailable')
+        return
     events = record.get('events') or ()
     special = next((e['event'] for e in events
                     if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)

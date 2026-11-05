@@ -206,8 +206,12 @@ def signal_recorded(pid, start, proc_root='/proc'):
             pass
         finally:
             os.close(fd)
-    # Without a race-free process handle, do not signal: verification reports
-    # only proven live survivors, never a reused or unreadable PID.
+    else:
+        try:
+            if alive(pid, start, proc_root=proc_root):
+                os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
 
 
 async def kill_process_tree(pid, *, platform=None, command_factory=None, members=None,
@@ -234,14 +238,20 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None, members
         raise KillIncomplete([pid])   # reused pid / not the group this run created
     from .contained_exec import supervisor
     anchor = supervisor(pid, ident, proc_root)
-    for member, start in (members if members is not None else snapshot(pid, ident, proc_root=proc_root)).items():
-        if anchor and member == pid:
-            continue  # let the private subreaper wait on its killed children
-        signal_recorded(member, start, proc_root)
+    if not anchor and st is not None and st[4] == ident and st[2] == pid:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    recorded = dict(members if members is not None else snapshot(pid, ident, proc_root=proc_root))
     # SIGKILL + wait: the reaped run must be seen dead, not merely signalled -
     # CI caught a grandchild still in state R while collect was returning.
     deadline = time.monotonic() + WAIT_S
     while time.monotonic() < deadline:
+        recorded.update(snapshot(pid, ident, proc_root=proc_root))
+        for member, start in recorded.items():
+            if not (anchor and member == pid):
+                signal_recorded(member, start, proc_root)
         if not await asyncio.to_thread(group_alive, pid):
             return
         await asyncio.sleep(0.02)
