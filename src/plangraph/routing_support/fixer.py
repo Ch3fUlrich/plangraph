@@ -38,8 +38,9 @@ def split_findings(findings, limit=None):
 def render_fixer_brief(findings):
     checklist = '\n'.join(f"{i}. [ ] {f.get('text', f.get('description', str(f)))}"
                           for i, f in enumerate(findings, 1))
-    return (checklist + '\n\nThe run ends only when each item is fixed or refuted by a named test\n'
-            'Run affected tests only; follow TEST-SPEED-AFFECTED.\nCOMMIT before finishing\n')
+    return (checklist + '\n\nThe run ends only when each item is fixed or refuted by a named test, '
+            'or listed under not done: with the reason.\n'
+            'Run affected tests only: python3 tools/affected_tests.py --base origin/main --run\nCOMMIT before finishing\n')
 
 
 def remaining_gaps(output):

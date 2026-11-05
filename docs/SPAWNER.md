@@ -665,9 +665,9 @@ writers. A shared file is never assigned to two writers. Indivisible components
 may exceed ten; findings without files form a final unassigned bucket appended
 to the smallest group. Dispatch fans these groups out in parallel.
 
-`render_fixer_brief` numbers every finding and requires each to be fixed or
-refuted by a named test, affected tests only (TEST-SPEED-AFFECTED), and
-COMMIT before finishing.
+`render_fixer_brief` numbers every finding: each must be fixed, refuted by a named test, or listed under `not done:` with the reason. Run affected tests only
+(`python3 tools/affected_tests.py --base origin/main --run`); COMMIT before finishing.
+Retry bounds are not multiplied: `src/plangraph/settings.py:ReviewMethod.max_rounds` (3) is advisory, not an enforced run cap; `src/plangraph/planner/routing.py:ATTEMPT_BUDGET` (3) feeds `next_after_failure`'s per-tier retry/promotion policy, but the spawner's `src/plangraph/spawner/service.py:_spawn` walks `plan.legs` once (no numeric fallthrough constant), stopping on a non-provider/non-unavailable result or `no_fallthrough`. Thus leg exhaustion or that earlier stop ends this spawn first, not the advisory round cap.
 
 Both dispatch paths inspect the full writer output, before tail truncation.
 A non-empty Remaining gaps section or unchecked Markdown checklist triggers

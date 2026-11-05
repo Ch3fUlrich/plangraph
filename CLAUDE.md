@@ -1,3 +1,5 @@
 # plangraph
 
-Orchestration: follow the `unattended-orchestration` skill (canonical: AutoOS `.agents/skills/unattended-orchestration`, linked on hosts at ~/.claude/skills/) and the AutoOS rules (AutoOS `AGENTS.md`).
+Orchestration: follow `skills/unattended-orchestration/SKILL.md` and the role's
+repo skill: `skills/implement/SKILL.md`, `skills/review/SKILL.md`, or
+`skills/research/SKILL.md`. Fleet-wide decisions come from the fleet decisions file.
