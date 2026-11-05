@@ -24,7 +24,7 @@ def generate(log, sha, output=Path("tests/windows_baseline.md")):
     narrative = re.sub(r"remaining \d+ skipped", f"remaining {skipped - 219} skipped", narrative)
     names = sorted(set(re.findall(r"^(?:FAILED|ERROR) (tests/.*?)(?: - .*|\r?)$", text, re.M)))
     names = [re.sub(r"\[.{200,}\]", "[parameter elided: oversized ID]", n) for n in names]
-    result = narrative + f"This run: finished; {totals}.\n\n" + MARKER + f"\nRecorded-at: {sha}\nTotals: {totals}\n"
+    result = narrative.rstrip() + f"\n\nThis run: finished; {totals}.\n\n" + MARKER + f"\nRecorded-at: {sha}\nTotals: {totals}\n"
     result += f"{len(names)} unique failure/error names; oversized parameter IDs are elided.\n"
     result += "".join(f"- {n} | owner: " + ("plangraph:SPAWNER-WIN-CANCEL-CHILD" if n.split("::")[0] in (
         "tests/test_spawn_cancel_d3505.py", "tests/test_spawner_cancel_cross_process.py") else "none yet") + "\n" for n in names)
