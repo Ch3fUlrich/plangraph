@@ -15,6 +15,11 @@ fn embedded_prompt_and_distinct_stdin() {
             events: None,
         };
         let id = new_run_id();
+        if stdin.contains(&raw) {
+            assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_err());
+            assert!(!dir.join("runs").join(id).join("prompt.txt").exists());
+            continue;
+        }
         assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_ok());
         assert_eq!(launch.argv[2], "echo [REDACTED]");
         assert_eq!(launch.stdin.unwrap(), stdin.replace(&raw, "[REDACTED]"));

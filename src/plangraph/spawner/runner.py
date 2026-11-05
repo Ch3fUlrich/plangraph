@@ -326,9 +326,8 @@ class SpawnerRunner:
         # REMOVE-AT-R10: capture the final prompt before command construction.
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
-        if not prepare_launch:  # REMOVE-AT-R10
-            prompt = redact(prompt)
-        if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
+        prompt = redact(prompt)  # REMOVE-AT-R10
+        if not prepare_launch and not dry_run and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
             atomic_write_private(path, prompt)

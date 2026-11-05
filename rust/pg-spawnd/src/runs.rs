@@ -145,20 +145,41 @@ fn store_prompt(
         .prompt
         .as_ref()
         .ok_or_else(|| internal("launch prompt missing"))?;
-    let channel = launch
+    let mut carriers = launch
         .stdin
         .iter()
         .chain(launch.argv.iter())
         .chain(launch.env.values())
-        .find(|s| s.contains(raw))
-        .ok_or_else(|| internal("launch prompt carrier missing"))?
-        .clone();
+        .filter(|s| !raw.is_empty() && s.contains(raw));
+    let channel = if raw.is_empty() {
+        String::new()
+    } else {
+        carriers
+            .next()
+            .ok_or_else(|| internal("launch prompt carrier missing"))?
+            .clone()
+    };
+    if carriers.any(|s| s != &channel) {
+        return Err(internal("launch prompt carriers differ"));
+    }
     let redacted = pg_worker_core::redact::redact(raw);
     for arg in launch.argv.iter_mut().chain(launch.env.values_mut()) {
         *arg = arg.replace(raw, &redacted);
     }
     if let Some(stdin) = &mut launch.stdin {
         *stdin = stdin.replace(raw, &redacted);
+    }
+    if let Some(warnings) = &mut launch.warnings {
+        for warning in warnings {
+            *warning = pg_worker_core::redact::redact(warning);
+        }
+    }
+    if let Some(events) = &mut launch.events {
+        for event in events {
+            let clean = pg_worker_core::redact::redact(&Value::Object(event.clone()).to_string());
+            *event = serde_json::from_str(&clean)
+                .map_err(|_| internal("could not redact launch event"))?;
+        }
     }
     let prompt = channel.replace(raw, &redacted);
     let path = pg_worker_core::run::record::run_dir(state, id)
@@ -234,6 +255,9 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     record.set("writer_family", leg["family"].clone());
 }
 
+#[cfg(all(test, unix))]
+#[path = "runs_record_tests.rs"]
+mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
