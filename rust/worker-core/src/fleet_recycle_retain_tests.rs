@@ -137,10 +137,22 @@ fn reuse_and_lease_uncertainty_never_pass() {
     };
     let r = check(&adapter, &unknown, "session-1", "session-2", 11);
     assert!(!r.passed);
-    assert_eq!(r.findings.len(), 1);
+    assert_eq!(r.findings.len(), 2);
     assert!(r.findings[0].alarm);
     assert_eq!(r.findings[0].session_id, "session-1");
     assert_eq!(r.findings[0].reason, "unreadable");
+    assert_eq!(r.findings[1].field, "oom_scope");
+    assert!(r.findings[1].alarm);
+    assert_eq!(r.findings[1].session_id, "session-1");
+    assert!(!r.findings[1].reason.is_empty());
+    for groups in [vec![43], vec![42, 43]] {
+        let mut f = retained();
+        f.0.oom_scope = OomScope::Groups(groups.into_iter().collect());
+        let r = check(&DirectLinux(f), &unknown, "session-1", "session-2", 11);
+        assert_eq!(r.findings.len(), 2);
+        assert_eq!(r.findings[1].field, "oom_scope");
+        assert!(r.findings[1].alarm);
+    }
     let r = check(&adapter, &lease("session-2"), "session-1", "session-3", 11);
     assert!(!r.passed);
     assert!(r.findings.iter().any(|f| f.field == "lease"));
@@ -151,7 +163,21 @@ fn reuse_and_lease_uncertainty_never_pass() {
             unreachable!()
         };
         record.identity = identity;
-        assert!(!check(&adapter, &Read::Known(record), "session-1", "session-2", 11).passed);
+        for groups in [vec![42], vec![43], vec![42, 43]] {
+            let mut f = retained();
+            f.0.oom_scope = OomScope::Groups(groups.into_iter().collect());
+            let r = check(
+                &DirectLinux(f),
+                &Read::Known(record.clone()),
+                "session-1",
+                "session-2",
+                11,
+            );
+            assert!(!r.passed);
+            assert_eq!(r.findings.len(), 2);
+            assert_eq!(r.findings[1].field, "oom_scope");
+            assert!(r.findings[1].alarm);
+        }
     }
 }
 #[test]
@@ -172,6 +198,20 @@ fn not_applicable_requires_declared_capabilities() {
         }
     }
     let mut f = retained();
+    for remote_control in [RemoteControl::Attached, RemoteControl::Detached] {
+        f.0.remote_control = remote_control;
+        let r = check(
+            &Headless(f.clone()),
+            &lease("session-1"),
+            "session-1",
+            "session-2",
+            11,
+        );
+        assert!(!r.passed);
+        assert_eq!(r.findings.len(), 2);
+        assert_eq!(r.findings[0].field, "pane");
+        assert_eq!(r.findings[1].field, "remote_control");
+    }
     f.0.pane = Pane::NotApplicable;
     f.0.remote_control = RemoteControl::NotApplicable;
     assert!(

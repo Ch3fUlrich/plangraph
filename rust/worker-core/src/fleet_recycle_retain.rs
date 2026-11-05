@@ -123,13 +123,13 @@ pub fn check(
         Transcript::Unknown(reason) => finding("transcript", reason, true),
     }
     match &observation.pane {
-        Pane::Retained => (),
+        Pane::Retained if capabilities.panes => (),
         Pane::NotApplicable if !capabilities.panes => (),
         Pane::Unknown(reason) => finding("pane", reason, true),
         _ => finding("pane", "pane not retained or applicability mismatch", false),
     }
     match &observation.remote_control {
-        RemoteControl::Attached | RemoteControl::Detached => (),
+        RemoteControl::Attached | RemoteControl::Detached if capabilities.remote_control => (),
         RemoteControl::NotApplicable if !capabilities.remote_control => (),
         RemoteControl::Unknown(reason) => finding("remote_control", reason, true),
         _ => finding(
@@ -149,6 +149,12 @@ pub fn check(
                         false,
                     );
                 }
+            } else {
+                finding(
+                    "oom_scope",
+                    "scope cannot be verified without the session owner group",
+                    true,
+                );
             }
         }
     }

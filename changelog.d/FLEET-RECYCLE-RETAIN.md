@@ -1,1 +1,2 @@
 - **FLEET-RECYCLE-RETAIN:** Add unwired per-host retention observations with session-scoped owner and OOM checks.
+- Report unverifiable OOM groups independently of unavailable owner identity; reject retained panes and attached/detached remote control when their capabilities are undeclared.
