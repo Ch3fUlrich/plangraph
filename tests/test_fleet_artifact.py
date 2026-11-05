@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import runpy
 
 import pytest
 
@@ -58,7 +59,9 @@ def test_failures(store, monkeypatch):
     source.write_bytes(b'x' * (5 * 1024 * 1024 + 1))
     run('put', source, code=6)
     source.write_text('safe\n' + 'gh' + 'p_' + 'examplevalue')
-    assert 'lines 2' in subprocess.run([sys.executable, '-m', 'plangraph.fleet_artifact', 'put', str(source)], capture_output=True).stderr.decode()
+    stderr = subprocess.run([sys.executable, '-m', 'plangraph.fleet_artifact', 'put', str(source)], capture_output=True).stderr
+    assert b'lines 2' in stderr
+    assert b'ghp_examplevalue' not in stderr
     run('put', source, code=7)
     monkeypatch.delenv('PLANGRAPH_ARTIFACT_REMOTE')
     run('put', source, code=2)
@@ -70,6 +73,35 @@ def test_failures(store, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_ARTIFACT_REMOTE', str(remote))
     run('put', source, code=2)
     assert subprocess.run(['git', '--git-dir', str(remote), 'show-ref'], capture_output=True).stdout == b''
+
+
+def test_shared_shapes(monkeypatch):
+    from plangraph import fleet_artifact
+    shared = runpy.run_path('tools/hooks/redact_common.py')['_SHAPES']
+    calls = []
+    def load(path):
+        calls.append(Path(path).resolve())
+        return {'_SHAPES': shared}
+    monkeypatch.setattr(runpy, 'run_path', load)
+    namespace = dict(__file__=fleet_artifact.__file__, __name__='shape_test')
+    exec(compile(Path(fleet_artifact.__file__).read_text(), fleet_artifact.__file__, 'exec'),
+         namespace)
+    assert calls == [Path('tools/hooks/redact_common.py').resolve()]
+    assert namespace['_SHAPES'] is shared
+
+
+@pytest.mark.parametrize('separator', [b'\x0b', b'\x0c', b'\x1c', b'\x1d', b'\x1e', b'\x85'])
+def test_secret_line_boundaries(store, separator):
+    root, remote, run = store
+    source = root / 'brief'
+    data = b'a' + separator + b'ghp_' + b'A' * 20
+    source.write_bytes(data)
+    before = subprocess.check_output(['git', '--git-dir', str(remote), 'show-ref'])
+    p = subprocess.run([sys.executable, '-m', 'plangraph.fleet_artifact', 'put', str(source)], capture_output=True)
+    assert p.returncode == 7 and p.stdout == b''
+    assert p.stderr == b'fleet-artifact: secret shape on lines 1\n'
+    assert data.count(b'\n') == 0
+    assert subprocess.check_output(['git', '--git-dir', str(remote), 'show-ref']) == before
 
 
 def test_shims():

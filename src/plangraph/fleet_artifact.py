@@ -4,19 +4,14 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
 from urllib.parse import urlsplit
 
-# Shape-only rules shared with tools/hooks/redact_common.py; deliberately no pairs.
-_SHAPES = tuple(re.compile(p) for p in (
-    r"sk[-_][A-Za-z0-9_-]{16,}", r"\bsk[-_][A-Za-z0-9_-]{4,}",
-    r"gh[pousr]_[A-Za-z0-9]+", r"github_pat_[A-Za-z0-9_]+",
-    r"xox[abprs]-[A-Za-z0-9-]+", r"(?:AKIA|ASIA)[0-9A-Z]{16}",
-    r"(?i:Bearer)\s+[A-Za-z0-9._~+/=-]+",
-    r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
-))
+# Load only the existing shape rules, not the broader key/value redactor.
+_SHAPES = runpy.run_path(str(Path(__file__).resolve().parents[2] / "tools/hooks/redact_common.py"))["_SHAPES"]
 NAME = r"[A-Za-z0-9._-]{1,80}"
 REF = rf"artifacts/([0-9a-f]{{12}})-({NAME})"
 LINE = (rf"ARTIFACT ({NAME}) sha256:([0-9a-f]{{64}}) lines=([0-9]+) "
@@ -74,8 +69,8 @@ def put(store, args):
     data = Path(args.path).read_bytes()
     if len(data) > 5 * 1024 * 1024:
         raise Failure(6, "fleet-artifact: size exceeds 5 MiB")
-    bad = [str(i) for i, line in enumerate(data.decode("latin1").splitlines(), 1)
-           if any(p.search(line) for p in _SHAPES)]
+    bad = [str(i) for i, line in enumerate(data.split(b"\n"), 1)
+           if any(p.search(line.decode("latin1")) for p in _SHAPES)]
     if bad:
         raise Failure(7, "fleet-artifact: secret shape on lines " + ",".join(bad))
     name = args.name
