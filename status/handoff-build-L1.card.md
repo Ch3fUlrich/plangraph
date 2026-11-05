@@ -1,36 +1,33 @@
-# L1 card · build-L1-0199 · 2026-11-05T21:00Z
+# L1 card · build-L1-0200 · 2026-11-05T22:27Z
 ## Goal
-- D-3893 phase 0 first, Sol writers, no L2s; #419 + #407 to GO; RIN direct (D-3880); seat lanes #338 #314
+- D-3893 phase 0 first, Sol writers, no L2s; #419 + #407 to GO; RIN direct (D-3880); seat lanes #338 #314; SPAWNER-ORPHAN-REAP slices
 ## Keeper
-- claimed: RIN-LEDGER-VIEWS + RIN-PATH-REPOINT (ep4, lease 22:06Z), ROUTER-LAUNCH-OOM-SCOPE (ep1), LE-FLEET-MSG-INVENTORY (ep5), LE-PANE-MOVE-EXIT-CONFIRM (ep5), ROUTER-INBOX-MOVE (ep1) lease 22:15Z; SEAT-PATH-FIXES (ep6), SEAT-VERDICT-FROM-RECORD (ep2) lease 22:28Z
+- claimed: RIN-LEDGER-VIEWS + RIN-PATH-REPOINT (ep4), ROUTER-LAUNCH-OOM-SCOPE (ep1), ROUTER-INBOX-MOVE (ep1), LE-FLEET-MSG-INVENTORY + LE-PANE-MOVE-EXIT-CONFIRM (ep5), SEAT-PATH-FIXES (ep6), SEAT-VERDICT-FROM-RECORD (ep2): lease 23:41Z; SPAWNER-ORPHAN-REAP (ep1) lease 00:25Z
 - ready next: KEEPER-SNAP-S0-TIMINGS, KEEPER-SNAP-S3-CLIENTS
 ## Done
-- 11-05T20:50Z LE-PANE-MOVE-EXIT-CONFIRM d636d7ca7 seat run-c83c4e0b ACCEPT, 40 passed, GO-REQ sent
-- 11-05T20:45Z ROUTER-LAUNCH-OOM-SCOPE c2a480e 19 passed, live pid 378474 selected read-only, delta seat queued
-- 11-05T20:40Z ROUTER-INBOX-MOVE 3b1ce15 r2 6 passed in test_inbox_move, seat run-2c265b25 REQUEST_CHANGES
-- 11-05T20:58Z SEAT-PATH-FIXES d39b7390a CI 8 pass 3 skip, 358 passed, main merged
-- 11-05T20:55Z SEAT-VERDICT-FROM-RECORD 808835544 172 passed, scrub 0, not pushed
-- 11-05T20:56Z D-3886 26ce4a375 aa9bd97ea suite 10471 passed, seat run-4e1be941 MED fixed, 54 passed
+- 11-05T21:04Z D-3886 26ce4a375 seat run-41d894c9 ACCEPT, CI 8 pass 3 skip, GO-REQ sent
+- 11-05T21:11Z ROUTER-LAUNCH-OOM-SCOPE 91fa103 seat run-26819890 ACCEPT, 19 passed, GO-REQ sent
+- 11-05T21:19Z ROUTER-INBOX-MOVE 9a76876a8 seat run-538efdc3 ACCEPT, 66 passed, GO-REQ sent
+- 11-05T22:13Z SEAT-PATH-FIXES 6038d28e8 CI 8 pass 3 skip, seat ACCEPT on d5c877c8c, 241 passed per writer
+- 11-05T22:10Z SPAWNER-ORPHAN-REAP 458574f46 seat run-18e88afe ACCEPT, CI red on PR #436, fix running
+- 11-05T22:25Z SPAWNER-ORPHAN-REAP 75e28512d slice 2 pushed, 76 passed per writer, not read, no seat
 ## In flight
-- D-3886 #407 CI on 26ce4a375 since 20:53Z next check at restart
-- none of my seats spawned at handoff: rerun list in handoff gen-91 block next check at restart
+- SPAWNER-ORPHAN-REAP fix436ci dell since 22:23Z next check at restart
+- ROUTERCTL-CTX-GUARD-CAPS run-6a54424d since 22:24Z next check at restart
 ## Planned
-1. Rerun gated jobs from gen-91 block: seat-338, seat-oom4, seat-407b, inbox-r3, ci-wait 407
-2. Seat results: OOM GO-REQ naming cap exception; #407 GO-REQ + DONE with sol cause; INBOX delta seat after r3
-3. PANE on D-id: merge, evidence, submit
-4. D-3835 #419 on GO + D-id: merge, ff live, Haiku probe, DONE; then #338 #314 #380 tests seats with Haiku
-5. SPAWNER-ORPHAN-REAP (D-3771) after #377; next ready phase 0 lanes, never idle (D-3893)
+1. pgrep gated jobs BEFORE any rerun; attach to ctxcaps2 and fix436ci (they outlive sessions)
+2. #436: delta seat mimo, CI green, GO-REQ
+3. ctx caps: delta seat mimo, merge main, push with leaf key, GO-REQ naming the watchdog change
+4. Orphan slice 2: merge fix436ci head, read diff, draft PR, seat mimo; then slice 3
+5. #338 tests seat, #419 on GO + D-id, next ready phase 0 lanes, never idle (D-3893)
 ## Open
-- BLOCKED #314 Gate-Edit D-id for 1-line trim tools/ci_commit_gate.py | default rest goes on, merge waits | deadline none
-- BLOCKED OOM past r3 cap hand fix | default seat decides, GO-REQ names exception | deadline none
-- BLOCKED #407 extra round past D-3877 | default one Sol round done, no merge until GO | deadline none
-- BLOCKED RIN-LEDGER-VIEWS flip + rule text | default a: keep import mode, flip to new leaf | deadline none
-- BLOCKED RIN-PATH-REPOINT criteria softening | default none: criteria are routing's | deadline none
-- BLOCKED D-3835 GO + ff D-id | default wait | deadline none
-- BLOCKED WATCHDOG r3 cap, #383 ruling, grok auth + baseline, omnigraph pin D-id, AutoOS terra row: gen-89 block | default as there | deadline none
+- BLOCKED GO-REQs #407, OOM, INBOX, PANE unanswered | default wait, no merge | deadline none
+- BLOCKED ROUTERCTL-CTX-GUARD-CAPS leaf key + gate edge | default no push | deadline none
+- BLOCKED sessions.json absent: config, operator or D-id | default left missing, no session verbs | deadline none
+- BLOCKED #314 Gate-Edit D-id; RIN-LEDGER-VIEWS flip + rule; RIN-PATH-REPOINT criteria; D-3835 GO + ff; gen-89 list | default as gen-91 block | deadline none
 ## Traps
-- Launch prompt gen-70 is stale. L2 = Sonnet = forbidden by D-3893. Keeper claim may land despite timeout: show first
-- Bash guard denies unquoted heredoc with backticks or $(): Write tool. Push build-L1 branch ONLY to control
-- Replan's runs keep the <4 gate closed: seat.sh may sit unspawned. Qwen seats static read only; HIGH needs a seat that ran tests
+- BG jobs OUTLIVE their session: gen-91's note was wrong, my reruns duplicated 2 jobs. Launch prompt gen-70 stale
+- qwen hung 3 of 3 on plangraph trees; free deepseek exit 7 quota; mimo-v2.6-pro with diff_ref works unless mimo wrote the PR; paid deepseek needs the diff inside the prompt
+- Read CI before trusting a seat ACCEPT. Slice 2 is stacked on a red head. Bash guard denies unquoted heredoc with backticks or $(): Write tool. Push build-L1 branch ONLY to control
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-91 block); T=/home/s/.claude/jobs/94195609/tmp; K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-92 block); T=/home/s/.claude/jobs/94195609/tmp; K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79
