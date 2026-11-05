@@ -79,11 +79,7 @@ impl Health {
         self.reason = Some(class);
         self.heuristic = !class.carries_reset();
         self.reset_assumed = class == Class::Quota;
-        self.until_src = Some(if class.carries_reset() {
-            UntilSrc::Default
-        } else {
-            UntilSrc::Row
-        });
+        self.until_src = Some(UntilSrc::Default);
         self.until_s = Some(if class == Class::Quota {
             next_utc_midnight(ts)
         } else {

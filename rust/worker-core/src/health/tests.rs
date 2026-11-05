@@ -21,6 +21,16 @@ pub(super) fn health(rows: &[Row], now: i64) -> Health {
 }
 
 #[test]
+fn until_source_is_always_class_default() {
+    for class in [Class::RateLimit, Class::HangSilent] {
+        assert_eq!(
+            health(&[row(class, 1)], 1).until_src,
+            Some(UntilSrc::Default)
+        );
+    }
+}
+
+#[test]
 fn table_defaults_and_clock() {
     for (class, count) in [
         (Class::HangNoActivity, 1),
