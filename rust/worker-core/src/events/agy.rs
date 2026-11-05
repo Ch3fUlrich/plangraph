@@ -4,6 +4,8 @@ use crate::activity::{Kind, Phase, Signal, ToolClass};
 use serde_json::Value;
 
 #[cfg(test)]
+mod more_tests;
+#[cfg(test)]
 mod tests;
 
 pub const RECORDED: &[&str] = &["1.4.12", "1.5.1"];
