@@ -38,6 +38,45 @@ def test_unknown_reaches_outbox(tmp_path):
     assert event['rule'] == 'unknown' and 'cancelled' not in event
 
 
+def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
+    from plangraph.spawner.remote_probe import exchange, poll
+    import subprocess
+    path = tmp_path / 'runs/run-bad/record.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{')
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_ROOT', 'fixture')
+    assert w.read_runs(tmp_path) == []
+    assert 'run-bad' in (tmp_path / 'watchdog/bad-records.json').read_text()
+    events = exchange([])
+    assert len(events) == 1
+    event, = events.values()
+    assert event['rule'] == 'unknown' and 'cancelled' not in event
+    sent = []
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            return subprocess.CompletedProcess(argv, 0, json.dumps(exchange([])))
+        sent.append(json.loads(kwargs['input']))
+        if len(sent) == 1:
+            raise subprocess.CalledProcessError(1, argv)
+    monkeypatch.setattr(subprocess, 'run', run)
+    poll(['fixture'], 'notify', tmp_path)
+    assert w.read_runs(tmp_path) == []
+    assert exchange([]) == events
+    poll(['fixture'], 'notify', tmp_path)
+    assert sent == [event, event]
+
+
+def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(w, 'read_runs', lambda state: [dict(run_id='run-fixture')])
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    assert w.main(['tick']) == 0
+    event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
+    assert event['rule'] == 'unknown' and event['event_id']
+
+
 @pytest.mark.parametrize('age', [301, 5400])
 def test_finished_child_redelivered_with_routing_alert(age):
     run = dict(run_id='run-abc', status='completed', ended=10000-age,

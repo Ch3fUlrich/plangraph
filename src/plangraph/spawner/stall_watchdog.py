@@ -152,7 +152,7 @@ def read_runs(state):
             runs.append(record)
         except (OSError, ValueError, UnicodeError) as exc:
             bad.append(dict(path=str(path), error=type(exc).__name__))
-            runs.append(dict(run_id=path.parent.name, rule='unknown'))
+            deliver_event(state, dict(run_id=path.parent.name, rule='unknown', kind='completion'))
     if bad:
         atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
     return runs
@@ -341,7 +341,7 @@ def main(argv=None):
             flush_outbox(state, json.loads(command))
         except Exception as exc:
             error = 'delivery-' + type(exc).__name__
-    elif findings:
+    elif any(f['rule'] != 'unknown' for f in findings):
         error = error or 'delivery-bridge-unconfigured'
     text = status(findings)
     if warning:

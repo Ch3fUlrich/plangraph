@@ -40,7 +40,7 @@ def poll(hosts, command, state):
         if key not in entry['seen']:
             event = dict(event, event_id=event.get('event_id') or key)
             subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
-                           text=True, check=True, timeout=20)
+                           text=True, encoding="utf-8", errors="replace", check=True, timeout=20)
             entry['seen'].append(key)
             save()
     def flush(entry):
@@ -68,7 +68,7 @@ def poll(hosts, command, state):
             reply = subprocess.run(['ssh', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes',
                                     '--', host, 'cd ' + shlex.quote(os.environ['PLANGRAPH_PROBE_ROOT'])
                                     + ' && PYTHONPATH=src python3 -c ' + shlex.quote(code)],
-                                   capture_output=True, text=True, timeout=30, check=True)
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
             events = json.loads(reply.stdout)
             if not isinstance(events, dict) or any(
                     len(k) != 64 or any(c not in '0123456789abcdef' for c in k)
