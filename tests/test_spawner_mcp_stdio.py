@@ -1,8 +1,10 @@
 import asyncio
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -136,3 +138,83 @@ def test_real_stdio_handshake_writes_only_replies_with_ids(tmp_path):
     replies = [json.loads(line) for line in done.stdout.splitlines()]
     assert [reply['id'] for reply in replies] == [1, 2]
     assert replies[1]['result']['tools']
+
+
+def stdio_process(tmp_path, *, stdin=subprocess.PIPE, script=None):
+    src = Path(__file__).resolve().parents[1] / 'src'
+    env = {**os.environ, 'PYTHONPATH': str(src), 'HOME': str(tmp_path),
+           'USERPROFILE': str(tmp_path), 'XDG_STATE_HOME': str(tmp_path)}
+    args = ['-c', script] if script else ['-m', 'plangraph.spawner.mcp']
+    return subprocess.Popen([sys.executable, *args], env=env, cwd=tmp_path,
+                            stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def reap_stdio(proc):
+    if proc.poll() is None:
+        proc.kill()
+    proc.communicate(timeout=10)
+
+
+def test_stdio_open_pipe_tool_round_trip(tmp_path):
+    proc = stdio_process(tmp_path)
+    answers = queue.Queue()
+    reader = threading.Thread(target=lambda: answers.put(proc.stdout.readline()), daemon=True)
+    try:
+        reader.start()
+        msg = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+               'params': {'name': 'plangraph_agent_ps', 'arguments': {}}}
+        proc.stdin.write(json.dumps(msg).encode() + b'\n')
+        proc.stdin.flush()
+        reply = json.loads(answers.get(timeout=10))
+        assert reply['id'] == 1 and 'error' not in reply
+        assert json.loads(reply['result']['content'][0]['text'])['total'] == 0
+        assert proc.poll() is None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        reader.join(timeout=10)
+        reap_stdio(proc)
+
+
+def test_stdio_redirected_file(tmp_path):
+    requests = tmp_path / 'requests.jsonl'
+    requests.write_text('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+    with requests.open('rb') as stdin:
+        proc = stdio_process(tmp_path, stdin=stdin)
+        try:
+            out, err = proc.communicate(timeout=10)
+            assert proc.returncode == 0, err
+            assert [json.loads(line)['id'] for line in out.splitlines()] == [1]
+        finally:
+            reap_stdio(proc)
+
+
+def test_stdio_failure_with_pending_read(tmp_path):
+    script = '''
+import asyncio
+from plangraph.spawner import mcp
+async def main():
+    task = asyncio.create_task(mcp.run_stdio_server())
+    await asyncio.sleep(0.2)
+    assert not task.done()
+    raise RuntimeError('injected server failure')
+asyncio.run(main())
+'''
+    proc = stdio_process(tmp_path, script=script)
+    try:
+        assert proc.wait(timeout=10) != 0
+        err = proc.stderr.read()
+        assert b'injected server failure' in err
+        assert b'Fatal Python error' not in err
+    finally:
+        reap_stdio(proc)
+
+
+def test_stdio_eof_exits_zero(tmp_path):
+    proc = stdio_process(tmp_path)
+    try:
+        out, err = proc.communicate(input=b'', timeout=10)
+        assert proc.returncode == 0, err
+        assert out == b''
+    finally:
+        reap_stdio(proc)
