@@ -62,7 +62,7 @@ def redact(value):
     if isinstance(value, (list, tuple)):
         return [redact(v) for v in value]
     if isinstance(value, str):
-        value = re.sub(r'sk-[\w-]+', '[REDACTED]', value)
+        value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
         value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
         return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
     return value
