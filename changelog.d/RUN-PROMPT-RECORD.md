@@ -1,1 +1,2 @@
 - **RUN-PROMPT-RECORD:** Store private, atomic final prompt snapshots and hashes before child dispatch, with single-pass credential redaction.
+- Fix embedded Rust prompt-channel snapshots; verify delivered bytes, record metadata, atomic replacement, and temporary Python block tags.

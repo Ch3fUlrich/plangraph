@@ -2,10 +2,18 @@ import asyncio
 import hashlib
 import json
 import stat
+import inspect
 
 import pytest
 
 from plangraph.spawner import runner
+
+
+def test_temporary_blocks_are_tagged():
+    source = inspect.getsource(runner.SpawnerRunner.spawn)
+    for block in ('if prepare_launch and not dry_run:', 'if not prepare_launch:',
+                  'if prompt_record is None:'):
+        assert block + '  # REMOVE-AT-R10' in source
 
 
 def test_missing_record_prevents_dispatch(monkeypatch):

@@ -20,7 +20,12 @@ fn embedded_prompt_and_distinct_stdin() {
         assert_eq!(launch.stdin.unwrap(), stdin.replace(&raw, "[REDACTED]"));
         assert_eq!(
             std::fs::read(dir.join("runs").join(id).join("prompt.txt")).unwrap(),
-            b"[REDACTED]"
+            if stdin.contains(&raw) {
+                stdin.replace(&raw, "[REDACTED]")
+            } else {
+                "echo [REDACTED]".into()
+            }
+            .as_bytes()
         );
     }
     std::fs::remove_dir_all(dir).unwrap();
@@ -49,12 +54,25 @@ fn prompt_snapshot_before_dispatch() {
     assert_eq!(bytes, launch.argv[1].as_bytes());
     assert_eq!(bytes, "héllo [REDACTED]".as_bytes());
     assert!(!base.to_string().contains(&raw));
-    assert!(base["prompt_sha256"].as_str().unwrap().len() == 64);
+    use sha2::{Digest, Sha256};
+    assert_eq!(
+        base["prompt_sha256"],
+        format!("{:x}", Sha256::digest(&bytes))
+    );
     assert_eq!(base["wake_variant"], "initial");
     assert_eq!(
         std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    let old = std::fs::File::open(&path).unwrap();
+    launch.prompt = Some("replacement".into());
+    launch.stdin = Some("replacement".into());
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_ok());
+    use std::io::Read;
+    let mut previous = Vec::new();
+    (&old).read_to_end(&mut previous).unwrap();
+    assert_eq!(previous, bytes); // Replacement must not truncate the old inode.
+    assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_err());
@@ -102,10 +120,10 @@ fn registered_job(dry: bool) {
             json!({"first_leg":{"family":"f"}}),
             |_, _| {
                 Ok(crate::launch::LaunchSpec {
-                    argv: vec!["/bin/true".into()],
+                    argv: vec!["/bin/cat".into()],
                     cwd: dir.0.clone(),
                     env: BTreeMap::new(),
-                    stdin: None,
+                    stdin: Some("p".into()),
                     prompt: Some("p".into()),
                     warnings: None,
                     events: None,
@@ -121,6 +139,23 @@ fn registered_job(dry: bool) {
         Some(&result["run_id"].as_str().unwrap().to_string())
     );
     assert!(terminal(&result));
+    if !dry {
+        let path = dir
+            .0
+            .join("runs")
+            .join(result["run_id"].as_str().unwrap())
+            .join("prompt.txt");
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            result["stdout_tail"].as_str().unwrap().as_bytes()
+        );
+    }
+    assert_eq!(result["wake_variant"], "initial");
+    use sha2::{Digest, Sha256};
+    assert_eq!(
+        result["prompt_sha256"],
+        format!("{:x}", Sha256::digest(b"p"))
+    );
     if dry {
         let id = runs.jobs.lock().unwrap()[result["job_id"].as_str().unwrap()].clone();
         let saved = crate::records::read_record(&dir.0, &json!(id))

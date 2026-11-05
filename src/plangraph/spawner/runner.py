@@ -324,11 +324,11 @@ class SpawnerRunner:
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         # REMOVE-AT-R10: capture the final prompt before command construction.
-        if prepare_launch and not dry_run:
+        if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
-        if not prepare_launch:
+        if not prepare_launch:  # REMOVE-AT-R10
             prompt = redact(prompt)
-            if prompt_record is None:
+            if prompt_record is None:  # REMOVE-AT-R10
                 raise ValueError('prompt record required')
             from .private_io import atomic_write_private
             path, record, save = prompt_record

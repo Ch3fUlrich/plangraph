@@ -144,13 +144,21 @@ fn store_prompt(
         .prompt
         .as_ref()
         .ok_or_else(|| internal("launch prompt missing"))?;
-    let prompt = pg_worker_core::redact::redact(raw);
+    let channel = launch
+        .stdin
+        .iter()
+        .chain(launch.argv.iter())
+        .find(|s| s.contains(raw))
+        .unwrap_or(raw)
+        .clone();
+    let redacted = pg_worker_core::redact::redact(raw);
     for arg in &mut launch.argv {
-        *arg = arg.replace(raw, &prompt);
+        *arg = arg.replace(raw, &redacted);
     }
     if let Some(stdin) = &mut launch.stdin {
-        *stdin = stdin.replace(raw, &prompt);
+        *stdin = stdin.replace(raw, &redacted);
     }
+    let prompt = channel.replace(raw, &redacted);
     let path = pg_worker_core::run::record::run_dir(state, id)
         .map_err(|_| internal("invalid run id"))?
         .join("prompt.txt");
