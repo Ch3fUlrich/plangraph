@@ -1,5 +1,22 @@
 # Spawner reliability
 
+## RL17: derived evidence and review seats
+
+Evidence defaults off. `reliability.json` accepts `evidence` values off/shadow/on,
+with `roles.<role>.evidence` overriding the default and
+`PLANGRAPH_RELIABILITY_EVIDENCE` overriding configuration. Shadow and on persist
+derived data only; neither enables routing. Operators roll back with off and may
+delete the derived evidence directory while writers are stopped.
+
+Rows use a separate stable lock file, tolerate an incomplete final line, and
+refuse malformed complete lines. Outcome corrections use last physical row per
+run/attempt before window filtering. Observations are separate from outcomes;
+canaries never become health incidents. Existing unclassified attempts are
+counted and skipped, not guessed from status. Legacy leg_events stay in the
+adapter until P-R11. Review seats remain enabled even when evidence is off.
+Only supported complete result frames supply rendered review text; missing or
+unknown output produces HALT, never a manufactured witness or finish reason.
+
 ## RL12: backend/API foundation (partial)
 
 The Unix-only `watch` module defines metadata-only hooks and results, an owned

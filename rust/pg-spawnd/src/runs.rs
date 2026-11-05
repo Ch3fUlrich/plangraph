@@ -253,6 +253,44 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         },
     );
     record.set("writer_family", leg["family"].clone());
+    if let Some(state) = record
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_owned)
+    {
+        let value = record.to_value();
+        if value["role"] == "review" {
+            let result = crate::review_artifacts::review_text(&state, &value).and_then(|text| {
+                crate::review_artifacts::write_review_artifacts(&state, &value, &text)
+            });
+            if result.is_ok() {
+                record.set("seat_dir", json!(record.path().with_file_name("seat")));
+            } else {
+                record.set(
+                    "review_artifact_error",
+                    json!("review artifacts unavailable"),
+                );
+            }
+        }
+        let role = value["role"].as_str().unwrap_or("");
+        if let Ok(store) =
+            crate::evidence::EvidenceStore::open(&state, crate::evidence::enabled(&state, role))
+        {
+            if store.backfill(&crate::records::list_runs(&state)).is_err() {
+                record.set("evidence_error", json!("evidence unavailable"));
+            }
+            let (rows, skipped) = crate::evidence_row::adapted(&value);
+            record.set("evidence_unclassified_attempts", json!(skipped));
+            for row in rows {
+                if store.append(&row).is_err() {
+                    record.set("evidence_error", json!("evidence unavailable"));
+                }
+            }
+            let _ = store.open_episodes();
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
