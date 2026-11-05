@@ -7,10 +7,11 @@ def test_scrub_and_refusal(tmp_path, monkeypatch):
     monkeypatch.setenv("USERNAME", "fake-person")
     monkeypatch.setenv("COMPUTERNAME", "fake-machine")
     out, log = tmp_path / "record", tmp_path / "log"
-    log.write_text("1 failed, 1 passed, 219 skipped in 1.00s\n")
+    log.write_text("FAILED tests/example.py::test_example\n1 failed, 1 passed, 219 skipped in 1.00s\n")
     out.write_text("fake-person fake-machine C:\\Users\\fake-person /c/Users/fake-person /home/fake-person /Users/fake-person\n" + MARKER)
     generate(log, "abc", out)
     assert "fake-" not in out.read_text() and "<home>" in out.read_text()
+    assert "tests/example.py::test_example | owner: none yet" in out.read_text()
     original = baseline.re.sub
     for content in ("x" * 40961, "C:/Users/residue"):
         if content.startswith("C:"):
