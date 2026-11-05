@@ -118,11 +118,15 @@ fn identities_overrides_and_duplicates() {
     assert_eq!(out.provenance["provenance"], "synthetic-base");
     for bad in [json!(null), json!({"window":{"Known":99}})] {
         v["entries"][0]["override"] = bad;
-        unknown(&run(&v, None, Some(&p), Some(&enable())));
+        let out = run(&v, Some(7), Some(&p), Some(&enable()));
+        unknown(&out);
+        assert_eq!(out.threshold, Some(7));
     }
     v = catalog(17);
     v["entries"][0]["identity"]["model"] = json!("small-alias");
-    unknown(&run(&v, None, Some(&p), Some(&enable())));
+    let out = run(&v, Some(7), Some(&p), Some(&enable()));
+    unknown(&out);
+    assert_eq!(out.threshold, Some(7));
     v = catalog(17);
     let mut other = v["entries"][0].clone();
     other["base"]["window"] = json!({"Known":18});
@@ -148,7 +152,9 @@ fn catalog_faults_revalidated() {
     let mut v = catalog(17);
     v["entries"][0]["override"] = v["entries"][0]["base"].clone();
     v["entries"][0]["override"]["expires_at"] = json!(100);
-    unknown(&run(&v, None, Some(&p), Some(&enable())));
+    let out = run(&v, Some(7), Some(&p), Some(&enable()));
+    unknown(&out);
+    assert_eq!(out.threshold, Some(7));
     let capture = catalog::decode(&serde_json::to_vec(&catalog(17)).unwrap(), 105);
     let out = run(
         &serde_json::to_value(capture).unwrap(),
@@ -167,6 +173,7 @@ fn catalog_faults_revalidated() {
         let out = resolve(&id(), bytes, 100, SHA, None, Some(&p), Some(&enable()));
         unknown(&out);
         assert_eq!(out.threshold, None);
+        assert!(out.alarms.iter().any(|f| f.reason == "invalid_json"));
         assert!(!out.catalog.unwrap().findings.is_empty());
     }
 }
@@ -210,8 +217,27 @@ fn policies_and_arithmetic() {
             let out = run(&catalog(17), prior, p, Some(&a));
             unknown(&out);
             assert_eq!(out.threshold, prior);
+            assert_eq!(out.source, "policy:absent_or_invalid");
+            assert_eq!(out.provenance, Value::Null);
         }
     }
+}
+#[test]
+fn defensive_unknown_arm() {
+    assert_eq!(unknown_reason(&Window::Known(17)), "unsupported_window");
+    assert_eq!(
+        unknown_reason(&Window::Unknown("fixture".into())),
+        "fixture"
+    );
+}
+#[test]
+fn inactive_catalog_alarms_preserve_prior() {
+    let out = resolve(&id(), Err("missing_file"), 100, SHA, Some(7), None, None);
+    assert_eq!(out.threshold, Some(7));
+    assert_eq!(out.source, "prior");
+    assert_eq!(out.provenance, Value::Null);
+    assert!(out.alarms.iter().any(|f| f.reason == "invalid_json"));
+    assert!(out.alarms.iter().any(|f| f.reason == "missing_file"));
 }
 #[test]
 fn consumer_parity_json_and_immutable_inputs() {

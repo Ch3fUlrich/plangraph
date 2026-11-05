@@ -69,10 +69,6 @@ pub fn resolve(
             reason: reason.into(),
         });
     };
-    if !valid {
-        alarm(&mut out, "activation", "missing_or_invalid_activation");
-        return out;
-    }
     let capture = match bytes {
         Ok(b) => catalog::decode(b, now_s),
         Err(reason) => {
@@ -80,6 +76,16 @@ pub fn resolve(
             catalog::decode(b"", now_s)
         }
     };
+    out.alarms.extend(capture.findings.iter().map(|f| Finding {
+        identity: f.identity.clone(),
+        source: f.source.clone(),
+        reason: f.reason.clone(),
+    }));
+    if !valid {
+        out.catalog = Some(capture);
+        alarm(&mut out, "activation", "missing_or_invalid_activation");
+        return out;
+    }
     let records: Vec<_> = capture
         .records
         .iter()
@@ -100,6 +106,8 @@ pub fn resolve(
     };
     out.catalog = Some(capture);
     let Some(policy) = policy else {
+        out.source = "policy:absent_or_invalid".into();
+        out.provenance = Value::Null;
         out.window = Window::Unknown("absent_policy".into());
         alarm(&mut out, "policy", "absent_policy");
         return out;
@@ -109,6 +117,8 @@ pub fn resolve(
         || policy.numerator > policy.denominator
         || matches!(policy.unknown, UnknownPolicy::CapAtConfiguredAndAlarm(0));
     if invalid {
+        out.source = "policy:absent_or_invalid".into();
+        out.provenance = Value::Null;
         out.window = Window::Unknown("invalid_policy".into());
         alarm(&mut out, "policy", "invalid_policy");
         return out;
@@ -125,10 +135,7 @@ pub fn resolve(
         out.window = Window::Unknown("policy_arithmetic".into());
         alarm(&mut out, "policy", "overflow_or_zero_output");
     }
-    let Window::Unknown(reason) = &out.window else {
-        unreachable!()
-    };
-    let reason = reason.clone();
+    let reason = unknown_reason(&out.window);
     alarm(&mut out, "unknown_policy", &reason);
     out.source = match policy.unknown {
         UnknownPolicy::KeepPriorAndAlarm => "policy:KeepPriorAndAlarm",
@@ -142,6 +149,12 @@ pub fn resolve(
         alarm(&mut out, "unknown_policy", "unresolved_no_threshold");
     }
     out
+}
+fn unknown_reason(window: &Window) -> String {
+    match window {
+        Window::Unknown(reason) => reason.clone(),
+        _ => "unsupported_window".into(),
+    }
 }
 #[cfg(test)]
 #[path = "fleet_cap_resolver_tests.rs"]
