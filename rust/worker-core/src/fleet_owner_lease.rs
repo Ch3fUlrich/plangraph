@@ -7,7 +7,7 @@
 //! Python consumers read JSON or use a later thin binary: SourceFileLoader
 //! cannot import Rust. No binary is needed for this contract-only slice.
 //! Paths are caller-supplied relative slots, never derived from opaque IDs.
-//! Pure transitions are included; durable CAS and activation remain separate.
+//! Part 2 owns explicit expected-epoch reconciliation, durable CAS and activation.
 //! Known is validated data, not ownership permission; Unknown never authorizes.
 //! Read never infers death, expiry or freedom from process observations.
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,11 @@ use std::{
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State<T> {
+    /// Evidence unavailable; never authorizes.
     Unknown,
+    /// Explicitly unoccupied.
     Free,
+    /// Occupied by the recorded value.
     Busy(T),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,13 +41,18 @@ pub struct Lease {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Successor {
+    /// Evidence unavailable; never authorizes.
     Unknown,
+    /// Stable replacement identifier.
     Id(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
+    /// Intent recorded before launch.
     Prepared,
+    /// Replacement launched with recorded identity.
     Launched,
+    /// Confirmed replacement; retain evidence.
     Confirmed,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,8 +152,13 @@ impl Record {
 /// Pure comparison only: callers must later persist with durable CAS.
 #[derive(Clone, Debug)]
 pub enum Transition {
+    /// Acquire a free, clear record.
     Acquire(Identity),
+    /// Confirm a launched transaction; retain successor.
     Complete(String),
+    /// Launch the matching prepared transaction.
+    Launch(String, String),
+    /// Release an occupied, clear record.
     Release,
 }
 pub fn advance(
@@ -153,8 +166,9 @@ pub fn advance(
     expected_epoch: u64,
     expected_identity: &State<Identity>,
     transition: Transition,
+    now_s: i64,
 ) -> Result<Record, Refusal> {
-    record.validate(record.updated_at)?;
+    record.validate(now_s)?;
     if record.epoch != expected_epoch || &record.identity != expected_identity {
         return Err(Refusal::Invalid);
     }
@@ -167,15 +181,27 @@ pub fn advance(
             next.identity = State::Free;
         }
         Transition::Complete(id)
-            if matches!(&record.pending, State::Busy(t) if t.id == id)
+            if matches!(&record.pending, State::Busy(t) if t.id == id && t.phase == Phase::Launched && matches!(t.successor, Successor::Id(_)))
                 && matches!(record.identity, State::Busy(_)) =>
         {
-            next.pending = State::Free;
+            if let State::Busy(t) = &mut next.pending {
+                t.phase = Phase::Confirmed;
+            }
+        }
+        Transition::Launch(id, successor)
+            if matches!(&record.pending, State::Busy(t) if t.id == id && t.phase == Phase::Prepared && t.successor == Successor::Unknown)
+                && matches!(record.identity, State::Busy(_)) =>
+        {
+            if let State::Busy(t) = &mut next.pending {
+                t.phase = Phase::Launched;
+                t.successor = Successor::Id(successor);
+            }
         }
         _ => return Err(Refusal::Unresolved),
     }
     next.epoch = record.epoch.checked_add(1).ok_or(Refusal::Invalid)?;
-    next.validate(next.updated_at)?;
+    next.updated_at = now_s;
+    next.validate(now_s)?;
     Ok(next)
 }
 /// Explicit bootstrap only; the caller must prove the slot has never existed.
@@ -291,10 +317,60 @@ fn decode_inner(
         },
     }
 }
+#[cfg(unix)]
+fn confined_read(root: &Path, slot: &Path) -> io::Result<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if slot.as_os_str().is_empty()
+        || slot
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let root = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(root)?;
+    confined_read_at(root, slot)
+}
+#[cfg(unix)]
+fn confined_read_at(mut dir: std::fs::File, slot: &Path) -> io::Result<Vec<u8>> {
+    use std::{
+        ffi::CString,
+        io::Read,
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
+    };
+    let mut parts = slot.components().peekable();
+    while let Some(part) = parts.next() {
+        let name = CString::new(part.as_os_str().as_bytes())?;
+        let flags = libc::O_RDONLY
+            | libc::O_CLOEXEC
+            | libc::O_NOFOLLOW
+            | if parts.peek().is_some() {
+                libc::O_DIRECTORY
+            } else {
+                0
+            };
+        // SAFETY: terminated name and live directory; successful descriptor is owned once.
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        dir = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    let mut bytes = Vec::new();
+    dir.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+#[cfg(not(unix))]
+fn confined_read(_: &Path, _: &Path) -> io::Result<Vec<u8>> {
+    Err(io::ErrorKind::Unsupported.into())
+}
 pub fn read(root: &Path, slot: &Path, session: &str, run: &str, now_s: i64) -> Read {
-    let bytes = slot_path(root, slot)
-        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
-        .and_then(std::fs::read);
+    let bytes = confined_read(root, slot);
     decode(session, run, bytes, now_s)
 }
 
@@ -302,11 +378,35 @@ pub fn read(root: &Path, slot: &Path, session: &str, run: &str, now_s: i64) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn advance(r: &Record, e: u64, i: &State<Identity>, t: Transition) -> Result<Record, Refusal> { super::advance(r, e, i, t, r.updated_at) }
     fn owner() -> Identity { Identity { pid: 7, start: "birth-a".into(), group: 7, } }
     fn encoded(r: &Record) -> io::Result<Vec<u8>> { Ok(serde_json::to_vec(r).unwrap()) }
     fn unknown(r: Read, reason: &str) { assert!(
             matches!(r, Read::Unknown { session_id, reason: why, alarm: true }
             if session_id == "session-a" && why.contains(reason)) ); }
+    #[test]
+    fn reconciliation_owner_is_documented() { assert!(include_str!("fleet_owner_lease.rs").lines().take(12).any(|l| l.contains("Part 2 owns explicit expected-epoch reconciliation"))); }
+    #[test]
+    fn phase_evidence_and_clock() {
+        let mut r = bootstrap("session-a", "run-a", 10).unwrap(); r.identity = State::Busy(owner());
+        r.pending = State::Busy(Transaction { id: "tx-a".into(), phase: Phase::Prepared, successor: Successor::Unknown });
+        assert!(advance(&r, 0, &r.identity, Transition::Complete("tx-a".into())).is_err());
+        let launched = super::advance(&r, 0, &r.identity, Transition::Launch("tx-a".into(), "next-a".into()), 11).unwrap();
+        assert_eq!(launched.updated_at, 11);
+        let done = advance(&launched, 1, &r.identity, Transition::Complete("tx-a".into())).unwrap();
+        assert!(matches!(done.pending, State::Busy(Transaction { phase: Phase::Confirmed, successor: Successor::Id(ref id), .. }) if id == "next-a"));
+        assert!(advance(&done, 2, &r.identity, Transition::Complete("tx-a".into())).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn held_root_survives_symlink_swap() {
+        let d = tempfile::tempdir().unwrap(); let root = d.path().join("dir"); let moved = d.path().join("moved");
+        std::fs::create_dir(&root).unwrap(); std::fs::write(root.join("real.json"), b"held").unwrap();
+        let held = std::fs::File::open(&root).unwrap(); std::fs::rename(&root, &moved).unwrap();
+        std::fs::write(d.path().join("real.json"), b"escaped").unwrap(); std::os::unix::fs::symlink(d.path(), &root).unwrap();
+        assert_eq!(confined_read_at(held, Path::new("real.json")).unwrap(), b"held");
+        assert!(confined_read(&root, Path::new("real.json")).is_err());
+    }
     #[test]
     fn advance_guards_and_exact_epoch() {
         let r = bootstrap("session-a", "run-a", 10).unwrap();
@@ -320,7 +420,7 @@ mod tests {
         let mut pending = busy.clone(); pending.pending = State::Busy(Transaction {
             id: "tx-a".into(), phase: Phase::Prepared, successor: Successor::Unknown });
         assert!(advance(&pending, 1, &pending.identity, Transition::Complete("tx-b".into())).is_err());
-        assert_eq!(advance(&pending, 1, &pending.identity, Transition::Complete("tx-a".into())).unwrap().epoch, 2);
+        assert!(advance(&pending, 1, &pending.identity, Transition::Complete("tx-a".into())).is_err());
         for now in [19, 20, 21] { for field in 0..4 {
             let mut blocked = busy.clone(); let l = Lease { id: "lease-a".into(), owner: owner(), expires_at: 20 };
             match field { 0 => blocked.pending = pending.pending.clone(), 1 => blocked.finalizer = State::Busy(l),

@@ -1,1 +1,2 @@
 - **FLEET-OWNER-LEASE (part 1):** Add an unwired owner record schema, session-scoped reads and validated explicit migration and guarded pure epoch/identity transitions; durable CAS and activation remain separate.
+- Fix ordered replacement phases with retained evidence, injected transition timestamps and descriptor-relative confined reads; reconciliation remains part 2.
