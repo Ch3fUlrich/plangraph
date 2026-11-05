@@ -174,13 +174,53 @@ class SettingsLayers(WrapperCase):
 
 
 class Plumbing(WrapperCase):
+    def test_calm_text_at_both_levels_and_private_destination(self):
+        for n, read in enumerate((275000, 301000)):
+            self.write(usage_line(read=read))
+            for configured in (False, True):
+                sid = "calm%d%s" % (n, configured)
+                path = str(self.tmp / "private" / "handoff.md")
+                if configured:
+                    self.set_override({"handoff_path": path}, sid=sid)
+                text = self.line(self.guard(self.payload(sid=sid)))
+                self.assertIn("HARD-CAP" if n else "HANDOFF-NOW", text)
+                self.assertIn("ctx=%dk" % (read // 1000), text)
+                self.assertIn("at the next natural stop, write your handoff to %s, then run" %
+                              (path if configured else "your private handoff path"), text)
+                for forbidden in ("commit+push", "no new work", "plangraph"):
+                    self.assertNotIn(forbidden, text)
+                self.assertTrue(text.endswith("If you are a subagent, finish your task and report; "
+                                              "this does not apply to you."))
+
+    def test_subagents_neither_emit_nor_touch_state(self):
+        for script in (SCRIPT, HOOKS / "context_guard.py"):
+            for read in (1000, 275000, 301000):
+                self.write(usage_line(read=read))
+                self.assert_silent(self.run_hook(script, self.payload(agent_id="worker")))
+                self.assertFalse(self.state_file().exists())
+                self.state_file().parent.mkdir(parents=True, exist_ok=True)
+                self.state_file().write_text('{"ctx": 290000}', encoding="utf-8")
+                self.assert_silent(self.run_hook(script, self.payload(agent_id="worker")))
+                self.assertEqual(self.state_file().read_text(), '{"ctx": 290000}')
+                self.state_file().unlink()
+
+    def test_launch_override_raises_lowers_isolates_and_clamps(self):
+        self.write(usage_line(read=301000))
+        self.set_override({"handoff": 320000, "hard": 330000})
+        self.assert_silent(self.guard())
+        self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid="other"))))
+        self.set_override({"handoff": 290000, "hard": 1})
+        self.assertIn("HARD-CAP ctx=301k >= 290k", self.line(self.guard()))
+        self.set_override("{broken", sid="garbled")
+        self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid="garbled"))))
+
     def test_card_rule_is_appended_to_both_levels(self):
         card = load_module("ctx_guard_session").CARD_RULE
         for sid, read, head in (("s1", 275000, "HANDOFF-NOW"), ("s2", 301000, "HARD-CAP")):
             self.write(usage_line(read=read))
             proc = self.guard(self.payload(sid=sid))
             text = self.line(proc)
-            self.assertTrue(text.startswith(head) and text.endswith(card), text)
+            self.assertTrue(text.startswith(head) and card in text, text)
             self.assertEqual(len(proc.stdout.splitlines()), 1, "still one JSON line")
             self.assertTrue(proc.stdout.endswith("\n"))
 

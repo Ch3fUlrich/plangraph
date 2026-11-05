@@ -1,0 +1,1 @@
+- **LE-GUARD-TEXT (D-3795):** Make context guard guidance calm and private, suppress subagents, and support session-local handoff destinations alongside launch-time thresholds.

@@ -84,10 +84,11 @@ PAYLOADS = [
 def emit_out(level, ctx_k, threshold_k):
     """The context_guard line, with this run's interpreter and script path where the original had its own."""
     script = J(str((HOOKS / "context_guard.py").resolve()))[1:-1]
-    head = ("HANDOFF-NOW ctx=%dk >= %dk: finish the current step, write your handoff, commit+push, "
-            if level == "handoff" else "HARD-CAP ctx=%dk >= %dk: no new work; handoff now, ") % (ctx_k, threshold_k)
-    tail = ("then run %s %s ready <handoff-path> (and SendMessage RECYCLE-READY <path> to your parent if your brief "
-            "says so)" % (J(sys.executable)[1:-1], script))
+    head = ("%s ctx=%dk >= %dk: at the next natural stop, write your handoff to your private handoff path, "
+            % ("HANDOFF-NOW" if level == "handoff" else "HARD-CAP", ctx_k, threshold_k))
+    tail = ("then run ready (and SendMessage RECYCLE-READY <path> to your parent if your brief says so). "
+            "If you are a subagent, finish your task and report; "
+            "this does not apply to you.")
     return '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s%s"}}\n' % (head, tail)
 
 

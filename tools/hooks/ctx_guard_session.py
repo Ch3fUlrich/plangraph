@@ -45,7 +45,9 @@ def add_card_rule(out: str) -> str:
         hso = doc["hookSpecificOutput"]
         context = hso.get("additionalContext")
         if isinstance(context, str) and _HANDOFF_LINE.match(context):
-            hso["additionalContext"] = context + CARD_RULE
+            backstop = " If you are a subagent, finish your task and report; this does not apply to you."
+            hso["additionalContext"] = (context[:-len(backstop)] + CARD_RULE + backstop
+                                        if context.endswith(backstop) else context + CARD_RULE)
             return json.dumps(doc) + "\n"
     except Exception:
         pass
@@ -121,6 +123,10 @@ def main() -> int:
     if doc and doc.get("off") is True:
         return 0
     if doc:
+        # Launch-time, session-local private destination, alongside handoff/hard.
+        path = doc.get("handoff_path")
+        if isinstance(path, str) and path:
+            os.environ["AUTOOS_CTX_HANDOFF_PATH"] = path
         for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
             val = doc.get(key)
             if isinstance(val, int) and not isinstance(val, bool):
