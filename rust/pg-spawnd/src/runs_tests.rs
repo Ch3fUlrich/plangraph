@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn embedded_prompt_and_distinct_stdin() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let raw = format!("{}{}", "sk-", "a".repeat(24));
+    for stdin in ["other".to_owned(), format!("prefix {raw} suffix")] {
+        let mut launch = crate::launch::LaunchSpec {
+            argv: vec!["sh".into(), "-c".into(), format!("echo {raw}")],
+            cwd: dir.clone(),
+            env: BTreeMap::new(),
+            stdin: Some(stdin.clone()),
+            prompt: Some(raw.clone()),
+            warnings: None,
+            events: None,
+        };
+        let id = new_run_id();
+        assert!(store_prompt(&dir, &id, &mut launch, &mut json!({})).is_ok());
+        assert_eq!(launch.argv[2], "echo [REDACTED]");
+        assert_eq!(launch.stdin.unwrap(), stdin.replace(&raw, "[REDACTED]"));
+        assert_eq!(
+            std::fs::read(dir.join("runs").join(id).join("prompt.txt")).unwrap(),
+            b"[REDACTED]"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn prompt_snapshot_before_dispatch() {
     use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(new_run_id());

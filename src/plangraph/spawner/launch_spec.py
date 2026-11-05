@@ -115,7 +115,8 @@ def build(request: dict) -> dict:
         prompt, writer_env = writer_launch(prompt, request['role'], leg.model, request['run_id'])
         try:
             job = asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
-                role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env))
+                role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env,
+                prepare_launch=True))  # REMOVE-AT-R10: Rust owns redaction and recording.
         except (SpawnRefused, ValueError) as exc:
             raise LaunchRefused('refused', str(exc)) from None
         for event in job.events:

@@ -146,12 +146,10 @@ fn store_prompt(
         .ok_or_else(|| internal("launch prompt missing"))?;
     let prompt = pg_worker_core::redact::redact(raw);
     for arg in &mut launch.argv {
-        if arg == raw {
-            *arg = prompt.clone();
-        }
+        *arg = arg.replace(raw, &prompt);
     }
-    if launch.stdin.is_some() {
-        launch.stdin = Some(prompt.clone());
+    if let Some(stdin) = &mut launch.stdin {
+        *stdin = stdin.replace(raw, &prompt);
     }
     let path = pg_worker_core::run::record::run_dir(state, id)
         .map_err(|_| internal("invalid run id"))?

@@ -8,6 +8,17 @@ import pytest
 from plangraph.spawner import runner
 
 
+def test_missing_record_prevents_dispatch(monkeypatch):
+    calls = []
+    original = runner.redact
+    monkeypatch.setattr(runner, 'redact', lambda p: (calls.append(p), original(p))[1])
+    monkeypatch.setattr(runner, 'build_command', lambda **k: pytest.fail('dispatched'))
+    prompt = 'sk' + '-' + 'a' * 20
+    with pytest.raises(ValueError, match='prompt record required'):
+        asyncio.run(runner.SpawnerRunner().spawn(prompt=prompt, role='review', dry_run=True))
+    assert calls == [prompt]
+
+
 def test_prompt_record(tmp_path):
     secret = 'sk' + '-' + 'a' * 20
     path, record = tmp_path / 'prompt.txt', {}
@@ -20,6 +31,16 @@ def test_prompt_record(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert record == dict(prompt_sha256=hashlib.sha256(path.read_bytes()).hexdigest(), wake_variant='initial')
     assert saves == [record]
+
+
+def test_launch_preparation_leaves_redaction_to_rust(monkeypatch):
+    monkeypatch.setattr(runner, 'redact', lambda p: pytest.fail('double redaction'))
+    prompt = 'sk' + '-' + 'a' * 20
+    job = asyncio.run(runner.SpawnerRunner().spawn(
+        prompt=prompt, role='review', dry_run=True, prepare_launch=True))
+    assert job.task_prompt == prompt
+    with pytest.raises(ValueError, match='requires dry run'):
+        asyncio.run(runner.SpawnerRunner().spawn(prompt=prompt, prepare_launch=True))
 
 
 def test_write_failure_prevents_dispatch(tmp_path, monkeypatch):

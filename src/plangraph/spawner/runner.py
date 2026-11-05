@@ -316,7 +316,7 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
-        watchdog=None, live_log=None, prompt_record=None,  # REMOVE-AT-R10
+        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False,  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
@@ -324,10 +324,14 @@ class SpawnerRunner:
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         # REMOVE-AT-R10: capture the final prompt before command construction.
-        if prompt_record is not None:
+        if prepare_launch and not dry_run:
+            raise ValueError('launch preparation requires dry run')
+        if not prepare_launch:
+            prompt = redact(prompt)
+            if prompt_record is None:
+                raise ValueError('prompt record required')
             from .private_io import atomic_write_private
             path, record, save = prompt_record
-            prompt = redact(prompt)
             atomic_write_private(path, prompt)
             record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant='initial')
             save(record)
