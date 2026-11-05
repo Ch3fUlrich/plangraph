@@ -201,6 +201,10 @@ impl EvidenceStore {
         }
         Ok(count)
     }
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "RL18 consumes restart episodes")
+    )]
     pub fn open_episodes(&self) -> Result<Vec<ObservationRow>, EvidenceError> {
         if !self.enabled {
             return Ok(Vec::new());

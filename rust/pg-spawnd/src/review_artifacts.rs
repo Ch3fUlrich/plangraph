@@ -85,6 +85,23 @@ pub(crate) fn write_review_artifacts(
         evidence["served_model"] = json!("unwitnessed");
         evidence["requested_model"] = Value::Null;
     }
+    let known = |key: &str| {
+        record[key].as_str().is_some_and(|s| {
+            !s.trim().is_empty()
+                && !["unsure", "unknown", "unwitnessed", "null"]
+                    .contains(&s.to_lowercase().as_str())
+        })
+    };
+    let passing = matches!(record["finish_reason"].as_str(), Some("stop" | "end_turn"))
+        && known("served_model")
+        && known("witness_kind")
+        && (record["test_gaming"] == false || record["test_gaming"] == "no");
+    let review = if passing && !review.contains("VERDICT: HALT") {
+        review
+    } else {
+        evidence["verdict"] = json!("HALT");
+        "Review cannot pass: incomplete or nonpassing evidence.\nVERDICT: HALT\n"
+    };
     for (name, bytes) in [
         (
             "review.txt",

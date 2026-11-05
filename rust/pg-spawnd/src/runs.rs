@@ -262,9 +262,9 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     {
         let value = record.to_value();
         if value["role"] == "review" {
-            let result = crate::review_artifacts::review_text(&state, &value).and_then(|text| {
-                crate::review_artifacts::write_review_artifacts(&state, &value, &text)
-            });
+            let text = crate::review_artifacts::review_text(&state, &value)
+                .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
+            let result = crate::review_artifacts::write_review_artifacts(&state, &value, &text);
             if result.is_ok() {
                 record.set("seat_dir", json!(record.path().with_file_name("seat")));
             } else {
@@ -282,15 +282,43 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
                 record.set("evidence_error", json!("evidence unavailable"));
             }
             let (rows, skipped) = crate::evidence_row::adapted(&value);
-            record.set("evidence_unclassified_attempts", json!(skipped));
+            if crate::evidence::enabled(&state, role) {
+                record.set("evidence_unclassified_attempts", json!(skipped));
+            }
             for row in rows {
                 if store.append(&row).is_err() {
                     record.set("evidence_error", json!("evidence unavailable"));
                 }
             }
-            let _ = store.open_episodes();
         }
     }
+}
+
+#[test]
+fn review_artifacts_finish_read_error_without_evidence() {
+    let state = std::env::temp_dir().join(new_run_id());
+    let mut record = create(
+        &state,
+        "run-test",
+        "local",
+        json!({"role":"review"}),
+        Status::Completed,
+    )
+    .ok()
+    .unwrap();
+    let log = record.path().with_file_name("live.log");
+    std::fs::write(&log, [0xff, b'\n']).unwrap();
+    record.set("live_log", json!(log));
+    assert!(crate::review_artifacts::review_text(&state, &record.to_value()).is_err());
+    finish(&mut record, Status::Completed, &json!({}));
+    let seat = record.path().with_file_name("seat");
+    assert!(std::fs::read_to_string(seat.join("review.txt"))
+        .unwrap()
+        .contains("VERDICT: HALT"));
+    let evidence: Value =
+        serde_json::from_slice(&std::fs::read(seat.join("evidence.json")).unwrap()).unwrap();
+    assert_eq!(evidence["verdict"], "HALT");
+    std::fs::remove_dir_all(state).unwrap();
 }
 
 #[cfg(all(test, unix))]
