@@ -29,6 +29,32 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 # --- 1. harness/tool_mode are catalog data -----------------------------------
 
+@pytest.mark.parametrize("selection", [{"leg": "omniroute-grok-4.7"},
+                                       {"model": "omniroute/gc/grok-4.7"}])
+def test_grok_review_override_and_implement_refusal(tmp_path, monkeypatch, selection):
+    service = _service(tmp_path, monkeypatch)
+    record = asyncio.run(service.spawn(card=CARD, prompt="review", role="review",
+        writer_families=("gpt",), override_reason="D-3701 test", dry_run=True, **selection))
+    assert record["chosen_leg"]["model"] == "omniroute/gc/grok-4.7"
+    assert record["chosen_leg"]["tool_mode"] == "tools"
+    with pytest.raises(SpawnRefused, match="does not serve role implement"):
+        asyncio.run(service.spawn(card=CARD, prompt="implement", role="implement",
+            override_reason="D-3701 test", dry_run=True, **selection))
+
+
+def test_grok_catalog_route_and_seat_family():
+    from plangraph.planner.seats import seat_family
+    from plangraph.review.family import model_family
+    row = _row(_seeded(), "omniroute/gc/grok-4.7")
+    assert (row["harness"], row["tool_mode"], row["family"]) == ("opencode", "tools", "grok")
+    assert row["context_tokens"] == 120000 and row["trains_on_prompts"] == 0
+    ids = [leg.id for leg in DEFAULT_LEGS]
+    assert ids[ids.index("opencode-go-qwen3.8-max") + 1] == "omniroute-grok-4.7"
+    plan = plan_spawn(CARD, role="review", writer_families=("gpt",))
+    assert "omniroute-grok-4.7" in [leg.id for leg in plan.legs]
+    assert "omniroute-grok-4.7" not in [leg.id for leg in plan_spawn(CARD, role="implement").legs]
+    assert model_family("omniroute/gc/grok-4.7") == seat_family("grok") == "xai"
+
 def test_schema_has_harness_and_tool_mode_columns():
     db = _seeded()
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(catalog_models)")}
@@ -302,7 +328,7 @@ def test_high_needs_two_families_per_part_incl_non_claude():
 
 def test_uncoverable_parts_are_an_error():
     only = RoutePolicy(banned_families=("deepseek", "glm", "gpt", "mimo", "gemini", "muse",
-                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi"),
+                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok"),
                        off_families=(), paused_harnesses={})
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",), policy=only)
     assert plan.error and "qwen" in _families(plan)

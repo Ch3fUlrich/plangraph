@@ -22,6 +22,11 @@ TIER_RUNG: dict[str, int] = {
 
 SEED_QUOTA_POOLS: list[dict[str, Any]] = [
     {
+        "pool_id": "gc-sub", "provider_id": "gc", "tier": "subscription",
+        "window_type": "weekly_quota", "pool_burn_multiplier": 1.0,
+        "cache_hit_discount": 0.0, "notes": "Grok subscription via OmniRoute gc",
+    },
+    {
         "pool_id": "agy-3p-partner",
         "provider_id": "agy",
         "tier": "subscription",
@@ -150,6 +155,12 @@ SEED_QUOTA_POOLS: list[dict[str, Any]] = [
 ]
 
 SEED_PROVIDERS: list[dict[str, Any]] = [
+    {
+        "provider_id": "gc", "omniroute_id": "gc", "tier": "subscription",
+        "transport": "gateway", "gateway_mode": "omniroute_acp",
+        "available": 1, "unavailable_reason": None,
+        "updated_at": "2026-11-05T00:00:00Z",
+    },
     {
         "provider_id": "agy",
         "omniroute_id": "agy",

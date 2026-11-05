@@ -19,6 +19,7 @@ PROVIDER_HARNESS: dict[str, Any] = {
     "opencode-go": "opencode",
     "mimo": "opencode",
     "cx": "opencode",
+    "gc": "opencode",
     "agy": None,
     "qoder": None,
     "cxa": None,

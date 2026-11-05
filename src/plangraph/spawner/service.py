@@ -259,6 +259,9 @@ class SpawnService(SeatSpawnMixin):
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is not None and not leg_active(chosen): raise SpawnRefused('leg expired: ' + chosen.id)  # D-3505
+            # D-3701: the Grok subscription is a review seat, including overrides.
+            if chosen is not None and chosen.id == 'omniroute-grok-4.7' and role not in chosen.roles:
+                raise SpawnRefused('leg does not serve role ' + role + ': ' + chosen.id)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg

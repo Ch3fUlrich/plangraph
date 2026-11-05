@@ -56,7 +56,7 @@ def test_seats_and_impossible_fence():
     assert [l.family for l in p.review_seats] == ["qwen", "deepseek"] and not p.error
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
-                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude"))  # D-3605 Haiku leg
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))  # D-3605 Haiku leg
     assert not p.review_seats and p.error
 
 

@@ -104,7 +104,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
-        "opencode-go-qwen3.8-max", "opencode-go-muse-spark",
+        "opencode-go-qwen3.8-max", "omniroute-grok-4.7", "opencode-go-muse-spark",
         "opencode-go-deepseek-v4-flash", "deepseek"]
 
 

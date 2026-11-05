@@ -48,7 +48,8 @@ MODELS = [
 
 
 def test_families_match_seat_verdict():
-    assert FAMILIES == sv.FAMILIES
+    # D-3701: door-path Grok mapping is delivered separately by L1.
+    assert FAMILIES == (*sv.FAMILIES, (r"grok", "xai"))
 
 
 @pytest.mark.parametrize("model,want", MODELS)
