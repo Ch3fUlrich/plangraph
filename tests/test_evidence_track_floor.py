@@ -387,6 +387,9 @@ def test_release_without_git_records_a_legacy_payload(tmp_path):
 
 def test_record_bases_without_a_git_or_repo_path_omits_every_key():
     class _NoPath:
+        def repo_ref(self, project=None, *args, **kwargs):
+            return "main"
+
         def head_sha(self, repo, ref="main"):
             return HEAD_SHA
     assert record_bases(ITEM, None) == {}

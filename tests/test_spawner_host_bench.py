@@ -84,6 +84,8 @@ def route_json(tmp_path, capsys, *extra):
 
 def test_review_route_uses_benchmark_p(tmp_path, capsys):
     """I3/D2: seeded rows reach review ranking through the leg-id map."""
+    from test_route_round3 import test_review_same_family_measured_order
+    test_review_same_family_measured_order()
     db = seeded_db(tmp_path)
     rows = benchmark_options(False, str(db))["benchmark"]
     assert {"qoder/qwen3.8-flash-next", "agy/gemini-3.8-flash-tiered-high",
@@ -102,10 +104,10 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     # luna and mimo-pro are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "agy-gemini-3.8-flash",
-        "mimo-v2.6-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
+        "opencode-glm-5.3-flash-free", "mimo-v2.6-flash", "opencode-go-deepseek-v4-flash",
+        "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
         "opencode-go-qwen3.8-max", "opencode-go-muse-spark",
-        "opencode-go-deepseek-v4-flash"]
+        ]
 
 
 def test_unmapped_leg_no_p(tmp_path, capsys):

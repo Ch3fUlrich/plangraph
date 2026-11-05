@@ -35,10 +35,17 @@ impl Group {
     }
 
     fn signal_group(&self, sig: i32) {
-        // SAFETY: plain syscall; errors (e.g. ESRCH when the group is gone) are ignored.
-        unsafe {
-            libc::killpg(self.pgid, sig);
-        }
+        let _ = killpg(self.pgid, sig);
+    }
+}
+
+pub(crate) fn killpg(pgid: i32, signal: i32) -> io::Result<()> {
+    if pgid <= 1 || pgid == unsafe { libc::getpgrp() } {
+        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    match unsafe { libc::killpg(pgid, signal) } {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()),
     }
 }
 

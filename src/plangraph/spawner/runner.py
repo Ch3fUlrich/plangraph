@@ -316,13 +316,25 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
-        watchdog=None, live_log=None,
+        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
+        # REMOVE-AT-R10: capture the final prompt before command construction.
+        if prepare_launch and not dry_run:  # REMOVE-AT-R10
+            raise ValueError('launch preparation requires dry run')
+        prompt = redact(prompt)  # REMOVE-AT-R10
+        if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
+            from .private_io import atomic_write_private
+            path, record, save = prompt_record
+            if not dry_run:  # REMOVE-AT-R10
+                atomic_write_private(path, prompt)
+            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant)
+            if not dry_run:  # REMOVE-AT-R10
+                save(record)
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
             try:
@@ -1060,7 +1072,8 @@ def spawn_service(*args, **kwargs):
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env,
+                            prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,

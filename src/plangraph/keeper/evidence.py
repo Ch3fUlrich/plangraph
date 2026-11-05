@@ -335,8 +335,8 @@ class CommitCiVerifier:
 
         target_ref = "main"
         try:
-            if hasattr(ctx.git, "repo_ref"):
-                target_ref = ctx.git.repo_ref(project)
+            # ``repo_ref`` is required of every adapter (no invented "main").
+            target_ref = ctx.git.repo_ref(project)
             if hasattr(ctx.git, "is_ancestor"):
                 is_anc = ctx.git.is_ancestor(repo, commit, target_ref)
             else:

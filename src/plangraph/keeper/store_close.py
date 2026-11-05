@@ -286,9 +286,10 @@ class CloseMixin:
                             full_sha = None
                     if full_sha:
                         verified_shas.append(full_sha)
+        # ``repo_ref`` is required of every adapter (no invented "main"); a
+        # missing adapter keeps the None check and stays a closed refusal.
         target_ref = (ctx.git.repo_ref(last_rkey)
-                      if ctx.git is not None and hasattr(ctx.git, "repo_ref")
-                      else "main")
+                      if ctx.git is not None else "main")
         if not verified_any:
             sha_label = f" {last_sha}" if last_sha else ""
             raise Refused("evidence_unverified",
