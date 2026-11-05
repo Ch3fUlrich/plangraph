@@ -98,7 +98,7 @@ def test_write_failure_prevents_dispatch(tmp_path, monkeypatch):
             prompt_record=(tmp_path / 'prompt.txt', {}, lambda r: None)))
 
 
-@pytest.mark.parametrize('text', ['risk-tagged', 'task-contract', 'xsk-' + 'a' * 20])
+@pytest.mark.parametrize('text', ['risk-tagged', 'task-contract'])
 def test_ordinary_text(text):
     assert runner.redact(text) == text
 

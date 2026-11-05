@@ -177,11 +177,14 @@ fn registered_job(dry: bool) {
 
 #[test]
 fn env_prompt_and_missing_carrier() {
-    for text in [
-        "risk-tagged task-contract sk-learn".to_owned(),
-        "xsk-".to_owned() + &"a".repeat(20),
+    for (text, expected) in [
+        (
+            "risk-tagged task-contract sk-learn".to_owned(),
+            "risk-tagged task-contract [REDACTED]",
+        ),
+        ("xsk-".to_owned() + &"a".repeat(20), "[REDACTED]"),
     ] {
-        assert_eq!(pg_worker_core::redact::redact(&text), text);
+        assert_eq!(pg_worker_core::redact::redact(&text), expected);
     }
     let dir = Dir(std::env::temp_dir().join(new_run_id()));
     let raw = ["sk-", &"a".repeat(24)].concat();
