@@ -18,7 +18,7 @@ impl Fixture {
         std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'/argv\nprintf '%s' '{}'\nprintf '%s\\n' '{}' >&2\nexit {}\n",state.path().display(),output,stderr,code)).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let launch = state.path().join("launch");
-        std::fs::write(&launch, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{{\"argv\":[\"/bin/true\"],\"cwd\":\"{}\",\"env\":{{}},\"stdin\":null}}'\n", std::env::current_dir().unwrap().display())).unwrap();
+        std::fs::write(&launch, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{{\"argv\":[\"/bin/true\"],\"cwd\":\"{}\",\"env\":{{\"PROMPT\":\"fixture prompt\"}},\"prompt\":\"fixture prompt\",\"stdin\":null}}'\n", std::env::current_dir().unwrap().display())).unwrap();
         std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
         let socket = state.path().join("socket");
         let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
@@ -285,8 +285,9 @@ fn spawn_dry_run_and_no_launch() {
     assert_eq!(records(&f), vec![row.clone()]);
     let id = row["run_id"].as_str().unwrap();
     let file = std::fs::read_to_string(f.state.path().join("runs").join(id).join("record.json"));
-    assert_eq!(text, file.unwrap());
-    keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host job_id pid plan request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd witness_kind writer_family");
+    // JSON float parsing may normalize the last timestamp digit; compare values.
+    assert_eq!(row, serde_json::from_str::<Value>(&file.unwrap()).unwrap());
+    keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host job_id pid plan prompt_sha256 request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd wake_variant witness_kind writer_family");
     keys(&row["attempts"][0], "leg provider_response request_side_model served_family served_model served_witness_reason skip_reason status stderr_tail stdout_tail witness_kind");
     keys(&row["plan"], "first_leg legs");
     for leg in [

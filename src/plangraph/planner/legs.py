@@ -56,6 +56,7 @@ class Leg:
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     expires: str = ""
+    disabled: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -104,8 +105,9 @@ DEFAULT_LEGS = (
         "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
         180000, False, claude_family=True,
         note="console sonnet credits; listed by opencode models --standalone, not by the "
-             "background service list; writer only, never a seat",
-        roles=("implement",), expires="2026-11-30"),
+              "background service list; D-3901: disabled, never a seat",
+        roles=(), expires="2026-11-30",
+        disabled="D-3893 no Sonnet writers, kept per D-3828"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
@@ -137,10 +139,9 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-2683 operator writer order (free-first): the free tier leads, then
-# subscription.  agy-sonnet-5.5 is orchestrate-only and never a writer here.
+# D-3745: the lead writer precedes every tier; others retain D-2683 tier/order.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3666/D-3667: tuple head; tier-first sort (D-2683) keeps it behind the free tier
+    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
     "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free",
     "openrouter-free",
@@ -149,6 +150,7 @@ WRITER_ORDER: tuple[str, ...] = (
     "mimo-v2.6-flash",
     "opencode-console-sonnet-5.5",
 )
+LEAD_WRITER = "cx-gpt-6.1-sol"
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
@@ -158,7 +160,9 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def leg_active(leg: Leg, today: date | datetime | None = None) -> bool:
-    """True while ``leg`` may be routed: no ``expires``, or not past its UTC end of day."""
+    """True unless explicitly disabled or past ``expires`` at UTC end of day."""
+    if leg.disabled is not None:
+        return False
     if not leg.expires:
         return True
     current = today if today is not None else datetime.now(timezone.utc)
@@ -209,11 +213,15 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if isinstance(raw.get("tool_mode"), str) and raw["tool_mode"] not in TOOL_MODES:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
+    disabled = raw.get("disabled")
+    if disabled is not None and (not isinstance(disabled, str) or not disabled.strip()):
+        problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
-    if (not isinstance(roles, (list, tuple)) or not roles
+    if (not isinstance(roles, (list, tuple))
+            or (not roles and not (isinstance(disabled, str) and disabled.strip()))
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
-        problems.append(f"{where}.roles: must be a non-empty subset of implement|review|orchestrate")
+        problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES
