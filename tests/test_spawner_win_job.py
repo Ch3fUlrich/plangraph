@@ -2,6 +2,7 @@
 import asyncio
 
 import pytest
+from fake_pid import FAKE_PID
 
 
 class FakeWinJob:
@@ -23,7 +24,7 @@ class FakeWinJob:
 
 
 class FakeChild:
-    def __init__(self, pid=4242, hang=False):
+    def __init__(self, pid=FAKE_PID, hang=False):
         self.pid, self.returncode = pid, 0
         self._unblock = asyncio.Event() if hang else None
 
@@ -70,15 +71,15 @@ def test_win_job_assigned_on_launch_and_terminated_once_at_reap(monkeypatch, tim
     api = FakeWinJob()
     runner, job, killed = _run_nt(monkeypatch, api, FakeChild(hang=hang), timeout=timeout)
     assert job.exit_code == (124 if hang else 0)
-    assert api.calls == [('create_job', None), ('assign', 4242),
+    assert api.calls == [('create_job', None), ('assign', FAKE_PID),
                          ('terminate', 'job-handle'), ('close', 'job-handle')]
-    assert killed == [4242] and runner._win_jobs == {}  # taskkill fallback; job popped
+    assert killed == [FAKE_PID] and runner._win_jobs == {}  # taskkill fallback; job popped
 
 
 def test_win_job_assign_failure_refuses_run(monkeypatch):
     api = FakeWinJob(fail_assign=True)
     runner, job, killed = _run_nt(monkeypatch, api, FakeChild())
-    assert job.status == 'failed' and job.survivors == [4242]   # fail closed: no unguarded run
+    assert job.status == 'failed' and job.survivors == [FAKE_PID]   # fail closed: no unguarded run
     assert {'event': 'win_job_unavailable'} in job.events   # r3 (V2 LOW): exact event restored
     assert [c[0] for c in api.calls] == ['create_job', 'assign', 'close']  # handle released
     assert killed == [] and runner._win_jobs == {}
@@ -95,7 +96,7 @@ def test_win_job_close_runs_when_terminate_raises(monkeypatch):
     runner, job, killed = _run_nt(monkeypatch, api, FakeChild())
     assert ('close', 'job-handle') in api.calls  # handle never leaks
     assert {'event': 'reap_failed', 'error': 'OSError'} in job.events
-    assert killed == [4242] and runner._win_jobs == {}
+    assert killed == [FAKE_PID] and runner._win_jobs == {}
 
 
 def test_win_job_api_constructor_failure_refuses_run(monkeypatch):
@@ -105,6 +106,6 @@ def test_win_job_api_constructor_failure_refuses_run(monkeypatch):
         raise OSError('kernel32 unavailable')
     monkeypatch.setattr(runner_mod, 'WinJobApi', no_kernel32)
     runner, job, killed = _run_nt(monkeypatch, None, FakeChild())
-    assert job.status == 'failed' and job.survivors == [4242]
+    assert job.status == 'failed' and job.survivors == [FAKE_PID]
     assert {'event': 'win_job_unavailable'} in job.events   # r3 (V2 LOW): exact event restored
     assert killed == [] and runner._win_jobs == {}

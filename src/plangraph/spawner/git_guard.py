@@ -48,7 +48,7 @@ def init_guard(work_dir):
         return None
     try:
         result = subprocess.run(['git', '-C', str(work_dir), 'rev-parse', '--git-common-dir'],
-                                capture_output=True, text=True, check=True)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
         path = (Path(work_dir) / result.stdout.strip()).resolve() / 'config'
         baseline = None
         # Close before git opens it, including on Windows.

@@ -1,0 +1,1 @@
+- **SPAWNER-MODEL-REFUSAL-RECORD:** Record Claude classifier refusals as terminal model_refusal failures, retaining output without rerouting or booking a leg limit.

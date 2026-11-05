@@ -6,15 +6,15 @@
     "must_not": ["two agents on one task", "lock the file", "take turns on the same file"]
   },
   {
-    "id": "plangraph-planning-2",
-    "prompt": "What must a task contract look like for the phase agent to accept a planned task as valid?",
-    "must": ["one sentence, one outcome", "one command, pass = exit 0"],
-    "must_not": ["as many files as needed", "several acceptance commands", "no acceptance command"]
+    "id": "plangraph-planning-graph-first",
+    "prompt": "The operator asks you to plan an existing item whose text names design docs. What do you do before asking questions, and how do you resolve conflicting answers before research?",
+    "must": ["Read the plan graph first", "ask only what the plan leaves open", "one follow-up round on conflicts"],
+    "must_not": ["ask questions before reading the item", "ignore the named docs", "research before the question batch"]
   },
   {
-    "id": "plangraph-planning-3",
-    "prompt": "When must a task's execution card be created, and what path rules does the card follow?",
-    "must": ["in the same batch", "relative paths only"],
-    "must_not": ["write the card after", "cards come later", "edit files outside the card write set"]
+    "id": "plangraph-planning-brief-purpose-retry",
+    "prompt": "Write brief guidance for attempt 2 after attempt 1 ended check_fail in card-check. The work unlocks a dependent item. What context belongs in the brief, and how should the failed attempt be described?",
+    "must": ["why the work exists", "what it unblocks", "State retries as facts only"],
+    "must_not": ["blame the previous agent", "failure is not acceptable", "invent praise"]
   }
 ]
