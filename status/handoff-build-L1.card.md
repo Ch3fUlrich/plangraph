@@ -11,8 +11,8 @@
 - 11-05T13:45Z D-3772 - sol hang diagnosis stopped per D-3778, cause unknown, probe ok 13:26:47Z
 ## In flight
 - #377 free seat s377f3 gated since 13:40Z next check 14:15Z (J/r-s377f3.wait)
-- drift-mail r1 run-d394ea19c82b4133b3cdf677608b5b94 since 13:05Z next check 14:15Z
-- omniroute r7 orr7b.sh (sol) gated since 13:40Z next check 14:15Z; send run id to prox-L1-main (J/r-orr7s.json)
+- drift-mail r1 run-d394ea19c82b4133b3cdf677608b5b94 finished 13:45Z next check now: verify J/r-wdriftr1m.wait, push, seat
+- omniroute r7 run-ec9499f5468b44168bd8f20efd816d50 (sol) since 13:45Z next check 14:15Z; result J/r-orr7m.wait; id sent to prox
 ## Planned
 1. #377 HIGH refuted (D-3783); free seat result, agy gemini tests seat ~11-06T13:43Z (K/seat-377d3t.md)
 2. omniroute r7 run id to prox, then seats; any MED -> list to prox, stop; clean -> sha to prox
