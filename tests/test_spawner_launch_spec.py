@@ -109,7 +109,7 @@ def test_inline_only_review_without_diff_refused(request_data):
     # (only SpawnService.spawn with an explicit --leg sets document_review).
     request_data.update(role='review', leg={'id': 'mimo-v2.6-flash'})
     code, out, err = invoke(request_data)
-    assert code != 0 and out == ''
+    assert code == 2 and out == ''
     assert 'inline_diff_failed' in err
 
 
