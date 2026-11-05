@@ -16,6 +16,7 @@ pub mod exports;
 pub mod fleet_cap_resolver;
 pub mod fleet_owner_lease;
 pub mod fleet_owner_transition;
+pub mod fleet_recycle_retain;
 pub mod fleet_router_hysteresis;
 pub mod fleet_router_signals;
 pub mod fleet_seat_supply;
