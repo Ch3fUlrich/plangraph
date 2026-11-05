@@ -755,9 +755,10 @@ class SpawnerRunner:
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
+            await self._reap_process(job_id, proc)
             if job_id in self.jobs:
                 if self.jobs[job_id].status not in ('failed', 'stalled', 'timeout'):
-                    self.jobs[job_id].status = "cancelled"
+                    self.jobs[job_id].status = 'cancelled'
                     self.jobs[job_id].exit_code = 1
                 self.jobs[job_id].end_time = time.time()
         except Exception as exc:
@@ -840,26 +841,8 @@ class SpawnerRunner:
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a running job."""
-        if not isinstance(job_id, str):
-            from plangraph.routing_errors import ParameterRefused
-            raise ParameterRefused('job_id must be a string')
-        if job_id not in self.jobs:
-            raise KeyError(f"Job {job_id} not found")
-        job = self.jobs[job_id]
-        job.status, job.exit_code = "cancelled", 1   # Q14: before the reap, so the monitor keeps it
-
-        proc = self._processes.get(job_id)
-        if proc:
-            await self._reap_process(job_id, proc)
-
-        task = self._tasks.get(job_id)
-        if task and not task.done():
-            task.cancel()
-
-        self._nonces.pop(job_id, None)
-        job.end_time = time.time()
-        self._check_git_config_guard(job_id)   # only a dangerous config mutation turns it 'failed'
-        return {"job_id": job_id, "status": job.status}
+        from .cancel_job import cancel_job
+        return await cancel_job(self, job_id)
 
 
 def spawn_service(*args, **kwargs):
