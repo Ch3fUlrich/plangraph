@@ -131,7 +131,6 @@ HAND_EDIT_MAX_LINES = 50
 #: Default exempt file, REPO-RELATIVE so CI reads it from the base commit.
 DEFAULT_EXEMPT = 'tools/ci_commit_exempt.txt'
 
-
 class ExemptError(Exception):
     '''The exempt file is missing or malformed.'''
 
