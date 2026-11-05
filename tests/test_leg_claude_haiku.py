@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from plangraph.planner.legs import DEFAULT_LEGS, HARNESSES, load_legs
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support.clients import build_command, STDIN_PROMPT_HARNESSES
@@ -55,11 +57,15 @@ def test_argv_has_model_stdin_prompt_and_no_api_key():
     assert "claude" in STDIN_PROMPT_HARNESSES
 
 
-def test_review_seat_gets_pytest_only_and_no_plan_mode():
-    cmd = build_command("p", "claude-haiku-5-5", role="review", client="claude")
+@pytest.mark.parametrize("online", [True, False])
+def test_review_seat_gets_pytest_only_and_no_plan_mode(online):
+    cmd = build_command("p", "claude-haiku-5-5", role="review", client="claude", gateway_online=online)
     assert cmd[cmd.index("--permission-mode") + 1] == "default"
     tools = cmd[cmd.index("--allowedTools") + 1].split(",")
-    assert tools == ["Read", "Grep", "Glob", "Bash(python3 -m pytest:*)"]
+    assert tools == ["Read", "Grep", "Glob", "Bash(python3 -m pytest -q *)"]
+    denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
+    assert {"Write", "Edit", "Bash(python3 -m pytest -q -*)", "Bash(python3 -m pytest -q * -*)"} <= set(denied)
+    assert cmd[cmd.index("--setting-sources") + 1] == "user"   # the diff under review cannot widen its seat
     assert "bypassPermissions" not in cmd and "--dangerously-skip-permissions" not in cmd
 
 

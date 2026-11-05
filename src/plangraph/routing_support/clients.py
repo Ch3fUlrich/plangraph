@@ -15,6 +15,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
+from plangraph.routing_support.claude_seat import claude_access_args
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -323,9 +324,6 @@ def detect_client_for_model(model_id: str) -> str:
     return "opencode"
 
 
-CLAUDE_REVIEW_TOOLS = "Read,Grep,Glob,Bash(python3 -m pytest:*)"
-
-
 def build_standalone_fallback_command(
     client_name: str,
     prompt: str,
@@ -348,16 +346,8 @@ def build_standalone_fallback_command(
     if cname == "codex":
         return ["codex", "exec", *(["--model", model] if model else []), prompt]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
-        cmd = [cname, "-p", *([] if cname == "claude" else [prompt])]
-        if model:
-            cmd.extend(["--model", model])
-        if cname != "claude":
-            return cmd
-        # D-3835: plan mode has no Bash, so a review seat could not run the tests.
-        # Review only, and only pytest; every other role stays in plan mode.
-        access = (["--permission-mode", "default", "--allowedTools", CLAUDE_REVIEW_TOOLS]
-                  if role == "review" else ["--permission-mode", "plan"])
-        return cmd + ["--output-format", "stream-json", "--verbose", *access]
+        cmd = [cname, "-p", *([] if cname == "claude" else [prompt]), *(["--model", model] if model else [])]
+        return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role)] if cname == "claude" else [])
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run", "--standalone"]
