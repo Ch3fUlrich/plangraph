@@ -1,5 +1,9 @@
 import json
 import sys
+import subprocess
+from pathlib import Path
+
+import pytest
 
 from plangraph.spawner.remote_probe import poll
 
@@ -47,3 +51,34 @@ def test_polls(tmp_path, monkeypatch):
     once()
     assert [json.loads(s)['rule'] for s in output.read_text().splitlines()] == [
         'run-silent', 'host-unreachable', 'host-recovered']
+
+
+@pytest.mark.parametrize('raw', ['{', '[]', 'null', '{"fixture": {}}',
+                                  '{"fixture": null}'])
+def test_corrupt_state(tmp_path, monkeypatch, raw):
+    (tmp_path / 'remote-probe.json').write_text(raw)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, '{}'))
+    poll(['fixture'], 'notify', tmp_path)
+    assert json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['acks'] == []
+
+
+def test_outage_notify_retry(tmp_path, monkeypatch):
+    calls = []
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh' or not calls:
+            calls.append(argv[0]) if argv[0] != 'ssh' else None
+            raise subprocess.CalledProcessError(1, argv)
+        calls.append(argv[0])
+    monkeypatch.setattr(subprocess, 'run', run)
+    for _ in range(2):
+        poll(['fixture'], 'notify', tmp_path)
+    assert not json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['down']
+    poll(['fixture'], 'notify', tmp_path)
+    poll(['fixture'], 'notify', tmp_path)
+    assert calls == ['notify', 'notify']
+
+
+def test_known_crash_window_documented():
+    text = Path('docs/operations/spawner-remote-probes.md').read_text()
+    assert 'at-least-once, not exactly-once' in text
+    assert 'crash after the notify command' in text

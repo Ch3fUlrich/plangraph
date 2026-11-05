@@ -26,7 +26,7 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None):
             finding = probe_run(state, run, now)
             if finding:
                 findings.append(finding)
-                if deliver and finding['rule'] != 'unknown':
+                if deliver:
                     deliver(dict(finding, kind='completion'))
         parent = run.get('parent_session')
         ended = run.get('ended')

@@ -6,6 +6,14 @@ import pytest
 from plangraph.spawner import stall_watchdog as w
 
 
+def test_unknown_reaches_outbox(tmp_path):
+    findings = w.tick([dict(run_id='run-fixture')], [], lambda s: None,
+                      state=tmp_path, deliver=lambda e: w.deliver_event(tmp_path, e))
+    assert findings[0]['rule'] == 'unknown'
+    event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
+    assert event['rule'] == 'unknown' and 'cancelled' not in event
+
+
 @pytest.mark.parametrize('age', [301, 5400])
 def test_finished_child_redelivered_with_routing_alert(age):
     run = dict(run_id='run-abc', status='completed', ended=10000-age,
@@ -84,7 +92,7 @@ def test_tick_cli_persists_status_and_delivers_w12(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(w, 'flush_outbox', lambda state, command: original(
         state, command, run=lambda args, **kw: sent.append(json.loads(kw['input']))))
     assert w.main(['tick']) == 0
-    assert sorted(e['kind'] for e in sent) == ['alert', 'completion']
+    assert sorted(e['kind'] for e in sent) == ['alert', 'completion', 'completion']
     assert '! stall ' in (tmp_path / 'watchdog/status.txt').read_text()
     capsys.readouterr()
     w.main(['status'])

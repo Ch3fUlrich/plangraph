@@ -26,7 +26,9 @@ def poll(hosts, command, state):
     path = Path(state) / 'remote-probe.json'
     try:
         saved = json.loads(path.read_text())
-    except FileNotFoundError:
+        if not isinstance(saved, dict):
+            raise TypeError('invalid probe state')
+    except (FileNotFoundError, ValueError, TypeError):
         saved = {}
     def save():
         atomic_write_private(path, json.dumps(saved))
@@ -38,6 +40,14 @@ def poll(hosts, command, state):
             save()
     for host in hosts:
         entry = saved.setdefault(host, dict(failures=0, outage=0, down=False, seen=[], acks=[]))
+        try:
+            if (any(type(entry[k]) is not int or entry[k] < 0 for k in ('failures', 'outage'))
+                    or type(entry['down']) is not bool
+                    or any(not isinstance(entry[k], list) or any(not isinstance(v, str)
+                           for v in entry[k]) for k in ('seen', 'acks'))):
+                raise ValueError('invalid probe entry')
+        except (ValueError, TypeError, KeyError):
+            entry = saved[host] = dict(failures=0, outage=0, down=False, seen=[], acks=[])
         try:
             code = ('import json; from plangraph.spawner.remote_probe import exchange; '
                     'print(json.dumps(exchange(' + repr(entry['acks']) + ')))')
@@ -52,12 +62,12 @@ def poll(hosts, command, state):
         except (OSError, ValueError, subprocess.SubprocessError):
             entry['failures'] += 1
             if entry['failures'] >= 2:
-                if not entry['down']:
+                if not entry['down'] and entry['failures'] == 2:
                     entry['outage'] += 1
-                    entry['down'] = True
                 save()
                 try:
                     notify('down-' + str(entry['outage']), dict(rule='host-unreachable', host=host), entry)
+                    entry['down'] = True
                 except (OSError, subprocess.SubprocessError):
                     pass
             save()

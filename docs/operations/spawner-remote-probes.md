@@ -9,5 +9,7 @@ pulls durable findings over SSH. Repeat `--host` or set `PLANGRAPH_PROBE_HOSTS`;
 the notification command can use `PLANGRAPH_PROBE_NOTIFY_CMD`.
 Installation creates `plangraph-remote-probe.timer`, disabled by default;
 configure its environment and explicitly enable it on the polling host.
-Successful notifications are deduplicated across restarts; a crash between a
-command's side effect and receipt persistence can replay that notification.
+Notifications are at-least-once, not exactly-once: a crash after the notify command
+succeeds but before persisting `seen` can replay the finding after restart.
+Resetting corrupt probe state can also replay previously sent findings.
+Unknown evidence is delivered, never considered silent and never cancelled.
