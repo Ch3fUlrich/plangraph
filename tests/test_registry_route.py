@@ -176,6 +176,18 @@ def test_route_skips_paused_harness_per_role():
     assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
     assert writer.first_leg.id == "cx-gpt-6.1-sol"  # D-3745: eligible lead precedes free tier
+    # Sol also uses opencode: pausing that harness must exclude the lead,
+    # not merely leave a first-leg assertion that passes without filtering.
+    paused = plan_spawn(CARD, role="implement", policy=RoutePolicy(
+        paused_harnesses={"opencode": ("review",)}))
+    paused_ids = {leg.id for leg in DEFAULT_LEGS
+                  if leg.harness == "opencode" and "implement" in leg.roles}
+    assert paused_ids
+    assert paused_ids.isdisjoint({leg.id for leg in paused.legs})
+    reasons = {s["leg"]: s["reason"] for s in paused.skipped}
+    assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
+        paused_ids, "paused_harness")
+    assert paused.first_leg.id == "agy-gemini-3.8-flash"
 
 
 def test_explicit_policy_argument_wins():
