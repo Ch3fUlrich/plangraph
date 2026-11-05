@@ -179,7 +179,8 @@ def test_route_skips_paused_harness_per_role():
     # Sol also uses opencode: pausing that harness must exclude the lead,
     # not merely leave a first-leg assertion that passes without filtering.
     paused = plan_spawn(CARD, role="implement", policy=RoutePolicy(
-        paused_harnesses={"opencode": ("review",)}))
+        paused_harnesses={"opencode": ("review",)}),
+        leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
     paused_ids = {leg.id for leg in DEFAULT_LEGS
                   if leg.harness == "opencode" and "implement" in leg.roles}
     assert paused_ids

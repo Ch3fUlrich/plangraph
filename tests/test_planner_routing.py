@@ -364,6 +364,7 @@ def test_writer_order_sol_family_excluded():
 
 
 def test_writer_order_privacy_excludes_training_sol():
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol").trains_on_data is False
     # The default Sol is non-training. Exercise eligibility before lead sorting
     # with a training lead and a non-training free fallback explicitly.
     legs = tuple(dataclasses.replace(leg, trains_on_data=leg.id == "cx-gpt-6.1-sol")

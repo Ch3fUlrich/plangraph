@@ -148,7 +148,7 @@ WRITER_ORDER: tuple[str, ...] = (
     "mimo-v2.6-flash",
     "opencode-console-sonnet-5.5",
 )
-LEAD_WRITER = WRITER_ORDER[0]
+LEAD_WRITER = "cx-gpt-6.1-sol"
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
