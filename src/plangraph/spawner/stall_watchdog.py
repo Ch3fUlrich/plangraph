@@ -203,6 +203,10 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
 
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
+    from .private_io import atomic_write_private
+    health_path = Path(state) / 'watchdog/delivery.json'
+    health = dict(failures=0, last_error=None) | (_read_state(state, health_path) or {})
+    failed = False
     for path in sorted((Path(state) / 'watchdog/outbox').glob('*.json')):
         record = _read_state(state, path)
         if record is None:
@@ -210,8 +214,14 @@ def flush_outbox(state, command, *, run=subprocess.run):
         try:
             run(command, input=path.read_bytes(), check=True, timeout=20)
             path.unlink(missing_ok=True)
-        except (OSError, subprocess.SubprocessError):
-            continue
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            failed = True
+            health.update(failures=health['failures'] + 1, last_error=type(exc).__name__)
+    if not failed:
+        health.update(failures=0, last_error=None)
+    health_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    atomic_write_private(health_path, json.dumps(health))
+    return health
 
 def install(host, destination, *, python=None, root=None, run=subprocess.run, disabled=False):
     python = python or sys.executable
@@ -226,14 +236,31 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
             text = (templates / ('watchdog.' + name)).read_text()
             text = text.replace('@PYTHON@', python).replace('@ROOT@', str(root))
             (destination / ('plangraph-stall-watchdog.' + name)).write_text(text)
+        config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'plangraph/watchdog.env'
         (destination / 'plangraph-remote-probe.service').write_text(
             '[Service]\nType=oneshot\nWorkingDirectory=' + str(root) + '\nEnvironment=PYTHONPATH=src\n'
             'Environment="PLANGRAPH_PROBE_ROOT=' + str(root) + '"\n'
-            'EnvironmentFile=-%h/.config/plangraph/watchdog.env\n'
+            'EnvironmentFile=-"' + str(config) + '"\n'
             'ExecStart=' + python + ' -m plangraph.spawner.remote_probe\n')
         (destination / 'plangraph-remote-probe.timer').write_text(
             '[Timer]\nOnBootSec=2min\nOnUnitActiveSec=2min\n[Install]\nWantedBy=timers.target\n')
         run(['systemctl', '--user', 'daemon-reload'], check=True)
+        configured = {}
+        try:
+            for line in config.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith(('#', ';')) or '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                    value = value[1:-1]
+                configured[key.strip()] = value
+        except (OSError, UnicodeError):
+            pass
+        if not all(configured.get(k, '').strip()
+                   for k in ('PLANGRAPH_PROBE_HOSTS', 'PLANGRAPH_PROBE_NOTIFY_CMD')):
+            run(['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'], check=True)
         run(['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'], check=True)
     elif host == 'windows':
         text = (templates / 'watchdog.xml').read_text()
@@ -287,7 +314,7 @@ def main(argv=None):
                          deliver=deliver, dry_run=args.dry_run)
     except Exception as exc:
         if type(exc).__name__ in ('MissingKeeperURL', 'Unreachable'):
-            warning = type(exc).__name__  # keeper not configured/reachable: skip claim rule
+            warning = 'keeper skipped ' + type(exc).__name__  # keeper not configured/reachable: skip claim rule
         else:
             error = type(exc).__name__
     if args.dry_run:
@@ -302,17 +329,21 @@ def main(argv=None):
     command = os.environ.get('PLANGRAPH_WATCHDOG_DELIVERY')
     if command:
         try:
-            flush_outbox(state, json.loads(command))
+            health = flush_outbox(state, json.loads(command))
+            if health and health['failures']:
+                error = (error + '; ' if error else '') + 'delivery-' + health['last_error'] + ' failures=' + str(health['failures'])
         except Exception as exc:
-            error = 'delivery-' + type(exc).__name__
+            error = (error + '; ' if error else '') + 'delivery-' + type(exc).__name__
     pending = len(list((state / 'watchdog/outbox').glob('*.json')))
+    if not command and (pending or findings):
+        warning = (warning + '; ' if warning else '') + 'delivery-bridge-unconfigured'
     if command and pending:
         error = error or 'delivery-bridge-failed'
     text = status(findings)
     if not command:
         text += ('\n' if text else '') + f'outbox {pending}, no bridge'
     if warning:
-        text += ('\n' if text else '') + '! stall watchdog warning keeper skipped ' + warning
+        text += ('\n' if text else '') + '! stall watchdog warning ' + warning
     if error:
         text += ('\n' if text else '') + '! stall watchdog error ' + error
     from plangraph.spawner.private_io import atomic_write_private
