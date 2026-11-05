@@ -87,6 +87,31 @@ def _use_tmpfs_tempdir() -> None:
 
 _use_tmpfs_tempdir()
 
+
+@pytest.fixture(autouse=True)
+def hermetic_writer_env(monkeypatch):
+    """Writer identity/config must not override a test's own setup."""
+    for name in (
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "OPENCODE_DISABLE_CLAUDE_CODE",
+        "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def short_socket_dir():
+    """Bound Unix sockets avoid pytest's long per-test directory names."""
+    with tempfile.TemporaryDirectory(prefix="s-", dir=tempfile.gettempdir()) as directory:
+        path = Path(directory)
+        assert len(os.fsencode(path / "anchor.sock")) < 108
+        assert len(os.fsencode(path / "silent.sock")) < 108
+        yield path
+
 from plangraph.spawner import resolver as _resolver
 _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served_models)
 

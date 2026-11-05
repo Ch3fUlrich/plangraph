@@ -192,14 +192,14 @@ def test_verify_flags_mismatch_ahead_order_and_garbage(w, tmp_path):
 
 # ------------------------------------------------------------ socket mode
 @pytest.fixture
-def service(tmp_path, monkeypatch):
+def service(tmp_path, monkeypatch, short_socket_dir):
     """A temp Unix socket served by anchord.serve_one, as pganchor@.service would.
 
     The temp log belongs to the test user; production refuses that (see
     test_socket_mode_refuses_a_log_the_keeper_can_write), so the ownership check is
     neutralised here only."""
     monkeypatch.setattr(anchor, "_keeper_can_write", lambda path: False)
-    sock_path = str(tmp_path / "anchor.sock")
+    sock_path = str(short_socket_dir / "anchor.sock")
     log = tmp_path / "svc" / "anchor.log"
     log.parent.mkdir()
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -462,10 +462,10 @@ def test_reaper_anchors_under_the_server_lock_after_its_writes(tmp_path):
     assert first == ["reap", "snapshot", "tick"] and all(owned for _, owned in order[:3])
 
 
-def test_silent_service_times_out_quickly(tmp_path):
+def test_silent_service_times_out_quickly(tmp_path, short_socket_dir):
     """A service that accepts but never answers costs <= ~1 s under the lock, then raises."""
     import time as _t
-    path = str(tmp_path / "silent.sock")
+    path = str(short_socket_dir / "silent.sock")
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(path)
     srv.listen(1)
