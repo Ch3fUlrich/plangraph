@@ -3,10 +3,14 @@ mod cli;
 #[cfg(test)]
 mod error_tests;
 mod errors;
+mod jobs;
+mod launch;
 mod placement;
 mod pyjson;
 mod records;
+mod runs;
 mod serve;
+mod serve_options;
 mod shim;
 mod spawn;
 mod state;

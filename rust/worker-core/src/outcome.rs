@@ -1,5 +1,6 @@
 //! Pure classification of structured attempt facts; no caller integration yet.
 use crate::{activity::KillOutcome, hosts::Role, redact::redact, reset::Reset};
+pub mod markers;
 
 #[cfg(test)]
 mod tests;
