@@ -141,8 +141,9 @@ fn role_rule_precedes_adapter_and_dry_run() {
         .unwrap();
     assert!(
         output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -150,4 +151,91 @@ fn role_rule_precedes_adapter_and_dry_run() {
     let called = marker.exists();
     std::fs::remove_dir_all(&temp).unwrap();
     assert!(!called, "refusal must not invoke the adapter");
+}
+
+#[cfg(unix)]
+fn wired_adapter_case(invalid: bool) {
+    const CHILD: &str = "PG_LEG_REF_WIRED";
+    if std::env::var_os(CHILD).is_some() {
+        use pg_worker_core::run::{
+            group::Confinement,
+            supervise::Config,
+            supervisor::{Supervisor, SupervisorCfg},
+        };
+        let state = std::path::PathBuf::from(std::env::var_os("PG_LEG_REF_STATE").unwrap());
+        let a = args(
+            json!({"card":{"task":"test"}, "prompt":"test", "model":if invalid {"--bad"} else {"provider/model"}, "dry_run":true}),
+        );
+        let route = crate::placement::route(&state, &a);
+        let runs = crate::runs::Runs::new(std::sync::Arc::new(
+            Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: state.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        let spawn = crate::spawn::spawn(&state, &a, "local", &runs);
+        assert_eq!(route.is_err(), invalid);
+        assert_eq!(spawn.is_err(), invalid);
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let temp = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    std::fs::create_dir(&temp).unwrap();
+    let script = temp.join("adapter.sh");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$PG_LEG_REF_STATE/calls"
+case "$3" in
+catalog) printf '[{"id":"registered","model":"provider/model","roles":["implement"]}]';;
+route|spawn) printf '{}';;
+*) exit 9;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let name = if invalid {
+        "invalid_ref_never_calls_adapter_in_on"
+    } else {
+        "mcp_route_and_spawn_override_share_resolver"
+    };
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &format!("leg_ref::admission_tests::{name}")])
+        .env(CHILD, "1")
+        .env("PG_LEG_REF_STATE", &temp)
+        .env("PLANGRAPH_LEG_REF", "on")
+        .env("PG_SPAWND_ADAPTER", &script)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = std::fs::read_to_string(temp.join("calls")).unwrap_or_default();
+    if invalid {
+        assert!(calls.is_empty());
+    } else {
+        assert_eq!(calls.lines().filter(|l| l.ends_with("catalog")).count(), 1);
+        let route = calls.lines().find(|l| l.contains(" route ")).unwrap();
+        assert!(!route.contains("--leg"));
+        assert!(calls.lines().any(|l| l.contains(" spawn ")
+            && l.contains("--leg registered")
+            && l.contains("--dry-run")));
+    }
+    std::fs::remove_dir_all(temp).unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn mcp_route_and_spawn_override_share_resolver() {
+    wired_adapter_case(false);
+}
+#[cfg(unix)]
+#[test]
+fn invalid_ref_never_calls_adapter_in_on() {
+    wired_adapter_case(true);
 }

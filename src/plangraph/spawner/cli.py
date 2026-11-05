@@ -128,6 +128,7 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true',
                            help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
+    commands.add_parser('catalog')
     commands.add_parser('launch-spec')
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
@@ -140,6 +141,11 @@ def main(argv=None):
     for verb in ('result', 'status', 'cancel'):
         commands.add_parser(verb).add_argument('run_id')
     args = parser.parse_args(argv)
+    if args.verb == 'catalog':
+        from plangraph.routing_support.resolver import get_catalog_models
+        print(json.dumps([dict(id=row['id'], model=row.get('model', row['id']), roles=row.get('roles', []))
+                          for row in get_catalog_models()]))
+        return 0
     if args.verb == 'launch-spec':
         from . import launch_spec
         return launch_spec.main(sys.stdin.buffer, sys.stdout, sys.stderr)

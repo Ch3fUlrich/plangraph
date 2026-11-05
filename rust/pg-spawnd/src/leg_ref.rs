@@ -1,7 +1,7 @@
 //! Exact, role-aware references. Hints never select a route.
 use std::path::Path;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 pub(crate) struct LegRef {
     pub id: String,
     pub model: String,
@@ -115,7 +115,8 @@ pub(crate) fn mode(env: Option<&str>, path: &Path, role: &str) -> LegRefMode {
         "warn" | "shadow" => LegRefMode::Warn,
         "off" => LegRefMode::Off,
         _ => {
-            eprintln!("leg_ref: invalid switch; off");
+            static WARNING: std::sync::Once = std::sync::Once::new();
+            WARNING.call_once(|| eprintln!("leg_ref: invalid switch; off"));
             LegRefMode::Off
         }
     }
@@ -211,3 +212,72 @@ pub(crate) fn admit_ref(
 #[cfg(test)]
 #[path = "leg_ref_admission_tests.rs"]
 mod admission_tests;
+
+pub(crate) trait LegCatalog {
+    fn models(&mut self, state: &Path) -> Result<Vec<LegRef>, crate::errors::ToolError>;
+}
+#[derive(Default)]
+pub(crate) struct AdapterCatalog {
+    cached: Option<(std::path::PathBuf, std::time::Instant, Vec<LegRef>)>,
+}
+impl LegCatalog for AdapterCatalog {
+    fn models(&mut self, state: &Path) -> Result<Vec<LegRef>, crate::errors::ToolError> {
+        use std::time::{Duration, Instant};
+        if let Some((path, at, rows)) = &self.cached {
+            if path == state && at.elapsed() < Duration::from_secs(60) {
+                return Ok(rows.clone());
+            }
+        }
+        let (code, bytes, _) =
+            crate::adapter::Adapter(state).run(&["catalog".into()], Duration::from_secs(30))?;
+        let rows: Vec<LegRef> = serde_json::from_slice(&bytes)
+            .ok()
+            .filter(|_| code == 0)
+            .ok_or_else(|| crate::placement::parameter("catalog unavailable"))?;
+        self.cached = Some((state.into(), Instant::now(), rows.clone()));
+        Ok(rows)
+    }
+}
+pub(crate) fn admit(
+    state: &Path,
+    args: &crate::placement::Args,
+) -> Result<crate::placement::Args, crate::errors::ToolError> {
+    use std::sync::Mutex;
+    static CATALOG: Mutex<AdapterCatalog> = Mutex::new(AdapterCatalog { cached: None });
+    check_review_role(args)?;
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("implement");
+    let mode = mode(
+        std::env::var("PLANGRAPH_LEG_REF").ok().as_deref(),
+        &state.join("config.json"),
+        role,
+    );
+    let mut admitted = args.clone();
+    if mode != LegRefMode::Off && ["leg", "model"].iter().any(|k| args.contains_key(*k)) {
+        // Reject malformed refs before even invoking the catalog adapter.
+        let invalid = ["leg", "model"].iter().any(|k| {
+            args.get(*k).is_some_and(|v| {
+                v.as_str()
+                    .is_none_or(|r| resolve_leg(r, role, &[]) == Err(RefError::Invalid))
+            })
+        });
+        if invalid {
+            admit_ref(&mut admitted, &[], mode)?;
+        } else {
+            let rows = CATALOG
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .models(state);
+            match rows {
+                Ok(rows) => admit_ref(&mut admitted, &rows, mode)?,
+                Err(_) if mode == LegRefMode::Warn => {
+                    eprintln!("leg_ref: catalog unavailable (observation only)")
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(admitted)
+}

@@ -124,6 +124,35 @@ pub(crate) fn spawn(
     host: &str,
     runs: &crate::runs::Runs,
 ) -> Result<Value, ToolError> {
+    let admitted = crate::leg_ref::admit(state, args)?;
+    let canonical_override = admitted
+        .get("leg")
+        .filter(|_| admitted != *args || !args.contains_key("model"));
+    // Only On can activate the Python override; Off/Warn retain the local path.
+    let enabled = crate::leg_ref::mode(
+        std::env::var("PLANGRAPH_LEG_REF").ok().as_deref(),
+        &state.join("config.json"),
+        args.get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("implement"),
+    ) == crate::leg_ref::LegRefMode::On;
+    if enabled && canonical_override.is_some() {
+        validate(&admitted)?;
+        let mut argv = placement::route_args(&admitted)?;
+        argv[0] = "spawn".into();
+        argv.extend(["--leg".into(), admitted["leg"].as_str().unwrap().into()]);
+        argv.extend(["--".into(), admitted["prompt"].as_str().unwrap().into()]);
+        if admitted.get("dry_run") == Some(&json!(true)) {
+            argv.insert(1, "--dry-run".into());
+        }
+        return serde_json::from_str(&placement::run(
+            state,
+            argv,
+            std::time::Duration::from_secs(30),
+            false,
+        )?)
+        .map_err(|_| ToolError::Internal("spawn adapter returned invalid output".into()));
+    }
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     if let Err(error) = validate(args) {
         record_validation_error(state, host, role, &error)?;
