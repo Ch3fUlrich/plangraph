@@ -31,7 +31,11 @@ __all__ = ["SERVER_ENV_VAR", "DEFAULT_MODEL", "DEFAULT_TIMEOUT",
 SERVER_ENV_VAR = "PLANGRAPH_OPENCODE_SERVER_URL"
 DEFAULT_MODEL = "opencode/deepseek-v3"
 DEFAULT_TIMEOUT = 900
-_RATE_LIMIT = re.compile(RATE_LIMIT_PATTERN + r"|usage limit", re.I)
+_RATE_LIMIT = re.compile(RATE_LIMIT_PATTERN, re.I)
+# Keep the standalone review leg independent of the spawner package.
+_USAGE_LIMIT = re.compile(
+    r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
+    r'(?:reached|exceeded)\s*[.!]?(?:\s*\(reset after \d[^\n]*\))?\s*$', re.I)
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -42,7 +46,8 @@ def _utc_now() -> str:
 
 def is_rate_limited(text: str | None) -> bool:
     """True when text names a rate limit or an HTTP/status 429 (not a bare 429)."""
-    return bool(_RATE_LIMIT.search(text or ""))
+    return bool(_RATE_LIMIT.search(text or "") or any(
+        _USAGE_LIMIT.fullmatch(line) for line in (text or "").splitlines()))
 
 
 def check_inputs(model: str, server_url: str | None) -> None:

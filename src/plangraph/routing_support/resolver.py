@@ -195,18 +195,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "combos": ["l2-worker", "l3-driver"],
     },
     {
-        "id": "opencode-go/glm-5.2",
-        "family": "glm",
-        "aa_intelligence": 45.1,
-        "verified_tok_per_s": 90.0,
-        "cost_per_task_usd": 0.35,
-        "pool_burn_weight": 1.0,
-        "tier": "subscription",
-        "available": 1,
-        "context_window": 128000,
-        "combos": ["l2-worker", "l2-reviewer"],
-    },
-    {
         "id": "agy/gemini-3.8-flash-tiered-high",
         "family": "gemini",
         "aa_intelligence": 41.0,

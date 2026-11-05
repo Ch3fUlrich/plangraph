@@ -2,6 +2,7 @@ import asyncio
 import os
 import sqlite3
 import subprocess
+import pytest
 from types import SimpleNamespace
 
 from plangraph.spawner.env_redact import first_reason, harness_limit_line, unavailable_reason
@@ -196,22 +197,43 @@ def test_model_unavailable_marks_the_leg_unavailable_d3676(tmp_path, monkeypatch
     assert resolver.is_model_available(row, LegStateStore(tmp_path / 'fresh.sqlite').leg_status) is True
 
 
-def test_usage_limit_prose_never_marks_a_leg_d3257(tmp_path, monkeypatch):
-    # D-3257: the usage-limit family counts only on an error-shaped line or
-    # start-anchored (same rule as the reset-after suffix); prose never marks
-    # a leg, whatever stream it arrives on.
-    assert harness_limit_line(1, '', 'the usage limit docs') is None
-    assert harness_limit_line(1, 'the usage limit docs', '') is None
+@pytest.mark.parametrize('prose', [
+    'the usage limit docs',
+    'Usage limit reached for docs...',
+    'Free usage limit tiers are described here',
+    'Error: see usage limit docs',
+    'Error: usage limit test case passed',
+])
+def test_usage_limit_prose_never_marks_a_leg_d3257(tmp_path, monkeypatch, prose):
+    from plangraph.spawner.env_redact import early_refusal
+    from plangraph.review.opencode import is_rate_limited
+    assert harness_limit_line(1, '', prose) is None
+    assert harness_limit_line(1, prose, '') is None
+    assert early_refusal(prose) is None
+    assert not is_rate_limited(prose)
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
     monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1_700_000_000.0)
     store = LegStateStore(tmp_path / 'legs.sqlite')
-    job = SimpleNamespace(exit_code=1, stdout='', stderr='the usage limit docs')
+    job = SimpleNamespace(exit_code=1, stdout='', stderr=prose)
     record = {}
     reason = fallthrough_reason(SimpleNamespace(leg_reader=store),
                                 SimpleNamespace(model='qwen3.8-max'), job, record)
     assert reason is None
     assert record == {}
     assert store.leg_status('qwen3.8-max')['state'] != 'limited'
+
+
+@pytest.mark.parametrize('line', ['Error: Go usage limit exceeded',
+                                 'Free usage limit reached', 'usage limit reached'])
+def test_review_usage_limit_refusals(line):
+    from plangraph.review.opencode import is_rate_limited
+    assert is_rate_limited(line)
+
+
+def test_resolver_does_not_add_glm_to_implement_fallback():
+    from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
+    glm = next(row for row in DEFAULT_FALLBACK_MODELS if row['id'] == 'opencode-go/glm-5.2')
+    assert glm['combos'] == []  # Registry admission is not an implement fallback.
 
 
 def test_orphan_check_never_signals_on_windows(tmp_path, monkeypatch):
