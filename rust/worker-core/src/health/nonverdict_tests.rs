@@ -79,6 +79,7 @@ fn scope_and_observations() {
         r.leg_key = "sibling".into();
         // Class metadata does not widen the fold's explicit scope.
         assert_eq!(health(&[r.clone()], 1), Health::default());
+        r.leg_key = "leg".into();
         r.route_key = "elsewhere".into();
         assert_eq!(health(&[r], 1), Health::default());
     }
@@ -154,15 +155,59 @@ fn duplicates_use_stable_tuple_order() {
     let a = row(Class::RateLimit, 1);
     let mut b = row(Class::Ok, 0);
     b.run_id = a.run_id.clone();
-    let expected = health(&[a.clone()], 2);
+    let expected = health(std::slice::from_ref(&a), 2);
     assert_eq!(health(&[a.clone(), b.clone()], 2), expected);
     assert_eq!(health(&[b, a], 2), expected);
+}
+
+#[test]
+fn dedupe_preserves_other_roles() {
+    let a = row(Class::RateLimit, 1);
+    let mut b = a.clone();
+    b.role = Role::Implement;
+    b.ts = 2;
+    b.outcome = Class::Ok;
+    let expected = health(std::slice::from_ref(&a), 2);
+    assert_eq!(health(&[a.clone(), b.clone()], 2), expected);
+    assert_eq!(health(&[b, a], 2), expected);
+}
+
+#[test]
+fn incidents_reopen_while_open() {
+    let rows = [row(Class::Empty, 1), row(Class::Empty, 2)];
+    let initial = health(&rows, 2);
+    assert_eq!(
+        (initial.state, initial.n, initial.strikes),
+        (State::Open, 1, 2)
+    );
+    assert_eq!(initial.until_s, Some(302));
+    let rows = [rows[0].clone(), rows[1].clone(), row(Class::Empty, 3)];
+    let reopened = health(&rows, 3);
+    assert_eq!(
+        (reopened.state, reopened.n, reopened.strikes),
+        (State::Open, 2, 3)
+    );
+    assert_eq!(reopened.until_s, Some(603));
+}
+
+#[test]
+fn quota_observations_reopen_with_backoff_not_midnight() {
+    let mut rows = vec![row(Class::Quota, 1)];
+    assert_eq!(health(&rows, 1).until_s, Some(86400));
+    for ts in [86400, 86460, 86520] {
+        let mut observation = row(Class::NoVerdict, ts);
+        observation.kind = Some("observation".into());
+        rows.push(observation);
+    }
+    let h = health(&rows, 86520);
+    assert_eq!((h.state, h.n, h.non_verdict_count), (State::Open, 2, 0));
+    assert_eq!(h.until_s, Some(87120));
 }
 
 fn assert_open_with_until(class: Class, rows: &[Row], now_s: i64) {
     let h = health(rows, now_s);
     assert_eq!(h.state, State::Open, "{class:?}");
-    assert!(h.state != State::Open || h.until_s.is_some(), "{class:?}");
+    assert!(h.until_s.is_some(), "{class:?}");
     assert_eq!(
         health(rows, now_s + 3 * 86400).until_s,
         h.until_s,

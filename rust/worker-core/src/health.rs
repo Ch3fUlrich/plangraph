@@ -177,6 +177,7 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
 }
 
 /// Fold one leg and route. Times are integral Unix seconds supplied by the caller.
+/// Routes are fanned out by the caller; `fold` sees one route.
 /// Only the requested leg, route and role contribute, for successes and failures alike.
 /// Duplicate attempts keep the greatest (timestamp, class, duration) tuple;
 /// Observations bypass attempt dedupe and incident merging.
