@@ -17,11 +17,17 @@ import time
 from xml.sax.saxutils import escape
 
 
-def tick(runs, claims, activity, *, now=None, deliver=None):
+def tick(runs, claims, activity, *, now=None, deliver=None, state=None):
     now = time.time() if now is None else now
     findings = []
     runs = list(runs)
     for run in runs:
+        if state is not None:
+            finding = probe_run(state, run, now)
+            if finding:
+                findings.append(finding)
+                if deliver and finding['rule'] != 'unknown':
+                    deliver(dict(finding, kind='completion'))
         parent = run.get('parent_session')
         ended = run.get('ended')
         if not parent or ended is None or run.get('status') in ('running', 'queued'):
@@ -67,6 +73,54 @@ def tick(runs, claims, activity, *, now=None, deliver=None):
     return findings
 
 
+def probe_run(state, record, now):
+    """Independent host sampling; missing evidence never authorizes cancellation."""
+    import asyncio
+    import math
+    from .private_io import atomic_write_private
+    directory = Path(state) / 'runs' / record['run_id']
+    event = dict(run_id=record['run_id'], leg=record.get('leg'), role=record.get('role'),
+                 age=None, seconds_silent=None, last_line='', rule='unknown')
+    try:
+        log = directory / 'live.log'
+        with log.open(encoding='utf-8') as stream:
+            stream.seek(max(0, log.stat().st_size - 4096))
+            lines = stream.read().splitlines()
+        silent = max(0, now - log.stat().st_mtime)
+        limit = float(record.get('card', {}).get('stall_min', 12)) * 60
+        if not math.isfinite(limit) or limit <= 0:
+            return event
+        event.update(age=max(0, now - record['started']), seconds_silent=silent,
+                     last_line=lines[-1][:200] if lines else '')
+        if record.get('status') == 'running':
+            pid = record.get('pid')
+            if not isinstance(pid, int) or pid <= 0 or os.name == 'nt':
+                return event
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                event['rule'] = 'run-orphan'
+                record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
+                atomic_write_private(directory / 'record.json', json.dumps(record))
+                return event
+            if silent < limit:
+                return None
+            event['rule'] = 'run-silent'
+            if silent >= 2 * limit:
+                from .runner import spawn_service
+                result = asyncio.run(spawn_service(state=state).cancel(record['run_id']))
+                event['cancelled'] = result.get('status') == 'cancelled'
+            return event
+        message = str(record.get('final_message', '')) + ' ' + event['last_line']
+        if record.get('role') == 'implement' and (record.get('reason') == 'writer_no_changes'
+                or 'running in the background' in message.lower()):
+            event['rule'] = 'run-ended-no-commit'
+            return event
+        return None
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+        return event
+
+
 def status(findings):
     return '\n'.join('! stall ' + json.dumps(f, sort_keys=True) for f in findings)
 
@@ -89,6 +143,7 @@ def read_runs(state):
             runs.append(record)
         except (OSError, ValueError, UnicodeError) as exc:
             bad.append(dict(path=str(path), error=type(exc).__name__))
+            runs.append(dict(run_id=path.parent.name, rule='unknown'))
     if bad:
         atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
     return runs
@@ -205,6 +260,11 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
             text = (templates / ('watchdog.' + name)).read_text()
             text = text.replace('@PYTHON@', python).replace('@ROOT@', str(root))
             (destination / ('plangraph-stall-watchdog.' + name)).write_text(text)
+        (destination / 'plangraph-remote-probe.service').write_text(
+            '[Service]\nType=oneshot\nWorkingDirectory=' + str(root) + '\nEnvironment=PYTHONPATH=src\n'
+            'ExecStart=' + python + ' -m plangraph.spawner.remote_probe\n')
+        (destination / 'plangraph-remote-probe.timer').write_text(
+            '[Timer]\nOnBootSec=2min\nOnUnitActiveSec=2min\n[Install]\nWantedBy=timers.target\n')
         run(['systemctl', '--user', 'daemon-reload'], check=True)
         run(['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'], check=True)
     elif host == 'windows':
@@ -245,7 +305,7 @@ def main(argv=None):
     spawn_service(state=state).retry_completions()
     runs = read_runs(state)
     findings = tick(runs, [], lambda s: read_activity(state, s),
-                    deliver=lambda e: deliver_event(state, e))
+                    deliver=lambda e: deliver_event(state, e), state=state)
     error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],

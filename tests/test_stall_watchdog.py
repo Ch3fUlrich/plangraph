@@ -128,3 +128,45 @@ def test_real_spawn_record_parent_and_item_come_from_completion(tmp_path):
     [run] = w.read_runs(tmp_path)
     assert (run["parent_session"], run["item_key"]) == ("build-L1", "plangraph:STALL-WATCHDOG")
     assert w.tick([run], [], lambda s: 1, now=run["ended"] + 400)[0]["rule"] == "finished-child"
+def test_host_run_probes(tmp_path, monkeypatch):
+    import os
+    from plangraph.spawner.stall_watchdog import tick
+    from plangraph.spawner import runner
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    log = directory / 'live.log'
+    log.write_text('work\n')
+    record = dict(run_id='run-fixture', status='running', pid=os.getpid(),
+                  started=0, role='implement', leg='fixture', card={'stall_min': 1})
+    cancelled = []
+    class Service:
+        async def cancel(self, run_id):
+            cancelled.append(run_id)
+            return {'status': 'cancelled'}
+    monkeypatch.setattr(runner, 'spawn_service', lambda **kw: Service())
+    def check(now):
+        return tick([record], [], lambda _: None, now=now, state=tmp_path)
+    os.utime(log, (100, 100))
+    assert check(159) == []
+    assert check(160)[0]['rule'] == 'run-silent'
+    assert not cancelled
+    assert check(220)[0]['cancelled']
+    assert cancelled == ['run-fixture']
+    os.utime(log, (220, 220))
+    assert check(221) == []
+    log.unlink()
+    assert check(500)[0]['rule'] == 'unknown'
+    assert len(cancelled) == 1
+    log.write_text('the retry is running in the background\n')
+    record.update(status='completed', ended=230)
+    assert check(500)[0]['rule'] == 'run-ended-no-commit'
+    record.update(reason='writer_no_changes')
+    log.write_text('done\n')
+    assert check(500)[0]['rule'] == 'run-ended-no-commit'
+    record.update(status='running')
+    def gone(*args):
+        raise ProcessLookupError()
+    monkeypatch.setattr(os, 'kill', gone)
+    assert check(500)[0]['rule'] == 'run-orphan'
+    import json
+    assert json.loads((directory / 'record.json').read_text())['reason'] == 'orphaned'
