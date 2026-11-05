@@ -48,19 +48,20 @@ def _gate(refused):
 def test_late_limit_line_books_after_silence_and_activity_cancels_it():
     refused = asyncio.Event()
     gate = _gate(refused)
-    gate.late_candidate(COOLDOWN, 100)
+    gate.scan_late([COOLDOWN + '\n'], 100)
     gate.poll(100 + LATE_QUIET_S - 1)
     assert not refused.is_set()
     gate.activity(100 + LATE_QUIET_S - 1)
     gate.poll(100 + 2 * LATE_QUIET_S)
     assert not refused.is_set()
-    gate.late_candidate(COOLDOWN, 100)
+    gate.scan_late([COOLDOWN + '\n'], 100)
     gate.poll(100 + LATE_QUIET_S)
     assert refused.is_set() and gate.job.refusal == COOLDOWN
 
 
 def test_hung_child_after_a_late_limit_line_ends_failed_with_the_line(tmp_path, monkeypatch):
     monkeypatch.setattr('plangraph.spawner.run_watchdog.REFUSAL_WINDOW_S', 0)
+    monkeypatch.setattr('plangraph.spawner.run_refusal.REFUSAL_WINDOW_S', 0)
     monkeypatch.setattr('plangraph.spawner.run_refusal.LATE_QUIET_S', .2)
     script = f"import time; print({COOLDOWN!r}, flush=True); time.sleep(60)"
     async def run():

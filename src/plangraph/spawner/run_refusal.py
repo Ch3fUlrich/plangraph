@@ -19,9 +19,12 @@ class RefusalGate:
         if not self.refused.is_set():
             self.pending = (text, now)
 
-    def late_candidate(self, text, now):
-        if not self.refused.is_set():
-            self.late = (text, now)
+    def scan_late(self, lines, now):
+        """REMOVE-AT-R10 (D-3769): past the window, an upstream limit line ends the run unless output resumes."""
+        from .env_redact import early_refusal
+        line = not self.refused.is_set() and now - self.job.start_time >= REFUSAL_WINDOW_S and early_refusal(''.join(lines))
+        if line:
+            self.late = (line, now)
 
     def activity(self, now):
         self.pending = self.late = None   # called only for activity lines after the candidate line

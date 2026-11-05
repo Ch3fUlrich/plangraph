@@ -40,8 +40,7 @@ def thresholds(card=None):
     from plangraph.planner.routing import SpawnRefused
     card = card or {}
     result = {}
-    # REMOVE-AT-R10 (D-3769): first_edit_min was 45, so a hung leg sat 'running' with no output for 45 min.
-    for key, default in [('stall_min', 20), ('first_edit_min', 15), ('max_min', 90)]:
+    for key, default in [('stall_min', 20), ('first_edit_min', 15), ('max_min', 90)]:   # REMOVE-AT-R10 (D-3769): first_edit_min was 45
         value = card.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
@@ -271,10 +270,7 @@ async def collect(runner, job_id, proc):
             found = candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S and early_refusal(''.join(candidates))
             if found or active:   # F2: a refusal is booked only after a quiet period; later activity cancels it
                 (gate.candidate(found, time.time()) if found else gate.activity(time.time()))
-            # REMOVE-AT-R10 (D-3769): an upstream limit past the window ends the run unless output resumes.
-            late = not found and not refused.is_set() and time.time() - job.start_time >= REFUSAL_WINDOW_S and early_refusal(''.join(lines))
-            if late:
-                gate.late_candidate(late, time.time())
+            gate.scan_late(lines, time.time())   # REMOVE-AT-R10 (D-3769)
             if active:
                 job.last_activity_ts = time.time()
             scrubbed = scrub(text)      # once per chunk: linear (Q4/M3)
