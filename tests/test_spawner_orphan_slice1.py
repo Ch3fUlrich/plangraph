@@ -46,6 +46,94 @@ def test_unmocked_cancel_leaves_no_live_descendant(tmp_path):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize('status,code,survivors', [('completed', 0, []), ('running', None, [123])])
+def test_cancel_publication_preserves_terminal_and_guards_survivors(status, code, survivors):
+    async def run():
+        runner = SpawnerRunner()
+        job = SimpleNamespace(status=status, exit_code=code, survivors=survivors, events=[])
+        runner.jobs['j'] = job
+        result = await runner.cancel('j')
+        assert result['status'] == ('failed' if survivors else status)
+        assert job.exit_code == (1 if survivors else code)
+        if survivors:
+            assert job.events[-1]['event'] == 'kill_incomplete'
+    asyncio.run(run())
+
+
+def test_real_reaper_publishes_survivors_as_failed():
+    async def run():
+        from plangraph.spawner.reap import reap
+        runner = SpawnerRunner()
+        job = SimpleNamespace(status='running', exit_code=None, survivors=[], events=[])
+        runner.jobs['j'] = job
+        await reap(runner, 'j', SimpleNamespace(pid=os.getpid()))
+        assert job.status == 'failed' and job.exit_code == 1
+        assert os.getpid() in job.survivors
+        assert job.events[-1]['event'] == 'kill_incomplete'
+    asyncio.run(run())
+
+
+def test_probe_cleanup_reaches_later_jobs_after_error(tmp_path):
+    async def run():
+        from plangraph.spawner.probe_cleanup import cleanup
+        jobs = {k: SimpleNamespace(job_id=k, cwd=str(tmp_path), survivors=[]) for k in ('a', 'b', 'foreign')}
+        called = []
+        async def cancel(jid):
+            called.append(jid)
+            if jid == 'a':
+                raise RuntimeError('first cancel failed')
+        runner = SimpleNamespace(jobs=jobs, cancel=cancel)
+        with pytest.raises(RuntimeError, match='directory retained'):
+            await cleanup(runner, None, jobs['a'], str(tmp_path), {'a', 'b'})
+        assert called == ['a', 'b']
+        assert tmp_path.exists()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('blocked', ['spawn', 'cancel', 'monitor'])
+def test_probe_cleanup_timeout_is_bounded_and_retains_dir(tmp_path, monkeypatch, blocked):
+    async def run():
+        from plangraph.spawner import probe_cleanup
+        monkeypatch.setattr(probe_cleanup, 'WAIT_S', .01, raising=False)
+        job = SimpleNamespace(job_id='j', survivors=[])
+        pending = asyncio.create_task(asyncio.Event().wait())
+        async def cancel(jid):
+            if blocked == 'cancel':
+                await asyncio.Event().wait()
+        runner = SimpleNamespace(jobs={'j': job}, cancel=cancel,
+                                 _tasks={'j': pending} if blocked == 'monitor' else {})
+        try:
+            with pytest.raises(RuntimeError, match='directory retained'):
+                await asyncio.wait_for(probe_cleanup.cleanup(
+                    runner, pending if blocked == 'spawn' else None,
+                    None if blocked == 'spawn' else job, str(tmp_path)), .3)
+            assert tmp_path.exists()
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+    asyncio.run(run())
+
+
+def test_probe_cleanup_does_not_claim_same_cwd(tmp_path):
+    async def run():
+        from plangraph.spawner.probe_cleanup import cleanup
+        async def cancel(jid):
+            pytest.fail('unowned job cancelled')
+        runner = SimpleNamespace(jobs={'other': SimpleNamespace(job_id='other', cwd=str(tmp_path))}, cancel=cancel)
+        await cleanup(runner, None, None, str(tmp_path))
+        assert not tmp_path.exists()
+    asyncio.run(run())
+
+
+def test_cancel_recorded_preserves_completed(tmp_path):
+    async def run():
+        service = SpawnService(SpawnerRunner(), tmp_path)
+        service._save(dict(run_id='run-finished', status='completed', exit_code=0))
+        out = await service.cancel('run-finished')
+        assert out['status'] == 'completed' and out['exit_code'] == 0
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('cross_process', [False, True])
 def test_unmocked_survivor_never_publishes_cancelled(tmp_path, cross_process):
     async def run():

@@ -136,6 +136,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
     job = None
     spawn_task = None
+    owned_ids = set()
 
     def git(*args):
         return subprocess.check_output(['git', '-C', root, *args], env=probe_env(),
@@ -161,6 +162,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             ok, reason, infra = False, 'probe infra: git', True
         if ok is None:
             async def launch():
+                from .probe_cleanup import OWNED
+                OWNED.set(owned_ids)
                 return await runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model,
                                          client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
                                          watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
@@ -200,7 +203,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
         return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start)
     finally:
         from .probe_cleanup import cleanup
-        cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root))
+        cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))
         # A second caller cancellation must not interrupt tree cleanup.
         while not cleanup_task.done():
             try:

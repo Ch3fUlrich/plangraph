@@ -7,6 +7,8 @@ from .private_io import SAVE_READ_ATTEMPTS
 
 async def cancel_recorded(service, run_id):
     record = service.result(run_id, attempts=SAVE_READ_ATTEMPTS)
+    if record['status'] != 'running':
+        return record
     survivors = []
     if record.get('job_id') in service.runner.jobs:
         await service.runner.cancel(record['job_id'])

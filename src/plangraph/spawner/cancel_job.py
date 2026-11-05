@@ -3,6 +3,15 @@ import asyncio
 import time
 
 
+def publish_cancel(job):
+    if job.survivors:
+        job.status, job.exit_code = 'failed', job.exit_code or 1
+        if not any(e['event'] == 'kill_incomplete' for e in job.events):
+            job.events.append(dict(event='kill_incomplete', survivors=list(job.survivors)))
+    elif job.status == 'running':
+        job.status, job.exit_code = 'cancelled', 1
+
+
 async def cancel_job(runner, job_id):
     if not isinstance(job_id, str):
         from plangraph.routing_errors import ParameterRefused
@@ -18,8 +27,7 @@ async def cancel_job(runner, job_id):
     proc = runner._processes.get(job_id)
     if proc:
         await runner._reap_process(job_id, proc)
-    if not job.survivors and job.status not in ('failed', 'stalled', 'timeout'):
-        job.status, job.exit_code = 'cancelled', 1
+    publish_cancel(job)
     runner._nonces.pop(job_id, None)
     job.end_time = time.time()
     runner._check_git_config_guard(job_id)

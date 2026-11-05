@@ -497,7 +497,8 @@ class SpawnerRunner:
                 dry_run=False,
                 cwd=work_dir,
             )
-            self.jobs[job_id] = job
+            from .probe_cleanup import register
+            self.jobs[job_id] = job; register(job_id)
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds()
             job._live_log = live_log
@@ -664,7 +665,6 @@ class SpawnerRunner:
         if job_id in reaped:
             return
         reaped.add(job_id)
-        job = self.jobs.get(job_id)
         await reap(self, job_id, proc)
 
     async def _monitor_process(
@@ -757,9 +757,7 @@ class SpawnerRunner:
         except asyncio.CancelledError:
             await self._reap_process(job_id, proc)
             if job_id in self.jobs:
-                if self.jobs[job_id].status not in ('failed', 'stalled', 'timeout'):
-                    self.jobs[job_id].status = 'cancelled'
-                    self.jobs[job_id].exit_code = 1
+                from .cancel_job import publish_cancel; publish_cancel(self.jobs[job_id])
                 self.jobs[job_id].end_time = time.time()
         except Exception as exc:
             job = self.jobs[job_id]
@@ -1054,8 +1052,8 @@ def spawn_service(*args, **kwargs):
                         task = self.runner._tasks.get(job.job_id)
                         if task:
                             await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
-                            if task.cancelled() and job.status not in ('stalled', 'timeout', 'cancelled'):
-                                job.status = 'cancelled'
+                            if task.cancelled():
+                                from .cancel_job import publish_cancel; publish_cancel(job)
                             elif not task.cancelled() and task.exception() is not None:
                                 raise task.exception()
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
@@ -1144,7 +1142,9 @@ def spawn_service(*args, **kwargs):
                         return
                     record.update(status='failed', exit_code=1, error=redact(str(exc)))
                 finally:
-                    if record['status'] == 'running':
+                    if record['status'] == 'running' and record.get('job_id') in self.runner.jobs and self.runner.jobs[record['job_id']].survivors:
+                        record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=self.runner.jobs[record['job_id']].survivors)
+                    elif record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
                     terminal_reason(record)
