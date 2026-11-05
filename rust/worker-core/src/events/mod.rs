@@ -1,5 +1,6 @@
 //! Pure event-channel primitives; bytes classify health, never activity.
 use crate::activity::{Kind, Signal};
+pub mod agy;
 pub mod claude;
 pub mod opencode;
 
