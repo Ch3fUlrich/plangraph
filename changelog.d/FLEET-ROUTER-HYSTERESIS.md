@@ -1,0 +1,1 @@
+- **FLEET-ROUTER-HYSTERESIS (part 1):** Add an inactive pure per-signal hysteresis evaluator with injected time and replay-safe observations; delivery and activation remain separate.
