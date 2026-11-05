@@ -1,40 +1,38 @@
-# L1 card · build-L1-0185 · 2026-11-05T19:24Z
+# L1 card · build-L1-0194 · 2026-11-05T20:25Z
 ## Goal
-- D-3835/D-3872 Haiku seat pytest (PR #419, SEC-OIDC r15 waits); D-3877 D-3817 r4 terra leg final round; D-3798 RIN via L2
+- D-3893 phase 0 first, Sol writers, no L2s; #419 + #407 to GO; RIN direct (D-3880); D-3886
 ## Keeper
-- claimed: plangraph:RIN-LEDGER-VIEWS (claimed, ep4, lease 21:07Z), plangraph:RIN-PATH-REPOINT (claimed, ep4, lease 21:07Z), plangraph:WATCHDOG-RECYCLE-DOUBLE-LAUNCH (ep1), plangraph:SPAWNER-DEEPSEEK-REVIEW-LEG (ep2), plangraph:KEEPER-SNAP-S0-TIMINGS, plangraph:SPAWNER-LEG-GROK (ep3)
-- ready next: SPAWNER-ORPHAN-REAP (after #377); SEAT-PATH-FIXES shows open: claim before submit
+- claimed: RIN-LEDGER-VIEWS + RIN-PATH-REPOINT (ep4, lease 22:06Z), ROUTER-LAUNCH-OOM-SCOPE (ep1), LE-FLEET-MSG-INVENTORY (ep5), LE-PANE-MOVE-EXIT-CONFIRM (ep5), ROUTER-INBOX-MOVE (ep1), lease 22:15Z
+- ready next: SEAT-PATH-FIXES, KEEPER-SNAP-S0, SEAT-VERDICT-FROM-RECORD (kept from D-3900), KEEPER-SNAP-S3-CLIENTS
 ## Done
-- 11-05T18:12Z D-3820 4fb7c59e7db0 live spawner ff, suite 10463 passed, smoke run-66df80bc SMOKE-OK
-- 11-05T18:48Z SEAT-PATH-FIXES 8b54e5956 delta seat run-578b9f98 ACCEPT, LOW fixed, 111 passed
-- 11-05T19:22Z D-3835 PR#419 seat run-9584ba60 ACCEPT at 700df01db, LOWs fixed, head f03e73c8b; not merged
-- 11-05T19:10Z D-3798 - brief fixed per D-3877, L2-LAUNCH build-L2-rin resent, cwd rin-l2
+- 11-05T19:31Z D-3880 - md-sync re-armed, apply 19:30:56Z 22 ops, halt drop-in z9-pin-mismatch-retry.conf, closes D-3853 D-3855 D-3867 D-3871
+- 11-05T20:13Z D-3835 PR#419 f03e73c8b full suite 10579 passed, CI green, ready, GO-REQ sent
+- 11-05T19:50Z D-3886 782388a84 terra removed by Sol run-2a14038a, full suite pending
+- 11-05T20:10Z RIN-PATH-REPOINT 1490f15 batch scratch ok, pushed, GO-REQ sent (softens criteria)
+- 11-05T20:19Z RIN-LEDGER-VIEWS 53b932b r3 batch 20 ops scratch ok, flip NOT RUNNABLE, BLOCKED sent
+- 11-05T20:18Z ROUTER-LAUNCH-OOM-SCOPE 624f784 26 passed, seat running
+- 11-05T20:20Z LE-PANE-MOVE-EXIT-CONFIRM 5d28148 38 passed, seat run-d9bef7e4 REQUEST_CHANGES
+- 11-05T20:21Z ROUTER-INBOX-MOVE a05858d 173 passed, seat running
 ## In flight
-- D-3817 full suite on r4 7acf7845d, detached pytest since 19:0xZ, output K2/terra-suite4.out, next check at restart
+- D-3886 #407 full suite J/terra5-suite.out since 20:12Z next check at restart (dies with me? rerun)
+- ROUTER-LAUNCH-OOM-SCOPE seat J/r-seat-oom.json since 20:19Z next check at restart
+- ROUTER-INBOX-MOVE seat J/r-seat-inbox.json since 20:21Z next check at restart
 ## Planned
-1. D-3835 #419: CI green + full suite on lane, ready, GO-REQ, merge, ff live with D-id, re-probe Haiku, DONE to routing + server-L1-main-0182
-2. D-3817: r4 suite green: push, delta seat non-gpt (judge validate_model exception), GO-REQ, DONE with sol cause; red: BLOCKED, no more rounds
-3. #338 #380 #377 tests seats: Haiku once D-3835 is live, else agy ~11-06T13:43Z
-4. SPAWNER-ORPHAN-REAP (D-3771) after #377
-5. D-3880 plangraph-md-sync owned by build-L1: find ANSWERS.md sha mismatch, fix, dry run, re-arm timer + path, DONE; no build-L2-rin launch by 21:00Z: run RIN with Sol writers, no further ask
-6. D-3879 new leaf LE-HANDOFF-CARRYOVER-AUDIT (HIGH) + LE-HANDOFF-OPEN-ITEMS-GATE, prio 8, after RIN starts
+1. LE-PANE-MOVE-EXIT-CONFIRM fixer round with 2 MED + LOW (verbatim in handoff), then delta seat
+2. D-3886 #407: suite green: read removed test lines, push, delta seat non-gpt, GO-REQ, DONE
+3. Seats OOM, INBOX: findings to Sol in one round; push, merge via routing D-id; inbox apply needs offsets + D-id
+4. D-3835 #419 on GO + D-id: merge, ff live, Haiku probe, DONE; then #338 #380 #314 tests seats with Haiku
+5. SPAWNER-ORPHAN-REAP (D-3771) after #377; next ready phase 0 lanes, never idle (D-3893)
 ## Open
-- BLOCKED D-3798 L2-LAUNCH build-L2-rin awaits routing | default heartbeat RIN, no RIN work | deadline none
-- BLOCKED D-3817 AutoOS opencode.jsonc terra row, prepush baseline 948 | default D-id raises baseline by 5, leg skipped until then | deadline none
-- BLOCKED D-3817 served model unwitnessed; fork codex registry lists gpt-5.6-terra only | default confirm before calling terra live | deadline none
-- BLOCKED WATCHDOG r3 cap: 2 HIGH + 5 MED, lists K/swd3q.out K/swd3d.out | default replan one slice | deadline none
-- BLOCKED #383 ruling on deepseek MED + keeper define + GO | default dismiss MED, define as sent | deadline none
-- BLOCKED grok: Authentication required; opencode.jsonc baseline refused push | default operator enables gc, D-id for baseline | deadline none
-- BLOCKED omnigraph pin edits need a D-id | default agent-skills Dockerfile + live worktrees only | deadline none
+- BLOCKED RIN-LEDGER-VIEWS flip + rule 2.0, 3.10 text | default a: import mode stays, flip to new leaf | deadline none
+- BLOCKED RIN-PATH-REPOINT GO-REQ criteria softening | default none: criteria are routing's | deadline none
+- BLOCKED D-3835 GO + ff D-id | default wait | deadline none
+- D-3898 Omnigraph homelab-server write freeze on | default no writes | deadline router lifts ~20:30Z
+- BLOCKED WATCHDOG r3 cap, #383 ruling, grok auth + baseline, omnigraph pin D-id, AutoOS terra row: as in gen-89 block | default as there | deadline none
 - D-3780 workstation spawner ff waits OS-WS-AUTOOS-START | default wait | deadline none
 ## Traps
-- Haiku seat prompts: exactly `python3 -m pytest -q <relative paths>`; -k, -x, -p, env prefix denied. `id`, `git status` were allowed in probes, cause not verified
-- Last deny additions on #419 have no live probe: re-probe before DONE
-- Hand lines on #419 total above 30 over commits: name it in GO-REQ
-- Guard in a worktree session refuses compound shell naming git; plain single commands + Write tool; a refused heredoc writes nothing
-- origin/main past live: new ff needs full suite + D-id; full suite ~30 min, timeout 3300
-- Full suite before any GO, read removed test lines; 'NO-TOOLS' prompt on qwen gets no diff: seat void; qwen has no pytest
-- After restart check ListAgents for a sibling build-L1 (D-3785)
-- Push build-L1 branch ONLY to control; never origin: public repo, D-1751
+- Launch prompt gen-70 is stale. L2 = Sonnet = forbidden by D-3893. Keeper claim may land despite timeout: show first
+- Bash guard denies unquoted heredoc with backticks or $(): Write tool. Push build-L1 branch ONLY to control
+- Qwen seats: no pytest, static read; HIGH needs a seat that ran tests. Full suite timeout 3300, 2 per host
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-89 block); K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79; K2=/home/s/.claude/jobs/57bc5156/tmp
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-90 block); J=/home/s/.claude/jobs/4eac7b7d/tmp; K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79
