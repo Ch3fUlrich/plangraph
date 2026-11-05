@@ -11,6 +11,7 @@ pub(super) fn validate_fields(value: &serde_json::Value) -> Result<(), HostsErro
             "registry" => &["version", "self", "hosts"],
             "host" => &[
                 "id",
+                "class",
                 "aliases",
                 "transport",
                 "os",
@@ -342,6 +343,20 @@ pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsErr
     }
     // V6 numbers and ramp roles.
     let c = &h.caps;
+    if h.class == HostClass::Restricted
+        && (c.max_runs > 4
+            || c.max_writers > 2
+            || c.max_seats > 2
+            || c.max_sessions > 5
+            || c.mem_floor_mb < 6144)
+    {
+        return Err(HostsError::NumbersShape(v(
+            &h.id,
+            "-",
+            "class/caps",
+            "restricted requires caps <= 4/2/2/5 and mem_floor_mb >= 6144",
+        )));
+    }
     for (ok, field, msg) in [
         (c.max_runs >= 1, "max_runs", "must be >= 1"),
         (
@@ -373,3 +388,7 @@ pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsErr
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "validate_tests.rs"]
+mod tests;
