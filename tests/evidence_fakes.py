@@ -89,7 +89,7 @@ class FakeGit:
             return dict(self.trailers_by_sha[sha])
         return dict(self.message_trailers)
 
-    def writer_trailers(self, repo, sha):
+    def writer_trailers(self, repo, sha, ref=None):
         """One dict per commit whose trailers name the writers (ADDENDUM).
 
         A merge/phase evidence sha carries the branch commits' trailers; any
