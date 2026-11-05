@@ -2,4 +2,4 @@
 
 Orchestration: follow `skills/unattended-orchestration/SKILL.md` and the role's
 repo skill: `skills/implement/SKILL.md`, `skills/review/SKILL.md`, or
-`skills/research/SKILL.md`. Fleet-wide decisions come from the fleet decisions file.
+`skills/research/SKILL.md`.
