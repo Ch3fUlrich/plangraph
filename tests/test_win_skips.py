@@ -29,6 +29,7 @@ def test_utility_without_alarm_still_runs():
 
 
 def test_nofollow_reason_and_parameter_matching():
-    assert len(NOFOLLOW) == 133
+    assert len(NOFOLLOW) == 132
+    assert "tests/test_spawner_sessions.py::test_windows_which_resolution" not in NOFOLLOW
     for nodeid in NOFOLLOW:
-        assert "production" in skip_reason(nodeid + "[case]", "win32", ())
+        assert 'pins platform="linux"' in skip_reason(nodeid + "[case]", "win32", ())
