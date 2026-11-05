@@ -358,15 +358,15 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         assert not set(EXEC_COLUMNS) & columns()
         # Merged code needs migration 7: opening the old schema is refused first ...
         path = tmp_path / "pg-jev.db"
-        with pytest.raises(RuntimeError, match="code needs 7"):
+        with pytest.raises(RuntimeError, match="code needs 10"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         # ... then pg admin migrate runs 7 and the exec columns are there.
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
-        assert db_pg.migrate(raw, name) == [7]
+        assert db_pg.migrate(raw, name) == [7, 8, 9, 10]
         assert set(EXEC_COLUMNS) <= columns()
         assert "jev_shadow" in jev_tables()
         assert [row[0] for row in raw.execute(
-            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 8))
+            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 11))
         conn = kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         conn.close()
     finally:
@@ -440,8 +440,8 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
-        assert schema_pg.LATEST == 9
-        assert db_pg.migrate(raw, fresh) == list(range(1, 10))
+        assert schema_pg.LATEST == 10
+        assert db_pg.migrate(raw, fresh) == list(range(1, 11))
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
 
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full[:8])
@@ -450,9 +450,9 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
         assert not BUS_TABLES & pg_tables(name)
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
         path = tmp_path / "pg-main.db"
-        with pytest.raises(RuntimeError, match="code needs 9"):
+        with pytest.raises(RuntimeError, match="code needs 10"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
-        assert db_pg.migrate(raw, name) == [9]
+        assert db_pg.migrate(raw, name) == [9, 10]
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(name)
         kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name).close()
     finally:
