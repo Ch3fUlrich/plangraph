@@ -5,6 +5,8 @@ mod error_tests;
 mod errors;
 mod jobs;
 mod launch;
+#[allow(dead_code)] // RL26 activation awaits the route selector/catalog contract.
+mod leg_ref;
 mod placement;
 mod pyjson;
 mod records;
