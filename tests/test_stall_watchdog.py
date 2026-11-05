@@ -95,6 +95,7 @@ def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatc
     assert w.main(['tick']) == 0
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and event['event_id']
+    assert 'outbox 1, no bridge' in (tmp_path / 'watchdog/status.txt').read_text()
 
 
 @pytest.mark.parametrize('age', [301, 5400])
@@ -175,7 +176,7 @@ def test_tick_cli_persists_status_and_delivers_w12(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(w, 'flush_outbox', lambda state, command: original(
         state, command, run=lambda args, **kw: sent.append(json.loads(kw['input']))))
     assert w.main(['tick']) == 0
-    assert sorted(e['kind'] for e in sent) == ['alert', 'completion', 'completion']
+    assert sorted(e['kind'] for e in sent) == ['alert', 'completion']
     assert '! stall ' in (tmp_path / 'watchdog/status.txt').read_text()
     capsys.readouterr()
     w.main(['status'])
