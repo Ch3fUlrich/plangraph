@@ -153,10 +153,6 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
         if job_pids is not None:   # the live Job Object is the proof; empty means the job is empty
             return {int(p): None for p in job_pids}
         table = (nt_table or _nt_table)()
-        if table and root not in table and not alive(root, None, platform='nt'):
-            if any(pp == root for pp in table.values()):
-                raise KillIncomplete(p for p, pp in table.items() if pp == root)
-            return {}
         if not table or table.get(root) != os.getpid():
             raise KillIncomplete([root])   # snapshot failed / root not provably our child: fail closed
         found = {root}

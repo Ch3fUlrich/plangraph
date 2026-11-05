@@ -1,3 +1,6 @@
+"""Fail closed on unknown trees; only strictly later creation proves ancestry.
+Hold first-observed handles so PID reuse cannot redirect termination.
+"""
 import ctypes
 import os
 from ctypes import wintypes as w
@@ -7,7 +10,11 @@ from . import proc_kill
 if os.name == 'nt':
     k32 = ctypes.WinDLL('kernel32', use_last_error=True)
     k32.OpenProcess.restype = ctypes.c_void_p
+
+
 def creation(pid, handle=None):
+    if os.name != 'nt':
+        return None
     owned = handle is None
     handle = handle or k32.OpenProcess(0x1000, False, pid)
     if not handle:
@@ -23,37 +30,39 @@ def creation(pid, handle=None):
 
 async def kill(pid, token):
     members, handles, uncertain = {}, {}, set()
-    try:
+    def observe(target):
+        handle = k32.OpenProcess(0x100001 | 0x1000, False, target)
+        if handle:
+            handles[target] = handle
+        return creation(target, handle) if handle else None
+    def live():
         table = proc_kill._nt_table()
-        if type(token) is not int or creation(pid) != token:
-            return sorted({p for p, pp in table.items() if pp == pid} | ({pid} if not table or proc_kill.alive(pid, None) else set()))
-        if pid not in table:
-            return sorted({p for p, pp in table.items() if pp == pid} | ({pid} if not table or proc_kill.alive(pid, None) else set()))
-        members[pid] = token
+        if not table:
+            uncertain.add(pid)
         while True:
             added = False
             for child, parent in table.items():
-                if parent in members and child not in members:
-                    start = creation(child)
-                    if start is None:
-                        if proc_kill.alive(child, None):
-                            uncertain.add(child)
-                        continue
-                    if start >= members[parent]:
+                if parent in members and child not in handles and child not in uncertain:
+                    start = observe(child)
+                    if start is None or start == members[parent]:
+                        uncertain.add(child)
+                    elif start > members[parent]:
                         members[child] = start
                         added = True
             if not added:
                 break
-        for child, start in members.items():
-            handle = k32.OpenProcess(0x100001 | 0x1000, False, child)
-            if not handle or creation(child, handle) != start:
-                if handle:
-                    k32.CloseHandle(ctypes.c_void_p(handle))
-                return sorted(members)
-            handles[child] = handle
-        for handle in reversed(list(handles.values())):
-            k32.TerminateProcess(ctypes.c_void_p(handle), 1)
-        await proc_kill.finish(pid, token, members, platform='nt', live_pids=lambda: [])
+        return uncertain | {p for p, h in handles.items() if p in members and k32.WaitForSingleObject(ctypes.c_void_p(h), 0) == 0x102}
+    def terminate():
+        for target in members:  # insertion order: root first, then descendants
+            k32.TerminateProcess(ctypes.c_void_p(handles[target]), 1)
+    try:
+        table = proc_kill._nt_table()
+        if type(token) is not int or pid not in table or observe(pid) != token or k32.WaitForSingleObject(ctypes.c_void_p(handles[pid]), 0) != 0x102:
+            return [pid]
+        members[pid] = token
+        live()
+        terminate()
+        await proc_kill.finish(pid, token, {}, platform='nt', live_pids=live, reterminate=terminate)
         return sorted(uncertain)
     except proc_kill.KillIncomplete as exc:
         return exc.survivors
