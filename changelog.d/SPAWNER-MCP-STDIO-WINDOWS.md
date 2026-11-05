@@ -1,0 +1,1 @@
+- **SPAWNER-MCP-STDIO-WINDOWS:** `python -m plangraph.spawner.mcp` answers on Windows instead of hanging; stdin is read on a daemon thread on every platform, so a request over 64 KiB no longer ends the server on POSIX.
