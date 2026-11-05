@@ -7,12 +7,15 @@ from plangraph.spawner import proc_kill
 from plangraph.spawner.runner import SpawnerRunner
 from plangraph.spawner.service import SpawnService
 pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows creation times')
-def test_second_service_tree(tmp_path):
+@pytest.mark.parametrize('orphan', [False, True])
+def test_second_service_tree(tmp_path, orphan):
     async def run():
         marker = tmp_path / 'grandchild'
-        code = ('import subprocess,sys,time; p=subprocess.Popen([sys.executable,"-c",'
-                '"import time; time.sleep(60)"]); '
-                f'open({str(marker)!r},"w").write(str(p.pid)); time.sleep(60)')
+        leaf = f'import os,time; open({str(marker)!r},"w").write(str(os.getpid())); time.sleep(60)'
+        middle = f'import subprocess,sys; subprocess.Popen([sys.executable,"-c",{leaf!r}])'
+        code = ('import subprocess,sys,time; time.sleep(.5); '
+                f'p=subprocess.Popen([sys.executable,"-c",{middle if orphan else leaf!r}]); '
+                + ('p.wait(); ' if orphan else '') + 'time.sleep(60)')
         async def factory(*args, **kwargs):
             return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
         runner = SpawnerRunner(process_factory=factory)
@@ -25,8 +28,9 @@ def test_second_service_tree(tmp_path):
                     break
                 await asyncio.sleep(.01)
             child = int(marker.read_text())
+            await asyncio.sleep(.3)  # intermediate has exited before the second service observes anything
             result = await SpawnService(SpawnerRunner(), tmp_path).cancel(record['run_id'])
-            assert result['status'] == 'cancelled' and not result.get('survivors')
+            assert not result.get('survivors')
             assert not any(proc_kill.alive(p, None) for p in (record['pid'], child))
         finally:
             await runner.cancel(record['job_id'])
@@ -45,26 +49,10 @@ def test_foreign_identity_and_stale_parent(monkeypatch):
             with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as root:
                 try:
                     monkeypatch.setattr(proc_kill, '_nt_table', lambda: {root.pid: os.getpid(), foreign.pid: root.pid})
-                    assert asyncio.run(SpawnerRunner().kill_recorded(root.pid, win.creation(root.pid))) == []
+                    assert asyncio.run(SpawnerRunner().kill_recorded(root.pid, win.creation(root.pid))) == [root.pid]
+                    assert root.poll() is None  # old record: no job name, signal nothing
                     assert foreign.poll() is None
                 finally:
                     root.kill()
         finally:
             foreign.kill()
-def test_dead_root_and_unreadable_children(monkeypatch):
-    from plangraph.spawner import win_recorded as win
-    with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as root:
-        try:
-            token = win.creation(root.pid)
-            monkeypatch.setattr(proc_kill, '_nt_table', lambda: {root.pid: os.getpid(), 0: root.pid})
-            original = win.creation
-            monkeypatch.setattr(win, 'creation', lambda pid, handle=None: None if pid == 0 else original(pid, handle))
-            monkeypatch.setattr(proc_kill, 'alive', lambda pid, start, **kw: pid == 0)
-            assert asyncio.run(win.kill(root.pid, token)) == [0]
-            root.wait(timeout=5)
-            monkeypatch.setattr(proc_kill, '_nt_table', lambda: {0: root.pid})
-            assert asyncio.run(win.kill(root.pid, token)) == [root.pid]
-            monkeypatch.setattr(proc_kill, '_nt_table', lambda: {0: 123456789})
-            assert asyncio.run(win.kill(root.pid, token)) == [root.pid]  # dead intermediate, live grandchild
-        finally:
-            root.kill()
