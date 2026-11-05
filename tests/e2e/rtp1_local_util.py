@@ -9,6 +9,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shlex
+import signal
 import stat
 import subprocess
 import threading
@@ -106,9 +108,58 @@ def write_fake_opencode(bin_dir: Path) -> None:
     """Temp name + rename so the worker never execs a file that is still open for write."""
     bin_dir.mkdir(parents=True)
     tmp = bin_dir / "opencode.tmp"
-    tmp.write_text(FAKE_OPENCODE)
+    pid_dir = bin_dir / "pids"
+    pid_dir.mkdir()
+    tmp.write_text(FAKE_OPENCODE.replace("#!/bin/sh\n", "#!/bin/sh\n"
+                   f'echo $$ > {shlex.quote(str(pid_dir.resolve()))}/$$\n', 1))
     tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR)
     os.replace(tmp, bin_dir / "opencode")
+
+
+def reap_recorded(pid_dir: Path, grace_s: float = 1.0) -> list[int]:
+    """Reap only recorded, still-identifiable harnesses; tolerate stale records."""
+    # Shell-based e2e requires POSIX; without Linux /proc, skip rather than risk PID reuse.
+    if os.name != "posix" or not Path("/proc/self").exists():
+        return []
+
+    def matches(pid):
+        try:
+            root = Path(f"/proc/{pid}")
+            if (root / "stat").read_text().split(") ", 1)[1].startswith("Z"):
+                return False  # exited, awaiting its parent's waitpid
+            identity = (root / "cmdline").read_bytes() + (root / "environ").read_bytes()
+            return any(str(p).encode() in identity for p in
+                       (pid_dir.resolve(), pid_dir.parent.resolve() / "opencode"))
+        except OSError:
+            return False
+
+    killed = []
+    for record in pid_dir.glob("*"):
+        try:
+            pid = int(record.read_text().strip())
+            if pid <= 1 or not matches(pid):
+                continue
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + grace_s
+            while matches(pid) and time.monotonic() < deadline:
+                time.sleep(.01)
+            if matches(pid):
+                os.kill(pid, signal.SIGKILL)
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                try:
+                    state = Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1][0]
+                    if state == "Z":
+                        break
+                except OSError:
+                    break
+                time.sleep(.01)
+            else:
+                raise RuntimeError(f"recorded harness {pid} survived SIGKILL")
+            killed.append(pid)
+        except (OSError, ValueError):
+            continue
+    return killed
 
 
 class WorkerProc:
@@ -116,6 +167,8 @@ class WorkerProc:
 
     def __init__(self, binary: str, env: dict, log: Path) -> None:
         env = env.copy()
+        self.pid_dir = Path(env.get("PG_FAKE_PID_DIR", log.parent / "stub-bin" / "pids"))
+        env["PG_FAKE_PID_DIR"] = str(self.pid_dir.resolve())
         if "PG_JAIL_BIN" not in env and "PG_JAIL" not in env:
             jail = Path(binary).resolve().with_name("pg-jail")
             if jail.is_file():
@@ -145,18 +198,28 @@ class WorkerProc:
         raise RuntimeError(f"worker did not come up:\n{self.text()[-2000:]}")
 
     def stop(self) -> None:
-        import signal
-        if self.proc.poll() is None:
+        try:
+            if self.proc.poll() is None:
+                try:
+                    if os.name == "posix":
+                        os.killpg(self.proc.pid, signal.SIGTERM)
+                    else:
+                        self.proc.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    self.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    if os.name == "posix":
+                        os.killpg(self.proc.pid, signal.SIGKILL)
+                    else:
+                        self.proc.kill()
+                    self.proc.wait(timeout=10)
+        finally:
             try:
-                os.killpg(self.proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.proc.pid, signal.SIGKILL)
-                self.proc.wait(timeout=10)
-        self.out.close()
+                reap_recorded(self.pid_dir)
+            finally:
+                self.out.close()
 
 
 def set_current_version(cli: str, address: str, build_id: str, deployment: str = "pg-worker",
