@@ -391,9 +391,4 @@ class SpawnService(SeatSpawnMixin):
         return self.result(record['run_id'], attempts=SAVE_READ_ATTEMPTS)
 
     async def cancel(self, run_id):
-        record = self.result(run_id)
-        self.runner._recorded_job = (record.get('job_name'), record.get('escapees', ()))
-        try:
-            return await cancel_recorded(self, run_id)
-        finally:
-            self.runner._recorded_job = (None, ())
+        return await cancel_recorded(self, run_id)
