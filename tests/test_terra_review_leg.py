@@ -57,3 +57,56 @@ def test_single_writer_suppression_matches_route_card():
         route_card(CARD, legs=(luna,), role='review', exclude_families=('gpt',))
     assert reason == 'excluded_family'
     assert reason in caught.value.exclusion_reasons
+
+
+@pytest.mark.parametrize('invalid', ['roles', 'duplicate'])
+def test_review_head_config_refused(tmp_path, invalid):
+    import json
+    from dataclasses import asdict
+    from plangraph.planner.legs import load_legs
+    head = asdict(next(l for l in DEFAULT_LEGS if l.review_head))
+    raw = [head]
+    if invalid == 'roles':
+        head['roles'] = ['implement', 'review']
+    else:
+        raw.append(dict(head, id='second-head'))
+    path = tmp_path / 'legs.json'
+    path.write_text(json.dumps({'legs': raw}))
+    with pytest.raises(ValueError, match='review_head'):
+        load_legs(path)
+
+
+def test_catalog_seeds_terra():
+    from plangraph.routing_support import resolver
+    from plangraph.routing_support.catalog_db import CatalogDB
+    db = CatalogDB(':memory:')
+    db.init_and_seed()
+    rows = [r for r in resolver.get_catalog_models(db) if r['id'] == 'omniroute/' + TERRA]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['harness'] == 'opencode' and row['family'] == 'gpt'
+    assert row['tool_mode'] == 'inline-only'
+    assert row['context_tokens'] == 900000 and row['trains_on_prompts'] == 0
+
+
+@pytest.mark.parametrize('model', [TERRA, 'cx-gpt-6-luna'])
+@pytest.mark.parametrize('review_of', [False, True])
+def test_override_same_family_only_review_head(tmp_path, monkeypatch, model, review_of):
+    import asyncio
+    from registry_route_util import _service
+    from plangraph.planner.routing import SpawnRefused
+    svc = _service(tmp_path, monkeypatch)
+    if review_of:
+        original_result = svc.result
+        monkeypatch.setattr(svc, 'result', lambda run, **k: {'writer_family': 'gpt'}
+                            if run == 'writer' else original_result(run, **k))
+    kwargs = {'review_of': 'writer'} if review_of else {'writer_families': ('gpt',)}
+    def spawn():
+        return asyncio.run(svc.spawn(card=CARD, prompt='review', role='review',
+                                    model='omniroute/' + model, override_reason='Terra override regression',
+                                    dry_run=True, **kwargs))
+    if model == TERRA:
+        assert spawn()['chosen_leg']['id'] == TERRA
+    else:
+        with pytest.raises(SpawnRefused, match='excluded writer family'):
+            spawn()

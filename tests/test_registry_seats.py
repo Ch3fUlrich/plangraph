@@ -39,15 +39,21 @@ def test_bad_diff_ref_refused(ref):
         plan_spawn(dict(CARD, diff_ref=ref), role="review")
 
 
-def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_policy):
+@pytest.mark.parametrize('terra', [True, False])
+def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_policy, terra):
     # Pinned to the pre-D-3552 policy (no review lift): luna is the inline-only seat.
     repo, base, head = _repo(tmp_path)
     card = dict(CARD, diff_ref={"repo": str(repo), "base": base, "head": head})
     svc = _service(tmp_path / "state", monkeypatch)
+    if not terra:
+        def without_terra(*a, **kw):
+            return plan_spawn(a[0], role=a[1], writer_families=a[2],
+                              legs=tuple(l for l in DEFAULT_LEGS if not l.review_head))
+        monkeypatch.setattr(svc, '_route', without_terra)
     out = asyncio.run(svc.spawn(card=card, prompt="review this", role="review",
                                 writer_families=("claude",), seats=True, dry_run=True))
     by_model = {c["model_or_combo"]: c["prompt"] for c in svc.runner.calls}
-    luna = by_model["omniroute/cx-gpt-6-luna"]
+    luna = by_model["omniroute/cx-gpt-6.1-terra" if terra else "omniroute/cx-gpt-6-luna"]
     assert luna.startswith("review this") and "-one\n+two" in luna and "INLINE DIFF" in luna
     assert "-one" not in by_model["Qwen3.8-Flash"]
     assert len(out["seats"]) == 2
@@ -114,7 +120,8 @@ def test_writer_spelled_anthropic_excludes_claude_legs():
 
 
 @pytest.mark.parametrize("card", [CARD, RCARD], ids=["no-diff", "diff"])
-def test_live_policy_every_writer_family_routes_or_names_why(card):
+@pytest.mark.parametrize('terra', [True, False])
+def test_live_policy_every_writer_family_routes_or_names_why(card, terra):
     # Each family a writer can have gets seats, or one named refusal (never a crash).
     # A family the keeper cannot resolve (writer_key) refuses, fail closed, like the keeper.
     from plangraph.review.family import FamilyError, writer_key
@@ -125,10 +132,12 @@ def test_live_policy_every_writer_family_routes_or_names_why(card):
             with pytest.raises(SpawnRefused, match="unknown writer family"):
                 plan_spawn(card, role="review", writer_families=(fam,))
             continue
-        plan = plan_spawn(card, role="review", writer_families=(fam,))
+        plan = plan_spawn(card, legs=tuple(l for l in DEFAULT_LEGS if terra or not l.review_head), role="review", writer_families=(fam,))
         assert plan.error is None or plan.error.startswith(
             ("two distinct review families unavailable", "seat coverage unmet")), (fam, plan.error)
-        assert fam not in _families(plan) or plan.error
+        assert all(l.review_head or l.family != fam for l in plan.review_seats) or plan.error
+        assert all(c['covers'] == [] for c in plan.seat_coverage
+                   if any(l.id == c['leg'] and l.family == fam for l in plan.review_seats))
 
 
 def test_inline_diff_size_cap(tmp_path):
@@ -267,13 +276,15 @@ def test_spares_use_keeper_families(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("writer", ["alibaba", " OpenAI ", "anthropic", "QWEN"])
-def test_keeper_writer_names_exclude_their_legs(writer):
+@pytest.mark.parametrize('terra', [True, False])
+def test_keeper_writer_names_exclude_their_legs(writer, terra):
     # qwen MED/LOW: keeper family names and case/space variants map to leg families.
     from plangraph.review.family import writer_key
     canon = writer_key(writer)
-    plan = plan_spawn(HIGH, role="review", writer_families=(writer,))
-    assert plan.review_seats and canon not in {writer_key(l.family) for l in plan.review_seats}
-    assert all(c["covers"] == [canon] for c in plan.seat_coverage)
+    plan = plan_spawn(HIGH, legs=tuple(l for l in DEFAULT_LEGS if terra or not l.review_head), role="review", writer_families=(writer,))
+    assert plan.review_seats and all(l.review_head or writer_key(l.family) != canon for l in plan.review_seats)
+    by_id = {l.id: l for l in plan.review_seats}
+    assert all(c["covers"] == ([] if writer_key(by_id[c['leg']].family) == canon else [canon]) for c in plan.seat_coverage)
 
 
 def test_policy_families_match_keeper_names():

@@ -30,6 +30,7 @@ PROVIDER_HARNESS: dict[str, Any] = {
 # Review legs that give no verdict in tool mode: the spawner inlines the diff
 # (D-3134, D-3173).
 INLINE_ONLY_MODELS = frozenset({
+    "omniroute/cx-gpt-6.1-terra",
     "omniroute/cx-gpt-6-luna",
     "cxa/gpt-6-luna-high",
     "mimo/mimo-v2.6-pro",

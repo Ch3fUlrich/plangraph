@@ -32,7 +32,7 @@ def test_review_free_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
     assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]] and ids[3] == "agy-gemini-3.8-flash"
-    assert {s['leg']: s['reason'] for s in plan.skipped}['cx-gpt-6.1-terra'] == 'inline_only_needs_diff'
+    assert [(s['leg'], s['reason']) for s in plan.skipped if s['leg'] == 'cx-gpt-6.1-terra'] == [('cx-gpt-6.1-terra', 'inline_only_needs_diff')]
     review = plan_spawn(dict(CARD, diff_ref={'repo': '/srv/repo', 'base': 'a1', 'head': 'b2'}),
                         role='review', writer_families=('claude',))
     # openrouter-free is implement-only; the eligible free review tier follows Terra.

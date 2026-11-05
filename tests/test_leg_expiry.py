@@ -20,9 +20,13 @@ def test_d3605_sol_routes_implement_never_review():
     sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
     assert leg_active(sol) and not sol.expires   # D-3605: operator implement leg again
     ids = [leg.id for leg in implement.legs]
+    subscriptions = [l.id for l in DEFAULT_LEGS if l.id in WRITER_ORDER and l.tier == 'subscription']
+    assert set(subscriptions) <= set(ids)
+    assert [i for i in ids if i in subscriptions] == [i for i in WRITER_ORDER if i in subscriptions]
     for free_id in ('opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free', 'openrouter-free'):
         for sub_id in WRITER_ORDER:
             if next(l for l in DEFAULT_LEGS if l.id == sub_id).tier == 'subscription':
+                assert free_id in ids and sub_id in ids
                 assert ids.index(free_id) < ids.index(sub_id)
 
 

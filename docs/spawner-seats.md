@@ -18,7 +18,8 @@ falls through only to a spare leg of a family no other seat holds.
 * **Per writer part** (DECISIONS 3.2, D-3084): each writer family is covered by
   seats of other families (1 standard, 2 on high risk incl. one non-Claude),
   the same rule as `keeper/coverage.uncovered`. A seat may share a family with
-  ANOTHER writer; a leg whose family is every writer's is excluded.
+  ANOTHER writer; a leg whose family is every writer's is excluded, except
+  Terra (`review_head`), which may sit but never covers its own family.
   Families are compared as the keeper names them (`review/family.py`: claude =
   `anthropic`, gpt = `openai`, qwen = `alibaba`, glm = `zhipu`, ...), and
   `seat_coverage` lists the parts each seat covers in those names. A writer
@@ -30,7 +31,7 @@ falls through only to a spare leg of a family no other seat holds.
   recorded as `banned_family` / `off_family` / `paused_harness`; a family may
   be named as the leg or as the keeper names it (`glm` or `zhipu`). Change the
   file, not code.
-* **Inline-only legs** (`tool_mode: inline-only`: luna, mimo-pro) give no
+* **Inline-only legs** (`tool_mode: inline-only`: terra, luna, mimo-pro) give no
   verdict in tool mode. Put `"diff_ref": {"repo": "/abs/path", "base": REV,
   "head": REV}` on the card; the spawner runs `git diff base...head` and
   inlines it for those legs only. Without `diff_ref` they are skipped

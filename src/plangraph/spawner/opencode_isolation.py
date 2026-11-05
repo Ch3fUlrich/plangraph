@@ -12,7 +12,6 @@ and its data dir (auth, git); review adds its own store and tool deny.
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -80,20 +79,22 @@ def fail_unchanged_writer(job, work_dir):
             or UNCHECKED in job.events or tree_state(work_dir) != base):
         return
     email = getattr(job, 'writer_email', None)
+    if not email:
+        job.events.append({'event': 'writer_change_unchecked',
+                           'reason': 'writer identity missing'})
+        return
     if email:
         try:
-            # Extended regex escaping makes the launch identity literal; angle
-            # brackets anchor it to the full author email, not a run-id prefix.
-            result = subprocess.run(
-                ['git', '-C', str(work_dir), 'log', '-1', '--all', '--format=%H',
-                 '--extended-regexp', '--author=<' + re.escape(email) + '>$',
-                 '--since=@' + str(int(job.start_time))],
-                capture_output=True, timeout=30, check=True)
+            for identity in ('author', 'committer'):
+                result = subprocess.run(
+                    ['git', '-C', str(work_dir), 'log', '-1', '--all', '--reflog',
+                     '--format=%H', '--fixed-strings', '--' + identity + '=<' + email + '>'],
+                    capture_output=True, timeout=30, check=True)
+                if result.stdout.strip():
+                    return
         except (OSError, subprocess.SubprocessError):
             job.events.append({'event': 'writer_change_unchecked',
                                'reason': 'writer commit lookup failed'})
-            return
-        if result.stdout.strip():
             return
     job.status = 'failed'
     job.exit_code = WRITER_NO_CHANGES_EXIT

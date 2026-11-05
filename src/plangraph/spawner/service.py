@@ -280,10 +280,10 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
-            if reviewed and seat_family(chosen.family) == seat_family(reviewed):
+            if reviewed and seat_family(chosen.family) == seat_family(reviewed) and not chosen.review_head:
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
-            if writers and writers <= {seat_family(chosen.family)}:
+            if writers and writers <= {seat_family(chosen.family)} and not chosen.review_head:
                 raise SpawnRefused('excluded writer family')
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')

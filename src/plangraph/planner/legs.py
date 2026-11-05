@@ -225,6 +225,8 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     for key in ("trains_on_data", "claude_family", "review_head"):
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
+    if raw.get("review_head") is True and roles not in (("review",), ["review"]):
+        problems.append(f"{where}.review_head: requires review-only roles")
     if len(problems) > start:
         return None
     data = dict(raw)
@@ -254,6 +256,8 @@ def load_legs(path: Path | None) -> tuple[Leg, ...]:
     if not doc["legs"]:
         problems.append("legs: must not be empty")
     ids = [leg.id for leg in legs if leg is not None]
+    if sum(leg.review_head for leg in legs if leg is not None) > 1:
+        problems.append("legs: at most one review_head is allowed")
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
         problems.append(f"legs: duplicate id {dup!r}")
     if problems:

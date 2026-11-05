@@ -164,7 +164,7 @@ def test_config_layers_close_independent_of_platform_home(env):
 
 
 @pytest.mark.writer_change_check
-@pytest.mark.parametrize('change', ['commit', 'other', 'none', 'fetch', 'pushed_deleted'])
+@pytest.mark.parametrize('change', ['commit', 'other', 'none', 'fetch', 'pushed_deleted', 'deleted', 'committer', 'backdated'])
 def test_writer_shared_local_refs(tmp_path, monkeypatch, change):
     work = _git_repo(tmp_path / 'work')
     linked = tmp_path / 'linked'
@@ -172,10 +172,16 @@ def test_writer_shared_local_refs(tmp_path, monkeypatch, change):
     remote = _git_repo(tmp_path / 'remote')
     subprocess.run(['git', '-C', str(work), 'fetch', '-q', str(remote), 'HEAD:refs/remotes/test/main'], check=True)
     def act(_):
-        if change in ('commit', 'other', 'pushed_deleted'):
+        if change in ('commit', 'other', 'pushed_deleted', 'deleted', 'committer', 'backdated'):
             email = ('run-other' if change == 'other' else 'run-test') + '@writer.plangraph.invalid'
             subprocess.run(['git', '-C', str(linked), '-c', 'user.email=' + email,
-                            'commit', '-q', '--allow-empty', '-m', 'writer work'], check=True)
+                            'commit', '-q', '--allow-empty', '-m', 'writer work',
+                            *(['--author=Other <other@example.invalid>'] if change == 'committer' else [])],
+                           env=({**__import__('os').environ, 'GIT_COMMITTER_DATE': '2000-01-01T00:00:00Z'}
+                                if change == 'backdated' else None), check=True)
+            if change == 'deleted':
+                subprocess.run(['git', '-C', str(linked), 'checkout', '-q', '--detach', 'HEAD~1'], check=True)
+                subprocess.run(['git', '-C', str(work), 'branch', '-D', 'writer'], check=True)
             if change == 'pushed_deleted':
                 subprocess.run(['git', '-C', str(linked), 'push', '-q', str(remote),
                                 'HEAD:refs/heads/saved'], check=True)
@@ -187,7 +193,18 @@ def test_writer_shared_local_refs(tmp_path, monkeypatch, change):
             subprocess.run(['git', '-C', str(remote), 'commit', '-q', '--allow-empty', '-m', 'remote work'], check=True)
             subprocess.run(['git', '-C', str(work), 'fetch', '-q', str(remote), 'HEAD:refs/remotes/test/main'], check=True)
     job, _ = _run_writer(tmp_path, monkeypatch, work, act=act)
-    assert (job.status, job.exit_code) == (('completed', 0) if change in ('commit', 'pushed_deleted') else ('failed', 5))
+    assert (job.status, job.exit_code) == (('completed', 0) if change in ('commit', 'pushed_deleted', 'deleted', 'committer', 'backdated') else ('failed', 5))
+
+
+@pytest.mark.parametrize('email', [None, ''])
+def test_missing_writer_identity_is_unchecked(tmp_path, email):
+    from plangraph.spawner import opencode_isolation as isolation
+    work = _git_repo(tmp_path / 'work')
+    job = SimpleNamespace(role='implement', status='completed', exit_code=0, stderr='',
+                          writer_email=email, events=[{'event': 'writer_baseline', 'state': isolation.tree_state(work)}])
+    isolation.fail_unchanged_writer(job, work)
+    assert (job.status, job.exit_code) == ('completed', 0)
+    assert job.events[-1]['event'] == 'writer_change_unchecked'
 
 
 def test_tree_state_outside_worktree(tmp_path):
