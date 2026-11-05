@@ -113,7 +113,11 @@ pub fn plan(
     let mut current = input.clone();
     for seat in &mut current.seats {
         if let Some(old) = state.retained.get(&seat.canonical) {
-            if old.route_family == seat.route_family && old.proving_run == seat.proving_run {
+            if old.route_family == seat.route_family
+                && old.proving_run == seat.proving_run
+                && old.route_expires_at == seat.route_expires_at
+                && input.now_s < old.route_expires_at
+            {
                 seat.probe = old.probe.clone();
             }
         }
@@ -160,7 +164,10 @@ pub fn plan(
     }
     for reading in validated.readings {
         let seat = reading.seat;
-        if !reading.eligible || families.contains(seat.route_family.as_ref().unwrap()) {
+        let Some(family) = seat.route_family.clone() else {
+            continue;
+        };
+        if !reading.eligible || families.contains(&family) {
             continue;
         }
         let Some(a) = covered.filter(|a| a.existing_probe_access.contains(&seat.canonical)) else {
@@ -176,7 +183,7 @@ pub fn plan(
             authorized: true,
             authority_reference: a.reference.clone(),
         };
-        families.insert(request.seat.route_family.clone().unwrap());
+        families.insert(family);
         state.attempts.push(request.clone());
         sink(request);
         return records;

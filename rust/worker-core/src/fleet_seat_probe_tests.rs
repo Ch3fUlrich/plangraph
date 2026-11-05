@@ -184,3 +184,58 @@ fn authority_not_needed_and_no_external_effects() {
     assert_eq!(fake_fs, before);
     assert_eq!(i.catalog_bytes, before["catalog"]);
 }
+
+#[test]
+fn missing_route_family_is_skipped_after_void() {
+    let (p, mut i, l, a) = fixture();
+    i.seats[1].route_family = None;
+    let mut s = State::default();
+    plan(&mut s, &p, &i, &l, Some(&a), &mut |_| {});
+    assert!(complete(&mut s, 1, Outcome::Void));
+    assert_eq!(
+        plan(&mut s, &p, &i, &l, Some(&a), &mut |_| panic!()),
+        vec![Record::Finding("eligible_family_unavailable")]
+    );
+    assert_eq!(s.attempts.len(), 1);
+}
+
+#[test]
+fn backward_day_preserves_budget() {
+    let (p, mut i, l, mut a) = fixture();
+    i.epoch_day = 1;
+    i.now_s = 86400;
+    a.day = 1;
+    let mut s = State::default();
+    plan(&mut s, &p, &i, &l, Some(&a), &mut |_| {});
+    let attempts = s.attempts.clone();
+    i.epoch_day -= 1;
+    i.now_s = 10;
+    assert_eq!(
+        plan(&mut s, &p, &i, &l, Some(&a), &mut |_| panic!()),
+        vec![Record::Finding("clock_backwards_or_invalid")]
+    );
+    assert_eq!(s.attempts.len(), attempts.len());
+    assert_eq!(s.attempts, attempts);
+    i.epoch_day = 1;
+    i.now_s = 86400;
+    plan(&mut s, &p, &i, &l, Some(&a), &mut |_| panic!());
+    assert_eq!(s.attempts.len(), 1);
+}
+
+#[test]
+fn renewed_route_does_not_inherit_expired_success() {
+    let (p, mut i, l, mut a) = fixture();
+    i.seats[0].route_expires_at = 86400;
+    let mut s = State::default();
+    plan(&mut s, &p, &i, &l, Some(&a), &mut |_| {});
+    assert!(complete(&mut s, 1, Outcome::Success));
+    i.epoch_day = 1;
+    i.now_s = 86400;
+    i.monotonic_ms += 1;
+    a.day = 1;
+    i.seats[0].route_expires_at += 86400;
+    let mut requests = vec![];
+    assert!(plan(&mut s, &p, &i, &l, Some(&a), &mut |r| requests.push(r)).is_empty());
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].seat.canonical, "one");
+}
