@@ -14,9 +14,12 @@ This foundation does **not** complete SPAWNER-RL12-WATCH-SUPERVISE. Pending work
 bounded separate pipe draining and stdin delivery, the event loop and channel
 aggregation, Blind shadow evaluation, source-priority selection, tree/CPU
 sampling, calibration, EOF handling, and the required real-process matrix.
-Linux identity checking currently protects against a changed live leader;
-owned descendant membership across leader reaping still needs validation
-before the backend can be integrated. No production caller is enabled.
+Linux signalling requires a captured, still-matching leader start identity;
+missing `/proc` identity (including after reaping) refuses both TERM and KILL.
+Other Unix platforms refuse signalling after observing/reaping leader exit.
+Without a validated leader, live descendants are not signalled: bounded teardown
+reports `Survivors`, never successful cleanup. Owned descendant membership across
+leader reaping remains unimplemented. No production caller is enabled.
 
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is

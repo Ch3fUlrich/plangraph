@@ -1,5 +1,10 @@
 use super::*;
 
+#[test]
+fn unix_backend_is_explicitly_gated() {
+    assert!(include_str!("watch.rs").contains("#[path = \"watch_unix.rs\"]\n#[cfg(unix)]\n"));
+}
+
 #[derive(Default)]
 struct Fake {
     terms: u32,

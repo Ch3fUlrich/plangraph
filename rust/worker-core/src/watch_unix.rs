@@ -27,15 +27,26 @@ impl UnixChild {
     }
     fn signal(&mut self, signal: i32) -> io::Result<()> {
         #[cfg(target_os = "linux")]
-        if start_time(self.pgid).is_some_and(|now| Some(now) != self.start) {
+        if self.start.is_none() || start_time(self.pgid) != self.start {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "process identity changed",
+                "process identity unavailable or changed",
+            ));
+        }
+        #[cfg(not(target_os = "linux"))]
+        if self.child.try_wait()?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "process leader already reaped",
             ));
         }
         killpg(self.pgid, signal)
     }
 }
+
+#[cfg(test)]
+#[path = "watch_process_tests.rs"]
+mod process_tests;
 #[cfg(target_os = "linux")]
 fn start_time(pid: i32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;

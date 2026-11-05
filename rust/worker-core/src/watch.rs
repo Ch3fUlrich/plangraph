@@ -10,6 +10,7 @@ use std::{io, process::ExitStatus};
 #[path = "watch_tests.rs"]
 mod tests;
 #[path = "watch_unix.rs"]
+#[cfg(unix)]
 #[allow(dead_code)] // RL12 supervisor integration follows in a separate slice.
 mod unix;
 
