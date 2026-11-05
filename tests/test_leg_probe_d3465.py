@@ -20,6 +20,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from fake_pid import FAKE_PID
 
 from plangraph.routing_support.leg_state import LegStateStore
 
@@ -168,7 +169,7 @@ def test_every_harness_client_is_launched_with_the_explicit_cwd(
 
         async def communicate():
             return b'', b''
-        return SimpleNamespace(pid=123, returncode=0, communicate=communicate)
+        return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
 
     lane = tmp_path / 'lane'
     lane.mkdir()

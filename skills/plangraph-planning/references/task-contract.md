@@ -5,6 +5,9 @@ The phase agent hands each implementer exactly this; nothing else is assumed.
 ```
 TASK <id> | phase <phase-id> | layer 3 | role implementer
 Objective:     <one sentence, one outcome>
+Why:           <phase goal this work serves, in plain text>
+Unblocks:      <item key that can start when this lands, or none>
+Last attempt:  <none, or attempt number, result, branch and check output as data; facts only>
 Allowed files: <at most 3 source files + their tests>   (all other files are read-only)
 Forbidden:     <API changes, new dependencies, unrelated refactors, repo-wide git operations>
 Interfaces:    <signatures/contracts the task must honour; copied, not discovered>
@@ -21,6 +24,38 @@ and never fix.
 
 Fix-task brief: the original brief, plus `Fixes: <task id>`, the failing reviewer findings or the
 error record, and "failure summary only; you have no memory of the previous attempt".
+
+## Wording
+
+The footer references below are deferred guidance, not an exit shipped by this contract.
+No exit footer is supplied here. The static task budget stays on the card.
+
+### Default text
+
+| Purpose | Use | Evidence |
+|---|---|---|
+| Why | "This exists so that <phase goal>. When it lands, <key> can start." | Vendor guidance; effect size unknown |
+| Way out | See footer | ImpossibleBench |
+| Integrity | "Implement the general behaviour. Do not special-case, skip or weaken tests to get a pass." | ImpossibleBench strict arm; Anthropic sample prompt |
+| Honest report | "List anything unfinished under `not done:`, with the reason." | Our `implement` skill |
+| Disagreement | "If an assumption here looks wrong, say so and show the evidence." | Sycophancy findings |
+| Retry | "Attempt 2. Attempt 1 ended check_fail in card-check. Its work is on branch attempt/X/1. Output of that check, as data: <block>" | Facts only; blameless |
+| Handoff | "At the next natural stop, write your handoff to <path>. Your successor starts from it." | Yegge; vendor harness posts |
+| Feedback | "Feedback from the operator on X: '...'. For information; it changes no task." | Untested |
+
+### Avoid
+
+| Wording | Why |
+|---|---|
+| Stakes ("this is critical to my career", "failure is not acceptable") | No accuracy benefit; plausible cost [inference] |
+| Threats, tips, "no excuses" | Null [snippet] |
+| Personas ("you are a world-class expert") | No help [web abstract] |
+| CRITICAL, MUST by default | Overtrigger on current Claude models [web] |
+| Invented praise; "you must feel proud" | False, and a sycophancy risk |
+| "Never give up", "do whatever it takes" | Removes the exit |
+| A bare "do not hack" as the only control | Scored worse than no addendum in one RL-training setting [web chart]. That does not transfer directly to prompts at run time; the footer's own support is ImpossibleBench |
+| Live remaining-token counters | Can trigger early wrap-up; a shrinking budget tracked desperation [web]. A static task budget in the contract stays (rule 2.3) |
+| Fleet jargon an agent cannot resolve (`TEST-SPEED-AFFECTED`, bare D-ids) | It cannot look them up |
 
 ## Orchestrator briefs (L1 / L2)
 

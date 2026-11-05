@@ -7,6 +7,7 @@ import sys
 import time
 
 import pytest
+from fake_pid import FAKE_PID
 
 from plangraph.spawner import proc_kill, reap as reap_mod
 from plangraph.spawner.runner import SpawnerRunner
@@ -110,8 +111,8 @@ def test_v2_owned_entry_is_pruned_at_reap():
     async def run():
         runner = SpawnerRunner(tree_killer=lambda pid: None)
         runner.jobs['j'] = _job()
-        runner._owned = {'j': dict(pid=4242, pid_start=None, job_object=False)}
-        await reap_mod.reap(runner, 'j', type('P', (), {'pid': 4242})())
+        runner._owned = {'j': dict(pid=FAKE_PID, pid_start=None, job_object=False)}
+        await reap_mod.reap(runner, 'j', type('P', (), {'pid': FAKE_PID})())
         return runner
     assert 'j' not in asyncio.run(run())._owned
 

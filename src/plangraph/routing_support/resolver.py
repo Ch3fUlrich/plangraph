@@ -458,7 +458,7 @@ def _probe_served_models(config, *, env=None):
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
         executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
-        result = subprocess.run([executable, 'models'], env=env, capture_output=True,
+        result = subprocess.run([executable, 'models', '--standalone'], env=env, capture_output=True,
                                 text=True, timeout=10)
         if result.returncode == 0:
             import re

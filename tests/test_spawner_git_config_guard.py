@@ -8,10 +8,11 @@ import pytest
 from plangraph.spawner import git_guard
 from plangraph.spawner.git_guard import check_guard, init_guard, writer_launch
 from plangraph.spawner.runner import SpawnerRunner
+from fake_pid import FAKE_PID
 
 
 class FakeProcess:
-    pid = 1234
+    pid = FAKE_PID
 
     def __init__(self, returncode: int = 0, stdout: bytes = b"", stderr: bytes = b""):
         self.returncode = returncode
@@ -66,7 +67,7 @@ def test_sibling_lane_writes_never_fail_or_remove(tmp_path):
     job = _job()
     check_guard((path, baseline), job)
 
-    assert job.status == "completed"
+    assert job.status == "completed", (job.events, getattr(job, 'stderr', ''), getattr(job, 'served_witness_reason', ''))
     assert not any(e.get("event") == "git_config_mutated" for e in job.events)
     changed = [e for e in job.events if e.get("event") == "git_config_changed"]
     assert changed and changed[0]["keys"] == sorted(sibling)
@@ -84,7 +85,7 @@ def test_benign_key_change_is_not_mutation(tmp_path):
     job = _job()
     check_guard((path, baseline), job)
 
-    assert job.status == "completed"
+    assert job.status == "completed", (job.events, getattr(job, 'stderr', ''), getattr(job, 'served_witness_reason', ''))
     assert job.events == [{"event": "git_config_changed", "keys": ["core.autocrlf"]}]
     assert _get(path, "core.autocrlf") == (0, "false")
 
@@ -98,7 +99,7 @@ def test_dangerous_addition_fails_run_and_removes_only_offending_keys(tmp_path):
     job = _job()
     check_guard((path, baseline), job)
 
-    assert job.status == "failed"
+    assert job.status == "failed", (job.events, getattr(job, 'stderr', ''), getattr(job, 'served_witness_reason', ''))
     assert job.exit_code == 1
     assert any(e == {"event": "git_config_mutated", "keys": ["core.hookspath"]} for e in job.events)
     assert "secret-path" not in str(job.events)
@@ -117,7 +118,7 @@ def test_changed_dangerous_key_restores_only_that_key(tmp_path):
     job = _job()
     check_guard((path, baseline), job)
 
-    assert job.status == "failed"
+    assert job.status == "failed", (job.events, getattr(job, 'stderr', ''), getattr(job, 'served_witness_reason', ''))
     assert _get(path, "core.hooksPath") == (0, "good")
     assert _get(path, "branch.x.remote") == (0, "origin")
 
@@ -140,7 +141,7 @@ def test_listing_error_warns_without_failing_or_restoring(tmp_path, monkeypatch)
     job = _job()
     check_guard((path, baseline), job)
 
-    assert job.status == "completed"
+    assert job.status == "completed", (job.events, getattr(job, 'stderr', ''), getattr(job, 'served_witness_reason', ''))
     assert job.events == [{"event": "git_config_warning", "reason": "config_list_failed"}]
     # No restore on a listing error: nothing is removed or rewritten.
     assert _get(path, "branch.x.remote") == (0, "origin")
@@ -163,7 +164,7 @@ def test_unparseable_baseline_warns_without_failing(tmp_path, monkeypatch):
     job = _job()
     check_guard(guard, job)
 
-    assert job.status == "completed"
+    assert job.status == "completed", (job.events, getattr(job, 'stderr', ''), getattr(job, 'served_witness_reason', ''))
     assert job.events == [{"event": "git_config_warning", "reason": "baseline_unavailable"}]
     assert _get(path, "core.hooksPath") == (0, "secret")
 
@@ -197,7 +198,7 @@ def test_writer_dangerous_mutation_fails_and_removes_key(tmp_path):
         if job.job_id in runner._tasks:
             await runner._tasks[job.job_id]
 
-        assert job.status == "failed"
+        assert job.status == "failed", (job.events, job.stderr, job.served_witness_reason)
         assert job.exit_code != 0
         # Verify no secrets in event
         for e in job.events:
@@ -235,7 +236,7 @@ def test_process_benign_config_change_completes(tmp_path):
         if job.job_id in runner._tasks:
             await runner._tasks[job.job_id]
 
-        assert job.status == "completed"
+        assert job.status == "completed", (job.events, job.stderr, job.served_witness_reason)
         assert job.exit_code == 0
         event = next(e for e in job.events if e.get("event", "").startswith("git_config_"))
         assert event == {"event": "git_config_changed", "keys": ["core.autocrlf"]}
@@ -262,7 +263,7 @@ def test_sibling_branch_config_is_preserved(tmp_path, malicious):
         job = await runner.spawn(prompt="write", model_or_combo="mimo/mimo-v2.6-flash",
                                  role="implement", cwd=str(wt), wait_seconds=.5)
         await runner._tasks[job.job_id]
-        assert job.status == ("failed" if malicious else "completed")
+        assert job.status == ("failed" if malicious else "completed"), (job.events, job.stderr, job.served_witness_reason)
         assert job.exit_code == (1 if malicious else 0)
         event = next(e for e in job.events if e["event"].startswith("git_config_"))
         assert event == {"event": "git_config_mutated" if malicious else "git_config_changed",
@@ -294,7 +295,7 @@ def test_process_unchanged_config_ok(tmp_path):
         if job.job_id in runner._tasks:
             await runner._tasks[job.job_id]
 
-        assert job.status == "completed"
+        assert job.status == "completed", (job.events, job.stderr, job.served_witness_reason)
         assert job.exit_code == 0
         assert not any(e.get("event") == "git_config_mutated" for e in job.events)
         assert config_file.read_bytes() == orig_bytes
@@ -321,7 +322,7 @@ def test_non_git_cwd_ok(tmp_path):
         if job.job_id in runner._tasks:
             await runner._tasks[job.job_id]
 
-        assert job.status == "completed"
+        assert job.status == "completed", (job.events, job.stderr, job.served_witness_reason)
         assert job.exit_code == 0
         assert not any(e.get("event") == "git_config_mutated" for e in job.events)
 
@@ -348,7 +349,7 @@ def test_fix_role_dangerous_mutation_fails_and_removes_key(tmp_path):
         if job.job_id in runner._tasks:
             await runner._tasks[job.job_id]
 
-        assert job.status == "failed"
+        assert job.status == "failed", (job.events, job.stderr, job.served_witness_reason)
         assert job.exit_code != 0
         assert any(e.get("event") == "git_config_mutated" for e in job.events)
         assert subprocess.run(["git", "config", "core.sshCommand"], cwd=repo,
@@ -388,7 +389,7 @@ def test_mutated_config_on_cancelled_job(tmp_path):
         await runner.cancel(job.job_id)
         await asyncio.gather(runner._tasks[job.job_id], return_exceptions=True)
 
-        assert job.status == "failed"
+        assert job.status == "failed", (job.events, job.stderr, job.served_witness_reason)
         assert job.exit_code != 0
         assert any(e.get("event") == "git_config_mutated" for e in job.events)
         assert subprocess.run(["git", "config", "core.hooksPath"], cwd=repo,

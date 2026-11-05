@@ -124,6 +124,7 @@ def test_legacy_unknown_fallback_but_explicit_unknown_rejected():
         build_command('p', 'x/y', client='omniroute')
 
 
+@pytest.mark.real_probe
 def test_probe_presence_key_no_secret_short_empty_and_bounded(monkeypatch):
     calls, now = [], [0]
     monkeypatch.setattr(r, '_probe_served_models', lambda config: calls.append(config) or frozenset())
@@ -143,6 +144,7 @@ def test_probe_presence_key_no_secret_short_empty_and_bounded(monkeypatch):
     assert len(r._served_cache) <= 8
 
 
+@pytest.mark.real_probe
 def test_concurrent_same_key_one_probe_different_keys_not_serialized(monkeypatch):
     calls, barrier = [], threading.Barrier(2)
     def probe(config):
@@ -158,6 +160,7 @@ def test_concurrent_same_key_one_probe_different_keys_not_serialized(monkeypatch
     assert len(calls) == 2
 
 
+@pytest.mark.real_probe
 def test_concurrent_callers_share_one_subprocess(monkeypatch):
     import subprocess
     calls = []

@@ -16,6 +16,11 @@ from email.utils import parsedate_to_datetime
 
 REPROBE_MINUTES = 10
 
+#: D-3685: a booked reset never parks a leg for days: every reset is capped at
+#: now + 24 h, so the leg is checked once after the cap and re-booked if the
+#: provider still reports it limited.
+RESET_CAP_S = 86400
+
 #: Probe/harness evidence is leg-level: a probe session cannot attribute its
 #: outcome to a card's account/combo. Rows written without those dimensions
 #: stay visible to every reader of the leg, while provider responses keep the
@@ -24,14 +29,19 @@ _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL A
 
 
 def _down_seconds(down_s):
-    """Validated PLANGRAPH_LEG_DOWN_S; an invalid value falls back, never raises."""
+    """Validated PLANGRAPH_LEG_DOWN_S, capped at RESET_CAP_S; never raises.
+
+    An invalid value falls back to 1800. The 24 h cap holds on every booking
+    path (D-3685): an explicit down_s or a large PLANGRAPH_LEG_DOWN_S never
+    parks a leg for days.
+    """
     if down_s is not None:
-        return down_s
+        return min(down_s, RESET_CAP_S)
     try:
         value = float(os.environ.get('PLANGRAPH_LEG_DOWN_S', 1800))
     except (TypeError, ValueError):
         return 1800
-    return value if math.isfinite(value) and value >= 0 else 1800
+    return min(value if math.isfinite(value) and value >= 0 else 1800, RESET_CAP_S)
 
 
 class LegStateError(ValueError):
@@ -46,7 +56,55 @@ def _redact(body):
     return body[:300]
 
 
+#: D-3685: cooldown units by full word, so the match is longest-first with a
+#: word boundary ("500ms" is 0.5 s, never 500 minutes). "ms"/milliseconds are
+#: milliseconds; an unknown unit makes the whole reset unparsed (None), never
+#: a misread.
+_UNITS = {'ms': .001, 'msec': .001, 'msecs': .001,
+          'millisecond': .001, 'milliseconds': .001,
+          's': 1, 'sec': 1, 'secs': 1, 'second': 1, 'seconds': 1,
+          'm': 60, 'min': 60, 'mins': 60, 'minute': 60, 'minutes': 60,
+          'h': 3600, 'hr': 3600, 'hrs': 3600, 'hour': 3600, 'hours': 3600,
+          'd': 86400, 'day': 86400, 'days': 86400}
+
+_COOLDOWN_PREFIX = re.compile(r"resets?\s+(?:in|after)\s+", re.I)
+_COOLDOWN_PAIR = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([a-z]+)", re.I)
+
+
+def _reset_seconds(body):
+    """Return an explicit prose cooldown, keeping zero distinct from absent."""
+    match = _COOLDOWN_PREFIX.search(body)
+    if match is None:
+        return None
+    total, pos, seen = 0.0, match.end(), False
+    while True:
+        pair = _COOLDOWN_PAIR.match(body, pos)
+        if pair is None:
+            return total if seen else None
+        factor = _UNITS.get(pair[2].lower())
+        if factor is None:
+            return None  # unknown unit: the whole reset is unparsed
+        total += float(pair[1]) * factor
+        pos, seen = pair.end(), True
+
+
+def _elapsed_cooldown(headers, body):
+    """True for an explicitly elapsed cooldown (D-3685): nothing to book.
+
+    "reset after 0s"/"resets in 0s" prose or a retry-after header of 0 say the
+    window already passed: no writer books a limit row or a down_s fallback
+    for it (a shared rule, so the booking paths cannot drift apart).
+    """
+    try:
+        if float(headers.get('retry-after', 'nan')) == 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _reset_seconds(body) == 0
+
+
 def _reset(headers, body, now):
+    reset = None
     for key in ("retry-after", "x-ratelimit-reset"):
         value = headers.get(key)
         if value is None:
@@ -54,20 +112,26 @@ def _reset(headers, body, now):
         try:
             number = float(value)
             if math.isfinite(number) and number >= 0:
-                return now + number if key == "retry-after" else number
+                reset = now + number if key == "retry-after" else number
+                break
         except (ValueError, TypeError):
             try:
-                return parsedate_to_datetime(value).timestamp()
+                reset = parsedate_to_datetime(value).timestamp()
+                break
             except (ValueError, TypeError, OverflowError):
                 try:
-                    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                    reset = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                    break
                 except (ValueError, TypeError, AttributeError):
                     pass
-    match = re.search(r"resets?\s+in\s+((?:\d+(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\s*)+)", body, re.I)
-    if match:
-        return now + sum(float(n) * {"s": 1, "m": 60, "h": 3600}[unit[0].lower()]
-                         for n, unit in re.findall(r'(\d+(?:\.\d+)?)\s*([a-z]+)', match[1], re.I))
-    return None
+    if reset is None:
+        # D-3685: OmniRoute prints "(reset after 3h 12m 5s)"; accept "reset
+        # after" as well as "resets in" over the same unit parsing.
+        total = _reset_seconds(body)
+        if total is not None:
+            # "reset after 0s": the cooldown already elapsed, nothing to book.
+            reset = now + total if total > 0 else None
+    return None if reset is None else min(reset, now + RESET_CAP_S)
 
 
 class LegStateStore:
@@ -97,6 +161,10 @@ class LegStateStore:
             raise LegStateError("requires provider body or reset header")
         if not isinstance(leg, str) or not leg.strip():
             raise LegStateError("requires provider/model leg")
+        # D-3685: an explicitly elapsed cooldown books nothing -- no reset-less
+        # limit row that would read "limited" for REPROBE_MINUTES.
+        if _elapsed_cooldown(headers, body):
+            return
         reset = _reset(headers, body, now)
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, status, _redact(body), None if reset is None else reset - now, reset, now, caller, "provider-response"))
@@ -111,6 +179,8 @@ class LegStateStore:
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         now = time.time() if now is None else now
+        # _down_seconds is capped at RESET_CAP_S (D-3685): the booked down
+        # window never parks a leg past the 24 h reset cap.
         down_s = _down_seconds(down_s)
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
@@ -139,10 +209,16 @@ class LegStateStore:
     def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
+        # An explicitly elapsed cooldown is not missing reset information:
+        # neither the fallback booking nor a reset-less limit row is valid.
+        if _elapsed_cooldown({}, line):
+            return
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
         if reset is None and down_s is not None:
-            reset = now + _down_seconds(down_s)   # D-3605 (a): credit/auth refusal, no provider reset time
+            # D-3605 (a): no provider reset time; _down_seconds is capped, so
+            # the fallback stays inside RESET_CAP_S like every other booking.
+            reset = now + _down_seconds(down_s)
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
                        (leg, account, combo, 429, _redact(line),
@@ -170,11 +246,21 @@ class LegStateStore:
                     # Two consecutive probe failures before down (M11): one
                     # failure is a reprobe hint, never proof the leg is gone.
                     streak = 1
+                    behind = None
                     for older in rows:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
                             streak += 1
                         else:
+                            behind = older
                             break
+                    # D-3685: a newer probe failure never hides a limit row
+                    # whose reset is still ahead. Skip the leading probe-fail
+                    # rows; if the next row is such a limit, it is the evidence.
+                    if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
+                            and behind['reset_at'] is not None and now < behind['reset_at']):
+                        evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
+                        evidence["event_id"] = behind["id"]
+                        return {"state": "limited", "evidence": evidence}
                     reset = row["reset_at"]
                     down = streak >= 2 and reset is not None and now < reset
                     return {'state': 'down' if down else 'reprobe', 'evidence': evidence}
