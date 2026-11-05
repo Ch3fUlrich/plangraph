@@ -157,11 +157,13 @@ def test_host_run_probes(tmp_path, monkeypatch):
     os.utime(log, (100, 100))
     assert check(159) == []
     assert check(160)[0]['rule'] == 'run-silent'
+    assert check(160)[0]['episode'] == 100
     assert not cancelled
     assert check(220)[0]['cancelled']
     assert cancelled == ['run-fixture']
     os.utime(log, (220, 220))
     assert check(221) == []
+    assert check(280)[0]['episode'] == 220
     log.unlink()
     assert check(500)[0]['rule'] == 'unknown'
     assert len(cancelled) == 1
@@ -175,6 +177,10 @@ def test_host_run_probes(tmp_path, monkeypatch):
     def gone(*args):
         raise ProcessLookupError()
     monkeypatch.setattr(os, 'kill', gone)
+    log.write_text('x' * 250 + '\n')
+    os.utime(log, (220, 220))
+    orphan = check(500)[0]
+    assert (orphan['age'], orphan['seconds_silent'], orphan['last_line']) == (500, 280, 'x' * 200)
     log.unlink()
     assert check(500)[0]['rule'] == 'run-orphan'
     import json

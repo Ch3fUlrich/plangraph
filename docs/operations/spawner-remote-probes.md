@@ -10,9 +10,9 @@ the notification command can use `PLANGRAPH_PROBE_NOTIFY_CMD`.
 Installation creates `plangraph-remote-probe.timer`, disabled by default;
 configure its environment and explicitly enable it on the polling host.
 Set `PLANGRAPH_PROBE_ROOT` to the remote checkout root; SSH uses its `src` tree.
-Completion IDs are stable per run and rule, independent of changing ages.
-Notification reservations persist before CMD, preventing replay across restarts.
-A crash before spawning CMD can lose delivery; exactly-once external effects require
-an idempotent transactional receiver. The event ID supports reconciliation.
-Resetting corrupt probe state can replay previously reserved findings.
+Completion IDs include cancellation disposition and stall episode (log mtime), not ages.
+V4 means at-least-once delivery, not exactly-once: CMD runs before saving seen or acking.
+Failed or crashed CMD retries next poll; a crash after its effect can replay delivery.
+Successful deliveries are deduplicated across restarts; no exactly-once protocol is provided.
+Resetting corrupt probe state can replay previously delivered findings.
 Unknown evidence is delivered, never considered silent and never cancelled.

@@ -82,17 +82,41 @@ def test_outage_notify_retry(tmp_path, monkeypatch):
     assert not json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['down']
     poll(['fixture'], 'notify', tmp_path)
     poll(['fixture'], 'notify', tmp_path)
-    assert calls == ['notify']
+    assert calls == ['notify', 'notify']
 
 
-def test_reservation_survives_crash(tmp_path, monkeypatch):
+@pytest.mark.parametrize('failure', [SystemExit, subprocess.CalledProcessError, subprocess.TimeoutExpired])
+def test_failed_notify_retries(tmp_path, monkeypatch, failure):
+    calls = []
     def run(argv, **kwargs):
         if argv[0] == 'ssh':
             return subprocess.CompletedProcess(argv, 0, json.dumps({'a' * 64: {'rule': 'run-silent'}}))
-        assert json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['seen']
-        raise SystemExit()
+        calls.append(argv)
+        if len(calls) == 1:
+            raise failure() if failure is SystemExit else failure(1, argv)
     monkeypatch.setattr(subprocess, 'run', run)
-    with pytest.raises(SystemExit):
+    if failure is SystemExit:
+        with pytest.raises(SystemExit):
+            poll(['fixture'], 'notify', tmp_path)
+    else:
         poll(['fixture'], 'notify', tmp_path)
     poll(['fixture'], 'notify', tmp_path)
+    assert len(calls) == 2
     assert json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['acks'] == ['a' * 64]
+
+
+def test_completion_dispositions_reach_notify(tmp_path, monkeypatch):
+    from plangraph.spawner.remote_probe import exchange
+    from plangraph.spawner.stall_watchdog import deliver_event
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    calls = []
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            return subprocess.CompletedProcess(argv, 0, json.dumps(exchange([])))
+        calls.append(json.loads(kwargs['input']))
+    monkeypatch.setattr(subprocess, 'run', run)
+    event = dict(rule='run-silent', run_id='fixture', kind='completion', episode=100)
+    for change in ({}, {'cancelled': True}, {'episode': 200}):
+        deliver_event(tmp_path, dict(event, **change))
+        poll(['fixture'], 'notify', tmp_path)
+    assert len(calls) == len({e['event_id'] for e in calls}) == 3

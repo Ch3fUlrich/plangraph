@@ -1,4 +1,4 @@
-"""Pull durable host findings with durable notification reservations."""
+"""Pull durable host findings with at-least-once notification delivery."""
 import argparse
 import hashlib
 import json
@@ -34,10 +34,10 @@ def poll(hosts, command, state):
         atomic_write_private(path, json.dumps(saved))
     def notify(key, event, entry):
         if key not in entry['seen']:
-            entry['seen'].append(key)
-            save()
             subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
                            text=True, check=True, timeout=20)
+            entry['seen'].append(key)
+            save()
     for host in hosts:
         entry = saved.setdefault(host, dict(failures=0, outage=0, down=False, seen=[], acks=[]))
         try:

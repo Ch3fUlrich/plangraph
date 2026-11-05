@@ -82,6 +82,16 @@ def probe_run(state, record, now):
     event = dict(run_id=record['run_id'], leg=record.get('leg'), role=record.get('role'),
                  age=None, seconds_silent=None, last_line='', rule='unknown')
     try:
+        event['age'] = max(0, now - record['started'])
+        log = directory / 'live.log'
+        try:
+            with log.open(encoding='utf-8') as stream:
+                stream.seek(max(0, log.stat().st_size - 4096))
+                lines = stream.read().splitlines()
+            event.update(seconds_silent=max(0, now - log.stat().st_mtime),
+                         last_line=lines[-1][:200] if lines else '')
+        except (OSError, UnicodeError):
+            pass
         if record.get('status') == 'running':
             pid = record.get('pid')
             if not isinstance(pid, int) or pid <= 0 or os.name == 'nt':
@@ -93,20 +103,17 @@ def probe_run(state, record, now):
                 record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
                 atomic_write_private(directory / 'record.json', json.dumps(record))
                 return event
-        log = directory / 'live.log'
-        with log.open(encoding='utf-8') as stream:
-            stream.seek(max(0, log.stat().st_size - 4096))
-            lines = stream.read().splitlines()
-        silent = max(0, now - log.stat().st_mtime)
+        silent = event['seconds_silent']
+        if silent is None:
+            return event
         limit = float(record.get('card', {}).get('stall_min', 12)) * 60
         if not math.isfinite(limit) or limit <= 0:
             return event
-        event.update(age=max(0, now - record['started']), seconds_silent=silent,
-                     last_line=lines[-1][:200] if lines else '')
         if record.get('status') == 'running':
             if silent < limit:
                 return None
             event['rule'] = 'run-silent'
+            event['episode'] = log.stat().st_mtime
             if silent >= 2 * limit:
                 from .runner import spawn_service
                 result = asyncio.run(spawn_service(state=state).cancel(record['run_id']))
@@ -210,7 +217,8 @@ def deliver_event(state, event, *, now=None, interval=None):
     from plangraph.spawner.private_io import atomic_write_private
     if event.get('kind') == 'completion':
         event = dict(event, event_id=hashlib.sha256(json.dumps(
-            [event.get('run_id'), event.get('rule')]).encode()).hexdigest())
+            [event.get('run_id'), event.get('rule'), event.get('cancelled'),
+             event.get('episode')]).encode()).hexdigest())
     payload = json.dumps(event, sort_keys=True)
     if event.get('kind') == 'clear':
         for folder in ('alerts', 'outbox'):
@@ -222,6 +230,8 @@ def deliver_event(state, event, *, now=None, interval=None):
                     path.unlink(missing_ok=True)
         return
     identity = {k: event.get(k) for k in ('rule', 'run_id', 'item_key', 'kind', 'recipient')}
+    if event.get('kind') == 'completion':
+        identity['event_id'] = event['event_id']
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     now = time.time() if now is None else now
     interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')) if interval is None else interval
