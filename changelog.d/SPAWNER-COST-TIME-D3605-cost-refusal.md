@@ -1,0 +1,1 @@
+- **SPAWNER-COST-TIME-D3605:** End busy, overloaded and 503 dispatch attempts through the guarded live refusal path; book planner-visible bounded cooldown and notify once, with hermetic synthetic replay showing four refused choices reduced to one dead-leg attempt per cooldown (not live acceptance or measured token savings).

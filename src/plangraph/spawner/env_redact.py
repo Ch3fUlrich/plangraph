@@ -19,6 +19,22 @@ _QUOTA_MARKER = re.compile(
 #: next to a quota/rate-limit name.
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
+_BUSY_LINE = re.compile(
+    r'\s*(?:error:\s*(?:server busy|too busy|overloaded)\b|HTTP 503:)', re.I)
+
+
+def busy_refusal(text):
+    """Unavailable dispatch evidence, not a mid-sentence discussion of errors."""
+    for line in normalize(text).splitlines():
+        if _BUSY_LINE.match(line):
+            return line.strip()
+        try:
+            response = json.loads(line).get('autoos_provider_response', {})
+            if response.get('status') == 503:
+                return 'HTTP 503: ' + str(response.get('body', ''))[:200]
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return None
 
 
 def _is_numeric(value):
@@ -43,6 +59,9 @@ def first_reason(text):
 def harness_limit_line(exit_code, stdout, stderr):
     if exit_code in (None, 0):
         return None
+    busy = busy_refusal(stderr) or busy_refusal(stdout)
+    if busy:
+        return busy
     # Quota evidence needs an error-shaped or start-anchored line (D-3257):
     # a mid-line mention in prose, a traceback or a retry log never marks a
     # leg. Agent prose on stdout only counts via its error-shaped lines.
@@ -68,6 +87,9 @@ def early_refusal(complete_text):
     quota marker: a start-anchored retry log ('Rate limit reached, retrying')
     or marker prose under an error shape never kills a healthy run (F1).
     """
+    busy = busy_refusal(complete_text)
+    if busy:
+        return busy
     lines = normalize(complete_text).splitlines()
     for line in lines:
         text = line.strip()
@@ -88,6 +110,9 @@ def unavailable_reason(exit_code, stdout, stderr):
     """Failed harness evidence, in stderr-first order; never task prose on success."""
     if exit_code == 0:
         return None
+    busy = busy_refusal(stderr) or busy_refusal(stdout)
+    if busy:
+        return busy
     stdout, stderr = normalize(stdout), normalize(stderr)
     markers = ('model unavailable', 'not served', 'unknown model', 'not_served_on_host')
     def marked(value):
