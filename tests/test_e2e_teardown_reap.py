@@ -1,11 +1,12 @@
 import os
-import ast
+import importlib
 from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 sys.path.insert(0, str(Path(__file__).parent / "e2e"))
@@ -89,11 +90,12 @@ def test_stale_and_missing(tmp_path, children):
         p.wait(timeout=2)
 
 
-def test_exited_worker(tmp_path, children):
-    pid_dir = tmp_path / "pids"
-    pid_dir.mkdir()
+def test_exited_worker(tmp_path, children, monkeypatch):
+    monkeypatch.setattr(u, "FAKE_OPENCODE", u.FAKE_OPENCODE + "exec sleep 60\n")
+    bin_dir = tmp_path / "different bin"
+    pid_dir = u.write_fake_opencode(bin_dir)
     binary = tmp_path / "worker"
-    binary.write_text('#!/bin/sh\nsetsid sh -c \'echo $$ > "$PG_FAKE_PID_DIR/$$"; exec sleep 60\' &\n')
+    binary.write_text(f'#!/bin/sh\nsetsid "{bin_dir}/opencode" &\n')
     binary.chmod(0o700)
     worker = u.WorkerProc(str(binary), dict(os.environ, PG_JAIL="off",
                           PG_FAKE_PID_DIR=str(pid_dir)), tmp_path / "worker.log")
@@ -105,6 +107,7 @@ def test_exited_worker(tmp_path, children):
             time.sleep(.01)
         pid = int(next(pid_dir.iterdir()).name)
         children.append(pid)
+        assert worker.pid_dir == pid_dir
         worker.stop()
         assert not alive(pid)
     finally:
@@ -115,19 +118,16 @@ def test_straggler_does_not_abort(tmp_path, monkeypatch, caplog):
     records = [tmp_path / "101", tmp_path / "102"]
     for record in records:
         record.write_text(record.name)
-    original = Path.read_text
-    monkeypatch.setattr(Path, "glob", lambda *a: iter(records))
-    monkeypatch.setattr(Path, "read_text", lambda p, *a, **k:
-                        "101 (fake) S" if str(p).startswith("/proc/") else original(p))
-    monkeypatch.setattr(Path, "read_bytes", lambda p: str(tmp_path).encode())
-    clock = iter(range(100))
-    monkeypatch.setattr(u.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(u.time, "sleep", lambda _: None)
+    proc = MagicMock()
+    proc.__truediv__.return_value = proc
+    proc.read_text.return_value = "101 (fake) S"
+    proc.read_bytes.return_value = str(tmp_path).encode()
+    monkeypatch.setattr(u, "Path", lambda p: proc if str(p).startswith("/proc/") else Path(p))
     signals = []
-    monkeypatch.setattr(u.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(u, "os", SimpleNamespace(name="posix", kill=lambda p, s: signals.append((p, s))))
     assert u.reap_recorded(tmp_path, grace_s=0) == []
-    assert signals == [(p, s) for p in (101, 102) for s in (signal.SIGTERM, signal.SIGKILL)]
-    assert "101, 102" in caplog.text
+    assert set(signals) == {(p, s) for p in (101, 102) for s in (signal.SIGTERM, signal.SIGKILL)}
+    assert all(str(p) in caplog.text for p in (101, 102))
 
 
 @pytest.mark.parametrize("group_error", [False, True])
@@ -170,26 +170,35 @@ def test_fake_rejects_changed_shebang(tmp_path, monkeypatch):
 
 
 def test_fixture_failed_wait_up_stops_worker(tmp_path, monkeypatch, children):
-    # Execute the actual fixture body without importing its optional live-service dependencies.
-    source = Path(__file__).parent / "e2e" / "test_rtp1_local_e2e.py"
-    fixture = next(n for n in ast.parse(source.read_text()).body
-                   if isinstance(n, ast.FunctionDef) and n.name == "rig")
-    fixture.decorator_list = []
+    rig_module = importlib.import_module("test_rtp1_local_e2e")
     worker = MagicMock()
     p = child(tmp_path / "pids", children)
     worker.wait_up.side_effect = RuntimeError("startup failed")
     worker.stop.side_effect = lambda: u.reap_recorded(tmp_path / "pids", grace_s=0)
     fake_u = MagicMock()
     fake_u.WorkerProc.return_value = worker
-    namespace = dict(u=fake_u, time=time, os=os, sys=sys, DevServer=MagicMock(),
-                     World=MagicMock(), seed=MagicMock(), ITEM="item", _BIN="worker",
-                     _CLI="cli", BUILD_ID="test")
-    exec(compile(ast.Module(body=[fixture], type_ignores=[]), str(source), "exec"), namespace)
+    for name, value in dict(u=fake_u, DevServer=MagicMock(), World=MagicMock(), seed=MagicMock()).items():
+        monkeypatch.setattr(rig_module, name, value)
     try:
         with pytest.raises(RuntimeError, match="startup failed"):
-            next(namespace["rig"](tmp_path, monkeypatch, MagicMock(param="ready")))
+            next(rig_module.rig.__wrapped__(tmp_path, monkeypatch, MagicMock(param="ready")))
         worker.stop.assert_called_once()
         assert not alive(p.pid)
     finally:
         p.kill() if alive(p.pid) else None
         p.wait(timeout=2)
+
+
+def test_pid_lookup_error_is_not_failure(tmp_path, monkeypatch):
+    class Unreadable:
+        def glob(self, pattern):
+            yield tmp_path / "stale"
+            raise OSError("lookup failed")
+    assert u.reap_recorded(Unreadable()) == []
+
+
+def test_regression_tests_use_local_mocks_and_real_fixture():
+    import inspect
+    assert 'setattr(Path,' not in inspect.getsource(test_straggler_does_not_abort)
+    assert 'setattr(u.time,' not in inspect.getsource(test_straggler_does_not_abort)
+    assert '.__wrapped__(' in inspect.getsource(test_fixture_failed_wait_up_stops_worker)

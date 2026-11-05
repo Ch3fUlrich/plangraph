@@ -105,7 +105,7 @@ def init_repo(path: Path) -> str:
     return git(path, "rev-parse", "HEAD")
 
 
-def write_fake_opencode(bin_dir: Path) -> None:
+def write_fake_opencode(bin_dir: Path) -> Path:
     """Temp name + rename so the worker never execs a file that is still open for write."""
     bin_dir.mkdir(parents=True)
     tmp = bin_dir / "opencode.tmp"
@@ -116,6 +116,7 @@ def write_fake_opencode(bin_dir: Path) -> None:
     tmp.write_text(f'{shebang}\necho $$ > {shlex.quote(str(pid_dir.resolve()))}/$$\n{body}')
     tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR)
     os.replace(tmp, bin_dir / "opencode")
+    return pid_dir
 
 
 def reap_recorded(pid_dir: Path, grace_s: float = 1.0) -> list[int]:
@@ -136,7 +137,11 @@ def reap_recorded(pid_dir: Path, grace_s: float = 1.0) -> list[int]:
             return False
 
     killed, stragglers = [], []
-    for record in pid_dir.glob("*"):
+    try:
+        records = list(pid_dir.glob("*"))
+    except OSError:
+        return []
+    for record in records:
         try:
             pid = int(record.read_text().strip())
             if pid <= 1 or not matches(pid):
