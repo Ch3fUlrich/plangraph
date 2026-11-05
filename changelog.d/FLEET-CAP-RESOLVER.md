@@ -1,0 +1,1 @@
+- **FLEET-CAP-RESOLVER:** Add a pure shared S12 resolver with exact-SHA recorded activation, catalog provenance, explicit unknown alarms and default prior-threshold pass-through; no callers enabled.
