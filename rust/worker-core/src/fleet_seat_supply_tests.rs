@@ -23,7 +23,7 @@ fn fixture() -> (Policy, Input) {
         claimed_family: Some("claimed".into()),
         witnessed_family: None,
         header: b"NO TOOLS\r\nold\0".to_vec(),
-        mandatory_no_tools_header: Some(b"NO TOOLS\r\n".to_vec()),
+        mandatory_no_tools_header: Some(b"NO TOOLS\r\nold\0".to_vec()),
         judge_only: true,
         judge_forbidden_writer_families: BTreeSet::from(["same".into()]),
         unavailable: false,
@@ -41,7 +41,7 @@ fn fixture() -> (Policy, Input) {
             reserved_gpt_family: "gpt".into(),
             writer_families: BTreeSet::from(["writer-a".into(), "writer-b".into()]),
             disallowed_pairs: BTreeSet::new(),
-            mandatory_no_tools_header: Some(b"NO TOOLS\r\n".to_vec()),
+            mandatory_no_tools_header: Some(b"NO TOOLS\r\nold\0".to_vec()),
             judge_only: true,
             judge_forbidden_writer_families: BTreeSet::from(["same".into()]),
         },
@@ -113,6 +113,7 @@ fn header_judge_and_unavailable() {
     p.writer_families.remove("same");
     i.seats[0].unavailable = true;
     assert!(count(&p, &i).readings[0].disabled);
+    assert!(!count(&p, &i).readings[0].eligible);
     i.seats[0].probe.authorization_reference = "authorized".into();
     assert!(!count(&p, &i).hold);
     i.seats[0].probe.void = true;
@@ -197,5 +198,39 @@ fn unconsumed_pairs_fail_closed() {
         let r = count(&p, &i);
         assert!(r.hold && r.families.is_empty());
         assert!(r.findings.contains("unconsumed_policy_pair"));
+    }
+}
+
+#[test]
+fn retained_header_is_exact() {
+    let (mut p, mut i) = fixture();
+    i.seats[0].unavailable = true;
+    i.seats[0].probe.authorization_reference = "authorized".into();
+    for header in [b"NO TOOLS\r\n".as_slice(), b"NO TOOLS\r\nold\0extra"] {
+        i.seats[0].header = header.to_vec();
+        let r = count(&p, &i);
+        assert!(!r.readings[0].eligible && r.readings[0].disabled);
+    }
+    p.mandatory_no_tools_header = Some(b"NO TOOLS".to_vec());
+    i.seats[0].mandatory_no_tools_header = Some(b"NO".to_vec());
+    i.seats[0].header = b"NO TOOLS\r\n".to_vec();
+    assert!(!count(&p, &i).readings[0].eligible);
+}
+
+#[test]
+fn unavailable_requires_configured_run() {
+    let (p, mut i) = fixture();
+    i.seats[0].unavailable = true;
+    i.seats[0].probe.authorization_reference = "authorized".into();
+    assert!(!count(&p, &i).readings[0].disabled);
+    for case in 0..2 {
+        let mut bad = p.clone();
+        if case == 0 {
+            bad.quorum = 0;
+        } else {
+            bad.disallowed_pairs
+                .insert(("writer-a".into(), "absent".into()));
+        }
+        assert!(count(&bad, &i).readings[0].disabled, "case {case}");
     }
 }

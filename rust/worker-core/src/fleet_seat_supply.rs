@@ -176,7 +176,7 @@ pub fn count(policy: &Policy, input: &Input) -> State {
         .all(|required| {
             required
                 .as_ref()
-                .is_none_or(|h| !h.is_empty() && seat.header.starts_with(h))
+                .is_none_or(|h| !h.is_empty() && seat.header == *h)
         });
         if !route_valid || !proved {
             findings.insert("unknown_catalog_or_route_evidence".into());
@@ -186,7 +186,9 @@ pub fn count(policy: &Policy, input: &Input) -> State {
         }
         let success = seat.probe.successful && !seat.probe.void && !seat.probe.timeout;
         let disabled = seat.unavailable
-            && !(success
+            && !(valid
+                && !unconsumed_pairs
+                && success
                 && text(&seat.probe.authorization_reference)
                 && route_valid
                 && proved
