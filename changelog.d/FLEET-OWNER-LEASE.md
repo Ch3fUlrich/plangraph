@@ -1,1 +1,1 @@
-- **FLEET-OWNER-LEASE (part 1):** Add an unwired owner record schema, session-scoped reads and explicit migration; transitions, durable CAS and activation remain separate.
+- **FLEET-OWNER-LEASE (part 1):** Add an unwired owner record schema, session-scoped reads and validated explicit migration and guarded pure epoch/identity transitions; durable CAS and activation remain separate.

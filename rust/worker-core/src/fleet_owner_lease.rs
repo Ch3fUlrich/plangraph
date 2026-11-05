@@ -7,7 +7,7 @@
 //! Python consumers read JSON or use a later thin binary: SourceFileLoader
 //! cannot import Rust. No binary is needed for this contract-only slice.
 //! Paths are caller-supplied relative slots, never derived from opaque IDs.
-//! Part 2 adds pure transitions; part 3 adds durable CAS and secure path resolution.
+//! Pure transitions are included; durable CAS and activation remain separate.
 //! Known is validated data, not ownership permission; Unknown never authorizes.
 //! Read never infers death, expiry or freedom from process observations.
 use serde::{Deserialize, Serialize};
@@ -141,6 +141,43 @@ impl Record {
             && self.runners == State::Free
     }
 }
+/// Pure comparison only: callers must later persist with durable CAS.
+#[derive(Clone, Debug)]
+pub enum Transition {
+    Acquire(Identity),
+    Complete(String),
+    Release,
+}
+pub fn advance(
+    record: &Record,
+    expected_epoch: u64,
+    expected_identity: &State<Identity>,
+    transition: Transition,
+) -> Result<Record, Refusal> {
+    record.validate(record.updated_at)?;
+    if record.epoch != expected_epoch || &record.identity != expected_identity {
+        return Err(Refusal::Invalid);
+    }
+    let mut next = record.clone();
+    match transition {
+        Transition::Acquire(i) if record.identity == State::Free && record.clear() => {
+            next.identity = State::Busy(i);
+        }
+        Transition::Release if matches!(record.identity, State::Busy(_)) && record.clear() => {
+            next.identity = State::Free;
+        }
+        Transition::Complete(id)
+            if matches!(&record.pending, State::Busy(t) if t.id == id)
+                && matches!(record.identity, State::Busy(_)) =>
+        {
+            next.pending = State::Free;
+        }
+        _ => return Err(Refusal::Unresolved),
+    }
+    next.epoch = record.epoch.checked_add(1).ok_or(Refusal::Invalid)?;
+    next.validate(next.updated_at)?;
+    Ok(next)
+}
 /// Explicit bootstrap only; the caller must prove the slot has never existed.
 pub fn bootstrap(session: &str, run: &str, now_s: i64) -> Result<Record, Refusal> {
     let r = Record {
@@ -181,11 +218,35 @@ pub fn slot_path(root: &Path, slot: &Path) -> Result<PathBuf, Refusal> {
 }
 /// Inject I/O results for deterministic unreadable/lost-record handling. Never bootstraps.
 pub fn decode(session: &str, run: &str, bytes: io::Result<Vec<u8>>, now_s: i64) -> Read {
+    decode_inner(session, run, bytes, now_s, false)
+}
+/// Explicitly validate v0; unknown lifecycle fields remain non-authorizing.
+pub fn migrate_v0(
+    session: &str,
+    run: &str,
+    bytes: io::Result<Vec<u8>>,
+    now_s: i64,
+) -> Result<Record, Refusal> {
+    match decode_inner(session, run, bytes, now_s, true) {
+        Read::Known(r) => Ok(r),
+        Read::Unknown { .. } => Err(Refusal::Invalid),
+    }
+}
+fn decode_inner(
+    session: &str,
+    run: &str,
+    bytes: io::Result<Vec<u8>>,
+    now_s: i64,
+    migration: bool,
+) -> Read {
     let result = (|| -> Result<Record, String> {
         let bytes = bytes.map_err(|e| format!("io:{:?}", e.kind()))?;
         let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "malformed")?;
         let r = match v["schema_version"].as_u64() {
-            Some(1) => serde_json::from_slice::<Record>(&bytes).map_err(|_| "schema")?,
+            Some(1) if !migration => {
+                serde_json::from_slice::<Record>(&bytes).map_err(|_| "schema")?
+            }
+            Some(0) if !migration => return Err("migration required".into()),
             Some(0) => {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -247,6 +308,28 @@ mod tests {
             matches!(r, Read::Unknown { session_id, reason: why, alarm: true }
             if session_id == "session-a" && why.contains(reason)) ); }
     #[test]
+    fn advance_guards_and_exact_epoch() {
+        let r = bootstrap("session-a", "run-a", 10).unwrap();
+        assert!(advance(&r, 1, &State::Free, Transition::Acquire(owner())).is_err());
+        let busy = advance(&r, 0, &State::Free, Transition::Acquire(owner())).unwrap();
+        assert_eq!(busy.epoch, 1);
+        assert!(advance(&busy, 0, &State::Free, Transition::Acquire(owner())).is_err());
+        let mut reused = owner(); reused.start = "birth-b".into();
+        assert!(advance(&busy, 1, &State::Busy(reused), Transition::Release).is_err());
+        assert_eq!(advance(&busy, 1, &busy.identity, Transition::Release).unwrap().epoch, 2);
+        let mut pending = busy.clone(); pending.pending = State::Busy(Transaction {
+            id: "tx-a".into(), phase: Phase::Prepared, successor: Successor::Unknown });
+        assert!(advance(&pending, 1, &pending.identity, Transition::Complete("tx-b".into())).is_err());
+        assert_eq!(advance(&pending, 1, &pending.identity, Transition::Complete("tx-a".into())).unwrap().epoch, 2);
+        for now in [19, 20, 21] { for field in 0..4 {
+            let mut blocked = busy.clone(); let l = Lease { id: "lease-a".into(), owner: owner(), expires_at: 20 };
+            match field { 0 => blocked.pending = pending.pending.clone(), 1 => blocked.finalizer = State::Busy(l),
+                2 => blocked.pause = State::Busy(l), _ => blocked.runners = State::Busy(vec![l]) }
+            assert_eq!(decode("session-a", "run-a", encoded(&blocked), now), Read::Known(blocked.clone()));
+            assert!(advance(&blocked, 1, &blocked.identity, Transition::Release).is_err());
+        } }
+    }
+    #[test]
     fn json_paths_and_explicit_states() { let mut r = bootstrap("session-a", "run-a", 10).unwrap();
         assert_eq!(r.identity, State::Free); r.identity = State::Busy(owner());
         r.pending = State::Busy(Transaction { id: "tx-a".into(), phase: Phase::Launched,
@@ -293,11 +376,13 @@ mod tests {
     #[test]
     fn migration_is_explicit_and_non_authorizing() {
         let mut v = serde_json::json!({"schema_version":0,"session_id":"session-a",
-            "run_id":"run-a","epoch":42,"identity":owner()}); let Read::Known(r) = decode( "session-a",
-            "run-a", Ok(serde_json::to_vec(&v).unwrap()), 10, ) else { panic!("migration refused") };
+            "run_id":"run-a","epoch":42,"identity":owner()}); unknown(decode("session-a", "run-a", Ok(serde_json::to_vec(&v).unwrap()), 10), "migration required");
+        let r = migrate_v0( "session-a",
+            "run-a", Ok(serde_json::to_vec(&v).unwrap()), 10, ).unwrap();
+        assert!(advance(&r, 42, &r.identity, Transition::Acquire(owner())).is_err());
+        assert!(advance(&r, 42, &r.identity, Transition::Release).is_err());
         assert_eq!((r.epoch, r.identity.clone()), (42, State::Busy(owner()))); assert_eq!(
             (r.pending, r.pause, r.finalizer, r.runners), ( State::Unknown, State::Unknown,
-                State::Unknown, State::Unknown ) ); v["identity"]["start"] = "".into(); unknown( decode(
-                "session-a", "run-a", Ok(serde_json::to_vec(&v).unwrap()), 10, ), "Invalid", );
+                State::Unknown, State::Unknown ) ); v["identity"]["start"] = "".into(); assert!(migrate_v0("session-a", "run-a", Ok(serde_json::to_vec(&v).unwrap()), 10).is_err());
         v["schema_version"] = 2.into(); unknown( decode( "session-a", "run-a",
                 Ok(serde_json::to_vec(&v).unwrap()), 10, ), "unsupported", ); } }
