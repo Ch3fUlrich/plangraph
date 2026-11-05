@@ -26,7 +26,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
-    from hook_common import read_stdin_text, read_text_capped, safe_id, state_home  # noqa: E402
+    from context_guard import HANDOFF_PATH_ENV, SUBAGENT_BACKSTOP
+except Exception:  # missing or broken guard: main() retains the fail-silent diagnostic
+    HANDOFF_PATH_ENV = SUBAGENT_BACKSTOP = None
+
+try:
+    from hook_common import read_stdin_text, read_text_capped, safe_id, state_home, write_json  # noqa: E402
 except ImportError:  # a half-installed hooks dir: main() says so and exits 0, as for a missing context_guard.py
     safe_id = state_home = read_stdin_text = read_text_capped = None
 
@@ -45,7 +50,9 @@ def add_card_rule(out: str) -> str:
         hso = doc["hookSpecificOutput"]
         context = hso.get("additionalContext")
         if isinstance(context, str) and _HANDOFF_LINE.match(context):
-            hso["additionalContext"] = context + CARD_RULE
+            backstop = SUBAGENT_BACKSTOP
+            hso["additionalContext"] = (context[:-len(backstop)] + CARD_RULE + backstop
+                                        if context.endswith(backstop) else context + CARD_RULE)
             return json.dumps(doc) + "\n"
     except Exception:
         pass
@@ -104,7 +111,25 @@ def settings_thresholds(cwd=None):
     return out
 
 
+def set_thresholds(args) -> int:
+    """--set SESSION_ID HANDOFF HARD: atomically configure one attended session."""
+    try:
+        if len(args) != 4 or not safe_id(args[1]):
+            return 2
+        handoff, hard = int(args[2]), int(args[3])
+        if handoff <= 0 or hard <= handoff:
+            return 2
+        directory = overrides_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        write_json(directory / (args[1] + ".json"), {"handoff": handoff, "hard": hard})
+        return 0
+    except Exception:
+        return 2
+
+
 def main() -> int:
+    if sys.argv[1:2] == ["--set"]:
+        return set_thresholds(sys.argv[1:])
     if state_home is None:
         print("ctx_guard_session: hook_common.py missing next to this hook; context guard is off", file=sys.stderr)
         return 0
@@ -121,6 +146,10 @@ def main() -> int:
     if doc and doc.get("off") is True:
         return 0
     if doc:
+        # Launch-time, session-local private destination, alongside handoff/hard.
+        path = doc.get("handoff_path")
+        if HANDOFF_PATH_ENV and isinstance(path, str) and path and "\x00" not in path:
+            os.environ[HANDOFF_PATH_ENV] = path
         for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
             val = doc.get(key)
             if isinstance(val, int) and not isinstance(val, bool):
