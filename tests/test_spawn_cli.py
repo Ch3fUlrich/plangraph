@@ -10,6 +10,7 @@ from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncom
 from plangraph.spawner.runner import spawn_service
 from plangraph.spawner.leg_state import LegStateStore
 import pytest, sys, os
+from fake_pid import FAKE_PID
 from pathlib import Path
 pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owned via the fake provider, never live host pids
 
@@ -175,12 +176,12 @@ def test_cancel_injected_windows_killer(tmp_path):
             calls.append(pid)
         runner = SpawnerRunner(tree_killer=killer)
         runner.jobs['fake'] = JobInfo('fake', 'running', '', '')
-        runner._owned = {'fake': dict(pid=123, pid_start='fake-token', job_object=False)}   # r3 V3: never a live host pid
+        runner._owned = {'fake': dict(pid=FAKE_PID, pid_start='fake-token', job_object=False)}   # r3 V3: never a live host pid
         class Process:
-            pid = 123
+            pid = FAKE_PID
         runner._processes['fake'] = Process()
         assert (await runner.cancel('fake'))['status'] == 'cancelled'
-        assert calls == [123]
+        assert calls == [FAKE_PID]
     asyncio.run(run())
 
 

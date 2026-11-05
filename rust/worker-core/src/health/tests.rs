@@ -1,5 +1,111 @@
 use super::*;
 
+#[test]
+fn non_verdict_probe_loop() {
+    let mut rows = vec![row(Class::HangSilent, 0)];
+    for cycle in 1..=7 {
+        let due = health(&rows, rows.last().unwrap().ts).until_s.unwrap();
+        for count in 1..=3 {
+            let ts = due + (count - 1) * 60;
+            let mut observation = row(Class::HangSilent, ts);
+            observation.kind = Some("observation".into());
+            observation.run_id = "probe".into();
+            observation.duration_s = Some(7200);
+            rows.push(observation);
+            let h = health(&rows, ts);
+            let (state, n, pending, gap) = if count < 3 {
+                (State::HalfOpen, cycle, count as u32, 60)
+            } else {
+                (State::Open, cycle + 1, 0, backoff_s(cycle + 1))
+            };
+            assert_eq!((h.state, h.n, h.non_verdict_count), (state, n, pending));
+            assert_eq!(h.until_s, Some(ts + gap));
+            let mut reversed = rows.clone();
+            reversed.reverse();
+            assert_eq!(health(&reversed, ts), h);
+            assert_eq!(health(&rows, ts), h);
+        }
+    }
+}
+
+#[test]
+fn non_verdict_verdict_restarts_count() {
+    let mut rows = vec![row(Class::HangSilent, 0)];
+    for (ts, kind, class, expected) in [
+        (300, true, Class::Ok, 1),
+        (360, false, Class::Empty, 0),
+        (960, true, Class::Empty, 1),
+        (1020, false, Class::Ok, 0),
+        (1080, true, Class::HangSilent, 0),
+    ] {
+        let mut r = row(class, ts);
+        r.kind = kind.then(|| "observation".into());
+        rows.push(r);
+        assert_eq!(health(&rows, ts).non_verdict_count, expected);
+    }
+    assert_eq!(health(&rows, 1080), Health::default());
+}
+
+#[test]
+fn dedupe_preserves_other_scopes() {
+    let a = row(Class::Empty, 10);
+    for scope in ["leg", "route"] {
+        let mut b = a.clone();
+        b.ts = 11;
+        if scope == "leg" {
+            b.leg_key = "other".into();
+        } else {
+            b.route_key = "other".into();
+        }
+        assert_eq!(health(&[a.clone(), b], 10).strikes, 1);
+    }
+}
+
+#[test]
+fn duplicate_order_is_stable() {
+    let a = row(Class::Empty, 10);
+    for ts in [10, 20] {
+        let mut b = a.clone();
+        b.ts = ts;
+        b.outcome = Class::Ok;
+        let rows = [a.clone(), b.clone()];
+        let expected = Health::default();
+        assert_eq!(health(&rows, 20), expected);
+        assert_eq!(health(&[b, a.clone()], 20), expected);
+        assert_eq!(health(&rows, 20), health(&rows, 20));
+    }
+}
+
+#[test]
+fn role_scope_applies_to_every_class() {
+    let mut rows = [row(Class::Empty, 1), row(Class::Empty, 2)];
+    for r in &mut rows {
+        r.role = Role::Implement;
+    }
+    assert_eq!(health(&rows, 2), Health::default());
+    rows[0].role = Role::Review;
+    rows[1].outcome = Class::Ok;
+    assert_eq!(health(&rows, 2).strikes, 1);
+}
+
+#[test]
+fn recent_success_probe_exception_and_open_escalation() {
+    for (ts, state, n, until) in [
+        (301, State::HalfOpen, 1, 301),
+        (86400, State::Open, 2, 87000),
+    ] {
+        let rows = [
+            row(Class::Ok, 0),
+            row(Class::HangSilent, 1),
+            row(Class::Empty, ts),
+        ];
+        let h = health(&rows, ts);
+        assert_eq!((h.state, h.n, h.until_s), (state, n, Some(until)));
+    }
+    let h = health(&[row(Class::HangSilent, 1), row(Class::Empty, 2)], 2);
+    assert_eq!((h.state, h.n, h.until_s), (State::Open, 2, Some(602)));
+}
+
 pub(super) fn row(class: Class, ts: i64) -> Row {
     Row {
         leg_key: if class.scope() == Scope::LegReview {

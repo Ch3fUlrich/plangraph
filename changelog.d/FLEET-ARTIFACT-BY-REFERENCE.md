@@ -1,0 +1,1 @@
+- **FLEET-ARTIFACT-BY-REFERENCE:** Transport private documents by verified git artifact pointers and refuse oversize session messages.

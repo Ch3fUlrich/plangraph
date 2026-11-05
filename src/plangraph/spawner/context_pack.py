@@ -32,6 +32,7 @@ wholly past the end is not packed).
 """
 from __future__ import annotations
 
+import errno
 import fnmatch
 import os
 import re
@@ -83,8 +84,18 @@ class Pack:
     warnings: tuple[str, ...] = ()
 
 
+def _check_loop(path: Path) -> None:
+    # Non-strict resolve() no longer raises on loops on Python 3.13+.
+    try:
+        os.stat(path)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise
+
+
 def _root(cwd) -> Path:
     try:
+        _check_loop(Path(cwd))
         return Path(cwd).resolve()
     except (RuntimeError, OSError):
         raise ContextError('the run cwd cannot be resolved (symlink loop or unreadable)') from None
@@ -97,7 +108,8 @@ def _locate(root: Path, raw: str) -> Path:
     if not path.is_relative_to(root):
         raise ContextError(f'context path {raw!r} is outside the run cwd')
     try:
-        resolved = path.resolve()   # RuntimeError on a symlink loop (Python < 3.13), OSError elsewhere
+        _check_loop(path)
+        resolved = path.resolve()
         inside, is_file = resolved.is_relative_to(root), resolved.is_file()
     except (RuntimeError, OSError):
         raise ContextError(f'context path {raw!r} cannot be resolved (symlink loop or unreadable)') from None

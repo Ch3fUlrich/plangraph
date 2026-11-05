@@ -20,6 +20,23 @@ RAW_NAME = 'claude-stream.jsonl'
 RAW_KEEP = 8 * 1024 * 1024
 
 
+def last_stop_reason(stream):
+    """Last explicit result or assistant stop, even without usable text or a result."""
+    stop = None
+    for line in str(stream or '').splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        source = event if event.get('type') == 'result' else event.get('message') if event.get('type') == 'assistant' else None
+        if isinstance(source, dict) and isinstance(source.get('stop_reason'), str):
+            stop = source['stop_reason']
+        if event.get('type') == 'result' and event.get('safety_stops', 0) > 0: stop = 'refusal'
+    return stop
+
+
 def final_text(stream) -> tuple[str, str | None] | None:
     """``(text, stop_reason)`` of a finished stream-json run, or None when it holds no usable answer.
 
