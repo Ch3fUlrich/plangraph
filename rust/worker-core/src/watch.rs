@@ -45,7 +45,7 @@ pub struct ChannelSummary {
 pub enum KillProof {
     NotNeeded,
     Empty,
-    Survivors,
+    Survivors { cause: Option<io::ErrorKind> },
 }
 
 /// A backend owns the identity; callers cannot supply a pid to signal.
@@ -63,27 +63,40 @@ pub trait Child {
 pub struct Stop {
     term_ms: Option<u64>,
     kill_ms: Option<u64>,
+    cause: Option<io::ErrorKind>,
 }
 impl Stop {
     pub fn tick(&mut self, child: &mut dyn Child, now_ms: u64, grace_ms: u64) -> Option<KillProof> {
         if self.term_ms.is_none() {
             self.term_ms = Some(now_ms);
-            let _ = child.terminate();
+            self.record(child.terminate());
         }
-        let _ = child.reap();
-        if child.empty().unwrap_or(false) {
+        self.record(child.reap());
+        let empty = child.empty();
+        self.record(
+            empty
+                .as_ref()
+                .map(|_| ())
+                .map_err(|e| io::Error::from(e.kind())),
+        );
+        if empty.unwrap_or(false) {
             return Some(KillProof::Empty);
         }
         if self.kill_ms.is_none() && now_ms.saturating_sub(self.term_ms?) >= grace_ms {
             self.kill_ms = Some(now_ms);
-            let _ = child.kill();
+            self.record(child.kill());
         }
         if self
             .kill_ms
             .is_some_and(|t| now_ms.saturating_sub(t) >= 2000)
         {
-            return Some(KillProof::Survivors);
+            return Some(KillProof::Survivors { cause: self.cause });
         }
         None
+    }
+    fn record(&mut self, result: io::Result<()>) {
+        if let Err(error) = result {
+            self.cause.get_or_insert(error.kind());
+        }
     }
 }

@@ -14,12 +14,12 @@ This foundation does **not** complete SPAWNER-RL12-WATCH-SUPERVISE. Pending work
 bounded separate pipe draining and stdin delivery, the event loop and channel
 aggregation, Blind shadow evaluation, source-priority selection, tree/CPU
 sampling, calibration, EOF handling, and the required real-process matrix.
-Linux signalling requires a captured, still-matching leader start identity;
-missing `/proc` identity (including after reaping) refuses both TERM and KILL.
-Other Unix platforms refuse signalling after observing/reaping leader exit.
-Without a validated leader, live descendants are not signalled: bounded teardown
-reports `Survivors`, never successful cleanup. Owned descendant membership across
-leader reaping remains unimplemented. No production caller is enabled.
+Owned groups remain signallable after leader reaping: Linux cannot reuse the
+pgid while the group exists. Every signal first probes the guarded group;
+the first ESRCH permanently latches emptiness, preventing later signalling.
+EPERM is an error, not proof. Adopted children (RL29) retain identity checks.
+`Survivors` carries the first signal, reap, or probe error kind, if any.
+No production caller is enabled.
 
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is

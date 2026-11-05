@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn watch_reaped_leader_with_live_descendant_refuses_signals() {
+fn grandchild_group_killed_even_after_leader_exit() {
     let mut cmd = Command::new("sh");
     cmd.args(["-c", "sleep 30 & exit 0"]);
     let mut child = UnixChild::spawn(&mut cmd).unwrap();
@@ -19,29 +19,38 @@ fn watch_reaped_leader_with_live_descendant_refuses_signals() {
         std::thread::yield_now();
     }
     assert!(!child.empty().unwrap());
-    for signal in [libc::SIGTERM, libc::SIGKILL] {
-        assert_eq!(
-            child.signal(signal).unwrap_err().kind(),
-            io::ErrorKind::PermissionDenied
-        );
+    child.kill().unwrap();
+    // A zombie may remain until the host's init reaps it: verify no live member.
+    loop {
+        let status = Command::new("ps")
+            .args(["-eo", "pgid=,stat="])
+            .output()
+            .unwrap();
+        let live = String::from_utf8(status.stdout)
+            .unwrap()
+            .lines()
+            .any(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next() == Some(&child.pgid.to_string())
+                    && !fields.next().unwrap().starts_with('Z')
+            });
+        if !live {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
     }
-    let mut stop = crate::watch::Stop::default();
-    assert_eq!(stop.tick(&mut child, 0, 0), None);
-    assert_eq!(
-        stop.tick(&mut child, 2000, 0),
-        Some(crate::watch::KillProof::Survivors)
-    );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn watch_missing_captured_identity_refuses_live_leader() {
-    let mut cmd = Command::new("sleep");
-    cmd.arg("30");
+fn watch_esrch_latches_and_never_signals_again() {
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "exit 0"]);
     let mut child = UnixChild::spawn(&mut cmd).unwrap();
-    child.start = None;
-    let result = child.signal(libc::SIGTERM);
-    let _ = child.child.kill();
-    let _ = child.child.wait();
-    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    child.child.wait().unwrap();
+    assert!(child.empty().unwrap());
+    assert!(child.gone);
+    child.pgid = unsafe { libc::getpgrp() };
+    assert!(child.empty().unwrap());
+    child.kill().unwrap();
 }

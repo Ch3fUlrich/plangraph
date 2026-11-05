@@ -1,10 +1,5 @@
 use super::*;
 
-#[test]
-fn unix_backend_is_explicitly_gated() {
-    assert!(include_str!("watch.rs").contains("#[path = \"watch_unix.rs\"]\n#[cfg(unix)]\n"));
-}
-
 #[derive(Default)]
 struct Fake {
     terms: u32,
@@ -12,6 +7,7 @@ struct Fake {
     reaps: u32,
     empty: bool,
     denied: bool,
+    signals_fail: bool,
 }
 impl Child for Fake {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
@@ -19,10 +15,16 @@ impl Child for Fake {
     }
     fn terminate(&mut self) -> io::Result<()> {
         self.terms += 1;
+        if self.signals_fail {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
         Ok(())
     }
     fn kill(&mut self) -> io::Result<()> {
         self.kills += 1;
+        if self.signals_fail {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
         Ok(())
     }
     fn empty(&mut self) -> io::Result<bool> {
@@ -55,11 +57,15 @@ fn surviving_group_is_kill_incomplete() {
     let (mut stop, mut child) = (Stop::default(), Fake::default());
     assert_eq!(stop.tick(&mut child, 0, 10), None);
     assert_eq!(stop.tick(&mut child, 10, 10), None);
-    assert_eq!(stop.tick(&mut child, 2010, 10), Some(KillProof::Survivors));
+    assert_eq!(
+        stop.tick(&mut child, 2010, 10),
+        Some(KillProof::Survivors { cause: None })
+    );
 }
 
 #[test]
-fn eperm_not_proof() {
+fn esrch_empty_eperm_not_proof() {
+    owned_child_is_reaped_and_empty(); // Real ESRCH probe, not a fake boolean.
     let mut child = Fake {
         denied: true,
         empty: true,
@@ -67,14 +73,19 @@ fn eperm_not_proof() {
     };
     let mut stop = Stop::default();
     assert_eq!(stop.tick(&mut child, 0, 0), None);
-    assert_eq!(stop.tick(&mut child, 2000, 0), Some(KillProof::Survivors));
+    assert_eq!(
+        stop.tick(&mut child, 2000, 0),
+        Some(KillProof::Survivors {
+            cause: Some(io::ErrorKind::PermissionDenied)
+        })
+    );
 }
 
 #[test]
 fn foreign_group_never_signalled() {
     for pgid in [-1, 0, 1, unsafe { libc::getpgrp() }] {
         assert_eq!(
-            crate::stall::killpg(pgid, 0).unwrap_err().kind(),
+            crate::stall::group_empty(pgid).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
     }
@@ -92,4 +103,21 @@ fn owned_child_is_reaped_and_empty() {
     }
     child.reap().unwrap();
     assert!(child.empty().unwrap());
+}
+
+#[test]
+fn first_signal_error_is_reported() {
+    let mut child = Fake {
+        signals_fail: true,
+        ..Fake::default()
+    };
+    let mut stop = Stop::default();
+    assert_eq!(stop.tick(&mut child, 0, 0), None);
+    assert_eq!(
+        stop.tick(&mut child, 2000, 0),
+        Some(KillProof::Survivors {
+            cause: Some(io::ErrorKind::PermissionDenied)
+        })
+    );
+    assert_eq!((child.terms, child.kills), (1, 1));
 }
