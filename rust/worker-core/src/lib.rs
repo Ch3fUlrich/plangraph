@@ -22,6 +22,7 @@ pub mod fleet_router_signals;
 pub mod fleet_seat_probe;
 pub mod fleet_seat_supply;
 pub mod fleet_stale_pair_alert;
+pub mod fleet_stale_pair_delivery;
 pub mod fleet_window_catalog;
 pub mod git;
 pub mod hash;
