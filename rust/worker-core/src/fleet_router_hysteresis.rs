@@ -34,7 +34,10 @@ pub struct Config {
 impl Config {
     pub fn validate(&self) -> Result<(), &'static str> {
         let names: BTreeSet<_> = self.signals.iter().map(|r| r.name.as_str()).collect();
-        if self.schema_version != 1 || names.len() != self.signals.len() {
+        if self.schema_version != 1
+            || names.len() != self.signals.len()
+            || names.len() != NAMES.len()
+        {
             return Err("invalid schema or duplicate configuration");
         }
         if self.signals.iter().any(|r| {
@@ -125,10 +128,10 @@ impl Evaluator {
             };
             let end = snapshot.end_inclusive;
             let interval = snapshot.start_exclusive.and_then(|s| end.checked_sub(s));
+            let valid_window = interval.and_then(|d| u64::try_from(d).ok()) == Some(rule.cadence)
+                && end <= snapshot.timestamp;
             let value = value.and_then(|v| {
-                if interval.and_then(|d| u64::try_from(d).ok()) != Some(rule.cadence)
-                    || end > snapshot.timestamp
-                {
+                if !valid_window {
                     Err("invalid window".into())
                 } else {
                     Ok(v)
@@ -136,12 +139,13 @@ impl Evaluator {
             });
             if let Err(reason) = &value {
                 state.reset();
-                // Consume faulty windows, but never lower either replay watermark.
-                state.last = Some(
-                    state
-                        .last
-                        .map_or((end, mono), |(e, m)| (e.max(end), m.max(mono))),
-                );
+                // Only structurally valid windows may consume replay watermarks.
+                // Rejected timestamps/monotonic inputs must not poison future progress.
+                if valid_window && snapshot.schema_version == 1 && !wall_jump {
+                    state.last = Some(state.last.map_or((end, mono), |(e, m)| {
+                        (e.max(end.min(snapshot.timestamp)), m.max(mono))
+                    }));
+                }
                 findings.push(Finding {
                     signal: rule.name.clone(),
                     observation: Observation::Unknown(reason.clone()),
@@ -166,7 +170,15 @@ impl Evaluator {
             let observation = if !state.latched && value >= rule.high {
                 state.entering = state.entering.saturating_add(1);
                 if state.entering >= rule.enter {
-                    state.episode = state.episode.checked_add(1).ok_or("episode exhausted")?;
+                    let Some(episode) = state.episode.checked_add(1) else {
+                        state.reset();
+                        findings.push(Finding {
+                            signal: rule.name.clone(),
+                            observation: Observation::Unknown("episode exhausted".into()),
+                        });
+                        continue;
+                    };
+                    state.episode = episode;
                     state.latched = true;
                     state.reset();
                     Some(Observation::Overload(state.episode))

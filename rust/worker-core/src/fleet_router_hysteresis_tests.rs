@@ -44,6 +44,71 @@ fn run(e: &mut Evaluator, t: i64, high: bool) -> Vec<Finding> {
     e.evaluate(&snapshot(t, high), t as u64, false).unwrap()
 }
 #[test]
+fn invalid_forward_window_cannot_poison_entry_or_recovery() {
+    let mut e = evaluator(9);
+    let mut bad = snapshot(20, true);
+    bad.end_inclusive = 10_000;
+    assert!(e
+        .evaluate(&bad, u64::MAX, false)
+        .unwrap()
+        .iter()
+        .all(|f| matches!(&f.observation, Observation::Unknown(r) if r == "invalid window")));
+    for t in (30..=100).step_by(10) {
+        assert!(run(&mut e, t, true).is_empty());
+    }
+    let entered = run(&mut e, 110, true);
+    assert_eq!(entered.len(), 6);
+    assert!(entered
+        .iter()
+        .all(|f| f.observation == Observation::Overload(1)));
+    bad = snapshot(120, false);
+    bad.end_inclusive = 10_000;
+    assert_eq!(e.evaluate(&bad, u64::MAX, false).unwrap().len(), 6);
+    assert!(run(&mut e, 130, false).is_empty());
+    let recovered = run(&mut e, 140, false);
+    assert_eq!(recovered.len(), 6);
+    assert!(recovered
+        .iter()
+        .all(|f| f.observation == Observation::Recovery(1)));
+}
+#[test]
+fn exhausted_episode_is_unknown_without_dropping_other_signals() {
+    let mut e = evaluator(1);
+    e.states.insert(
+        NAMES[1].into(),
+        State {
+            episode: u64::MAX,
+            ..State::default()
+        },
+    );
+    e = serde_json::from_slice(&serde_json::to_vec(&e).unwrap()).unwrap();
+    let findings = run(&mut e, 10, true);
+    assert_eq!(findings.len(), 6);
+    for (i, f) in findings.iter().enumerate() {
+        assert_eq!(
+            f.observation,
+            if i == 1 {
+                Observation::Unknown("episode exhausted".into())
+            } else {
+                Observation::Overload(1)
+            }
+        );
+    }
+    assert!(!e.states[NAMES[1]].latched);
+    assert_eq!(e.states[NAMES[1]].episode, u64::MAX);
+    assert!(run(&mut e, 10, true).is_empty());
+}
+#[test]
+fn partial_configuration_is_rejected_on_creation_and_restore() {
+    for count in 0..NAMES.len() {
+        let mut e = evaluator(2);
+        e.config.signals.truncate(count);
+        assert!(Evaluator::new(e.config.clone()).is_err(), "count {count}");
+        e = serde_json::from_slice(&serde_json::to_vec(&e).unwrap()).unwrap();
+        assert!(e.evaluate(&snapshot(10, true), 10, false).is_err());
+    }
+}
+#[test]
 fn thresholds_noise_deadband_counts_and_ninety_seconds() {
     let mut e = evaluator(9);
     for t in (10..=80).step_by(10) {
