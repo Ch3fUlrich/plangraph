@@ -314,7 +314,7 @@ def main(argv=None):
                          deliver=deliver, dry_run=args.dry_run)
     except Exception as exc:
         if type(exc).__name__ in ('MissingKeeperURL', 'Unreachable'):
-            warning = type(exc).__name__  # keeper not configured/reachable: skip claim rule
+            warning = 'keeper skipped ' + type(exc).__name__  # keeper not configured/reachable: skip claim rule
         else:
             error = type(exc).__name__
     if args.dry_run:
@@ -336,14 +336,14 @@ def main(argv=None):
             error = (error + '; ' if error else '') + 'delivery-' + type(exc).__name__
     pending = len(list((state / 'watchdog/outbox').glob('*.json')))
     if not command and (pending or findings):
-        error = (error + '; ' if error else '') + 'delivery-bridge-unconfigured'
+        warning = (warning + '; ' if warning else '') + 'delivery-bridge-unconfigured'
     if command and pending:
         error = error or 'delivery-bridge-failed'
     text = status(findings)
     if not command:
         text += ('\n' if text else '') + f'outbox {pending}, no bridge'
     if warning:
-        text += ('\n' if text else '') + '! stall watchdog warning keeper skipped ' + warning
+        text += ('\n' if text else '') + '! stall watchdog warning ' + warning
     if error:
         text += ('\n' if text else '') + '! stall watchdog error ' + error
     from plangraph.spawner.private_io import atomic_write_private

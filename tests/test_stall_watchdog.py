@@ -105,13 +105,13 @@ def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatc
     monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
     monkeypatch.setattr(w, 'read_runs', lambda state: [dict(run_id='run-fixture')])
     monkeypatch.setattr(w, 'read_claims', lambda: [])
-    assert w.main(['tick']) == 1
+    assert w.main(['tick']) == 0
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and event['event_id']
     assert 'outbox 1, no bridge' in (tmp_path / 'watchdog/status.txt').read_text()
     assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
     monkeypatch.setattr(w, 'read_runs', lambda state: [])
-    assert w.main(['tick']) == 1
+    assert w.main(['tick']) == 0
     assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
 
 
@@ -285,7 +285,7 @@ def test_findings_without_bridge_report_unconfigured(tmp_path, monkeypatch):
         deliver(event)
         return [event]
     monkeypatch.setattr(w, 'tick', tick)
-    assert w.main(['tick']) == 1
+    assert w.main(['tick']) == 0
     assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
     assert list((tmp_path / 'watchdog/outbox').glob('*.json'))
 

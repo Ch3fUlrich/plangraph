@@ -34,24 +34,31 @@ def test_restart_flush_preserves_unmeasured_seen(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setenv('PLANGRAPH_PROBE_ROOT', 'fixture')
 
+    attempts = 0
+
     def run(argv, **kwargs):
+        nonlocal attempts
         if argv[0] == 'ssh':
+            attempts += 1
+            if attempts <= 2:
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0, '{}')
+        event = json.loads(kwargs['input'])
+        sent.append(event['event_id'])
+        if sent.count(pending_key) == 1:
             raise subprocess.CalledProcessError(1, argv)
-        sent.append(json.loads(kwargs['input'])['event_id'])
 
     monkeypatch.setattr(subprocess, 'run', run)
     remote_probe.poll(['fixture'], 'notify', tmp_path)
     entry = json.loads(path.read_text())['fixture']
     assert entry['seen'] == keys
     assert pending_key in entry['pending']
-    assert sent == []
-
-    def recovered(argv, **kwargs):
-        if argv[0] == 'ssh':
-            return subprocess.CompletedProcess(argv, 0, '{}')
-        sent.append(json.loads(kwargs['input'])['event_id'])
-
-    monkeypatch.setattr(subprocess, 'run', recovered)
-    remote_probe.poll(['fixture'], 'notify', tmp_path)
     assert sent == [pending_key]
+    remote_probe.poll(['fixture'], 'notify', tmp_path)
+    entry = json.loads(path.read_text())['fixture']
+    assert entry['seen'] == keys
+    assert pending_key not in entry['pending']
+    assert sent[:2] == [pending_key, pending_key]
+    remote_probe.poll(['fixture'], 'notify', tmp_path)
+    assert sent.count(pending_key) == 2
     assert json.loads(path.read_text())['fixture']['pending'] == {}
