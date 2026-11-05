@@ -54,7 +54,7 @@ fn patterns() -> &'static [regex::Regex] {
             r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
             // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
-            r"\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
+            r"\b(?:x?sk)-[A-Za-z0-9_-]+|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
             // 7. Long hex — a 40-char git sha is caught too; acceptable, and shas
@@ -133,11 +133,13 @@ pub fn redacted_tail(text: &str, max_lines: usize, max_bytes: usize) -> String {
 }
 
 #[cfg(test)]
+#[path = "redact_parity.rs"]
+mod redact_parity;
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Fake secrets are built at runtime from fragments so that no
-    /// token-shaped literal ever appears in this source file.
+    /// Build fake secrets from fragments, avoiding token-shaped source literals.
     fn sk() -> String {
         ["sk", "-", &"a".repeat(24)].concat()
     }
@@ -213,7 +215,6 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 -----END TEST PRIVATE KEY-----"#;
 
-    /// `body_lines` filler lines of `FAKE_PEM` between its header and footer.
     fn pem_block(body_lines: usize) -> Vec<String> {
         let mut lines: Vec<String> = FAKE_PEM.lines().map(str::to_string).collect();
         let footer = lines.pop().expect("FAKE_PEM ends with its footer");
@@ -231,7 +232,6 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         assert!(!out.contains("PRIVATE KEY"), "{out}");
         assert!(!out.contains(&"A".repeat(64)), "{out}");
         assert!(out.contains(REDACTED), "{out}");
-        // The whole multi-line block collapses into one placeholder line.
         assert_eq!(out.lines().count(), 3, "{out}");
     }
 
