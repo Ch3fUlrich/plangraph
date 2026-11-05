@@ -264,6 +264,7 @@ def flush_outbox(state, command, *, run=subprocess.run):
     from .private_io import atomic_write_private
     health_path = Path(state) / 'watchdog/delivery.json'
     health = _read_state(state, health_path) or dict(failures=0, last_error=None)
+    failed = False
     for path in sorted((Path(state) / 'watchdog/outbox').glob('*.json')):
         record = _read_state(state, path)
         if record is None:
@@ -272,7 +273,10 @@ def flush_outbox(state, command, *, run=subprocess.run):
             run(command, input=path.read_bytes(), check=True, timeout=20)
             path.unlink(missing_ok=True)
         except (OSError, subprocess.SubprocessError) as exc:
+            failed = True
             health.update(failures=health['failures'] + 1, last_error=type(exc).__name__)
+    if not failed:
+        health.update(failures=0, last_error=None)
     atomic_write_private(health_path, json.dumps(health))
     return health
 
@@ -298,6 +302,10 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
         (destination / 'plangraph-remote-probe.timer').write_text(
             '[Timer]\nOnBootSec=2min\nOnUnitActiveSec=2min\n[Install]\nWantedBy=timers.target\n')
         run(['systemctl', '--user', 'daemon-reload'], check=True)
+        config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'plangraph/watchdog.env'
+        if not config.is_file() and not (os.environ.get('PLANGRAPH_PROBE_HOSTS')
+                                        and os.environ.get('PLANGRAPH_PROBE_NOTIFY_CMD')):
+            run(['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'], check=True)
         run(['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'], check=True)
     elif host == 'windows':
         text = (templates / 'watchdog.xml').read_text()

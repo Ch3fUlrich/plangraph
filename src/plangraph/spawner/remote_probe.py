@@ -37,6 +37,7 @@ def poll(hosts, command, state):
             raise TypeError('invalid probe state')
     except (FileNotFoundError, ValueError, TypeError):
         saved = {}
+    protected = set()
     def save():
         atomic_write_private(path, json.dumps(saved))
     def notify(key, event, entry):
@@ -71,7 +72,8 @@ def poll(hosts, command, state):
         except (ValueError, TypeError, KeyError):
             entry = saved[host] = dict(failures=0, outage=0, down=False, seen=[], acks=[])
         pending = entry.setdefault('pending', {})
-        protected = set(pending)
+        protected.clear()
+        protected.update(pending)
         try:
             code = ('import json; from plangraph.spawner.remote_probe import exchange; '
                     'print(json.dumps(exchange(' + repr(entry['acks']) + ')))')

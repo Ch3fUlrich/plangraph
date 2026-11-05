@@ -30,6 +30,10 @@ def test_flush_continues_after_poison(tmp_path):
         health = w.flush_outbox(tmp_path, ['notify'], run=send)
         assert health == dict(failures=count, last_error='CalledProcessError')
     assert sorted(p.stem for p in out.iterdir()) == ['a']
+    health = w.flush_outbox(tmp_path, ['notify'], run=lambda *a, **kw: None)
+    assert health == dict(failures=0, last_error=None)
+    assert json.loads((tmp_path / 'watchdog/delivery.json').read_text()) == health
+    assert w.flush_outbox(tmp_path, ['notify'], run=send) == health
 
 
 def test_unknown_reaches_outbox(tmp_path):
@@ -195,7 +199,10 @@ def test_tick_cli_persists_status_and_delivers_w12(tmp_path, monkeypatch, capsys
 
 
 @pytest.mark.parametrize('host', ['linux', 'windows'])
-def test_scheduler_installation(tmp_path, host):
+def test_scheduler_installation(tmp_path, host, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+    monkeypatch.delenv('PLANGRAPH_PROBE_HOSTS', raising=False)
+    monkeypatch.delenv('PLANGRAPH_PROBE_NOTIFY_CMD', raising=False)
     calls = []
     w.install(host, tmp_path, python='/usr/bin/python3', root=Path.cwd(),
               run=lambda args, **kw: calls.append(args))
@@ -207,7 +214,7 @@ def test_scheduler_installation(tmp_path, host):
         assert 'EnvironmentFile=-%h/.config/plangraph/watchdog.env' in unit
         assert 'OnUnitActiveSec=120' in content
         assert ['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'] in calls
-        assert not any('plangraph-remote-probe.timer' in call for call in calls)
+        assert ['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'] in calls
     else:
         assert '<Interval>PT2M</Interval>' in content
         assert calls[0][:2] == ['schtasks', '/Create']
