@@ -6,22 +6,21 @@
 - ready next: KEEPER-SNAP S1 after S0, AUTOOS-HOOKS-INTERIM-S09 after S06, S14 after S13
 ## Done
 - 11-05T22:33Z ROUTERCTL-CTX-GUARD-CAPS 82034b8 seat run-9d9d6bcd ACCEPT, 247 passed per writer, not pushed, GO-REQ sent
-- 11-05T22:50Z KEEPER-SNAP-S0a d42cd1626 PR#448 CI 8 pass on prior head, deepseek ACCEPT and mimo RC on prior head, fix round pushed
-- 11-05T22:55Z KEEPER-SNAP-S0b 06c752c47 PR#450 2 seats RC on prior head, fix round pushed, bench 1143 to 80 ms per writer
+- 11-05T22:50Z KEEPER-SNAP-S0-TIMINGS d42cd1626 PR#448 CI 8 pass on prior head, deepseek ACCEPT and mimo RC on prior head, fix round pushed
+- 11-05T22:55Z KEEPER-SNAP-S0-TIMINGS 06c752c47 PR#450 2 seats RC on prior head, fix round pushed, bench 1143 to 80 ms per writer
 - 11-05T22:40Z AUTOOS-HOOKS-INTERIM-S13 5b1cc312e PR#447 deepseek seat ACCEPT, CI rerun pending
 - 11-05T22:40Z AUTOOS-HOOKS-INTERIM-S06 06be59dfd PR#446 seat HIGH fixed by hand, delta seat pending
 - 11-05T22:45Z SPAWNER-ORPHAN-REAP 475918778 PR#436 CI fix pushed; 3c5a6a707 PR#451 slice 2 draft, seat RC
-- 11-05T22:55Z routerctl-nudge e2a0a9a local, 87 passed, seat pending
+- 11-05T22:55Z ROUTERCTL-CTX-GUARD-CAPS e2a0a9a local, 87 passed, seat pending
 ## In flight
 - KEEPER-SNAP S0a delta seats J/seat-s0a2-*.out + nudge seat J/seat-nudge.out + CI 448 since 22:53Z next check at restart
 - KEEPER-SNAP S0b delta seats J/seat-s0b2-*.out + CI 450 since 22:58Z next check at restart
-- #436 + S06 delta seats J/seat-436d.out J/seat-s06d.out + CI 436 446 447 since 22:42Z next check at restart
 - SPAWNER-ORPHAN-REAP fixorphan2 dell since 22:47Z next check at restart
 ## Planned
 1. pgrep and read J/seat-*.out BEFORE any rerun; reattach fixorphan2 with the same tag
 2. S0a + S0b: 2 ACCEPTs + CI, then GO-REQ + judge per sha; then S1, S2, S3; close old #380 after S0b merges
-3. #436 GO-REQ after CI + seat; #451 read diff, delta seat, one run on 18-de-2053, then slice 3
-4. Hooks S06 S13 GO-REQ, naming that _helpers.py is no longer byte-equal; then S09 S14
+3. #436 CI green but delta seat RC with HIGH (J/seat-436d.out): fix round 2, then GO-REQ; #451 read diff, delta seat, one run on 18-de-2053, then slice 3
+4. Hooks: #447 GO-REQ now; #446 delta seat RC MED (J/seat-s06d.out): hand fix, re-seat, GO-REQ naming _helpers.py not byte-equal; then S09 S14
 5. #338 tests seat, #419 on GO + D-id, next ready phase 0 lanes, never idle (D-3893)
 ## Open
 - BLOCKED GO-REQs #407, OOM, INBOX, PANE unanswered | default wait, no merge | deadline none
