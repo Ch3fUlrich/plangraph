@@ -7,10 +7,12 @@ state dir are the live guard's contract; they stay until the cutover item G13.
 
     python3 tests/hooks/test_context_guard_more.py
 """
+import io
 import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -73,6 +75,25 @@ class Records(MoreCase):
 
 
 class Output(MoreCase):
+    def test_public_fragment_is_retained(self):
+        fragment = HOOKS.parent.parent / "changelog.d/LE-GUARD-TEXT.md"
+        self.assertTrue(fragment.read_text().startswith("- **LE-GUARD-TEXT:"))
+
+    def test_missing_guard_constant_keeps_the_fail_silent_diagnostic(self):
+        with mock.patch.dict(sys.modules, {"context_guard": None}):
+            wrapper = load_module("ctx_guard_session")
+        self.assertIsNone(wrapper.HANDOFF_PATH_ENV)
+        for path in ("/private/handoff.md", "", None, 5):
+            with self.subTest(path=path), mock.patch.object(wrapper, "read_stdin_text", return_value="{}"), \
+                    mock.patch.object(wrapper, "settings_thresholds", return_value={}), \
+                    mock.patch.object(wrapper, "session_override", return_value={"handoff_path": path}), \
+                    mock.patch.object(wrapper, "GUARD", str(self.tmp / "missing.py")), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out, \
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                self.assertEqual(wrapper.main(), 0)
+                self.assertEqual(out.getvalue(), "")
+                self.assertIn("context_guard.py missing or broken", err.getvalue())
+
     def test_line_hides_interpreter_and_script_path(self):
         self.write(usage_line(read=275000))
         text = self.text(self.hook())

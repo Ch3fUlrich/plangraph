@@ -130,7 +130,7 @@ def main() -> int:
     if doc:
         # Launch-time, session-local private destination, alongside handoff/hard.
         path = doc.get("handoff_path")
-        if isinstance(path, str) and path:
+        if HANDOFF_PATH_ENV and isinstance(path, str) and path:
             os.environ[HANDOFF_PATH_ENV] = path
         for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
             val = doc.get(key)
