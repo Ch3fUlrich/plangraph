@@ -100,6 +100,7 @@ class ExistingPathRunsTheHook(unittest.TestCase):
 
     def test_malformed_stdin_still_fails_open(self):
         self.assert_same_as_direct(BASH_GUARD, "{not json")
+        self.assertEqual(run_wrapped(BASH_GUARD, "{not json").returncode, 0)
 
     def test_fleet_report_hook_runs_through_the_wrapper(self):
         self.assert_same_as_direct(FLEET_REPORT, "{not json")

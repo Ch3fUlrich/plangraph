@@ -42,7 +42,7 @@ except ImportError:
 # concatenation so no matched literal appears in this file, while the runtime
 # strings stay byte-identical to the originals the tests were written against.
 FAKE_TOKEN = "sk-" + "abcdefghijklmnopqrstuvwx"        # a fake API token
-AUTOOS_HOME = "/ho" + "me/s/code/AutoOS"               # the read-only AutoOS checkout
+AUTOOS_HOME = os.environ.get("AUTOOS_HOME", "/srv/fixture/code/AutoOS")  # capture sets the real checkout
 SYS_PW = "/etc/" + "passwd"                            # the passwd file
 SYS_SH = "/etc/" + "shadow"                            # the shadow file
 AWS_CRED = ".aws/" + "credentials"                     # the AWS credentials file
