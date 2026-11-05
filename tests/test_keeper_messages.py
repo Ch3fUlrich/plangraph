@@ -95,8 +95,7 @@ def test_messages_table_declared_in_both_ddls():
     from plangraph.keeper import schema_pg
     import re
     assert "messages" in schema.SCHEMA
-    migration = next(m for m in schema_pg.MIGRATIONS if m.version == 9)
-    assert re.search(r"CREATE TABLE (?:IF NOT EXISTS )?messages\s*\(", migration.sql)
+    assert re.search(r"CREATE TABLE (?:IF NOT EXISTS )?messages\s*\(", next(m for m in schema_pg.MIGRATIONS if m.version == 9).sql)
     m_body = re.search(r"CREATE TABLE (?:IF NOT EXISTS )?messages \(\n(.*?)\n\);", schema.MESSAGES_DDL, re.S)
     cols = re.findall(r'^    "?(\w+)"? \w+', m_body.group(1), re.M)
     assert list(cols) == [
