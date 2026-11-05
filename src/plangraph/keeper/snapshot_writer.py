@@ -20,6 +20,7 @@ import threading
 import time
 
 from .snapshot_io import write_snapshot
+from . import timing
 
 __all__ = ["SnapshotWriter", "ALARM_AFTER"]
 
@@ -58,7 +59,7 @@ class SnapshotWriter(threading.Thread):
 
     def _write_locked(self):
         """Rebuild under the server lock; True when the file now reflects the database."""
-        with self.server.lock:     # writes mark() under this lock, so ``gen`` is exact
+        with timing.RequestTimer(self.server.lock, event="writer_timing"):
             with self._cond:
                 gen = self._gen
             try:

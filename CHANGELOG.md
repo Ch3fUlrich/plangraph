@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **KEEPER-SNAP-S0-TIMINGS S0a:** Add payload-free, best-effort request lock, snapshot writer, snapshot, changelog and anchor-cycle timing lines on stderr.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.
 - **SPAWNER-CANCEL-KILLS (register 42):** a cancel from another process kills a run started on a named leg: its record now keeps the root's start token.
 - **SPAWNER-MCP-STDIO-GUARD (D-3753):** ignore notifications, compact MCP ps records, and guard stdio reply sizes with ReplyTooLarge errors.
