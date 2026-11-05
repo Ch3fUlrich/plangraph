@@ -282,11 +282,14 @@ def decision_texts(decisions, ids):
     continue reading the adapter directly, never this best-effort read view.
     Same-size, same-mtime rewrites may leave decision_book stale; enforcement stays fresh.
     """
-    rows = decision_book(decisions)["rows"]
+    try:
+        rows = decision_book(decisions)["rows"]
+    except Exception:
+        rows = {}
     texts = {}
     for did in ids:
         try:
-            if decisions is not None and not hasattr(decisions, "_rows"):
+            if decisions is not None and not isinstance(decisions, DecisionsAdapter):
                 text = decisions.text(did)
                 if text:
                     texts[did] = text

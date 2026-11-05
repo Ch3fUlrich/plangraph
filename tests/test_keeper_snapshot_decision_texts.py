@@ -126,7 +126,8 @@ def test_anchored_read_call_pins():
     assert sorted(calls) == ["decision_book", "decision_texts", "decision_texts"]
 
 
-@pytest.mark.parametrize("path_kind", ["none", "text_only", "unreadable", "row", "canonical"])
+@pytest.mark.parametrize("path_kind", ["none", "text_only", "unreadable", "row", "canonical",
+                                      "read_error", "decode_error"])
 def test_decision_text_failure_paths(tmp_path, monkeypatch, path_kind):
     world = World(tmp_path, backend="sqlite")
     path = tmp_path / "decisions.md"
@@ -139,6 +140,14 @@ def test_decision_text_failure_paths(tmp_path, monkeypatch, path_kind):
         adapter = SimpleNamespace(text=lambda did: expected[did])
     elif path_kind == "unreadable":
         path.unlink()
+        expected = {}
+    elif path_kind in ("read_error", "decode_error"):
+        def failed_book(decisions):
+            if path_kind == "read_error":
+                raise OSError("book read failed")
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+
+        monkeypatch.setattr(context_sources, "decision_book", failed_book)
         expected = {}
     else:
         # Warm the book: inject failures in the text view, not book construction.
@@ -179,3 +188,21 @@ def test_decision_text_failure_paths(tmp_path, monkeypatch, path_kind):
             log, "0", {"demo:A": "title A"}, expected, 1)
     finally:
         world.close()
+
+
+def test_text_only_adapter_with_private_rows():
+    adapter = SimpleNamespace(text=lambda did: "adapter text", _rows=lambda: {})
+    assert context_sources.decision_texts(adapter, ["D-1"]) == {"D-1": "adapter text"}
+
+
+@pytest.mark.parametrize("failure", [PermissionError("denied"),
+                                    UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")])
+def test_decision_book_file_read_failure(tmp_path, monkeypatch, failure):
+    path = tmp_path / "decisions.md"
+    path.write_text("| D-1 | scope | first |\n")
+
+    def failed_read(self, *args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(Path, "read_text", failed_read)
+    assert context_sources.decision_texts(DecisionsAdapter(path), ["D-1"]) == {}
