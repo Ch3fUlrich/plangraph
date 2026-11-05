@@ -10,6 +10,7 @@ use std::{io, process::ExitStatus};
 #[path = "watch_blind_tests.rs"]
 mod blind_tests;
 #[path = "watch_supervise.rs"]
+#[cfg(unix)]
 mod supervise;
 #[cfg(test)]
 #[path = "watch_tests.rs"]
@@ -17,6 +18,7 @@ mod tests;
 #[path = "watch_unix.rs"]
 #[cfg(unix)]
 mod unix;
+#[cfg(unix)]
 pub use supervise::supervise_events;
 
 pub struct Hooks<'a> {
@@ -80,14 +82,14 @@ impl Stop {
     ) -> Option<KillProof> {
         if self.term_ms.is_none() {
             self.term_ms = Some(now_ms);
-            if child.empty().unwrap_or(false) {
+            if self.empty(child) {
                 return Some(KillProof::Empty);
             }
             self.record(child.terminate());
         }
         self.record(child.reap());
         if self.kill_ms.is_none() && now_ms.saturating_sub(self.term_ms?) >= grace_ms {
-            if child.empty().unwrap_or(false) {
+            if self.empty(child) {
                 return Some(KillProof::Empty);
             }
             self.kill_ms = Some(now_ms);
@@ -109,6 +111,15 @@ impl Stop {
     fn record(&mut self, result: io::Result<()>) {
         if let Err(error) = result {
             self.cause.get_or_insert(error.kind());
+        }
+    }
+    fn empty(&mut self, child: &mut dyn Child) -> bool {
+        match child.empty() {
+            Ok(empty) => empty,
+            Err(error) => {
+                self.record(Err(error));
+                false
+            }
         }
     }
 }

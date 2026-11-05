@@ -49,9 +49,13 @@ struct Events {
     provider: bool,
     late: Option<u64>,
     blind: Option<BlindReason>,
+    partial: bool,
 }
 impl Events {
     fn feed(&mut self, hooks: &mut Hooks<'_>, bytes: &[u8], now: u64, stopping: bool) {
+        if let Some(last) = bytes.last() {
+            self.partial = *last != b'\n';
+        }
         // Mirror parser counter deltas, without interpreting payloads a second time.
         let before = hooks.parser.health();
         let old = (before.bad(), before.parsed(), before.unknown());
@@ -88,6 +92,10 @@ impl Events {
         max: usize,
     ) -> io::Result<()> {
         // A bounded snapshot prevents an incessant producer from starving ticks.
+        self.blind = self.blind.or(hooks.channel.blind(now));
+        if self.blind.is_some() {
+            self.provider = false;
+        }
         for _ in 0..64 {
             match rx.try_recv() {
                 Ok(Chunk::Data(stdout, bytes)) => {
@@ -103,7 +111,7 @@ impl Events {
                 Ok(Chunk::Eof(stdout)) => {
                     self.eof += 1;
                     // Complete a final non-newline-terminated frame exactly once.
-                    if stdout {
+                    if stdout && self.partial {
                         self.feed(hooks, b"\n", now, stopping);
                     }
                 }
@@ -158,6 +166,7 @@ pub fn supervise_events(
         provider: false,
         late: None,
         blind: None,
+        partial: false,
     };
     let (mut decisions, mut stop, mut stopped_at) = (Vec::new(), None, None);
     let (mut timed_out, mut cancelled, mut stall_bytes) = (false, false, false);
@@ -187,8 +196,11 @@ pub fn supervise_events(
                 }
             }
             cancelled = (hooks.cancelled)();
-            timed_out = !cancelled && opts.timeout.is_some_and(|t| start.elapsed() >= t);
-            stall_bytes = !cancelled
+            timed_out = status.is_none()
+                && !cancelled
+                && opts.timeout.is_some_and(|t| start.elapsed() >= t);
+            stall_bytes = status.is_none()
+                && !cancelled
                 && !timed_out
                 && events.blind.is_some()
                 && opts.stall.is_some_and(|t| {

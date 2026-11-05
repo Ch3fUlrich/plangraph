@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn grandchild_group_killed_even_after_leader_exit() {
+    let mut sentinel_cmd = Command::new("sleep");
+    sentinel_cmd.arg("30");
+    let mut sentinel = UnixChild::spawn(&mut sentinel_cmd).unwrap();
     let mut cmd = Command::new("sh");
     cmd.args(["-c", "sleep 30 & exit 0"]);
     let mut child = UnixChild::spawn(&mut cmd).unwrap();
@@ -13,6 +16,7 @@ fn grandchild_group_killed_even_after_leader_exit() {
         }
     }
     let _cleanup = Cleanup(child.pgid);
+    let _sentinel_cleanup = Cleanup(sentinel.pgid);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while child.try_wait().unwrap().is_none() {
         assert!(std::time::Instant::now() < deadline);
@@ -39,6 +43,9 @@ fn grandchild_group_killed_even_after_leader_exit() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::yield_now();
     }
+    assert!(sentinel.try_wait().unwrap().is_none());
+    sentinel.kill().unwrap();
+    sentinel.child.wait().unwrap();
 }
 
 #[test]

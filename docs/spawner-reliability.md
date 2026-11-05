@@ -45,3 +45,18 @@ They cover bounded prompt/output handling, Blind behavior, silent tools,
 termination escalation, descendant ownership, and escaped pipe teardown.
 Notifications, outcome persistence, CPU sampling implementation, and safe
 fall-through remain RL14/RL17, RL13, and RL15 respectively; none is wired here.
+
+### RL12 review fixes
+
+The supervisor module and export are explicitly Unix-only (as is the public
+watch module). Blind is checked before feeding a drain batch, so a pinned
+version mismatch cannot enforce a provider error from its first chunk.
+The post-drain check also suppresses provider enforcement when the batch itself
+latches Blind. Timeout and byte-stall flags require a live root: an already
+successful exit cannot become a timeout while an escaped pipe holder delays
+the bounded tail drain. TERM and KILL probes retain the first I/O error even
+when later probes merely report a non-empty group.
+
+Regression coverage includes source gating, first-chunk pinned provider errors,
+a drain interrupted by an I/O error, a successful root with an escaped pipe
+holder past its timeout, and transient EPERM at each signal probe.

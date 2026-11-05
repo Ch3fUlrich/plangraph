@@ -1,5 +1,12 @@
 use super::*;
 
+#[test]
+fn unix_supervisor_module_and_export_are_gated() {
+    let source = include_str!("watch.rs");
+    assert!(source.contains("#[cfg(unix)]\nmod supervise;"));
+    assert!(source.contains("#[cfg(unix)]\npub use supervise::supervise_events;"));
+}
+
 #[derive(Default)]
 struct Fake {
     terms: u32,
@@ -8,6 +15,7 @@ struct Fake {
     empty: bool,
     denied: bool,
     signals_fail: bool,
+    deny_once: bool,
 }
 impl Child for Fake {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
@@ -28,7 +36,7 @@ impl Child for Fake {
         Ok(())
     }
     fn empty(&mut self) -> io::Result<bool> {
-        if self.denied {
+        if std::mem::take(&mut self.deny_once) || self.denied {
             Err(io::Error::from_raw_os_error(libc::EPERM))
         } else {
             Ok(self.empty)
@@ -37,6 +45,23 @@ impl Child for Fake {
     fn reap(&mut self) -> io::Result<()> {
         self.reaps += 1;
         Ok(())
+    }
+}
+
+#[test]
+fn first_probe_error_is_reported_at_each_signal() {
+    for kill_probe in [false, true] {
+        let (mut stop, mut child) = (Stop::default(), Fake::default());
+        child.deny_once = !kill_probe;
+        stop.tick(&mut child, 0, 10, 2000);
+        child.deny_once = kill_probe;
+        stop.tick(&mut child, 10, 10, 2000);
+        assert_eq!(
+            stop.tick(&mut child, 2010, 10, 2000),
+            Some(KillProof::Survivors {
+                cause: Some(io::ErrorKind::PermissionDenied)
+            })
+        );
     }
 }
 

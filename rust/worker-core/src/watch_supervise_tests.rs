@@ -28,6 +28,38 @@ fn signal(kind: Kind, ts_ms: u64) -> Signal {
 }
 
 #[test]
+fn blind_latched_before_error_aborts_drain() {
+    use super::super::blind_tests::Parser;
+    let mut parser = Parser::default();
+    let (mut monitor, mut channel) = (monitor(), ChannelHealth::new(0, Some(1)));
+    channel.pin("fixture", "drift");
+    let mut hooks = Hooks {
+        parser: &mut parser,
+        monitor: &mut monitor,
+        channel: &mut channel,
+        cancelled: &|| false,
+        tree_sample: &Ctx::default,
+        cpu: None,
+        stdin: b"",
+    };
+    let mut events = Events {
+        last_byte: 0,
+        output: vec![],
+        eof: 0,
+        provider: false,
+        late: None,
+        blind: None,
+        partial: false,
+    };
+    let (tx, rx) = mpsc::sync_channel(2);
+    tx.send(Chunk::Data(true, b"{\"error\":true}\n".to_vec()))
+        .unwrap();
+    tx.send(Chunk::Error(io::ErrorKind::BrokenPipe.into()))
+        .unwrap();
+    assert!(events.drain(&rx, &mut hooks, 0, false, 1024).is_err());
+    assert!(!events.provider);
+}
+#[test]
 fn signal_in_confirm_cancels_kill_and_late_signal_does_not() {
     let mut m = monitor();
     assert_eq!(m.tick(800, Ctx::default()).unwrap().act, Act::Warn);

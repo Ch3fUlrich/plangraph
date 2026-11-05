@@ -13,11 +13,22 @@ pub(super) struct Parser {
     framer: Framer,
     health: ChannelHealth,
 }
+impl Default for Parser {
+    fn default() -> Self {
+        Self {
+            framer: Framer::new(),
+            health: ChannelHealth::new(0, Some(1)),
+        }
+    }
+}
 impl EventParser for Parser {
     fn health(&self) -> &ChannelHealth {
         &self.health
     }
     fn feed(&mut self, chunk: &[u8], now: u64) -> Vec<Signal> {
+        if chunk == b"\n" {
+            self.health.line(LineKind::NotJson, now);
+        }
         self.framer
             .push(chunk)
             .into_iter()
@@ -106,6 +117,12 @@ fn run_timeout(
     .unwrap()
 }
 #[test]
+fn pinned_error_in_first_chunk_is_not_enforced() {
+    let r = run("printf '{\"error\":true}\\n'; sleep 1", true, b"", false);
+    assert_eq!(r.run.code, Some(0));
+    assert_eq!(r.channel.blind, Some(BlindReason::VersionDrift));
+}
+#[test]
 fn garbage_lines_blind_no_f_s_m_kill() {
     let r = run(
         "i=0; while [ $i -lt 25 ]; do echo garbage; i=$((i+1)); done; sleep 3",
@@ -135,9 +152,27 @@ fn no_first_activity_ignorer_gone_within_f_confirm_grace_two_second_proof() {
 fn escaped_pipe_holder_cannot_hang_teardown() {
     let start = Instant::now();
     // Escaped fixture expires itself; it is never targeted by the owned group.
-    let r = run("setsid sh -c 'sleep 4' & exit 0", false, b"", false);
+    let r = run_timeout(
+        "setsid sh -c 'sleep 4' & exit 0",
+        false,
+        b"",
+        false,
+        Duration::from_millis(500),
+    );
     assert_eq!(r.run.code, Some(0));
+    assert!(!r.run.timed_out && !r.run.stalled);
     assert!(start.elapsed() < Duration::from_millis(3500));
+}
+
+#[test]
+fn nineteen_good_lines_eof_has_no_bad_frame() {
+    let r = run(
+        "i=0; while [ $i -lt 19 ]; do echo '{}'; i=$((i+1)); done",
+        false,
+        b"",
+        false,
+    );
+    assert_eq!((r.channel.lines, r.channel.bad), (19, 0));
 }
 #[test]
 fn late_signal_during_term_grace_is_recorded() {
