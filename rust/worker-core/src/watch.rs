@@ -66,30 +66,37 @@ pub struct Stop {
     cause: Option<io::ErrorKind>,
 }
 impl Stop {
-    pub fn tick(&mut self, child: &mut dyn Child, now_ms: u64, grace_ms: u64) -> Option<KillProof> {
+    pub fn tick(
+        &mut self,
+        child: &mut dyn Child,
+        now_ms: u64,
+        grace_ms: u64,
+        prove_ms: u64,
+    ) -> Option<KillProof> {
         if self.term_ms.is_none() {
             self.term_ms = Some(now_ms);
+            if child.empty().unwrap_or(false) {
+                return Some(KillProof::Empty);
+            }
             self.record(child.terminate());
         }
         self.record(child.reap());
-        let empty = child.empty();
-        self.record(
-            empty
-                .as_ref()
-                .map(|_| ())
-                .map_err(|e| io::Error::from(e.kind())),
-        );
-        if empty.unwrap_or(false) {
-            return Some(KillProof::Empty);
-        }
         if self.kill_ms.is_none() && now_ms.saturating_sub(self.term_ms?) >= grace_ms {
+            if child.empty().unwrap_or(false) {
+                return Some(KillProof::Empty);
+            }
             self.kill_ms = Some(now_ms);
             self.record(child.kill());
         }
         if self
             .kill_ms
-            .is_some_and(|t| now_ms.saturating_sub(t) >= 2000)
+            .is_some_and(|t| now_ms.saturating_sub(t) >= prove_ms)
         {
+            match child.empty() {
+                Ok(true) => return Some(KillProof::Empty),
+                Ok(false) => (),
+                Err(error) => self.record(Err(error)),
+            }
             return Some(KillProof::Survivors { cause: self.cause });
         }
         None
