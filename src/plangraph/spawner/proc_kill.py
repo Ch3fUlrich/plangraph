@@ -209,7 +209,9 @@ def signal_recorded(pid, start, proc_root='/proc'):
     else:
         try:
             if alive(pid, start, proc_root=proc_root):
-                os.kill(pid, signal.SIGKILL)
+                # No pidfd (e.g. macOS): recheck immediately; a reuse window remains.
+                if alive(pid, start, proc_root=proc_root):
+                    os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
 
@@ -252,9 +254,15 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None, members
         for member, start in recorded.items():
             if not (anchor and member == pid):
                 signal_recorded(member, start, proc_root)
-        if not await asyncio.to_thread(group_alive, pid):
+        left = {p for p, s in recorded.items() if alive(p, s, proc_root=proc_root)}
+        if not await asyncio.to_thread(group_alive, pid) and not left:
             return
         await asyncio.sleep(0.02)
+    left = {p for p, s in recorded.items() if alive(p, s, proc_root=proc_root)}
+    if await asyncio.to_thread(group_alive, pid):
+        left.update(group_members(pid, proc_root=proc_root))
+    if left:
+        raise KillIncomplete(left)
 
 
 async def verify(root, ident, members, *, platform=None, job_pids=None, proc_root='/proc',

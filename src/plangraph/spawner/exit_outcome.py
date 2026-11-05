@@ -151,10 +151,6 @@ def terminal_reason(record):
     """
     if record.get('reason') == 'kill_incomplete':
         return   # survivors outrank every other verdict: the run failed
-    from .contained_exec import CONTAINMENT_MARKER
-    if CONTAINMENT_MARKER in record.get('stderr_tail', '').splitlines():
-        record.update(status='failed', reason='containment_unavailable')
-        return
     events = record.get('events') or ()
     special = next((e['event'] for e in events
                     if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)
@@ -163,6 +159,10 @@ def terminal_reason(record):
         return
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
+        return
+    from .contained_exec import CONTAINMENT_MARKER
+    if record.get('exit_code') == 125 and CONTAINMENT_MARKER in (record.get('stderr_tail') or '').splitlines():
+        record.update(status='failed', reason='containment_unavailable')
         return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
     if reason == 'harness_limit':
@@ -182,7 +182,7 @@ def terminal_reason(record):
         return
     if record.get('exit_code') not in (None, 0):
         record['reason'] = (reason or record.get('error')
-                            or first_reason(record.get('stderr_tail', ''))
+                            or first_reason(record.get('stderr_tail') or '')
                             or f"harness exit {record['exit_code']}")
 
 

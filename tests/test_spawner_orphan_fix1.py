@@ -15,7 +15,7 @@ from plangraph.spawner.exit_outcome import terminal_reason
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux subreaper')
 
 
-@pytest.mark.parametrize('terminate', [False, True])
+@pytest.mark.parametrize('terminate', [False, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT])
 def test_wrapper_bounds_daemons_and_forwards(tmp_path, terminate):
     pidfile = tmp_path / 'pid'
     root = ("import subprocess,sys,time; "
@@ -32,8 +32,8 @@ def test_wrapper_bounds_daemons_and_forwards(tmp_path, terminate):
             time.sleep(.01)
         kid = int(pidfile.read_text())
         if terminate:
-            proc.send_signal(signal.SIGTERM)
-        assert proc.wait(timeout=3) == (143 if terminate else 23)
+            proc.send_signal(terminate)
+        assert proc.wait(timeout=3) == (128 + terminate if terminate else 23)
         assert not proc_kill.alive(kid, None)
     finally:
         if proc.poll() is None:

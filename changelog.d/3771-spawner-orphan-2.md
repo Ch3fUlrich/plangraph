@@ -4,3 +4,6 @@ termination signals, catch late forks during verified tree kills, and distinguis
 containment denial from harness exit 125. If the wrapper is SIGKILLed, the spawner
 uses its pre-kill identity snapshot (including setsid descendants), plus surviving
 group/session membership; the anchor normally stays alive to reap adopted children.
+Fix round 2: fail closed on unreaped wrapper children, forward HUP/QUIT without
+signalling reaped groups, validate containment markers after terminal events,
+recheck fallback identities, and reject surviving recorded setsid members.

@@ -44,18 +44,21 @@ def main(grace=ORPHAN_GRACE_S):
         return 125
     deadline = None
     child = None
+    reaped = False
+    forwarded = None
 
     def forward(sig, _frame):
-        nonlocal deadline
+        nonlocal deadline, forwarded
+        forwarded = sig
         if deadline is None:
             deadline = time.monotonic() + grace
-        if child is not None:
+        if child is not None and not reaped:
             try:
                 os.killpg(child.pid, sig)
             except ProcessLookupError:
                 pass
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
         signal.signal(sig, forward)
     child = subprocess.Popen(sys.argv[1:], start_new_session=True)
     # Only this process's children are waited on: unrelated service children are
@@ -66,8 +69,9 @@ def main(grace=ORPHAN_GRACE_S):
         try:
             pid, status = os.waitpid(-1, os.WNOHANG)
         except ChildProcessError:
-            return code
+            return code if reaped else 128 + (forwarded or signal.SIGKILL)
         if pid == child.pid:
+            reaped = True
             code = os.waitstatus_to_exitcode(status)
             if code < 0:
                 code = 128 - code
@@ -75,6 +79,11 @@ def main(grace=ORPHAN_GRACE_S):
                 deadline = time.monotonic() + grace
         now = time.monotonic()
         if deadline is not None and now >= deadline:
+            if not reaped:
+                try:
+                    os.kill(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             # Only direct children of this private subreaper, including adopted
             # setsid daemons. Repeat as killed parents release their children.
             for path in Path('/proc/self/task').glob('*/children'):
@@ -90,6 +99,16 @@ def main(grace=ORPHAN_GRACE_S):
             if kill_deadline is None:
                 kill_deadline = now + 1.0
             if now >= kill_deadline:
+                if not reaped:
+                    # One bounded final reap; never report success for unknown status.
+                    try:
+                        pid, status = os.waitpid(child.pid, os.WNOHANG)
+                    except ChildProcessError:
+                        pid = 0
+                    if pid == child.pid:
+                        code = os.waitstatus_to_exitcode(status)
+                        return code if code >= 0 else 128 - code
+                    return 128 + (forwarded or signal.SIGKILL)
                 return code
         time.sleep(0.01)
 
