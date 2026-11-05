@@ -13,6 +13,7 @@ pub mod diffscan;
 pub mod events;
 pub mod exit_class;
 pub mod exports;
+pub mod fleet_router_signals;
 pub mod git;
 pub mod hash;
 pub mod health;
