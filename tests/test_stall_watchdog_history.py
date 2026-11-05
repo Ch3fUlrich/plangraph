@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,6 +41,26 @@ def test_live_evidence(tmp_path, monkeypatch):
         raise ProcessLookupError()
     monkeypatch.setattr(os, 'kill', gone)
     assert w.probe_run(tmp_path, runs[0], 600000)['rule'] == 'run-orphan'
+
+
+@pytest.mark.parametrize('age', [30, 719, 720, 1440, None])
+@pytest.mark.parametrize('log_kind', ['missing', 'unreadable'])
+def test_no_log_startup_grace(tmp_path, monkeypatch, age, log_kind):
+    from plangraph.spawner import runner
+    runs = records(tmp_path, status='running', started=None if age is None else 2000 - age,
+                   pid=os.getpid(), card={'stall_min': 12})
+    if log_kind == 'unreadable':
+        (tmp_path / 'runs/run-0/live.log').mkdir()
+    monkeypatch.setattr(runner, 'spawn_service', lambda **kw: pytest.fail('cancel attempted'))
+    sent = []
+    findings = w.tick(runs, [], lambda _: None, now=2000, state=tmp_path,
+                      deliver=lambda e: w.deliver_event(tmp_path, e))
+    w.flush_outbox(tmp_path, ['notify'], run=lambda cmd, **kw: sent.append(json.loads(kw['input'])))
+    if age is not None and age < 720:
+        assert findings == sent == []
+    else:
+        assert findings[0]['rule'] == sent[0]['rule'] == 'unknown'
+        assert sent[0]['event_id'] and 'cancelled' not in sent[0]
 
 
 @pytest.mark.parametrize('value,age,expected', [
@@ -108,13 +130,15 @@ def test_cap_window_replay(tmp_path, monkeypatch):
     monkeypatch.setattr(w, 'read_claims', lambda: [])
     sent = []
     flush = w.flush_outbox
+    real_clock = time.time
     def blocked(command, **kwargs):
+        assert time.time is real_clock
         sent.append(json.loads(kwargs['input']))
         raise subprocess.CalledProcessError(1, command)
     monkeypatch.setattr(w, 'flush_outbox', lambda state, command: flush(state, command, run=blocked))
     for now in (1201, 1202, 1320):
-        monkeypatch.setattr(w.time, 'time', lambda: now)
-        assert w.main(['tick']) == 0
+        monkeypatch.setattr(w, 'time', SimpleNamespace(time=lambda: now))
+        assert w.main(['tick']) == 1
         caps = [e for e in sent if e['rule'] == 'findings-capped']
         assert len({e['event_id'] for e in caps}) == (2 if now == 1320 else 1)
         if now != 1201:
@@ -166,3 +190,21 @@ def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):
         events = [json.loads(p.read_text()) for p in (tmp_path / 'watchdog/outbox').glob('*')]
         assert len(events) == expected
         assert sum(e['rule'] == 'findings-capped' for e in events) == 1
+
+
+def test_pull_host_keeps_findings(tmp_path, monkeypatch):
+    from plangraph.spawner import runner
+    from plangraph.keeper.cli_verbs import MissingKeeperURL
+    records(tmp_path, status='running', started=0, pid=123)
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(os, 'kill', lambda *a: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(runner, 'spawn_service', lambda **kw: SimpleNamespace(retry_completions=lambda: None))
+    def unavailable():
+        raise MissingKeeperURL()
+    monkeypatch.setattr(w, 'read_claims', unavailable)
+    assert w.main(['tick']) == 0
+    events = list((tmp_path / 'watchdog/outbox').glob('*.json'))
+    assert len(events) == 1 and json.loads(events[0].read_text())['rule'] == 'run-orphan'
+    text = (tmp_path / 'watchdog/status.txt').read_text()
+    assert 'outbox 1, no bridge' in text and 'warning keeper skipped MissingKeeperURL' in text

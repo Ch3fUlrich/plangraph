@@ -10,7 +10,6 @@ import argparse
 from contextvars import ContextVar
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import subprocess
@@ -18,14 +17,9 @@ import sys
 import time
 from xml.sax.saxutils import escape
 
-_budget = ContextVar('probe_budget', default=None)
+from .stall_probe import probe_run, probe_setting
 
-def probe_setting(name, default, maximum):
-    try:
-        value = float(os.environ.get(name, default))
-        return min(value, maximum) if math.isfinite(value) and value >= 0 else default
-    except ValueError:
-        return default
+_budget = ContextVar('probe_budget', default=None)
 
 def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=False, budget=None):
     now = time.time() if now is None else now
@@ -82,78 +76,6 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=
                 if recipient:
                     deliver(dict(finding, kind='alert', recipient=recipient))
     return findings
-
-def probe_run(state, record, now, *, dry_run=False):
-    """Independent host sampling; missing evidence never authorizes cancellation."""
-    import asyncio
-    import math
-    from .private_io import atomic_write_private
-    event = dict(rule='unknown')
-    try:
-        event.update(run_id=record.get('run_id'), leg=record.get('leg'), role=record.get('role'),
-                     age=None, seconds_silent=None, last_line=None)
-        directory = Path(state) / 'runs' / record['run_id']
-        finished = record.get('status') not in ('running', 'queued', None)
-        if finished:
-            ended = record.get('ended')
-            if (isinstance(ended, bool) or not isinstance(ended, (int, float))
-                    or not math.isfinite(ended) or not 0 <= now - ended <= probe_setting(
-                        'PLANGRAPH_PROBE_HORIZON_S', 86400, 604800)):
-                return None
-        log = directory / 'live.log'
-        try:
-            with log.open(encoding='utf-8') as stream:
-                stream.seek(max(0, log.stat().st_size - 4096))
-                lines = stream.read().splitlines()
-            event.update(seconds_silent=max(0, now - log.stat().st_mtime),
-                         last_line=lines[-1][:200] if lines else '')
-        except (OSError, UnicodeError):
-            pass
-        try:
-            started = record['started']
-            if math.isfinite(started):
-                event['age'] = max(0, now - started)
-        except (KeyError, TypeError, ValueError, OverflowError):
-            pass
-        if finished:
-            message = str(record.get('final_message', '')) + ' ' + (event['last_line'] or '')
-            if record.get('role') == 'implement' and (record.get('reason') == 'writer_no_changes'
-                    or 'running in the background' in message.lower()):
-                return dict(event, rule='run-ended-no-commit')
-            return None
-        if record.get('status') is None and event['age'] is None:
-            return event
-        if record.get('status') == 'running':
-            pid = record.get('pid')
-            if not isinstance(pid, int) or pid <= 0 or os.name == 'nt':
-                return event
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                event['rule'] = 'run-orphan'
-                record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
-                if not dry_run:
-                    atomic_write_private(directory / 'record.json', json.dumps(record))
-                return event
-        silent = event['seconds_silent']
-        if silent is None:
-            return event
-        limit = float((record.get('card') or {}).get('stall_min', 12)) * 60
-        if not math.isfinite(limit) or limit <= 0:
-            return event
-        if record.get('status') == 'running':
-            if silent < limit:
-                return None
-            event['rule'] = 'run-silent'
-            event['episode'] = log.stat().st_mtime
-            if silent >= 2 * limit and not dry_run:
-                from .runner import spawn_service
-                result = asyncio.run(spawn_service(state=state).cancel(record['run_id']))
-                event['cancelled'] = result.get('status') == 'cancelled'
-            return event
-        return None
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError):
-        return event
 
 def status(findings):
     return '\n'.join('! stall ' + json.dumps(f, sort_keys=True) for f in findings)
@@ -383,9 +305,12 @@ def main(argv=None):
             flush_outbox(state, json.loads(command))
         except Exception as exc:
             error = 'delivery-' + type(exc).__name__
-    elif any(f['rule'] != 'unknown' for f in findings):
-        error = error or 'delivery-bridge-unconfigured'
+    pending = len(list((state / 'watchdog/outbox').glob('*.json')))
+    if command and pending:
+        error = error or 'delivery-bridge-failed'
     text = status(findings)
+    if not command:
+        text += ('\n' if text else '') + f'outbox {pending}, no bridge'
     if warning:
         text += ('\n' if text else '') + '! stall watchdog warning keeper skipped ' + warning
     if error:
