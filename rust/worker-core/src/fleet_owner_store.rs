@@ -86,7 +86,10 @@ fn store(
         time::{Duration, Instant},
     };
     crate::fleet_owner_lease::slot_path(root, slot).map_err(StoreError::Refused)?;
-    if slot.components().any(|c| c.as_os_str() == ".owner-locks") {
+    if slot
+        .components()
+        .any(|c| c.as_os_str().as_bytes().starts_with(b".owner-"))
+    {
         return Err(StoreError::Refused(Refusal::Invalid));
     }
     let mut parent = OpenOptions::new()
@@ -111,8 +114,6 @@ fn store(
     // The descriptor pins the parent, even if its original pathname is moved.
     let dir = std::path::PathBuf::from(format!("/dev/fd/{}/.", parent.as_raw_fd()));
     let name = Path::new(slot.file_name().unwrap());
-    // Refusals must not materialize metadata; re-read after locking on success.
-    next(&dir, name)?;
     let locks = dir.join(".owner-locks");
     match std::fs::create_dir(&locks) {
         Ok(()) => (),

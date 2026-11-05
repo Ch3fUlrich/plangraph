@@ -227,13 +227,49 @@ fn lock_suffix_slots_are_independent() {
 }
 
 #[test]
-fn refused_operations_leave_fresh_directory_empty() {
+fn refused_operations_leave_records_absent() {
     let d = tempfile::tempdir().unwrap();
     assert!(matches!(
         acquire(d.path(), "missing", 0, &State::Free),
         Err(StoreError::Unknown(_))
     ));
-    assert_eq!(fs::read_dir(d.path()).unwrap().count(), 0);
+    assert!(!d.path().join("missing").exists());
     assert!(create(d.path(), Path::new("slot"), "", "run", 0).is_err());
-    assert_eq!(fs::read_dir(d.path()).unwrap().count(), 0);
+    assert!(!d.path().join("slot").exists());
+}
+
+#[test]
+fn temp_namespace_is_reserved() {
+    let d = setup();
+    FAIL.with(|f| f.set(1));
+    assert!(acquire(d.path(), "slot", 0, &State::Free).is_err());
+    FAIL.with(|f| f.set(0));
+    let temp = fs::read_dir(d.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .find(|n| n.to_string_lossy().starts_with(".owner-") && n != ".owner-locks")
+        .unwrap();
+    let slot = temp.to_str().unwrap();
+    assert!(matches!(
+        acquire(d.path(), slot, 1, &State::Busy(owner())),
+        Err(StoreError::Refused(Refusal::Invalid))
+    ));
+    assert!(matches!(
+        create(d.path(), Path::new(".owner-new.tmp"), "session", "run", 0),
+        Err(StoreError::Refused(Refusal::Invalid))
+    ));
+}
+
+#[test]
+fn decisions_run_only_under_slot_lock() {
+    let d = setup();
+    store(d.path(), Path::new("slot"), |_, _| {
+        assert!(
+            crate::lockfile::try_lock(&d.path().join(".owner-locks/slot"))
+                .unwrap()
+                .is_none()
+        );
+        lease::bootstrap("session", "run", 0).map_err(StoreError::Refused)
+    })
+    .unwrap();
 }
