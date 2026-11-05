@@ -1,13 +1,12 @@
-"""Creation-time proof and handle-bound termination for recorded Windows trees."""
 import ctypes
+import os
 from ctypes import wintypes as w
 
 from . import proc_kill
 
-k32 = ctypes.WinDLL('kernel32', use_last_error=True)
-k32.OpenProcess.restype = ctypes.c_void_p
-
-
+if os.name == 'nt':
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    k32.OpenProcess.restype = ctypes.c_void_p
 def creation(pid, handle=None):
     owned = handle is None
     handle = handle or k32.OpenProcess(0x1000, False, pid)
@@ -23,13 +22,13 @@ def creation(pid, handle=None):
 
 
 async def kill(pid, token):
-    members, handles = {}, {}
+    members, handles, uncertain = {}, {}, set()
     try:
-        if type(token) is not int or creation(pid) != token:
-            return [pid] if proc_kill.alive(pid, None) else []
         table = proc_kill._nt_table()
+        if type(token) is not int or creation(pid) != token:
+            return sorted({p for p, pp in table.items() if pp == pid} | ({pid} if not table or proc_kill.alive(pid, None) else set()))
         if pid not in table:
-            return [pid]
+            return sorted({p for p, pp in table.items() if pp == pid} | ({pid} if not table or proc_kill.alive(pid, None) else set()))
         members[pid] = token
         while True:
             added = False
@@ -37,13 +36,14 @@ async def kill(pid, token):
                 if parent in members and child not in members:
                     start = creation(child)
                     if start is None:
-                        return sorted(set(members) | {child})
+                        if proc_kill.alive(child, None):
+                            uncertain.add(child)
+                        continue
                     if start >= members[parent]:
                         members[child] = start
                         added = True
             if not added:
                 break
-        # Hold validated handles until verification: pid reuse cannot redirect a signal.
         for child, start in members.items():
             handle = k32.OpenProcess(0x100001 | 0x1000, False, child)
             if not handle or creation(child, handle) != start:
@@ -54,7 +54,7 @@ async def kill(pid, token):
         for handle in reversed(list(handles.values())):
             k32.TerminateProcess(ctypes.c_void_p(handle), 1)
         await proc_kill.finish(pid, token, members, platform='nt', live_pids=lambda: [])
-        return []
+        return sorted(uncertain)
     except proc_kill.KillIncomplete as exc:
         return exc.survivors
     finally:
