@@ -261,6 +261,8 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         .map(Path::to_owned)
     {
         let value = record.to_value();
+        let (rows, skipped) = crate::evidence_row::adapted(&value);
+        record.set("evidence_unclassified_attempts", json!(skipped));
         if value["role"] == "review" {
             let text = crate::review_artifacts::review_text(&state, &value)
                 .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
@@ -280,10 +282,6 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         {
             if store.backfill(&crate::records::list_runs(&state)).is_err() {
                 record.set("evidence_error", json!("evidence unavailable"));
-            }
-            let (rows, skipped) = crate::evidence_row::adapted(&value);
-            if crate::evidence::enabled(&state, role) {
-                record.set("evidence_unclassified_attempts", json!(skipped));
             }
             for row in rows {
                 if store.append(&row).is_err() {
@@ -311,6 +309,7 @@ fn review_artifacts_finish_read_error_without_evidence() {
     record.set("live_log", json!(log));
     assert!(crate::review_artifacts::review_text(&state, &record.to_value()).is_err());
     finish(&mut record, Status::Completed, &json!({}));
+    assert_eq!(record.to_value()["evidence_unclassified_attempts"], 1);
     let seat = record.path().with_file_name("seat");
     assert!(std::fs::read_to_string(seat.join("review.txt"))
         .unwrap()

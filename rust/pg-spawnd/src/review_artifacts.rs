@@ -96,11 +96,43 @@ pub(crate) fn write_review_artifacts(
         && known("served_model")
         && known("witness_kind")
         && (record["test_gaming"] == false || record["test_gaming"] == "no");
-    let review = if passing && !review.contains("VERDICT: HALT") {
+    let accepts = review
+        .lines()
+        .rev()
+        .find_map(|line| {
+            let line = line.trim_start_matches([' ', '\t', '>', '#', '*', '_', '`', '-']);
+            let (label, decision) = line.split_once(':')?;
+            if !label
+                .trim_end_matches([' ', '\t', '*', '_', '`'])
+                .eq_ignore_ascii_case("verdict")
+            {
+                return None;
+            }
+            let decision = decision
+                .trim_start_matches([' ', '\t', '*', '_', '`'])
+                .to_ascii_lowercase();
+            let end = decision
+                .find(|c: char| !c.is_ascii_alphabetic())
+                .unwrap_or(decision.len());
+            let (word, rest) = decision.split_at(end);
+            let boundary =
+                rest.is_empty() || rest.starts_with(|c: char| " \t.,;:!)(*_`—–-".contains(c));
+            Some(
+                boundary
+                    && !rest.trim_start().starts_with(['|', '/'])
+                    && matches!(word, "pass" | "approve" | "accept"),
+            )
+        })
+        .unwrap_or(false);
+    let review = if passing && accepts {
         review
     } else {
         evidence["verdict"] = json!("HALT");
-        "Review cannot pass: incomplete or nonpassing evidence.\nVERDICT: HALT\n"
+        if review.trim().is_empty() || accepts {
+            "Review cannot pass: incomplete or nonpassing evidence.\nVERDICT: HALT\n"
+        } else {
+            review
+        }
     };
     for (name, bytes) in [
         (

@@ -1,5 +1,42 @@
 use super::*;
 #[test]
+fn review_artifacts_preserve_body_and_parse_verdict() {
+    let state = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    let base = json!({"run_id":"run-test","served_model":"model","witness_kind":"response",
+        "finish_reason":"stop","test_gaming":false,"verdict":"PASS"});
+    for (body, pass) in [
+        ("analysis\nVERDICT: HALT", false),
+        ("analysis\nverdict: halt", false),
+        ("", false),
+        ("  \n", false),
+        ("analysis only", false),
+        ("VERDICT: pass | fix", false),
+        ("quoted \"VERDICT: HALT\"\n**Verdict**: ACCEPT", true),
+        ("VERDICT: ACCEPT\nVERDICT: unknown", false),
+    ] {
+        write_review_artifacts(&state, &base, body).unwrap();
+        let seat = state.join("runs/run-test/seat");
+        let evidence: Value =
+            serde_json::from_slice(&fs::read(seat.join("evidence.json")).unwrap()).unwrap();
+        assert_eq!(
+            evidence["verdict"],
+            if pass { "PASS" } else { "HALT" },
+            "{body}"
+        );
+        if !body.trim().is_empty() {
+            assert_eq!(fs::read_to_string(seat.join("review.txt")).unwrap(), body);
+        }
+    }
+    let mut incomplete = base;
+    incomplete["finish_reason"] = Value::Null;
+    write_review_artifacts(&state, &incomplete, "analysis\nVERDICT: HALT").unwrap();
+    assert_eq!(
+        fs::read_to_string(state.join("runs/run-test/seat/review.txt")).unwrap(),
+        "analysis\nVERDICT: HALT"
+    );
+    fs::remove_dir_all(state).unwrap();
+}
+#[test]
 fn missing_witness_or_finish_never_pass() {
     let state = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
     let base = json!({"run_id":"run-test","served_model":"model","witness_kind":"response",
