@@ -1,15 +1,15 @@
-"""Fail closed on unknown trees; only strictly later creation proves ancestry.
-Hold first-observed handles so PID reuse cannot redirect termination.
-"""
+"""Recorded Windows cancellation uses only a proven named Job Object."""
+import asyncio
 import ctypes
 import os
+import time
 from ctypes import wintypes as w
-
 from . import proc_kill
+from .winjob import WinJobApi
 
 if os.name == 'nt':
     k32 = ctypes.WinDLL('kernel32', use_last_error=True)
-    k32.OpenProcess.restype = ctypes.c_void_p
+    k32.OpenProcess.restype = k32.OpenJobObjectW.restype = ctypes.c_void_p
 
 
 def creation(pid, handle=None):
@@ -28,44 +28,29 @@ def creation(pid, handle=None):
             k32.CloseHandle(ctypes.c_void_p(handle))
 
 
-async def kill(pid, token):
-    members, handles, uncertain = {}, {}, set()
-    def observe(target):
-        handle = k32.OpenProcess(0x100001 | 0x1000, False, target)
-        if handle:
-            handles[target] = handle
-        return creation(target, handle) if handle else None
-    def live():
-        table = proc_kill._nt_table()
-        if not table:
-            uncertain.add(pid)
-        while True:
-            added = False
-            for child, parent in table.items():
-                if parent in members and child not in handles and child not in uncertain:
-                    start = observe(child)
-                    if start is None or start == members[parent]:
-                        uncertain.add(child)
-                    elif start > members[parent]:
-                        members[child] = start
-                        added = True
-            if not added:
-                break
-        return uncertain | {p for p, h in handles.items() if p in members and k32.WaitForSingleObject(ctypes.c_void_p(h), 0) == 0x102}
-    def terminate():
-        for target in members:  # insertion order: root first, then descendants
-            k32.TerminateProcess(ctypes.c_void_p(handles[target]), 1)
+async def kill(pid, token, name=None, escapees=()):
+    if os.name != 'nt' or not name or type(token) is not int:
+        return [pid]
+    root = k32.OpenProcess(0x1000, False, pid)
+    job = None
     try:
-        table = proc_kill._nt_table()
-        if type(token) is not int or pid not in table or observe(pid) != token or k32.WaitForSingleObject(ctypes.c_void_p(handles[pid]), 0) != 0x102:
+        if not root or creation(pid, root) != token:
             return [pid]
-        members[pid] = token
-        live()
-        terminate()
-        await proc_kill.finish(pid, token, {}, platform='nt', live_pids=live, reterminate=terminate)
-        return sorted(uncertain)
-    except proc_kill.KillIncomplete as exc:
-        return exc.survivors
+        job = k32.OpenJobObjectW(0x0008 | 0x0004, False, ctypes.c_wchar_p(name))
+        member = w.BOOL()
+        if not job or not k32.IsProcessInJob(ctypes.c_void_p(root), ctypes.c_void_p(job), ctypes.byref(member)) or not member.value:
+            return [pid]
+        api = WinJobApi()
+        api.terminate(job)
+        deadline = time.monotonic() + proc_kill.KILL_WAIT_S
+        while True:
+            live = api.pids(job)
+            if not live or time.monotonic() >= deadline:
+                return sorted(set(live) | {p for p in escapees if proc_kill.alive(p, None)})
+            await asyncio.sleep(.05)
+    except OSError:
+        return [pid]
     finally:
-        for handle in handles.values():
-            k32.CloseHandle(ctypes.c_void_p(handle))
+        for handle in (job, root):
+            if handle:
+                k32.CloseHandle(ctypes.c_void_p(handle))

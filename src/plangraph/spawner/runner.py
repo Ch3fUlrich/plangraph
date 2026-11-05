@@ -590,6 +590,7 @@ class SpawnerRunner:
                     self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
                     # Descendants made before assign() are not job members: record them now, kill+verify at reap.
                     self._escapees = {**getattr(self, '_escapees', {}), job_id: proc_kill.escapees(root_pid, self.win_job_api.pids(handle) if hasattr(type(self.win_job_api), 'pids') else [])}
+                    self._owned[job_id].update(job_name=getattr(self.win_job_api, 'name', None), escapees=list(self._escapees[job_id]))
                 except Exception:
                     stale = self._win_jobs.pop(job_id, None)
                     if stale is not None:   # assigned but unverifiable: release the handle, the run does not start
@@ -644,7 +645,7 @@ class SpawnerRunner:
         plat = 'nt' if self._nt() else None
         if plat == 'nt' and type(pid_start) is int:
             from .win_recorded import kill
-            return await kill(pid, pid_start)
+            return await kill(pid, pid_start, *getattr(self, '_recorded_job', (None, ())))
         if pid_start is None or plat == 'nt':
             return unproven_survivors(pid, plat)
         return await kill_proven(self, pid, pid_start, plat=plat) or []
