@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from fake_pid import FAKE_PID
 
 import pytest
 
@@ -66,7 +67,7 @@ def test_runner_records_admitted_by_render(tmp_path, monkeypatch):
     monkeypatch.setattr(SpawnService, "_route", lambda self, *a, **kw: plan)
 
     async def factory(exe, *args, **kwargs):
-        proc = AsyncMock(returncode=0, pid=999)
+        proc = AsyncMock(returncode=0, pid=FAKE_PID)
         proc.communicate = AsyncMock(return_value=(b"ok", b""))
         return proc
 

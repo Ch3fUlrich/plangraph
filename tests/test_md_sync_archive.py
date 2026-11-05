@@ -272,7 +272,7 @@ def test_unreachable_keeper_leaves_the_file_alone_and_reports(tmp_path, monkeypa
     tok.write_text("x" * 20, encoding="utf-8")
     os.chmod(tok, 0o600)
     status = tmp_path / "status.json"
-    def down(self, verb):
+    def down(self, verb, **kw):
         raise md_sync.apply_batch.ApiError("unreachable", "URLError")
     monkeypatch.setattr(md_sync.apply_batch.Session, "get", down)   # no socket, no port race
     out, err = io.StringIO(), io.StringIO()
@@ -868,7 +868,7 @@ def test_malformed_snapshot_data_returns_2_with_status(tmp_path, monkeypatch):
            "operator": True, "priority": 0, "depends_on": [],
            "description": "d", "choices": {"options": ["a"]}}
 
-    def fake_get(self, _verb):
+    def fake_get(self, _verb, **kw):
         return {"items": [bad]}
 
     monkeypatch.setattr(md_sync.apply_batch.Session, "get", fake_get)

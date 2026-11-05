@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import sqlite3
+from fake_pid import FAKE_PID
 
 import pytest
 
@@ -49,7 +50,7 @@ def test_sqlite_private_sidecars(tmp_path, monkeypatch, store_kind, existing):
 
 
 class Process:
-    pid = 123
+    pid = FAKE_PID
 
     def __init__(self, output=(b'', b''), code=0, blocked=False):
         self.output, self.returncode, self.blocked = output, code, blocked
@@ -74,7 +75,7 @@ def test_nonce_removed_on_real_outcomes(monkeypatch, outcome):
             return Process((b'', envelope if outcome == 'provider-stop' else b''), code=int(outcome == 'nonzero'), blocked=outcome == 'cancel')
 
         async def killer(pid):
-            assert pid == 123
+            assert pid == FAKE_PID
 
         runner = SpawnerRunner(process_factory=factory, tree_killer=killer)
         if outcome == 'spawn-failure':

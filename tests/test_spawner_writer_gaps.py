@@ -32,7 +32,7 @@ def test_brief():
     assert '1. [ ] one' in brief and '2. [ ] two' in brief
     assert 'The run ends only when each item is fixed or refuted by a named test' in brief
     assert 'COMMIT before finishing' in brief
-    assert 'TEST-SPEED-AFFECTED' in brief
+    assert 'python3 tools/affected_tests.py --base origin/main --run' in brief
 
 
 @pytest.mark.parametrize('text,expected', [

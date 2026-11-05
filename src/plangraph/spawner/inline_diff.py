@@ -32,9 +32,11 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         proc = subprocess.run(
             ["git", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
              "--no-textconv", f"{base}...{head}", "--"],
-            capture_output=True, text=True, timeout=timeout, check=False)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InlineDiffError(f"git diff failed: {type(exc).__name__}") from None
+    if proc.stdout is None or proc.stderr is None:
+        raise InlineDiffError("git diff reader failure: stdout or stderr is None")
     if proc.returncode != 0:
         raise InlineDiffError("git diff failed: " + (proc.stderr.strip().splitlines() or ["exit %d" % proc.returncode])[0][:200])
     if not proc.stdout.strip():

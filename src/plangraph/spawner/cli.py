@@ -128,6 +128,7 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true',
                            help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
+    commands.add_parser('launch-spec')
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
     p.add_argument('--all-writers', action='store_true')
@@ -139,16 +140,23 @@ def main(argv=None):
     for verb in ('result', 'status', 'cancel'):
         commands.add_parser(verb).add_argument('run_id')
     args = parser.parse_args(argv)
+    if args.verb == 'launch-spec':
+        from . import launch_spec
+        return launch_spec.main(sys.stdin.buffer, sys.stdout, sys.stderr)
     service = SpawnService(state=args.state)
     try:
         if args.verb == 'probe':
-            from .leg_probe import probe_many
+            from .leg_probe import probe_many, reset_iso
             result = asyncio.run(probe_many(service.runner, args.leg, args.all_writers, args.timeout))
             if args.json:
                 print(json.dumps(result))
             else:
                 for row in result['probes']:
-                    print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
+                    if row.get('skipped') == 'limited':
+                        # reset_iso guards legacy out-of-range reset_at values.
+                        print(f"{row['id']} skipped=limited until {reset_iso(row.get('reset_at'))}")
+                    else:
+                        print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
             return 0 if result['ok'] else 1
         from .bench_entry import benchmark_options
         try:
@@ -295,7 +303,7 @@ raise SystemExit(code)
                 with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
                     child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-                        env=env, text=True, **({'start_new_session': True} if os.name != 'nt' else
+                        env=env, text=True, encoding="utf-8", errors="replace", **({'start_new_session': True} if os.name != 'nt' else
                                       {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
                     try:
                         child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')

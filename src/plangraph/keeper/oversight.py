@@ -1,4 +1,4 @@
-"""RT-OVERSIGHT-CHECKS: pure checks R1..R7 over a keeper snapshot.
+"""RT-OVERSIGHT-CHECKS: pure checks R1..R8 over a keeper snapshot.
 
 Every rule is a pure function of ``conn`` and an injected epoch ``now``: no wall
 clock, no network, no LLM.  A *finding* is a plain dict ``{rule, kind, key,
@@ -20,6 +20,7 @@ from .. import views_graph
 from ..governor.policy import BURN_LIMIT
 from .stall import STALL_S, _CLOSED, stall_alarms
 from .store_support import iso, parse_iso
+from .oversight_operator import r8_operator
 
 __all__ = [
     "STALL_S",
@@ -128,7 +129,8 @@ _RULE_OF_STALL = {"stall_no_event": "R1", "merged_open": "R2"}
 #: Alarm kind handed back to the rule that owns it.  When a rule's check fails
 #: (``oversight_check_failed``) :func:`raise_alarms` must keep its open alarms
 #: instead of reading the missing findings as "the condition went away".
-_RULE_OF_ALARM_KIND = {"lane_idle": "R4"}
+_RULE_OF_ALARM_KIND = {"lane_idle": "R4", **dict.fromkeys((
+    "operator_step_untested", "operator_step_no_guard", "operator_step_stale"), "R8")}
 
 
 def r1_r2(conn, now, git=None):
@@ -338,13 +340,7 @@ def r7_burn(conn, day, now):
 
 # ------------------------------------------------------------ aggregate
 def run_checks(conn, now, *, git=None, lane_git=None, day=None):
-    """Every rule, one list sorted by ``(rule, key)``.
-
-    ``git`` is the config-style object (or ``(repo, ref)`` callable) that
-    :mod:`plangraph.keeper.stall` understands for R1/R2; ``lane_git`` is the
-    separate ``git(args) -> str`` callable R4 needs.  They are deliberately not
-    interchangeable: a config object silently yields no R4 rows.
-    """
+    """Every rule sorted by (rule, key); git is R1/R2's adapter, lane_git R4's."""
     if day is None:
         day = datetime.fromtimestamp(float(now), tz=timezone.utc).date().isoformat()
     findings = []
@@ -354,6 +350,7 @@ def run_checks(conn, now, *, git=None, lane_git=None, day=None):
     findings.extend(r5_windows(conn, now))
     findings.extend(r6_projector(conn, now))
     findings.extend(r7_burn(conn, day, now))
+    findings.extend(r8_operator(conn, now))
     return _sort(findings)
 
 
