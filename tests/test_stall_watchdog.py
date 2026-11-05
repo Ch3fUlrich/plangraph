@@ -107,6 +107,9 @@ def test_scheduler_installation(tmp_path, host):
     content = '\n'.join(p.read_text(encoding='utf-16' if host == 'windows' else 'utf-8') for p in tmp_path.iterdir())
     assert 'plangraph.spawner.stall_watchdog' in content
     if host == 'linux':
+        assert 'Environment="PLANGRAPH_PROBE_ROOT=' + str(Path.cwd()) + '"' in content
+        unit = (tmp_path / 'plangraph-remote-probe.service').read_text()
+        assert 'EnvironmentFile=-%h/.config/plangraph/watchdog.env' in unit
         assert 'OnUnitActiveSec=120' in content
         assert ['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'] in calls
     else:

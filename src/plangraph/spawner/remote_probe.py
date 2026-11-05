@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import uuid
 
 from .private_io import atomic_write_private
 
@@ -34,6 +35,7 @@ def poll(hosts, command, state):
         atomic_write_private(path, json.dumps(saved))
     def notify(key, event, entry):
         if key not in entry['seen']:
+            event = dict(event, event_id=event.get('event_id') or key)
             subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
                            text=True, check=True, timeout=20)
             entry['seen'].append(key)
@@ -60,14 +62,15 @@ def poll(hosts, command, state):
                     len(k) != 64 or any(c not in '0123456789abcdef' for c in k)
                     or not isinstance(v, dict) for k, v in events.items()):
                 raise ValueError('invalid remote findings')
-        except (OSError, ValueError, subprocess.SubprocessError):
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             entry['failures'] += 1
             if entry['failures'] >= 2:
                 if not entry['down'] and entry['failures'] == 2:
                     entry['outage'] += 1
+                    entry['episode'] = uuid.uuid4().hex
                 save()
                 try:
-                    notify('down-' + str(entry['outage']), dict(rule='host-unreachable', host=host), entry)
+                    notify('down-' + entry.get('episode', str(entry['outage'])), dict(rule='host-unreachable', host=host), entry)
                     entry['down'] = True
                 except (OSError, subprocess.SubprocessError):
                     pass
@@ -75,7 +78,7 @@ def poll(hosts, command, state):
             continue
         try:
             if entry['down']:
-                notify('up-' + str(entry['outage']), dict(rule='host-recovered', host=host), entry)
+                notify('up-' + entry.get('episode', str(entry['outage'])), dict(rule='host-recovered', host=host), entry)
             entry.update(failures=0, down=False, acks=[])
             for key, event in events.items():
                 notify(key, event, entry)
@@ -91,6 +94,8 @@ def main():
     parser.add_argument('--host', action='append')
     parser.add_argument('--notify-cmd', default=os.environ.get('PLANGRAPH_PROBE_NOTIFY_CMD'))
     args = parser.parse_args()
+    if not os.environ.get('PLANGRAPH_PROBE_ROOT'):
+        parser.error('PLANGRAPH_PROBE_ROOT is required')
     hosts = args.host or shlex.split(os.environ.get('PLANGRAPH_PROBE_HOSTS', ''))
     if not hosts or not args.notify_cmd or any(h.startswith('-') for h in hosts):
         parser.error('hosts and notify command are required')

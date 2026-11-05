@@ -276,6 +276,8 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
             (destination / ('plangraph-stall-watchdog.' + name)).write_text(text)
         (destination / 'plangraph-remote-probe.service').write_text(
             '[Service]\nType=oneshot\nWorkingDirectory=' + str(root) + '\nEnvironment=PYTHONPATH=src\n'
+            'Environment="PLANGRAPH_PROBE_ROOT=' + str(root) + '"\n'
+            'EnvironmentFile=-%h/.config/plangraph/watchdog.env\n'
             'ExecStart=' + python + ' -m plangraph.spawner.remote_probe\n')
         (destination / 'plangraph-remote-probe.timer').write_text(
             '[Timer]\nOnBootSec=2min\nOnUnitActiveSec=2min\n[Install]\nWantedBy=timers.target\n')

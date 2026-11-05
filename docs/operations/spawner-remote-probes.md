@@ -1,5 +1,11 @@
 # Remote run probes
 
+The installed unit sets `PLANGRAPH_PROBE_ROOT` to its install root; override it
+if the remote checkout differs. The CLI requires this variable. Set hosts and
+notify command in the unit's optional `%h/.config/plangraph/watchdog.env` file.
+Every notification carries `event_id`; outage/recovery IDs share an episode
+suffix, unique even after local state loss. Receivers can dedupe replays.
+
 `stall_watchdog tick` samples recorded runs without their launcher, reports
 silent runs, orphans and implement exits without completed work, and cancels
 only proven silence of twice the card's `stall_min` (default 12 minutes).

@@ -58,6 +58,30 @@ def test_polls(tmp_path, monkeypatch):
     once()
     assert [json.loads(s)['rule'] for s in output.read_text().splitlines()] == [
         'run-silent', 'host-unreachable', 'host-recovered']
+    events = [json.loads(s) for s in output.read_text().splitlines()]
+    assert events[0]['event_id'] == 'a' * 64
+    assert events[1]['event_id'].removeprefix('down-') == events[2]['event_id'].removeprefix('up-')
+    (tmp_path / 'remote-probe.json').unlink()
+    reply.write_text('garbled')
+    once()
+    once()
+    assert json.loads(output.read_text().splitlines()[-1])['event_id'] != events[1]['event_id']
+
+
+def test_missing_root_main(monkeypatch, capsys):
+    from plangraph.spawner.remote_probe import main
+    monkeypatch.delenv('PLANGRAPH_PROBE_ROOT')
+    monkeypatch.setattr(sys, 'argv', ['remote_probe', '--host', 'fixture', '--notify-cmd', 'true'])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+    assert 'PLANGRAPH_PROBE_ROOT is required' in capsys.readouterr().err
+
+
+def test_missing_root_poll(tmp_path, monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_PROBE_ROOT')
+    poll(['fixture'], 'true', tmp_path)
+    assert json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['failures'] == 1
 
 
 @pytest.mark.parametrize('raw', ['{', '[]', 'null', '{"fixture": {}}',
