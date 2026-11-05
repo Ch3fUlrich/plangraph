@@ -88,16 +88,20 @@ def test_exit_replay_cooldown_and_probe(line, monkeypatch, tmp_path):
     notices = []
     service = NS(leg_reader=store.leg_status,
                  completion_sink=NS(deliver=lambda *a: notices.append(a)))
-    attempts = []
-    # Before: a reader without refusal evidence dispatches all four choices.
-    before = sum(store.leg_status('dead')['state'] == 'ok' for _ in range(4))
-    for _ in range(4):
-        chosen = next(m for m in ('dead', 'next') if store.leg_status(m)['state'] == 'ok')
-        attempts.append(chosen)
-        job = NS(exit_code=1 if chosen == 'dead' else 0, stdout=line, stderr='')
-        reason = exit_outcome.fallthrough_reason(service, NS(model=chosen), job, {'run_id': 'fixture'})
-        assert bool(reason) == (chosen == 'dead')
-    assert before == 4
+    def replay(book):
+        attempts = []
+        for _ in range(4):
+            chosen = next(m for m in ('dead', 'next') if service.leg_reader(m)['state'] == 'ok')
+            attempts.append(chosen)
+            job = NS(exit_code=1 if chosen == 'dead' else 0, stdout=line, stderr='')
+            if book:
+                reason = exit_outcome.fallthrough_reason(service, NS(model=chosen), job, {'run_id': 'fixture'})
+                assert bool(reason) == (chosen == 'dead')
+        return attempts
+    before = replay(book=False)  # Pre-evidence dispatch: failed exits never book.
+    attempts = replay(book=True)
+    assert before == ['dead'] * 4
+    assert (before.count('dead'), attempts.count('dead')) == (4, 1)
     assert attempts == ['dead', 'next', 'next', 'next']
     assert len(notices) == 1
     evidence = store.leg_status('dead')['evidence']
@@ -119,6 +123,14 @@ def test_success_and_prose_guards(text):
         assert env_redact.harness_limit_line(1, text, text) is None
 
 
+@pytest.mark.parametrize('text', [line + ' responses are handled here.' for line in LINES[:3]] +
+                         ['HTTP 503: was discussed in the report', LINES[3] + ' was discussed.'])
+def test_busy_prefix_prose_is_not_refusal(text):
+    assert env_redact.early_refusal(text) is None
+    assert env_redact.harness_limit_line(1, text, text) is None
+    assert env_redact.unavailable_reason(1, text, text) is None
+
+
 def test_quiet_guard_and_provider_reset(monkeypatch, tmp_path):
     from plangraph.spawner.run_refusal import RefusalGate
     gate = RefusalGate(NS(is_set=lambda: False), NS(start_time=1000), lambda s: s)
@@ -129,6 +141,9 @@ def test_quiet_guard_and_provider_reset(monkeypatch, tmp_path):
     monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
     store = LegStateStore(tmp_path / 'legs.sqlite')
     line = 'Error: server busy (reset after 2h)'
-    exit_outcome.fallthrough_reason(NS(leg_reader=store), NS(model='dead'),
+    service = NS(leg_reader=store.leg_status)
+    assert callable(service.leg_reader)
+    assert service.leg_reader('dead')['state'] == 'ok'
+    exit_outcome.fallthrough_reason(service, NS(model='dead'),
                                    NS(exit_code=1, stdout='', stderr=line), {})
     assert store.leg_status('dead')['evidence']['reset_at'] == 8200

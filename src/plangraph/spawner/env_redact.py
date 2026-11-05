@@ -20,7 +20,7 @@ _QUOTA_MARKER = re.compile(
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
 _BUSY_LINE = re.compile(
-    r'\s*(?:error:\s*(?:server busy|too busy|overloaded)\b|HTTP 503:)', re.I)
+    r'\s*(?:error:\s*(?:server busy|too busy|overloaded)|HTTP 503: Service Unavailable)\s*$', re.I)
 
 
 def busy_refusal(text):
