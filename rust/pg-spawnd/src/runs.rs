@@ -59,7 +59,7 @@ impl Runs {
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
-        let launch = launch(
+        let mut launch = launch(
             state,
             &json!({
                 "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
@@ -70,6 +70,7 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -132,6 +133,67 @@ impl Runs {
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 }
+fn store_prompt(
+    state: &Path,
+    id: &str,
+    launch: &mut crate::launch::LaunchSpec,
+    base: &mut Value,
+    dry: bool,
+) -> Result<(), ToolError> {
+    use sha2::{Digest, Sha256};
+    let raw = launch
+        .prompt
+        .as_ref()
+        .ok_or_else(|| internal("launch prompt missing"))?;
+    let mut carriers = launch
+        .stdin
+        .iter()
+        .chain(launch.argv.iter())
+        .chain(launch.env.values())
+        .filter(|s| !raw.is_empty() && s.contains(raw));
+    let channel = if raw.is_empty() {
+        String::new()
+    } else {
+        carriers
+            .next()
+            .ok_or_else(|| internal("launch prompt carrier missing"))?
+            .clone()
+    };
+    if carriers.any(|s| s != &channel) {
+        return Err(internal("launch prompt carriers differ"));
+    }
+    let redacted = pg_worker_core::redact::redact(raw);
+    for arg in launch.argv.iter_mut().chain(launch.env.values_mut()) {
+        *arg = arg.replace(raw, &redacted);
+    }
+    if let Some(stdin) = &mut launch.stdin {
+        *stdin = stdin.replace(raw, &redacted);
+    }
+    if let Some(warnings) = &mut launch.warnings {
+        for warning in warnings {
+            *warning = pg_worker_core::redact::redact(warning);
+        }
+    }
+    if let Some(events) = &mut launch.events {
+        for event in events {
+            let clean = pg_worker_core::redact::redact(&Value::Object(event.clone()).to_string());
+            *event = serde_json::from_str(&clean)
+                .map_err(|_| internal("could not redact launch event"))?;
+        }
+    }
+    let prompt = channel.replace(raw, &redacted);
+    let path = pg_worker_core::run::record::run_dir(state, id)
+        .map_err(|_| internal("invalid run id"))?
+        .join("prompt.txt");
+    if !dry {
+        pg_worker_core::run::record_io::atomic_write_private(&path, prompt.as_bytes())
+            .map_err(|_| internal("could not save prompt"))?;
+    }
+    base["prompt_sha256"] = json!(format!("{:x}", Sha256::digest(prompt.as_bytes())));
+    base["wake_variant"] = json!("initial");
+    launch.prompt = Some(prompt);
+    Ok(())
+}
 fn internal(message: &str) -> ToolError {
     ToolError::Internal(message.into())
 }
@@ -193,6 +255,9 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     record.set("writer_family", leg["family"].clone());
 }
 
+#[cfg(all(test, unix))]
+#[path = "runs_record_tests.rs"]
+mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;

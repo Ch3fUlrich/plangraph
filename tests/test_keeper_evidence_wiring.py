@@ -96,7 +96,8 @@ def test_claim_and_release_payloads_carry_base(w):
 
 def test_claim_succeeds_without_base_when_git_or_head_unavailable(w):
     class GitWithoutHead:
-        pass
+        def repo_ref(self, project=None, *args, **kwargs):
+            return "main"
 
     cases = [
         make_ctx(git=None),

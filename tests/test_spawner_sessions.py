@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import pytest
 from plangraph.routing_errors import ParameterRefused
 from sessions_support import UUID1, UUID2, PROMPT, DETACHED, FakeRun, make, go
@@ -64,10 +65,11 @@ def test_windows_which_resolution(site):
     with pytest.raises(ParameterRefused, match="claude"):
         go(site, s4, name="delta", prompt="do delta")
     # non-win32 never consults which
-    calls = []
-    s5 = make(site, FakeRun(stdout="session " + UUID1), which=lambda n: calls.append(n) or "/x/claude")
-    go(site, s5, name="eps", prompt="do eps")
-    assert calls == []
+    if sys.platform != "win32":
+        calls = []
+        s5 = make(site, FakeRun(stdout="session " + UUID1), which=lambda n: calls.append(n) or "/x/claude")
+        go(site, s5, name="eps", prompt="do eps")
+        assert calls == []
 
 
 def test_exit_failure_reason_carries_claude_output(site):

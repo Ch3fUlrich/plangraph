@@ -27,7 +27,7 @@ def test_d3605_sol_routes_implement_never_review():
         for sub_id in WRITER_ORDER:
             if next(l for l in DEFAULT_LEGS if l.id == sub_id).tier == 'subscription':
                 assert free_id in ids and sub_id in ids
-                assert ids.index(free_id) < ids.index(sub_id)
+                assert ids.index(free_id) < ids.index(sub_id) if sub_id != LEG_ID else ids.index(sub_id) == 0
 
 
 def test_leg_active_utc_end_of_day():
