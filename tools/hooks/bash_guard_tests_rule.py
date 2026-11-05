@@ -17,11 +17,11 @@ _VALUE_OPTIONS = {
     "exec": "-a",
     "ionice": "-c --class -n --classdata -p --pid -P --pgid -u --uid",
     "systemd-run": "--unit --description --slice -p --property --working-directory "
-                   "--service-type --uid --gid --nice -E --setenv --expand-environment "
+                   "--service-type --uid --gid --nice -E --setenv "
                    "--on-active --on-boot --on-startup --on-unit-active "
                    "--on-unit-inactive --on-calendar --on-clock-change "
                    "--on-timezone-change --timer-property --path-property "
-                   "--socket-property -H --host -M --machine --background --job-mode",
+                   "--socket-property -H --host -M --machine --job-mode",
     "xargs": "-a --arg-file -d --delimiter -E -I --replace -L --max-lines "
              "-n --max-args -P --max-procs -s --max-chars --process-slot-var",
 }

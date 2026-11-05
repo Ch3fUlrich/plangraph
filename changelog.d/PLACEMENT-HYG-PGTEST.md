@@ -1,4 +1,6 @@
 ### Fixed
+- Keep systemd-run boolean flags value-free so background and environment-expanding
+  invocations cannot hide bare tests, including through nested wrappers.
 - Opted-in hosts reject bare test runs through bash_guard and direct callers to
   pgtest, which uses agent-tests.slice on Linux or a kill-on-close job on Windows.
 - Handle Python option operands, Cargo toolchains, and wrapper option values
