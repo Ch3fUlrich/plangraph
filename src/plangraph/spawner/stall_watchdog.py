@@ -82,16 +82,6 @@ def probe_run(state, record, now):
     event = dict(run_id=record['run_id'], leg=record.get('leg'), role=record.get('role'),
                  age=None, seconds_silent=None, last_line='', rule='unknown')
     try:
-        log = directory / 'live.log'
-        with log.open(encoding='utf-8') as stream:
-            stream.seek(max(0, log.stat().st_size - 4096))
-            lines = stream.read().splitlines()
-        silent = max(0, now - log.stat().st_mtime)
-        limit = float(record.get('card', {}).get('stall_min', 12)) * 60
-        if not math.isfinite(limit) or limit <= 0:
-            return event
-        event.update(age=max(0, now - record['started']), seconds_silent=silent,
-                     last_line=lines[-1][:200] if lines else '')
         if record.get('status') == 'running':
             pid = record.get('pid')
             if not isinstance(pid, int) or pid <= 0 or os.name == 'nt':
@@ -103,6 +93,17 @@ def probe_run(state, record, now):
                 record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
                 atomic_write_private(directory / 'record.json', json.dumps(record))
                 return event
+        log = directory / 'live.log'
+        with log.open(encoding='utf-8') as stream:
+            stream.seek(max(0, log.stat().st_size - 4096))
+            lines = stream.read().splitlines()
+        silent = max(0, now - log.stat().st_mtime)
+        limit = float(record.get('card', {}).get('stall_min', 12)) * 60
+        if not math.isfinite(limit) or limit <= 0:
+            return event
+        event.update(age=max(0, now - record['started']), seconds_silent=silent,
+                     last_line=lines[-1][:200] if lines else '')
+        if record.get('status') == 'running':
             if silent < limit:
                 return None
             event['rule'] = 'run-silent'
@@ -207,6 +208,9 @@ def deliver_event(state, event, *, now=None, interval=None):
     stalled parent is re-alerted only after the configured interval.
     """
     from plangraph.spawner.private_io import atomic_write_private
+    if event.get('kind') == 'completion':
+        event = dict(event, event_id=hashlib.sha256(json.dumps(
+            [event.get('run_id'), event.get('rule')]).encode()).hexdigest())
     payload = json.dumps(event, sort_keys=True)
     if event.get('kind') == 'clear':
         for folder in ('alerts', 'outbox'):

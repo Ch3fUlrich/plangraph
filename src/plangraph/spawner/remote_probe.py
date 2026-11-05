@@ -1,4 +1,4 @@
-"""Pull durable host findings; retain remote data until local notification succeeds."""
+"""Pull durable host findings with durable notification reservations."""
 import argparse
 import hashlib
 import json
@@ -34,10 +34,10 @@ def poll(hosts, command, state):
         atomic_write_private(path, json.dumps(saved))
     def notify(key, event, entry):
         if key not in entry['seen']:
-            subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
-                           text=True, check=True, timeout=20)
             entry['seen'].append(key)
             save()
+            subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
+                           text=True, check=True, timeout=20)
     for host in hosts:
         entry = saved.setdefault(host, dict(failures=0, outage=0, down=False, seen=[], acks=[]))
         try:
@@ -52,7 +52,8 @@ def poll(hosts, command, state):
             code = ('import json; from plangraph.spawner.remote_probe import exchange; '
                     'print(json.dumps(exchange(' + repr(entry['acks']) + ')))')
             reply = subprocess.run(['ssh', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes',
-                                    '--', host, 'python3 -c ' + shlex.quote(code)],
+                                    '--', host, 'cd ' + shlex.quote(os.environ['PLANGRAPH_PROBE_ROOT'])
+                                    + ' && PYTHONPATH=src python3 -c ' + shlex.quote(code)],
                                    capture_output=True, text=True, timeout=30, check=True)
             events = json.loads(reply.stdout)
             if not isinstance(events, dict) or any(

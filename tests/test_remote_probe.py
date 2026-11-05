@@ -8,6 +8,11 @@ import pytest
 from plangraph.spawner.remote_probe import poll
 
 
+@pytest.fixture(autouse=True)
+def probe_root(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_PROBE_ROOT', 'fixture root')
+
+
 def test_exchange_ack(tmp_path, monkeypatch):
     from plangraph.spawner.remote_probe import exchange
     from plangraph.spawner.stall_watchdog import deliver_event
@@ -15,10 +20,11 @@ def test_exchange_ack(tmp_path, monkeypatch):
     event = dict(rule='run-orphan', run_id='fixture', kind='completion')
     deliver_event(tmp_path, event)
     findings = exchange([])
-    assert list(findings.values()) == [event]
+    assert list(findings.values())[0].items() >= event.items()
+    assert list(findings.values())[0]['event_id']
     assert exchange([]) == findings
     assert exchange(list(findings)) == {}
-    deliver_event(tmp_path, event)
+    deliver_event(tmp_path, dict(event, age=240, seconds_silent=180))
     assert exchange([]) == {}
 
 
@@ -27,6 +33,7 @@ def test_polls(tmp_path, monkeypatch):
     reply = tmp_path / 'reply'
     reply.write_text(json.dumps({'a' * 64: {'rule': 'run-silent'}}))
     ssh.write_text('#!' + sys.executable + '\nimport os, pathlib\n'
+                   'import sys\nassert sys.argv[-1].startswith("cd \'fixture root\' && PYTHONPATH=src python3 -c " )\n'
                    'print(pathlib.Path(os.environ["REPLY"]).read_text())\n')
     ssh.chmod(0o700)
     monkeypatch.setenv('PATH', str(tmp_path))
@@ -75,10 +82,17 @@ def test_outage_notify_retry(tmp_path, monkeypatch):
     assert not json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['down']
     poll(['fixture'], 'notify', tmp_path)
     poll(['fixture'], 'notify', tmp_path)
-    assert calls == ['notify', 'notify']
+    assert calls == ['notify']
 
 
-def test_known_crash_window_documented():
-    text = Path('docs/operations/spawner-remote-probes.md').read_text()
-    assert 'at-least-once, not exactly-once' in text
-    assert 'crash after the notify command' in text
+def test_reservation_survives_crash(tmp_path, monkeypatch):
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'a' * 64: {'rule': 'run-silent'}}))
+        assert json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['seen']
+        raise SystemExit()
+    monkeypatch.setattr(subprocess, 'run', run)
+    with pytest.raises(SystemExit):
+        poll(['fixture'], 'notify', tmp_path)
+    poll(['fixture'], 'notify', tmp_path)
+    assert json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']['acks'] == ['a' * 64]

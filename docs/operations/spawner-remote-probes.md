@@ -9,7 +9,10 @@ pulls durable findings over SSH. Repeat `--host` or set `PLANGRAPH_PROBE_HOSTS`;
 the notification command can use `PLANGRAPH_PROBE_NOTIFY_CMD`.
 Installation creates `plangraph-remote-probe.timer`, disabled by default;
 configure its environment and explicitly enable it on the polling host.
-Notifications are at-least-once, not exactly-once: a crash after the notify command
-succeeds but before persisting `seen` can replay the finding after restart.
-Resetting corrupt probe state can also replay previously sent findings.
+Set `PLANGRAPH_PROBE_ROOT` to the remote checkout root; SSH uses its `src` tree.
+Completion IDs are stable per run and rule, independent of changing ages.
+Notification reservations persist before CMD, preventing replay across restarts.
+A crash before spawning CMD can lose delivery; exactly-once external effects require
+an idempotent transactional receiver. The event ID supports reconciliation.
+Resetting corrupt probe state can replay previously reserved findings.
 Unknown evidence is delivered, never considered silent and never cancelled.

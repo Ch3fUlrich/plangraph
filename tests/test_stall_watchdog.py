@@ -175,6 +175,7 @@ def test_host_run_probes(tmp_path, monkeypatch):
     def gone(*args):
         raise ProcessLookupError()
     monkeypatch.setattr(os, 'kill', gone)
+    log.unlink()
     assert check(500)[0]['rule'] == 'run-orphan'
     import json
     assert json.loads((directory / 'record.json').read_text())['reason'] == 'orphaned'
