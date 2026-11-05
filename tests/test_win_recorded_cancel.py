@@ -36,12 +36,13 @@ def test_second_service_tree(tmp_path, orphan):
         finally:
             await runner.cancel(record['job_id'])
     asyncio.run(run())
-def test_foreign_identity_and_stale_parent(monkeypatch):
+@pytest.mark.parametrize('delay', [.3, 60])
+def test_foreign_identity_and_stale_parent(monkeypatch, tmp_path, delay):
     from plangraph.spawner import win_recorded as win
     from plangraph.spawner.winjob import WinJobApi
-    api = WinJobApi()
-    job = api.create_job()
-    with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as foreign:
+    api = WinJobApi(); job = api.create_job(); release = tmp_path / 'release'
+    code = f'import pathlib,time; p=pathlib.Path({str(release)!r})\nwhile not p.exists(): time.sleep(.01)\ntime.sleep({delay})'
+    with subprocess.Popen([sys.executable, '-c', code]) as foreign:
         try:
             token = win.creation(foreign.pid); other = WinJobApi(); other_job = other.create_job(); other.assign(other_job, foreign.pid)
             monkeypatch.setattr(proc_kill, '_nt_table', lambda: {foreign.pid: os.getpid()})
@@ -61,8 +62,9 @@ def test_foreign_identity_and_stale_parent(monkeypatch):
                     assert root.poll() is None  # old record: no job name, signal nothing
                     api.assign(job, root.pid)
                     assert asyncio.run(win.kill(root.pid, win.creation(root.pid), other.name)) == [root.pid]; assert foreign.poll() is None
-                    assert asyncio.run(win.kill(root.pid, win.creation(root.pid), api.name)) == []
-                    assert foreign.poll() is None
+                    monkeypatch.setattr(proc_kill, 'KILL_WAIT_S', 2 if delay < 1 else .15); release.touch()
+                    assert asyncio.run(win.kill(root.pid, win.creation(root.pid), api.name, [foreign.pid])) == ([] if delay < 1 else [foreign.pid])
+                    assert (foreign.poll() is None) == (delay > 1)
                 finally:
                     root.kill()
         finally:

@@ -44,9 +44,9 @@ async def kill(pid, token, name=None, escapees=()):
         api.terminate(job)
         deadline = time.monotonic() + proc_kill.KILL_WAIT_S
         while True:
-            live = api.pids(job)
+            live = set(api.pids(job)) | {p for p in escapees if proc_kill.alive(p, None)}
             if not live or time.monotonic() >= deadline:
-                return sorted(set(live) | {p for p in escapees if proc_kill.alive(p, None)})
+                return sorted(live)
             await asyncio.sleep(.05)
     except OSError:
         return [pid]
