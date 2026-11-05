@@ -13,7 +13,7 @@ pub enum Line {
     Overlong,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Framer {
     buf: Vec<u8>,
     dropping: bool,
@@ -86,6 +86,7 @@ pub enum BlindReason {
 }
 
 /// Counters and policy only: no event text or clock access.
+#[derive(Debug)]
 pub struct ChannelHealth {
     t0_ms: u64,
     first_activity_s: Option<u64>,
