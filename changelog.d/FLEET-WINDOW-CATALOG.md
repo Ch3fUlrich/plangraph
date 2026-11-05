@@ -1,0 +1,1 @@
+- **FLEET-WINDOW-CATALOG:** Add read-only versioned window capture with explicit unknowns, override provenance and proved served coverage; no lifecycle or threshold changes.
