@@ -39,7 +39,9 @@ def render_fixer_brief(findings):
     checklist = '\n'.join(f"{i}. [ ] {f.get('text', f.get('description', str(f)))}"
                           for i, f in enumerate(findings, 1))
     return (checklist + '\n\nThe run ends only when each item is fixed or refuted by a named test, '
-            'or listed under not done: with the reason.\n'
+            'or reported as not done: prose with the reason.\n'
+            'Never echo an unchecked checklist in your report. '
+            'Do not use a Remaining gaps section for terminal not done: items.\n'
             'Run affected tests only: python3 tools/affected_tests.py --base origin/main --run\nCOMMIT before finishing\n')
 
 

@@ -15,6 +15,27 @@ def test_fixer_completion_contract():
     assert 'TEST-SPEED-AFFECTED' not in text
 
 
+def test_fixer_terminal_report_gate(tmp_path):
+    import asyncio
+    from plangraph.routing_support.fixer import render_fixer_brief
+    from plangraph.spawner.service import SpawnService
+    brief = render_fixer_brief([{'text': 'repair'}])
+    assert 'reported as not done: prose with the reason' in brief
+    assert 'Never echo an unchecked checklist' in brief
+    assert 'Do not use a Remaining gaps section for terminal not done: items' in brief
+    service = SpawnService(runner=object(), state=tmp_path)
+    async def probe():
+        for output, reason in [('not done: repair; needs a decision', 'clean_report'),
+                               ('1. [ ] repair', 'remaining_gaps'),
+                               ('## Remaining gaps\nrepair', 'remaining_gaps')]:
+            record = dict(run_id='probe', role='implement', exit_code=0)
+            if reason == 'remaining_gaps':
+                record['continuation_run_id'] = 'existing'  # Inspect gate without spawning.
+            await service._continue_writer(record, output)
+            assert record['continuation_reason'] == reason
+    asyncio.run(probe())
+
+
 def test_no_unresolvable_keeper_instruction():
     historical = {}  # No historical mentions currently need an exception/reason.
     for folder in ('skills', 'docs', 'src'):
@@ -25,13 +46,19 @@ def test_no_unresolvable_keeper_instruction():
                     assert historical.get(path.relative_to(ROOT).as_posix())
 
 
-def test_tail_standing_question():
-    from plangraph.review.prompt import assemble
+@pytest.mark.parametrize('mode', ['files', 'diff'])
+def test_tail_standing_question(mode):
+    from plangraph.review.prompt import assemble_all, assemble_diff
     text = (ROOT / 'src/plangraph/review/tail.md').read_text()
     assert 'Does the change game tests' in text
-    prompt = assemble(['check'], [])
-    assert prompt.endswith(text.rstrip())
-    assert prompt.count('Does the change game tests') == 1
+    prompts = (assemble_all(['check'], {'src/example.py': 'value = 1\n'})
+               if mode == 'files' else assemble_diff(['check'],
+                   'diff --git a/src/example.py b/src/example.py\n'
+                   '--- a/src/example.py\n+++ b/src/example.py\n@@ -1 +1 @@\n-value = 0\n+value = 1\n'))
+    assert prompts
+    for prompt in prompts:
+        assert prompt.endswith(text.rstrip())
+        assert prompt.count('Does the change game tests') == 1
 
 
 def test_claude_skill_pointers():
