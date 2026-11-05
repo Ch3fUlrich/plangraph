@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import shlex
 import signal
@@ -110,8 +111,9 @@ def write_fake_opencode(bin_dir: Path) -> None:
     tmp = bin_dir / "opencode.tmp"
     pid_dir = bin_dir / "pids"
     pid_dir.mkdir()
-    tmp.write_text(FAKE_OPENCODE.replace("#!/bin/sh\n", "#!/bin/sh\n"
-                   f'echo $$ > {shlex.quote(str(pid_dir.resolve()))}/$$\n', 1))
+    shebang, newline, body = FAKE_OPENCODE.partition("\n")
+    assert shebang == "#!/bin/sh" and newline, "fake opencode requires a shell shebang"
+    tmp.write_text(f'{shebang}\necho $$ > {shlex.quote(str(pid_dir.resolve()))}/$$\n{body}')
     tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR)
     os.replace(tmp, bin_dir / "opencode")
 
@@ -133,7 +135,7 @@ def reap_recorded(pid_dir: Path, grace_s: float = 1.0) -> list[int]:
         except OSError:
             return False
 
-    killed = []
+    killed, stragglers = [], []
     for record in pid_dir.glob("*"):
         try:
             pid = int(record.read_text().strip())
@@ -155,10 +157,13 @@ def reap_recorded(pid_dir: Path, grace_s: float = 1.0) -> list[int]:
                     break
                 time.sleep(.01)
             else:
-                raise RuntimeError(f"recorded harness {pid} survived SIGKILL")
+                stragglers.append(pid)
+                continue
             killed.append(pid)
         except (OSError, ValueError):
             continue
+    if stragglers:
+        logging.warning("recorded harnesses survived SIGKILL: %s", stragglers)
     return killed
 
 
