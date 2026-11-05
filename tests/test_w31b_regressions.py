@@ -38,6 +38,7 @@ def test_listing_case_variant_and_absence(monkeypatch):
     assert r.host_skip_reason({'model': 'other/absent', 'harness': 'opencode'}, probe=probe) == 'not_served_on_host: other/absent'
 
 
+@pytest.mark.real_probe
 def test_real_probe_stable_nonce_ttl_and_short_unknown(monkeypatch):
     calls = []
     now = [0]
