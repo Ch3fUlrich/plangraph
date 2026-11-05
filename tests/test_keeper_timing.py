@@ -292,3 +292,11 @@ def test_emit_drops_none_values_before_any_arithmetic(wait, hold, part, meter):
     for event, kind in (("snapshot_timing", "other"), ("writer_timing", "other")):
         timing._emit(event, kind, wait, hold, parts)
     assert out.getvalue() == ""
+
+
+def test_emit_control_valid_values_write_and_none_parts_do_not(meter):
+    _, out = meter
+    timing._emit("writer_timing", "other", 1, 1, None)
+    assert out.getvalue() == ""
+    timing._emit("writer_timing", "other", 1, 1, {})
+    assert "writer_timing" in out.getvalue()
