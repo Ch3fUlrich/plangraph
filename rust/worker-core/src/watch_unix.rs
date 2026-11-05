@@ -1,6 +1,6 @@
 //! Owned fresh process group. Never accepts a caller-provided pid.
 use super::Child;
-use crate::stall::{group_empty, killpg, spawn_retrying};
+use crate::stall::{killpg, spawn_retrying};
 use std::{
     io,
     os::unix::process::CommandExt,
@@ -51,5 +51,13 @@ impl Child for UnixChild {
     }
     fn reap(&mut self) -> io::Result<()> {
         self.child.try_wait().map(|_| ())
+    }
+}
+
+pub(super) fn group_empty(pgid: i32) -> io::Result<bool> {
+    match killpg(pgid, 0) {
+        Ok(()) => Ok(false),
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(true),
+        Err(e) => Err(e),
     }
 }

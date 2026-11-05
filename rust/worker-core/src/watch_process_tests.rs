@@ -20,20 +20,19 @@ fn grandchild_group_killed_even_after_leader_exit() {
     }
     assert!(!child.empty().unwrap());
     child.kill().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     // A zombie may remain until the host's init reaps it: verify no live member.
     loop {
-        let status = Command::new("ps")
-            .args(["-eo", "pgid=,stat="])
-            .output()
-            .unwrap();
-        let live = String::from_utf8(status.stdout)
-            .unwrap()
-            .lines()
-            .any(|line| {
-                let mut fields = line.split_whitespace();
-                fields.next() == Some(&child.pgid.to_string())
-                    && !fields.next().unwrap().starts_with('Z')
-            });
+        let live = std::fs::read_dir("/proc").unwrap().flatten().any(|entry| {
+            let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+                return false;
+            };
+            let Some((_, fields)) = stat.rsplit_once(") ") else {
+                return false;
+            };
+            let fields: Vec<_> = fields.split_whitespace().collect();
+            fields.get(2) == Some(&child.pgid.to_string().as_str()) && fields[0] != "Z"
+        });
         if !live {
             break;
         }

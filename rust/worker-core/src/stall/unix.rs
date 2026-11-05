@@ -39,27 +39,14 @@ impl Group {
     }
 }
 
-#[rustfmt::skip]
 pub(crate) fn killpg(pgid: i32, signal: i32) -> io::Result<()> {
-    match raw_killpg(pgid, signal) { Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()), result => result }
-}
-
-pub(crate) fn group_empty(pgid: i32) -> io::Result<bool> {
-    match raw_killpg(pgid, 0) {
-        Ok(()) => Ok(false),
-        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(true),
-        Err(e) => Err(e),
-    }
-}
-
-#[rustfmt::skip]
-fn raw_killpg(pgid: i32, signal: i32) -> io::Result<()> {
     if pgid <= 1 || pgid == unsafe { libc::getpgrp() } {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unsafe process group"));
+        return Err(io::Error::from_raw_os_error(libc::EINVAL));
     }
-    if unsafe { libc::killpg(pgid, signal) } == 0 { return Ok(()); }
-    let error = io::Error::last_os_error();
-    Err(error)
+    match unsafe { libc::killpg(pgid, signal) } {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()),
+    }
 }
 
 /// The fatal signal that stopped `status`, if any (`WTERMSIG`).

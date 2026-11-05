@@ -85,7 +85,7 @@ fn esrch_empty_eperm_not_proof() {
 fn foreign_group_never_signalled() {
     for pgid in [-1, 0, 1, unsafe { libc::getpgrp() }] {
         assert_eq!(
-            crate::stall::group_empty(pgid).unwrap_err().kind(),
+            super::unix::group_empty(pgid).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
     }
@@ -120,4 +120,20 @@ fn first_signal_error_is_reported() {
         })
     );
     assert_eq!((child.terms, child.kills), (1, 1));
+}
+
+#[test]
+fn review_layout_contract() {
+    let stall = include_str!("stall/unix.rs");
+    assert!(!stall.contains("rustfmt::skip"));
+    assert!(!stall.contains("fn group_empty"));
+    assert_eq!(
+        include_str!("../../../changelog.d/SPAWNER-RL12.md")
+            .lines()
+            .count(),
+        2
+    );
+    let process = include_str!("watch_process_tests.rs");
+    assert_eq!(process.matches("let deadline =").count(), 2);
+    assert!(process.contains("read_dir(\"/proc\")"));
 }

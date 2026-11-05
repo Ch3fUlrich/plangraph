@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub(crate) use unix::{group_empty, killpg};
+pub(crate) use unix::killpg;
 #[cfg(windows)]
 pub(crate) mod windows;
 
