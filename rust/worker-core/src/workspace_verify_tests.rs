@@ -94,9 +94,13 @@ fn registry_toplevel_common_dir_remote_mismatch_each_refuses() {
     assert!(verify_workspace(&f.repo, &f.ws, &sub, None).is_err());
     f.repo.remote.push_str("-wrong");
     assert!(f.verify().is_err());
+    f.repo.remote = git(&f.checkout, &["remote", "get-url", "origin"]).unwrap();
     let other = Fixture::new();
     f.repo.root = other.repo.root;
-    assert!(f.verify().is_err());
+    assert!(matches!(
+        f.verify(),
+        Err(ResolveError::Verify("common_dir"))
+    ));
 }
 
 #[test]
@@ -157,11 +161,37 @@ fn autocrlf_false_required() {
     assert!(f.verify().is_err());
 }
 
+#[cfg(unix)]
 #[test]
-fn platform_longpaths_policy() {
+fn unix_longpaths_not_required() {
     let f = Fixture::new();
     git(&f.checkout, &["config", "--unset", "core.longpaths"]).unwrap();
-    assert_eq!(f.verify().is_ok(), cfg!(unix));
+    assert!(f.verify().is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_longpaths_true_required() {
+    let f = Fixture::new();
+    for value in ["false", "invalid"] {
+        git(&f.checkout, &["config", "core.longpaths", value]).unwrap();
+        assert!(f.verify().is_err());
+    }
+    git(&f.checkout, &["config", "--unset", "core.longpaths"]).unwrap();
+    assert!(f.verify().is_err());
+}
+
+#[test]
+fn import_environment_removes_explicit_git_overrides() {
+    let f = Fixture::new();
+    let mut cmd = Command::new("unused");
+    cmd.env("GIT_DIR", "wrong").env("GIT_WORK_TREE", "wrong");
+    configure_import_environment(&mut cmd, &f.repo, &f.checkout).unwrap();
+    for (key, value) in cmd.get_envs() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            assert!(value.is_none());
+        }
+    }
 }
 
 #[test]

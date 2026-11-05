@@ -69,7 +69,11 @@ pub fn configure_import_environment(
         roots.push(path);
     }
     let paths = std::env::join_paths(roots).map_err(|_| ResolveError::Verify("pythonpath"))?;
-    for (key, _) in std::env::vars_os() {
+    let keys: Vec<_> = std::env::vars_os()
+        .map(|(key, _)| key)
+        .chain(cmd.get_envs().map(|(key, _)| key.to_os_string()))
+        .collect();
+    for key in keys {
         if key
             .to_string_lossy()
             .to_ascii_uppercase()
@@ -150,7 +154,7 @@ pub fn verify_workspace(
         "linked_worktree",
     )?;
     require(
-        git(&checkout, &["remote", "get-url", "origin"])? == repo.remote,
+        git(&checkout, &["remote", "get-url", "--all", "origin"])? == repo.remote,
         "remote",
     )?;
     let revision = git(&checkout, &["rev-parse", "HEAD"])?;
