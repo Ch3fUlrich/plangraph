@@ -14,6 +14,7 @@ pub mod events;
 pub mod exit_class;
 pub mod exports;
 pub mod fleet_router_signals;
+pub mod fleet_window_catalog;
 pub mod git;
 pub mod hash;
 pub mod health;
