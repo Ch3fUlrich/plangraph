@@ -76,7 +76,7 @@ except ImportError:
 
 DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
     {
-        "id": "opencode-go/gemini-4-argon-contributor",
+        "id": "opencode-go/gemini-4-argon",
         "family": "gemini",
         "aa_intelligence": 53.0,
         "verified_tok_per_s": 115.0,
@@ -185,7 +185,7 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "combos": ["l2-worker"],
     },
     {
-        "id": "opencode-go/deepseek-v4-flash-max",
+        "id": "opencode-go/deepseek-v4.1-flash",
         "family": "deepseek",
         "aa_intelligence": 45.0,
         "verified_tok_per_s": 231.0,

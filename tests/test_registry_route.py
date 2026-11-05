@@ -42,7 +42,7 @@ def test_every_seed_row_declares_harness_and_tool_mode():
 
 
 @pytest.mark.parametrize("model_id, harness", [
-    ("opencode-go/glm-5.2-max", "opencode"),
+    ("opencode-go/glm-5.2", "opencode"),
     ("opencode-go/qwen3.8-max", "opencode"),
     ("mimo/mimo-v2.6-pro", "opencode"),
     ("omniroute/cx-gpt-6-luna", "opencode"),
@@ -77,7 +77,7 @@ def test_migration_adds_columns_to_an_old_catalog(tmp_path):
     db.close()
     db = CatalogDB(path)
     db.init_and_seed()
-    assert _row(db, "opencode-go/glm-5.2-max")["harness"] == "opencode"
+    assert _row(db, "opencode-go/glm-5.2")["harness"] == "opencode"
     assert _row(db, "omniroute/cx-gpt-6-luna")["tool_mode"] == "inline-only"
 
 

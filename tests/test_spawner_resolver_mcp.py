@@ -436,9 +436,9 @@ def test_resolver_mimo_scores_above_qwen():
 
 
 def test_resolver_gemini_argon_smart_model_and_cost_adaptation():
-    """Verify opencode-go/gemini-4-argon-contributor is selected as frontier smart model and cost adapts by risk."""
+    """Verify opencode-go/gemini-4-argon is selected as frontier smart model and cost adapts by risk."""
     models = {m["id"]: m for m in get_catalog_models()}
-    argon = models["opencode-go/gemini-4-argon-contributor"]
+    argon = models["opencode-go/gemini-4-argon"]
     assert argon is not None
     assert argon["available"] == 1
     assert argon["tier"] == "subscription"
@@ -771,7 +771,7 @@ def test_ubiquitous_symbol_fanout_blocklist():
 def test_deepseek_flash_cost_and_tier_ranking():
     """Verify DeepSeek Flash v1017: intelligence 45.0, cost $0.26, subscription prioritized over paid."""
     models = {m["id"]: m for m in get_catalog_models()}
-    ds_sub = models["opencode-go/deepseek-v4-flash-max"]
+    ds_sub = models["opencode-go/deepseek-v4.1-flash"]
     ds_paid = models["deepseek/deepseek-v4-flash-max"]
 
     assert ds_sub["aa_intelligence"] == 45.0
