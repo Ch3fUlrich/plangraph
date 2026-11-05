@@ -1,0 +1,1 @@
+- **SKILLS-REMAINDER-CLASSIFY (D-3798):** Move the site-free homelab-access skill into skills/ with 3 evals; its MCP server stays in AutoOS until AUTOOS-INTO-PLANGRAPH.
