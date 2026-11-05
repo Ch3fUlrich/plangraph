@@ -19,6 +19,7 @@ pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owne
 def _gateway_url(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
 
+
 @pytest.fixture(autouse=True)
 def fake_host_binaries(tmp_path, monkeypatch):
     """Keep real probes (including worker processes) off the host installation."""
@@ -245,15 +246,6 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     assert final['status'] == 'completed', {k: final.get(k) for k in ('exit_code', 'reason', 'error', 'events')}
 
 
-def test_route_and_refusal(tmp_path, capsys):
-    assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
-    plan = json.loads(capsys.readouterr().out)
-    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'  # D-3745
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
-    assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
-    assert 'spawn by card' in capsys.readouterr().err
-
-
 def test_records_and_review(tmp_path):
     async def run():
         service = SpawnService(state=tmp_path)
@@ -400,3 +392,8 @@ def test_cli_wait_returns_after_the_dispatcher_died(tmp_path):
     finally:
         child.kill()
         child.wait()
+
+
+def test_route_and_refusal(tmp_path, capsys):
+    from test_route_free_first import test_route_and_refusal as check
+    check(tmp_path, capsys)

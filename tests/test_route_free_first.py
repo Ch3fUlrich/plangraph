@@ -2,13 +2,41 @@
 from __future__ import annotations
 
 import json
+import dataclasses
 
+from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 
 CARD = {"estimate_tokens": 20000, "risk_tags": []}
 FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
+
+
+def test_writer_order_sol_family_excluded():
+    plan = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
+                      role="implement", exclude_families=("gpt",))
+    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert "gpt" not in {leg.family for leg in plan.legs}
+    assert {s["leg"]: s["reason"] for s in plan.skipped}[
+        "cx-gpt-6.1-sol"] == "excluded_family"
+
+
+def test_writer_order_privacy_excludes_training_sol():
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol").trains_on_data is False
+    # The default Sol is non-training. Exercise eligibility before lead sorting
+    # with a training lead and a non-training free fallback explicitly.
+    legs = tuple(dataclasses.replace(leg, trains_on_data=leg.id == "cx-gpt-6.1-sol")
+                 for leg in DEFAULT_LEGS)
+    public = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
+                        role="implement", legs=legs)
+    assert public.first_leg.id == "cx-gpt-6.1-sol"
+    private = plan_spawn({"estimate_tokens": 20000, "risk_tags": ["secrets"]},
+                         role="implement", legs=legs)
+    assert private.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert "cx-gpt-6.1-sol" not in {leg.id for leg in private.legs}
+    assert {s["leg"]: s["reason"] for s in private.skipped}[
+        "cx-gpt-6.1-sol"] == "trains_on_data"
 
 
 def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
@@ -19,6 +47,15 @@ def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
     assert ids == SUBS[:1] + FREE + SUBS[1:] + ["deepseek"]  # D-3745
     assert "agy-sonnet-5.5" not in ids
     assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == []
+
+
+def test_route_and_refusal(tmp_path, capsys):
+    assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol'  # D-3745
+    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
+    assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
+    assert 'spawn by card' in capsys.readouterr().err
 
 
 def test_review_free_first():
@@ -89,7 +126,20 @@ def test_no_anthropic_implement_leg_retains_sonnet():
     from plangraph.planner.legs import DEFAULT_LEGS
     assert any(leg.id == "opencode-console-sonnet-5.5" for leg in DEFAULT_LEGS)
     assert all("implement" not in leg.roles for leg in DEFAULT_LEGS
-               if leg.claude_family or leg.family in ("claude", "anthropic"))
+                if leg.claude_family or leg.family in ("claude", "anthropic"))
+
+
+def test_renamed_and_second_haiku_remain_last():
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import route_card
+    table = {leg.id: leg for leg in DEFAULT_LEGS}
+    haiku = table["claude-haiku-5.5"]
+    legs = (replace(haiku, id="renamed-review"),
+            replace(haiku, id="second-review", model="claude-haiku-next"),
+            table["agy-gemini-3.8-flash"])
+    assert [leg.id for leg in route_card(CARD, legs=legs, role="review").legs] == [
+        "agy-gemini-3.8-flash", "renamed-review", "second-review"]
 
 
 def test_fixed_implement_sol_across_tiers():
@@ -104,3 +154,13 @@ def test_fixed_implement_sol_across_tiers():
         assert [leg.id for leg in route_card(CARD, legs=legs, role="implement").legs] == expected
         fallback = route_card(CARD, legs=legs, role="implement", unavailable=(SUBS[0],))
         assert [leg.id for leg in fallback.legs] == expected[1:]
+
+
+def test_writer_order_d2683_implement_first_seven():
+    # D-3745: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="implement")
+    expected = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
+                "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
+                "mimo-v2.6-flash"]
+    assert [leg.id for leg in plan.legs[:len(expected)]] == expected

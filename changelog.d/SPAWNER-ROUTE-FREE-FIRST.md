@@ -1,1 +1,1 @@
-- **SPAWNER-ROUTE-FREE-FIRST (D-3901):** keep Sol first for implement, order serving free review legs before named fallbacks, and disable Sonnet implement routing without removing its entry.
+- **SPAWNER-ROUTE-FREE-FIRST (D-3901):** keep Sol first across implement tiers, serving free review legs before named subscription groups, and measured ranking within each group. Seats follow the review route and retain per-writer coverage. Anthropic legs remain registered but cannot implement; explicit overrides are unchanged.

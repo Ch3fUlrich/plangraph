@@ -24,6 +24,8 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
 from .legs import DEFAULT_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active
+from .provider_stop import next_leg_after_provider_stop
+from .review_order import review_key
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
@@ -174,18 +176,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             return (leg.id != LEAD_WRITER, tier_idx, w_idx, pos)
         eligible.sort(key=sort_key)
     elif effective_role == "review":
-        def review_key(t):
-            tier_idx, pos, leg = t
-            # D-3901: serving free legs first; named fallbacks precede
-            # other subscription legs, with Haiku always last.
-            if leg.tier == "free":
-                return (0, leg.id != "qodercli-qwen3.8-flash", pos)
-            priority = (0 if leg.id == "qodercli-qwen3.8-flash" else
-                        1 if leg.family == "mimo" else
-                        2 if leg.family == "deepseek" else
-                        4 if leg.id == "claude-haiku-5.5" else 3)
-            return (1, priority, tier_idx, pos)
-        eligible.sort(key=review_key)
+        eligible.sort(key=lambda t: review_key(t[2], t[0], t[1]))
     else:
         eligible.sort(key=lambda t: (t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
@@ -402,10 +393,16 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 ordered[i] = leg
             if positions:
                 source = "benchmark"
+    if role == "review":
+        measured_order = {leg.id: i for i, leg in enumerate(ordered)}
+        ordered.sort(key=lambda leg: review_key(
+            leg, TIERS.index(leg.tier), measured_order[leg.id]))
     seats, coverage, open_parts = [], (), []
     if role == "review":
         high = ranking_risk in ("high", "critical") or bool(card.get('risk_tags'))
-        seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
+        seat_order = {leg.id: i for i, leg in enumerate(route.legs)}
+        seats, coverage, open_parts = pick_seats(
+            sorted(ordered, key=lambda leg: seat_order.get(leg.id, len(seat_order))), writer_set, high=high)
     error = None
     if role == "review" and len(seats) < 2:
         error = "two distinct review families unavailable"
@@ -455,29 +452,3 @@ def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller
     append_private(path, json.dumps({"ts": time.time(), "model": model,
                     "reason": override_reason, "caller": caller or "planner"}) + "\n")
     return model
-
-
-def next_leg_after_provider_stop(plan, leg_id, status, body, headers, caller, *,
-                                 store=None, now=None, account=None, combo=None):
-    """Consume an actual provider stop; unrelated failures never suppress a leg."""
-    from plangraph.routing_support import leg_state
-    state = store or leg_state
-    by_id = {leg.id: leg for leg in plan.legs}
-    if not isinstance(leg_id, str):
-        raise SpawnRefused('leg id must be a string')
-    if leg_id not in by_id:
-        raise ValueError("leg not in plan")
-    if type(status) is not int or status not in (429, 402) or not isinstance(body, str) or not body.strip():
-        return by_id[leg_id]
-    state.record_provider_response(by_id[leg_id].model, status, body, headers, caller,
-                                   now=now, account=account, combo=combo)
-    start = list(by_id).index(leg_id) + 1
-    for leg in plan.legs[start:]:
-        st = state.leg_status(leg.model, now=now, account=account, combo=combo)
-        if leg.harness == "agy" and not unavailable(st) and "/" not in leg.model:
-            alt = state.leg_status("agy/" + leg.model, now=now, account=account, combo=combo)
-            if unavailable(alt):
-                continue
-        if not unavailable(st):
-            return leg
-    return None

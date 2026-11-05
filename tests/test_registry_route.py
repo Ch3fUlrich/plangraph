@@ -199,9 +199,8 @@ def test_explicit_policy_argument_wins():
 
 # --- 4. seats per writer part --------------------------------------------------
 
-def test_claude_written_high_gets_mimo_and_qwen(pre_d3552_policy):
-    # Pinned to the pre-D-3552 policy: no review lift, so the seat set is
-    # luna/gpt (the D-3552 lift is covered in test_review_legs_d3552.py).
+def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
+    # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
     assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "mimo-v2.6-flash"}
@@ -220,9 +219,7 @@ def test_seat_never_shares_family_with_a_single_writer():
 
 
 def test_seat_may_share_family_with_another_writer_part(pre_d3552_policy):
-    # D-3084: writers gpt + qwen; a qwen seat covers the gpt part, a gpt seat
-    # covers the qwen part.  Every part is covered by a family other than it.
-    # Pinned to the pre-D-3552 policy (no review lift): the seat set is luna/gpt.
+    # D-3084 coverage survives D-3901 review-route seat ordering.
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None

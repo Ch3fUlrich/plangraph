@@ -314,13 +314,8 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
 
 
 def test_writer_order_d2683_implement_first_seven():
-    # D-3745: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
-    c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="implement")
-    expected = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-                "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
-                "mimo-v2.6-flash"]
-    assert [leg.id for leg in plan.legs[:len(expected)]] == expected
+    from test_route_free_first import test_writer_order_d2683_implement_first_seven as check
+    check()
 
 
 def test_writer_order_d2683_unavailable_skipped():
@@ -352,32 +347,6 @@ def test_writer_order_d2683_writer_family_exclusion():
     # F2: writer_families does not exclude implement legs
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
     assert plan_wf.first_leg.id == "cx-gpt-6.1-sol" and "agy-gemini-3.8-flash" in [l.id for l in plan_wf.legs]
-
-
-def test_writer_order_sol_family_excluded():
-    plan = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
-                      role="implement", exclude_families=("gpt",))
-    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
-    assert "gpt" not in {leg.family for leg in plan.legs}
-    assert {s["leg"]: s["reason"] for s in plan.skipped}[
-        "cx-gpt-6.1-sol"] == "excluded_family"
-
-
-def test_writer_order_privacy_excludes_training_sol():
-    assert next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol").trains_on_data is False
-    # The default Sol is non-training. Exercise eligibility before lead sorting
-    # with a training lead and a non-training free fallback explicitly.
-    legs = tuple(dataclasses.replace(leg, trains_on_data=leg.id == "cx-gpt-6.1-sol")
-                 for leg in DEFAULT_LEGS)
-    public = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
-                        role="implement", legs=legs)
-    assert public.first_leg.id == "cx-gpt-6.1-sol"
-    private = plan_spawn({"estimate_tokens": 20000, "risk_tags": ["secrets"]},
-                         role="implement", legs=legs)
-    assert private.first_leg.id == "opencode-deepseek-v4.1-flash-free"
-    assert "cx-gpt-6.1-sol" not in {leg.id for leg in private.legs}
-    assert {s["leg"]: s["reason"] for s in private.skipped}[
-        "cx-gpt-6.1-sol"] == "trains_on_data"
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
@@ -481,3 +450,13 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     )
     assert nxt_agy is not None
     assert nxt_agy.id == "mimo-v2.6-pro"
+
+
+def test_writer_order_sol_family_excluded():
+    from test_route_free_first import test_writer_order_sol_family_excluded as check
+    check()
+
+
+def test_writer_order_privacy_excludes_training_sol():
+    from test_route_free_first import test_writer_order_privacy_excludes_training_sol as check
+    check()
