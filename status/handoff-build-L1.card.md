@@ -1,29 +1,33 @@
-# L1 card · build-L1-0144 · 2026-11-03T09:53Z
+# L1 card · build-L1-0158 · 2026-11-05T13:08Z
 ## Goal
-- HOLD D-3746 until 2026-11-05T11:00Z (no new lane/seat/run, no polling); then D-3745 sol-first writer, D-3722 order: #377 -> #380 -> SEAT-PATH-FIXES (#309+#338)
+- D-3722 order #377 -> #380 -> SEAT-PATH-FIXES (#309+#338); mimo writers until sol cooldown ends ~16:23Z (D-3768), seats per D-3763
 ## Keeper
-- claimed (leases 10:47Z, will lapse in hold): KEEPER-SNAP-S0-TIMINGS ep1, SEAT-PATH-FIXES ep4, KEEPER-EVIDENCE-MERGE-HEAD ep3, SPAWNER-LEG-GROK ep2, SPAWNER-DEEPSEEK-REVIEW-LEG ep1
-- ready next: SPAWNER-SOL-FIRST-WRITER (define asked of routing), SPAWNER-LEGS-D3605 (after #338)
+- claimed: SPAWNER-DEEPSEEK-REVIEW-LEG (ep2, since 11:19Z), SPAWNER-LEG-GROK (ep3, since 11:19Z)
+- ready next: KEEPER-SNAP-S0-TIMINGS, SEAT-PATH-FIXES (leases lapsed, reclaim)
 ## Done
-- 11-03T09:24Z KEEPER-SNAP-S0-TIMINGS bd4bb6c4 PR#380 delta seat deepseek run-401695f0 ACCEPT, 0 findings
-- 11-03T09:35Z D-3744 cbd41dceb md-sync live on wt md-sync-cbd41dce, drop-in z9-md-sync-cbd41dce.conf, 221 passed, run Result=success
-- 11-03T09:45Z SPAWNER-DEEPSEEK-REVIEW-LEG 08cf1334 PR#377 r1 writer 178ffd72 + Hand-Edit eca511fd, 1375 passed, seat run-06897295 ACCEPT
+- 11-05T13:00Z D-3764 f5b4d4b0a spawner-main ff from 6aabc772, 1267 passed on target, smoke pending
+- 11-05T12:20Z D-3681 ff9ae83f omniroute r5 pushed, omp 7 pass, Haiku REQUEST_CHANGES -> r6
+- 11-05T12:50Z D-3681 e1f5dd1df5 omniroute r6 pushed, 16 pass, both seats REQUEST_CHANGES -> r7
+- 11-05T12:40Z SPAWNER-SOL-FIRST-WRITER 57296bf56 PR#383 Haiku s383h ACCEPT, 127 passed
 ## In flight
-- D-3681 omniroute r5 writer mimo-pro run-1171c1f1 since 09:40Z next check 11-05T11:00Z (waiter stopped; commits locally, no push)
-- SPAWNER-LEG-GROK writer mimo-pro run-a2b11fd3 since 09:47Z next check 11-05T11:00Z (lane/spawner-leg-grok from 08cf1334)
-- SPAWNER-SOL-FIRST-WRITER writer sol run-c58e5bc6 since 09:50Z next check 11-05T11:00Z (lane/sol-first-writer from 442912995)
+- SPAWNER-DEEPSEEK-REVIEW-LEG run-b3b5370576c7442281a78fa945887545 since 13:05Z next check 14:05Z
+- drift-mail r1 run-d394ea19c82b4133b3cdf677608b5b94 since 13:05Z next check 14:05Z
+- omniroute r7 tag orr7m gate-waiting since 13:05Z next check 13:15Z (J/r-orr7m.json; respawn if absent)
 ## Planned
-1. On resume: verify the 3 writer commits (spawner result <run>), push; r5 sha to prox-L1-main + check omp.ts:52 dir fix; deepseek delta seats
-2. SPAWNER-SOL-FIRST-WRITER seat + merge, then ff live spawner-main (D-3745)
-3. #377/#380/#338 HIGH tools seat when a leg serves or Haiku returns 11-05 (D-3736)
+1. D-3764 smoke spawn on mimo-v2.6-pro, then DONE to routing + tell workst-L1-autoos
+2. #377 r3 verify, push, delta seat; tests seat via qwen or workst-L1-autoos
+3. omniroute r7 seats; any MED -> list to prox, stop; clean -> sha to prox
+4. drift-mail push, seat, sha to prox, MERGE-READY routing-0101
+5. #380 and #338 merge main (conflicts), then tools seats
 ## Open
-- BLOCKED #377/#380/#338/omniroute HIGH tools seat | default hold D-3736 | deadline 11-05
-- BLOCKED SPAWNER-SOL-FIRST-WRITER keeper define (JSON sent) | default routing defines as sent | deadline none
-- BLOCKED ff spawner-main 6aabc772 (live route mimo>flash>sonnet>sol) | default 10-min spawner pause | deadline none
-- BLOCKED HOST-DISK-GUARD-REAPER define; pd#15/16/17/21 MEDs | default routing | deadline none
+- BLOCKED #383 ruling on deepseek MED + keeper define + GO | default dismiss MED, define as sent | deadline none
+- BLOCKED grok: Authentication required; opencode.jsonc baseline refused push | default operator enables gc, D-id for baseline | deadline none
+- BLOCKED 3.3 tests seat for HIGH PRs | default workst-L1-autoos | deadline none
+- BLOCKED omnigraph pin edits need a D-id | default agent-skills Dockerfile + live worktrees only | deadline none
+- BLOCKED HOST-DISK-GUARD-REAPER undefined | default routing defines | deadline none
 ## Traps
-- J=/home/s/.claude/jobs/666c38f5/tmp, K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79; spawnw2.sh/seat2.sh; hourly probe loop killed (D-3746)
-- deepseek leg text-only: NO-TOOLS prompt + inline diff; spawner steer = unknown job for CLI runs
-- routing.py baseline 470 lines: no growth; non-review routes keep main order (#377 Hand-Edit)
+- Spawner CLI needs full run ids; spawner cancel leaves the opencode child alive: check by cwd, kill only verified pids
+- opencode review seats have all tools denied; Haiku seats run plan mode: neither runs tests
+- Leg probe is a commit probe: exit 5 on review legs proves nothing; its timeout orphans opencode
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-82 block)
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-83 block)
