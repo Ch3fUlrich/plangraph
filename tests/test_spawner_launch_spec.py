@@ -104,6 +104,15 @@ def test_dry(request_data, monkeypatch):
     assert json.loads(out)['argv'][0] == 'qodercli'
 
 
+def test_inline_only_review_without_diff_refused(request_data):
+    # A placement request names the routed leg, never a document review: fail closed
+    # (only SpawnService.spawn with an explicit --leg sets document_review).
+    request_data.update(role='review', leg={'id': 'mimo-v2.6-flash'})
+    code, out, err = invoke(request_data)
+    assert code != 0 and out == ''
+    assert 'inline_diff_failed' in err
+
+
 @pytest.mark.parametrize('kind', ['render_refused', 'unavailable', 'launch', 'inline_diff_failed', 'context', 'refused'])
 def test_refusals(request_data, monkeypatch, kind):
     from plangraph.routing_support import opencode_render
