@@ -8,7 +8,7 @@ def publish_cancel(job):
         job.status, job.exit_code = 'failed', job.exit_code or 1
         if not any(e['event'] == 'kill_incomplete' for e in job.events):
             job.events.append(dict(event='kill_incomplete', survivors=list(job.survivors)))
-    elif job.status == 'running':
+    elif job.status in ('running', 'dry_run'):
         job.status, job.exit_code = 'cancelled', 1
 
 
