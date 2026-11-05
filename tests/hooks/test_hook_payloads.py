@@ -5,7 +5,7 @@ The twelve payloads come from the parity corpus of the closed AutoOS port (#292)
 file was run through the ORIGINAL hooks in a temp HOME with empty state, and the three observable fields were
 kept. Here the same inputs run against the hooks in this tree, in a fresh temp HOME per payload, and must give
 the same bytes. The two emitting context_guard payloads the corpus had to skip (their line names the hook's
-own install path) are pinned too, with the interpreter and script path of this run filled in.
+own install path) are pinned too, with private guidance instead of install paths.
 
     python3 tests/hooks/test_hook_payloads.py
 """
@@ -17,7 +17,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from hookkit import HOOKS, HookCase, clean_env, run_script  # noqa: E402
+from hookkit import HOOKS, HookCase, clean_env, load_module, run_script  # noqa: E402
+
+SUBAGENT_BACKSTOP = load_module("context_guard").SUBAGENT_BACKSTOP
 
 TOKEN = "sk-" + "abcdefghijklmnopqrstuvwx"  # a fake key, assembled so no token-shaped literal sits in the source
 J = json.dumps
@@ -82,13 +84,11 @@ PAYLOADS = [
 
 
 def emit_out(level, ctx_k, threshold_k):
-    """The context_guard line, with this run's interpreter and script path where the original had its own."""
-    script = J(str((HOOKS / "context_guard.py").resolve()))[1:-1]
+    """The context_guard line, without interpreter or checkout paths."""
     head = ("%s ctx=%dk >= %dk: at the next natural stop, write your handoff to your private handoff path, "
             % ("HANDOFF-NOW" if level == "handoff" else "HARD-CAP", ctx_k, threshold_k))
-    tail = ("then run ready (and SendMessage RECYCLE-READY <path> to your parent if your brief says so). "
-            "If you are a subagent, finish your task and report; "
-            "this does not apply to you.")
+    tail = ("then run ready (and SendMessage RECYCLE-READY <path> to your parent if your brief says so)."
+            + SUBAGENT_BACKSTOP)
     return '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s%s"}}\n' % (head, tail)
 
 

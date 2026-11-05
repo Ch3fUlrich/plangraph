@@ -26,6 +26,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
+    from context_guard import HANDOFF_PATH_ENV, SUBAGENT_BACKSTOP
+except Exception:  # missing or broken guard: main() retains the fail-silent diagnostic
+    HANDOFF_PATH_ENV = SUBAGENT_BACKSTOP = None
+
+try:
     from hook_common import read_stdin_text, read_text_capped, safe_id, state_home  # noqa: E402
 except ImportError:  # a half-installed hooks dir: main() says so and exits 0, as for a missing context_guard.py
     safe_id = state_home = read_stdin_text = read_text_capped = None
@@ -45,7 +50,7 @@ def add_card_rule(out: str) -> str:
         hso = doc["hookSpecificOutput"]
         context = hso.get("additionalContext")
         if isinstance(context, str) and _HANDOFF_LINE.match(context):
-            backstop = " If you are a subagent, finish your task and report; this does not apply to you."
+            backstop = SUBAGENT_BACKSTOP
             hso["additionalContext"] = (context[:-len(backstop)] + CARD_RULE + backstop
                                         if context.endswith(backstop) else context + CARD_RULE)
             return json.dumps(doc) + "\n"
@@ -126,7 +131,7 @@ def main() -> int:
         # Launch-time, session-local private destination, alongside handoff/hard.
         path = doc.get("handoff_path")
         if isinstance(path, str) and path:
-            os.environ["AUTOOS_CTX_HANDOFF_PATH"] = path
+            os.environ[HANDOFF_PATH_ENV] = path
         for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
             val = doc.get(key)
             if isinstance(val, int) and not isinstance(val, bool):

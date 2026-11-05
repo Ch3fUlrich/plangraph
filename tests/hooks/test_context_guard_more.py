@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """More tests for tools/hooks/context_guard.py, beside the 36 ported ones (test_context_guard.py).
 
-These pin what the port added over the original (threshold clamp, stepping past unusable records, quoted
-commands, the debug traceback) and the `status` output shapes. The AUTOOS_CTX_* names and the `autoos/ctx-guard`
+These pin what the port added over the original (threshold clamp, stepping past unusable records, private
+guidance, the debug traceback) and the `status` output shapes. The AUTOOS_CTX_* names and the `autoos/ctx-guard`
 state dir are the live guard's contract; they stay until the cutover item G13.
 
     python3 tests/hooks/test_context_guard_more.py
@@ -73,18 +73,34 @@ class Records(MoreCase):
 
 
 class Output(MoreCase):
-    def test_the_line_names_this_interpreter_and_script(self):
+    def test_line_hides_interpreter_and_script_path(self):
         self.write(usage_line(read=275000))
-        command = " ".join('"%s"' % part if " " in part else part for part in (sys.executable, str(SCRIPT.resolve())))
-        self.assertIn("then run ready", self.text(self.hook()))
+        text = self.text(self.hook())
+        self.assertIn("then run ready", text)
+        for path in (sys.executable, str(SCRIPT.resolve())):
+            self.assertNotIn(path, text)
 
-    def test_paths_with_spaces_are_quoted_so_the_command_pastes(self):
+    def test_line_needs_no_interpreter_or_script_path(self):
         guard = load_module("context_guard")
-        line = guard.emit_line("handoff", 280000, 270000, Path("/a b") / "context guard.py")
-        resolved = str(Path("/a b/context guard.py").resolve())
-        self.assertNotIn(resolved, line)
+        self.assertFalse(hasattr(guard, "_cmd"))
+        line = guard.emit_line("handoff", 280000, 270000)
         self.assertNotIn("\n", line)
-        self.assertEqual(guard.emit_line("hard", 310000, 300000, SCRIPT).split(":", 1)[0], "HARD-CAP ctx=310k >= 300k")
+        self.assertEqual(guard.emit_line("hard", 310000, 300000).split(":", 1)[0], "HARD-CAP ctx=310k >= 300k")
+
+    def test_public_fragment_is_deferred(self):
+        self.assertFalse((HOOKS.parent.parent / "changelog.d/LE-GUARD-TEXT.md").exists())
+
+    def test_shared_backstop_stays_last_after_card_rule(self):
+        guard = load_module("context_guard")
+        wrapper = load_module("ctx_guard_session")
+        self.assertEqual(wrapper.HANDOFF_PATH_ENV, guard.HANDOFF_PATH_ENV)
+        wrapper.SUBAGENT_BACKSTOP = " Changed backstop."
+        for level in ("handoff", "hard"):
+            text = guard.emit_line(level, 310000, 300000)
+            text = text.removesuffix(guard.SUBAGENT_BACKSTOP) + wrapper.SUBAGENT_BACKSTOP
+            out = wrapper.add_card_rule(json.dumps({"hookSpecificOutput": {"additionalContext": text}}))
+            self.assertTrue(json.loads(out)["hookSpecificOutput"]["additionalContext"].endswith(
+                wrapper.CARD_RULE + wrapper.SUBAGENT_BACKSTOP))
 
     def test_the_debug_variable_surfaces_the_swallowed_traceback(self):
         blocker = self.tmp / "blocker"
