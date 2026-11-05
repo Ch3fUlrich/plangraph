@@ -79,3 +79,14 @@ reports absence to the sticky group-empty probe. EPERM remains an error.
 Process fixtures use two-second F/confirm and three-second silence limits; the
 confirm fixture emits at two seconds, with two seconds before contractual kill.
 The escalation assertion retains a separate 1.5-second scheduler margin.
+
+### RL12 supervision fix-round validation
+
+Stdin writer setup errors now enter the same bounded Stop state machine as
+runtime I/O errors and remain visible in `Watched.io_error`; the monitor does
+not tick after an I/O error. Natural-exit drain checks group emptiness at entry
+and completion rather than polling every 10 ms. A real child exercises both
+tree context and CPU signals through `supervise_events`, without a repository.
+The escaped-pipe fixture has a three-second wall timeout and retains its
+3.5-second teardown assertion. The existing `lib.rs` Unix module gate also
+excludes watch tests from Windows all-targets builds.

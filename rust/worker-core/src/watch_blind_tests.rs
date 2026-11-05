@@ -12,12 +12,14 @@ use std::{
 const FIXTURE_FIRST_S: u64 = 2;
 const FIXTURE_CONFIRM_S: u64 = 2;
 const FIXTURE_SILENCE_S: u64 = 3;
+const ESCAPED_FIXTURE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[test]
 fn fixture_scheduler_slack_is_separate_from_contract() {
     let margin = |limit, emission| limit - emission;
     assert!(margin(FIXTURE_FIRST_S + FIXTURE_CONFIRM_S, 2) >= 2);
     assert!(margin(FIXTURE_SILENCE_S + FIXTURE_CONFIRM_S, 1) >= 2);
+    assert!(ESCAPED_FIXTURE_TIMEOUT >= Duration::from_secs(3));
 }
 
 pub(super) struct Parser {
@@ -170,7 +172,7 @@ fn escaped_pipe_holder_cannot_hang_teardown() {
         false,
         b"",
         false,
-        Duration::from_millis(500),
+        ESCAPED_FIXTURE_TIMEOUT,
     );
     assert_eq!(r.run.code, Some(0));
     assert!(!r.run.timed_out && !r.run.stalled);

@@ -21,6 +21,7 @@ fn mixed_kind_mirror_counts_both_lines() {
 
 #[test]
 fn natural_exit_does_not_sample_cancel_during_drain() {
+    super::super::unix::PROBES.with(|n| n.set(0));
     let mut parser = super::super::blind_tests::Parser::default();
     let mut monitor = monitor();
     let mut channel = ChannelHealth::new(0, Some(1));
@@ -46,6 +47,42 @@ fn natural_exit_does_not_sample_cancel_during_drain() {
     .unwrap();
     assert_eq!(r.run.code, Some(0));
     assert!(!r.run.cancelled);
+    assert_eq!(super::super::unix::PROBES.with(|n| n.get()), 2);
+}
+
+#[test]
+fn writer_setup_failure_stops_group_without_monitor_tick() {
+    let mut parser = super::super::blind_tests::Parser::default();
+    let (mut monitor, mut channel) = (monitor(), ChannelHealth::new(0, Some(1)));
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "exec sleep 20"]);
+    let start = Instant::now();
+    let r = supervise_with_writer(
+        cmd,
+        &stall::Opts {
+            timeout: Some(Duration::from_secs(5)),
+            grace: Duration::from_millis(50),
+            ..stall::Opts::default()
+        },
+        Hooks {
+            parser: &mut parser,
+            monitor: &mut monitor,
+            channel: &mut channel,
+            cancelled: &|| false,
+            tree_sample: &Ctx::default,
+            cpu: None,
+            stdin: b"",
+        },
+        |_, _| {
+            thread::sleep(Duration::from_millis(900));
+            Err(io::ErrorKind::PermissionDenied.into())
+        },
+    )
+    .unwrap();
+    assert_eq!(r.io_error.unwrap().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(r.proof, KillProof::Empty);
+    assert!(r.decisions.is_empty());
+    assert!(start.elapsed() < Duration::from_millis(3500));
 }
 
 #[test]

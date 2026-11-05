@@ -128,10 +128,15 @@ impl Events {
 }
 
 /// Supervise the original jail-wrapped command without reconstructing it.
-pub fn supervise_events(
+pub fn supervise_events(cmd: Command, opts: &stall::Opts, hooks: Hooks<'_>) -> io::Result<Watched> {
+    supervise_with_writer(cmd, opts, hooks, super::unix::stdin_writer)
+}
+
+fn supervise_with_writer(
     mut cmd: Command,
     opts: &stall::Opts,
     mut hooks: Hooks<'_>,
+    writer_setup: impl FnOnce(std::process::ChildStdin, &[u8]) -> io::Result<super::unix::Writer>,
 ) -> io::Result<Watched> {
     if opts.timeout.is_none() {
         return Err(io::Error::new(
@@ -156,8 +161,11 @@ pub fn supervise_events(
         false,
         tx.clone(),
     );
-    let writer =
-        super::unix::stdin_writer(child.child.stdin.take().expect("piped stdin"), hooks.stdin)?;
+    let writer = writer_setup(child.child.stdin.take().expect("piped stdin"), hooks.stdin);
+    let (writer, setup_error) = match writer {
+        Ok(writer) => (Some(writer), None),
+        Err(error) => (None, Some(error)),
+    };
     drop(tx);
     let mut events = Events {
         last_byte: 0,
@@ -170,7 +178,7 @@ pub fn supervise_events(
     };
     let (mut decisions, mut stop, mut stopped_at) = (Vec::new(), None, None);
     let (mut timed_out, mut cancelled, mut stall_bytes) = (false, false, false);
-    let (mut status, mut error, mut proof) = (None, None, KillProof::NotNeeded);
+    let (mut status, mut error, mut proof) = (None, setup_error, KillProof::NotNeeded);
     let mut ctx = Ctx::default();
     let mut sample_at = 0;
     let mut finished_at = None;
@@ -207,7 +215,13 @@ pub fn supervise_events(
                     Duration::from_millis(now.saturating_sub(events.last_byte)) >= t
                 });
             let mut activity_kill = false;
-            if !cancelled && !timed_out && !stall_bytes && !events.provider && status.is_none() {
+            if !cancelled
+                && !timed_out
+                && !stall_bytes
+                && !events.provider
+                && status.is_none()
+                && error.is_none()
+            {
                 if let Some(mut decision) = hooks.monitor.tick(now, ctx) {
                     if events.blind.is_some() {
                         decision.act = match decision.act {
@@ -229,7 +243,7 @@ pub fn supervise_events(
             {
                 stop = Some(Stop::default());
                 stopped_at = Some(now);
-            } else if status.is_some() {
+            } else if status.is_some() && finished_at.is_none() {
                 match child.empty() {
                     Ok(true) => {
                         finished_at.get_or_insert(now);
@@ -258,6 +272,18 @@ pub fn supervise_events(
             }
         }
         if finished_at.is_some_and(|t| events.eof == 2 || now.saturating_sub(t) >= 2000) {
+            if stop.is_none() {
+                match child.empty() {
+                    Ok(true) => {}
+                    result => {
+                        error = result.err();
+                        stop = Some(Stop::default());
+                        stopped_at = Some(now);
+                        finished_at = None;
+                        continue;
+                    }
+                }
+            }
             break;
         }
         thread::sleep(Duration::from_millis(10));
@@ -287,7 +313,7 @@ pub fn supervise_events(
             stall_bytes,
             late_signal_ms: events.late.filter(|t| stopped_at.is_some_and(|s| *t >= s)),
         },
-        writer.finish(),
+        writer.map_or(Ok(()), |writer| writer.finish()),
     ))
 }
 

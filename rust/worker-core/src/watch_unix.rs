@@ -107,6 +107,8 @@ impl Child for UnixChild {
         self.signal(libc::SIGKILL)
     }
     fn empty(&mut self) -> io::Result<bool> {
+        #[cfg(test)]
+        PROBES.with(|n| n.set(n.get() + 1));
         // Continuous ownership survives leader reaping; never revive an absent group.
         self.gone = self.gone || group_empty(self.pgid)?;
         Ok(self.gone)
@@ -122,4 +124,9 @@ pub(super) fn group_empty(pgid: i32) -> io::Result<bool> {
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(true),
         Err(e) => Err(e),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
