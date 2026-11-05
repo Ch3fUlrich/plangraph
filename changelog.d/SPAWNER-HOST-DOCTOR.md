@@ -1,0 +1,1 @@
+- **SPAWNER-HOST-DOCTOR (D-3755, D-3762):** add independent host readiness checks with real MCP stdio handshakes and opt-in liveness probes.
