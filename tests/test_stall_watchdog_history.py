@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -56,15 +57,21 @@ def test_bad_cap_survives_restart(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_PROBE_MAX_PER_TICK', 'bad')
     monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
     script = '''
-from plangraph.spawner import stall_watchdog as w, runner
+import sys
 from types import SimpleNamespace
-runner.spawn_service = lambda **kw: SimpleNamespace(retry_completions=lambda: None)
+sys.path.insert(0, sys.argv[1])
+sys.modules['plangraph.spawner.runner'] = SimpleNamespace(
+    spawn_service=lambda **kw: SimpleNamespace(retry_completions=lambda: None))
+from plangraph.spawner import stall_watchdog as w
 w.read_claims = lambda: []
 raise SystemExit(w.main(['tick']))
 '''
     first = None
     for expected in (25, 30):
-        subprocess.run([sys.executable, '-c', script], check=True, capture_output=True)
+        result = subprocess.run([sys.executable, '-S', '-c', script,
+                                 str(Path(w.__file__).resolve().parents[2])], cwd=tmp_path,
+                                env=dict(os.environ, PYTHONPATH=''), capture_output=True)
+        assert result.returncode == 0, result.stderr.decode()
         events = [json.loads(p.read_text()) for p in (tmp_path / 'watchdog/outbox').glob('*')]
         findings = {e['run_id']: e for e in events if e['rule'] == 'unknown'}
         assert len(findings) == expected
@@ -72,6 +79,46 @@ raise SystemExit(w.main(['tick']))
         if first is not None:
             assert all(findings[key] == event for key, event in first.items())
         first = findings
+
+
+@pytest.mark.parametrize('cap', ['0', '0.5'])
+def test_small_cap_makes_progress(tmp_path, monkeypatch, cap):
+    from plangraph.spawner import runner
+    records(tmp_path, 3, status='running', started=0, pid=None)
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_MAX_PER_TICK', cap)
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(runner, 'spawn_service', lambda **kw: type(
+        'Service', (), {'retry_completions': lambda self: None})())
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    for expected in (1, 2):
+        assert w.main(['tick']) == 0
+        events = [json.loads(p.read_text()) for p in (tmp_path / 'watchdog/outbox').glob('*')]
+        assert sum(e['rule'] == 'unknown' for e in events) == expected
+
+
+def test_cap_window_replay(tmp_path, monkeypatch):
+    from plangraph.spawner import runner
+    records(tmp_path, 4, status='running', started=0, pid=None)
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_MAX_PER_TICK', '1')
+    monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["notify"]')
+    monkeypatch.setattr(runner, 'spawn_service', lambda **kw: type(
+        'Service', (), {'retry_completions': lambda self: None})())
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    sent = []
+    flush = w.flush_outbox
+    def blocked(command, **kwargs):
+        sent.append(json.loads(kwargs['input']))
+        raise subprocess.CalledProcessError(1, command)
+    monkeypatch.setattr(w, 'flush_outbox', lambda state, command: flush(state, command, run=blocked))
+    for now in (1201, 1202, 1320):
+        monkeypatch.setattr(w.time, 'time', lambda: now)
+        assert w.main(['tick']) == 0
+        caps = [e for e in sent if e['rule'] == 'findings-capped']
+        assert len({e['event_id'] for e in caps}) == (2 if now == 1320 else 1)
+        if now != 1201:
+            assert caps[0] == caps[1]
 
 
 def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):

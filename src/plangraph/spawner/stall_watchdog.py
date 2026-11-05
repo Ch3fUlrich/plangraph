@@ -349,7 +349,7 @@ def main(argv=None):
     from .runner import spawn_service
     if not args.dry_run:
         spawn_service(state=state).retry_completions()
-    budget = [int(probe_setting('PLANGRAPH_PROBE_MAX_PER_TICK', 25, 25)), 0]
+    budget = [max(1, int(probe_setting('PLANGRAPH_PROBE_MAX_PER_TICK', 25, 25))), 0]
     deliver = lambda e: deliver_event(state, e, budget=budget)
     token = _budget.set(budget)
     try:
@@ -376,7 +376,7 @@ def main(argv=None):
         return 0
     if budget[1]:
         deliver_event(state, dict(rule='findings-capped', kind='completion',
-                                 episode=time.time(), held=budget[1]))
+                                 episode=int(time.time() // 120), held=budget[1]))
     command = os.environ.get('PLANGRAPH_WATCHDOG_DELIVERY')
     if command:
         try:
