@@ -1,4 +1,41 @@
 use super::*;
+
+#[test]
+fn prompt_snapshot_before_dispatch() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(new_run_id());
+    let id = new_run_id();
+    let raw = format!("héllo {}{}", "sk-", "a".repeat(24));
+    let mut launch = crate::launch::LaunchSpec {
+        argv: vec!["fake".into(), raw.clone()],
+        cwd: dir.clone(),
+        env: BTreeMap::new(),
+        stdin: Some(raw.clone()),
+        prompt: Some(raw.clone()),
+        warnings: None,
+        events: None,
+    };
+    let mut base = json!({});
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_ok());
+    let path = dir.join("runs").join(&id).join("prompt.txt");
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes, launch.stdin.as_ref().unwrap().as_bytes());
+    assert_eq!(bytes, launch.argv[1].as_bytes());
+    assert_eq!(bytes, "héllo [REDACTED]".as_bytes());
+    assert!(!base.to_string().contains(&raw));
+    assert!(base["prompt_sha256"].as_str().unwrap().len() == 64);
+    assert_eq!(base["wake_variant"], "initial");
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_err());
+    launch.prompt = None;
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
 use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
 
 struct Dir(std::path::PathBuf);
@@ -43,6 +80,7 @@ fn registered_job(dry: bool) {
                     cwd: dir.0.clone(),
                     env: BTreeMap::new(),
                     stdin: None,
+                    prompt: Some("p".into()),
                     warnings: None,
                     events: None,
                 })

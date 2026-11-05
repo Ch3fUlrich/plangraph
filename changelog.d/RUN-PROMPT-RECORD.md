@@ -1,0 +1,1 @@
+- **RUN-PROMPT-RECORD:** Store private, atomic final prompt snapshots and hashes before child dispatch, with single-pass credential redaction.

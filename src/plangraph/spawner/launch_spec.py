@@ -141,6 +141,7 @@ def build(request: dict) -> dict:
                     raise WindowsEnvIncomplete(name)
         events.append(dict(event='launch_spec', python_job_id=job.job_id))
         return dict(argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
+                    prompt=job.task_prompt,  # REMOVE-AT-R10: Rust redacts the final prompt.
                     stdin=job.task_prompt if cmd[0] in runner.STDIN_PROMPT_HARNESSES else None,
                     warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events)
     finally:

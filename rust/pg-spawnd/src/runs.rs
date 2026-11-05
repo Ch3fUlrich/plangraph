@@ -59,7 +59,7 @@ impl Runs {
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
-        let launch = launch(
+        let mut launch = launch(
             state,
             &json!({
                 "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
@@ -70,6 +70,7 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        store_prompt(state, &run_id, &mut launch, &mut base)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -131,6 +132,36 @@ impl Runs {
         self.jobs.lock().unwrap().insert(job_id, run_id.clone());
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
+}
+fn store_prompt(
+    state: &Path,
+    id: &str,
+    launch: &mut crate::launch::LaunchSpec,
+    base: &mut Value,
+) -> Result<(), ToolError> {
+    use sha2::{Digest, Sha256};
+    let raw = launch
+        .prompt
+        .as_ref()
+        .ok_or_else(|| internal("launch prompt missing"))?;
+    let prompt = pg_worker_core::redact::redact(raw);
+    for arg in &mut launch.argv {
+        if arg == raw {
+            *arg = prompt.clone();
+        }
+    }
+    if launch.stdin.is_some() {
+        launch.stdin = Some(prompt.clone());
+    }
+    let path = pg_worker_core::run::record::run_dir(state, id)
+        .map_err(|_| internal("invalid run id"))?
+        .join("prompt.txt");
+    pg_worker_core::run::record_io::atomic_write_private(&path, prompt.as_bytes())
+        .map_err(|_| internal("could not save prompt"))?;
+    base["prompt_sha256"] = json!(format!("{:x}", Sha256::digest(prompt.as_bytes())));
+    base["wake_variant"] = json!("initial");
+    launch.prompt = Some(prompt);
+    Ok(())
 }
 fn internal(message: &str) -> ToolError {
     ToolError::Internal(message.into())
