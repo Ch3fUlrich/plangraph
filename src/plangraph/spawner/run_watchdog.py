@@ -372,7 +372,7 @@ async def collect(runner, job_id, proc):
             now = time.time()
             cpu = (await cpu_seconds(runner, job_id, getattr(proc, 'pid', None), int(now / limits['interval']))
                    if now - job.start_time < limits['max_s'] else None)
-            event = w.decide(now, edit, job.last_activity_ts, cpu)
+            event = w.decide(now, edit, job.last_activity_ts, cpu); gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
             try:
                 callback = getattr(runner, 'on_sample', None)
                 if callback:

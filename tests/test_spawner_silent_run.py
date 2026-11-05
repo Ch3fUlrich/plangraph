@@ -56,11 +56,32 @@ def test_late_limit_line_books_after_silence_and_activity_cancels_it():
     gate.scan_late(['> build · model\n'], 100 + LATE_QUIET_S - 1)   # a header-only chunk is output too
     gate.poll(100 + 2 * LATE_QUIET_S)
     assert not refused.is_set()
-    gate.scan_late([COOLDOWN + '\n', 'tool output after it\n'], 100)   # newest output decides, within one chunk too
+    gate.scan_late([COOLDOWN + '\n', 'tool output after it\n'], 100)   # any line of the chunk arms
+    assert gate.late
+    gate.activity(101)
+    assert gate.late is None
+    gate.scan_late([COOLDOWN + '\n'], 100)
+    gate.progress(100)   # an edit before the line changes nothing
+    assert gate.late
+    gate.progress(101)   # an edit after it is progress
     assert gate.late is None
     gate.scan_late([COOLDOWN + '\n'], 100)
     gate.poll(100 + LATE_QUIET_S)
     assert refused.is_set() and gate.job.refusal == COOLDOWN
+
+
+def test_a_worktree_edit_after_the_late_line_keeps_the_run_alive(tmp_path, monkeypatch):
+    monkeypatch.setattr('plangraph.spawner.run_refusal.LATE_QUIET_S', .5)
+    script = f"import time; print({COOLDOWN!r}, flush=True); time.sleep(.2); open('edit', 'w').close(); time.sleep(60)"
+    async def run():
+        runner, job = _job(tmp_path, {'stall_min': 10, 'first_edit_min': 20, 'max_min': .03})
+        job._watchdog_limits['interval'] = .05
+        proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        runner._owned = {'j': dict(pid=proc.pid, pid_start=root_identity(proc.pid), job_object=False)}
+        await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
+        assert job.status == 'timeout' and not [e for e in job.events if e['event'] == 'dispatch_refused']
+    asyncio.run(run())
 
 
 def test_hung_child_after_a_late_limit_line_ends_failed_with_the_line(tmp_path, monkeypatch):

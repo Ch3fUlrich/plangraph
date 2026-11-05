@@ -21,15 +21,21 @@ class RefusalGate:
         if not self.refused.is_set():
             self.pending = (text, now)
 
-    def scan_late(self, lines, now):
-        """REMOVE-AT-R10 (D-3769): an upstream limit as the newest output arms the late booking; any later output chunk disarms it."""
+    def scan_late(self, lines, now):   # REMOVE-AT-R10 (D-3769)
+        """An upstream limit line in this output chunk arms the late booking; a later chunk without one disarms it."""
         from .env_redact import early_refusal, normalize
-        last = normalize(next((line for line in reversed(lines) if line.strip()), ''))
-        found = not self.refused.is_set() and (early_refusal(last) or (_UPSTREAM.match(last) and last.strip()))
+        text = normalize(''.join(lines))
+        up = next((line.strip() for line in text.splitlines() if _UPSTREAM.match(line)), None)
+        found = not self.refused.is_set() and (early_refusal(text) or up)
         self.late = (found, now) if found else None
 
+    def progress(self, when):   # REMOVE-AT-R10 (D-3769)
+        """Worktree edits are progress too: an edit after the limit line disarms the late booking."""
+        if self.late and when > self.late[1]:
+            self.late = None
+
     def activity(self, now):
-        self.pending = None   # called only for activity lines after the candidate line
+        self.pending = self.late = None   # called only for activity lines after the candidate line; REMOVE-AT-R10 (D-3769)
 
     def _expired(self):
         # F2: a candidate whose job-relative time passed the window is task
