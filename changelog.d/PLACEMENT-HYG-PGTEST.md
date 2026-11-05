@@ -1,4 +1,6 @@
 ### Fixed
+- Keep the six placement wrappers local, read the marker once per top-level
+  check, and consolidate placement documentation into one short section.
 - Keep systemd-run boolean flags value-free so background and environment-expanding
   invocations cannot hide bare tests, including through nested wrappers.
 - Opted-in hosts reject bare test runs through bash_guard and direct callers to

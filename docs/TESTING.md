@@ -72,7 +72,6 @@ Linux uses `nice` and `systemd-run` in `agent-tests.slice`, with
 nice only. Windows assigns the child to a kill-on-close Job Object. Exit codes
 pass through. Direct systemd-run commands selecting that slice remain allowed.
 
-### Placement guard option handling
 Python interpreter option values, Cargo toolchain selectors, and wrapper option
 values are skipped before checking the test command; quoted option values are
 not commands. An unresolvable home directory counts as an absent marker.

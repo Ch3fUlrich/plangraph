@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 MESSAGE = "bare test run on this host: use pgtest <command> (runs in agent-tests.slice)"
+_PLACEMENT_WRAPPERS = frozenset(("sudo", "time", "xargs", "stdbuf", "ionice", "exec"))
 
 # Only separate option operands need skipping; --option=value is one word.
 _VALUE_OPTIONS = {
@@ -55,7 +56,7 @@ def check_bare_tests(pos_words, wrapped_in_slice) -> str | None:
             continue
         if name == "pgtest" or wrapped_in_slice:
             return None
-        if name not in _WRAPPERS:
+        if name not in _WRAPPERS | _PLACEMENT_WRAPPERS:
             args = words[i + 1:]
             if name in ("pytest", "py.test"):
                 return None if any(a in ("--version", "--collect-only") for a in args) else MESSAGE

@@ -170,14 +170,14 @@ def _shell_strings(words, k):
 
 # ─── per-command rules ────────────────────────────────────────────────
 
-def _check_simple(cmd, depth):
+def _check_simple(cmd, depth, placement_required):
     pos = [w for w in cmd if not w.redir]
     i = lead(pos)
     while i < len(pos) and _ENV_ASSIGN_RE.match(pos[i].text):
         i += 1
     if i >= len(pos):
         return None
-    if tests_required():
+    if placement_required:
         reason = check_bare_tests(pos[i:], False)
         if reason:
             return reason
@@ -195,12 +195,12 @@ def _check_simple(cmd, depth):
                 return _CLAUDE_MSG % (flag, "a double-quoted" if live & 1 else "an unquoted")
         elif name in _SHELLS:
             for string in _shell_strings(pos, j + 1):
-                reason = check_command(string, depth + 1)
+                reason = check_command(string, depth + 1, placement_required)
                 if reason:
                     return reason
         elif name == "eval" and not evaled:
             evaled = True
-            reason = check_command(" ".join(w.text for w in pos[j + 1:]), depth + 1)
+            reason = check_command(" ".join(w.text for w in pos[j + 1:]), depth + 1, placement_required)
             if reason:
                 return reason
     return None
@@ -208,7 +208,7 @@ def _check_simple(cmd, depth):
 
 # ─── deny-rule entry point ──────────────────────────────────────────────
 
-def check_command(command, depth=0):
+def check_command(command, depth=0, placement_required=None):
     """The deny message for `command`, or None to allow. Never raises: a
     command that cannot be scanned is denied (fail closed)."""
     if depth > _MAX_C_DEPTH:
@@ -216,12 +216,14 @@ def check_command(command, depth=0):
     if len(command.encode("utf-8", "surrogatepass")) > MAX_COMMAND_BYTES:
         return _SIZE_MSG
     try:
+        if placement_required is None:
+            placement_required = tests_required()
         commands, heredocs = scan(command)
         for delim, quoted, body in heredocs:
             if not quoted and _has_unescaped_heredoc_injection(body):
                 return _HEREDOC_MSG % (delim, delim)
         for cmd in commands:
-            reason = _check_simple(cmd, depth)
+            reason = _check_simple(cmd, depth, placement_required)
             if reason:
                 return reason
     except Exception as exc:  # ParseError, RecursionError, MemoryError, a bug: all fail closed

@@ -9,6 +9,7 @@ def test_placement_documentation_intake():
     root = Path(__file__).resolve().parents[2]
     assert "# Opt-in bash_guard test placement" not in (root / "CHANGELOG.md").read_text()
     doc = (root / "docs/TESTING.md").read_text()
+    assert "\n### " not in doc.split("## Opt-in bash_guard test placement\n", 1)[1]
     for text in ("bash_guard", "pgtest-required", "agent-tests.slice", "kill-on-close"):
         assert text in doc
 
@@ -34,7 +35,11 @@ BARE = ["pytest", "py.test -q", "python -m pytest", "python3 -m pytest",
         "systemd-run --expand-environment pytest",
         "X=1 env systemd-run --background cargo test",
         "bash -c 'systemd-run --expand-environment pytest'",
-        "eval 'systemd-run --background cargo test'"]
+         "eval 'systemd-run --background cargo test'",
+         "sudo pytest", "time pytest", "xargs -I{} pytest", "stdbuf -o0 pytest",
+         "ionice pytest", "exec pytest", "sudo -u nobody pytest",
+         "time -f pytest pytest", "xargs -I pytest pytest", "stdbuf -o 0 pytest",
+         "ionice -c 3 pytest", "exec -a pytest pytest"]
 ALLOWED = ["cargo build", "cargo clippy", "pytest --version",
            "pytest --collect-only", "grep pytest x", "echo cargo test",
            "nice -n 10 grep pytest x", "pgtest pytest", "pgtest cargo test",
@@ -73,6 +78,26 @@ def test_unreadable_marker(guard, monkeypatch, tmp_path):
     marker = tmp_path / "plangraph" / "pgtest-required"
     marker.mkdir(parents=True)  # Cannot be opened as a marker file, even as root.
     assert guard.check("pytest") is None
+
+
+def test_placement_wrappers_are_local(guard, monkeypatch):
+    import bash_guard_rules as rules
+    from bash_guard_tests_rule import _PLACEMENT_WRAPPERS
+
+    assert _PLACEMENT_WRAPPERS == {"sudo", "time", "xargs", "stdbuf", "ionice", "exec"}
+    monkeypatch.setattr(rules, "_WRAPPERS", rules._WRAPPERS - _PLACEMENT_WRAPPERS)
+    monkeypatch.setattr(rules, "tests_required", lambda: True)
+    for command in BARE[-12:]:
+        assert "use pgtest" in guard.check(command)
+
+
+def test_marker_read_once(guard, monkeypatch):
+    import bash_guard_rules as rules
+
+    reads = []
+    monkeypatch.setattr(rules, "tests_required", lambda: reads.append(1) or False)
+    assert guard.check("echo ok; bash -c 'echo nested'; eval 'echo again'") is None
+    assert reads == [1]
 
 
 def test_default_marker(guard, monkeypatch, tmp_path):
