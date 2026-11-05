@@ -144,6 +144,11 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     unknown.cache_clear = probe.cache_clear
     if request.node.get_closest_marker('real_probe') is None:
         monkeypatch.setattr(resolver, 'served_models', unknown)
+        # Async spawn retains the real-function alias; stub both entry points.
+        monkeypatch.setattr(resolver, '_served_models_real', unknown)
+        def forbidden_probe(*args, **kwargs):
+            pytest.fail('Host binary probe requires @pytest.mark.real_probe', pytrace=False)
+        monkeypatch.setattr(resolver, '_probe_served_models', forbidden_probe)
     original_which = shutil.which
     monkeypatch.setattr(shutil, 'which', lambda command, *a, **kw:
                         (original_which(command, *a, **kw) or command)

@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 - **SPAWNER-RL10A (D-3676, D-3714):** Add the pure row-health core, incident folding and row-anchored expiry tests.
+- **SPAWNER-MCP-STDIO-GUARD (D-3753):** ignore notifications, compact MCP ps records, and guard stdio reply sizes with ReplyTooLarge errors.
+- **SPAWNER-GIT-GUARD-FLAKE (D-3739):** stub both synchronous and async host-probe entry points in tests and fail closed on unmarked binary probes.
 - **SPAWNER-RL5B (D-3676, D-3714):** record closed-stdin opencode 2.1.0 live arrivals and replay read progress, version drift and payload-retention checks; no wiring or pin change.
 - **SPAWNER-RL5B (D-3676, D-3714):** map opencode events to receive-time activity with seven sanitized historical replays; no caller or switch, rollback by git revert.
 - **SPAWNER-RL9B part 2b (D-3676, D-3714):** add marker-to-outcome classification tests covering provider failures, quota and rate limits, raw reset propagation, evidence, and exit-status guards; no caller or switch, rollback by revert.
