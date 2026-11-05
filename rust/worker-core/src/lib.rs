@@ -13,6 +13,7 @@ pub mod diffscan;
 pub mod events;
 pub mod exit_class;
 pub mod exports;
+pub mod fleet_alarm_delivery;
 pub mod fleet_cap_resolver;
 pub mod fleet_owner_lease;
 pub mod fleet_router_signals;
