@@ -1,0 +1,1 @@
+- **FLEET-ROUTER-HYSTERESIS (part 1):** Adds a pure fleet-router signal evaluator with hysteresis, reasoned unknown observations, and replay-safe restorable state.

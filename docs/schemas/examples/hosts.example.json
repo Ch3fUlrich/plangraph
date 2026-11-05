@@ -4,6 +4,7 @@
   "hosts": [
     {
       "id": "code",
+      "class": "worker",
       "aliases": ["devbox"],
       "transport": "local",
       "os": "linux",
@@ -37,6 +38,7 @@
     },
     {
       "id": "workstation",
+      "class": "worker",
       "aliases": ["winbox"],
       "transport": "ssh",
       "os": "windows",

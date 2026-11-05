@@ -32,7 +32,8 @@ def test_console_sonnet_leg_shape():
     assert (leg.family, leg.claude_family, leg.trains_on_data) == ("claude", True, False)
     assert leg.windows == ("128k", "256k", "1m")
     assert leg.max_request_tokens == 180000
-    assert leg.roles == ("implement",)
+    assert leg.roles == ()
+    assert leg.disabled == "D-3893 no Sonnet writers, kept per D-3828"
     assert leg.tool_mode == "tools"
     assert leg.expires == "2026-11-30"
     assert "--standalone" in leg.note
@@ -58,12 +59,13 @@ def test_d3605_sol_routes_implement_never_review():
 
 
 def test_implement_route_ranks_sonnet_after_free_legs():
+    # Historical test name retained; D-3901 now excludes anthropic writers.
     plan = plan_spawn(CARD, role="implement")
     ids = [leg.id for leg in plan.legs]
-    assert SONNET in ids
-    free_positions = [ids.index(leg.id) for leg in plan.legs if leg.tier == "free"]
-    assert free_positions
-    assert ids.index(SONNET) > max(free_positions)
+    assert SONNET not in ids
+    assert plan.legs
+    assert all(not leg.claude_family and leg.family not in ("claude", "anthropic")
+               for leg in plan.legs)
 
 
 def test_review_route_never_returns_sonnet():
@@ -75,7 +77,7 @@ def test_review_route_never_returns_sonnet():
 
 
 def test_leg_active_utc_end_of_day():
-    leg = _leg()
+    leg = replace(_leg(), disabled=None)
     assert leg_active(leg, today=date(2026, 11, 30)) is True
     assert leg_active(leg, today=date(2026, 12, 1)) is False
 

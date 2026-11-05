@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,8 @@ def test_bad_record_does_not_stop_tick(tmp_path, bad):
     assert [f['rule'] for f in findings] == ['unknown'] * (1 if bad.get('card', 1) is None else 2)
 
 
-def test_flush_continues_after_poison(tmp_path):
+@pytest.mark.parametrize('error', [subprocess.CalledProcessError(1, 'bridge'), ValueError('invalid command')])
+def test_flush_continues_after_poison(tmp_path, error):
     import subprocess
     out = tmp_path / 'watchdog/outbox'
     out.mkdir(parents=True)
@@ -25,10 +27,15 @@ def test_flush_continues_after_poison(tmp_path):
         (out / (name + '.json')).write_text(json.dumps({'run_id': name}))
     def send(command, **kwargs):
         if json.loads(kwargs['input'])['run_id'] == 'a':
-            raise subprocess.CalledProcessError(1, command)
-    w.flush_outbox(tmp_path, ['notify'], run=send)
+            raise error
+    for count in (1, 2):
+        health = w.flush_outbox(tmp_path, ['notify'], run=send)
+        assert health == dict(failures=count, last_error=type(error).__name__)
     assert sorted(p.stem for p in out.iterdir()) == ['a']
-
+    health = w.flush_outbox(tmp_path, ['notify'], run=lambda *a, **kw: None)
+    assert health == dict(failures=0, last_error=None)
+    assert json.loads((tmp_path / 'watchdog/delivery.json').read_text()) == health
+    assert w.flush_outbox(tmp_path, ['notify'], run=send) == health
 
 def test_unknown_reaches_outbox(tmp_path):
     findings = w.tick([dict(run_id='run-fixture')], [], lambda s: None,
@@ -37,6 +44,14 @@ def test_unknown_reaches_outbox(tmp_path):
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and 'cancelled' not in event
 
+def test_bridge_failure_status(tmp_path, monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["bridge"]')
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    monkeypatch.setattr(w, 'flush_outbox', lambda *a: dict(failures=2, last_error='OSError'))
+    assert w.main(['tick']) == 1
+    assert 'delivery-OSError failures=2' in (tmp_path / 'watchdog/status.txt').read_text()
 
 @pytest.mark.parametrize('log_text', [None, 'first\nlatest\n'])
 def test_unknown_has_full_shape(tmp_path, monkeypatch, log_text):
@@ -56,7 +71,6 @@ def test_unknown_has_full_shape(tmp_path, monkeypatch, log_text):
     assert event == dict(expected, kind='completion', event_id=event['event_id'])
     assert event['event_id']
     assert w.probe_run(tmp_path, dict(run_id='run-fixture'), 1000) == expected
-
 
 def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
     from plangraph.spawner.remote_probe import exchange, poll
@@ -86,7 +100,6 @@ def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
     poll(['fixture'], 'notify', tmp_path)
     assert sent == [event, event]
 
-
 def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
@@ -96,6 +109,25 @@ def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatc
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and event['event_id']
     assert 'outbox 1, no bridge' in (tmp_path / 'watchdog/status.txt').read_text()
+    assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    assert w.main(['tick']) == 0
+    assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
+
+
+@pytest.mark.parametrize('loaded', [{}, {'last_error': None}, {'failures': 2}])
+def test_flush_partial_health_preserves_retry_and_health(tmp_path, loaded):
+    w.deliver_event(tmp_path, dict(rule='unknown', run_id='fixture', kind='completion'))
+    health_path = tmp_path / 'watchdog/delivery.json'
+    health_path.write_text(json.dumps(loaded))
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0])
+    health = w.flush_outbox(tmp_path, ['notify'], run=fail)
+    assert health == dict(failures=loaded.get('failures', 0) + 1, last_error='CalledProcessError')
+    assert json.loads(health_path.read_text()) == health
+    assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1
+    assert w.flush_outbox(tmp_path, ['notify'], run=lambda *a, **kw: None) == dict(
+        failures=0, last_error=None)
 
 
 @pytest.mark.parametrize('age', [301, 5400])
@@ -184,7 +216,10 @@ def test_tick_cli_persists_status_and_delivers_w12(tmp_path, monkeypatch, capsys
 
 
 @pytest.mark.parametrize('host', ['linux', 'windows'])
-def test_scheduler_installation(tmp_path, host):
+def test_scheduler_installation(tmp_path, host, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+    monkeypatch.delenv('PLANGRAPH_PROBE_HOSTS', raising=False)
+    monkeypatch.delenv('PLANGRAPH_PROBE_NOTIFY_CMD', raising=False)
     calls = []
     w.install(host, tmp_path, python='/usr/bin/python3', root=Path.cwd(),
               run=lambda args, **kw: calls.append(args))
@@ -193,9 +228,10 @@ def test_scheduler_installation(tmp_path, host):
     if host == 'linux':
         assert 'Environment="PLANGRAPH_PROBE_ROOT=' + str(Path.cwd()) + '"' in content
         unit = (tmp_path / 'plangraph-remote-probe.service').read_text()
-        assert 'EnvironmentFile=-%h/.config/plangraph/watchdog.env' in unit
+        assert 'EnvironmentFile=-"' + str(tmp_path / 'config/plangraph/watchdog.env') + '"' in unit
         assert 'OnUnitActiveSec=120' in content
         assert ['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'] in calls
+        assert ['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'] in calls
     else:
         assert '<Interval>PT2M</Interval>' in content
         assert calls[0][:2] == ['schtasks', '/Create']
@@ -205,6 +241,73 @@ def test_scheduler_installation(tmp_path, host):
     bootstrap = Path('deploy/bootstrap.' + ('sh' if host == 'linux' else 'ps1')).read_text()
     assert 'plangraph.spawner.stall_watchdog' in bootstrap
     assert 'install' in bootstrap
+
+
+@pytest.mark.parametrize('config_text', ['', 'PLANGRAPH_PROBE_HOSTS=fixture',
+    'PLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD=notify --json',
+    '# comment\nbare-token\nPLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD=notify --json=a',
+    'PLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD="notify --json"'])
+def test_probe_timer_requires_service_config(tmp_path, monkeypatch, config_text):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_PROBE_HOSTS', raising=False)
+    monkeypatch.delenv('PLANGRAPH_PROBE_NOTIFY_CMD', raising=False)
+    config = tmp_path / 'plangraph/watchdog.env'
+    config.parent.mkdir()
+    config.write_text(config_text)
+    calls = []
+    w.install('linux', tmp_path, run=lambda args, **kw: calls.append(args))
+    disabled = ['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer']
+    assert (disabled in calls) == ('PLANGRAPH_PROBE_NOTIFY_CMD' not in config_text)
+
+
+@pytest.mark.parametrize('config_text', [None, 'PLANGRAPH_PROBE_HOSTS=fixture',
+    'PLANGRAPH_PROBE_NOTIFY_CMD=""'])
+def test_probe_timer_environment_fallback(tmp_path, monkeypatch, config_text):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_HOSTS', 'fixture')
+    monkeypatch.setenv('PLANGRAPH_PROBE_NOTIFY_CMD', 'notify')
+    if config_text is not None:
+        config = tmp_path / 'plangraph/watchdog.env'
+        config.parent.mkdir()
+        config.write_text(config_text)
+    calls = []
+    w.install('linux', tmp_path, run=lambda args, **kw: calls.append(args))
+    assert any('disable' in call for call in calls)
+
+
+def test_findings_without_bridge_report_unconfigured(tmp_path, monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    def tick(*args, deliver, **kwargs):
+        event = dict(rule='run-orphan', run_id='fixture', kind='completion')
+        deliver(event)
+        return [event]
+    monkeypatch.setattr(w, 'tick', tick)
+    assert w.main(['tick']) == 0
+    assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
+    assert list((tmp_path / 'watchdog/outbox').glob('*.json'))
+
+
+@pytest.mark.parametrize('bridge', ['health', 'exception', 'unconfigured'])
+def test_tick_status_keeps_error_and_finding(tmp_path, monkeypatch, bridge):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["bridge"]' if bridge != 'unconfigured' else '')
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'tick', lambda *args, **kw: [dict(rule='run-orphan', run_id='fixture')])
+    def fail():
+        raise ValueError('fixture')
+    monkeypatch.setattr(w, 'read_claims', fail)
+    monkeypatch.setattr(w, 'status', lambda findings: '! stall run-orphan')
+    def bridge_fail():
+        raise RuntimeError('fixture')
+    monkeypatch.setattr(w, 'flush_outbox', lambda *args: bridge_fail() if bridge == 'exception'
+                        else dict(failures=1, last_error='CalledProcessError'))
+    assert w.main(['tick']) == 1
+    text = (tmp_path / 'watchdog/status.txt').read_text()
+    assert '! stall run-orphan' in text and 'ValueError' in text
+    assert 'delivery-' in text
 
 
 def test_tick_keeper_unconfigured_skips_with_one_warning(tmp_path, monkeypatch):
@@ -223,6 +326,8 @@ def test_real_spawn_record_parent_and_item_come_from_completion(tmp_path):
     [run] = w.read_runs(tmp_path)
     assert (run["parent_session"], run["item_key"]) == ("build-L1", "plangraph:STALL-WATCHDOG")
     assert w.tick([run], [], lambda s: 1, now=run["ended"] + 400)[0]["rule"] == "finished-child"
+
+
 def test_unreadable_start_does_not_stop_classification(tmp_path, monkeypatch):
     import os
     directory = tmp_path / 'runs/run-fixture'
@@ -292,5 +397,4 @@ def test_host_run_probes(tmp_path, monkeypatch):
     assert (orphan['age'], orphan['seconds_silent'], orphan['last_line']) == (500, 280, 'x' * 200)
     log.unlink()
     assert check(500)[0]['rule'] == 'run-orphan'
-    import json
     assert json.loads((directory / 'record.json').read_text())['reason'] == 'orphaned'

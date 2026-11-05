@@ -175,7 +175,20 @@ def test_route_skips_paused_harness_per_role():
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-3.8-flash"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
-    assert writer.first_leg.id == "openrouter-free"
+    assert writer.first_leg.id == "cx-gpt-6.1-sol"  # D-3745: eligible lead precedes free tier
+    # Sol also uses opencode: pausing that harness must exclude the lead,
+    # not merely leave a first-leg assertion that passes without filtering.
+    paused = plan_spawn(CARD, role="implement", policy=RoutePolicy(
+        paused_harnesses={"opencode": ("review",)}),
+        leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
+    paused_ids = {leg.id for leg in DEFAULT_LEGS
+                  if leg.harness == "opencode" and "implement" in leg.roles}
+    assert paused_ids
+    assert paused_ids.isdisjoint({leg.id for leg in paused.legs})
+    reasons = {s["leg"]: s["reason"] for s in paused.skipped}
+    assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
+        paused_ids, "paused_harness")
+    assert paused.first_leg.id == "agy-gemini-3.8-flash"
 
 
 def test_explicit_policy_argument_wins():
@@ -187,11 +200,11 @@ def test_explicit_policy_argument_wins():
 # --- 4. seats per writer part --------------------------------------------------
 
 def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
-    # Pinned to the pre-D-3552 policy: no review lift, so the seat set is
-    # luna/gpt (the D-3552 lift is covered in test_review_legs_d3552.py).
+    # Historical test name retained; D-3901 replaces Luna with Mimo.
+    # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "cx-gpt-6-luna"}
+    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "mimo-v2.6-flash"}
 
 
 def test_default_policy_seats_deepseek_for_review():
@@ -207,17 +220,15 @@ def test_seat_never_shares_family_with_a_single_writer():
 
 
 def test_seat_may_share_family_with_another_writer_part(pre_d3552_policy):
-    # D-3084: writers gpt + qwen; a qwen seat covers the gpt part, a gpt seat
-    # covers the qwen part.  Every part is covered by a family other than it.
-    # Pinned to the pre-D-3552 policy (no review lift): the seat set is luna/gpt.
+    # D-3084 coverage survives D-3901 review-route seat ordering.
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"qwen", "gpt"}
+    assert set(_families(plan)) == {"qwen", "mimo"}
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
     assert plan.seat_coverage == ({"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]},
-                                  {"leg": "cx-gpt-6-luna", "covers": ["alibaba"]})
+                                  {"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():
