@@ -3,7 +3,8 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
-- **SPAWNER-SILENT-RUN-HOTFIX (D-3769):** a writer with no output and no edit stalls at 15 min, not 45; an upstream cooldown or 429 line ends a quiet run and shows in its result. Removed at R10.
+- **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.
+- **SPAWNER-CANCEL-KILLS (register 42):** a cancel from another process kills a run started on a named leg: its record now keeps the root's start token.
 - **SPAWNER-MCP-STDIO-GUARD (D-3753):** ignore notifications, compact MCP ps records, and guard stdio reply sizes with ReplyTooLarge errors.
 - **SPAWNER-GIT-GUARD-FLAKE (D-3739):** stub both synchronous and async host-probe entry points in tests and fail closed on unmarked binary probes.
 - **SPAWNER-RL5B (D-3676, D-3714):** record closed-stdin opencode 2.1.0 live arrivals and replay read progress, version drift and payload-retention checks; no wiring or pin change.
