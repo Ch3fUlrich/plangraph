@@ -8,9 +8,8 @@ from .private_io import SAVE_READ_ATTEMPTS
 async def cancel_recorded(service, run_id):
     record = service.result(run_id, attempts=SAVE_READ_ATTEMPTS)
     if record['status'] not in ('running', 'dry_run') and not record.get('survivors'):
-        # Preserve the terminal outcome, but retain the durable save contract
-        # (including its bounded Windows sharing-violation retries).
-        service._save(record)
+        # A finisher may already have published a newer record: never rewrite
+        # an unchanged terminal snapshot.
         return record
     survivors = list(record.get('survivors', []))
     if record.get('job_id') in service.runner.jobs:
