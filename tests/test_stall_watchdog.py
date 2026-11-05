@@ -6,6 +6,30 @@ import pytest
 from plangraph.spawner import stall_watchdog as w
 
 
+@pytest.mark.parametrize('bad', [{}, {'run_id': 'run-fixture', 'card': None},
+                                {'run_id': 'run-fixture', 'card': 1}])
+def test_bad_record_does_not_stop_tick(tmp_path, bad):
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    (directory / 'live.log').write_text('work')
+    records = [dict(started=0, **bad), dict(run_id='run-later')]
+    findings = w.tick(records, [], lambda _: None, now=0, state=tmp_path)
+    assert [f['rule'] for f in findings] == ['unknown'] * (1 if bad.get('card', 1) is None else 2)
+
+
+def test_flush_continues_after_poison(tmp_path):
+    import subprocess
+    out = tmp_path / 'watchdog/outbox'
+    out.mkdir(parents=True)
+    for name in ('a', 'b'):
+        (out / (name + '.json')).write_text(json.dumps({'run_id': name}))
+    def send(command, **kwargs):
+        if json.loads(kwargs['input'])['run_id'] == 'a':
+            raise subprocess.CalledProcessError(1, command)
+    w.flush_outbox(tmp_path, ['notify'], run=send)
+    assert sorted(p.stem for p in out.iterdir()) == ['a']
+
+
 def test_unknown_reaches_outbox(tmp_path):
     findings = w.tick([dict(run_id='run-fixture')], [], lambda s: None,
                       state=tmp_path, deliver=lambda e: w.deliver_event(tmp_path, e))

@@ -17,8 +17,11 @@ def exchange(acks):
                  Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
     out = state / 'watchdog/outbox'
     for key in acks:
-        if len(key) == 64 and all(c in '0123456789abcdef' for c in key):
-            (out / (key + '.json')).unlink(missing_ok=True)
+        try:
+            if isinstance(key, str) and len(key) == 64 and all(c in '0123456789abcdef' for c in key):
+                (out / (key + '.json')).unlink(missing_ok=True)
+        except OSError:
+            continue
     return {p.stem: r for p in sorted(out.glob('*.json'))
             if (r := _read_state(state, p)) is not None}
 
@@ -79,13 +82,17 @@ def poll(hosts, command, state):
         try:
             if entry['down']:
                 notify('up-' + entry.get('episode', str(entry['outage'])), dict(rule='host-recovered', host=host), entry)
-            entry.update(failures=0, down=False, acks=[])
-            for key, event in events.items():
+            entry.update(failures=0, down=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        entry['acks'] = []
+        for key, event in events.items():
+            try:
                 notify(key, event, entry)
                 entry['acks'].append(key)
                 save()
-        except (OSError, subprocess.SubprocessError):
-            pass
+            except (OSError, subprocess.SubprocessError):
+                continue
         save()
 
 

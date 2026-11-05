@@ -13,6 +13,40 @@ def probe_root(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_PROBE_ROOT', 'fixture root')
 
 
+@pytest.mark.parametrize('recovery', [False, True])
+def test_poison_notify_does_not_starve_events_or_hosts(tmp_path, monkeypatch, recovery):
+    calls = []
+    if recovery:
+        (tmp_path / 'remote-probe.json').write_text(json.dumps({
+            'first': dict(failures=2, outage=1, down=True, seen=[], acks=[])}))
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            return subprocess.CompletedProcess(argv, 0, json.dumps({
+                c * 64: {'rule': c} for c in ('a', 'b')}))
+        event = json.loads(kwargs['input'])
+        calls.append(event['rule'])
+        if event['rule'] in ('a', 'host-recovered'):
+            raise subprocess.CalledProcessError(1, argv)
+    monkeypatch.setattr(subprocess, 'run', run)
+    for _ in range(2):
+        poll(['first', 'second'], 'notify', tmp_path)
+    assert calls.count('b') == 2
+    assert calls.count('a') == 4
+    if recovery:
+        assert calls.count('host-recovered') == 2
+
+
+def test_exchange_bad_ack_does_not_stop_others(tmp_path, monkeypatch):
+    from plangraph.spawner.remote_probe import exchange
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    out = tmp_path / 'watchdog/outbox'
+    out.mkdir(parents=True)
+    (out / ('a' * 64 + '.json')).mkdir()
+    (out / ('b' * 64 + '.json')).write_text('{}')
+    exchange([None, 'a' * 64, 'b' * 64])
+    assert not (out / ('b' * 64 + '.json')).exists()
+
+
 def test_exchange_ack(tmp_path, monkeypatch):
     from plangraph.spawner.remote_probe import exchange
     from plangraph.spawner.stall_watchdog import deliver_event

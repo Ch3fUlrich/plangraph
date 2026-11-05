@@ -78,10 +78,11 @@ def probe_run(state, record, now):
     import asyncio
     import math
     from .private_io import atomic_write_private
-    directory = Path(state) / 'runs' / record['run_id']
-    event = dict(run_id=record['run_id'], leg=record.get('leg'), role=record.get('role'),
-                 age=None, seconds_silent=None, last_line='', rule='unknown')
+    event = dict(rule='unknown')
     try:
+        event.update(run_id=record.get('run_id'), leg=record.get('leg'), role=record.get('role'),
+                     age=None, seconds_silent=None, last_line='')
+        directory = Path(state) / 'runs' / record['run_id']
         event['age'] = max(0, now - record['started'])
         log = directory / 'live.log'
         try:
@@ -106,7 +107,7 @@ def probe_run(state, record, now):
         silent = event['seconds_silent']
         if silent is None:
             return event
-        limit = float(record.get('card', {}).get('stall_min', 12)) * 60
+        limit = float((record.get('card') or {}).get('stall_min', 12)) * 60
         if not math.isfinite(limit) or limit <= 0:
             return event
         if record.get('status') == 'running':
@@ -125,7 +126,7 @@ def probe_run(state, record, now):
             event['rule'] = 'run-ended-no-commit'
             return event
         return None
-    except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError):
         return event
 
 
@@ -256,9 +257,11 @@ def flush_outbox(state, command, *, run=subprocess.run):
         record = _read_state(state, path)
         if record is None:
             continue
-        run(command, input=path.read_bytes(),
-            check=True, timeout=20)
-        path.unlink(missing_ok=True)
+        try:
+            run(command, input=path.read_bytes(), check=True, timeout=20)
+            path.unlink(missing_ok=True)
+        except (OSError, subprocess.SubprocessError):
+            continue
 
 
 def install(host, destination, *, python=None, root=None, run=subprocess.run, disabled=False):
