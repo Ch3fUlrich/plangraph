@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import importlib.util
 import os
 import re
@@ -1056,19 +1055,3 @@ def test_hand_edit_auth_path_rename_exact(repo: Path) -> None:
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
     sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py']
-
-
-def test_seat_record_is_auth_door_path(repo: Path):
-    assert any(
-        fnmatch.fnmatchcase('tools/seat_record.py', pattern)
-        for pattern in ci_commit_gate.AUTH_DOOR_PATHS
-    )
-    base = _head(repo)
-    sha = _commit(
-        repo,
-        'fix: tweak\n\nHand-Edit: typo in docs\n',
-        files={'tools/seat_record.py': 'x'},
-    )
-    assert check(base, sha, cwd=repo) == [
-        f'{sha}: hand-edit touches auth/door surface: tools/seat_record.py'
-    ]

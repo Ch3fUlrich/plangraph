@@ -28,7 +28,7 @@ def copy_fixture(tmp_path, name):
 OMNI_RUN = "run-17e7efa9a08149788618a3d189d437fa"   # real omniroute leg -> D-2905
 FREE_RUN = "run-2b6f4c8e1a9d3f7b5e0c4a8d2f6b1e3c"   # free leg, findings after VERDICT
 PASS_RUN = "run-9e1d5c3b7a2f6d4b8c0e2a6f4d8b1c3e"   # free leg, PASS + TEST-GAMING
-HEAD40 = "0123456789abcdef0123456789abcdef01234567"
+HEAD40 = "a" * 40
 FREE_LEG = {"id": "leg-1", "tier": "subscription", "harness": "opencode",
             "model": "opencode/mimo-v2.6-free", "family": "mimo"}
 PASS_LOG = "review ok\nVERDICT: PASS\nTEST_GAMING: no\n"
