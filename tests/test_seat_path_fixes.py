@@ -137,3 +137,41 @@ def test_inline_only_review_leg_requires_diff_ref(monkeypatch, tmp_path):
         seat._leg_prompt("Review this", {}, "review", leg)
     assert seat._leg_prompt("Review this", {}, "review", leg, document_review=True) == "Review this"
     assert seat._leg_prompt("p", {}, "implement", leg) == "p"
+
+
+def test_inline_only_plain_card_dry_run_path_parity(monkeypatch, tmp_path):
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.runner import SpawnerRunner, spawn_service
+    from plangraph.spawner.service import SpawnService
+
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == "mimo-v2.6-flash")
+    plan = SpawnPlan((chosen,), (), "operator-order", (), ())
+    monkeypatch.setattr(SpawnService, "_route", lambda *args, **kwargs: plan)
+
+    async def no_probe(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("plangraph.spawner.leg_probe.before_launch", no_probe)
+    card = {"estimate_tokens": 100}
+
+    async def check():
+        previews = []
+        for name, factory in (("service", SpawnService), ("wrapper", spawn_service)):
+            runner = SpawnerRunner(default_cwd=str(tmp_path))
+            service = factory(runner=runner, state=tmp_path / name)
+            preview = await service.spawn(card=card, prompt="Review this design", role="review",
+                                          dry_run=True, wait_seconds=10)
+            assert preview["status"] == "dry_run"
+            assert preview["chosen_leg"]["id"] == chosen.id
+            previews.append(preview["chosen_leg"])
+            live = await service.spawn(card=card, prompt="Review this design", role="review",
+                                       wait_seconds=10)
+            assert live["chosen_leg"] is None
+            assert len(live["attempts"]) == 1
+            attempt = live["attempts"][0]
+            assert attempt["leg"]["id"] == chosen.id
+            assert attempt["status"] == "skipped"
+            assert attempt["skip_reason"].startswith("inline_diff_failed:")
+        assert previews[0] == previews[1]
+
+    asyncio.run(check())

@@ -19,8 +19,8 @@ class SeatSpawnMixin:
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
-        ``document_review`` is set only for an explicit ``--leg`` review of a document; every routed inline-only
-        review leg needs the card's diff inlined and refuses without ``diff_ref`` (r3)."""
+        ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
+        inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3)."""
         if getattr(leg, 'tool_mode', 'tools') != 'inline-only':
             return prompt
         from . import context_pack
