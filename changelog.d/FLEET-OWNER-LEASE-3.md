@@ -1,1 +1,2 @@
 - **FLEET-OWNER-LEASE (part 3):** Add unwired crash-safe filesystem ownership compare-and-swap and explicit bootstrap.
+- Wait up to five seconds for slot locks, isolate locks in reserved `.owner-locks` directories, and preflight refusals without creating metadata; successful writes still re-read under the lock.

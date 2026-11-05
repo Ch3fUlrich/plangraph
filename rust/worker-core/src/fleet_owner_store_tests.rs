@@ -165,7 +165,7 @@ fn bootstrap_missing_and_existing_paths() {
 #[test]
 fn held_lock_is_bounded_and_local() {
     let d = setup();
-    let _guard = crate::lockfile::try_lock(&d.path().join("slot.lock"))
+    let _guard = crate::lockfile::try_lock(&d.path().join(".owner-locks/slot"))
         .unwrap()
         .unwrap();
     let start = Instant::now();
@@ -173,7 +173,7 @@ fn held_lock_is_bounded_and_local() {
         acquire(d.path(), "slot", 0, &State::Free),
         Err(StoreError::Busy)
     ));
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(start.elapsed() < Duration::from_secs(7));
     create(d.path(), Path::new("other"), "session", "run", 0).unwrap();
     acquire(d.path(), "other", 0, &State::Free).unwrap();
 }
@@ -191,4 +191,49 @@ fn symlinks_and_lexical_escape_refused() {
     assert!(create(d.path(), Path::new("slot"), "session", "run", 0).is_err());
     assert_eq!(fs::read(d.path().join("target")).unwrap(), old);
     assert!(acquire(d.path(), "../escape", 0, &State::Free).is_err());
+}
+
+#[test]
+fn slow_winner_waits_then_observes_stale_epoch() {
+    let d = setup();
+    let guard = crate::lockfile::try_lock(&d.path().join(".owner-locks/slot"))
+        .unwrap()
+        .unwrap();
+    std::thread::scope(|s| {
+        let waiter = s.spawn(|| acquire(d.path(), "slot", 0, &State::Free));
+        std::thread::sleep(Duration::from_millis(250));
+        drop(guard);
+        waiter.join().unwrap().unwrap();
+    });
+    assert!(matches!(
+        acquire(d.path(), "slot", 0, &State::Free),
+        Err(StoreError::StaleEpoch)
+    ));
+}
+
+#[test]
+fn lock_suffix_slots_are_independent() {
+    let d = tempfile::tempdir().unwrap();
+    for slot in ["x", "x.lock"] {
+        create(d.path(), Path::new(slot), "session", "run", 0).unwrap();
+    }
+    let guard = crate::lockfile::try_lock(&d.path().join(".owner-locks/x"))
+        .unwrap()
+        .unwrap();
+    acquire(d.path(), "x.lock", 0, &State::Free).unwrap();
+    drop(guard);
+    acquire(d.path(), "x", 0, &State::Free).unwrap();
+    assert!(create(d.path(), Path::new(".owner-locks"), "session", "run", 0).is_err());
+}
+
+#[test]
+fn refused_operations_leave_fresh_directory_empty() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        acquire(d.path(), "missing", 0, &State::Free),
+        Err(StoreError::Unknown(_))
+    ));
+    assert_eq!(fs::read_dir(d.path()).unwrap().count(), 0);
+    assert!(create(d.path(), Path::new("slot"), "", "run", 0).is_err());
+    assert_eq!(fs::read_dir(d.path()).unwrap().count(), 0);
 }
