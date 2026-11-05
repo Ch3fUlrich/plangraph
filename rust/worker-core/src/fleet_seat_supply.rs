@@ -18,6 +18,9 @@ pub struct Policy {
     pub reserved_gpt_family: String,
     pub writer_families: BTreeSet<String>,
     pub disallowed_pairs: BTreeSet<(String, String)>,
+    pub mandatory_no_tools_header: Option<Vec<u8>>,
+    pub judge_only: bool,
+    pub judge_forbidden_writer_families: BTreeSet<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seat {
@@ -116,6 +119,12 @@ pub fn count(policy: &Policy, input: &Input) -> State {
     if !valid {
         out.findings.insert("invalid_configuration_or_clock".into());
     }
+    let unconsumed_pairs = policy.disallowed_pairs.iter().any(|(w, s)| {
+        !policy.writer_families.contains(w) || !input.seats.iter().any(|v| &v.canonical == s)
+    });
+    if unconsumed_pairs {
+        out.findings.insert("unconsumed_policy_pair".into());
+    }
     let mut seen = BTreeSet::new();
     for seat in &input.seats {
         let mut findings = BTreeSet::new();
@@ -151,16 +160,24 @@ pub fn count(policy: &Policy, input: &Input) -> State {
         });
         let forbidden = route
             .is_some_and(|f| f == policy.reserved_gpt_family || policy.writer_families.contains(f))
+            || policy
+                .disallowed_pairs
+                .iter()
+                .any(|(_, s)| s == &seat.canonical)
             || policy.writer_families.iter().any(|w| {
-                policy
-                    .disallowed_pairs
-                    .contains(&(w.clone(), seat.canonical.clone()))
-                    || (seat.judge_only && seat.judge_forbidden_writer_families.contains(w))
+                (seat.judge_only && seat.judge_forbidden_writer_families.contains(w))
+                    || (policy.judge_only && policy.judge_forbidden_writer_families.contains(w))
             });
-        let header_ok = seat
-            .mandatory_no_tools_header
-            .as_ref()
-            .is_none_or(|h| !h.is_empty() && seat.header.starts_with(h));
+        let header_ok = [
+            &policy.mandatory_no_tools_header,
+            &seat.mandatory_no_tools_header,
+        ]
+        .into_iter()
+        .all(|required| {
+            required
+                .as_ref()
+                .is_none_or(|h| !h.is_empty() && seat.header.starts_with(h))
+        });
         if !route_valid || !proved {
             findings.insert("unknown_catalog_or_route_evidence".into());
         }
@@ -176,6 +193,7 @@ pub fn count(policy: &Policy, input: &Input) -> State {
                 && !forbidden
                 && header_ok);
         let eligible = valid
+            && !unconsumed_pairs
             && route_valid
             && proved
             && !forbidden
@@ -195,7 +213,7 @@ pub fn count(policy: &Policy, input: &Input) -> State {
             findings,
         });
     }
-    out.hold = !valid || out.families.len() < policy.quorum;
+    out.hold = !valid || unconsumed_pairs || out.families.len() < policy.quorum;
     if out.hold {
         out.findings.insert("router_alarm".into());
     }

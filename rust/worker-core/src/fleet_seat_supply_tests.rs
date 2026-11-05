@@ -41,6 +41,9 @@ fn fixture() -> (Policy, Input) {
             reserved_gpt_family: "gpt".into(),
             writer_families: BTreeSet::from(["writer-a".into(), "writer-b".into()]),
             disallowed_pairs: BTreeSet::new(),
+            mandatory_no_tools_header: Some(b"NO TOOLS\r\n".to_vec()),
+            judge_only: true,
+            judge_forbidden_writer_families: BTreeSet::from(["same".into()]),
         },
         Input {
             epoch_day: 0,
@@ -170,4 +173,29 @@ fn json_roundtrip() {
     roundtrip(count(&p, &i));
     roundtrip(p);
     roundtrip(i);
+}
+
+#[test]
+fn policy_requirements_cannot_be_opted_out() {
+    let (mut p, mut i) = fixture();
+    i.seats[0].mandatory_no_tools_header = None;
+    i.seats[0].judge_only = false;
+    i.seats[0].judge_forbidden_writer_families.clear();
+    assert!(!count(&p, &i).hold);
+    let header = std::mem::take(&mut i.seats[0].header);
+    assert!(count(&p, &i).hold, "policy header bypass");
+    i.seats[0].header = header;
+    p.writer_families.insert("same".into());
+    assert!(count(&p, &i).hold, "policy judge bypass");
+}
+
+#[test]
+fn unconsumed_pairs_fail_closed() {
+    for (writer, canonical) in [("absent", "seat"), ("writer-a", "absent")] {
+        let (mut p, i) = fixture();
+        p.disallowed_pairs.insert((writer.into(), canonical.into()));
+        let r = count(&p, &i);
+        assert!(r.hold && r.families.is_empty());
+        assert!(r.findings.contains("unconsumed_policy_pair"));
+    }
 }
