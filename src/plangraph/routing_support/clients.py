@@ -323,10 +323,14 @@ def detect_client_for_model(model_id: str) -> str:
     return "opencode"
 
 
+CLAUDE_REVIEW_TOOLS = "Read,Grep,Glob,Bash(python3 -m pytest:*)"
+
+
 def build_standalone_fallback_command(
     client_name: str,
     prompt: str,
     model: str | None = None,
+    role: str = "implement",
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
     cname = client_name.lower()
@@ -347,7 +351,13 @@ def build_standalone_fallback_command(
         cmd = [cname, "-p", *([] if cname == "claude" else [prompt])]
         if model:
             cmd.extend(["--model", model])
-        return cmd + (["--output-format", "stream-json", "--verbose", "--permission-mode", "plan"] if cname == "claude" else [])
+        if cname != "claude":
+            return cmd
+        # D-3835: plan mode has no Bash, so a review seat could not run the tests.
+        # Review only, and only pytest; every other role stays in plan mode.
+        access = (["--permission-mode", "default", "--allowedTools", CLAUDE_REVIEW_TOOLS]
+                  if role == "review" else ["--permission-mode", "plan"])
+        return cmd + ["--output-format", "stream-json", "--verbose", *access]
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run", "--standalone"]
@@ -379,7 +389,7 @@ def build_command(
         if client not in (*CLIENTS, "qodercli"):
             raise ValueError(f"unknown harness: {client}")
         if client != "opencode":
-            return build_standalone_fallback_command(client, prompt, model_or_combo)
+            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role)
     # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(
@@ -396,4 +406,5 @@ def build_command(
         client_name=resolved_client,
         prompt=prompt,
         model=model_or_combo,
+        role=role,
     )

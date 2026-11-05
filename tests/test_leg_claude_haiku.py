@@ -55,6 +55,20 @@ def test_argv_has_model_stdin_prompt_and_no_api_key():
     assert "claude" in STDIN_PROMPT_HARNESSES
 
 
+def test_review_seat_gets_pytest_only_and_no_plan_mode():
+    cmd = build_command("p", "claude-haiku-5-5", role="review", client="claude")
+    assert cmd[cmd.index("--permission-mode") + 1] == "default"
+    tools = cmd[cmd.index("--allowedTools") + 1].split(",")
+    assert tools == ["Read", "Grep", "Glob", "Bash(python3 -m pytest:*)"]
+    assert "bypassPermissions" not in cmd and "--dangerously-skip-permissions" not in cmd
+
+
+def test_non_review_role_stays_in_plan_mode_without_tools():
+    cmd = build_command("p", "claude-haiku-5-5", role="implement", client="claude")
+    assert cmd[cmd.index("--permission-mode") + 1] == "plan"
+    assert "--allowedTools" not in cmd
+
+
 def test_harnesses_validation_accepts_claude(tmp_path):
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [{
