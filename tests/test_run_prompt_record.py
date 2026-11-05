@@ -14,7 +14,7 @@ from plangraph.spawner import runner
 def test_temporary_blocks_are_tagged():
     source = inspect.getsource(runner.SpawnerRunner.spawn)
     for block in ('if prepare_launch and not dry_run:',
-                  'if not prepare_launch and not dry_run and prompt_record is not None:'):
+                  'if not prepare_launch and prompt_record is not None:'):
         assert block + '  # REMOVE-AT-R10' in source
 
 
@@ -31,18 +31,19 @@ def test_no_run_redacts_once_and_dispatches_without_file(tmp_path, monkeypatch):
     assert not list(tmp_path.iterdir())
 
 
-def test_run_call_sites_require_prompt_record():
-    root = Path(runner.__file__).parent
+def test_run_call_sites_require_prompt_record(root=None):
+    root = root or Path(runner.__file__).parent
     allow = {
-        ('leg_probe.py', 'launch'): 'Liveness probe has no run record.',
-        ('launch_spec.py', 'build'): 'Dry preparation only; Rust records the actual run before dispatch.',
-        ('mcp.py', 'call_tool'): 'Service entry point creates the run record.',
-        ('cli.py', 'run'): 'Service entry point creates the run record.',
-        ('cli.py', 'main'): 'Service entry point creates the run record.',
+        ('leg_probe.py', 'launch', "runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model, client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION, watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60, max_s=timeout + 60, interval=1))"): 'Liveness probe has no run record.',
+        ('launch_spec.py', 'build', "service.runner.spawn(prompt=prompt, model_or_combo=leg.model, role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env, prepare_launch=True)"): 'Dry preparation only; Rust records the actual run before dispatch.',
+        ('mcp.py', 'call_tool', "self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'], role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'), override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'), writer_families=arguments.get('writer_families', ()), review_scope=arguments.get('review_scope'), seats=arguments.get('seats', False), dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0), no_fallthrough=arguments.get('no_fallthrough', False), **options)"): 'Service entry point creates the run record.',
+        ('cli.py', 'run', 'service.spawn(**payload, wait_seconds=0)'): 'Service entry point creates the run record.',
+        ('cli.py', 'main', 'service.spawn(**payload, wait_seconds=None)'): 'Service entry point creates the run record.',
     }
     seen = set()
     for path in root.glob('*.py'):
-        tree = ast.parse(path.read_text())
+        source = path.read_text()
+        tree = ast.parse(source)
         parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         for call in ast.walk(tree):
             if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
@@ -51,17 +52,19 @@ def test_run_call_sites_require_prompt_record():
             owner = parents[call]
             while not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 owner = parents[owner]
-            site = (path.name, owner.name)
+            site = (path.name, owner.name, ' '.join(ast.get_source_segment(source, call).split()))
             if site in allow:
                 seen.add(site)
             else:
                 assert any(k.arg == 'prompt_record' and not (isinstance(k.value, ast.Constant)
                            and k.value.value is None) for k in call.keywords), site
-    assert seen == set(allow)
+    assert seen == set(allow), ('stale allowlist', set(allow) - seen)
 
 
 def test_prompt_record(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, 'build_command', lambda **k: (_ for _ in ()).throw(RuntimeError('dispatch')))
+    received = []
+    monkeypatch.setattr(runner, 'build_command', lambda **k: (received.append(k['prompt']),
+        (_ for _ in ()).throw(RuntimeError('dispatch')))[1])
     secret = 'sk' + '-' + 'a' * 20
     path, record = tmp_path / 'prompt.txt', {}
     saves = []
@@ -70,6 +73,8 @@ def test_prompt_record(tmp_path, monkeypatch):
             prompt='héllo ' + secret, role='review',
             prompt_record=(path, record, lambda r: saves.append(dict(r)))))
     assert path.read_bytes() == b'h\xc3\xa9llo [REDACTED]'
+    assert path.read_bytes() == received[0].encode()
+    assert secret not in received[0]
     assert secret not in json.dumps(record)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert record == dict(prompt_sha256=hashlib.sha256(path.read_bytes()).hexdigest(), wake_variant='initial')
@@ -113,11 +118,12 @@ def test_single_redaction_at_command_boundary(tmp_path, monkeypatch):
     original = runner.redact
     monkeypatch.setattr(runner, 'redact', lambda p: (calls.append(p), original(p))[1])
     monkeypatch.setattr(runner, 'build_command', lambda **kw: (commands.append(kw['prompt']), ['fake'])[1])
-    path = tmp_path / 'prompt.txt'
+    path, record = tmp_path / 'prompt.txt', {}
     asyncio.run(runner.SpawnerRunner().spawn(prompt='hello', role='review', dry_run=True,
-        prompt_record=(path, {}, lambda r: pytest.fail('dry save'))))
+        prompt_record=(path, record, lambda r: pytest.fail('dry save'))))
     assert calls == ['hello']
     assert commands == ['hello']
+    assert record == dict(prompt_sha256=hashlib.sha256(b'hello').hexdigest(), wake_variant='initial')
     assert not path.exists()
 
 

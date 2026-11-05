@@ -327,12 +327,14 @@ class SpawnerRunner:
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
         prompt = redact(prompt)  # REMOVE-AT-R10
-        if not prepare_launch and not dry_run and prompt_record is not None:  # REMOVE-AT-R10
+        if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
-            atomic_write_private(path, prompt)
+            if not dry_run:  # REMOVE-AT-R10
+                atomic_write_private(path, prompt)
             record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant)
-            save(record)
+            if not dry_run:  # REMOVE-AT-R10
+                save(record)
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
             try:
