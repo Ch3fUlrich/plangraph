@@ -158,7 +158,7 @@ def test_completion_configuration(host, monkeypatch, missing):
         assert d.completion()[0] == 'pass'
 
 
-@pytest.mark.parametrize('mode', ['good', 'exit', 'hang', 'missing'])
+@pytest.mark.parametrize('mode', ['good', 'empty', 'exit', 'hang', 'missing'])
 def test_harness(host, monkeypatch, mode):
     monkeypatch.setattr(d, 'TIMEOUT', 0.2)
     binary = host / 'fake'
@@ -166,6 +166,8 @@ def test_harness(host, monkeypatch, mode):
         binary.write_text(f'#!{sys.executable}\nraise SystemExit(1)\n')
     elif mode == 'hang':
         binary.write_text(f'#!{sys.executable}\nimport time; time.sleep(60)\n')
+    elif mode == 'empty':
+        binary.write_text(f'#!{sys.executable}\n')
     if mode in ('exit', 'hang'):
         with pytest.raises(Exception):
             run(d.harness('fake'))

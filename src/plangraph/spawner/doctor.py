@@ -113,7 +113,7 @@ async def harness(name):
         output, _ = await asyncio.wait_for(child.communicate(), TIMEOUT)
         if child.returncode:
             raise RuntimeError(f'version exited {child.returncode}')
-        return 'pass', output.decode(errors='replace').splitlines()[0]
+        return 'pass', (output.decode(errors='replace').splitlines() or [''])[0]
     finally:
         if child.returncode is None:
             try:
