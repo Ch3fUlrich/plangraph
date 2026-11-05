@@ -1,0 +1,1 @@
+- **SPAWNER-SSH-RUN-PROBES:** Ignore historical finished runs, preview ticks without writes, and bound new probe deliveries with durable overflow.

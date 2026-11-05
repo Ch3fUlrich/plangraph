@@ -7,8 +7,10 @@ activity is deliberately not interpreted as proof of idleness.
 from __future__ import annotations
 
 import argparse
+from contextvars import ContextVar
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -16,14 +18,23 @@ import sys
 import time
 from xml.sax.saxutils import escape
 
+_budget = ContextVar('probe_budget', default=None)
 
-def tick(runs, claims, activity, *, now=None, deliver=None, state=None):
+def probe_setting(name, default, maximum):
+    try:
+        value = float(os.environ.get(name, default))
+        return min(value, maximum) if math.isfinite(value) and value >= 0 else default
+    except ValueError:
+        return default
+
+def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=False, budget=None):
     now = time.time() if now is None else now
+    deliver = None if dry_run else deliver
     findings = []
     runs = list(runs)
     for run in runs:
         if state is not None:
-            finding = probe_run(state, run, now)
+            finding = probe_run(state, run, now, dry_run=dry_run or (budget is not None and budget[0] <= 0))
             if finding:
                 findings.append(finding)
                 if deliver:
@@ -72,8 +83,7 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None):
                     deliver(dict(finding, kind='alert', recipient=recipient))
     return findings
 
-
-def probe_run(state, record, now):
+def probe_run(state, record, now, *, dry_run=False):
     """Independent host sampling; missing evidence never authorizes cancellation."""
     import asyncio
     import math
@@ -83,6 +93,13 @@ def probe_run(state, record, now):
         event.update(run_id=record.get('run_id'), leg=record.get('leg'), role=record.get('role'),
                      age=None, seconds_silent=None, last_line=None)
         directory = Path(state) / 'runs' / record['run_id']
+        finished = record.get('status') not in ('running', 'queued', None)
+        if finished:
+            ended = record.get('ended')
+            if (isinstance(ended, bool) or not isinstance(ended, (int, float))
+                    or not math.isfinite(ended) or not 0 <= now - ended <= probe_setting(
+                        'PLANGRAPH_PROBE_HORIZON_S', 86400, 604800)):
+                return None
         log = directory / 'live.log'
         try:
             with log.open(encoding='utf-8') as stream:
@@ -98,6 +115,12 @@ def probe_run(state, record, now):
                 event['age'] = max(0, now - started)
         except (KeyError, TypeError, ValueError, OverflowError):
             pass
+        if finished:
+            message = str(record.get('final_message', '')) + ' ' + (event['last_line'] or '')
+            if record.get('role') == 'implement' and (record.get('reason') == 'writer_no_changes'
+                    or 'running in the background' in message.lower()):
+                return dict(event, rule='run-ended-no-commit')
+            return None
         if record.get('status') is None and event['age'] is None:
             return event
         if record.get('status') == 'running':
@@ -109,7 +132,8 @@ def probe_run(state, record, now):
             except ProcessLookupError:
                 event['rule'] = 'run-orphan'
                 record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
-                atomic_write_private(directory / 'record.json', json.dumps(record))
+                if not dry_run:
+                    atomic_write_private(directory / 'record.json', json.dumps(record))
                 return event
         silent = event['seconds_silent']
         if silent is None:
@@ -122,26 +146,19 @@ def probe_run(state, record, now):
                 return None
             event['rule'] = 'run-silent'
             event['episode'] = log.stat().st_mtime
-            if silent >= 2 * limit:
+            if silent >= 2 * limit and not dry_run:
                 from .runner import spawn_service
                 result = asyncio.run(spawn_service(state=state).cancel(record['run_id']))
                 event['cancelled'] = result.get('status') == 'cancelled'
-            return event
-        message = str(record.get('final_message', '')) + ' ' + event['last_line']
-        if record.get('role') == 'implement' and (record.get('reason') == 'writer_no_changes'
-                or 'running in the background' in message.lower()):
-            event['rule'] = 'run-ended-no-commit'
             return event
         return None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError):
         return event
 
-
 def status(findings):
     return '\n'.join('! stall ' + json.dumps(f, sort_keys=True) for f in findings)
 
-
-def read_runs(state):
+def read_runs(state, *, dry_run=False):
     from .private_io import atomic_write_private, read_text_retry
     runs, bad = [], []
     for path in sorted((Path(state) / 'runs').glob('run-*/record.json')):
@@ -159,12 +176,14 @@ def read_runs(state):
             runs.append(record)
         except (OSError, ValueError, UnicodeError) as exc:
             bad.append(dict(path=str(path), error=type(exc).__name__))
-            finding = probe_run(state, dict(run_id=path.parent.name), time.time())
-            deliver_event(state, dict(finding, kind='completion'))
-    if bad:
+            if dry_run:
+                runs.append(dict(run_id=path.parent.name))
+            else:
+                finding = probe_run(state, dict(run_id=path.parent.name), time.time())
+                deliver_event(state, dict(finding, kind='completion'), budget=_budget.get())
+    if bad and not dry_run:
         atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
     return runs
-
 
 def read_activity(state, session):
     if not session or Path(session).name != session or session in ('.', '..'):
@@ -174,13 +193,11 @@ def read_activity(state, session):
     except FileNotFoundError:
         return None
 
-
 def read_claims(session=None):
     if session is None:
         from plangraph.keeper.cli_verbs import Session
         session = Session()
     return [c for c in session.call('GET', 'snapshot')['items'] if c.get('state') == 'claimed']
-
 
 def _read_state(state, path, *, stamp=False):
     """Treat corrupt mailbox state as absent; retain evidence outside active queues."""
@@ -216,8 +233,7 @@ def _read_state(state, path, *, stamp=False):
             pass
         return None
 
-
-def deliver_event(state, event, *, now=None, interval=None):
+def deliver_event(state, event, *, now=None, interval=None, budget=None):
     """Idempotent, private mailbox. Consumers acknowledge by removing the file.
 
     An unacknowledged completion survives ticks and process restarts. A still
@@ -255,9 +271,13 @@ def deliver_event(state, event, *, now=None, interval=None):
             interval = min(300 * 2 ** min(count - 1, 4), 3600)
         if now - previous['sent'] < interval:
             return
+    if budget is not None:
+        if budget[0] <= 0:
+            budget[1] += 1
+            return
+        budget[0] -= 1
     atomic_write_private(Path(state) / 'watchdog/outbox' / (key + '.json'), payload)
     atomic_write_private(stamp, json.dumps(dict(event, sent=now, count=count + 1)))
-
 
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
@@ -270,7 +290,6 @@ def flush_outbox(state, command, *, run=subprocess.run):
             path.unlink(missing_ok=True)
         except (OSError, subprocess.SubprocessError):
             continue
-
 
 def install(host, destination, *, python=None, root=None, run=subprocess.run, disabled=False):
     python = python or sys.executable
@@ -305,7 +324,6 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
     else:
         raise ValueError('unsupported watchdog host')
 
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('tick', 'status', 'install'))
@@ -329,20 +347,36 @@ def main(argv=None):
         return
     # Completion delivery must not be blocked by an unavailable keeper.
     from .runner import spawn_service
-    spawn_service(state=state).retry_completions()
-    runs = read_runs(state)
+    if not args.dry_run:
+        spawn_service(state=state).retry_completions()
+    budget = [int(probe_setting('PLANGRAPH_PROBE_MAX_PER_TICK', 25, 25)), 0]
+    deliver = lambda e: deliver_event(state, e, budget=budget)
+    token = _budget.set(budget)
+    try:
+        runs = read_runs(state, dry_run=True) if args.dry_run else read_runs(state)
+    finally:
+        _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),
-                    deliver=lambda e: deliver_event(state, e), state=state)
+                    deliver=deliver, state=state, dry_run=args.dry_run, budget=budget)
     error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],
                          read_claims(), lambda s: read_activity(state, s),
-                         deliver=lambda e: deliver_event(state, e))
+                         deliver=deliver, dry_run=args.dry_run)
     except Exception as exc:
         if type(exc).__name__ in ('MissingKeeperURL', 'Unreachable'):
             warning = type(exc).__name__  # keeper not configured/reachable: skip claim rule
         else:
             error = type(exc).__name__
+    if args.dry_run:
+        from collections import Counter
+        for rule, count in sorted(Counter(f['rule'] for f in findings).items()):
+            print(f'{rule}: {count}')
+        print(status(findings[:5]))
+        return 0
+    if budget[1]:
+        deliver_event(state, dict(rule='findings-capped', kind='completion',
+                                 episode=time.time(), held=budget[1]))
     command = os.environ.get('PLANGRAPH_WATCHDOG_DELIVERY')
     if command:
         try:

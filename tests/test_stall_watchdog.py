@@ -175,7 +175,7 @@ def test_tick_cli_persists_status_and_delivers_w12(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(w, 'flush_outbox', lambda state, command: original(
         state, command, run=lambda args, **kw: sent.append(json.loads(kw['input']))))
     assert w.main(['tick']) == 0
-    assert sorted(e['kind'] for e in sent) == ['alert', 'completion', 'completion']
+    assert sorted(e['kind'] for e in sent) == ['alert', 'completion']
     assert '! stall ' in (tmp_path / 'watchdog/status.txt').read_text()
     capsys.readouterr()
     w.main(['status'])
