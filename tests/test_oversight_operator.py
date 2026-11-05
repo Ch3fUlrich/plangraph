@@ -47,6 +47,23 @@ def test_guard(w, shell):
     assert rows(w, "host: lab\ntested: lab ok\n$ echo ok")[0]["kind"] == "operator_step_no_guard"
 
 
+@pytest.mark.parametrize("fence", ["```sh", "~~~pwsh", "```"])
+def test_fenced_probe_is_not_evidence(w, fence):
+    text = fence + "\ncat <<EOF\ntested: lab x\nEOF\n" + fence[:3]
+    assert [r["kind"] for r in rows(w, text)] == ["operator_step_untested"]
+    assert rows(w, text + "\ntested: lab real probe") == []
+    assert rows(w, text.rsplit("\n", 1)[0])[0]["kind"] == "operator_step_untested"
+
+
+@pytest.mark.parametrize("shell,other", [("sh", "pwsh"), ("pwsh", "sh")])
+def test_guard_must_match_fence_shell(w, shell, other):
+    text = render("lab", "lab probe ok", "echo ok", shell)
+    assert rows(w, text) == []
+    for tag in (other, "", "python"):
+        changed = text.replace("```" + shell + "\n", "```" + tag + "\n")
+        assert [r["kind"] for r in rows(w, changed)] == ["operator_step_no_guard"]
+
+
 def test_render_shell(tmp_path):
     source = tmp_path / "commands"
     source.write_text("touch marker\n")

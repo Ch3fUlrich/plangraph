@@ -28,7 +28,12 @@ def render(host, tested, commands, shell="sh"):
 
 def command_blocks(text):
     """Extract fenced commands and prompt lines, preserving their order."""
+    return [body for shell, body in _step_parts(text)[0]]
+
+
+def _step_parts(text):
     blocks = []
+    outside = []
     current = None
     fence = None
     for line in text.splitlines():
@@ -36,17 +41,20 @@ def command_blocks(text):
         if match:
             if current is None:
                 current, fence = [], match[1][0]
+                shell = line[match.end():].strip()
             elif match[1][0] == fence:
-                blocks.append("\n".join(current) + "\n")
+                blocks.append((shell, "\n".join(current) + "\n"))
                 current = None
             continue
         if current is not None:
             current.append(line)
-        elif line.startswith(("$ ", "! ")):
-            blocks.append(line[2:] + "\n")
+        else:
+            outside.append(line)
+            if line.startswith(("$ ", "! ")):
+                blocks.append((None, line[2:] + "\n"))
     if current is not None:
-        blocks.append("\n".join(current) + "\n")
-    return blocks
+        blocks.append((shell, "\n".join(current) + "\n"))
+    return blocks, "\n".join(outside)
 
 
 def r8_operator(conn, now):
@@ -67,22 +75,22 @@ def r8_operator(conn, now):
             if not (item["operator"] or item["kind"] == "operator_task"):
                 continue
             text = item["desc"] or ""
-            blocks = command_blocks(text)
+            blocks, metadata = _step_parts(text)
             stamp = events.get(key) or item["updated_at"] or item["created_at"]
             def finding(kind, detail):
                 rows.append(_finding("R8", kind, key, detail, stamp))
-            if blocks and not re.search(r"^tested:[ \t]+\S+[ \t]+\S[^\n]*$", text, re.M):
+            if blocks and not re.search(r"^tested:[ \t]+\S+[ \t]+\S[^\n]*$", metadata, re.M):
                 finding("operator_step_untested", f"operator step {key} lacks host probe evidence")
-            host = re.search(r"^host:[ \t]+(\S+)[ \t]*$", text, re.M)
+            host = re.search(r"^host:[ \t]+(\S+)[ \t]*$", metadata, re.M)
             if host:
                 valid = False
-                for shell in ("sh", "pwsh"):
+                for shell, body in blocks[:1]:
                     try:
                         opening, closing = guard(host[1], shell)
                     except ValueError:
                         continue
-                    valid |= bool(blocks and blocks[0].startswith(opening)
-                                  and blocks[0].rstrip().endswith("\n" + closing))
+                    valid = (body.startswith(opening)
+                             and body.rstrip().endswith("\n" + closing))
                 if not valid:
                     finding("operator_step_no_guard", f"operator step {key} lacks guard for {host[1]}")
             age = _age(stamp, now)
