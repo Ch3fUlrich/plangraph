@@ -7,6 +7,15 @@ object, validates the origin URL against the registry, and fetches only origin.
 Linked worktrees share this lock. Missing after fetch is `sha_not_reachable`.
 Other Git failures fail closed; diagnostics never display stderr or environment.
 
+## Object classification
+
+A valid object ID that is missing or cannot peel to a commit (including a blob,
+tree, or tag targeting a non-commit) follows the fetch/recheck path and returns
+`sha_not_reachable` if still unavailable. Tags peeling to commits remain valid.
+Failed Git execution or malformed object-probe output remains `git_failed`.
+Warm-path tests hold the fetch lock and use an unusable registry remote; an
+existing `FETCH_HEAD` is allowed and is not evidence of a resolver fetch.
+
 Git is invoked directly, with separate arguments, registry cwd, inherited
 `GIT_*` variables removed and prompting disabled. The existing cross-platform
 lock helper releases the lock on every exit. The registry and Git administration

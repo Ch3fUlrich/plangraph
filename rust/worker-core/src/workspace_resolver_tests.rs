@@ -71,10 +71,37 @@ impl Fixture {
 fn existing_commit_never_fetches() {
     let mut f = Fixture::new();
     f.repo.remote = "unusable".into();
+    std::fs::write(
+        Path::new(&f.repo.root).join(".git/FETCH_HEAD"),
+        "existing\n",
+    )
+    .unwrap();
     let guard = lockfile::try_lock(&f.lock()).unwrap().unwrap();
     ensure_commit(&f.repo, &f.sha, Duration::ZERO).unwrap();
-    assert!(!Path::new(&f.repo.root).join(".git/FETCH_HEAD").exists());
     drop(guard);
+}
+
+#[test]
+fn non_commit_objects_are_sha_not_reachable() {
+    let f = Fixture::new();
+    let root = Path::new(&f.repo.root);
+    let blob = git(root, &["hash-object", "-w", "--stdin"]);
+    let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+    git(root, &["tag", "-a", "blob-tag", &blob, "-m", "blob tag"]);
+    let tag = git(root, &["rev-parse", "refs/tags/blob-tag"]);
+    for sha in [&blob, &tree, &tag] {
+        assert!(matches!(
+            ensure_commit(&f.repo, sha, Duration::ZERO),
+            Err(ResolveError::ShaNotReachable)
+        ));
+        assert!(lockfile::try_lock(&f.lock()).unwrap().is_some());
+    }
+    git(
+        root,
+        &["tag", "-a", "commit-tag", &f.sha, "-m", "commit tag"],
+    );
+    let commit_tag = git(root, &["rev-parse", "refs/tags/commit-tag"]);
+    ensure_commit(&f.repo, &commit_tag, Duration::ZERO).unwrap();
 }
 
 #[test]

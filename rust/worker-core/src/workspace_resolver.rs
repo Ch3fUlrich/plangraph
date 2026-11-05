@@ -67,7 +67,7 @@ fn has_commit(root: &Path, sha: &str) -> Result<bool, ResolveError> {
     if out.status.success() {
         return Ok(true);
     }
-    // Distinguish missing objects from corrupt objects and other git failures.
+    // A failed peel is a reachability miss for missing or non-commit objects.
     let mut child = git_command(root)
         .args(["cat-file", "--batch-check"])
         .stdin(Stdio::piped())
@@ -78,7 +78,13 @@ fn has_commit(root: &Path, sha: &str) -> Result<bool, ResolveError> {
     let write = writeln!(child.stdin.take().ok_or(ResolveError::Git)?, "{sha}");
     let checked = child.wait_with_output()?;
     write?;
-    if checked.status.success() && checked.stdout == format!("{sha} missing\n").as_bytes() {
+    let response = String::from_utf8_lossy(&checked.stdout);
+    let fields: Vec<_> = response.split_whitespace().collect();
+    let non_commit = matches!(fields.as_slice(), [oid, "blob" | "tree" | "tag", size]
+        if *oid == sha && size.parse::<u64>().is_ok());
+    if checked.status.success()
+        && (checked.stdout == format!("{sha} missing\n").as_bytes() || non_commit)
+    {
         Ok(false)
     } else {
         Err(ResolveError::Git)
