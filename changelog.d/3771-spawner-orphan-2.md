@@ -1,0 +1,1 @@
+Fix Linux spawner containment with a private per-run subreaper anchor, keeping setsid descendants attributable after their command exits and waiting on adopted children. Live and recorded cancellation verify descendants; unmocked cancellation and probe cleanup regressions cover orphaned descendants without cgroup delegation.

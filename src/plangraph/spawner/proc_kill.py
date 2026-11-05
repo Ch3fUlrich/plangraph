@@ -19,7 +19,7 @@ class KillIncomplete(RuntimeError):
 
     def __init__(self, survivors):
         self.survivors = sorted(survivors)
-        super().__init__('kill_incomplete: %d survivor(s)' % len(self.survivors))
+        super().__init__('kill_incomplete: %d survivor(s); containment or verified signalling unavailable/ineffective' % len(self.survivors))
 
 
 def _stat(pid, proc_root='/proc'):
@@ -143,9 +143,8 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     Object members when a job exists, else the Toolhelp32 ppid closure (only when
     the root is our child).  Empty when ``ident`` does not prove the root ours.
 
-    Caveat (known, pre-existing): a descendant that setsid()s away and is orphaned
-    after its root exits is invisible here; reap.sample_tree narrows the window, but
-    closing it fully needs a subreaper (PR_SET_CHILD_SUBREAPER) or a cgroup."""
+    Linux launches keep a private subreaper anchor alive after the command exits,
+    so setsid orphans remain ppid-descendants until they have been waited on."""
     if ident is None:
         return {}
     if (platform or os.name) == 'nt':
@@ -190,6 +189,27 @@ def _winpid(pid, proc_root):
         return pid
 
 
+def signal_recorded(pid, start, proc_root='/proc'):
+    """Pin Linux identity before checking procfs; read/reuse races fail closed."""
+    import signal
+    if start is None:
+        return
+    if hasattr(os, 'pidfd_open') and hasattr(signal, 'pidfd_send_signal'):
+        try:
+            fd = os.pidfd_open(pid)
+        except OSError:
+            return
+        try:
+            if alive(pid, start, proc_root=proc_root):
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+    # Without a race-free process handle, do not signal: verification reports
+    # only proven live survivors, never a reused or unreadable PID.
+
+
 async def kill_process_tree(pid, *, platform=None, command_factory=None, members=None,
                             proc_root='/proc', ident=None):
     """Terminate the run's POSIX group / Windows tree; ``members`` is a pre-kill snapshot.
@@ -212,17 +232,12 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None, members
     st = _stat(pid, proc_root)
     if st is not None and (st[4] != ident or st[2] != pid):
         raise KillIncomplete([pid])   # reused pid / not the group this run created
-    if st is not None:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass  # the run's process group is already gone
-    for member, start in (members or {}).items():
-        if alive(member, start, proc_root=proc_root):
-            try:
-                os.kill(member, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+    from .contained_exec import supervisor
+    anchor = supervisor(pid, ident, proc_root)
+    for member, start in (members if members is not None else snapshot(pid, ident, proc_root=proc_root)).items():
+        if anchor and member == pid:
+            continue  # let the private subreaper wait on its killed children
+        signal_recorded(member, start, proc_root)
     # SIGKILL + wait: the reaped run must be seen dead, not merely signalled -
     # CI caught a grandchild still in state R while collect was returning.
     deadline = time.monotonic() + WAIT_S
@@ -263,10 +278,8 @@ async def verify(root, ident, members, *, platform=None, job_pids=None, proc_roo
             for pid, start in late.items():
                 if pid not in members and alive(pid, start, proc_root=proc_root):
                     left.add(pid)
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
-                        pass
+                    members[pid] = start
+                    signal_recorded(pid, start, proc_root)
         if not left:
             return
         if time.monotonic() >= deadline:

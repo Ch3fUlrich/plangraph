@@ -167,10 +167,48 @@ def test_v2_nt_descendant_created_before_job_assign_is_killed_and_verified(monke
         assert job.status == 'failed' and 5000 in job.survivors
 
 
-@pytest.mark.skip(reason='V2 LOW: a setsid() descendant orphaned after its root exits and born <0.25s ago is invisible '
-                         'to the /proc snapshot; closing it needs a subreaper (PR_SET_CHILD_SUBREAPER) or a cgroup, pre-existing')
-def test_v2_low_setsid_orphan_after_root_exit_is_killed():
-    raise AssertionError('needs subreaper/cgroup')
+@posix
+@pytest.mark.parametrize('recorded', [False, True])
+def test_v2_low_setsid_orphan_after_root_exit_is_killed(tmp_path, recorded):
+    try:
+        from plangraph.spawner.contained_exec import command
+    except ImportError:  # same regression can run against slice 1
+        command = lambda argv: argv
+    from test_spawner_orphan_slice1 import ready
+
+    async def run():
+        script = ("import subprocess,sys\n"
+                  "p=subprocess.Popen([sys.executable,'-c',"
+                  "'import os,time; os.setsid(); time.sleep(60)'],"
+                  "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                  "open('child.pid','w').write(str(p.pid))\n")
+        async def factory(*args, **kw):
+            kw['cwd'] = str(tmp_path)
+            return await asyncio.create_subprocess_exec(*command([sys.executable, '-c', script]), **kw)
+        runner = SpawnerRunner(process_factory=factory)
+        job = await runner.spawn('test', model_or_combo='mimo/mimo-v2.6-flash', wait_seconds=0)
+        proc = runner._processes[job.job_id]
+        kid = await ready(tmp_path / 'child.pid')
+        start = proc_kill._stat(kid)[4]
+        try:
+            async with asyncio.timeout(5):
+                while proc_kill._stat(kid)[1] != proc.pid and proc.returncode is None:
+                    await asyncio.sleep(.01)
+            if recorded:
+                survivors = await SpawnerRunner().kill_recorded(
+                    proc.pid, runner._owned[job.job_id]['pid_start'])
+                assert survivors == []
+            else:
+                assert (await runner.cancel(job.job_id))['status'] == 'cancelled'
+            assert not proc_kill.alive(kid, start)
+            await asyncio.wait_for(proc.wait(), 5)
+            assert proc_kill._stat(kid) is None  # adopted child was waited on, not a zombie
+        finally:
+            if proc_kill.alive(kid, start):
+                os.kill(kid, signal.SIGKILL)
+            await runner.cancel(job.job_id)
+            await asyncio.wait_for(proc.wait(), 5)
+    asyncio.run(run())
 
 
 @posix

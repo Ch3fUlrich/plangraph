@@ -175,14 +175,20 @@ def test_unmocked_survivor_never_publishes_cancelled(tmp_path, cross_process):
 
 
 @pytest.mark.parametrize('exit_path', ['timeout', 'exception', 'cancel'])
-def test_unmocked_probe_exit_cleans_tree_and_dir(tmp_path, exit_path):
+@pytest.mark.parametrize('setsid', [False, True])
+def test_unmocked_probe_exit_cleans_tree_and_dir(tmp_path, exit_path, setsid):
     async def run():
         launched = asyncio.Event()
         box = {}
 
         async def factory(*args, **kw):
             box['root'] = Path(kw['cwd'])
-            box['proc'] = await asyncio.create_subprocess_exec(sys.executable, '-c', TREE, **kw)
+            from plangraph.spawner.contained_exec import command
+            tree = TREE
+            if setsid:
+                tree = TREE.replace('import time; time.sleep(60)', 'import os,time; os.setsid(); time.sleep(60)')
+                tree = tree.rsplit('time.sleep(60)', 1)[0]  # command exits immediately after spawning
+            box['proc'] = await asyncio.create_subprocess_exec(*command([sys.executable, '-c', tree]), **kw)
             box['kid'] = await ready(box['root'] / 'child.pid')
             launched.set()
             return box['proc']

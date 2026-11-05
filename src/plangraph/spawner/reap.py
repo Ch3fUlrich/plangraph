@@ -130,4 +130,5 @@ async def reap(runner, job_id, proc):
     if incomplete is not None and job is not None:
         job.survivors = list(incomplete) or [pid]
         job.status, job.exit_code = 'failed', job.exit_code or 1
-        job.events.append({'event': 'kill_incomplete', 'survivors': job.survivors})
+        job.events.append({'event': 'kill_incomplete', 'survivors': job.survivors,
+                           'detail': 'ownership, containment or verified signalling unavailable/ineffective'})

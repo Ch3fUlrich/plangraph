@@ -237,7 +237,8 @@ class SpawnerRunner:
         self.on_sample = None
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
-        self.process_factory = process_factory or asyncio.create_subprocess_exec
+        from .contained_exec import create_subprocess_exec
+        self.process_factory = process_factory or create_subprocess_exec
         self.tree_killer = tree_killer or self._own_kill
         self.platform = None   # tests inject 'nt'
         self.provider_responses = {}
@@ -547,8 +548,7 @@ class SpawnerRunner:
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             try:
                 proc = await self.process_factory(
-                    resolved_exe,
-                    *cmd[1:],
+                    resolved_exe, *cmd[1:],
                     cwd=work_dir,
                     env=child_env,
                     stdout=asyncio.subprocess.PIPE,
