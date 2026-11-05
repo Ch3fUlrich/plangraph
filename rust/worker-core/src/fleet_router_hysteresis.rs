@@ -142,9 +142,11 @@ impl Evaluator {
                 // Only structurally valid windows may consume replay watermarks.
                 // Rejected timestamps/monotonic inputs must not poison future progress.
                 if valid_window && snapshot.schema_version == 1 && !wall_jump {
-                    state.last = Some(state.last.map_or((end, mono), |(e, m)| {
-                        (e.max(end.min(snapshot.timestamp)), m.max(mono))
-                    }));
+                    state.last = Some(
+                        state
+                            .last
+                            .map_or((end, mono), |(e, m)| (e.max(end), m.max(mono))),
+                    );
                 }
                 findings.push(Finding {
                     signal: rule.name.clone(),
@@ -153,7 +155,15 @@ impl Evaluator {
                 continue;
             }
             if let Some((last_end, last_mono)) = state.last {
-                if end <= last_end || mono <= last_mono {
+                if end <= last_end {
+                    continue;
+                }
+                if mono <= last_mono {
+                    state.reset();
+                    findings.push(Finding {
+                        signal: rule.name.clone(),
+                        observation: Observation::Unknown("monotonic discontinuity".into()),
+                    });
                     continue;
                 }
                 if end

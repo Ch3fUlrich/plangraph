@@ -265,3 +265,53 @@ fn wall_jumps_are_inert_and_inputs_unchanged() {
     }
     assert_eq!(fake_fs, before);
 }
+#[test]
+fn stalled_monotonic_is_unknown_without_entry_or_recovery() {
+    for mono in [9, 10] {
+        let mut e = evaluator(2);
+        assert!(run(&mut e, 10, true).is_empty());
+        let findings = e.evaluate(&snapshot(20, true), mono, false).unwrap();
+        assert_eq!(findings.len(), 6);
+        assert!(findings
+            .iter()
+            .all(|f| f.observation == Observation::Unknown("monotonic discontinuity".into())));
+        assert!(run(&mut e, 30, true).is_empty());
+        assert_eq!(
+            run(&mut e, 40, true)[0].observation,
+            Observation::Overload(1)
+        );
+        assert!(run(&mut e, 50, false).is_empty());
+        let findings = e.evaluate(&snapshot(60, false), 50, false).unwrap();
+        assert_eq!(findings.len(), 6);
+        assert!(findings
+            .iter()
+            .all(|f| f.observation == Observation::Unknown("monotonic discontinuity".into())));
+        e = serde_json::from_slice(&serde_json::to_vec(&e).unwrap()).unwrap();
+        assert!(run(&mut e, 70, false).is_empty());
+        assert_eq!(
+            run(&mut e, 80, false)[0].observation,
+            Observation::Recovery(1)
+        );
+        assert!(run(&mut e, 80, false).is_empty());
+        assert!(run(&mut e, 90, true).is_empty());
+        assert_eq!(
+            run(&mut e, 100, true)[0].observation,
+            Observation::Overload(2)
+        );
+    }
+}
+#[test]
+fn report_counts_regression() {
+    let report = include_str!("../../../changelog.d/FLEET-ROUTER-HYSTERESIS.md");
+    assert!(report.contains("234 + 267 + 1 + 1 = 503"));
+}
+#[test]
+fn report_red_first_regression() {
+    let report = include_str!("../../../changelog.d/FLEET-ROUTER-HYSTERESIS.md");
+    assert!(report.contains("five original suites remain red-first unproven"));
+}
+#[test]
+fn watermark_uses_validated_end_directly() {
+    let implementation = include_str!("fleet_router_hysteresis.rs");
+    assert!(!implementation.contains("end.min(snapshot.timestamp)"));
+}
