@@ -230,6 +230,8 @@ def test_scheduler_installation(tmp_path, host, monkeypatch):
 
 
 @pytest.mark.parametrize('config_text', ['', 'PLANGRAPH_PROBE_HOSTS=fixture',
+    'PLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD=notify --json',
+    '# comment\nbare-token\nPLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD=notify --json=a',
     'PLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD="notify --json"'])
 def test_probe_timer_requires_service_config(tmp_path, monkeypatch, config_text):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
@@ -246,7 +248,7 @@ def test_probe_timer_requires_service_config(tmp_path, monkeypatch, config_text)
 
 @pytest.mark.parametrize('config_text', [None, 'PLANGRAPH_PROBE_HOSTS=fixture',
     'PLANGRAPH_PROBE_NOTIFY_CMD=""'])
-def test_probe_timer_environment_fallback(tmp_path, monkeypatch, config_text):
+def test_probe_timer_rejects_shell_only_config(tmp_path, monkeypatch, config_text):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     monkeypatch.setenv('PLANGRAPH_PROBE_HOSTS', 'fixture')
     monkeypatch.setenv('PLANGRAPH_PROBE_NOTIFY_CMD', 'notify')
@@ -256,7 +258,22 @@ def test_probe_timer_environment_fallback(tmp_path, monkeypatch, config_text):
         config.write_text(config_text)
     calls = []
     w.install('linux', tmp_path, run=lambda args, **kw: calls.append(args))
-    assert any('disable' in call for call in calls) == (config_text is not None and '""' in config_text)
+    assert any('disable' in call for call in calls)
+
+
+def test_findings_without_bridge_report_unconfigured(tmp_path, monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    def tick(*args, deliver, **kwargs):
+        event = dict(rule='run-orphan', run_id='fixture', kind='completion')
+        deliver(event)
+        return [event]
+    monkeypatch.setattr(w, 'tick', tick)
+    assert w.main(['tick']) == 1
+    assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
+    assert list((tmp_path / 'watchdog/outbox').glob('*.json'))
 
 
 @pytest.mark.parametrize('bridge', ['health', 'exception', 'unconfigured'])

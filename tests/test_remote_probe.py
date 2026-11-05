@@ -266,3 +266,31 @@ def test_restart_pending_full_window(tmp_path, monkeypatch):
         poll(['fixture'], 'notify', tmp_path)
     assert sent == ['restart-event']
     assert json.loads(path.read_text())['fixture']['pending'] == {}
+
+
+def test_failed_send_does_not_prune_delivery_window(tmp_path, monkeypatch):
+    keys = [f'{i:064x}' for i in range(10000)]
+    path = tmp_path / 'remote-probe.json'
+    path.write_text(json.dumps({'fixture': dict(failures=0, outage=0, down=False,
+        seen=keys, acks=keys)}))
+    failed, successful = 'a' * 64, keys[-1]
+    events = {failed: {}, successful: {}}
+    sent = []
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            return subprocess.CompletedProcess(argv, 0, json.dumps(events))
+        key = json.loads(kwargs['input'])['event_id']
+        sent.append(key)
+        if key == failed:
+            raise subprocess.CalledProcessError(1, argv)
+    monkeypatch.setattr(subprocess, 'run', run)
+    poll(['fixture'], 'notify', tmp_path)
+    entry = json.loads(path.read_text())['fixture']
+    assert entry['seen'] == keys
+    events = {keys[0]: {}, successful: {}}
+    poll(['fixture'], 'notify', tmp_path)
+    assert sent == [failed]
+    events = {'b' * 64: {}}
+    poll(['fixture'], 'notify', tmp_path)
+    assert sent == [failed, 'b' * 64]
+    assert json.loads(path.read_text())['fixture']['seen'] == keys[1:] + ['b' * 64]

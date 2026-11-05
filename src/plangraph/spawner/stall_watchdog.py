@@ -7,7 +7,6 @@ activity is deliberately not interpreted as proof of idleness.
 from __future__ import annotations
 
 import argparse
-import shlex
 from contextvars import ContextVar
 import hashlib
 import json
@@ -247,10 +246,18 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
         run(['systemctl', '--user', 'daemon-reload'], check=True)
         configured = {}
         try:
-            configured = dict(line.split('=', 1) for line in shlex.split(config.read_text(), comments=True))
-        except (OSError, ValueError):
+            for line in config.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith(('#', ';')) or '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                    value = value[1:-1]
+                configured[key.strip()] = value
+        except (OSError, UnicodeError):
             pass
-        if not all(configured.get(k, os.environ.get(k, '')).strip()
+        if not all(configured.get(k, '').strip()
                    for k in ('PLANGRAPH_PROBE_HOSTS', 'PLANGRAPH_PROBE_NOTIFY_CMD')):
             run(['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'], check=True)
         run(['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'], check=True)
@@ -326,7 +333,7 @@ def main(argv=None):
                 error = (error + '; ' if error else '') + 'delivery-' + health['last_error'] + ' failures=' + str(health['failures'])
         except Exception as exc:
             error = (error + '; ' if error else '') + 'delivery-' + type(exc).__name__
-    elif error and any(f['rule'] != 'unknown' for f in findings):
+    elif any(f['rule'] != 'unknown' for f in findings):
         error = (error + '; ' if error else '') + 'delivery-bridge-unconfigured'
     pending = len(list((state / 'watchdog/outbox').glob('*.json')))
     if command and pending:

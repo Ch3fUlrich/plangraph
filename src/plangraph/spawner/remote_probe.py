@@ -45,14 +45,16 @@ def poll(hosts, command, state):
             argv = shlex.split(command)
             if not argv:
                 raise ValueError('empty notification command')
+            old = None
             if len(entry['seen']) >= 10000:
                 old = next((k for k in entry['seen'] if k not in protected), None)
                 if old is None:
                     raise ValueError('delivery window full; awaiting remote acknowledgements')
-                entry['seen'].remove(old)
             event = dict(event, event_id=event.get('event_id') or key)
             subprocess.run(argv, input=json.dumps(event, sort_keys=True) + '\n',
                            text=True, encoding="utf-8", errors="replace", check=True, timeout=20)
+            if old is not None:
+                entry['seen'].remove(old)
             entry['seen'].append(key)
             save()
     def flush(entry):
