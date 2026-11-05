@@ -116,7 +116,8 @@ fn start(row: &Row) -> i64 {
 
 /// Coalesce interval chains per leg and class before chronological replay.
 fn incidents(rows: Vec<Row>) -> Vec<Row> {
-    let mut sorted = rows;
+    let (mut sorted, observations): (Vec<_>, Vec<_>) =
+        rows.into_iter().partition(|r| r.kind.is_none());
     sorted.sort_by(|a, b| {
         (
             &a.leg_key,
@@ -137,9 +138,10 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
     });
     let mut out: Vec<Row> = Vec::new();
     for row in sorted {
-        if !row.outcome.is_neutral() && row.outcome != Class::Ok {
+        if row.kind.is_none() && !row.outcome.is_neutral() && row.outcome != Class::Ok {
             if let Some(last) = out.last_mut() {
-                if last.leg_key == row.leg_key
+                if last.kind.is_none()
+                    && last.leg_key == row.leg_key
                     && last.outcome == row.outcome
                     && start(&row) <= last.ts
                 {
@@ -152,6 +154,7 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
         }
         out.push(row);
     }
+    out.extend(observations);
     out.sort_by(|a, b| {
         (
             a.ts,
@@ -174,12 +177,18 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
 /// Fold one leg and route. Times are integral Unix seconds supplied by the caller.
 /// Only the requested leg, route and role contribute, for successes and failures alike.
 /// Duplicate attempts keep the greatest (timestamp, class, duration) tuple;
-/// remaining fields are observation metadata and do not affect this fold.
+/// Observations bypass attempt dedupe and incident merging.
 pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64) -> Health {
     let mut attempts: Vec<Row> = Vec::new();
-    for row in rows.iter().filter(|r| {
-        r.kind.is_none() && r.leg_key == leg_key && r.route_key == route_key && r.role == role
-    }) {
+    let mut observations = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|r| r.leg_key == leg_key && r.route_key == route_key && r.role == role)
+    {
+        if row.kind.is_some() {
+            observations.push(row.clone());
+            continue;
+        }
         if let Some(old) = attempts
             .iter_mut()
             .find(|r| r.run_id == row.run_id && r.attempt == row.attempt)
@@ -193,11 +202,24 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
             attempts.push(row.clone());
         }
     }
+    attempts.extend(observations);
     let rows = incidents(attempts);
     let mut health = Health::default();
     let mut success = None;
     for row in rows {
         health.advance(row.ts);
+        if row.kind.is_some() {
+            if health.state == State::HalfOpen {
+                health.non_verdict_count += 1;
+                if health.non_verdict_count == 3 {
+                    health.open(health.reason.unwrap(), row.ts);
+                    health.until_s = Some(row.ts.saturating_add(backoff_s(health.n)));
+                } else {
+                    health.until_s = Some(row.ts.saturating_add(reprobe_gap_s()));
+                }
+            }
+            continue;
+        }
         let class = row.outcome;
         if class == Class::Ok {
             health = Health::default();

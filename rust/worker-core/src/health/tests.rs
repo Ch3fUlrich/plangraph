@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn non_verdict_probe_loop() {
+    let mut rows = vec![row(Class::HangSilent, 0)];
+    for cycle in 1..=7 {
+        let due = health(&rows, rows.last().unwrap().ts).until_s.unwrap();
+        for count in 1..=3 {
+            let ts = due + (count - 1) * 60;
+            let mut observation = row(Class::HangSilent, ts);
+            observation.kind = Some("observation".into());
+            observation.run_id = "probe".into();
+            observation.duration_s = Some(7200);
+            rows.push(observation);
+            let h = health(&rows, ts);
+            let (state, n, pending, gap) = if count < 3 {
+                (State::HalfOpen, cycle, count as u32, 60)
+            } else {
+                (State::Open, cycle + 1, 0, backoff_s(cycle + 1))
+            };
+            assert_eq!((h.state, h.n, h.non_verdict_count), (state, n, pending));
+            assert_eq!(h.until_s, Some(ts + gap));
+            let mut reversed = rows.clone();
+            reversed.reverse();
+            assert_eq!(health(&reversed, ts), h);
+            assert_eq!(health(&rows, ts), h);
+        }
+    }
+}
+
+#[test]
+fn non_verdict_verdict_restarts_count() {
+    let mut rows = vec![row(Class::HangSilent, 0)];
+    for (ts, kind, class, expected) in [
+        (300, true, Class::Ok, 1),
+        (360, false, Class::Empty, 0),
+        (960, true, Class::Empty, 1),
+        (1020, false, Class::Ok, 0),
+        (1080, true, Class::HangSilent, 0),
+    ] {
+        let mut r = row(class, ts);
+        r.kind = kind.then(|| "observation".into());
+        rows.push(r);
+        assert_eq!(health(&rows, ts).non_verdict_count, expected);
+    }
+    assert_eq!(health(&rows, 1080), Health::default());
+}
+
+#[test]
 fn dedupe_preserves_other_scopes() {
     let a = row(Class::Empty, 10);
     for scope in ["leg", "route"] {
