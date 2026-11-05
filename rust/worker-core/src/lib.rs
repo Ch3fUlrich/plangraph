@@ -33,6 +33,8 @@ pub mod sandbox_env;
 pub mod scope;
 pub mod slots;
 pub mod stall;
+#[cfg(unix)]
+pub mod watch;
 pub mod workspace;
 pub mod worktree;
 pub mod wsl;

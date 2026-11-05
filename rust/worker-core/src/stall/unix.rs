@@ -35,11 +35,18 @@ impl Group {
     }
 
     fn signal_group(&self, sig: i32) {
-        // SAFETY: plain syscall; errors (e.g. ESRCH when the group is gone) are ignored.
-        unsafe {
-            libc::killpg(self.pgid, sig);
-        }
+        let _ = killpg(self.pgid, sig);
     }
+}
+
+#[rustfmt::skip]
+pub(crate) fn killpg(pgid: i32, signal: i32) -> io::Result<()> {
+    if pgid <= 1 || pgid == unsafe { libc::getpgrp() } {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unsafe process group"));
+    }
+    if unsafe { libc::killpg(pgid, signal) } == 0 { return Ok(()); }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) { Ok(()) } else { Err(error) }
 }
 
 /// The fatal signal that stopped `status`, if any (`WTERMSIG`).
