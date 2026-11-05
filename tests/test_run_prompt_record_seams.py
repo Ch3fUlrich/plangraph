@@ -1,8 +1,12 @@
 import pytest
 import shutil
+from collections import Counter
 from pathlib import Path
 
-from test_run_prompt_record import test_run_call_sites_require_prompt_record as check_seams
+from test_run_prompt_record import (
+    check_run_call_sites,
+    test_run_call_sites_require_prompt_record as check_seams,
+)
 from plangraph.spawner import runner
 
 
@@ -12,8 +16,19 @@ def test_guard_rejects_every_argument_form(tmp_path, monkeypatch, arguments):
     root.mkdir()
     (root / 'probe.py').write_text(f'def probe():\n    service.spawn({arguments})\n')
     monkeypatch.setattr(runner, '__file__', str(root / 'runner.py'))
+    check_expected_probe(root)
+
+
+def check_expected_probe(root):
     with pytest.raises(AssertionError, match=r"\('probe.py', 'probe',"):
-        check_seams()
+        check_run_call_sites(root, Counter())
+
+
+def test_probe_expectation_rejects_recorded_call(tmp_path):
+    (tmp_path / 'probe.py').write_text(
+        'def probe():\n    service.spawn(prompt_record=record)\n')
+    with pytest.raises(pytest.fail.Exception, match='DID NOT RAISE'):
+        check_expected_probe(tmp_path)
 
 
 @pytest.mark.parametrize('mutation', ['new_call', 'stale_entry'])

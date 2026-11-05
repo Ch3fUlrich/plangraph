@@ -4,6 +4,7 @@ import json
 import stat
 import inspect
 import ast
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,11 @@ def test_run_call_sites_require_prompt_record(root=None):
         ('cli.py', 'run', 'service.spawn(**payload, wait_seconds=0)'): 'Service entry point creates the run record.',
         ('cli.py', 'main', 'service.spawn(**payload, wait_seconds=None)'): 'Service entry point creates the run record.',
     }
-    seen = set()
+    check_run_call_sites(root, Counter({site: 1 for site in allow}))
+
+
+def check_run_call_sites(root, allow):
+    seen = Counter()
     for path in root.glob('*.py'):
         source = path.read_text()
         tree = ast.parse(source)
@@ -54,11 +59,12 @@ def test_run_call_sites_require_prompt_record(root=None):
                 owner = parents[owner]
             site = (path.name, owner.name, ' '.join(ast.get_source_segment(source, call).split()))
             if site in allow:
-                seen.add(site)
+                seen[site] += 1
+                assert seen[site] <= allow[site], ('extra allowlisted call', site)
             else:
                 assert any(k.arg == 'prompt_record' and not (isinstance(k.value, ast.Constant)
                            and k.value.value is None) for k in call.keywords), site
-    assert seen == set(allow), ('stale allowlist', set(allow) - seen)
+    assert seen == allow, ('stale allowlist', allow - seen)
 
 
 def test_prompt_record(tmp_path, monkeypatch):
@@ -163,3 +169,14 @@ def test_fixer_wake_variant(tmp_path, monkeypatch):
     asyncio.run(service._continue_writer(record, 'gaps'))
     child = service._path(record['continuation_run_id']).with_name('prompt.txt')
     assert child.exists()
+
+
+@pytest.mark.parametrize('calls, allowed', [(2, 1), (0, 1), (1, 2)])
+def test_guard_counts_exact_sites(tmp_path, calls, allowed):
+    call = 'service.spawn(prompt="p")'
+    (tmp_path / 'probe.py').write_text('def probe():\n    pass\n' +
+        ''.join(f'    {call}\n' for _ in range(calls)))
+    allow = Counter({('probe.py', 'probe', call): allowed})
+    with pytest.raises(AssertionError, match=(
+            'extra allowlisted call' if calls > allowed else 'stale allowlist')):
+        check_run_call_sites(tmp_path, allow)
