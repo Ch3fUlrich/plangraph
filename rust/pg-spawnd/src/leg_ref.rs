@@ -124,3 +124,90 @@ pub(crate) fn mode(env: Option<&str>, path: &Path, role: &str) -> LegRefMode {
 #[cfg(test)]
 #[path = "leg_ref_tests.rs"]
 mod tests;
+
+pub(crate) fn check_review_role(
+    args: &crate::placement::Args,
+) -> Result<(), crate::errors::ToolError> {
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("implement");
+    let diff = args.get("diff_ref").is_some_and(|v| !v.is_null())
+        || args
+            .get("card")
+            .and_then(|v| v.get("diff_ref"))
+            .is_some_and(|v| !v.is_null());
+    if role == "implement" && diff {
+        return Err(crate::placement::parameter(
+            "diff_ref requires role review; role implement is refused",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn admit_ref(
+    args: &mut crate::placement::Args,
+    catalog: &[LegRef],
+    mode: LegRefMode,
+) -> Result<(), crate::errors::ToolError> {
+    check_review_role(args)?;
+    if mode == LegRefMode::Off {
+        return Ok(());
+    }
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("implement");
+    let resolve = || {
+        let mut selected = None;
+        for key in ["leg", "model"] {
+            if let Some(value) = args.get(key) {
+                let reference = value
+                    .as_str()
+                    .ok_or_else(|| crate::placement::parameter("invalid leg/reference"))?;
+                let id = resolve_leg(reference, role, catalog).map_err(|error| {
+                    let message = match error {
+                        RefError::Unknown(ids) | RefError::Ambiguous(ids) if !ids.is_empty() => {
+                            // Catalog strings are untrusted; never echo arbitrary ref or model text.
+                            let hints: Vec<_> = ids
+                                .into_iter()
+                                .filter(|id| {
+                                    id.len() <= 200
+                                        && id.bytes().all(|b| {
+                                            b.is_ascii_alphanumeric() || b"-_/.:".contains(&b)
+                                        })
+                                })
+                                .collect();
+                            format!("unknown leg/reference; did-you-mean: {}", hints.join(", "))
+                        }
+                        _ => "unknown leg/reference or role-ineligible reference".into(),
+                    };
+                    crate::placement::parameter(message)
+                })?;
+                if selected.as_ref().is_some_and(|other| other != &id) {
+                    return Err(crate::placement::parameter(
+                        "conflicting leg/reference selectors",
+                    ));
+                }
+                selected = Some(id);
+            }
+        }
+        Ok(selected)
+    };
+    let result = resolve();
+    if mode == LegRefMode::Warn {
+        if result.is_err() {
+            eprintln!("leg_ref: reference refused (observation only)");
+        }
+        return Ok(());
+    }
+    if let Some(id) = result? {
+        args.insert("leg".into(), serde_json::Value::String(id));
+        args.remove("model");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "leg_ref_admission_tests.rs"]
+mod admission_tests;

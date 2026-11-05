@@ -24,6 +24,7 @@ fn save(state: &Path, host: &str, base: Value, status: Status) -> Result<Value, 
     .map_err(|_| ToolError::Internal("could not save run record".into()))
 }
 fn validate(args: &Args) -> Result<(), ToolError> {
+    crate::leg_ref::check_review_role(args)?;
     if !args.contains_key("prompt") {
         return Err(ToolError::Key("prompt".into()));
     }

@@ -71,6 +71,7 @@ fn run(
     }
 }
 pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
+    crate::leg_ref::check_review_role(args)?;
     let card = args
         .get("card")
         .ok_or_else(|| ToolError::Key("card".into()))?
