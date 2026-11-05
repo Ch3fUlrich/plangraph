@@ -3,3 +3,5 @@
   pgtest, which uses agent-tests.slice on Linux or a kill-on-close job on Windows.
 - Handle Python option operands, Cargo toolchains, and wrapper option values
   without missed tests or false refusals; treat an unresolvable home as no marker.
+- Keep placement usage in docs/TESTING.md rather than the merged-changes log;
+  verify the guard rules remain within the 400-line limit.

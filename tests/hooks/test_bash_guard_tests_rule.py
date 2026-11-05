@@ -1,7 +1,21 @@
 """Host opt-in test placement policy."""
 import pytest
+from pathlib import Path
 
 from bash_guard_support import guard  # noqa: F401
+
+
+def test_placement_documentation_intake():
+    root = Path(__file__).resolve().parents[2]
+    assert "# Opt-in bash_guard test placement" not in (root / "CHANGELOG.md").read_text()
+    doc = (root / "docs/TESTING.md").read_text()
+    for text in ("bash_guard", "pgtest-required", "agent-tests.slice", "kill-on-close"):
+        assert text in doc
+
+
+def test_guard_rules_size_limit():
+    root = Path(__file__).resolve().parents[2]
+    assert len((root / "tools/hooks/bash_guard_rules.py").read_text().splitlines()) <= 400
 
 BARE = ["pytest", "py.test -q", "python -m pytest", "python3 -m pytest",
         "python3.12 -m pytest", "cargo test", "cargo nextest run",
