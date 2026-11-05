@@ -8,7 +8,7 @@ use crate::{
     events::LineKind,
 };
 use std::{
-    io::{Read, Write},
+    io::Read,
     os::unix::process::ExitStatusExt,
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver, SyncSender},
@@ -133,6 +133,12 @@ pub fn supervise_events(
     opts: &stall::Opts,
     mut hooks: Hooks<'_>,
 ) -> io::Result<Watched> {
+    if opts.timeout.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "watch requires a wall timeout",
+        ));
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -150,15 +156,9 @@ pub fn supervise_events(
         false,
         tx.clone(),
     );
-    let mut stdin = child.child.stdin.take().expect("piped stdin");
-    let payload = hooks.stdin.to_vec();
-    thread::spawn(move || {
-        if let Err(e) = stdin.write_all(&payload) {
-            if e.kind() != io::ErrorKind::BrokenPipe {
-                let _ = tx.send(Chunk::Error(e));
-            }
-        }
-    });
+    let writer =
+        super::unix::stdin_writer(child.child.stdin.take().expect("piped stdin"), hooks.stdin)?;
+    drop(tx);
     let mut events = Events {
         last_byte: 0,
         output: Vec::new(),
@@ -263,6 +263,7 @@ pub fn supervise_events(
     }
     // Workers own only bounded chunks/payload. Never join a pipe held by an escaped child.
     drop(rx);
+    writer.finish()?;
     if let Some(e) = error {
         return Err(e);
     }

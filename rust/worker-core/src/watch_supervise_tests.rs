@@ -1,6 +1,45 @@
 use super::*;
 use crate::{activity::*, hosts::Role};
 
+#[test]
+fn missing_wall_timeout_rejected_before_spawn() {
+    let mut parser = super::super::blind_tests::Parser::default();
+    let mut monitor = monitor();
+    let mut channel = ChannelHealth::new(0, Some(1));
+    let result = supervise_events(
+        Command::new("nonexistent-watch-command"),
+        &stall::Opts::default(),
+        Hooks {
+            parser: &mut parser,
+            monitor: &mut monitor,
+            channel: &mut channel,
+            cancelled: &|| false,
+            tree_sample: &Ctx::default,
+            cpu: None,
+            stdin: b"",
+        },
+    );
+    assert_eq!(result.err().unwrap().kind(), io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn blocked_stdin_writer_releases_prompt_before_pipe_closes() {
+    let mut child = Command::new("sh")
+        .args(["-c", "exec sleep 5"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let writer =
+        super::super::unix::stdin_writer(child.stdin.take().unwrap(), &vec![0; 1 << 20]).unwrap();
+    let start = Instant::now();
+    let result = writer.finish();
+    let elapsed = start.elapsed();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    result.unwrap();
+    assert!(elapsed < Duration::from_secs(2));
+}
+
 fn monitor() -> Monitor {
     Monitor::new(
         Role::Research,

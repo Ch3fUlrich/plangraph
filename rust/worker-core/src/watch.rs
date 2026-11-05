@@ -6,7 +6,7 @@ use crate::{
 };
 use std::{io, process::ExitStatus};
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "watch_blind_tests.rs"]
 mod blind_tests;
 #[path = "watch_supervise.rs"]

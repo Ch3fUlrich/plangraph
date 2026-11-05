@@ -11,9 +11,13 @@ Separate bounded stdout/stderr readers run concurrently with the stdin writer;
 EOF closes the prompt pipe. Only stdout enters the event parser. Both streams
 refresh the byte clock and contribute to the capped private output tail. A
 bounded queue and bounded drain prevent a producer from starving supervision.
-No pipe thread is joined: escaped pipe holders cannot block the return beyond
-the two-second drain deadline. Detached workers retain only bounded chunks and
-the supplied prompt until their pipe closes; no payload enters result metadata.
+Reader threads are not joined: escaped pipe holders cannot block the return beyond
+the two-second drain deadline. The stdin writer uses nonblocking writes and a
+cancellation flag; teardown joins it after cancellation (10 ms polling), releasing
+the prompt even when an escaped process holds the pipe. No payload enters metadata.
+Every call requires `Opts.timeout = Some(...)`, validated before spawn. Monitor
+modes and Blind-only stall detection are not substitutes for a wall deadline;
+even a continuously writing child with every monitor mode off remains bounded.
 
 The supervisor drains pending signals before ticking the monitor every 10 ms.
 The monitor supplies warning/confirm-window decisions. Cancellation wins over
