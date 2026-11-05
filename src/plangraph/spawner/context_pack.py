@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
+from .inline_diff import InlineDiffError
 
 BIG_FILE_LINES = 400
 DEFAULT_MAX_CHARS = 60_000
@@ -339,13 +340,17 @@ def build(prompt: str, card, cwd) -> Pack:
     return Pack(text, tuple(notes + unfit + skipped + big))
 
 
+class PromptBoundError(ContextError, InlineDiffError):
+    """A context bound refusal also handled by the launcher's inline-payload boundary."""
+
+
 def bound_prompt(prompt: str, max_request_tokens: int) -> str:
     """Refuse the entire inline payload; conservative three characters per estimated token.
 
     Requirements are never truncated. Diagnostics contain sizes and a reason code, not prompt content.
     """
     if len(prompt) > max_request_tokens * 3:
-        raise ContextError(f'inline_prompt_oversized: chars {len(prompt)} '
+        raise PromptBoundError(f'inline_prompt_oversized: chars {len(prompt)} '
                            f'estimated_tokens {(len(prompt) + 2) // 3} max_request_tokens {max_request_tokens}')
     return prompt
 

@@ -64,6 +64,7 @@ def test_strict_before_runner_and_disabled_unchanged(sandbox, monkeypatch, enabl
 
 def test_total_bound_including_original_and_review_framing(sandbox, monkeypatch):
     root, seat, _ = sandbox
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
     card = {'context': ['large.py:101-130']}
     pack = cp.annotate({}, 'edit large.py', card, root)
     leg = SimpleNamespace(tool_mode='inline-only', max_request_tokens=200)
@@ -75,6 +76,40 @@ def test_total_bound_including_original_and_review_framing(sandbox, monkeypatch)
     monkeypatch.setattr(inline_diff, 'inline_diff_prompt', lambda p, *a, **k: p + 'd' * 600)
     with pytest.raises(cp.ContextError, match='inline_prompt_oversized'):
         seat._leg_prompt('x', {}, 'review', leg, cp.Pack())
+
+
+@pytest.mark.parametrize('enabled', [None, '0'])
+def test_inline_bound_disabled_preserves_prompt_and_warning(sandbox, monkeypatch, enabled):
+    root, seat, _ = sandbox
+    if enabled is not None:
+        monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
+    prompt = 'edit large.py\n' + 'x' * 1000
+    calls = []
+    record = dispatch(seat, root, prompt, {}, SimpleNamespace(
+        tool_mode='inline-only', max_request_tokens=200), calls)
+    assert calls == [prompt]
+    assert record['warnings'] == [
+        'big_file_unsliced: large.py 1000 lines; name one function per slice in card.context']
+
+
+def test_launch_maps_strict_prompt_bound_before_runner(sandbox, monkeypatch):
+    from plangraph.spawner import launch_spec
+    root, seat, _ = sandbox
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
+    leg = SimpleNamespace(id='synthetic', roles=('implement',), tool_mode='inline-only',
+                          max_request_tokens=200)
+    monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
+    monkeypatch.setattr(launch_spec, 'leg_active', lambda leg: True)
+    seat.state = root / 'state'
+    seat.runner.spawn = lambda **kw: pytest.fail('runner invoked')
+    monkeypatch.setattr(launch_spec, 'SpawnService', lambda **kw: seat)
+    monkeypatch.setattr(launch_spec, '_sweep', lambda *a: None)
+    request = dict(run_id='run-' + '0' * 32, job_id='synthetic', role='implement',
+                   dry_run=True, leg={'id': leg.id}, prompt='x' * 1000, card={},
+                   cwd=str(root), state=str(seat.state))
+    with pytest.raises(launch_spec.LaunchRefused, match='inline_prompt_oversized') as exc:
+        launch_spec.build(request)
+    assert exc.value.kind == 'inline_diff_failed'
 
 
 def test_synthetic_replay_exact_reductions(sandbox, monkeypatch):
