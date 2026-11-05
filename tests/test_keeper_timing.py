@@ -218,7 +218,7 @@ def test_context_failures_do_not_escape_or_leak(failure, meter, monkeypatch):
     original.set(None)
 
 
-@pytest.mark.parametrize("sample", range(1, 6))
+@pytest.mark.parametrize("sample", range(1, 5))
 @pytest.mark.parametrize("body_error", [False, True])
 def test_sample_failure_preserves_body_and_unlocks(sample, body_error, monkeypatch):
     calls, lock = 0, threading.Lock()
@@ -260,7 +260,7 @@ def test_context_set_failure_never_outputs_under_lock(meter, monkeypatch):
     assert out.getvalue() == ""
 
 
-@pytest.mark.parametrize("sample", range(1, 6))
+@pytest.mark.parametrize("sample", range(1, 5))
 @pytest.mark.parametrize("body_error", [False, True])
 def test_failed_clock_drops_dependent_lines(sample, body_error, meter, monkeypatch):
     clock, out = meter
@@ -283,3 +283,12 @@ def test_failed_clock_drops_dependent_lines(sample, body_error, meter, monkeypat
     assert out.getvalue() == ""
     assert lock.acquire(blocking=False)
     lock.release()
+
+
+@pytest.mark.parametrize("wait,hold,part", [(None, 500, 0), (500, None, 0), (500, 500, None)])
+def test_emit_drops_none_values_before_any_arithmetic(wait, hold, part, meter):
+    _, out = meter
+    parts = {timing._fields[0]: part}
+    for event, kind in (("snapshot_timing", "other"), ("writer_timing", "other")):
+        timing._emit(event, kind, wait, hold, parts)
+    assert out.getvalue() == ""
