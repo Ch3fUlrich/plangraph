@@ -26,7 +26,9 @@ def test_flush_continues_after_poison(tmp_path):
     def send(command, **kwargs):
         if json.loads(kwargs['input'])['run_id'] == 'a':
             raise subprocess.CalledProcessError(1, command)
-    w.flush_outbox(tmp_path, ['notify'], run=send)
+    for count in (1, 2):
+        health = w.flush_outbox(tmp_path, ['notify'], run=send)
+        assert health == dict(failures=count, last_error='CalledProcessError')
     assert sorted(p.stem for p in out.iterdir()) == ['a']
 
 
@@ -36,6 +38,16 @@ def test_unknown_reaches_outbox(tmp_path):
     assert findings[0]['rule'] == 'unknown'
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and 'cancelled' not in event
+
+
+def test_bridge_failure_status(tmp_path, monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["bridge"]')
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    monkeypatch.setattr(w, 'flush_outbox', lambda *a: dict(failures=2, last_error='OSError'))
+    assert w.main(['tick']) == 1
+    assert 'delivery-OSError failures=2' in (tmp_path / 'watchdog/status.txt').read_text()
 
 
 @pytest.mark.parametrize('log_text', [None, 'first\nlatest\n'])
@@ -195,6 +207,7 @@ def test_scheduler_installation(tmp_path, host):
         assert 'EnvironmentFile=-%h/.config/plangraph/watchdog.env' in unit
         assert 'OnUnitActiveSec=120' in content
         assert ['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'] in calls
+        assert not any('plangraph-remote-probe.timer' in call for call in calls)
     else:
         assert '<Interval>PT2M</Interval>' in content
         assert calls[0][:2] == ['schtasks', '/Create']
@@ -222,6 +235,8 @@ def test_real_spawn_record_parent_and_item_come_from_completion(tmp_path):
     [run] = w.read_runs(tmp_path)
     assert (run["parent_session"], run["item_key"]) == ("build-L1", "plangraph:STALL-WATCHDOG")
     assert w.tick([run], [], lambda s: 1, now=run["ended"] + 400)[0]["rule"] == "finished-child"
+
+
 def test_unreadable_start_does_not_stop_classification(tmp_path, monkeypatch):
     import os
     directory = tmp_path / 'runs/run-fixture'
@@ -291,5 +306,4 @@ def test_host_run_probes(tmp_path, monkeypatch):
     assert (orphan['age'], orphan['seconds_silent'], orphan['last_line']) == (500, 280, 'x' * 200)
     log.unlink()
     assert check(500)[0]['rule'] == 'run-orphan'
-    import json
     assert json.loads((directory / 'record.json').read_text())['reason'] == 'orphaned'

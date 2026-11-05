@@ -1,0 +1,1 @@
+- **SPAWNER-SSH-PROBES-LOWS:** Report invalid notification commands and persistent bridge failures; bound delivery history without acknowledging undelivered findings, and keep unconfigured probe timers disabled.

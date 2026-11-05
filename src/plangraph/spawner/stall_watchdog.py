@@ -261,6 +261,9 @@ def deliver_event(state, event, *, now=None, interval=None):
 
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
+    from .private_io import atomic_write_private
+    health_path = Path(state) / 'watchdog/delivery.json'
+    health = _read_state(state, health_path) or dict(failures=0, last_error=None)
     for path in sorted((Path(state) / 'watchdog/outbox').glob('*.json')):
         record = _read_state(state, path)
         if record is None:
@@ -268,8 +271,10 @@ def flush_outbox(state, command, *, run=subprocess.run):
         try:
             run(command, input=path.read_bytes(), check=True, timeout=20)
             path.unlink(missing_ok=True)
-        except (OSError, subprocess.SubprocessError):
-            continue
+        except (OSError, subprocess.SubprocessError) as exc:
+            health.update(failures=health['failures'] + 1, last_error=type(exc).__name__)
+    atomic_write_private(health_path, json.dumps(health))
+    return health
 
 
 def install(host, destination, *, python=None, root=None, run=subprocess.run, disabled=False):
@@ -346,7 +351,9 @@ def main(argv=None):
     command = os.environ.get('PLANGRAPH_WATCHDOG_DELIVERY')
     if command:
         try:
-            flush_outbox(state, json.loads(command))
+            health = flush_outbox(state, json.loads(command))
+            if health and health['failures']:
+                error = 'delivery-' + health['last_error'] + ' failures=' + str(health['failures'])
         except Exception as exc:
             error = 'delivery-' + type(exc).__name__
     elif any(f['rule'] != 'unknown' for f in findings):

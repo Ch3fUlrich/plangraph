@@ -217,3 +217,34 @@ def test_completion_dispositions_reach_notify(tmp_path, monkeypatch):
         deliver_event(tmp_path, dict(event, **change))
         poll(['fixture'], 'notify', tmp_path)
     assert len(calls) == len({e['event_id'] for e in calls}) == 3
+
+
+def test_bad_command_keeps_polling(tmp_path, monkeypatch, capsys):
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, json.dumps({'a' * 64: {}}))
+    monkeypatch.setattr(subprocess, 'run', run)
+    for _ in range(2):
+        poll(['first', 'second'], "'", tmp_path)
+    assert len(calls) == 4
+    assert 'ValueError' in capsys.readouterr().err
+    assert all(not e['acks'] for e in json.loads((tmp_path / 'remote-probe.json').read_text()).values())
+
+
+def test_delivery_window(tmp_path, monkeypatch):
+    keys = [f'{i:064x}' for i in range(10002)]
+    (tmp_path / 'remote-probe.json').write_text(json.dumps({'fixture': dict(
+        failures=0, outage=0, down=False, seen=keys[:10000], acks=keys[:10000])}))
+    events = dict.fromkeys(keys[9999:], {})
+    sent = []
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            return subprocess.CompletedProcess(argv, 0, json.dumps(events))
+        sent.append(json.loads(kwargs['input'])['event_id'])
+    monkeypatch.setattr(subprocess, 'run', run)
+    for _ in range(2):
+        poll(['fixture'], 'notify', tmp_path)
+    entry = json.loads((tmp_path / 'remote-probe.json').read_text())['fixture']
+    assert entry['seen'] == keys[2:] and len(entry['acks']) <= 10000
+    assert sent == keys[10000:]

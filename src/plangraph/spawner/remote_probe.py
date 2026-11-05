@@ -1,11 +1,14 @@
-"""Pull durable host findings with at-least-once notification delivery."""
+"""Pull durable host findings with at-least-once notification delivery.
+
+PLANGRAPH_PROBE_ROOT is one shared repository root for all configured hosts.
+"""
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import uuid
 
 from .private_io import atomic_write_private
@@ -38,6 +41,11 @@ def poll(hosts, command, state):
         atomic_write_private(path, json.dumps(saved))
     def notify(key, event, entry):
         if key not in entry['seen']:
+            if len(entry['seen']) >= 10000:
+                old = next((k for k in entry['seen'] if k not in protected), None)
+                if old is None:
+                    raise ValueError('delivery window full; awaiting remote acknowledgements')
+                entry['seen'].remove(old)
             event = dict(event, event_id=event.get('event_id') or key)
             subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
                            text=True, encoding="utf-8", errors="replace", check=True, timeout=20)
@@ -49,7 +57,8 @@ def poll(hosts, command, state):
                 notify(key, event, entry)
                 del entry['pending'][key]
                 save()
-            except (OSError, subprocess.SubprocessError):
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                print('probe notification failed: ' + type(exc).__name__, file=sys.stderr)
                 continue
     for host in hosts:
         entry = saved.setdefault(host, dict(failures=0, outage=0, down=False, seen=[], acks=[]))
@@ -62,6 +71,7 @@ def poll(hosts, command, state):
         except (ValueError, TypeError, KeyError):
             entry = saved[host] = dict(failures=0, outage=0, down=False, seen=[], acks=[])
         pending = entry.setdefault('pending', {})
+        protected = set(pending)
         try:
             code = ('import json; from plangraph.spawner.remote_probe import exchange; '
                     'print(json.dumps(exchange(' + repr(entry['acks']) + ')))')
@@ -88,6 +98,7 @@ def poll(hosts, command, state):
         if entry['down']:
             pending['up-' + entry.get('episode', str(entry['outage']))] = dict(rule='host-recovered', host=host)
         entry.update(failures=0, down=False)
+        protected.update(events)
         save()
         flush(entry)
         entry['acks'] = []
@@ -96,7 +107,8 @@ def poll(hosts, command, state):
                 notify(key, event, entry)
                 entry['acks'].append(key)
                 save()
-            except (OSError, subprocess.SubprocessError):
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                print('probe notification failed: ' + type(exc).__name__, file=sys.stderr)
                 continue
         save()
 
