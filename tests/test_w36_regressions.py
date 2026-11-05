@@ -53,7 +53,7 @@ def test_probe_resolves_cmd_and_records_failure(monkeypatch, caplog):
         return SimpleNamespace(returncode=1, stdout='', stderr='probe failed')
     monkeypatch.setattr(resolver.subprocess, 'run', run)
     assert resolver._probe_served_models('{}', env={'PATH': 'fixture'}) is None
-    assert calls == [['C:/Tools/opencode.cmd', 'models']]
+    assert calls == [['C:/Tools/opencode.cmd', 'models', '--standalone']]
     assert 'host_probe_error' in caplog.text
 
 
