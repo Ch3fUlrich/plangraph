@@ -173,6 +173,19 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                 w_idx = len(WRITER_ORDER)
             return (leg.id != LEAD_WRITER, tier_idx, w_idx, pos)
         eligible.sort(key=sort_key)
+    elif effective_role == "review":
+        def review_key(t):
+            tier_idx, pos, leg = t
+            # D-3901: serving free legs first; named fallbacks precede
+            # other subscription legs, with Haiku always last.
+            if leg.tier == "free":
+                return (0, leg.id != "qodercli-qwen3.8-flash", pos)
+            priority = (0 if leg.id == "qodercli-qwen3.8-flash" else
+                        1 if leg.family == "mimo" else
+                        2 if leg.family == "deepseek" else
+                        4 if leg.id == "claude-haiku-5.5" else 3)
+            return (1, priority, tier_idx, pos)
+        eligible.sort(key=review_key)
     else:
         eligible.sort(key=lambda t: (t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)

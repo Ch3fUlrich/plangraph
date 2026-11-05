@@ -151,7 +151,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 9, record   # D-3605: Sol implement leg active again
+        assert len(models) == 8, record   # D-3605: Sol implement leg active again
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
         assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
@@ -164,7 +164,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record["attempts"]) == 9   # D-3605: Sol active again
+        assert len(record["attempts"]) == 8   # D-3605: Sol active again
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -281,7 +281,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record["attempts"]) == 9   # D-3605: Sol active again
+        assert len(record["attempts"]) == 8   # D-3605: Sol active again
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)

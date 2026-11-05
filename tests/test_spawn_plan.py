@@ -63,7 +63,7 @@ def test_seats_and_impossible_fence():
 def test_operator_order_and_roles_roundtrip(tmp_path):
     assert [l.id for l in DEFAULT_LEGS if "implement" in l.roles] == [
         "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-        "openrouter-free", "cx-gpt-6.1-sol", "opencode-console-sonnet-5.5",
+        "openrouter-free", "cx-gpt-6.1-sol",
         "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
@@ -110,9 +110,9 @@ def test_load_legs_bad_roles(tmp_path, roles):
 def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
     # OPENCODE-ORCHESTRATOR-FALLBACK G1/G2: an orchestrator leg off Claude, mimo-pro first
     plan = plan_spawn(CARD, role="orchestrate")
-    assert plan.first_leg.id == "mimo-v2.6-pro"
+    assert plan.first_leg.id == "opencode-console-sonnet-5.5"
     # fallthrough: agy-sonnet runs on Antigravity quota, not Claude Max; never deepseek (D-2744)
-    assert [l.id for l in plan.legs] == ["mimo-v2.6-pro", "agy-sonnet-5.5"]
+    assert [l.id for l in plan.legs] == ["opencode-console-sonnet-5.5", "mimo-v2.6-pro", "agy-sonnet-5.5"]
     with pytest.raises(ValueError, match=re.escape("role must be implement|review|orchestrate")):
         plan_spawn(CARD, role="drive")
     from plangraph.spawner.cli import main

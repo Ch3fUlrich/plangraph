@@ -319,8 +319,8 @@ def test_writer_order_d2683_implement_first_seven():
     plan = plan_spawn(c, role="implement")
     expected = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
                 "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
-                "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]
-    assert [leg.id for leg in plan.legs[:8]] == expected
+                "mimo-v2.6-flash"]
+    assert [leg.id for leg in plan.legs[:len(expected)]] == expected
 
 
 def test_writer_order_d2683_unavailable_skipped():
@@ -400,7 +400,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
     expected_writers = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free",  # D-3745: lead first,
                         "opencode-glm-5.3-flash-free", "openrouter-free", "agy-gemini-3.8-flash",  # then tier/order
-                        "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]
+                        "mimo-v2.6-flash"]
     assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
 
 

@@ -1,0 +1,1 @@
+- **SPAWNER-ROUTE-FREE-FIRST (D-3901):** keep Sol first for implement, order serving free review legs before named fallbacks, and disable Sonnet implement routing without removing its entry.
