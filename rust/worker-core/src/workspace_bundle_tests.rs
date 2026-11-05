@@ -260,3 +260,43 @@ fn empty_bundle_is_explicit() {
     ));
     f.no_tip();
 }
+
+#[test]
+fn no_public_ref_changes_or_push() {
+    let f = Fixture::new();
+    let source = Path::new(&f.source.root);
+    let origin = f.temp.path().join("origin");
+    let source_refs = g(source, &["show-ref"]);
+    let origin_refs = g(&origin, &["show-ref"]);
+    let head = g(source, &["rev-parse", "HEAD"]);
+    f.export();
+    assert_eq!(source_refs, g(source, &["show-ref"]));
+    assert_eq!(origin_refs, g(&origin, &["show-ref"]));
+    assert_eq!(head, g(source, &["rev-parse", "HEAD"]));
+    f.no_tip();
+}
+
+#[test]
+fn cleanup_failure_removes_complete_output() {
+    let f = Fixture::new();
+    let result = export_with_cleanup(&f.source, &f.head, "test-run", &f.bundle(), |root, args| {
+        assert_eq!(args[0], OsStr::new("update-ref"));
+        assert_eq!(args[1], OsStr::new("-d"));
+        g(root, &["bundle", "verify", f.bundle().to_str().unwrap()]);
+        g(
+            root,
+            &["update-ref", "refs/spawner/bundle/test-run", &f.base],
+        );
+        git(root, args)
+    });
+    assert!(matches!(result, Err(ResolveError::Git)));
+    assert!(!f.bundle().exists());
+    // A failed CAS must not be retried without its expected old value.
+    assert_eq!(
+        f.base,
+        g(
+            Path::new(&f.source.root),
+            &["rev-parse", "refs/spawner/bundle/test-run"]
+        )
+    );
+}

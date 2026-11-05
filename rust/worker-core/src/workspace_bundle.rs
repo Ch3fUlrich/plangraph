@@ -79,6 +79,16 @@ pub fn export_bundle(
     run_id: &str,
     output: &Path,
 ) -> Result<(), ResolveError> {
+    export_with_cleanup(repo, revision, run_id, output, git)
+}
+
+fn export_with_cleanup(
+    repo: &RepoEntry,
+    revision: &str,
+    run_id: &str,
+    output: &Path,
+    cleanup_ref: impl FnOnce(&Path, &[&OsStr]) -> Result<String, ResolveError>,
+) -> Result<(), ResolveError> {
     if !valid_id(run_id) {
         return Err(ResolveError::Invalid("run_id"));
     }
@@ -128,7 +138,7 @@ pub fn export_bundle(
         }
         result
     })();
-    let cleanup = git(
+    let cleanup = cleanup_ref(
         root,
         &[
             "update-ref".as_ref(),
@@ -137,7 +147,12 @@ pub fn export_bundle(
             revision.as_ref(),
         ],
     );
-    cleanup?;
+    if let Err(err) = cleanup {
+        if result.is_ok() {
+            fs::remove_file(output)?;
+        }
+        return Err(err);
+    }
     result
 }
 
