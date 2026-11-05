@@ -71,7 +71,16 @@ def main():
     failed = False
     for root in args.root:
         try:
-            paths.extend(p for p in Path(root).iterdir() if (p / ".git").exists())
+            for p in Path(root).iterdir():
+                try:
+                    (p / ".git").stat()
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                except OSError:
+                    print(f"UNREADABLE {p}")
+                    failed = True
+                else:
+                    paths.append(p)
         except OSError:
             print(f"UNREADABLE {root}")
             failed = True

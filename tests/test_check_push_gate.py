@@ -108,6 +108,28 @@ def test_install_refusals(repo):
     assert git(repo, "config", "core.hooksPath") == "other"
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+@pytest.mark.parametrize("gated_sibling", [False, True])
+def test_root_unreadable_checkout(repo, tmp_path, gated_sibling):
+    readable = tmp_path / "readable"
+    git(repo, "clone", "-q", str(repo), str(readable))
+    git(readable, "remote", "set-url", "origin", git(repo, "remote", "get-url", "origin"))
+    if gated_sibling:
+        assert run("--install", readable).returncode == 0
+    (tmp_path / "ordinary-file").write_text("not a checkout\n")
+    (tmp_path / "ordinary-directory").mkdir()
+    mode = repo.stat().st_mode
+    try:
+        repo.chmod(0)
+        result = run("--root", tmp_path)
+    finally:
+        repo.chmod(mode)
+    assert result.returncode == 1
+    assert f"UNREADABLE {repo}\n" in result.stdout
+    assert (f"NO-GATE {readable} " in result.stdout) == (not gated_sibling)
+    assert result.stderr == ""
+
+
 def test_global_gate_and_usage(repo):
     git(repo, "config", "--global", "core.hooksPath", str(repo / "tools/hooks"))
     assert run(repo).returncode == 0
