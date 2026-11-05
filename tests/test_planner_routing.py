@@ -13,7 +13,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-    "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna", "cx-gpt-6.1-terra",
+    "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
     "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
@@ -143,7 +143,7 @@ def test_small_estimate_goes_128k_qodercli_first():
 def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
-    assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna", "cx-gpt-6.1-terra",
+    assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
                       "agy-gemini-3.8-flash",
                       "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
     assert all("256k" in leg.windows for leg in r.legs)
@@ -456,6 +456,5 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     )
     assert nxt_agy is not None
     assert nxt_agy.id == "mimo-v2.6-pro"
-
 
 

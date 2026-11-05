@@ -800,7 +800,6 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "benchmark_source": "AA-v4.3.2-2026-10 (gpt-6-luna, as cxa/gpt-6-luna-high)",
         "updated_at": "2026-10-26T00:00:00Z",
     },
-    # Terra is registered in SEED_MODELS; no measured benchmark is available.
 ]
 
 # The 4 Role Routes

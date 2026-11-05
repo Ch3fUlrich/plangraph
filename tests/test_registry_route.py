@@ -186,47 +186,38 @@ def test_explicit_policy_argument_wins():
 
 # --- 4. seats per writer part --------------------------------------------------
 
-@pytest.mark.parametrize('terra', [True, False])
-def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy, terra):
+def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
     # Pinned to the pre-D-3552 policy: no review lift, so the seat set is
     # luna/gpt (the D-3552 lift is covered in test_review_legs_d3552.py).
-    plan = plan_spawn(HIGH, legs=tuple(l for l in DEFAULT_LEGS if terra or not l.review_head), role="review", writer_families=("claude",))
+    plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "cx-gpt-6.1-terra" if terra else "cx-gpt-6-luna"}
+    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "cx-gpt-6-luna"}
 
 
-@pytest.mark.parametrize('terra', [True, False])
-def test_default_policy_seats_deepseek_for_review(terra):
+def test_default_policy_seats_deepseek_for_review():
     # D-3552: with the live policy a deepseek leg may be a review seat.
-    plan = plan_spawn(HIGH, legs=tuple(l for l in DEFAULT_LEGS if terra or not l.review_head), role="review", writer_families=("claude",))
-    assert ("cx-gpt-6.1-terra" in [l.id for l in plan.review_seats]) if terra else ("deepseek" in _families(plan))
+    plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
+    assert "deepseek" in _families(plan)
 
 
-@pytest.mark.parametrize('terra', [True, False])
-def test_seat_never_shares_family_with_a_single_writer(terra):
-    plan = plan_spawn(RCARD, legs=tuple(l for l in DEFAULT_LEGS if terra or not l.review_head), role="review", writer_families=("gpt",))
-    assert all(l.review_head or l.family != 'gpt' for l in plan.review_seats)
-    assert ('gpt' in _families(plan)) == terra
-    assert all(c['covers'] == [] for c in plan.seat_coverage if c['leg'] == 'cx-gpt-6.1-terra')
+def test_seat_never_shares_family_with_a_single_writer():
+    plan = plan_spawn(RCARD, role="review", writer_families=("gpt",))
+    assert "gpt" not in _families(plan)
     assert any(s["leg"] == "cx-gpt-6-luna" and s["reason"] == "excluded_family" for s in plan.skipped)
 
 
-@pytest.mark.parametrize('terra', [True, False])
-def test_seat_may_share_family_with_another_writer_part(pre_d3552_policy, terra):
+def test_seat_may_share_family_with_another_writer_part(pre_d3552_policy):
     # D-3084: writers gpt + qwen; a qwen seat covers the gpt part, a gpt seat
     # covers the qwen part.  Every part is covered by a family other than it.
     # Pinned to the pre-D-3552 policy (no review lift): the seat set is luna/gpt.
     from plangraph.keeper.coverage import uncovered
-    plan = plan_spawn(RCARD, legs=tuple(l for l in DEFAULT_LEGS if terra or not l.review_head), role="review", writer_families=("gpt", "qwen"))
+    plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
     assert set(_families(plan)) == {"qwen", "gpt"}
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == (({"leg": "cx-gpt-6.1-terra", "covers": ["alibaba"]},
-                                  {"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]}) if terra else
-                                 ({"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]},
+    assert plan.seat_coverage == ({"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]},
                                   {"leg": "cx-gpt-6-luna", "covers": ["alibaba"]})
-                                 )
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():

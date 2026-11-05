@@ -1,1 +1,1 @@
-- **SPAWNER-TERRA (D-3817):** add the cx-gpt-6.1-terra review leg at the head of the review order (on a gpt writer it counts only with one non-gpt seat), remove the console Sonnet implementer, and stop marking a writer failed with writer_no_changes when its commit landed in a linked worktree.
+- **SPAWNER (D-3817):** remove the console Sonnet implementer and stop marking a writer failed with writer_no_changes when its commit landed in a linked worktree.

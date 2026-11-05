@@ -6,7 +6,6 @@ spawner catalog and the review gateway. Imports nothing from plangraph.spawner.
 
 from typing import Any
 from plangraph.registry_columns import tag_seed_rows
-from plangraph.catalog_supplement import MIMO_FLASH
 
 # Canonical 22 Models from Artificial Analysis v4.3.2
 SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
@@ -536,21 +535,24 @@ SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
         "trains_on_prompts": 0,
     },
     {
-        "model_id": "omniroute/cx-gpt-6.1-terra",
-        "provider_id": "cx",
-        "upstream_id": "gpt-6.1-terra",
-        "family": "gpt",
-        "context_tokens": 900000,
-        "max_output_tokens": 128000,
-        "quota_pool_id": "cxa-sub",
+        "model_id": "mimo/mimo-v2.6-flash",
+        "provider_id": "mimo",
+        "upstream_id": "mimo-v2.6-flash",
+        "family": "mimo",
+        "parameter_effort": None,
+        "max_safe_effort": None,
+        "effort_warning": None,
+        "context_tokens": 1000000,
+        "max_output_tokens": 65536,
+        "price_cliff_tokens": None,
+        "quota_pool_id": "mimo-sub",
         "pool_burn_weight": 1.0,
         "status": "active",
-        "available": 0,
-        "unavailable_reason": "unmeasured: no benchmark row; review-only, served model unwitnessed (D-3817)",
+        "available": 1,
+        "unavailable_reason": None,
         "supports_reasoning": 1,
         "supports_tool_calling": 1,
-        "supports_vision": 1,
+        "supports_vision": 0,
         "trains_on_prompts": 0,
     },
-    MIMO_FLASH,
 ])

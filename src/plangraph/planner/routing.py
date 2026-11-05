@@ -174,8 +174,6 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                 w_idx = len(WRITER_ORDER)
             return (tier_idx, w_idx, pos)
         eligible.sort(key=sort_key)
-    elif effective_role == "review":
-        eligible.sort(key=lambda t: (not t[2].review_head, t[0], t[1]))
     else:
         eligible.sort(key=lambda t: (t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
@@ -254,7 +252,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     ``exclude_families`` excludes the specified family names from candidate legs.
     ``policy`` (default :func:`load_route_policy`) skips banned/off families and
     paused harnesses.  A review leg whose family is EVERY writer family is
-    excluded except Terra; seats cover each writer part (:func:`pick_seats`).  An inline-only
+    excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
@@ -324,10 +322,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     if role == "review" and not writer_set:   # D-1533: no writer named = none excluded; fail closed
         raise SpawnRefused("review needs a writer family (writer_families or review_of)")
     # D-3084 per-part seats: only a family that is EVERY writer covers no part.
-    excluded = family_spellings(set(exclude_families) | claude_writer_fence(role, writer_set), legs)
-    same_writer = family_spellings(writer_set, legs) if role == "review" and len(writer_set) == 1 else set()
-    same_writer_legs = {l.id for l in candidates if l.family in same_writer
-                        and not l.review_head}
+    excluded = family_spellings((writer_set if role == "review" and len(writer_set) == 1 else set())
+                                | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:
@@ -347,7 +343,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason:
             pass
-        elif leg.family in excluded or leg.id in same_writer_legs:
+        elif leg.family in excluded:
             reason = "excluded_family"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
@@ -371,7 +367,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
     try:
-        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped | same_writer_legs,
+        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
@@ -427,10 +423,6 @@ def validate_model(model):
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
     rows = get_catalog_models()
-    # D-3817: Terra is an explicit review leg, not a measured resolver candidate.
-    if model == 'omniroute/cx-gpt-6.1-terra' and any(
-            leg.model == model and leg.roles == ('review',) for leg in DEFAULT_LEGS):
-        return model
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
                {leg.model for leg in DEFAULT_LEGS}) - inactive - OPERATOR_REMOVED_MODELS
