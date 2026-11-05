@@ -53,8 +53,18 @@ fn windows_supervise_helper() {
     };
     let dir = std::env::var(HELPER_DIR).unwrap_or_default();
     match mode.as_str() {
-        "sleep" => {}
+        "sleep" => write_pid(&dir, "sleep.pid"),
         "exit" => std::process::exit(7),
+        "priority" => {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GetPriorityClass(process: HANDLE) -> u32;
+            }
+            // SAFETY: the current-process pseudo handle is valid.
+            let priority = unsafe { GetPriorityClass(GetCurrentProcess()) };
+            std::fs::write(Path::new(&dir).join("priority"), priority.to_string()).unwrap();
+            std::process::exit(7);
+        }
         "leaf" => write_pid(&dir, "leaf.pid"),
         "leak" => {
             assert!(!dir.is_empty(), "the leak helper needs {HELPER_DIR}");
@@ -177,6 +187,16 @@ fn timeout_terminates_the_child() {
     let t = Instant::now();
     let r = supervise(helper("sleep", d.path()), &o).unwrap();
     assert!(r.timed_out && !r.stalled && !r.cancelled, "{r:?}");
+    if d.path().join("sleep.pid").exists() {
+        assert!(wait_until_gone(read_pid(d.path(), "sleep.pid")));
+    } else {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            assert!(!d.path().join("sleep.pid").exists());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!d.path().join("sleep.pid").exists());
+    }
     // Slack for a loaded host (2.57 s seen in a parallel run).
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
@@ -187,16 +207,27 @@ fn cancel_terminates_the_child() {
     let d = tempfile::tempdir().unwrap();
     let flag = Arc::new(AtomicBool::new(false));
     let f = flag.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+    let pid_file = d.path().join("sleep.pid");
+    let cancel = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !pid_file.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let raised = Instant::now();
         f.store(true, Ordering::Relaxed);
+        (raised, pid_file.exists())
     });
-    let t = Instant::now();
     let r = supervise_with_cancel(helper("sleep", d.path()), &quick(), &|| {
         flag.load(Ordering::Relaxed)
     })
     .unwrap();
+    let (t, published) = cancel.join().unwrap();
+    assert!(
+        published,
+        "child never published sleep.pid before cancellation"
+    );
     assert!(r.cancelled && !r.stalled && !r.timed_out, "{r:?}");
+    assert!(wait_until_gone(read_pid(d.path(), "sleep.pid")));
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
 
@@ -238,16 +269,20 @@ fn helper_passes_the_libtest_nocapture_flag() {
     assert!(args.iter().any(|a| a == "--nocapture"), "{args:?}");
 }
 
-/// Caller-set creation flags are replaced by the supervisor's own pair; the
-/// supervised child must still spawn, resume and report its exit code.
+/// Assignment replaces the distinguishable IDLE_PRIORITY_CLASS caller flag.
 #[test]
 #[serial]
 fn caller_creation_flags_do_not_break_supervision() {
     let d = tempfile::tempdir().unwrap();
-    let mut c = helper("exit", d.path());
-    c.creation_flags(CREATE_NO_WINDOW);
+    let mut c = helper("priority", d.path());
+    c.creation_flags(0x40); // IDLE_PRIORITY_CLASS
     let r = supervise(c, &quick()).unwrap();
     assert_eq!(r.code, Some(7));
+    let priority = std::fs::read_to_string(d.path().join("priority")).unwrap();
+    assert_ne!(
+        priority, "64",
+        "caller IDLE_PRIORITY_CLASS survived assignment"
+    );
 }
 
 /// The locally declared snapshot row keeps the layout and size the walk

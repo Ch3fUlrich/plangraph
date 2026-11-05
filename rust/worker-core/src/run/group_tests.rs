@@ -2,7 +2,6 @@ use super::{group::*, group_unix::*};
 use std::{ffi::OsStr, path::Path, time::Duration};
 use std::{
     io::{self, Read},
-    sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
 };
 
@@ -92,6 +91,8 @@ fn environment_cwd_and_stdin() {
             piped,
         );
         assert_eq!(g.child.stdin.is_some(), piped);
+        assert!(g.child.stderr.is_some());
+        assert!(g.group.identity().start_time.is_some());
         drop(g.child.stdin.take());
         let mut text = String::new();
         g.child
@@ -113,6 +114,10 @@ fn environment_cwd_and_stdin() {
     assert!(
         matches!(SystemLauncher.launch("pg-test", &spec, &Confinement::Plain, &RunLimits::default()), Err(LaunchError::Io(e)) if e.kind() == io::ErrorKind::NotFound)
     );
+    assert!(matches!(
+        SystemLauncher.launch("a.b", &spec, &Confinement::default(), &RunLimits::default()),
+        Err(LaunchError::BadUnit)
+    ));
 }
 
 #[test]
@@ -157,54 +162,6 @@ fn ignores_term_and_zero_grace() {
     assert!(!dir.path().join("marker").exists());
 }
 
-struct Fake {
-    identity: Identity,
-    signals: AtomicUsize,
-    mode: u8,
-}
-impl RunGroup for Fake {
-    fn identity(&self) -> &Identity {
-        &self.identity
-    }
-    fn members(&self) -> io::Result<Vec<u32>> {
-        match self.mode {
-            0 => Ok(vec![]),
-            1 => Ok(vec![self.identity.pid]),
-            _ => Err(io::Error::other("unknown")),
-        }
-    }
-    fn terminate(&self) {
-        self.signals.fetch_add(1, Ordering::SeqCst);
-    }
-    fn kill(&self) {
-        self.signals.fetch_add(1, Ordering::SeqCst);
-    }
-}
-#[test]
-fn empty_and_unknown_stop() {
-    for mode in 0..3 {
-        let f = Fake {
-            identity: Identity {
-                pid: 42,
-                start_time: None,
-                group: None,
-            },
-            signals: AtomicUsize::new(0),
-            mode,
-        };
-        let start = Instant::now();
-        let outcome = stop_group(&f, Duration::from_millis(30), Duration::from_millis(30));
-        if mode == 0 {
-            assert_eq!(outcome, StopOutcome::Empty);
-            assert_eq!(f.signals.load(Ordering::SeqCst), 0);
-            assert!(start.elapsed() < Duration::from_millis(100));
-        } else {
-            assert_eq!(outcome, StopOutcome::Survivors(vec![42]));
-            assert!(start.elapsed() >= Duration::from_millis(60));
-        }
-    }
-}
-
 #[test]
 fn fake_cgroup() {
     let dir = tempfile::tempdir().unwrap();
@@ -224,6 +181,22 @@ fn fake_cgroup() {
         roots: Roots::default(),
     };
     assert_eq!(group.members().unwrap(), vec![child.child.id()]);
+    let nested = dir.path().join("child");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("cgroup.procs"), child.child.id().to_string()).unwrap();
+    std::fs::write(dir.path().join("cgroup.procs"), "").unwrap();
+    assert_eq!(group.members().unwrap(), vec![child.child.id()]);
+    std::fs::remove_file(nested.join("cgroup.procs")).unwrap();
+    assert!(group.members().unwrap().is_empty());
+    std::fs::create_dir(nested.join("cgroup.procs")).unwrap();
+    assert!(group.members().is_err());
+    std::fs::remove_dir(nested.join("cgroup.procs")).unwrap();
+    std::fs::remove_dir(nested).unwrap();
+    std::fs::write(
+        dir.path().join("cgroup.procs"),
+        child.child.id().to_string(),
+    )
+    .unwrap();
     group.kill();
     let _ = child.child.wait();
     assert_eq!(
@@ -337,3 +310,6 @@ fn parsers() {
     assert_eq!(start, proc_start_time(Path::new("/proc"), pid));
     assert_eq!(proc_start_time(Path::new("/proc"), u32::MAX), None);
 }
+
+#[path = "group_failure_tests.rs"]
+mod failures;

@@ -44,6 +44,7 @@ def test_windows_fallthrough_tails_and_choice(tmp_path, monkeypatch, code):
     assert result['stdout_tail'] and result['stderr_tail']
 
 
+@pytest.mark.real_probe
 def test_probe_resolves_cmd_and_records_failure(monkeypatch, caplog):
     monkeypatch.setattr(resolver.shutil, 'which', lambda *a, **kw: 'C:/Tools/opencode.cmd')
     calls = []
