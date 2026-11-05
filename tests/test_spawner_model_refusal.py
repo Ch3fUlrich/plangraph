@@ -53,6 +53,26 @@ def test_last_explicit_stop():
     assert last_stop_reason('\n'.join(lines + [json.dumps({'type': 'result', 'stop_reason': 'end_turn'})])) == 'end_turn'
 
 
+@pytest.fixture
+def captured_safety_stop():
+    return {'type': 'result', 'subtype': 'success', 'is_error': False,
+            'result': 'I cannot help with that request.', 'stop_reason': 'end_turn',
+            'safety_stops': 1, 'num_turns': 1}
+
+
+def test_result_safety_stops_is_refusal(tmp_path, monkeypatch, captured_safety_stop):
+    lines = [json.dumps(captured_safety_stop)]
+    assert last_stop_reason(lines[0]) == 'refusal'
+    record, directory = run_review(tmp_path, monkeypatch, lines)
+    assert (record['status'], record['reason'], record['stop_reason']) == ('failed', 'model_refusal', 'refusal')
+    assert record['stdout_tail'] == captured_safety_stop['result']
+    assert (directory / 'claude-stream.jsonl').read_text().splitlines() == lines
+    assert record['completion']['run_id'] == record['run_id']
+    assert 'model_refusal' in json.dumps(record['completion'])
+    captured_safety_stop['safety_stops'] = 0
+    assert last_stop_reason(json.dumps(captured_safety_stop)) == 'end_turn'
+
+
 def test_no_booking_even_for_limit_text():
     job = SimpleNamespace(events=[{'event': 'model_refusal'}], exit_code=7,
                           stdout='usage limit reached', stderr='', refusal='quota')

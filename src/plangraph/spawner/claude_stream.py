@@ -33,6 +33,7 @@ def last_stop_reason(stream):
         source = event if event.get('type') == 'result' else event.get('message') if event.get('type') == 'assistant' else None
         if isinstance(source, dict) and isinstance(source.get('stop_reason'), str):
             stop = source['stop_reason']
+        if event.get('type') == 'result' and event.get('safety_stops', 0) > 0: stop = 'refusal'
     return stop
 
 
