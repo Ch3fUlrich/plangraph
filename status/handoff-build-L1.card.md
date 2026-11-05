@@ -16,6 +16,8 @@
 2. D-3817: r4 suite green: push, delta seat non-gpt (judge validate_model exception), GO-REQ, DONE with sol cause; red: BLOCKED, no more rounds
 3. #338 #380 #377 tests seats: Haiku once D-3835 is live, else agy ~11-06T13:43Z
 4. SPAWNER-ORPHAN-REAP (D-3771) after #377
+5. D-3880 plangraph-md-sync owned by build-L1: find ANSWERS.md sha mismatch, fix, dry run, re-arm timer + path, DONE; no build-L2-rin launch by 21:00Z: run RIN with Sol writers, no further ask
+6. D-3879 new leaf LE-HANDOFF-CARRYOVER-AUDIT (HIGH) + LE-HANDOFF-OPEN-ITEMS-GATE, prio 8, after RIN starts
 ## Open
 - BLOCKED D-3798 L2-LAUNCH build-L2-rin awaits routing | default heartbeat RIN, no RIN work | deadline none
 - BLOCKED D-3817 AutoOS opencode.jsonc terra row, prepush baseline 948 | default D-id raises baseline by 5, leg skipped until then | deadline none
@@ -29,11 +31,9 @@
 - Haiku seat prompts: exactly `python3 -m pytest -q <relative paths>`; -k, -x, -p, env prefix denied. `id`, `git status` were allowed in probes, cause not verified
 - Last deny additions on #419 have no live probe: re-probe before DONE
 - Hand lines on #419 total above 30 over commits: name it in GO-REQ
-- A refused heredoc writes nothing: check files before reporting 'running'
-- Guard in a worktree session refuses compound shell naming git; plain single commands + Write tool work
+- Guard in a worktree session refuses compound shell naming git; plain single commands + Write tool; a refused heredoc writes nothing
 - origin/main past live: new ff needs full suite + D-id; full suite ~30 min, timeout 3300
-- Named test lists hid failures twice on #407: full suite before any GO; read removed test lines
-- 'NO-TOOLS' prompt on tools leg qwen gets no diff: seat void; qwen has no pytest
+- Full suite before any GO, read removed test lines; 'NO-TOOLS' prompt on qwen gets no diff: seat void; qwen has no pytest
 - After restart check ListAgents for a sibling build-L1 (D-3785)
 - Push build-L1 branch ONLY to control; never origin: public repo, D-1751
 ## Drill-down
