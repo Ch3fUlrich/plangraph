@@ -23,6 +23,13 @@ def _ms(start, end):
     return max(0, round((end - start) * 1000))
 
 
+def _sample(fallback=0.0):
+    try:
+        return _now()
+    except Exception:
+        return fallback
+
+
 class _Parts(dict):
     pending = None
 
@@ -69,16 +76,16 @@ class RequestTimer:
         self.lock, self.kind, self.event = lock, kind, event
 
     def __enter__(self):
-        self.start = _now()
+        self.start = _sample()
         self.lock.acquire()
-        self.held = _now()
+        self.held = _sample(self.start)
         self.parts = _Parts()
         self.parts.pending = []
         self.token = _context(self.parts)
         return self
 
     def __exit__(self, *exc):
-        end = _now()
+        end = _sample(self.held)
         try:
             self.lock.release()
         finally:
@@ -105,15 +112,15 @@ def measured(event=None, part=None):
             if event:
                 parts.pending = getattr(parent, "pending", None)
             token = _context(parts)
-            start = _now()
+            start = _sample()
             try:
                 return fn(*args, **kwargs)
             finally:
                 try:
-                    elapsed = _ms(start, _now())
+                    elapsed = _ms(start, _sample(start))
                     if part and parts is not None:
                         parts[part] = parts.get(part, 0) + elapsed
-                    if event:
+                    if event and token is not None:
                         _emit(event, "other", 0, elapsed, parts)
                 except Exception:
                     pass

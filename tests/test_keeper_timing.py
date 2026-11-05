@@ -216,3 +216,44 @@ def test_context_failures_do_not_escape_or_leak(failure, meter, monkeypatch):
     lock.release()
     monkeypatch.setattr(timing, "_parts", original)
     original.set(None)
+
+
+@pytest.mark.parametrize("sample", range(1, 6))
+@pytest.mark.parametrize("body_error", [False, True])
+def test_sample_failure_preserves_body_and_unlocks(sample, body_error, monkeypatch):
+    calls, lock = 0, threading.Lock()
+    def now():
+        nonlocal calls
+        calls += 1
+        if calls == sample:
+            raise RuntimeError("clock")
+        return 0.0
+    monkeypatch.setattr(timing, "_now", now)
+    def body():
+        with timing.RequestTimer(lock):
+            assert timing.measured("snapshot_timing")(lambda: 42)() == 42
+            if body_error:
+                raise ValueError("original")
+        return 42
+    try:
+        if body_error:
+            with pytest.raises(ValueError, match="original"):
+                body()
+        else:
+            assert body() == 42
+    finally:
+        assert lock.acquire(blocking=False)
+        lock.release()
+
+
+def test_context_set_failure_never_outputs_under_lock(meter, monkeypatch):
+    clock, out = meter
+    class BrokenContext:
+        def get(self):
+            return None
+        def set(self, value):
+            raise RuntimeError("set")
+    monkeypatch.setattr(timing, "_parts", BrokenContext())
+    with timing.RequestTimer(threading.Lock()):
+        timing.measured("snapshot_timing")(lambda: clock.advance(.300))()
+        assert out.getvalue() == ""
