@@ -1,4 +1,4 @@
-//! Unwired retention evidence only; D-3610. Adapters and observation time are injected.
+//! Unwired retention evidence only; FLEET-RECYCLE-RETAIN. Adapters and observation time are injected.
 use crate::fleet_owner_lease::{Identity, Read, State};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
