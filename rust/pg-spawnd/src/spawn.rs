@@ -134,26 +134,8 @@ pub(crate) fn spawn(
         }
     };
     let args = &admitted;
-    let mut plan: Value = serde_json::from_str(&placement::route(state, args)?)
+    let plan: Value = serde_json::from_str(&placement::route(state, args)?)
         .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
-    if crate::leg_ref::configured_mode(role.as_str().unwrap_or("implement"))
-        == crate::leg_ref::LegRefMode::On
-    {
-        if let Some(id) = args.get("leg") {
-            let selected = plan["legs"]
-                .as_array()
-                .and_then(|legs| legs.iter().find(|leg| leg["id"] == *id))
-                .cloned();
-            match selected {
-                Some(leg) => plan["first_leg"] = leg,
-                None => {
-                    let error = parameter("selected leg unavailable in route plan");
-                    record_validation_error(state, host, role, &error)?;
-                    return Err(error);
-                }
-            }
-        }
-    }
     let leg = &plan["first_leg"];
     if !plan["legs"].is_array()
         || !leg.is_object()

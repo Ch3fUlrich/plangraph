@@ -1,2 +1,2 @@
-RL26: add read-only catalog bridge, 60-second catalog cache and shared reference admission, off by default. Route remains a selector-free preview; On spawn overrides select the canonical leg locally. External acceptance and historical live gate remain outstanding.
-Fix r4: read PLANGRAPH_RELIABILITY_LEG_REF over XDG reliability.json; canonical overrides use the local spawn path, preserving refusal records and host handling. Add omitted-role coverage.
+RL26: add read-only catalog bridge, 60-second catalog cache and shared reference admission, off by default. External acceptance and historical live gate remain outstanding.
+Fix r5: admission never selects a leg; preserve the planner choice in every mode. Explicit selection belongs to RL20. Guard probe with the review-role rule and omit empty suggestion suffixes. Preserve validation refusal records and host handling.

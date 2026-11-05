@@ -184,7 +184,7 @@ fn wired_adapter_case(invalid: bool) {
             assert_eq!(rows[0]["refusal"], "ParameterRefused");
         } else {
             assert_eq!(rows[0]["host"], "local");
-            assert_eq!(rows[0]["chosen_leg"]["id"], "registered");
+            assert_eq!(rows[0]["chosen_leg"]["id"], "planner-choice");
         }
         return;
     }
@@ -198,7 +198,7 @@ fn wired_adapter_case(invalid: bool) {
 printf '%s\n' "$*" >> "$PG_LEG_REF_STATE/calls"
 case "$3" in
 catalog) printf '[{"id":"registered","model":"provider/model","roles":["implement"]}]';;
-route) printf '{"legs":[{"id":"registered","harness":"test","model":"provider/model","family":"test"}],"first_leg":{}}';;
+route) printf '{"legs":[{"id":"registered","harness":"test","model":"provider/model","family":"test"}],"first_leg":{"id":"planner-choice","harness":"test","model":"provider/planned","family":"test"}}';;
 *) exit 9;;
 esac
 "#,
@@ -215,7 +215,7 @@ esac
     let name = if invalid {
         "invalid_ref_never_calls_adapter_in_on"
     } else {
-        "mcp_route_and_spawn_override_share_resolver"
+        "mcp_route_and_spawn_admission_preserves_planner_choice"
     };
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", &format!("leg_ref::admission_tests::{name}")])
@@ -245,7 +245,7 @@ esac
 }
 #[cfg(unix)]
 #[test]
-fn mcp_route_and_spawn_override_share_resolver() {
+fn mcp_route_and_spawn_admission_preserves_planner_choice() {
     wired_adapter_case(false);
 }
 #[cfg(unix)]
@@ -260,4 +260,34 @@ fn omitted_role_with_diff_ref_refused() {
         let mut a = args(json!({"card":{"diff_ref":"change"},"dry_run":true}));
         assert!(admit_ref(&mut a, &catalog(), mode).is_err());
     }
+}
+
+#[test]
+fn probe_role_rule_precedes_adapter() {
+    for value in [
+        json!({"card":{"diff_ref":"change"}, "dry_run":true}),
+        json!({"role":"implement", "diff_ref":"change"}),
+    ] {
+        let error = crate::placement::probe(Path::new("unused"), &args(value))
+            .unwrap_err()
+            .into_error_data();
+        assert_eq!(
+            error.message,
+            "diff_ref requires role review; role implement is refused"
+        );
+    }
+}
+
+#[test]
+fn filtered_empty_suggestions_omit_suffix() {
+    let c = vec![LegRef {
+        id: "unsafe!".into(),
+        model: "provider/model".into(),
+        roles: vec!["implement".into()],
+    }];
+    let mut a = args(json!({"model":"provider/mode"}));
+    let error = admit_ref(&mut a, &c, LegRefMode::On)
+        .unwrap_err()
+        .into_error_data();
+    assert_eq!(error.message, "unknown leg/reference");
 }

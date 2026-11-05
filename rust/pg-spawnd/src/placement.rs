@@ -125,6 +125,7 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
     run(state, route_args(args)?, Duration::from_secs(30), false)
 }
 pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
+    crate::leg_ref::check_review_role(args)?;
     let mut argv = vec!["probe".into()];
     strings(args, "leg", "--leg", &mut argv)?;
     boolean(args, "all_writers", "--all-writers", &mut argv)?;

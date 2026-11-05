@@ -200,7 +200,11 @@ pub(crate) fn admit_ref(
                                         })
                                 })
                                 .collect();
-                            format!("unknown leg/reference; did-you-mean: {}", hints.join(", "))
+                            if hints.is_empty() {
+                                "unknown leg/reference".into()
+                            } else {
+                                format!("unknown leg/reference; did-you-mean: {}", hints.join(", "))
+                            }
                         }
                         _ => "unknown leg/reference or role-ineligible reference".into(),
                     };
