@@ -11,8 +11,8 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|quota threshold|exhausted their quota|usage limit|rate limit|resets in|cooling down'
-    r'|too many requests|\bHTTP 429\b|\b(?:status|code)[ =:]*429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
+    r'quota reached|quota exceeded|quota threshold|exhausted their quota|usage limit|rate limit|resets in'
+    r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
 #: leg (prose stays out, D-3257). It counts only on an error-shaped line or

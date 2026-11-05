@@ -33,12 +33,14 @@ def test_silent_child_ends_stalled_with_no_activity(tmp_path):
     asyncio.run(run())
 
 
-def test_cooldown_and_status_429_lines_count_prose_does_not():
-    assert early_refusal(COOLDOWN + '\n') == COOLDOWN
-    assert early_refusal('Error: request failed with status 429\n')
-    assert harness_limit_line(1, '', COOLDOWN + '\n') == COOLDOWN
-    assert early_refusal('the pool is cooling down, status 429\n') is None
-    assert early_refusal('Error: bad value on line 429\n') is None
+def test_upstream_lines_arm_the_late_booking_prose_does_not_and_no_leg_is_booked():
+    for line, armed in ((COOLDOWN, True), ('Error: request failed with status 429', True),
+                        ('Error: rate limit reached', True), ('the pool is cooling down, status 429', False),
+                        ('Error: bad value on line 429', False)):
+        gate = _gate(asyncio.Event())
+        gate.scan_late([line + '\n'], 100)
+        assert bool(gate.late) is armed, line
+    assert early_refusal(COOLDOWN + '\n') is None and harness_limit_line(1, '', COOLDOWN + '\n') is None
 
 
 def _gate(refused):
@@ -51,17 +53,17 @@ def test_late_limit_line_books_after_silence_and_activity_cancels_it():
     gate.scan_late([COOLDOWN + '\n'], 100)
     gate.poll(100 + LATE_QUIET_S - 1)
     assert not refused.is_set()
-    gate.activity(100 + LATE_QUIET_S - 1)
+    gate.scan_late(['> build · model\n'], 100 + LATE_QUIET_S - 1)   # a header-only chunk is output too
     gate.poll(100 + 2 * LATE_QUIET_S)
     assert not refused.is_set()
+    gate.scan_late([COOLDOWN + '\n', 'tool output after it\n'], 100)   # newest output decides, within one chunk too
+    assert gate.late is None
     gate.scan_late([COOLDOWN + '\n'], 100)
     gate.poll(100 + LATE_QUIET_S)
     assert refused.is_set() and gate.job.refusal == COOLDOWN
 
 
 def test_hung_child_after_a_late_limit_line_ends_failed_with_the_line(tmp_path, monkeypatch):
-    monkeypatch.setattr('plangraph.spawner.run_watchdog.REFUSAL_WINDOW_S', 0)
-    monkeypatch.setattr('plangraph.spawner.run_refusal.REFUSAL_WINDOW_S', 0)
     monkeypatch.setattr('plangraph.spawner.run_refusal.LATE_QUIET_S', .2)
     script = f"import time; print({COOLDOWN!r}, flush=True); time.sleep(60)"
     async def run():
