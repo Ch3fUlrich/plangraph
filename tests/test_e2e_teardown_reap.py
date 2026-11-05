@@ -138,7 +138,8 @@ def test_stop_reaps_after_timeout_or_group_error(tmp_path, monkeypatch, group_er
     worker.proc.wait.side_effect = [subprocess.TimeoutExpired("worker", 10), None]
     killpg = MagicMock(side_effect=PermissionError if group_error else None)
     reap = MagicMock()
-    monkeypatch.setattr(u.os, "killpg", killpg)
+    monkeypatch.setattr(u, "os", SimpleNamespace(name="posix", killpg=killpg))
+    assert os.killpg is not killpg
     monkeypatch.setattr(u, "reap_recorded", reap)
     if group_error:
         with pytest.raises(PermissionError):
@@ -167,6 +168,33 @@ def test_fake_rejects_changed_shebang(tmp_path, monkeypatch):
     monkeypatch.setattr(u, "FAKE_OPENCODE", u.FAKE_OPENCODE.replace("#!/bin/sh", "#!/bin/bash"))
     with pytest.raises(AssertionError, match="shebang"):
         u.write_fake_opencode(tmp_path / "bin")
+
+
+def test_worker_does_not_guess_pid_directory(tmp_path, monkeypatch):
+    popen = MagicMock()
+    popen.return_value.poll.return_value = 0
+    monkeypatch.setattr(u.subprocess, "Popen", popen)
+    reap = MagicMock()
+    monkeypatch.setattr(u, "reap_recorded", reap)
+    worker = u.WorkerProc("unused", {"PG_JAIL": "off"}, tmp_path / "worker.log")
+    try:
+        assert worker.pid_dir is None
+        assert "PG_FAKE_PID_DIR" not in popen.call_args.kwargs["env"]
+    finally:
+        worker.stop()
+    reap.assert_not_called()
+
+
+def test_fake_missing_pid_directory_is_nonfatal(tmp_path):
+    bin_dir = tmp_path / "other bin"
+    pid_dir = u.write_fake_opencode(bin_dir)
+    pid_dir.rmdir()
+    for prompt in ("question", u.ANSWER_TOKEN):
+        result = subprocess.run(["sh", "-e", str(bin_dir / "opencode"), "run", prompt],
+                                cwd=tmp_path, capture_output=True, text=True, timeout=2)
+        assert result.returncode == 0
+        assert ("PG_QUESTION:" if prompt == "question" else "wrote out.txt") in result.stdout
+    assert (tmp_path / u.CARD_FILE).read_text() == "done\n"
 
 
 def test_fixture_failed_wait_up_stops_worker(tmp_path, monkeypatch, children):

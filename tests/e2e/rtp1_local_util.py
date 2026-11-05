@@ -113,7 +113,7 @@ def write_fake_opencode(bin_dir: Path) -> Path:
     pid_dir.mkdir()
     shebang, newline, body = FAKE_OPENCODE.partition("\n")
     assert shebang == "#!/bin/sh" and newline, "fake opencode requires a shell shebang"
-    tmp.write_text(f'{shebang}\necho $$ > {shlex.quote(str(pid_dir.resolve()))}/$$\n{body}')
+    tmp.write_text(f'{shebang}\necho $$ > {shlex.quote(str(pid_dir.resolve()))}/$$ 2>/dev/null || true\n{body}')
     tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR)
     os.replace(tmp, bin_dir / "opencode")
     return pid_dir
@@ -177,8 +177,9 @@ class WorkerProc:
 
     def __init__(self, binary: str, env: dict, log: Path) -> None:
         env = env.copy()
-        self.pid_dir = Path(env.get("PG_FAKE_PID_DIR", log.parent / "stub-bin" / "pids"))
-        env["PG_FAKE_PID_DIR"] = str(self.pid_dir.resolve())
+        self.pid_dir = Path(env["PG_FAKE_PID_DIR"]) if "PG_FAKE_PID_DIR" in env else None
+        if self.pid_dir is not None:
+            env["PG_FAKE_PID_DIR"] = str(self.pid_dir.resolve())
         if "PG_JAIL_BIN" not in env and "PG_JAIL" not in env:
             jail = Path(binary).resolve().with_name("pg-jail")
             if jail.is_file():
@@ -227,7 +228,8 @@ class WorkerProc:
                     self.proc.wait(timeout=10)
         finally:
             try:
-                reap_recorded(self.pid_dir)
+                if self.pid_dir is not None:
+                    reap_recorded(self.pid_dir)
             finally:
                 self.out.close()
 
