@@ -3,6 +3,9 @@ use super::{event_object, unknown_event, ChannelHealth, EventParser, Framer, Lin
 use crate::activity::{Kind, Phase, Signal, ToolClass};
 use std::collections::HashMap;
 
+mod limit;
+#[cfg(test)]
+mod limit_tests;
 #[cfg(test)]
 mod more_tests;
 #[cfg(test)]
@@ -117,7 +120,7 @@ impl ClaudeParser {
                 true
             }
             Some("rate_limit_event") => {
-                emit(Kind::Request, None);
+                emit(limit::gate(&v), None);
                 true
             }
             Some("result") => {
