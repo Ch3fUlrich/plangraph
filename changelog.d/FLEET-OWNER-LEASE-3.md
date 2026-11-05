@@ -1,0 +1,1 @@
+- **FLEET-OWNER-LEASE (part 3):** Add unwired crash-safe filesystem ownership compare-and-swap and explicit bootstrap.
