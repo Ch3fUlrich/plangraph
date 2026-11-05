@@ -1,1 +1,0 @@
-- **SPAWNER (D-3817):** remove the console Sonnet implementer and stop marking a writer failed with writer_no_changes when its commit landed in a linked worktree.

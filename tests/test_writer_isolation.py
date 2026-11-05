@@ -207,6 +207,22 @@ def test_missing_writer_identity_is_unchecked(tmp_path, email):
     assert job.events[-1]['event'] == 'writer_change_unchecked'
 
 
+@pytest.mark.writer_change_check
+def test_earlier_attempt_commit_does_not_count(tmp_path, monkeypatch):
+    work = _git_repo(tmp_path / 'work')
+    linked = tmp_path / 'linked'
+    subprocess.run(['git', '-C', str(work), 'worktree', 'add', '-qb', 'writer', str(linked)], check=True)
+    def earlier_attempt(_):
+        subprocess.run(['git', '-C', str(linked), '-c',
+                        'user.email=run-test@writer.plangraph.invalid', 'commit', '-q',
+                        '--allow-empty', '-m', 'earlier attempt'], check=True)
+    first, _ = _run_writer(tmp_path, monkeypatch, work, act=earlier_attempt)
+    assert (first.status, first.exit_code) == ('completed', 0)
+    later, _ = _run_writer(tmp_path, monkeypatch, work)
+    assert (later.status, later.exit_code) == ('failed', 5)
+    assert {'event': 'writer_no_changes'} in later.events
+
+
 def test_tree_state_outside_worktree(tmp_path):
     from plangraph.spawner.opencode_isolation import tree_state
     assert tree_state(tmp_path) is None
