@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 - **PLACEMENT-R7A-JOB-SCHEMA (D-3676, D-3741):** add reversible Postgres migration 10 for federation storage with bounded blob chunks and live-attempt backstops; no routes or deployment.
+- **SPAWNER-MCP-STDIO-GUARD (D-3753):** ignore notifications, compact MCP ps records, and guard stdio reply sizes with ReplyTooLarge errors.
 - **SPAWNER-GIT-GUARD-FLAKE (D-3739):** stub both synchronous and async host-probe entry points in tests and fail closed on unmarked binary probes.
 - **SPAWNER-RL5B (D-3676, D-3714):** record closed-stdin opencode 2.1.0 live arrivals and replay read progress, version drift and payload-retention checks; no wiring or pin change.
 - **SPAWNER-RL5B (D-3676, D-3714):** map opencode events to receive-time activity with seven sanitized historical replays; no caller or switch, rollback by git revert.
