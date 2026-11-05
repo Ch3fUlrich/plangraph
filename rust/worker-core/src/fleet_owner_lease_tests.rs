@@ -6,6 +6,42 @@
             matches!(r, Read::Unknown { session_id, reason: why, alarm: true }
             if session_id == "session-a" && why.contains(reason)) ); }
     #[test]
+    fn expiry_boundary_is_observed_without_takeover() {
+        for field in 0..3 {
+            let mut r = bootstrap("session-a", "run-a", 10).unwrap();
+            r.identity = State::Busy(owner());
+            let l = Lease { id: "lease-a".into(), owner: owner(), expires_at: 20 };
+            match field { 0 => r.pause = State::Busy(l), 1 => r.finalizer = State::Busy(l), _ => r.runners = State::Busy(vec![l]) }
+            assert_eq!(decode("session-a", "run-a", encoded(&r), 19), Read::Known(r.clone()));
+            for now in [20, 21] {
+                unknown(decode("session-a", "run-a", encoded(&r), now), "Expired");
+                assert!(super::advance(&r, 0, &r.identity, Transition::Release, now).is_err());
+            }
+        }
+    }
+    #[test]
+    fn migrated_origin_cannot_be_laundered_by_serialization() {
+        let v = serde_json::json!({"schema_version":0,"session_id":"session-a",
+            "run_id":"run-a","epoch":42,"identity":owner()});
+        let mut r = migrate_v0("session-a", "run-a", Ok(serde_json::to_vec(&v).unwrap()), 10).unwrap();
+        assert_eq!(serde_json::to_value(&r).unwrap()["reconciliation_required"], true);
+        r.pending = State::Free; r.pause = State::Free; r.finalizer = State::Free; r.runners = State::Free;
+        unknown(decode("session-a", "run-a", encoded(&r), 11), "ReconciliationRequired");
+        assert!(super::advance(&r, 42, &r.identity, Transition::Release, 11).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn nul_slot_is_invalid_input() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(confined_read(d.path(), Path::new("bad\0slot")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
+    #[test]
+    fn changelog_is_one_mandated_line() {
+        let text = include_str!("../../../changelog.d/FLEET-OWNER-LEASE.md");
+        assert_eq!(text.lines().count(), 1);
+        assert!(text.starts_with("- **FLEET-OWNER-LEASE (part 1):**"));
+    }
+    #[test]
     fn reconciliation_owner_is_documented() { assert!(include_str!("fleet_owner_lease.rs").lines().take(12).any(|l| l.contains("Part 2 owns explicit expected-epoch reconciliation"))); }
     #[test]
     fn phase_evidence_and_clock() {
@@ -46,7 +82,9 @@
             let mut blocked = busy.clone(); let l = Lease { id: "lease-a".into(), owner: owner(), expires_at: 20 };
             match field { 0 => blocked.pending = pending.pending.clone(), 1 => blocked.finalizer = State::Busy(l),
                 2 => blocked.pause = State::Busy(l), _ => blocked.runners = State::Busy(vec![l]) }
-            assert_eq!(decode("session-a", "run-a", encoded(&blocked), now), Read::Known(blocked.clone()));
+            if field == 0 || now < 20 {
+                assert_eq!(decode("session-a", "run-a", encoded(&blocked), now), Read::Known(blocked.clone()));
+            } else { unknown(decode("session-a", "run-a", encoded(&blocked), now), "Expired"); }
             assert!(advance(&blocked, 1, &blocked.identity, Transition::Release).is_err());
         } }
     }

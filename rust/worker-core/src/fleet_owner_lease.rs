@@ -1,11 +1,9 @@
 //! Unwired store contract: no writes, launches, kills, or lifecycle callers.
-//! Watchdog, retirement, router, timer, finalizer, exit and fencing must later
-//! consume this same session/run record under their own keys; none is wired here.
+//! Lifecycle consumers must later share this session/run record; none is wired here.
 //! JSON uses schema_version=1 and externally tagged Unknown/Free/Busy states;
 //! every lifecycle field is required. Identity includes pid, start and group.
 //! v0 decoding preserves identity/epoch but requires explicit reconciliation.
-//! Python consumers read JSON or use a later thin binary: SourceFileLoader
-//! cannot import Rust. No binary is needed for this contract-only slice.
+//! Python consumers read JSON; SourceFileLoader cannot import Rust.
 //! Paths are caller-supplied relative slots, never derived from opaque IDs.
 //! Part 2 owns explicit expected-epoch reconciliation, durable CAS and activation.
 //! Known is validated data, not ownership permission; Unknown never authorizes.
@@ -18,7 +16,6 @@ use std::{
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State<T> {
-    /// Evidence unavailable; never authorizes.
     Unknown,
     /// Explicitly unoccupied.
     Free,
@@ -43,16 +40,12 @@ pub struct Lease {
 pub enum Successor {
     /// Evidence unavailable; never authorizes.
     Unknown,
-    /// Stable replacement identifier.
     Id(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
-    /// Intent recorded before launch.
     Prepared,
-    /// Replacement launched with recorded identity.
     Launched,
-    /// Confirmed replacement; retain evidence.
     Confirmed,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +64,7 @@ pub struct Record {
     pub epoch: u64,
     pub identity: State<Identity>,
     pub updated_at: i64,
+    pub reconciliation_required: bool,
     pub pending: State<Transaction>,
     pub pause: State<Lease>,
     pub finalizer: State<Lease>,
@@ -81,6 +75,8 @@ pub enum Refusal {
     Invalid,
     Clock,
     Unresolved,
+    Expired,
+    ReconciliationRequired,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // One slot per read; keep the public value API unboxed.
@@ -103,6 +99,9 @@ fn identity(i: &Identity) -> bool {
 }
 impl Record {
     fn validate(&self, now_s: i64) -> Result<(), Refusal> {
+        if self.reconciliation_required {
+            return Err(Refusal::ReconciliationRequired);
+        }
         if self.schema_version != 1 || !valid_id(&self.session_id) || !valid_id(&self.run_id) {
             return Err(Refusal::Invalid);
         }
@@ -139,6 +138,18 @@ impl Record {
         }
         if self.identity == State::Free && !self.clear() {
             return Err(Refusal::Unresolved);
+        }
+        // Expiry is an alarm, never evidence of freedom or permission to take over.
+        if [&self.pause, &self.finalizer]
+            .into_iter()
+            .filter_map(|s| match s {
+                State::Busy(l) => Some(l),
+                _ => None,
+            })
+            .chain(runners)
+            .any(|l| now_s >= l.expires_at)
+        {
+            return Err(Refusal::Expired);
         }
         Ok(())
     }
@@ -213,6 +224,7 @@ pub fn bootstrap(session: &str, run: &str, now_s: i64) -> Result<Record, Refusal
         epoch: 0,
         identity: State::Free,
         updated_at: now_s,
+        reconciliation_required: false,
         pending: State::Free,
         pause: State::Free,
         finalizer: State::Free,
@@ -294,6 +306,7 @@ fn decode_inner(
                     epoch: old.epoch,
                     identity: State::Busy(old.identity),
                     updated_at: now_s,
+                    reconciliation_required: true,
                     pending: State::Unknown,
                     pause: State::Unknown,
                     finalizer: State::Unknown,
@@ -305,7 +318,12 @@ fn decode_inner(
         if r.session_id != session || r.run_id != run {
             return Err("slot mismatch".into());
         }
-        r.validate(now_s).map_err(|e| format!("{e:?}"))?;
+        // Validate migration evidence only; part 2 owns reconciliation/CAS.
+        let mut evidence = r.clone();
+        if migration {
+            evidence.reconciliation_required = false;
+        }
+        evidence.validate(now_s).map_err(|e| format!("{e:?}"))?;
         Ok(r)
     })();
     match result {
@@ -345,7 +363,8 @@ fn confined_read_at(mut dir: std::fs::File, slot: &Path) -> io::Result<Vec<u8>> 
     };
     let mut parts = slot.components().peekable();
     while let Some(part) = parts.next() {
-        let name = CString::new(part.as_os_str().as_bytes())?;
+        let name = CString::new(part.as_os_str().as_bytes())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let flags = libc::O_RDONLY
             | libc::O_CLOEXEC
             | libc::O_NOFOLLOW
