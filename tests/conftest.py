@@ -117,6 +117,13 @@ _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served
 
 
 def pytest_configure(config):
+    if sys.platform == "win32" and config.option.basetemp is None:
+        # Avoid numbered-root/pytest-current symlink cleanup on Windows mounts
+        # affected by the reported WinError 448 (not reproduced on this run).
+        # A fresh owned root avoids that machinery without touching old roots.
+        root = tempfile.mkdtemp(prefix="pg-win-pytest-")
+        config.option.basetemp = str(Path(root) / "tests")
+        atexit.register(shutil.rmtree, root, ignore_errors=True)
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
 
@@ -219,6 +226,12 @@ def pytest_ignore_collect(collection_path, config):
 
 
 def pytest_collection_modifyitems(config, items):
+    if sys.platform == "win32":
+        from win_skips import skip_reason
+        for item in items:
+            reason = skip_reason(item.nodeid, sys.platform, item.fixturenames)
+            if reason:
+                item.add_marker(pytest.mark.skip(reason=reason))
     if not _PG:
         return
     kept, dropped = [], []
