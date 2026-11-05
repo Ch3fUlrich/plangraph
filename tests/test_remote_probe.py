@@ -219,14 +219,15 @@ def test_completion_dispositions_reach_notify(tmp_path, monkeypatch):
     assert len(calls) == len({e['event_id'] for e in calls}) == 3
 
 
-def test_bad_command_keeps_polling(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize('command', ["'", '   '])
+def test_bad_command_keeps_polling(tmp_path, monkeypatch, capsys, command):
     calls = []
     def run(argv, **kwargs):
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps({'a' * 64: {}}))
     monkeypatch.setattr(subprocess, 'run', run)
     for _ in range(2):
-        poll(['first', 'second'], "'", tmp_path)
+        poll(['first', 'second'], command, tmp_path)
     assert len(calls) == 4
     assert 'ValueError' in capsys.readouterr().err
     assert all(not e['acks'] for e in json.loads((tmp_path / 'remote-probe.json').read_text()).values())

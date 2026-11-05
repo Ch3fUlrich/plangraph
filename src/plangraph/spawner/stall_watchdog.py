@@ -7,6 +7,7 @@ activity is deliberately not interpreted as proof of idleness.
 from __future__ import annotations
 
 import argparse
+import shlex
 import hashlib
 import json
 import os
@@ -272,7 +273,7 @@ def flush_outbox(state, command, *, run=subprocess.run):
         try:
             run(command, input=path.read_bytes(), check=True, timeout=20)
             path.unlink(missing_ok=True)
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             failed = True
             health.update(failures=health['failures'] + 1, last_error=type(exc).__name__)
     if not failed:
@@ -294,17 +295,21 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
             text = (templates / ('watchdog.' + name)).read_text()
             text = text.replace('@PYTHON@', python).replace('@ROOT@', str(root))
             (destination / ('plangraph-stall-watchdog.' + name)).write_text(text)
+        config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'plangraph/watchdog.env'
         (destination / 'plangraph-remote-probe.service').write_text(
             '[Service]\nType=oneshot\nWorkingDirectory=' + str(root) + '\nEnvironment=PYTHONPATH=src\n'
             'Environment="PLANGRAPH_PROBE_ROOT=' + str(root) + '"\n'
-            'EnvironmentFile=-%h/.config/plangraph/watchdog.env\n'
+            'EnvironmentFile=-"' + str(config) + '"\n'
             'ExecStart=' + python + ' -m plangraph.spawner.remote_probe\n')
         (destination / 'plangraph-remote-probe.timer').write_text(
             '[Timer]\nOnBootSec=2min\nOnUnitActiveSec=2min\n[Install]\nWantedBy=timers.target\n')
         run(['systemctl', '--user', 'daemon-reload'], check=True)
-        config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'plangraph/watchdog.env'
-        if not config.is_file() and not (os.environ.get('PLANGRAPH_PROBE_HOSTS')
-                                        and os.environ.get('PLANGRAPH_PROBE_NOTIFY_CMD')):
+        configured = {}
+        try:
+            configured = dict(line.split('=', 1) for line in shlex.split(config.read_text(), comments=True))
+        except (OSError, ValueError):
+            pass
+        if not all(configured.get(k, '').strip() for k in ('PLANGRAPH_PROBE_HOSTS', 'PLANGRAPH_PROBE_NOTIFY_CMD')):
             run(['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'], check=True)
         run(['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'], check=True)
     elif host == 'windows':

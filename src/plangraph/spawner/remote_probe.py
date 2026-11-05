@@ -42,13 +42,16 @@ def poll(hosts, command, state):
         atomic_write_private(path, json.dumps(saved))
     def notify(key, event, entry):
         if key not in entry['seen']:
+            argv = shlex.split(command)
+            if not argv:
+                raise ValueError('empty notification command')
             if len(entry['seen']) >= 10000:
                 old = next((k for k in entry['seen'] if k not in protected), None)
                 if old is None:
                     raise ValueError('delivery window full; awaiting remote acknowledgements')
                 entry['seen'].remove(old)
             event = dict(event, event_id=event.get('event_id') or key)
-            subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
+            subprocess.run(argv, input=json.dumps(event, sort_keys=True) + '\n',
                            text=True, encoding="utf-8", errors="replace", check=True, timeout=20)
             entry['seen'].append(key)
             save()

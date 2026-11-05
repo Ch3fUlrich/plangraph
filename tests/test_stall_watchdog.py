@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,8 @@ def test_bad_record_does_not_stop_tick(tmp_path, bad):
     assert [f['rule'] for f in findings] == ['unknown'] * (1 if bad.get('card', 1) is None else 2)
 
 
-def test_flush_continues_after_poison(tmp_path):
+@pytest.mark.parametrize('error', [subprocess.CalledProcessError(1, 'bridge'), ValueError('invalid command')])
+def test_flush_continues_after_poison(tmp_path, error):
     import subprocess
     out = tmp_path / 'watchdog/outbox'
     out.mkdir(parents=True)
@@ -25,10 +27,10 @@ def test_flush_continues_after_poison(tmp_path):
         (out / (name + '.json')).write_text(json.dumps({'run_id': name}))
     def send(command, **kwargs):
         if json.loads(kwargs['input'])['run_id'] == 'a':
-            raise subprocess.CalledProcessError(1, command)
+            raise error
     for count in (1, 2):
         health = w.flush_outbox(tmp_path, ['notify'], run=send)
-        assert health == dict(failures=count, last_error='CalledProcessError')
+        assert health == dict(failures=count, last_error=type(error).__name__)
     assert sorted(p.stem for p in out.iterdir()) == ['a']
     health = w.flush_outbox(tmp_path, ['notify'], run=lambda *a, **kw: None)
     assert health == dict(failures=0, last_error=None)
@@ -211,7 +213,7 @@ def test_scheduler_installation(tmp_path, host, monkeypatch):
     if host == 'linux':
         assert 'Environment="PLANGRAPH_PROBE_ROOT=' + str(Path.cwd()) + '"' in content
         unit = (tmp_path / 'plangraph-remote-probe.service').read_text()
-        assert 'EnvironmentFile=-%h/.config/plangraph/watchdog.env' in unit
+        assert 'EnvironmentFile=-"' + str(tmp_path / 'config/plangraph/watchdog.env') + '"' in unit
         assert 'OnUnitActiveSec=120' in content
         assert ['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'] in calls
         assert ['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'] in calls
@@ -224,6 +226,21 @@ def test_scheduler_installation(tmp_path, host, monkeypatch):
     bootstrap = Path('deploy/bootstrap.' + ('sh' if host == 'linux' else 'ps1')).read_text()
     assert 'plangraph.spawner.stall_watchdog' in bootstrap
     assert 'install' in bootstrap
+
+
+@pytest.mark.parametrize('config_text', ['', 'PLANGRAPH_PROBE_HOSTS=fixture',
+    'PLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD="notify --json"'])
+def test_probe_timer_requires_service_config(tmp_path, monkeypatch, config_text):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_HOSTS', 'fixture')
+    monkeypatch.setenv('PLANGRAPH_PROBE_NOTIFY_CMD', 'notify')
+    config = tmp_path / 'plangraph/watchdog.env'
+    config.parent.mkdir()
+    config.write_text(config_text)
+    calls = []
+    w.install('linux', tmp_path, run=lambda args, **kw: calls.append(args))
+    disabled = ['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer']
+    assert (disabled in calls) == ('PLANGRAPH_PROBE_NOTIFY_CMD' not in config_text)
 
 
 def test_tick_keeper_unconfigured_skips_with_one_warning(tmp_path, monkeypatch):
