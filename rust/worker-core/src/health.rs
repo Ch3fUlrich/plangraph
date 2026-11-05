@@ -2,6 +2,8 @@
 use crate::{hosts::Role, outcome::Class};
 
 #[cfg(test)]
+mod nonverdict_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,6 +177,7 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
 }
 
 /// Fold one leg and route. Times are integral Unix seconds supplied by the caller.
+/// Routes are fanned out by the caller; `fold` sees one route.
 /// Only the requested leg, route and role contribute, for successes and failures alike.
 /// Duplicate attempts keep the greatest (timestamp, class, duration) tuple;
 /// Observations bypass attempt dedupe and incident merging.
@@ -206,6 +209,7 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
     let rows = incidents(attempts);
     let mut health = Health::default();
     let mut success = None;
+    let mut killed = Vec::new();
     for row in rows {
         health.advance(row.ts);
         if row.kind.is_some() {
@@ -224,20 +228,36 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
         if class == Class::Ok {
             health = Health::default();
             success = Some(row.ts);
+            killed.clear();
             continue;
         }
         if class.is_neutral() {
+            if health.state == State::HalfOpen {
+                health.non_verdict_count += 1;
+                if health.non_verdict_count == 3 {
+                    health.open(class, row.ts);
+                    health.heuristic = false;
+                } else {
+                    health.until_s = Some(row.ts.saturating_add(reprobe_gap_s()));
+                    health.until_src = Some(UntilSrc::Default);
+                }
+            }
             continue;
         }
         health.non_verdict_count = 0;
         health.strikes = health.strikes.saturating_add(1);
+        let reached = if class == Class::KilledExternal {
+            killed.retain(|ts| row.ts.saturating_sub(*ts) <= 3600);
+            killed.push(row.ts);
+            killed.len() >= trip(class) as usize
+        } else {
+            health.strikes >= trip(class)
+        };
         let probe = health.state == State::HalfOpen;
         let recent_success = success.is_some_and(|ts| row.ts.saturating_sub(ts) < 86400);
         // A recent success suppresses non-reset probe failures for 24 hours.
         // Further incidents while OPEN intentionally escalate n and restart the deadline.
-        if class.carries_reset()
-            || ((probe || health.strikes >= trip(class)) && !(probe && recent_success))
-        {
+        if class.carries_reset() || ((probe || reached) && !(probe && recent_success)) {
             health.open(class, row.ts);
         }
     }
