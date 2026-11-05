@@ -71,6 +71,7 @@ impl State {
         };
         if [
             config.maximum_age,
+            config.divergence_tolerance,
             config.compaction_cap,
             config.silence_deadline,
             config.retry_delay,
@@ -87,7 +88,12 @@ impl State {
         if let Some(dt) = delta {
             self.monotonic = Some(clock.monotonic);
             for age in &mut self.ages {
-                *age = age.and_then(|a| a.checked_add(dt));
+                *age = age.map(|a| {
+                    a.checked_add(dt).unwrap_or_else(|| {
+                        out.diagnostics.push("age overflow: saturated".into());
+                        u64::MAX
+                    })
+                });
             }
         } else {
             out.diagnostics.push("monotonic regression".into());
@@ -127,9 +133,16 @@ impl State {
                         .push(format!("member {i}: missing, invalid or future evidence"));
                 }
                 if trusted && valid[i] {
+                    let changed = self.evidence[i]
+                        .as_ref()
+                        .is_some_and(|p| p.identity != m.identity);
+                    if changed {
+                        out.diagnostics
+                            .push(format!("member {i}: member identity changed"));
+                    }
                     let advances = self.evidence[i]
                         .as_ref()
-                        .is_none_or(|p| p.identity == m.identity && m.freshness > p.freshness);
+                        .is_none_or(|p| changed || m.freshness > p.freshness);
                     if advances {
                         self.ages[i] = m
                             .freshness
@@ -153,8 +166,8 @@ impl State {
                 && (0..2).all(|i| self.evidence[i].as_ref() == Some(&s.members[i]))
                 && self.coherent.as_ref().is_none_or(|p| {
                     (0..2).all(|i| {
-                        s.members[i].identity == p.members[i].identity
-                            && s.members[i].freshness > p.members[i].freshness
+                        s.members[i].identity != p.members[i].identity
+                            || s.members[i].freshness > p.members[i].freshness
                     })
                 });
             if coherent {

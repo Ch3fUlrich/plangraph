@@ -131,3 +131,83 @@ fn dark_json_has_no_actions() {
     let lib = include_str!("lib.rs");
     assert_eq!(lib.matches("pub mod fleet_stale_pair_alert;").count(), 1);
 }
+#[test]
+fn zero_tolerance_is_invalid() {
+    let mut cfg = config();
+    cfg.divergence_tolerance = 0;
+    let f = State::default().observe(
+        &cfg,
+        &bytes(pair(100, 99, 0)),
+        Clock {
+            wall: 100,
+            monotonic: 0,
+            discontinuity: None,
+        },
+    );
+    assert_eq!(f.diagnostics, ["invalid configuration"]);
+    assert!(!f.new_alarm);
+}
+#[test]
+fn replacement_rearms_only_after_validated_coherence() {
+    let mut state = State::default();
+    run(&mut state, pair(100, 100, 0), 0);
+    assert!(run(&mut state, pair(100, 100, 0), 10).new_alarm);
+    let mut replacement = pair(110, 110, 0);
+    replacement.members[0].identity = "synthetic-c".into();
+    replacement.members[1].identity = "synthetic-b".into();
+    let mut clock = Clock {
+        wall: 110,
+        monotonic: 10,
+        discontinuity: None,
+    };
+    let observe = |s: &mut State, p: &Snapshot, c: Clock| {
+        s.observe(&config(), &serde_json::to_vec(p).unwrap(), c)
+    };
+    clock.discontinuity = Some("injected".into());
+    assert_eq!(
+        observe(&mut state, &replacement, clock.clone()).episode,
+        Some(1)
+    );
+    clock.discontinuity = None;
+    replacement.members[0].revision = "other".into();
+    let f = observe(&mut state, &replacement, clock.clone());
+    assert!(f
+        .diagnostics
+        .contains(&"member 0: member identity changed".into()));
+    assert_eq!(f.ages, [Some(0); 2]);
+    assert_eq!(f.episode, Some(1));
+    assert!(!f.new_alarm);
+    replacement.members[0].revision = "r1".into();
+    replacement.members[0].freshness = Some(111);
+    replacement.members[1].freshness = Some(111);
+    clock.wall = 111;
+    clock.monotonic = 11;
+    assert_eq!(
+        observe(&mut state, &replacement, clock.clone()).episode,
+        None
+    );
+    clock.wall = 121;
+    clock.monotonic = 21;
+    let f = observe(&mut state, &replacement, clock.clone());
+    assert_eq!(f.episode, Some(2));
+    assert!(f.new_alarm);
+    assert!(!observe(&mut state, &replacement, clock).new_alarm);
+}
+#[test]
+fn age_overflow_saturates_with_diagnostic() {
+    let mut state = State::default();
+    run(&mut state, pair(99, 99, 0), 0);
+    let f = state.observe(
+        &config(),
+        &bytes(pair(99, 99, 0)),
+        Clock {
+            wall: 100,
+            monotonic: u64::MAX,
+            discontinuity: None,
+        },
+    );
+    assert_eq!(f.ages, [Some(u64::MAX); 2]);
+    assert!(f.diagnostics.contains(&"age overflow: saturated".into()));
+    assert_eq!(f.reasons, ["stale"]);
+    assert!(f.new_alarm);
+}
