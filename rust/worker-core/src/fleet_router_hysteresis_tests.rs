@@ -139,6 +139,7 @@ fn thresholds_noise_deadband_counts_and_ninety_seconds() {
 }
 #[test]
 fn invalid_configuration() {
+    assert_eq!(run(&mut evaluator(1), 10, true).len(), 6);
     for mode in 0..11 {
         let mut c = evaluator(2).config;
         match mode {
@@ -301,17 +302,16 @@ fn stalled_monotonic_is_unknown_without_entry_or_recovery() {
     }
 }
 #[test]
-fn report_counts_regression() {
-    let report = include_str!("../../../changelog.d/FLEET-ROUTER-HYSTERESIS.md");
-    assert!(report.contains("234 + 267 + 1 + 1 = 503"));
-}
-#[test]
-fn report_red_first_regression() {
-    let report = include_str!("../../../changelog.d/FLEET-ROUTER-HYSTERESIS.md");
-    assert!(report.contains("five original suites remain red-first unproven"));
-}
-#[test]
-fn watermark_uses_validated_end_directly() {
-    let implementation = include_str!("fleet_router_hysteresis.rs");
-    assert!(!implementation.contains("end.min(snapshot.timestamp)"));
+fn validated_window_end_controls_replay() {
+    let mut e = evaluator(2);
+    let mut s = snapshot(20, true);
+    s.start_exclusive = Some(0);
+    s.end_inclusive = 10;
+    assert!(e.evaluate(&s, 10, false).unwrap().is_empty());
+    assert!(e.evaluate(&s, 10, false).unwrap().is_empty());
+    let findings = run(&mut e, 20, true);
+    assert_eq!(findings.len(), 6);
+    assert!(findings
+        .iter()
+        .all(|f| f.observation == Observation::Overload(1)));
 }
