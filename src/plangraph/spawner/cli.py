@@ -303,7 +303,7 @@ raise SystemExit(code)
                 with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
                     child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-                        env=env, text=True, **({'start_new_session': True} if os.name != 'nt' else
+                        env=env, text=True, encoding="utf-8", errors="replace", **({'start_new_session': True} if os.name != 'nt' else
                                       {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
                     try:
                         child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')

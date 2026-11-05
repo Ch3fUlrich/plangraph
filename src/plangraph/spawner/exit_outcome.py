@@ -90,6 +90,8 @@ def notify_leg_refused(service, record, chosen, reason):
 
 
 def fallthrough_reason(service, chosen, job, record):
+    if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
+        return None   # safety stops are not provider limits or leg-health evidence
     from . import leg_state
     from .leg_probe import key as leg_key
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)

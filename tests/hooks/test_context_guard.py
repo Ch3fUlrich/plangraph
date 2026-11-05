@@ -55,7 +55,7 @@ class Thresholds(GuardCase):
     def test_handoff_message_names_ready_command(self):
         self.write(usage_line(read=275000))
         t = self.ctx_text(self.hook())
-        self.assertIn("%s %s ready <handoff-path>" % (sys.executable, SCRIPT.resolve()), t)
+        self.assertIn("then run ready", t)
         self.assertIn("RECYCLE-READY", t)
         self.assertNotIn("\n", t)
 
@@ -68,7 +68,7 @@ class Thresholds(GuardCase):
         self.write(usage_line(read=301000))
         t = self.ctx_text(self.hook())
         self.assertIn("HARD-CAP ctx=301k >= 300k", t)
-        self.assertIn("no new work; handoff now", t)
+        self.assertIn("at the next natural stop, write your handoff to", t)
         st = json.loads(self.state_file().read_text())
         self.assertEqual((st["session_id"], st["cwd"], st["ctx"], st["level"]),
                          (SID, "/w/x", 301000, "hard"))

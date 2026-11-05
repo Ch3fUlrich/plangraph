@@ -134,7 +134,7 @@ class _AgentsMixin:
         # must never fall back to a bare "claude" on win32 (R-9).
         head = self._claude_head()
         try:
-            proc = self._run(head + ["agents", "--json"], capture_output=True, text=True, timeout=STOP_TIMEOUT)
+            proc = self._run(head + ["agents", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=STOP_TIMEOUT)
             if proc.returncode != 0:
                 raise _ActionFailed(f"agents poll failed: exit {proc.returncode}")
             rows = json.loads(proc.stdout or "[]")

@@ -1,0 +1,1 @@
+- **PG-TEST-FAKE-PID (register 48):** Use impossible PIDs for fake test children and guard against host-process collisions.

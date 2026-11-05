@@ -32,7 +32,7 @@ from plangraph.spawner.clients import (
     build_routing_envelope_headers,
 )
 from plangraph.spawner.claude_env import claude_child_env
-from plangraph.spawner.claude_stream import render_review_output
+from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
 from plangraph.planner.legs import DEFAULT_LEGS
@@ -737,6 +737,11 @@ class SpawnerRunner:
                     from .gateway_witness import witness
                     await asyncio.to_thread(witness, self, job_id, job, env)
 
+            if job.command and job.command[0] == 'claude' and last_stop_reason(stdout_text) == 'refusal':
+                answer = final_text(stdout_text)
+                job.events.append(dict(event='model_refusal', stop_reason='refusal',
+                                       refusal_text_chars=len(answer[0]) if answer else 0))
+                job.status = 'failed'
             if job.command and job.command[0] == 'claude' and exit_code == 0:   # D-3605
                 m = _claude_stream_model(stdout_text)
                 if m is not None and m == requested_model:
@@ -1084,6 +1089,14 @@ def spawn_service(*args, **kwargs):
                             record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
+                            return
+                        refusal = next((e for e in job.events if e.get('event') == 'model_refusal'), None)
+                        if refusal is not None:   # terminal safety stop: no booking, reroute, or writer continuation
+                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='model_refusal',
+                                stdout_tail=job.stdout, stderr_tail=job.stderr))
+                            record.update(status='failed', reason='model_refusal', exit_code=job.exit_code,
+                                stop_reason=refusal['stop_reason'], refusal_text_chars=refusal['refusal_text_chars'],
+                                events=record.get('events', []) + job.events)
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)

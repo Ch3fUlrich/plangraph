@@ -55,7 +55,7 @@ def caller_heads():
         try:
             heads[label] = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=os.getcwd(), env=env,
-                stderr=subprocess.DEVNULL).decode().strip()
+                stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
         except (OSError, subprocess.CalledProcessError):
             pass
     return heads
@@ -141,7 +141,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
 
     def git(*args):
         return subprocess.check_output(['git', '-C', root, *args], env=probe_env(),
-                                       stderr=subprocess.DEVNULL).decode().strip()
+                                       stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
 
     try:
         ok = reason = None

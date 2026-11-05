@@ -45,7 +45,7 @@ def thresholds(card=None, *, role=None):
     from plangraph.planner.routing import SpawnRefused
     card = card or {}
     result = {}
-    for key, default in [('stall_min', 20), ('first_edit_min', 45), ('max_min', 90)]:
+    for key, default in [('stall_min', 20), ('first_edit_min', 15), ('max_min', 90)]:   # REMOVE-AT-R10 (D-3769): first_edit_min was 45
         value = card.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
@@ -126,9 +126,9 @@ class Watchdog:
             elif activity is not None and now - activity >= stall:
                 # Q6: no activity signal (buffered harness) is not a stall.
                 rule = 'no-activity'
-            elif now - self.start >= self.limits['first_edit_s'] and now - (
-                    activity if activity is not None else self.start) >= stall:
-                # no-first-edit = no output AND no edit (M5/Q6, goal 1).
+            elif activity is None and now - self.start >= self.limits['first_edit_s']:
+                # no-first-edit = no output AND no edit (M5/Q6, goal 1): 'no-activity'
+                # above already owns a run that spoke. REMOVE-AT-R10 (D-3769).
                 rule = 'no-first-edit'
         elif now - max(self.progress.values()) >= stall:
             rule = 'no-progress'
@@ -271,6 +271,7 @@ async def collect(runner, job_id, proc):
             found = candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S and early_refusal(''.join(candidates))
             if found or active:   # F2: a refusal is booked only after a quiet period; later activity cancels it
                 (gate.candidate(found, time.time()) if found else gate.activity(time.time()))
+            gate.scan_late(lines, time.time())   # REMOVE-AT-R10 (D-3769)
             if active:
                 job.last_activity_ts = time.time()
             scrubbed = scrub(text)      # once per chunk: linear (Q4/M3)
@@ -372,7 +373,7 @@ async def collect(runner, job_id, proc):
             now = time.time()
             cpu = (await cpu_seconds(runner, job_id, getattr(proc, 'pid', None), int(now / limits['interval']))
                    if now - job.start_time < limits['max_s'] else None)
-            event = w.decide(now, edit, job.last_activity_ts, cpu)
+            event = w.decide(now, edit, job.last_activity_ts, cpu); gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
             try:
                 callback = getattr(runner, 'on_sample', None)
                 if callback:
