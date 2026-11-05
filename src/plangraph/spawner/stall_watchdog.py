@@ -309,7 +309,8 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
             configured = dict(line.split('=', 1) for line in shlex.split(config.read_text(), comments=True))
         except (OSError, ValueError):
             pass
-        if not all(configured.get(k, '').strip() for k in ('PLANGRAPH_PROBE_HOSTS', 'PLANGRAPH_PROBE_NOTIFY_CMD')):
+        if not all(configured.get(k, os.environ.get(k, '')).strip()
+                   for k in ('PLANGRAPH_PROBE_HOSTS', 'PLANGRAPH_PROBE_NOTIFY_CMD')):
             run(['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer'], check=True)
         run(['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'], check=True)
     elif host == 'windows':
@@ -366,11 +367,11 @@ def main(argv=None):
         try:
             health = flush_outbox(state, json.loads(command))
             if health and health['failures']:
-                error = 'delivery-' + health['last_error'] + ' failures=' + str(health['failures'])
+                error = (error + '; ' if error else '') + 'delivery-' + health['last_error'] + ' failures=' + str(health['failures'])
         except Exception as exc:
-            error = 'delivery-' + type(exc).__name__
+            error = (error + '; ' if error else '') + 'delivery-' + type(exc).__name__
     elif any(f['rule'] != 'unknown' for f in findings):
-        error = error or 'delivery-bridge-unconfigured'
+        error = (error + '; ' if error else '') + 'delivery-bridge-unconfigured'
     text = status(findings)
     if warning:
         text += ('\n' if text else '') + '! stall watchdog warning keeper skipped ' + warning

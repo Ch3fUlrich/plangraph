@@ -232,8 +232,8 @@ def test_scheduler_installation(tmp_path, host, monkeypatch):
     'PLANGRAPH_PROBE_HOSTS=fixture\nPLANGRAPH_PROBE_NOTIFY_CMD="notify --json"'])
 def test_probe_timer_requires_service_config(tmp_path, monkeypatch, config_text):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
-    monkeypatch.setenv('PLANGRAPH_PROBE_HOSTS', 'fixture')
-    monkeypatch.setenv('PLANGRAPH_PROBE_NOTIFY_CMD', 'notify')
+    monkeypatch.delenv('PLANGRAPH_PROBE_HOSTS', raising=False)
+    monkeypatch.delenv('PLANGRAPH_PROBE_NOTIFY_CMD', raising=False)
     config = tmp_path / 'plangraph/watchdog.env'
     config.parent.mkdir()
     config.write_text(config_text)
@@ -241,6 +241,41 @@ def test_probe_timer_requires_service_config(tmp_path, monkeypatch, config_text)
     w.install('linux', tmp_path, run=lambda args, **kw: calls.append(args))
     disabled = ['systemctl', '--user', 'disable', '--now', 'plangraph-remote-probe.timer']
     assert (disabled in calls) == ('PLANGRAPH_PROBE_NOTIFY_CMD' not in config_text)
+
+
+@pytest.mark.parametrize('config_text', [None, 'PLANGRAPH_PROBE_HOSTS=fixture',
+    'PLANGRAPH_PROBE_NOTIFY_CMD=""'])
+def test_probe_timer_environment_fallback(tmp_path, monkeypatch, config_text):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_HOSTS', 'fixture')
+    monkeypatch.setenv('PLANGRAPH_PROBE_NOTIFY_CMD', 'notify')
+    if config_text is not None:
+        config = tmp_path / 'plangraph/watchdog.env'
+        config.parent.mkdir()
+        config.write_text(config_text)
+    calls = []
+    w.install('linux', tmp_path, run=lambda args, **kw: calls.append(args))
+    assert any('disable' in call for call in calls) == (config_text is not None and '""' in config_text)
+
+
+@pytest.mark.parametrize('bridge', ['health', 'exception', 'unconfigured'])
+def test_tick_status_keeps_error_and_finding(tmp_path, monkeypatch, bridge):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_WATCHDOG_DELIVERY', '["bridge"]' if bridge != 'unconfigured' else '')
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    monkeypatch.setattr(w, 'tick', lambda *args, **kw: [dict(rule='run-orphan', run_id='fixture')])
+    def fail():
+        raise ValueError('fixture')
+    monkeypatch.setattr(w, 'read_claims', fail)
+    monkeypatch.setattr(w, 'status', lambda findings: '! stall run-orphan')
+    def bridge_fail():
+        raise RuntimeError('fixture')
+    monkeypatch.setattr(w, 'flush_outbox', lambda *args: bridge_fail() if bridge == 'exception'
+                        else dict(failures=1, last_error='CalledProcessError'))
+    assert w.main(['tick']) == 1
+    text = (tmp_path / 'watchdog/status.txt').read_text()
+    assert '! stall run-orphan' in text and 'ValueError' in text
+    assert 'delivery-' in text
 
 
 def test_tick_keeper_unconfigured_skips_with_one_warning(tmp_path, monkeypatch):
