@@ -1,26 +1,25 @@
 # L1 card · build-L1-0170 · 2026-11-05T15:19Z
 ## Goal
-- omniroute r10 list at prox, then r11; WATCHDOG-RECYCLE-DOUBLE-LAUNCH r3 to seats and GO; D-3786 ff; #338 + #380 + #377 tests seat
+- omniroute r11 GO from prox (handoff), then tag + GHCR + npm pack; WATCHDOG-RECYCLE-DOUBLE-LAUNCH r3 to seats and GO; D-3786 ff; #338 + #380 + #377 tests seat
 ## Keeper
 - claimed: plangraph:WATCHDOG-RECYCLE-DOUBLE-LAUNCH (ep1), plangraph:SEAT-PATH-FIXES (ep5), plangraph:SPAWNER-DEEPSEEK-REVIEW-LEG (ep2), plangraph:KEEPER-SNAP-S0-TIMINGS, plangraph:SPAWNER-LEG-GROK (ep3)
 - ready next: SPAWNER-ORPHAN-REAP (after #377)
 ## Done
 - 11-05T14:39Z SEAT-PATH-FIXES 6ed5be77b hand-edit for qwen run-5c03f10d, 111 passed, pushed
-- 11-05T14:41Z omniroute-r8 255ea32444 qwen run-98ca24c6 + Haiku run-b74a2f05 REQUEST_CHANGES, list to prox
-- 11-05T14:59Z omniroute-r9 b8287ff46b 54 passed, typecheck rc=0; seats REQUEST_CHANGES, list to prox
-- 11-05T15:20Z omniroute-r10 f9840b048c 66 passed, typecheck rc=0; seats REQUEST_CHANGES (MED only), list to prox
+- 11-05T14:41Z D-3763 255ea32444 omniroute r8 qwen run-98ca24c6 + Haiku run-b74a2f05 REQUEST_CHANGES, list to prox
+- 11-05T14:59Z D-3763 b8287ff46b omniroute r9 54 passed, typecheck rc=0; seats REQUEST_CHANGES, list to prox
+- 11-05T15:20Z D-3763 f9840b048c omniroute r10 66 passed, typecheck rc=0; seats REQUEST_CHANGES (MED only), list to prox
 - 11-05T15:05Z WATCHDOG-RECYCLE-DOUBLE-LAUNCH afe7b75 r1+r2+r2b pushed, 114 passed; seats REQUEST_CHANGES
-- 11-05T15:10Z drift-mail 8e8636721 merged by server-L1-main into improve, schedule off
+- 11-05T15:10Z D-3763 8e8636721 drift-mail merged by server-L1-main into improve, schedule off
 ## In flight
 - WATCHDOG-RECYCLE-DOUBLE-LAUNCH r3 sol run in J/r-wwd3.json since 15:18Z next check on restart: J/r-wwd3.wait (J=/home/s/.claude/jobs/666c38f5/tmp)
 ## Planned
 1. WATCHDOG r3: read diff incl. removed tests, own pytest, push, qwen + deepseek seats (K/seat-wd2.md); HIGH/MED left -> routing replan, no r4
-2. omniroute r11 on prox answer: K/brief-or-r10.md + K/spawnor10.sh as templates; own test+typecheck is the gate (prox ruling)
+2. omniroute r11 NOW, prox GO in handoff: K/brief-or-r10.md + K/spawnor10.sh as templates; own test+typecheck is the gate; only LOWs left = ACCEPT, then tag, GHCR digest, npm pack, sha + digest to prox
 3. D-3786 ff on routing answer; smoke; remove spawner-ff-check
 4. #338 delta seat on 6ed5be77b; tests seats for #338 #380 #377 on agy ~11-06T13:43Z
 5. SPAWNER-ORPHAN-REAP (D-3771) after #377
 ## Open
-- BLOCKED omniroute r10 MED list at prox | default *r11 as listed | deadline none
 - BLOCKED D-3786 ff with live runs (routing 14:39Z) | default wait | deadline none
 - BLOCKED #377 #338 #380 3.3 (D-3782, D-3783): test-running non-writer seat | *agy gemini tests seat ~11-06T13:43Z | deadline none
 - BLOCKED #383 ruling on deepseek MED + keeper define + GO | default dismiss MED, define as sent | deadline none
