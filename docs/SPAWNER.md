@@ -665,9 +665,7 @@ writers. A shared file is never assigned to two writers. Indivisible components
 may exceed ten; findings without files form a final unassigned bucket appended
 to the smallest group. Dispatch fans these groups out in parallel.
 
-`render_fixer_brief` numbers every finding and requires each to be fixed or
-refuted by a named test, affected tests only (TEST-SPEED-AFFECTED), and
-COMMIT before finishing.
+See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
 
 Both dispatch paths inspect the full writer output, before tail truncation.
 A non-empty Remaining gaps section or unchecked Markdown checklist triggers

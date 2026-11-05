@@ -6,6 +6,97 @@ import pytest
 from plangraph.spawner import stall_watchdog as w
 
 
+@pytest.mark.parametrize('bad', [{}, {'run_id': 'run-fixture', 'card': None},
+                                {'run_id': 'run-fixture', 'card': 1}])
+def test_bad_record_does_not_stop_tick(tmp_path, bad):
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    (directory / 'live.log').write_text('work')
+    records = [dict(started=0, **bad), dict(run_id='run-later')]
+    findings = w.tick(records, [], lambda _: None, now=0, state=tmp_path)
+    assert [f['rule'] for f in findings] == ['unknown'] * (1 if bad.get('card', 1) is None else 2)
+
+
+def test_flush_continues_after_poison(tmp_path):
+    import subprocess
+    out = tmp_path / 'watchdog/outbox'
+    out.mkdir(parents=True)
+    for name in ('a', 'b'):
+        (out / (name + '.json')).write_text(json.dumps({'run_id': name}))
+    def send(command, **kwargs):
+        if json.loads(kwargs['input'])['run_id'] == 'a':
+            raise subprocess.CalledProcessError(1, command)
+    w.flush_outbox(tmp_path, ['notify'], run=send)
+    assert sorted(p.stem for p in out.iterdir()) == ['a']
+
+
+def test_unknown_reaches_outbox(tmp_path):
+    findings = w.tick([dict(run_id='run-fixture')], [], lambda s: None,
+                      state=tmp_path, deliver=lambda e: w.deliver_event(tmp_path, e))
+    assert findings[0]['rule'] == 'unknown'
+    event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
+    assert event['rule'] == 'unknown' and 'cancelled' not in event
+
+
+@pytest.mark.parametrize('log_text', [None, 'first\nlatest\n'])
+def test_unknown_has_full_shape(tmp_path, monkeypatch, log_text):
+    import os
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    (directory / 'record.json').write_text('{')
+    if log_text is not None:
+        (directory / 'live.log').write_text(log_text)
+        os.utime(directory / 'live.log', (900, 900))
+    monkeypatch.setattr(w.time, 'time', lambda: 1000)
+    assert w.read_runs(tmp_path) == []
+    event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
+    expected = dict(run_id='run-fixture', rule='unknown', leg=None, role=None,
+                    age=None, seconds_silent=100 if log_text is not None else None,
+                    last_line='latest' if log_text is not None else None)
+    assert event == dict(expected, kind='completion', event_id=event['event_id'])
+    assert event['event_id']
+    assert w.probe_run(tmp_path, dict(run_id='run-fixture'), 1000) == expected
+
+
+def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
+    from plangraph.spawner.remote_probe import exchange, poll
+    import subprocess
+    path = tmp_path / 'runs/run-bad/record.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{')
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROBE_ROOT', 'fixture')
+    assert w.read_runs(tmp_path) == []
+    assert 'run-bad' in (tmp_path / 'watchdog/bad-records.json').read_text()
+    events = exchange([])
+    assert len(events) == 1
+    event, = events.values()
+    assert event['rule'] == 'unknown' and 'cancelled' not in event
+    sent = []
+    def run(argv, **kwargs):
+        if argv[0] == 'ssh':
+            return subprocess.CompletedProcess(argv, 0, json.dumps(exchange([])))
+        sent.append(json.loads(kwargs['input']))
+        if len(sent) == 1:
+            raise subprocess.CalledProcessError(1, argv)
+    monkeypatch.setattr(subprocess, 'run', run)
+    poll(['fixture'], 'notify', tmp_path)
+    assert w.read_runs(tmp_path) == []
+    assert exchange([]) == events
+    poll(['fixture'], 'notify', tmp_path)
+    assert sent == [event, event]
+
+
+def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(w, 'read_runs', lambda state: [dict(run_id='run-fixture')])
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    assert w.main(['tick']) == 0
+    event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
+    assert event['rule'] == 'unknown' and event['event_id']
+
+
 @pytest.mark.parametrize('age', [301, 5400])
 def test_finished_child_redelivered_with_routing_alert(age):
     run = dict(run_id='run-abc', status='completed', ended=10000-age,
@@ -84,7 +175,7 @@ def test_tick_cli_persists_status_and_delivers_w12(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(w, 'flush_outbox', lambda state, command: original(
         state, command, run=lambda args, **kw: sent.append(json.loads(kw['input']))))
     assert w.main(['tick']) == 0
-    assert sorted(e['kind'] for e in sent) == ['alert', 'completion']
+    assert sorted(e['kind'] for e in sent) == ['alert', 'completion', 'completion']
     assert '! stall ' in (tmp_path / 'watchdog/status.txt').read_text()
     capsys.readouterr()
     w.main(['status'])
@@ -99,6 +190,9 @@ def test_scheduler_installation(tmp_path, host):
     content = '\n'.join(p.read_text(encoding='utf-16' if host == 'windows' else 'utf-8') for p in tmp_path.iterdir())
     assert 'plangraph.spawner.stall_watchdog' in content
     if host == 'linux':
+        assert 'Environment="PLANGRAPH_PROBE_ROOT=' + str(Path.cwd()) + '"' in content
+        unit = (tmp_path / 'plangraph-remote-probe.service').read_text()
+        assert 'EnvironmentFile=-%h/.config/plangraph/watchdog.env' in unit
         assert 'OnUnitActiveSec=120' in content
         assert ['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'] in calls
     else:
@@ -128,3 +222,74 @@ def test_real_spawn_record_parent_and_item_come_from_completion(tmp_path):
     [run] = w.read_runs(tmp_path)
     assert (run["parent_session"], run["item_key"]) == ("build-L1", "plangraph:STALL-WATCHDOG")
     assert w.tick([run], [], lambda s: 1, now=run["ended"] + 400)[0]["rule"] == "finished-child"
+def test_unreadable_start_does_not_stop_classification(tmp_path, monkeypatch):
+    import os
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    log = directory / 'live.log'
+    log.write_text('work\n')
+    os.utime(log, (100, 100))
+    record = dict(run_id='run-fixture', status='running', pid=1, card={'stall_min': 1})
+    def gone(*args):
+        raise ProcessLookupError()
+    for start in ({}, {'started': 'invalid'}, {'started': None}, {'started': float('nan')}):
+        sample = dict(record, **start)
+        monkeypatch.setattr(os, 'kill', gone)
+        orphan = w.probe_run(tmp_path, sample, 160)
+        assert (orphan['rule'], orphan['age']) == ('run-orphan', None)
+        monkeypatch.setattr(os, 'kill', lambda *args: None)
+        silent = w.probe_run(tmp_path, sample, 160)
+        assert (silent['rule'], silent['age']) == ('run-silent', None)
+        assert silent['seconds_silent'] == 60
+        assert w.probe_run(tmp_path, sample, 159) is None
+
+
+def test_host_run_probes(tmp_path, monkeypatch):
+    import os
+    from plangraph.spawner.stall_watchdog import tick
+    from plangraph.spawner import runner
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    log = directory / 'live.log'
+    log.write_text('work\n')
+    record = dict(run_id='run-fixture', status='running', pid=os.getpid(),
+                  started=0, role='implement', leg='fixture', card={'stall_min': 1})
+    cancelled = []
+    class Service:
+        async def cancel(self, run_id):
+            cancelled.append(run_id)
+            return {'status': 'cancelled'}
+    monkeypatch.setattr(runner, 'spawn_service', lambda **kw: Service())
+    def check(now):
+        return tick([record], [], lambda _: None, now=now, state=tmp_path)
+    os.utime(log, (100, 100))
+    assert check(159) == []
+    assert check(160)[0]['rule'] == 'run-silent'
+    assert check(160)[0]['episode'] == 100
+    assert not cancelled
+    assert check(220)[0]['cancelled']
+    assert cancelled == ['run-fixture']
+    os.utime(log, (220, 220))
+    assert check(221) == []
+    assert check(280)[0]['episode'] == 220
+    log.unlink()
+    assert check(500)[0]['rule'] == 'unknown'
+    assert len(cancelled) == 1
+    log.write_text('the retry is running in the background\n')
+    record.update(status='completed', ended=230)
+    assert check(500)[0]['rule'] == 'run-ended-no-commit'
+    record.update(reason='writer_no_changes')
+    log.write_text('done\n')
+    assert check(500)[0]['rule'] == 'run-ended-no-commit'
+    record.update(status='running')
+    def gone(*args):
+        raise ProcessLookupError()
+    monkeypatch.setattr(os, 'kill', gone)
+    log.write_text('x' * 250 + '\n')
+    os.utime(log, (220, 220))
+    orphan = check(500)[0]
+    assert (orphan['age'], orphan['seconds_silent'], orphan['last_line']) == (500, 280, 'x' * 200)
+    log.unlink()
+    assert check(500)[0]['rule'] == 'run-orphan'
+    import json
+    assert json.loads((directory / 'record.json').read_text())['reason'] == 'orphaned'

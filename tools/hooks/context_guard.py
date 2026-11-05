@@ -57,6 +57,8 @@ _USAGE_FIELDS = ("input_tokens", "cache_read_input_tokens",
 
 DEFAULT_HANDOFF = 270000
 DEFAULT_HARD = 300000
+HANDOFF_PATH_ENV = "AUTOOS_CTX_HANDOFF_PATH"
+SUBAGENT_BACKSTOP = " If you are a subagent, finish your task and report; this does not apply to you."
 
 # Re-announce only once the fill has grown this much past the last emitted one,
 # unless the level itself escalates.
@@ -187,28 +189,19 @@ def write_state(session_id: str, state: dict) -> None:
     _write_json(directory / ("%s.json" % session_id), state)
 
 
-def _cmd(*parts) -> str:
-    """A paste-ready command line: parts containing spaces are quoted (Windows paths)."""
-    return " ".join('"%s"' % p if " " in p else p for p in parts)
+def emit_line(level: str, ctx: int, threshold: int) -> str:
+    """The single-line `additionalContext` names `ready` without paths.
 
-
-def emit_line(level: str, ctx: int, threshold: int, script_path) -> str:
-    """The single-line `additionalContext`, naming the `ready` command to run.
-
-    No newline is embedded: the whole message is one line, as the hook contract
-    and the tests require. The interpreter is `sys.executable`, not a hardcoded
-    `python3`, which typically does not exist on Windows.
+    No newline is embedded: the whole message is one line. Do not expose the
+    interpreter or checkout path: neither belongs in the handoff guidance.
     """
     n = ctx // 1000
     h = threshold // 1000
-    script = str(Path(script_path).resolve())
-    tail = ("then run %s ready <handoff-path> (and SendMessage "
-            "RECYCLE-READY <path> to your parent if your brief says so)"
-            % _cmd(sys.executable, script))
-    if level == "hard":
-        return "HARD-CAP ctx=%dk >= %dk: no new work; handoff now, %s" % (n, h, tail)
-    return ("HANDOFF-NOW ctx=%dk >= %dk: finish the current step, write your "
-            "handoff, commit+push, %s" % (n, h, tail))
+    tail = "then run ready (and SendMessage RECYCLE-READY <path> to your parent if your brief says so)"
+    path = os.environ.get(HANDOFF_PATH_ENV) or "your private handoff path"
+    marker = "HARD-CAP" if level == "hard" else "HANDOFF-NOW"
+    return ("%s ctx=%dk >= %dk: at the next natural stop, write your handoff to %s, %s."
+            % (marker, n, h, path, tail)) + SUBAGENT_BACKSTOP
 
 
 def run_hook() -> int:
@@ -223,6 +216,8 @@ def run_hook() -> int:
     try:
         payload = json.loads(read_stdin_text())
         if not isinstance(payload, dict):
+            return 0
+        if isinstance(payload.get("agent_id"), str) and payload["agent_id"]:
             return 0
         transcript_path = payload.get("transcript_path")
         session_id = payload.get("session_id")
@@ -243,7 +238,7 @@ def run_hook() -> int:
         threshold = hard if level == "hard" else handoff
         if not should_emit(session_id, ctx, level):
             return 0
-        line = emit_line(level, ctx, threshold, Path(__file__))
+        line = emit_line(level, ctx, threshold)
         out = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                       "additionalContext": line}}
         print(json.dumps(out))

@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """More tests for tools/hooks/context_guard.py, beside the 36 ported ones (test_context_guard.py).
 
-These pin what the port added over the original (threshold clamp, stepping past unusable records, quoted
-commands, the debug traceback) and the `status` output shapes. The AUTOOS_CTX_* names and the `autoos/ctx-guard`
+These pin what the port added over the original (threshold clamp, stepping past unusable records, private
+guidance, the debug traceback) and the `status` output shapes. The AUTOOS_CTX_* names and the `autoos/ctx-guard`
 state dir are the live guard's contract; they stay until the cutover item G13.
 
     python3 tests/hooks/test_context_guard_more.py
 """
+import io
 import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -73,18 +75,50 @@ class Records(MoreCase):
 
 
 class Output(MoreCase):
-    def test_the_line_names_this_interpreter_and_script(self):
-        self.write(usage_line(read=275000))
-        command = " ".join('"%s"' % part if " " in part else part for part in (sys.executable, str(SCRIPT.resolve())))
-        self.assertIn("then run %s ready <handoff-path>" % command, self.text(self.hook()))
+    def test_public_fragment_is_retained(self):
+        fragment = HOOKS.parent.parent / "changelog.d/LE-GUARD-TEXT.md"
+        self.assertTrue(fragment.read_text().startswith("- **LE-GUARD-TEXT (D-3795):**"))
 
-    def test_paths_with_spaces_are_quoted_so_the_command_pastes(self):
+    def test_missing_guard_constant_keeps_the_fail_silent_diagnostic(self):
+        with mock.patch.dict(sys.modules, {"context_guard": None}):
+            wrapper = load_module("ctx_guard_session")
+        self.assertIsNone(wrapper.HANDOFF_PATH_ENV)
+        for path in ("/private/handoff.md", "", None, 5):
+            with self.subTest(path=path), mock.patch.object(wrapper, "read_stdin_text", return_value="{}"), \
+                    mock.patch.object(wrapper, "settings_thresholds", return_value={}), \
+                    mock.patch.object(wrapper, "session_override", return_value={"handoff_path": path}), \
+                    mock.patch.object(wrapper, "GUARD", str(self.tmp / "missing.py")), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out, \
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                self.assertEqual(wrapper.main(), 0)
+                self.assertEqual(out.getvalue(), "")
+                self.assertIn("context_guard.py missing or broken", err.getvalue())
+
+    def test_line_hides_interpreter_and_script_path(self):
+        self.write(usage_line(read=275000))
+        text = self.text(self.hook())
+        self.assertIn("then run ready", text)
+        for path in (sys.executable, str(SCRIPT.resolve())):
+            self.assertNotIn(path, text)
+
+    def test_line_needs_no_interpreter_or_script_path(self):
         guard = load_module("context_guard")
-        line = guard.emit_line("handoff", 280000, 270000, Path("/a b") / "context guard.py")
-        resolved = str(Path("/a b/context guard.py").resolve())
-        self.assertIn('"%s"' % resolved, line)
+        self.assertFalse(hasattr(guard, "_cmd"))
+        line = guard.emit_line("handoff", 280000, 270000)
         self.assertNotIn("\n", line)
-        self.assertEqual(guard.emit_line("hard", 310000, 300000, SCRIPT).split(":", 1)[0], "HARD-CAP ctx=310k >= 300k")
+        self.assertEqual(guard.emit_line("hard", 310000, 300000).split(":", 1)[0], "HARD-CAP ctx=310k >= 300k")
+
+    def test_shared_backstop_stays_last_after_card_rule(self):
+        guard = load_module("context_guard")
+        wrapper = load_module("ctx_guard_session")
+        self.assertEqual(wrapper.HANDOFF_PATH_ENV, guard.HANDOFF_PATH_ENV)
+        wrapper.SUBAGENT_BACKSTOP = " Changed backstop."
+        for level in ("handoff", "hard"):
+            text = guard.emit_line(level, 310000, 300000)
+            text = text.removesuffix(guard.SUBAGENT_BACKSTOP) + wrapper.SUBAGENT_BACKSTOP
+            out = wrapper.add_card_rule(json.dumps({"hookSpecificOutput": {"additionalContext": text}}))
+            self.assertTrue(json.loads(out)["hookSpecificOutput"]["additionalContext"].endswith(
+                wrapper.CARD_RULE + wrapper.SUBAGENT_BACKSTOP))
 
     def test_the_debug_variable_surfaces_the_swallowed_traceback(self):
         blocker = self.tmp / "blocker"
