@@ -43,6 +43,7 @@ def test_probe_admission(monkeypatch):
 
 
 @pytest.mark.parametrize('failure', ['timeout', 'missing', 'nonzero'])
+@pytest.mark.real_probe
 def test_probe_timeout(monkeypatch, failure):
     calls = []
     def timeout(*args, **kwargs):
