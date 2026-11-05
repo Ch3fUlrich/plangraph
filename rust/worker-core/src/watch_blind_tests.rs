@@ -9,6 +9,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+const FIXTURE_FIRST_S: u64 = 2;
+const FIXTURE_CONFIRM_S: u64 = 2;
+const FIXTURE_SILENCE_S: u64 = 3;
+
+#[test]
+fn fixture_scheduler_slack_is_separate_from_contract() {
+    let margin = |limit, emission| limit - emission;
+    assert!(margin(FIXTURE_FIRST_S + FIXTURE_CONFIRM_S, 2) >= 2);
+    assert!(margin(FIXTURE_SILENCE_S + FIXTURE_CONFIRM_S, 1) >= 2);
+}
+
 pub(super) struct Parser {
     framer: Framer,
     health: ChannelHealth,
@@ -33,7 +44,7 @@ impl EventParser for Parser {
             .push(chunk)
             .into_iter()
             .filter_map(|line| {
-                let kind = match line {
+                let kind = match &line {
                     Line::Bytes(b) if b == b"{}" => Some(Kind::Request),
                     Line::Bytes(b) if b == b"{\"content\":true}" => Some(Kind::Content),
                     Line::Bytes(b) if b == b"{\"tool\":true}" => Some(Kind::Tool),
@@ -43,6 +54,8 @@ impl EventParser for Parser {
                 self.health.line(
                     if kind.is_some() {
                         LineKind::Known
+                    } else if matches!(line, Line::Bytes(b) if b == b"{\"unknown\":true}") {
+                        LineKind::Unknown
                     } else {
                         LineKind::NotJson
                     },
@@ -58,7 +71,7 @@ impl EventParser for Parser {
     }
 }
 pub(super) fn run(script: &str, blind: bool, input: &[u8], cancel: bool) -> Watched {
-    run_timeout(script, blind, input, cancel, Duration::from_secs(5))
+    run_timeout(script, blind, input, cancel, Duration::from_secs(8))
 }
 fn run_timeout(
     script: &str,
@@ -79,9 +92,9 @@ fn run_timeout(
         parser.health.pin("fixture", "drift");
     }
     let limits = Limits {
-        first_activity_s: Some(1),
-        silence_s: Some(1),
-        confirm_s: Some(1),
+        first_activity_s: Some(FIXTURE_FIRST_S),
+        silence_s: Some(FIXTURE_SILENCE_S),
+        confirm_s: Some(FIXTURE_CONFIRM_S),
         milestone_s: None,
         ..Limits::default()
     };
@@ -183,12 +196,13 @@ fn late_signal_during_term_grace_is_recorded() {
         false,
     );
     assert!(r.late_signal_ms.is_some());
+    assert_eq!(r.run.code, Some(0));
     assert_eq!(r.decisions.last().unwrap().act, Act::Kill);
 }
 #[test]
 fn confirm_window_signal_prevents_first_activity_kill() {
     let r = run(
-        "sleep 1; printf '{\"content\":true}\\n'; sleep 1",
+        "sleep 2; printf '{\"content\":true}\\n'; sleep 1",
         false,
         b"",
         false,
@@ -226,7 +240,7 @@ fn sigterm_ignorer_reaped() {
     let r = run("trap '' TERM; while :; do :; done", false, b"", false);
     assert_eq!(r.run.signal, Some(libc::SIGKILL));
     assert_eq!(r.proof, KillProof::Empty);
-    assert!(start.elapsed() < Duration::from_millis(1_000 + 1_000 + 100 + 2_000 + 10 + 1500));
+    assert!(start.elapsed() < Duration::from_millis(2_000 + 2_000 + 100 + 2_000 + 10 + 1500));
 }
 #[test]
 fn stdin_one_megabyte_delivered_then_eof() {

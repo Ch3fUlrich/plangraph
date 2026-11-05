@@ -111,8 +111,8 @@ impl Child for UnixChild {
         self.gone = self.gone || group_empty(self.pgid)?;
         Ok(self.gone)
     }
-    fn reap(&mut self) -> io::Result<()> {
-        self.child.try_wait().map(|_| ())
+    fn reap(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.child.try_wait()
     }
 }
 

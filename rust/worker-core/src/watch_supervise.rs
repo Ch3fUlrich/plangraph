@@ -195,7 +195,7 @@ pub fn supervise_events(
                     hooks.monitor.feed(signal);
                 }
             }
-            cancelled = (hooks.cancelled)();
+            cancelled = status.is_none() && (hooks.cancelled)();
             timed_out = status.is_none()
                 && !cancelled
                 && opts.timeout.is_some_and(|t| start.elapsed() >= t);
@@ -254,6 +254,7 @@ pub fn supervise_events(
                     proof = result; // Survivors is terminal, never retry or infer success from root exit.
                     finished_at = Some(now);
                 }
+                status = status.or(stop.status);
             }
         }
         if finished_at.is_some_and(|t| events.eof == 2 || now.saturating_sub(t) >= 2000) {
@@ -263,29 +264,36 @@ pub fn supervise_events(
     }
     // Workers own only bounded chunks/payload. Never join a pipe held by an escaped child.
     drop(rx);
-    writer.finish()?;
-    if let Some(e) = error {
-        return Err(e);
+    Ok(record_writer_result(
+        Watched {
+            io_error: error,
+            run: stall::Supervised {
+                code: status.and_then(|s| s.code()),
+                signal: status.and_then(|s| s.signal()),
+                stalled: stall_bytes,
+                timed_out,
+                cancelled,
+                output: events.output,
+            },
+            decisions,
+            activity: hooks.monitor.first_activity_ms(),
+            channel: ChannelSummary {
+                blind: events.blind,
+                lines: hooks.channel.lines(),
+                bad: hooks.channel.bad(),
+                blind_events: u32::from(events.blind.is_some()),
+            },
+            proof,
+            stall_bytes,
+            late_signal_ms: events.late.filter(|t| stopped_at.is_some_and(|s| *t >= s)),
+        },
+        writer.finish(),
+    ))
+}
+
+fn record_writer_result(mut watched: Watched, result: io::Result<()>) -> Watched {
+    if let Err(error) = result {
+        watched.io_error.get_or_insert(error);
     }
-    Ok(Watched {
-        run: stall::Supervised {
-            code: status.and_then(|s| s.code()),
-            signal: status.and_then(|s| s.signal()),
-            stalled: stall_bytes,
-            timed_out,
-            cancelled,
-            output: events.output,
-        },
-        decisions,
-        activity: hooks.monitor.first_activity_ms(),
-        channel: ChannelSummary {
-            blind: events.blind,
-            lines: hooks.channel.lines(),
-            bad: hooks.channel.bad(),
-            blind_events: u32::from(events.blind.is_some()),
-        },
-        proof,
-        stall_bytes,
-        late_signal_ms: events.late.filter(|t| stopped_at.is_some_and(|s| *t >= s)),
-    })
+    watched
 }

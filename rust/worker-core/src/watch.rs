@@ -32,6 +32,7 @@ pub struct Hooks<'a> {
 }
 
 pub struct Watched {
+    pub io_error: Option<io::Error>,
     pub run: stall::Supervised,
     pub decisions: Vec<Decision>,
     pub activity: Option<u64>,
@@ -61,13 +62,14 @@ pub trait Child {
     fn terminate(&mut self) -> io::Result<()>;
     fn kill(&mut self) -> io::Result<()>;
     fn empty(&mut self) -> io::Result<bool>;
-    fn reap(&mut self) -> io::Result<()>;
+    fn reap(&mut self) -> io::Result<Option<ExitStatus>>;
 }
 
 /// One clock-driven termination path, including cleanup after an I/O failure.
 /// Signal errors do not skip escalation or become evidence of emptiness.
 #[derive(Default)]
 pub struct Stop {
+    status: Option<ExitStatus>,
     term_ms: Option<u64>,
     kill_ms: Option<u64>,
     cause: Option<io::ErrorKind>,
@@ -80,6 +82,10 @@ impl Stop {
         grace_ms: u64,
         prove_ms: u64,
     ) -> Option<KillProof> {
+        match child.reap() {
+            Ok(status) => self.status = self.status.or(status),
+            Err(error) => self.record(Err(error)),
+        }
         if self.term_ms.is_none() {
             self.term_ms = Some(now_ms);
             if self.empty(child) {
@@ -87,7 +93,6 @@ impl Stop {
             }
             self.record(child.terminate());
         }
-        self.record(child.reap());
         if self.kill_ms.is_none() && now_ms.saturating_sub(self.term_ms?) >= grace_ms {
             if self.empty(child) {
                 return Some(KillProof::Empty);

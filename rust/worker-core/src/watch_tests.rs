@@ -1,13 +1,5 @@
 use super::*;
 
-#[test]
-fn unix_supervisor_module_and_export_are_gated() {
-    assert!(include_str!("lib.rs").contains("#[cfg(unix)]\npub mod watch;"));
-    let source = include_str!("watch.rs");
-    assert!(source.contains("#[cfg(unix)]\nmod supervise;"));
-    assert!(source.contains("#[cfg(unix)]\npub use supervise::supervise_events;"));
-}
-
 #[derive(Default)]
 struct Fake {
     terms: u32,
@@ -43,9 +35,9 @@ impl Child for Fake {
             Ok(self.empty)
         }
     }
-    fn reap(&mut self) -> io::Result<()> {
+    fn reap(&mut self) -> io::Result<Option<ExitStatus>> {
         self.reaps += 1;
-        Ok(())
+        Ok(None)
     }
 }
 

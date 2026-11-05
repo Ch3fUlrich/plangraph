@@ -61,6 +61,21 @@ successful exit cannot become a timeout while an escaped pipe holder delays
 the bounded tail drain. TERM and KILL probes retain the first I/O error even
 when later probes merely report a non-empty group.
 
-Regression coverage includes source gating, first-chunk pinned provider errors,
+Regression coverage includes Unix builds, first-chunk pinned provider errors,
 a drain interrupted by an I/O error, a successful root with an escaped pipe
 holder past its timeout, and transient EPERM at each signal probe.
+
+### RL12 part B review
+
+`ChannelHealth::parsed` includes Unknown lines; the Known mirror delta therefore
+subtracts Unknown exactly once. `mixed_kind_mirror_counts_both_lines` covers both
+kinds in a single parser chunk without changing the correct counter semantics.
+Unix gating is checked by compilation, not whitespace-sensitive source matching.
+Stop retains the status returned by reap, including the terminal empty-group tick.
+`Watched::io_error` records the first drain or writer failure without throwing away
+the exit status, decisions, channel summary, or kill proof. Cancellation is sampled
+only while the root is live. ESRCH from TERM/KILL is success; signal-zero still
+reports absence to the sticky group-empty probe. EPERM remains an error.
+Process fixtures use two-second F/confirm and three-second silence limits; the
+confirm fixture emits at two seconds, with two seconds before contractual kill.
+The escalation assertion retains a separate 1.5-second scheduler margin.

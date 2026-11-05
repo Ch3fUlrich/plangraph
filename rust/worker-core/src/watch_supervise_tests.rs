@@ -2,6 +2,78 @@ use super::*;
 use crate::{activity::*, hosts::Role};
 
 #[test]
+fn writer_error_preserves_watched() {
+    let watched = super::super::blind_tests::run("exit 0", false, &vec![0; 1 << 20], false);
+    let watched = record_writer_result(watched, Err(io::ErrorKind::WriteZero.into()));
+    assert_eq!(watched.io_error.unwrap().kind(), io::ErrorKind::WriteZero);
+    assert_eq!(watched.run.code, Some(0));
+    assert_eq!(watched.proof, KillProof::NotNeeded);
+    assert_eq!(watched.channel.lines, 0);
+    assert!(watched.decisions.is_empty());
+}
+
+#[test]
+fn mixed_kind_mirror_counts_both_lines() {
+    let r =
+        super::super::blind_tests::run("printf '{}\\n{\"unknown\":true}\\n'", false, b"", false);
+    assert_eq!((r.channel.lines, r.channel.bad), (2, 0));
+}
+
+#[test]
+fn natural_exit_does_not_sample_cancel_during_drain() {
+    let mut parser = super::super::blind_tests::Parser::default();
+    let mut monitor = monitor();
+    let mut channel = ChannelHealth::new(0, Some(1));
+    let start = Instant::now();
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "setsid sh -c 'sleep 3' & exit 0"]);
+    let r = supervise_events(
+        cmd,
+        &stall::Opts {
+            timeout: Some(Duration::from_secs(5)),
+            ..stall::Opts::default()
+        },
+        Hooks {
+            parser: &mut parser,
+            monitor: &mut monitor,
+            channel: &mut channel,
+            cancelled: &|| start.elapsed() >= Duration::from_millis(500),
+            tree_sample: &Ctx::default,
+            cpu: None,
+            stdin: b"",
+        },
+    )
+    .unwrap();
+    assert_eq!(r.run.code, Some(0));
+    assert!(!r.run.cancelled);
+}
+
+#[test]
+fn reap_in_stop_retains_exit_status() {
+    struct Exited;
+    impl Child for Exited {
+        fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+            Ok(None)
+        }
+        fn reap(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+            Ok(Some(std::process::ExitStatus::from_raw(0)))
+        }
+        fn empty(&mut self) -> io::Result<bool> {
+            Ok(true)
+        }
+        fn terminate(&mut self) -> io::Result<()> {
+            unreachable!()
+        }
+        fn kill(&mut self) -> io::Result<()> {
+            unreachable!()
+        }
+    }
+    let mut stop = Stop::default();
+    assert_eq!(stop.tick(&mut Exited, 0, 100, 2000), Some(KillProof::Empty));
+    assert_eq!(stop.status.unwrap().code(), Some(0));
+}
+
+#[test]
 fn missing_wall_timeout_rejected_before_spawn() {
     let mut parser = super::super::blind_tests::Parser::default();
     let mut monitor = monitor();

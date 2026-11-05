@@ -54,6 +54,8 @@ fn watch_esrch_latches_and_never_signals_again() {
     cmd.args(["-c", "exit 0"]);
     let mut child = UnixChild::spawn(&mut cmd).unwrap();
     child.child.wait().unwrap();
+    assert!(killpg(child.pgid, libc::SIGTERM).is_ok());
+    assert!(killpg(child.pgid, libc::SIGKILL).is_ok());
     assert!(child.empty().unwrap());
     assert!(child.gone);
     child.pgid = unsafe { libc::getpgrp() };
