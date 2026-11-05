@@ -222,6 +222,28 @@ def test_real_spawn_record_parent_and_item_come_from_completion(tmp_path):
     [run] = w.read_runs(tmp_path)
     assert (run["parent_session"], run["item_key"]) == ("build-L1", "plangraph:STALL-WATCHDOG")
     assert w.tick([run], [], lambda s: 1, now=run["ended"] + 400)[0]["rule"] == "finished-child"
+def test_unreadable_start_does_not_stop_classification(tmp_path, monkeypatch):
+    import os
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    log = directory / 'live.log'
+    log.write_text('work\n')
+    os.utime(log, (100, 100))
+    record = dict(run_id='run-fixture', status='running', pid=1, card={'stall_min': 1})
+    def gone(*args):
+        raise ProcessLookupError()
+    for start in ({}, {'started': 'invalid'}, {'started': None}, {'started': float('nan')}):
+        sample = dict(record, **start)
+        monkeypatch.setattr(os, 'kill', gone)
+        orphan = w.probe_run(tmp_path, sample, 160)
+        assert (orphan['rule'], orphan['age']) == ('run-orphan', None)
+        monkeypatch.setattr(os, 'kill', lambda *args: None)
+        silent = w.probe_run(tmp_path, sample, 160)
+        assert (silent['rule'], silent['age']) == ('run-silent', None)
+        assert silent['seconds_silent'] == 60
+        assert w.probe_run(tmp_path, sample, 159) is None
+
+
 def test_host_run_probes(tmp_path, monkeypatch):
     import os
     from plangraph.spawner.stall_watchdog import tick

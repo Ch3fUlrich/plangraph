@@ -92,7 +92,14 @@ def probe_run(state, record, now):
                          last_line=lines[-1][:200] if lines else '')
         except (OSError, UnicodeError):
             pass
-        event['age'] = max(0, now - record['started'])
+        try:
+            started = record['started']
+            if math.isfinite(started):
+                event['age'] = max(0, now - started)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+        if record.get('status') is None and event['age'] is None:
+            return event
         if record.get('status') == 'running':
             pid = record.get('pid')
             if not isinstance(pid, int) or pid <= 0 or os.name == 'nt':
