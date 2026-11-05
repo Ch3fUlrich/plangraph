@@ -44,13 +44,12 @@ def prepare_run(service, record, card):
 def thresholds(card=None, *, role=None):
     from plangraph.planner.routing import SpawnRefused
     card = card or {}
-    result = {}
+    result = {'hard_max': False}   # table max_min may carry the first-edit hold (M5)
     for key, default in [('stall_min', 20), ('first_edit_min', 15), ('max_min', 90)]:   # REMOVE-AT-R10 (D-3769): first_edit_min was 45
         value = card.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
         result[key.replace('_min', '_s')] = value * 60
-    result['hard_max'] = False   # table max_min may carry the first-edit hold (M5)
     timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT') or ('1500' if role == 'review' else None)
     if timeout and 'max_min' not in card:
         try:
