@@ -1,5 +1,9 @@
 import asyncio
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -119,3 +123,16 @@ def test_stdio_cap_recovers(tmp_path, monkeypatch):
     assert reply['error']['data']['type'] == 'ReplyTooLarge'
     monkeypatch.setattr(mcp_limits, 'MAX_REPLY_BYTES', cap)
     assert json.loads(request(server))['result']['tools']
+
+
+def test_real_stdio_handshake_writes_only_replies_with_ids(tmp_path):
+    src = Path(__file__).resolve().parents[1] / 'src'
+    env = {**os.environ, 'PYTHONPATH': str(src), 'HOME': str(tmp_path), 'XDG_STATE_HOME': str(tmp_path)}
+    messages = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}},
+                {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
+                {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}]
+    done = subprocess.run([sys.executable, '-m', 'plangraph.spawner.mcp'], env=env, cwd=tmp_path, capture_output=True,
+                          text=True, timeout=60, input=''.join(json.dumps(m) + '\n' for m in messages))
+    replies = [json.loads(line) for line in done.stdout.splitlines()]
+    assert [reply['id'] for reply in replies] == [1, 2]
+    assert replies[1]['result']['tools']
