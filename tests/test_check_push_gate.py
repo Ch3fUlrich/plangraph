@@ -59,7 +59,9 @@ def test_public_private_and_install(repo):
     git(repo, "remote", "set-url", "origin", "https://example.invalid/private")
     git(repo, "config", "core.hooksPath", "missing")
     assert run(repo).returncode == 0
-    assert run("--install", repo, "--force").returncode == 1
+    result = run("--install", repo, "--force")
+    assert result.returncode == 1
+    assert result.stdout == result.stderr == ""
     assert git(repo, "config", "core.hooksPath") == "missing"
 
 
@@ -95,7 +97,9 @@ def test_install_refusals(repo):
     git(repo, "rm", "tools/hooks/pre-push")
     commit(repo)
     git(repo, "config", "core.hooksPath", "other")
-    assert run("--install", repo, "--force").returncode == 1
+    result = run("--install", repo, "--force")
+    assert result.returncode == 1
+    assert result.stdout == result.stderr == ""
     assert git(repo, "config", "core.hooksPath") == "other"
 
 
@@ -103,6 +107,8 @@ def test_global_gate_and_usage(repo):
     git(repo, "config", "--global", "core.hooksPath", str(repo / "tools/hooks"))
     assert run(repo).returncode == 0
     git(repo, "config", "core.hooksPath", "missing")
+    assert run(repo).returncode == 1
+    git(repo, "config", "--add", "core.hooksPath", "tools/hooks")
     assert run(repo).returncode == 0
     assert run("--force", repo).returncode == 2
 

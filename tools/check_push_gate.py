@@ -18,7 +18,7 @@ def git(path, *args, optional=False):
 
 
 def config(path, *args):
-    return git(path, "config", *args, optional=True).decode().strip()
+    return git(path, "config", *args, "--get", "core.hooksPath", optional=True).decode().strip()
 
 
 def public_remote(path):
@@ -41,13 +41,12 @@ def gated(path):
     if not git(path, "ls-tree", "HEAD", "--", HOOK):
         return False
     expected = git(path, "show", "HEAD:" + HOOK)
-    for value in (config(path, "--path", "core.hooksPath"),
-                  config(path, "--global", "--path", "core.hooksPath")):
-        if value:
-            hook = path / value / "pre-push"
-            if hook.is_file() and os.access(hook, os.X_OK):
-                if hook.read_bytes() == expected:
-                    return True
+    value = config(path, "--path")
+    if value:
+        hook = path / value / "pre-push"
+        if hook.is_file() and os.access(hook, os.X_OK):
+            if hook.read_bytes() == expected:
+                return True
     return False
 
 
@@ -87,8 +86,10 @@ def main():
                     return 1
                 continue
             if args.install:
+                if not git(path, "ls-tree", "HEAD", "--", HOOK):
+                    return 1
                 git(path, "show", "HEAD:" + HOOK)
-                old = config(path, "core.hooksPath")
+                old = config(path)
                 if old and old != "tools/hooks" and not args.force:
                     return 1
                 git(path, "config", "core.hooksPath", "tools/hooks")
