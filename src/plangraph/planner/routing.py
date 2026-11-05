@@ -24,6 +24,7 @@ from plangraph.routing_errors import RouteError, SpawnRefused
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
 from .legs import DEFAULT_LEGS, TIERS, WRITER_ORDER, Leg, leg_active
+from .provider_stop import next_leg_after_provider_stop
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
@@ -426,6 +427,10 @@ def validate_model(model):
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
     rows = get_catalog_models()
+    # D-3817: Terra is an explicit review leg, not a measured resolver candidate.
+    if model == 'omniroute/cx-gpt-6.1-terra' and any(
+            leg.model == model and leg.roles == ('review',) for leg in DEFAULT_LEGS):
+        return model
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
                {leg.model for leg in DEFAULT_LEGS}) - inactive - OPERATOR_REMOVED_MODELS
@@ -446,29 +451,3 @@ def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller
     append_private(path, json.dumps({"ts": time.time(), "model": model,
                     "reason": override_reason, "caller": caller or "planner"}) + "\n")
     return model
-
-
-def next_leg_after_provider_stop(plan, leg_id, status, body, headers, caller, *,
-                                 store=None, now=None, account=None, combo=None):
-    """Consume an actual provider stop; unrelated failures never suppress a leg."""
-    from plangraph.routing_support import leg_state
-    state = store or leg_state
-    by_id = {leg.id: leg for leg in plan.legs}
-    if not isinstance(leg_id, str):
-        raise SpawnRefused('leg id must be a string')
-    if leg_id not in by_id:
-        raise ValueError("leg not in plan")
-    if type(status) is not int or status not in (429, 402) or not isinstance(body, str) or not body.strip():
-        return by_id[leg_id]
-    state.record_provider_response(by_id[leg_id].model, status, body, headers, caller,
-                                   now=now, account=account, combo=combo)
-    start = list(by_id).index(leg_id) + 1
-    for leg in plan.legs[start:]:
-        st = state.leg_status(leg.model, now=now, account=account, combo=combo)
-        if leg.harness == "agy" and not unavailable(st) and "/" not in leg.model:
-            alt = state.leg_status("agy/" + leg.model, now=now, account=account, combo=combo)
-            if unavailable(alt):
-                continue
-        if not unavailable(st):
-            return leg
-    return None
