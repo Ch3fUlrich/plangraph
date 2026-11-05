@@ -81,9 +81,8 @@ def probe_run(state, record, now):
     event = dict(rule='unknown')
     try:
         event.update(run_id=record.get('run_id'), leg=record.get('leg'), role=record.get('role'),
-                     age=None, seconds_silent=None, last_line='')
+                     age=None, seconds_silent=None, last_line=None)
         directory = Path(state) / 'runs' / record['run_id']
-        event['age'] = max(0, now - record['started'])
         log = directory / 'live.log'
         try:
             with log.open(encoding='utf-8') as stream:
@@ -93,6 +92,7 @@ def probe_run(state, record, now):
                          last_line=lines[-1][:200] if lines else '')
         except (OSError, UnicodeError):
             pass
+        event['age'] = max(0, now - record['started'])
         if record.get('status') == 'running':
             pid = record.get('pid')
             if not isinstance(pid, int) or pid <= 0 or os.name == 'nt':
@@ -152,7 +152,8 @@ def read_runs(state):
             runs.append(record)
         except (OSError, ValueError, UnicodeError) as exc:
             bad.append(dict(path=str(path), error=type(exc).__name__))
-            deliver_event(state, dict(run_id=path.parent.name, rule='unknown', kind='completion'))
+            finding = probe_run(state, dict(run_id=path.parent.name), time.time())
+            deliver_event(state, dict(finding, kind='completion'))
     if bad:
         atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
     return runs

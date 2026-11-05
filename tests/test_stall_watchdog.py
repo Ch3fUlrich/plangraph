@@ -38,6 +38,26 @@ def test_unknown_reaches_outbox(tmp_path):
     assert event['rule'] == 'unknown' and 'cancelled' not in event
 
 
+@pytest.mark.parametrize('log_text', [None, 'first\nlatest\n'])
+def test_unknown_has_full_shape(tmp_path, monkeypatch, log_text):
+    import os
+    directory = tmp_path / 'runs/run-fixture'
+    directory.mkdir(parents=True)
+    (directory / 'record.json').write_text('{')
+    if log_text is not None:
+        (directory / 'live.log').write_text(log_text)
+        os.utime(directory / 'live.log', (900, 900))
+    monkeypatch.setattr(w.time, 'time', lambda: 1000)
+    assert w.read_runs(tmp_path) == []
+    event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
+    expected = dict(run_id='run-fixture', rule='unknown', leg=None, role=None,
+                    age=None, seconds_silent=100 if log_text is not None else None,
+                    last_line='latest' if log_text is not None else None)
+    assert event == dict(expected, kind='completion', event_id=event['event_id'])
+    assert event['event_id']
+    assert w.probe_run(tmp_path, dict(run_id='run-fixture'), 1000) == expected
+
+
 def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
     from plangraph.spawner.remote_probe import exchange, poll
     import subprocess
