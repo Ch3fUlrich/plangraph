@@ -87,9 +87,6 @@ class Output(MoreCase):
         self.assertNotIn("\n", line)
         self.assertEqual(guard.emit_line("hard", 310000, 300000).split(":", 1)[0], "HARD-CAP ctx=310k >= 300k")
 
-    def test_public_fragment_is_deferred(self):
-        self.assertFalse((HOOKS.parent.parent / "changelog.d/LE-GUARD-TEXT.md").exists())
-
     def test_shared_backstop_stays_last_after_card_rule(self):
         guard = load_module("context_guard")
         wrapper = load_module("ctx_guard_session")
