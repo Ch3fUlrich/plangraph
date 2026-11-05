@@ -1,8 +1,11 @@
 import asyncio
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -136,3 +139,75 @@ def test_real_stdio_handshake_writes_only_replies_with_ids(tmp_path):
     replies = [json.loads(line) for line in done.stdout.splitlines()]
     assert [reply['id'] for reply in replies] == [1, 2]
     assert replies[1]['result']['tools']
+
+
+def stdio_env(tmp_path):
+    src = Path(__file__).resolve().parents[1] / 'src'
+    return {**os.environ, 'PYTHONPATH': str(src), 'HOME': str(tmp_path), 'USERPROFILE': str(tmp_path),
+            'XDG_STATE_HOME': str(tmp_path)}
+
+
+def stop(proc):
+    proc.kill()
+    proc.wait(timeout=30)
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream and not stream.closed:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
+def test_real_stdio_tool_call_round_trip_while_stdin_stays_open(tmp_path):
+    """Real clients keep stdin open and wait for each reply before the next request."""
+    proc = subprocess.Popen([sys.executable, '-m', 'plangraph.spawner.mcp'], env=stdio_env(tmp_path), cwd=tmp_path,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    answers = queue.Queue()
+    threading.Thread(target=lambda: [answers.put(line) for line in proc.stdout], daemon=True).start()
+
+    def call(msg_id, method, params):
+        proc.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': msg_id, 'method': method, 'params': params}).encode()
+                         + b'\n')
+        proc.stdin.flush()
+        return json.loads(answers.get(timeout=60))
+
+    try:
+        assert call(1, 'initialize', {})['result']['serverInfo']['name'] == 'plangraph-spawner'
+        reply = call(2, 'tools/call', {'name': 'plangraph_agent_ps', 'arguments': {}})
+        assert reply['id'] == 2 and 'error' not in reply
+        assert json.loads(reply['result']['content'][0]['text'])['total'] == 0
+        proc.stdin.close()
+        assert proc.wait(timeout=30) == 0
+    finally:
+        stop(proc)
+
+
+def test_real_stdio_accepts_stdin_redirected_from_a_file(tmp_path):
+    """Pipe-only transports refuse this on every platform, so it also guards POSIX-only CI."""
+    requests = tmp_path / 'requests.jsonl'
+    requests.write_text(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}}) + '\n')
+    with requests.open('rb') as stdin:
+        done = subprocess.run([sys.executable, '-m', 'plangraph.spawner.mcp'], env=stdio_env(tmp_path), cwd=tmp_path,
+                              stdin=stdin, capture_output=True, text=True, timeout=60)
+    assert [json.loads(line)['id'] for line in done.stdout.splitlines()] == [1]
+    assert done.returncode == 0
+
+
+def test_server_failure_exits_without_waiting_for_stdin(tmp_path):
+    """A read blocked on open stdin must not hold the process, or crash it, at shutdown."""
+    proc = subprocess.Popen([sys.executable, '-m', 'plangraph.spawner.mcp'], env=stdio_env(tmp_path), cwd=tmp_path,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    errors = []
+    threading.Thread(target=lambda: errors.append(proc.stderr.read()), daemon=True).start()
+    try:
+        proc.stdout.close()  # The next reply fails; stdin stays open with a read pending.
+        proc.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}}).encode()
+                         + b'\n')
+        proc.stdin.flush()
+        assert proc.wait(timeout=60) != 0
+        deadline = time.monotonic() + 30
+        while not errors and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert errors and b'Fatal Python error' not in errors[0]
+    finally:
+        stop(proc)
