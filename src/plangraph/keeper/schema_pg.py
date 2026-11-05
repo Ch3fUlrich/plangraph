@@ -23,8 +23,8 @@ from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
 from .schema import EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, WINDOW_CLASSES
-from .messages_schema import PG as MESSAGES_DDL; from .schema_pg_spawner import PG as SPAWNER_DDL
-
+from .messages_schema import PG as MESSAGES_DDL
+from .schema_pg_spawner import PG as SPAWNER_DDL
 __all__ = ["Migration", "MIGRATIONS", "LATEST", "parse_tables", "table_bodies",
            "BOOTSTRAP"]
 

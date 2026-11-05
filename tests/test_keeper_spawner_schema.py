@@ -120,6 +120,13 @@ def test_blob_boundaries(pg):
                 ('blob', chunks, 67108864))
 
 
+def test_blob_rejects_two_dimensions(pg):
+    raw = upgrade(pg)
+    with pytest.raises(Exception, match='check constraint'):
+        raw.execute('INSERT INTO spawner_blobs(blob_id,chunks,total_size) VALUES (%s,%s,%s)',
+                    ('matrix', [[b'x', b'y'], [b'z', b'w']], 4))
+
+
 @pytest.mark.parametrize('column', ['attempt_no', 'attempt_id'])
 def test_attempt_uniqueness(pg, column):
     raw = upgrade(pg)
@@ -138,6 +145,8 @@ def test_run_trigger(pg):
         raw.execute("INSERT INTO spawner_finalizations(run_id,finalizer_id) VALUES ('run','f')")
     job(raw)
     raw.execute("INSERT INTO spawner_finalizations(run_id,finalizer_id) VALUES ('run','f')")
+    with pytest.raises(Exception, match='spawner_unknown_run'):
+        raw.execute("UPDATE spawner_finalizations SET run_id='missing'")
 
 
 @pytest.mark.parametrize('table,column', [('spawner_jobs', 'result_blob_id'),
