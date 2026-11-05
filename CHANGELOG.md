@@ -301,3 +301,14 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - Known gap: merge-conflict-only authorship detection is not implemented by the
   merge writer traversal (which enumerates branch leaves). A Hand-Edit merge that
   reaches the resolver is counted as anthropic, never CHANGELOG-exempt.
+# Opt-in bash_guard test placement
+
+The host-local marker `$XDG_CONFIG_HOME/plangraph/pgtest-required` (default
+`~/.config/plangraph/pgtest-required`) enables bare-test refusals. Without it,
+guard behaviour is unchanged. Unreadable markers count as absent; this change
+does not create the marker or install live hooks.
+Run `python3 tools/pgtest.py <command>` (or the executable `tools/pgtest.py`):
+Linux uses `nice` and `systemd-run` in `agent-tests.slice`, with
+`PGTEST_MEMORY_MAX` defaulting to `2G`. Without systemd-run it warns and uses
+nice only. Windows assigns the child to a kill-on-close Job Object. Exit codes
+pass through. Direct systemd-run commands selecting that slice remain allowed.

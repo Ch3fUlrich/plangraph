@@ -19,6 +19,7 @@ three levels is denied.
 import re
 
 from bash_guard_rules2 import lead, scan
+from bash_guard_tests_rule import check_bare_tests, tests_required
 
 MAX_COMMAND_BYTES = 1024 * 1024  # 1 MiB
 _MAX_C_DEPTH = 3  # `shell -c` / `eval` strings nested inside each other
@@ -176,6 +177,10 @@ def _check_simple(cmd, depth):
         i += 1
     if i >= len(pos):
         return None
+    if tests_required():
+        reason = check_bare_tests(pos[i:], False)
+        if reason:
+            return reason
     wrapped = _basename(pos[i].text) in _WRAPPERS
     sfx, evaled = None, False
     for j in (range(i, len(pos)) if wrapped else (i,)):
