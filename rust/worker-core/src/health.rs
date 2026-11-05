@@ -224,9 +224,10 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
                 health.non_verdict_count += 1;
                 if health.non_verdict_count == 3 {
                     health.open(class, row.ts);
+                    health.heuristic = false;
                 } else {
                     health.until_s = Some(row.ts.saturating_add(reprobe_gap_s()));
-                    health.until_src = Some(UntilSrc::Row);
+                    health.until_src = Some(UntilSrc::Default);
                 }
             }
             continue;

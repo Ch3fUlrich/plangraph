@@ -29,11 +29,13 @@ fn neutral_probe_loop_and_cap() {
                         (State::HalfOpen, n, count)
                     );
                     assert_eq!(h.until_s, Some(ts + 60));
+                    assert_eq!(h.until_src, Some(UntilSrc::Default));
                     assert!(!h.available(ts));
                     ts += 60;
                 } else {
                     assert_eq!((h.state, h.n, h.non_verdict_count), (State::Open, n + 1, 0));
                     assert_eq!(h.until_s, Some(ts + backoff_s(n + 1)));
+                    assert!(!h.heuristic);
                     ts += backoff_s(n + 1);
                 }
             }
@@ -125,12 +127,23 @@ fn stability_shuffle_and_keeper_1103() {
         row(Class::MaxTime, 970),
     ];
     let expected = health(&rows, 970);
-    for shift in 0..rows.len() {
-        let mut shuffled = rows.clone();
-        shuffled.rotate_left(shift);
-        shuffled.reverse();
-        assert_eq!(health(&shuffled, 970), expected);
+    let mut permutations = 0;
+    for a in 0..4 {
+        for b in 0..4 {
+            for c in 0..4 {
+                for d in 0..4 {
+                    let indices = [a, b, c, d];
+                    if (0..4).any(|i| indices[..i].contains(&indices[i])) {
+                        continue;
+                    }
+                    let shuffled = indices.map(|i| rows[i].clone());
+                    assert_eq!(health(&shuffled, 970), expected);
+                    permutations += 1;
+                }
+            }
+        }
     }
+    assert_eq!(permutations, 24);
     assert_eq!(health(&rows, 970 + 3 * 86400).until_s, expected.until_s);
     let r = [row(Class::RateLimit, 100)];
     assert!(!health(&r, 399).available(399));
@@ -141,9 +154,56 @@ fn stability_shuffle_and_keeper_1103() {
 #[test]
 fn duplicates_last_row_wins() {
     let a = row(Class::RateLimit, 1);
-    let mut b = row(Class::Ok, 2);
+    let mut b = row(Class::Ok, 0);
     b.run_id = a.run_id.clone();
     assert_eq!(health(&[a, b], 2), Health::default());
+}
+
+fn assert_open_with_until(class: Class, rows: &[Row], now_s: i64) {
+    let h = health(rows, now_s);
+    assert_eq!(h.state, State::Open, "{class:?}");
+    assert!(h.state != State::Open || h.until_s.is_some(), "{class:?}");
+    assert_eq!(
+        health(rows, now_s + 3 * 86400).until_s,
+        h.until_s,
+        "{class:?}"
+    );
+}
+
+#[test]
+fn every_open_class_has_until() {
+    for class in [
+        Class::HangNoActivity,
+        Class::HangSilent,
+        Class::NoProgress,
+        Class::KilledExternal,
+        Class::Empty,
+        Class::Crash,
+        Class::ToolCallOnly,
+        Class::NoVerdict,
+        Class::ModelUnavailable,
+        Class::ProviderUnavailable,
+        Class::Quota,
+        Class::RateLimit,
+        Class::Auth,
+    ] {
+        let rows: Vec<_> = (1..=3).map(|ts| row(class, ts)).collect();
+        assert_open_with_until(class, &rows, 3);
+    }
+    for class in [
+        Class::MaxTime,
+        Class::Neutral(Terminal::Cancelled),
+        Class::Neutral(Terminal::CallerFault),
+        Class::Neutral(Terminal::Orphaned),
+        Class::Neutral(Terminal::KillIncomplete),
+        Class::Neutral(Terminal::ProofFailure),
+        Class::Neutral(Terminal::GitConfigMutated),
+        Class::Neutral(Terminal::WriterNoChanges),
+    ] {
+        let mut rows = vec![row(Class::RateLimit, 0)];
+        rows.extend((1..=3).map(|n| row(class, n * 300)));
+        assert_open_with_until(class, &rows, 900);
+    }
 }
 
 #[test]
