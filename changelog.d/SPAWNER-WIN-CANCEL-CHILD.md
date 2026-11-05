@@ -1,1 +1,1 @@
-Windows recorded cancellation now proves root and descendant creation times and terminates validated handles before verifying exit. Legacy unproven records remain fail-closed.
+Windows recorded cancellation proves root identity and membership before terminating a named Job Object; unproven records fail closed. A `Local\` job name opens only from the same Windows session; from another session the tree is reported as a survivor, never read clean.

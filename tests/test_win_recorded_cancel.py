@@ -43,11 +43,13 @@ def test_foreign_identity_and_stale_parent(monkeypatch):
     job = api.create_job()
     with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as foreign:
         try:
-            token = win.creation(foreign.pid)
+            token = win.creation(foreign.pid); other = WinJobApi(); other_job = other.create_job(); other.assign(other_job, foreign.pid)
             monkeypatch.setattr(proc_kill, '_nt_table', lambda: {foreign.pid: os.getpid()})
             assert type(token) is int
             for legacy in (None, 'nt'):
                 assert asyncio.run(SpawnerRunner().kill_recorded(foreign.pid, legacy)) == [foreign.pid]
+            dead = subprocess.Popen([sys.executable, '-c', 'pass']); dead.wait()
+            assert [asyncio.run(SpawnerRunner().kill_recorded(dead.pid, t)) for t in ('nt', None)] == [[dead.pid], [dead.pid]]
             assert asyncio.run(SpawnerRunner().kill_recorded(foreign.pid, token + 1)) == [foreign.pid]
             assert asyncio.run(win.kill(foreign.pid, token + 1, api.name)) == [foreign.pid]
             assert asyncio.run(win.kill(foreign.pid, token, api.name)) == [foreign.pid]
@@ -58,10 +60,11 @@ def test_foreign_identity_and_stale_parent(monkeypatch):
                     assert asyncio.run(SpawnerRunner().kill_recorded(root.pid, win.creation(root.pid))) == [root.pid]
                     assert root.poll() is None  # old record: no job name, signal nothing
                     api.assign(job, root.pid)
+                    assert asyncio.run(win.kill(root.pid, win.creation(root.pid), other.name)) == [root.pid]; assert foreign.poll() is None
                     assert asyncio.run(win.kill(root.pid, win.creation(root.pid), api.name)) == []
                     assert foreign.poll() is None
                 finally:
                     root.kill()
         finally:
             foreign.kill()
-            api.close(job)
+            api.close(job); other.close(other_job)

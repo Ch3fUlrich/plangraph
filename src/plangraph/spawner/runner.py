@@ -647,7 +647,7 @@ class SpawnerRunner:
             from .win_recorded import kill
             return await kill(pid, pid_start, *getattr(self, '_recorded_job', (None, ())))
         if pid_start is None or plat == 'nt':
-            return unproven_survivors(pid, plat)
+            return [pid] if plat == 'nt' else unproven_survivors(pid, plat)
         return await kill_proven(self, pid, pid_start, plat=plat) or []
 
     async def _own_kill(self, pid, ident=None):
