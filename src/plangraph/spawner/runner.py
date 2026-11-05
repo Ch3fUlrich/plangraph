@@ -62,7 +62,7 @@ def redact(value):
     if isinstance(value, (list, tuple)):
         return [redact(v) for v in value]
     if isinstance(value, str):
-        value = re.sub(r'\bsk-[\w-]{20,}', '[REDACTED]', value)  # REMOVE-AT-R10
+        value = re.sub(r'\bsk-[\w-]+', '[REDACTED]', value)  # REMOVE-AT-R10
         value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
         return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
     return value
@@ -316,7 +316,7 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
-        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False,  # REMOVE-AT-R10
+        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
@@ -328,12 +328,11 @@ class SpawnerRunner:
             raise ValueError('launch preparation requires dry run')
         if not prepare_launch:  # REMOVE-AT-R10
             prompt = redact(prompt)
-            if prompt_record is None:  # REMOVE-AT-R10
-                raise ValueError('prompt record required')
+        if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
             atomic_write_private(path, prompt)
-            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant='initial')
+            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant)
             save(record)
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:

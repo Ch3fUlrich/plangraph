@@ -15,7 +15,7 @@ fn embedded_prompt_and_distinct_stdin() {
             events: None,
         };
         let id = new_run_id();
-        assert!(store_prompt(&dir, &id, &mut launch, &mut json!({})).is_ok());
+        assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_ok());
         assert_eq!(launch.argv[2], "echo [REDACTED]");
         assert_eq!(launch.stdin.unwrap(), stdin.replace(&raw, "[REDACTED]"));
         assert_eq!(
@@ -47,7 +47,7 @@ fn prompt_snapshot_before_dispatch() {
         events: None,
     };
     let mut base = json!({});
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_ok());
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false).is_ok());
     let path = dir.join("runs").join(&id).join("prompt.txt");
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(bytes, launch.stdin.as_ref().unwrap().as_bytes());
@@ -67,7 +67,7 @@ fn prompt_snapshot_before_dispatch() {
     let old = std::fs::File::open(&path).unwrap();
     launch.prompt = Some("replacement".into());
     launch.stdin = Some("replacement".into());
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_ok());
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false).is_ok());
     use std::io::Read;
     let mut previous = Vec::new();
     (&old).read_to_end(&mut previous).unwrap();
@@ -75,9 +75,9 @@ fn prompt_snapshot_before_dispatch() {
     assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_err());
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false).is_err());
     launch.prompt = None;
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base).is_err());
+    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false).is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
 use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
@@ -157,11 +157,54 @@ fn registered_job(dry: bool) {
         format!("{:x}", Sha256::digest(b"p"))
     );
     if dry {
+        assert!(!dir
+            .0
+            .join("runs")
+            .join(result["run_id"].as_str().unwrap())
+            .join("prompt.txt")
+            .exists());
         let id = runs.jobs.lock().unwrap()[result["job_id"].as_str().unwrap()].clone();
         let saved = crate::records::read_record(&dir.0, &json!(id))
             .unwrap_or_else(|_| panic!("missing dry record"));
         assert_eq!(saved["status"], "dry_run");
     }
+}
+
+#[test]
+fn env_prompt_and_missing_carrier() {
+    for text in [
+        "risk-tagged task-contract sk-learn".to_owned(),
+        "xsk-".to_owned() + &"a".repeat(20),
+    ] {
+        assert_eq!(pg_worker_core::redact::redact(&text), text);
+    }
+    let dir = Dir(std::env::temp_dir().join(new_run_id()));
+    let raw = ["sk-", &"a".repeat(24)].concat();
+    let mut launch = crate::launch::LaunchSpec {
+        argv: vec!["sh".into(), "-c".into(), "printf %s \"$PROMPT\"".into()],
+        cwd: dir.0.clone(),
+        env: BTreeMap::from([("PROMPT".into(), raw.clone())]),
+        stdin: None,
+        prompt: Some(raw.clone()),
+        warnings: None,
+        events: None,
+    };
+    let id = new_run_id();
+    let mut base = json!({});
+    assert!(store_prompt(&dir.0, &id, &mut launch, &mut base, false).is_ok());
+    let child = std::process::Command::new(&launch.argv[0])
+        .args(&launch.argv[1..])
+        .envs(&launch.env)
+        .output()
+        .unwrap();
+    assert_eq!(child.stdout, b"[REDACTED]");
+    assert_eq!(
+        std::fs::read(dir.0.join("runs").join(id).join("prompt.txt")).unwrap(),
+        child.stdout
+    );
+    assert!(!base.to_string().contains(&raw));
+    launch.prompt = Some("absent".into());
+    assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut base, false).is_err());
 }
 
 #[test]

@@ -187,7 +187,7 @@ class SpawnService(SeatSpawnMixin):
         try:
             chosen = child['chosen_leg']
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
-                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'],
+                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'], wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10
             child['job_id'] = job.job_id
             self._save(child)

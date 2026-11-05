@@ -70,7 +70,7 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
-        store_prompt(state, &run_id, &mut launch, &mut base)?;
+        store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -138,6 +138,7 @@ fn store_prompt(
     id: &str,
     launch: &mut crate::launch::LaunchSpec,
     base: &mut Value,
+    dry: bool,
 ) -> Result<(), ToolError> {
     use sha2::{Digest, Sha256};
     let raw = launch
@@ -148,11 +149,12 @@ fn store_prompt(
         .stdin
         .iter()
         .chain(launch.argv.iter())
+        .chain(launch.env.values())
         .find(|s| s.contains(raw))
-        .unwrap_or(raw)
+        .ok_or_else(|| internal("launch prompt carrier missing"))?
         .clone();
     let redacted = pg_worker_core::redact::redact(raw);
-    for arg in &mut launch.argv {
+    for arg in launch.argv.iter_mut().chain(launch.env.values_mut()) {
         *arg = arg.replace(raw, &redacted);
     }
     if let Some(stdin) = &mut launch.stdin {
@@ -162,8 +164,10 @@ fn store_prompt(
     let path = pg_worker_core::run::record::run_dir(state, id)
         .map_err(|_| internal("invalid run id"))?
         .join("prompt.txt");
-    pg_worker_core::run::record_io::atomic_write_private(&path, prompt.as_bytes())
-        .map_err(|_| internal("could not save prompt"))?;
+    if !dry {
+        pg_worker_core::run::record_io::atomic_write_private(&path, prompt.as_bytes())
+            .map_err(|_| internal("could not save prompt"))?;
+    }
     base["prompt_sha256"] = json!(format!("{:x}", Sha256::digest(prompt.as_bytes())));
     base["wake_variant"] = json!("initial");
     launch.prompt = Some(prompt);
