@@ -37,14 +37,12 @@ def test_flush_continues_after_poison(tmp_path, error):
     assert json.loads((tmp_path / 'watchdog/delivery.json').read_text()) == health
     assert w.flush_outbox(tmp_path, ['notify'], run=send) == health
 
-
 def test_unknown_reaches_outbox(tmp_path):
     findings = w.tick([dict(run_id='run-fixture')], [], lambda s: None,
                       state=tmp_path, deliver=lambda e: w.deliver_event(tmp_path, e))
     assert findings[0]['rule'] == 'unknown'
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and 'cancelled' not in event
-
 
 def test_bridge_failure_status(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
@@ -54,7 +52,6 @@ def test_bridge_failure_status(tmp_path, monkeypatch):
     monkeypatch.setattr(w, 'flush_outbox', lambda *a: dict(failures=2, last_error='OSError'))
     assert w.main(['tick']) == 1
     assert 'delivery-OSError failures=2' in (tmp_path / 'watchdog/status.txt').read_text()
-
 
 @pytest.mark.parametrize('log_text', [None, 'first\nlatest\n'])
 def test_unknown_has_full_shape(tmp_path, monkeypatch, log_text):
@@ -74,7 +71,6 @@ def test_unknown_has_full_shape(tmp_path, monkeypatch, log_text):
     assert event == dict(expected, kind='completion', event_id=event['event_id'])
     assert event['event_id']
     assert w.probe_run(tmp_path, dict(run_id='run-fixture'), 1000) == expected
-
 
 def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
     from plangraph.spawner.remote_probe import exchange, poll
@@ -104,16 +100,34 @@ def test_corrupt_record_skipped_but_unknown_delivered(tmp_path, monkeypatch):
     poll(['fixture'], 'notify', tmp_path)
     assert sent == [event, event]
 
-
-def test_unknown_without_bridge_is_durable_not_tick_failure(tmp_path, monkeypatch):
+def test_unknown_without_bridge_reports_unconfigured(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
     monkeypatch.setattr(w, 'read_runs', lambda state: [dict(run_id='run-fixture')])
     monkeypatch.setattr(w, 'read_claims', lambda: [])
-    assert w.main(['tick']) == 0
+    assert w.main(['tick']) == 1
     event = json.loads(next((tmp_path / 'watchdog/outbox').glob('*.json')).read_text())
     assert event['rule'] == 'unknown' and event['event_id']
     assert 'outbox 1, no bridge' in (tmp_path / 'watchdog/status.txt').read_text()
+    assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
+    monkeypatch.setattr(w, 'read_runs', lambda state: [])
+    assert w.main(['tick']) == 1
+    assert 'delivery-bridge-unconfigured' in (tmp_path / 'watchdog/status.txt').read_text()
+
+
+@pytest.mark.parametrize('loaded', [{}, {'last_error': None}, {'failures': 2}])
+def test_flush_partial_health_preserves_retry_and_health(tmp_path, loaded):
+    w.deliver_event(tmp_path, dict(rule='unknown', run_id='fixture', kind='completion'))
+    health_path = tmp_path / 'watchdog/delivery.json'
+    health_path.write_text(json.dumps(loaded))
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0])
+    health = w.flush_outbox(tmp_path, ['notify'], run=fail)
+    assert health == dict(failures=loaded.get('failures', 0) + 1, last_error='CalledProcessError')
+    assert json.loads(health_path.read_text()) == health
+    assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1
+    assert w.flush_outbox(tmp_path, ['notify'], run=lambda *a, **kw: None) == dict(
+        failures=0, last_error=None)
 
 
 @pytest.mark.parametrize('age', [301, 5400])

@@ -205,7 +205,7 @@ def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
     from .private_io import atomic_write_private
     health_path = Path(state) / 'watchdog/delivery.json'
-    health = _read_state(state, health_path) or dict(failures=0, last_error=None)
+    health = dict(failures=0, last_error=None) | (_read_state(state, health_path) or {})
     failed = False
     for path in sorted((Path(state) / 'watchdog/outbox').glob('*.json')):
         record = _read_state(state, path)
@@ -333,9 +333,9 @@ def main(argv=None):
                 error = (error + '; ' if error else '') + 'delivery-' + health['last_error'] + ' failures=' + str(health['failures'])
         except Exception as exc:
             error = (error + '; ' if error else '') + 'delivery-' + type(exc).__name__
-    elif any(f['rule'] != 'unknown' for f in findings):
-        error = (error + '; ' if error else '') + 'delivery-bridge-unconfigured'
     pending = len(list((state / 'watchdog/outbox').glob('*.json')))
+    if not command and (pending or findings):
+        error = (error + '; ' if error else '') + 'delivery-bridge-unconfigured'
     if command and pending:
         error = error or 'delivery-bridge-failed'
     text = status(findings)
