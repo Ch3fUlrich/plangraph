@@ -104,8 +104,8 @@ DEFAULT_LEGS = (
         "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
         180000, False, claude_family=True,
         note="console sonnet credits; listed by opencode models --standalone, not by the "
-             "background service list; D-3901: disabled as writer, never a seat",
-        roles=("orchestrate",), expires="2026-11-30"),
+              "background service list; D-3901: disabled, never a seat",
+        roles=(), expires="2026-11-30"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
@@ -210,10 +210,10 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
     roles = raw.get("roles", ("orchestrate",))
-    if (not isinstance(roles, (list, tuple)) or not roles
+    if (not isinstance(roles, (list, tuple))
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
-        problems.append(f"{where}.roles: must be a non-empty subset of implement|review|orchestrate")
+        problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES

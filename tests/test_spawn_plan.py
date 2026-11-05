@@ -97,7 +97,7 @@ def test_non_provider_stops_do_not_mark(tmp_path, status, body):
     assert not store.path.exists()
 
 
-@pytest.mark.parametrize("roles", [[], ["worker"], "implement", [["review"]], ["review", "review"]])
+@pytest.mark.parametrize("roles", [["worker"], "implement", [["review"]], ["review", "review"]])
 def test_load_legs_bad_roles(tmp_path, roles):
     raw = dataclasses.asdict(DEFAULT_LEGS[0])
     raw["roles"] = roles
@@ -110,9 +110,9 @@ def test_load_legs_bad_roles(tmp_path, roles):
 def test_orchestrate_role_routes_opencode_first(tmp_path, capsys):
     # OPENCODE-ORCHESTRATOR-FALLBACK G1/G2: an orchestrator leg off Claude, mimo-pro first
     plan = plan_spawn(CARD, role="orchestrate")
-    assert plan.first_leg.id == "opencode-console-sonnet-5.5"
+    assert plan.first_leg.id == "mimo-v2.6-pro"
     # fallthrough: agy-sonnet runs on Antigravity quota, not Claude Max; never deepseek (D-2744)
-    assert [l.id for l in plan.legs] == ["opencode-console-sonnet-5.5", "mimo-v2.6-pro", "agy-sonnet-5.5"]
+    assert [l.id for l in plan.legs] == ["mimo-v2.6-pro", "agy-sonnet-5.5"]
     with pytest.raises(ValueError, match=re.escape("role must be implement|review|orchestrate")):
         plan_spawn(CARD, role="drive")
     from plangraph.spawner.cli import main

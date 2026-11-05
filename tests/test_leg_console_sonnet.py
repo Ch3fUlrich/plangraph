@@ -32,7 +32,7 @@ def test_console_sonnet_leg_shape():
     assert (leg.family, leg.claude_family, leg.trains_on_data) == ("claude", True, False)
     assert leg.windows == ("128k", "256k", "1m")
     assert leg.max_request_tokens == 180000
-    assert leg.roles == ("orchestrate",)
+    assert leg.roles == ()
     assert leg.tool_mode == "tools"
     assert leg.expires == "2026-11-30"
     assert "--standalone" in leg.note
@@ -57,11 +57,13 @@ def test_d3605_sol_routes_implement_never_review():
     assert leg_active(sol) and not sol.expires   # D-3605: operator implement leg again
 
 
-def test_implement_route_ranks_sonnet_after_free_legs():
+def test_implement_route_has_no_claude_leg():
     plan = plan_spawn(CARD, role="implement")
     ids = [leg.id for leg in plan.legs]
     assert SONNET not in ids
-
+    assert plan.legs
+    assert all(not leg.claude_family and leg.family not in ("claude", "anthropic")
+               for leg in plan.legs)
 
 
 def test_review_route_never_returns_sonnet():
