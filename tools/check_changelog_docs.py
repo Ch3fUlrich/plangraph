@@ -136,6 +136,22 @@ def unreleased_lines(changelog: str) -> collections.Counter[str]:
     return found
 
 
+def fragment_entry_added(root: str, paths: list[str], merge_base: str, head: str) -> bool:
+    """True when a direct-child fragment adds an entry against the merge-base."""
+    for path in paths:
+        if not re.fullmatch(r"changelog\.d/[^/]*\.md", path):
+            continue
+        if path.rsplit("/", 1)[-1].lower() == "readme.md":
+            continue
+        run = git(root, "show", f"{head}:{path}")
+        before = git(root, "show", f"{merge_base}:{path}")
+        entries = lambda text: collections.Counter(line.strip() for line in text.splitlines()
+                                                   if line.strip() and not line.strip().startswith("#"))
+        if run.returncode == 0 and entries(run.stdout) - entries(before.stdout):
+            return True
+    return False
+
+
 def changelog_entry_added(root: str, merge_base: str, head: str) -> bool:
     """True when head's '## Unreleased' holds a line the merge-base's does not."""
     def read(rev: str) -> str:
@@ -285,7 +301,10 @@ def main(argv: list[str] | None = None) -> int:
             uncovered.append(sha[:8])
 
     has_non_doc = any(not is_doc_path(p) for p in raw_paths)
-    entry_added = changelog_entry_added(root, merge_base, head_sha)
+    entry_added = (
+        changelog_entry_added(root, merge_base, head_sha)
+        or fragment_entry_added(root, raw_paths, merge_base, head_sha)
+    )
 
     if entry_added:
         changelog_status = "yes"
