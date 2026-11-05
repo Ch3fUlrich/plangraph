@@ -17,11 +17,17 @@ import time
 from xml.sax.saxutils import escape
 
 
-def tick(runs, claims, activity, *, now=None, deliver=None):
+def tick(runs, claims, activity, *, now=None, deliver=None, state=None):
     now = time.time() if now is None else now
     findings = []
     runs = list(runs)
     for run in runs:
+        if state is not None:
+            finding = probe_run(state, run, now)
+            if finding:
+                findings.append(finding)
+                if deliver:
+                    deliver(dict(finding, kind='completion'))
         parent = run.get('parent_session')
         ended = run.get('ended')
         if not parent or ended is None or run.get('status') in ('running', 'queued'):
@@ -67,6 +73,70 @@ def tick(runs, claims, activity, *, now=None, deliver=None):
     return findings
 
 
+def probe_run(state, record, now):
+    """Independent host sampling; missing evidence never authorizes cancellation."""
+    import asyncio
+    import math
+    from .private_io import atomic_write_private
+    event = dict(rule='unknown')
+    try:
+        event.update(run_id=record.get('run_id'), leg=record.get('leg'), role=record.get('role'),
+                     age=None, seconds_silent=None, last_line=None)
+        directory = Path(state) / 'runs' / record['run_id']
+        log = directory / 'live.log'
+        try:
+            with log.open(encoding='utf-8') as stream:
+                stream.seek(max(0, log.stat().st_size - 4096))
+                lines = stream.read().splitlines()
+            event.update(seconds_silent=max(0, now - log.stat().st_mtime),
+                         last_line=lines[-1][:200] if lines else '')
+        except (OSError, UnicodeError):
+            pass
+        try:
+            started = record['started']
+            if math.isfinite(started):
+                event['age'] = max(0, now - started)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+        if record.get('status') is None and event['age'] is None:
+            return event
+        if record.get('status') == 'running':
+            pid = record.get('pid')
+            if not isinstance(pid, int) or pid <= 0 or os.name == 'nt':
+                return event
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                event['rule'] = 'run-orphan'
+                record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
+                atomic_write_private(directory / 'record.json', json.dumps(record))
+                return event
+        silent = event['seconds_silent']
+        if silent is None:
+            return event
+        limit = float((record.get('card') or {}).get('stall_min', 12)) * 60
+        if not math.isfinite(limit) or limit <= 0:
+            return event
+        if record.get('status') == 'running':
+            if silent < limit:
+                return None
+            event['rule'] = 'run-silent'
+            event['episode'] = log.stat().st_mtime
+            if silent >= 2 * limit:
+                from .runner import spawn_service
+                result = asyncio.run(spawn_service(state=state).cancel(record['run_id']))
+                event['cancelled'] = result.get('status') == 'cancelled'
+            return event
+        message = str(record.get('final_message', '')) + ' ' + event['last_line']
+        if record.get('role') == 'implement' and (record.get('reason') == 'writer_no_changes'
+                or 'running in the background' in message.lower()):
+            event['rule'] = 'run-ended-no-commit'
+            return event
+        return None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError):
+        return event
+
+
 def status(findings):
     return '\n'.join('! stall ' + json.dumps(f, sort_keys=True) for f in findings)
 
@@ -89,6 +159,8 @@ def read_runs(state):
             runs.append(record)
         except (OSError, ValueError, UnicodeError) as exc:
             bad.append(dict(path=str(path), error=type(exc).__name__))
+            finding = probe_run(state, dict(run_id=path.parent.name), time.time())
+            deliver_event(state, dict(finding, kind='completion'))
     if bad:
         atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
     return runs
@@ -152,6 +224,10 @@ def deliver_event(state, event, *, now=None, interval=None):
     stalled parent is re-alerted only after the configured interval.
     """
     from plangraph.spawner.private_io import atomic_write_private
+    if event.get('kind') == 'completion':
+        event = dict(event, event_id=hashlib.sha256(json.dumps(
+            [event.get('run_id'), event.get('rule'), event.get('cancelled'),
+             event.get('episode')]).encode()).hexdigest())
     payload = json.dumps(event, sort_keys=True)
     if event.get('kind') == 'clear':
         for folder in ('alerts', 'outbox'):
@@ -163,6 +239,8 @@ def deliver_event(state, event, *, now=None, interval=None):
                     path.unlink(missing_ok=True)
         return
     identity = {k: event.get(k) for k in ('rule', 'run_id', 'item_key', 'kind', 'recipient')}
+    if event.get('kind') == 'completion':
+        identity['event_id'] = event['event_id']
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     now = time.time() if now is None else now
     interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')) if interval is None else interval
@@ -187,9 +265,11 @@ def flush_outbox(state, command, *, run=subprocess.run):
         record = _read_state(state, path)
         if record is None:
             continue
-        run(command, input=path.read_bytes(),
-            check=True, timeout=20)
-        path.unlink(missing_ok=True)
+        try:
+            run(command, input=path.read_bytes(), check=True, timeout=20)
+            path.unlink(missing_ok=True)
+        except (OSError, subprocess.SubprocessError):
+            continue
 
 
 def install(host, destination, *, python=None, root=None, run=subprocess.run, disabled=False):
@@ -205,6 +285,13 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
             text = (templates / ('watchdog.' + name)).read_text()
             text = text.replace('@PYTHON@', python).replace('@ROOT@', str(root))
             (destination / ('plangraph-stall-watchdog.' + name)).write_text(text)
+        (destination / 'plangraph-remote-probe.service').write_text(
+            '[Service]\nType=oneshot\nWorkingDirectory=' + str(root) + '\nEnvironment=PYTHONPATH=src\n'
+            'Environment="PLANGRAPH_PROBE_ROOT=' + str(root) + '"\n'
+            'EnvironmentFile=-%h/.config/plangraph/watchdog.env\n'
+            'ExecStart=' + python + ' -m plangraph.spawner.remote_probe\n')
+        (destination / 'plangraph-remote-probe.timer').write_text(
+            '[Timer]\nOnBootSec=2min\nOnUnitActiveSec=2min\n[Install]\nWantedBy=timers.target\n')
         run(['systemctl', '--user', 'daemon-reload'], check=True)
         run(['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'], check=True)
     elif host == 'windows':
@@ -245,7 +332,7 @@ def main(argv=None):
     spawn_service(state=state).retry_completions()
     runs = read_runs(state)
     findings = tick(runs, [], lambda s: read_activity(state, s),
-                    deliver=lambda e: deliver_event(state, e))
+                    deliver=lambda e: deliver_event(state, e), state=state)
     error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],
@@ -262,7 +349,7 @@ def main(argv=None):
             flush_outbox(state, json.loads(command))
         except Exception as exc:
             error = 'delivery-' + type(exc).__name__
-    elif findings:
+    elif any(f['rule'] != 'unknown' for f in findings):
         error = error or 'delivery-bridge-unconfigured'
     text = status(findings)
     if warning:
