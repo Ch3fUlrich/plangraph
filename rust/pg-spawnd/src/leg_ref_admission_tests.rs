@@ -92,3 +92,44 @@ fn parameter_error_wire_shape_preserved() {
     assert_eq!(data["type"], "ParameterRefused");
     assert_eq!(data["exit_code"], 2);
 }
+
+#[cfg(unix)]
+#[test]
+fn role_rule_precedes_adapter_and_dry_run() {
+    // Isolate the adapter environment from all concurrently running tests.
+    const CHILD: &str = "PG_LEG_REF_ROLE_TEST";
+    if std::env::var_os(CHILD).is_some() {
+        let state = std::env::var_os("PG_LEG_REF_STATE").unwrap();
+        for dry_run in [false, true] {
+            let a = args(json!({"card":{"diff_ref":"change"}, "dry_run":dry_run}));
+            assert!(crate::placement::route(Path::new(&state), &a).is_err());
+        }
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let temp = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    std::fs::create_dir(&temp).unwrap();
+    let script = temp.join("adapter.sh");
+    let marker = temp.join("called");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ntouch \"$PG_LEG_REF_MARKER\"\nprintf '{}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "leg_ref::admission_tests::role_rule_precedes_adapter_and_dry_run",
+        ])
+        .env(CHILD, "1")
+        .env("PG_LEG_REF_STATE", &temp)
+        .env("PG_LEG_REF_MARKER", &marker)
+        .env("PG_SPAWND_ADAPTER", &script)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let called = marker.exists();
+    std::fs::remove_dir_all(&temp).unwrap();
+    assert!(!called, "refusal must not invoke the adapter");
+}

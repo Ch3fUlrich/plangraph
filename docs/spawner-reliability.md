@@ -1,6 +1,6 @@
 # Spawner reliability
 
-## RL26: exact leg references (P-R6)
+## RL26 groundwork only: exact leg references (P-R6)
 
 The Rust resolver accepts exact registered leg ids first, or unique exact model
 references eligible for the requested role. Ambiguous models refuse; bounded,
@@ -26,3 +26,16 @@ The injectable admission helper preserves selectors in off/warn and atomically
 canonicalizes them in on, but is deliberately not runtime-wired until the
 catalog/route prerequisites are available. No claim of complete RL26 admission
 or external STD acceptance is made.
+
+### Re-scoped acceptance checklist
+
+- Pure exact resolver, harvested fixtures, and injectable admission tests only.
+- Independent rule 11-05 refusal before the route adapter, including dry runs.
+- V5 production catalog bridge is removed from this groundwork checklist.
+  `LegCatalog`, `AdapterCatalog`, the 60-second cache, and the Python read-only
+  catalog verb belong to the subsequent production-admission slice.
+- Runtime switch activation and shared MCP/override resolution are deferred;
+  the dead-code allowance denotes this intentional boundary, not activation.
+- Commit-2 shared-resolver and invalid-reference adapter tests remain required
+  for that subsequent slice; helper tests do not establish production wiring.
+- No STD ACCEPT or historical live-gate claim; external seats remain required.
