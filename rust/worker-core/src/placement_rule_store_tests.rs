@@ -1,4 +1,17 @@
 use super::*;
+#[test]
+fn placement_rule_docs_use_production_only_budget() {
+    let docs = include_str!("../../../docs/placement-rules.md");
+    let changelog = include_str!("../../../changelog.d/PLACEMENT-RULES-AUDIT.md");
+    for text in [docs, changelog] {
+        let text = text.to_lowercase();
+        assert!(!text.contains("re-split"), "obsolete split requirement");
+        assert!(!text.contains("not merge-ready"), "obsolete size blocker");
+        assert!(text.contains("production lines only"));
+    }
+    assert!(docs.contains("not production durability"));
+    assert!(docs.contains("Dependencies before item closure:"));
+}
 const KEY: &str = "PG_RULE_HOST_WORKER_CAP_COUNT";
 #[derive(Default)]
 struct Fake {

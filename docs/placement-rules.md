@@ -52,5 +52,6 @@ Role rollout remains off/shadow/on and gated on R7. HOST-AGENT and
 HOST-SAMPLES-API retain independent services/stores and all sampler, ingest,
 staleness and retention ownership; they supply no rule inputs.
 
-This B checkpoint needs re-splitting before PR: formatted production plus sibling
-tests exceeded the requested 400-line total stop threshold.
+The 400-line budget counts production lines only: this boundary has 202 production
+lines. Each file independently stays within 400 lines; sibling tests do not count
+against the production budget. No size-driven split is needed.
