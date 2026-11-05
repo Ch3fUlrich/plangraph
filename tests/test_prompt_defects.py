@@ -133,9 +133,22 @@ def test_l3_question_channel():
 def test_report_lead_in_and_retry_pointers():
     text = (ROOT / 'skills/implement/SKILL.md').read_text()
     assert 'End with these, and no claim without evidence:\n\n- `commits:`' in text
-    text = (ROOT / 'docs/SPAWNER.md').read_text()
+    text = (ROOT / 'docs/operations/spawner-prompt-rules.md').read_text()
     for pointer in ('ReviewMethod.max_rounds', 'ATTEMPT_BUDGET', 'plan.legs', 'no_fallthrough'):
         assert pointer in text
     assert 'no numeric\nfallthrough constant' in text
     assert all(len(line) <= 100 for line in text.splitlines() if
                'render_fixer_brief` numbers' in line or 'checklist or use' in line)
+
+
+def test_spawner_size_and_prompt_rules_pointer():
+    text = (ROOT / 'docs/SPAWNER.md').read_text()
+    assert len(text.splitlines()) <= 728
+    assert text.count('(operations/spawner-prompt-rules.md)') == 1
+    rules = (ROOT / 'docs/operations/spawner-prompt-rules.md').read_text()
+    assert len(rules.splitlines()) <= 400
+    for contract in ('render_fixer_brief', 'refuted by a named test', '`not done:`',
+                     'reason', 'Never echo an unchecked checklist', '`Remaining gaps`',
+                     'python3 tools/affected_tests.py --base origin/main --run',
+                     'COMMIT before finishing'):
+        assert contract in rules
