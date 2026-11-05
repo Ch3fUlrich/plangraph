@@ -125,7 +125,8 @@ pub(crate) fn spawn(
     runs: &crate::runs::Runs,
 ) -> Result<Value, ToolError> {
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
-    let admitted = crate::leg_ref::admit(state, args).and_then(|a| validate(&a).map(|()| a));
+    let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
+        .and_then(|a| validate(&a).map(|()| a));
     let admitted = match admitted {
         Ok(args) => args,
         Err(error) => {

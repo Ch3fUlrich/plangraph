@@ -159,10 +159,10 @@ pub(crate) fn check_review_role(
             .get("card")
             .and_then(|v| v.get("diff_ref"))
             .is_some_and(|v| !v.is_null());
-    if role == "implement" && diff {
-        return Err(crate::placement::parameter(
-            "diff_ref requires role review; role implement is refused",
-        ));
+    if role != "review" && diff {
+        return Err(crate::placement::parameter(format!(
+            "diff_ref requires role review; role {role} is refused"
+        )));
     }
     Ok(())
 }
@@ -189,7 +189,11 @@ pub(crate) fn admit_ref(
                     .ok_or_else(|| crate::placement::parameter("invalid leg/reference"))?;
                 let id = resolve_leg(reference, role, catalog).map_err(|error| {
                     let message = match error {
-                        RefError::Unknown(ids) | RefError::Ambiguous(ids) if !ids.is_empty() => {
+                        error @ (RefError::Unknown(_) | RefError::Ambiguous(_)) => {
+                            let ambiguous = matches!(error, RefError::Ambiguous(_));
+                            let (RefError::Unknown(ids) | RefError::Ambiguous(ids)) = error else {
+                                unreachable!()
+                            };
                             // Catalog strings are untrusted; never echo arbitrary ref or model text.
                             let hints: Vec<_> = ids
                                 .into_iter()
@@ -200,7 +204,9 @@ pub(crate) fn admit_ref(
                                         })
                                 })
                                 .collect();
-                            if hints.is_empty() {
+                            if ambiguous {
+                                format!("ambiguous reference; candidates: {}", hints.join(", "))
+                            } else if hints.is_empty() {
                                 "unknown leg/reference".into()
                             } else {
                                 format!("unknown leg/reference; did-you-mean: {}", hints.join(", "))
@@ -239,36 +245,42 @@ pub(crate) fn admit_ref(
 mod admission_tests;
 
 pub(crate) trait LegCatalog {
-    fn models(&mut self, state: &Path) -> Result<Vec<LegRef>, crate::errors::ToolError>;
+    fn legs(&self) -> Result<Vec<LegRef>, crate::errors::ToolError>;
 }
-#[derive(Default)]
-pub(crate) struct AdapterCatalog {
-    cached: Option<(std::path::PathBuf, std::time::Instant, Vec<LegRef>)>,
+pub(crate) struct AdapterCatalog<'a> {
+    state: &'a Path,
 }
-impl LegCatalog for AdapterCatalog {
-    fn models(&mut self, state: &Path) -> Result<Vec<LegRef>, crate::errors::ToolError> {
+impl<'a> AdapterCatalog<'a> {
+    pub(crate) fn new(state: &'a Path) -> Self {
+        Self { state }
+    }
+}
+impl LegCatalog for AdapterCatalog<'_> {
+    fn legs(&self) -> Result<Vec<LegRef>, crate::errors::ToolError> {
+        use std::sync::Mutex;
         use std::time::{Duration, Instant};
-        if let Some((path, at, rows)) = &self.cached {
-            if path == state && at.elapsed() < Duration::from_secs(60) {
+        type Cache = Option<(std::path::PathBuf, Instant, Vec<LegRef>)>;
+        static CACHE: Mutex<Cache> = Mutex::new(None);
+        let mut cached = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((path, at, rows)) = &*cached {
+            if path == self.state && at.elapsed() < Duration::from_secs(60) {
                 return Ok(rows.clone());
             }
         }
-        let (code, bytes, _) =
-            crate::adapter::Adapter(state).run(&["catalog".into()], Duration::from_secs(30))?;
+        let (code, bytes, _) = crate::adapter::Adapter(self.state)
+            .run(&["catalog".into()], Duration::from_secs(30))?;
         let rows: Vec<LegRef> = serde_json::from_slice(&bytes)
             .ok()
             .filter(|_| code == 0)
             .ok_or_else(|| crate::placement::parameter("catalog unavailable"))?;
-        self.cached = Some((state.into(), Instant::now(), rows.clone()));
+        *cached = Some((self.state.into(), Instant::now(), rows.clone()));
         Ok(rows)
     }
 }
 pub(crate) fn admit(
-    state: &Path,
+    catalog: &dyn LegCatalog,
     args: &crate::placement::Args,
 ) -> Result<crate::placement::Args, crate::errors::ToolError> {
-    use std::sync::Mutex;
-    static CATALOG: Mutex<AdapterCatalog> = Mutex::new(AdapterCatalog { cached: None });
     check_review_role(args)?;
     let role = args
         .get("role")
@@ -287,10 +299,7 @@ pub(crate) fn admit(
         if invalid {
             admit_ref(&mut admitted, &[], mode)?;
         } else {
-            let rows = CATALOG
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .models(state);
+            let rows = catalog.legs();
             match rows {
                 Ok(rows) => admit_ref(&mut admitted, &rows, mode)?,
                 Err(_) if mode == LegRefMode::Warn => {

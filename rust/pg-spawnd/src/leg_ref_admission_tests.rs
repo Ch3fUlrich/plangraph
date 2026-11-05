@@ -167,6 +167,15 @@ fn wired_adapter_case(invalid: bool) {
             json!({"card":{"task":"test"}, "prompt":"test", "model":if invalid {"--bad"} else {"provider/model"}, "dry_run":true}),
         );
         let route = crate::placement::route(&state, &a);
+        if !invalid {
+            struct FakeCatalog;
+            impl LegCatalog for FakeCatalog {
+                fn legs(&self) -> Result<Vec<LegRef>, crate::errors::ToolError> {
+                    Ok(catalog())
+                }
+            }
+            assert_eq!(admit(&FakeCatalog, &a).ok().unwrap()["leg"], "registered");
+        }
         let runs = crate::runs::Runs::new(std::sync::Arc::new(
             Supervisor::new(SupervisorCfg::new(Config {
                 state_dir: state.clone(),
@@ -208,7 +217,7 @@ esac
     let launch = temp.join("launch.sh");
     std::fs::write(
         &launch,
-        "#!/bin/sh\nprintf '{\"argv\":[\"true\"],\"cwd\":\".\",\"env\":{},\"stdin\":null}'\n",
+        "#!/bin/sh\nprintf '{\"argv\":[\"true\"],\"cwd\":\".\",\"env\":{},\"stdin\":\"test\",\"prompt\":\"test\"}'\n",
     )
     .unwrap();
     std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -290,4 +299,38 @@ fn filtered_empty_suggestions_omit_suffix() {
         .unwrap_err()
         .into_error_data();
     assert_eq!(error.message, "unknown leg/reference");
+}
+
+#[test]
+fn diff_ref_refuses_every_non_review_role() {
+    for role in ["orchestrate", "unknown", ""] {
+        for mode in [LegRefMode::Off, LegRefMode::Warn, LegRefMode::On] {
+            for value in [
+                json!({"role":role,"diff_ref":"change"}),
+                json!({"role":role,"card":{"diff_ref":"change"},"dry_run":true}),
+            ] {
+                assert!(admit_ref(&mut args(value), &catalog(), mode).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn ambiguous_diagnostic_is_distinct_from_unknown() {
+    let mut rows = catalog();
+    rows.push(LegRef {
+        id: "another".into(),
+        ..rows[0].clone()
+    });
+    let error = admit_ref(
+        &mut args(json!({"model":"provider/model"})),
+        &rows,
+        LegRefMode::On,
+    )
+    .unwrap_err()
+    .into_error_data();
+    assert_eq!(
+        error.message,
+        "ambiguous reference; candidates: another, registered"
+    );
 }
