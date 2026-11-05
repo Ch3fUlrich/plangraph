@@ -54,23 +54,27 @@ def offenders(source):
                     values.extend(v for t, v in zip(target.elts, node.value.elts)
                                   if pid_target(t))
         if isinstance(node, ast.AnnAssign):
-            if pid_target(node.target):
+            if pid_target(node.target) and node.value is not None:
                 values.append(node.value)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             args = node.args
             values.extend(v for a, v in zip((*args.posonlyargs, *args.args)[-len(args.defaults):], args.defaults)
                           if a.arg == 'pid')
-            values.extend(v for a, v in zip(args.kwonlyargs, args.kw_defaults) if a.arg == 'pid')
+            values.extend(v for a, v in zip(args.kwonlyargs, args.kw_defaults)
+                          if a.arg == 'pid' and v is not None)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id == 'type' and len(node.args) == 3 and isinstance(node.args[2], ast.Dict):
                 values.extend(v for k, v in zip(node.args[2].keys, node.args[2].values)
                               if isinstance(k, ast.Constant) and k.value == 'pid')
-            if node.func.id in {'_Fake', 'Hanging', 'kill_process_tree'} and node.args:
-                values.append(node.args[0])
+            if node.func.id in {'_Fake', 'Hanging', 'kill_process_tree'}:
+                if node.args:
+                    values.append(node.args[0])
+                values.extend(k.value for k in node.keywords if k.arg == 'pid')
         if isinstance(node, ast.Call) and (
                 isinstance(node.func, ast.Name) and node.func.id == 'SimpleNamespace'
                 or isinstance(node.func, ast.Attribute) and node.func.attr == 'SimpleNamespace'):
             values.extend(k.value for k in node.keywords if k.arg == 'pid')
+        assert all(isinstance(v, ast.AST) for v in values)
         if any(isinstance(v, ast.Constant) and isinstance(v.value, int)
                and v.value < FAKE_PID for v in values):
             found.append('.'.join(scope))
@@ -99,15 +103,27 @@ def test_no_small_fake_pid_literals():
     'self.pid: int = 1234',
     'self.pid, self.returncode = 1234, 0',
     "proc = type('P', (), {'pid': 1234})()",
+    'x = _Fake(pid=1234)',
+    'x = Hanging(pid=1234)',
+    'kill_process_tree(pid=1234)',
 ])
 def test_guard_catches_new_offender(source):
     assert offenders(source)
 
 
 @pytest.mark.parametrize('name', ['gateway_witness', 'w36_regressions', 'writer_isolation'])
-def test_stub_comment_describes_impossible_pid(name):
+def test_stub_pid_comes_from_shared_constant(name):
     source = Path(__file__).with_name('test_' + name + '.py').read_text()
-    assert 'impossible pid' in next(line for line in source.splitlines() if line.startswith('pytestmark'))
+    pids = [k.value for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == 'SimpleNamespace' for k in node.keywords if k.arg == 'pid']
+    assert pids
+    assert all(isinstance(pid, ast.Name) and pid.id == 'FAKE_PID' for pid in pids)
+
+
+@pytest.mark.parametrize('source', ['def f(*, pid): pass', 'self.pid: int', 'class C:\n pid: int'])
+def test_guard_skips_absent_values(source):
+    assert offenders(source) == []
 
 
 @pytest.mark.parametrize('old_pid', [1234, 999])

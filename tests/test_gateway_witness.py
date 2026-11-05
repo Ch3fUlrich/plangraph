@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fake_pid import FAKE_PID
-pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: impossible pid
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID exceeds the host PID range; no live process can match
 
 from plangraph.spawner import gateway_witness as gw
 
