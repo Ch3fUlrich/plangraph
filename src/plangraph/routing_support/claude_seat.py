@@ -7,6 +7,7 @@ Repo settings stay unread: the diff under review must not widen its own seat.
 
 REVIEW_TOOLS = "Read,Grep,Glob,Bash(python3 -m pytest -q *)"
 REVIEW_DENIED = ("Write,Edit,Bash(python3 -m pytest -q -*),Bash(python3 -m pytest -q * -*),"
+                 "Bash(python3 -m pytest -q /*),Bash(*..*),Bash(*$*),Bash(*`*),"
                  "Bash(*\"*),Bash(*'*),Bash(*\\*)")
 
 

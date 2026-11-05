@@ -10,7 +10,7 @@ import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS, HARNESSES, load_legs
 from plangraph.planner.routing import plan_spawn
-from plangraph.routing_support.clients import build_command, STDIN_PROMPT_HARNESSES
+from plangraph.routing_support.clients import build_command, build_standalone_fallback_command, STDIN_PROMPT_HARNESSES
 from plangraph.spawner import runner as runner_mod
 
 from registry_route_util import CARD, live_policy  # noqa: F401
@@ -67,6 +67,12 @@ def test_review_seat_gets_pytest_only_and_no_plan_mode(online):
     assert {"Write", "Edit", "Bash(python3 -m pytest -q -*)", "Bash(python3 -m pytest -q * -*)"} <= set(denied)
     assert cmd[cmd.index("--setting-sources") + 1] == "user"   # the diff under review cannot widen its seat
     assert "bypassPermissions" not in cmd and "--dangerously-skip-permissions" not in cmd
+
+
+def test_offline_review_fallback_keeps_the_scope_and_denies_paths_out():
+    cmd = build_standalone_fallback_command("claude", "p", "claude-haiku-5-5", role="review")
+    denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
+    assert {"Bash(*$*)", "Bash(*`*)", "Bash(*..*)", "Bash(python3 -m pytest -q /*)"} <= set(denied)
 
 
 def test_non_review_role_stays_in_plan_mode_without_tools():
