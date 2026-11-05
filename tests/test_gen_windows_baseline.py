@@ -1,8 +1,6 @@
 import gen_windows_baseline as baseline
 import pytest
 from gen_windows_baseline import generate, MARKER
-
-
 def test_scrub_and_refusal(tmp_path, monkeypatch):
     monkeypatch.setenv("USERNAME", "fake-person")
     monkeypatch.setenv("COMPUTERNAME", "fake-machine")

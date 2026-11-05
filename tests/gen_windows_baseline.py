@@ -4,11 +4,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-
 MARKER = "<!-- generated Windows baseline -->"
 PATHS = r"(?i)(?:[a-z]:[\\/](?:Users|home)[\\/]|/(?:[a-z]/Users|home|Users)/)[^\s/\\]+"
-
-
 def generate(log, sha, output=Path("tests/windows_baseline.md")):
     text = Path(log).read_text(encoding="utf-8", errors="replace")
     old = output.read_text(encoding="utf-8") if output.exists() else subprocess.check_output(
@@ -38,7 +35,5 @@ def generate(log, sha, output=Path("tests/windows_baseline.md")):
     if re.search(PATHS, result) or any(s.lower() in result.lower() for s in filter(None, secrets)) or len(result.encode()) > 40960:
         raise ValueError("unsafe or oversized baseline")
     output.write_bytes(result.encode("utf-8"))
-
-
 if __name__ == "__main__":
     generate(*sys.argv[1:3], *([Path(sys.argv[3])] if len(sys.argv) > 3 else []))
