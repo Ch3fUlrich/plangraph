@@ -35,7 +35,8 @@ _RATE_LIMIT = re.compile(RATE_LIMIT_PATTERN, re.I)
 # Keep the standalone review leg independent of the spawner package.
 _USAGE_LIMIT = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
-    r'(?:reached|exceeded)\s*[.!]?(?:\s*\(reset after \d[^\n]*\))?\s*$', re.I)
+    r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'
+    r'|\.\s*Please try again later[.!]?|,\s*retry in \d+(?:\.\d+)?\s*(?:s|m|h|d))\s*', re.I)
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 

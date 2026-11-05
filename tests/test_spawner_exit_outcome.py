@@ -203,6 +203,9 @@ def test_model_unavailable_marks_the_leg_unavailable_d3676(tmp_path, monkeypatch
     'Free usage limit tiers are described here',
     'Error: see usage limit docs',
     'Error: usage limit test case passed',
+    'usage limit reached for documentation examples',
+    'The docs say usage limit reached',
+    'Error: see docs: usage limit reached',
 ])
 def test_usage_limit_prose_never_marks_a_leg_d3257(tmp_path, monkeypatch, prose):
     from plangraph.spawner.env_redact import early_refusal
@@ -228,6 +231,28 @@ def test_usage_limit_prose_never_marks_a_leg_d3257(tmp_path, monkeypatch, prose)
 def test_review_usage_limit_refusals(line):
     from plangraph.review.opencode import is_rate_limited
     assert is_rate_limited(line)
+
+
+@pytest.mark.parametrize('line', [
+    'usage limit reached. Please try again later',
+    'usage limit reached, retry in 5h',
+    'usage limit reached (reset after 5h)',
+])
+def test_usage_limit_trailing_detail_books_leg(tmp_path, monkeypatch, line):
+    from plangraph.spawner.env_redact import early_refusal
+    from plangraph.review.opencode import is_rate_limited
+    assert harness_limit_line(1, '', line) == line
+    assert harness_limit_line(1, 'Error: ' + line, '') == 'Error: ' + line
+    assert early_refusal('Error: ' + line) == 'Error: ' + line
+    assert is_rate_limited(line)
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1_700_000_000.0)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    job = SimpleNamespace(exit_code=1, stdout='', stderr=line)
+    reason = fallthrough_reason(SimpleNamespace(leg_reader=store),
+                                SimpleNamespace(model='qwen3.8-max'), job, {})
+    assert reason == 'harness_limit: ' + line
+    assert store.leg_status('qwen3.8-max')['state'] == 'limited'
 
 
 def test_resolver_does_not_add_glm_to_implement_fallback():

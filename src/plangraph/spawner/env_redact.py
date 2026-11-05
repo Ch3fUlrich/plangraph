@@ -17,7 +17,8 @@ _QUOTA_MARKER = re.compile(
 #: pointers and start-anchored prose must not book a leg down (D-3257).
 _USAGE_LIMIT = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
-    r'(?:reached|exceeded)\s*[.!]?(?:\s*\(reset after \d[^\n]*\))?\s*$', re.I)
+    r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'
+    r'|\.\s*Please try again later[.!]?|,\s*retry in \d+(?:\.\d+)?\s*(?:s|m|h|d))\s*', re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
 #: leg (prose stays out, D-3257). It counts only on an error-shaped line or
@@ -55,16 +56,16 @@ def harness_limit_line(exit_code, stdout, stderr):
         text = line.strip()
         if _ERROR_SHAPED.match(line):
             return (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
-                    or _USAGE_LIMIT.search(line))
+                    or _USAGE_LIMIT.fullmatch(line))
         # A complete usage refusal names an exhausted quota. A reset suffix
         # alone still needs a quota/rate-limit name alongside (D-3257).
-        return (_QUOTA_MARKER.match(text) or _USAGE_LIMIT.match(text) or (
-            (_RESET_AFTER.match(text) or _USAGE_LIMIT.search(text))
+        return (_QUOTA_MARKER.match(text) or _USAGE_LIMIT.fullmatch(text) or (
+            (_RESET_AFTER.match(text) or _USAGE_LIMIT.fullmatch(text))
             and _QUOTA_MARKER.search(line)))
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
         line for line in normalize(stdout).splitlines()
         if _ERROR_SHAPED.match(line) and (
-            _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _USAGE_LIMIT.search(line))]
+             _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _USAGE_LIMIT.fullmatch(line))]
     return lines[0].strip() if lines else None
 
 
@@ -89,7 +90,7 @@ def early_refusal(complete_text):
                 pass
     for line in lines:
         if _ERROR_SHAPED.match(line) and (
-                _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _USAGE_LIMIT.search(line)):
+                _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _USAGE_LIMIT.fullmatch(line)):
             return line.strip()
     return None
 
