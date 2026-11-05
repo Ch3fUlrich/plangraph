@@ -97,7 +97,7 @@ def server(status):
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             assert self.path == '/v1/whoami'
-            assert self.headers['Authorization'] == 'Bearer planted-credential-value'
+            assert self.headers['Authorization'].split() == ['Bearer', 'planted-credential-value']
             self.send_response(status)
             if status == 302:
                 self.send_header('Location', '/must-not-follow')
