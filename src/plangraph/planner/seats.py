@@ -56,6 +56,9 @@ def pick_seats(ordered, writer_families, *, high):
     (D-3084).  Seats are taken in route order, one per family, only while they
     help cover an open part; at least two families are always picked.  Returns
     ``(seats, coverage, open_parts)``.
+
+    D-3817: Terra may sit with its own writer family, but contributes no coverage
+    for that part; standard still needs another family and high needs two.
     """
     from plangraph.keeper.coverage import uncovered
     writers = sorted({seat_family(w) for w in writer_families if w})
@@ -63,7 +66,7 @@ def pick_seats(ordered, writer_families, *, high):
     seats, families = [], []
     for leg in ordered:
         fam = seat_family(leg.family)
-        if fam in families or (writers and all(fam == w for w in writers)):
+        if fam in families or (leg.id != "cx-gpt-6.1-terra" and writers and all(fam == w for w in writers)):
             continue
         open_parts = uncovered(writers, families, need=need, sensitive=high)
         if len(families) >= 2 and not any(fam != w for w in open_parts):

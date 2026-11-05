@@ -97,19 +97,13 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
         note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
+    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
+        tool_mode="inline-only"),
     Leg("cx-gpt-6.1-terra", "subscription", "opencode", "omniroute/cx-gpt-6.1-terra",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only",
         note="D-3817: operator review leg; on a gpt writer it needs one non-gpt seat"),
-    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
-        tool_mode="inline-only"),
-    Leg("opencode-console-sonnet-5.5", "subscription", "opencode",
-        "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
-        180000, False, claude_family=True,
-        note="console sonnet credits; listed by opencode models --standalone, not by the "
-             "background service list; writer only, never a seat",
-        roles=("implement",), expires="2026-11-30"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
@@ -151,7 +145,6 @@ WRITER_ORDER: tuple[str, ...] = (
     "agy-gemini-3.8-flash",
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
-    "opencode-console-sonnet-5.5",
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))

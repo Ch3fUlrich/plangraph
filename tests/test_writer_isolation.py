@@ -160,3 +160,26 @@ def test_config_layers_close_independent_of_platform_home(env):
         assert all(child[k] == v for k, v in CLOSED_LAYERS.items())
     finally:
         shutil.rmtree(oc_dir)
+
+
+@pytest.mark.writer_change_check
+@pytest.mark.parametrize('change', ['commit', 'none', 'fetch'])
+def test_writer_shared_local_refs(tmp_path, monkeypatch, change):
+    work = _git_repo(tmp_path / 'work')
+    linked = tmp_path / 'linked'
+    subprocess.run(['git', '-C', str(work), 'worktree', 'add', '-qb', 'writer', str(linked)], check=True)
+    remote = _git_repo(tmp_path / 'remote')
+    subprocess.run(['git', '-C', str(work), 'fetch', '-q', str(remote), 'HEAD:refs/remotes/test/main'], check=True)
+    def act(_):
+        if change == 'commit':
+            subprocess.run(['git', '-C', str(linked), 'commit', '-q', '--allow-empty', '-m', 'writer work'], check=True)
+        elif change == 'fetch':
+            subprocess.run(['git', '-C', str(remote), 'commit', '-q', '--allow-empty', '-m', 'remote work'], check=True)
+            subprocess.run(['git', '-C', str(work), 'fetch', '-q', str(remote), 'HEAD:refs/remotes/test/main'], check=True)
+    job, _ = _run_writer(tmp_path, monkeypatch, work, act=act)
+    assert (job.status, job.exit_code) == (('completed', 0) if change == 'commit' else ('failed', 5))
+
+
+def test_tree_state_outside_worktree(tmp_path):
+    from plangraph.spawner.opencode_isolation import tree_state
+    assert tree_state(tmp_path) is None

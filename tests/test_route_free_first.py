@@ -3,8 +3,7 @@
 For a public standard card ``spawner.cli route`` lists the serving free legs
 (opencode/*-free, openrouter-free) before the subscription legs, for implement
 and review alike; free legs the route policy bans stay skipped; agy is skipped
-while out of quota (leg_state); the one claude writer leg for implement is the
-console Sonnet writer (never a seat); agy-sonnet-5.5 is orchestrate-only.
+while out of quota (leg_state); no claude-family leg implements; agy-sonnet-5.5 is orchestrate-only.
 """
 from __future__ import annotations
 
@@ -15,8 +14,7 @@ from plangraph.spawner.cli import main
 
 CARD = {"estimate_tokens": 20000, "risk_tags": []}
 FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free"]
-SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash",
-        "opencode-console-sonnet-5.5"]   # D-3667: Sol heads the subscription tier
+SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
 
 
 def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
@@ -26,8 +24,7 @@ def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
     ids = [leg["id"] for leg in plan["legs"]]
     assert ids == FREE + SUBS + ["deepseek"]
     assert "agy-sonnet-5.5" not in ids
-    assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == [
-        "opencode-console-sonnet-5.5"]
+    assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == []
 
 
 def test_review_free_first():
@@ -57,7 +54,7 @@ def test_agy_skipped_while_out_of_quota():
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
     ids = [leg.id for leg in plan.legs]
     assert ids == FREE + ["cx-gpt-6.1-sol", "mimo-v2.6-pro", "mimo-v2.6-flash",
-                          "opencode-console-sonnet-5.5", "deepseek"]
+                          "deepseek"]
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in plan.skipped}["agy-gemini-3.8-flash"] == "limited"
 

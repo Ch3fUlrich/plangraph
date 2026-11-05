@@ -13,7 +13,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-    "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna", "opencode-console-sonnet-5.5",
+    "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna", "cx-gpt-6.1-terra",
     "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
@@ -143,8 +143,8 @@ def test_small_estimate_goes_128k_qodercli_first():
 def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
-    assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
-                      "opencode-console-sonnet-5.5", "agy-gemini-3.8-flash",
+    assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna", "cx-gpt-6.1-terra",
+                      "agy-gemini-3.8-flash",
                       "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
     assert all("256k" in leg.windows for leg in r.legs)
 
@@ -316,13 +316,13 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
 def test_writer_order_d2683_implement_first_seven():
     # (a) implement plan, public standard card (20000 tokens, no exclusions): free tier first, then
     # subscription headed by Sol (D-3667): deepseek-free, glm-free, openrouter-free, cx-gpt-6.1-sol,
-    # agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash, console-sonnet as the first 8 leg ids in that order
+    # agy-gemini, mimo-v2.6-pro, mimo-v2.6-flash as the first 7 leg ids in that order
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
     expected = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
                 "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
-                "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]
-    assert [leg.id for leg in plan.legs[:8]] == expected
+                "mimo-v2.6-flash"]
+    assert [leg.id for leg in plan.legs[:7]] == expected
 
 
 def test_writer_order_d2683_unavailable_skipped():
@@ -376,17 +376,16 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
     expected_writers = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",  # pinned: tier first,
                         "openrouter-free", "cx-gpt-6.1-sol", "agy-gemini-3.8-flash",  # then WRITER_ORDER
-                        "mimo-v2.6-flash", "opencode-console-sonnet-5.5"]  # (D-2683, D-3667)
+                        "mimo-v2.6-flash"]  # (D-2683, D-3667)
     assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
 
 
 def test_no_implement_plan_leg_has_claude_family():
-    # F5 amended by D-3455: the console Sonnet writer is the one claude_family implement
-    # leg, and it is never a review seat.
+    # D-3817/D-3763: no claude-family implement leg.
     for estimate in (1000, 20000, 100000):
         plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
         assert plan.legs
-        assert {leg.id for leg in plan.legs if leg.claude_family} <= {"opencode-console-sonnet-5.5"}
+        assert {leg.id for leg in plan.legs if leg.claude_family} == set()
         review = plan_spawn({"estimate_tokens": estimate}, role="review", writer_families=("gpt",))
         assert not any(leg.claude_family for leg in review.review_seats)
 

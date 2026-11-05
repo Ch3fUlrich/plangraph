@@ -32,7 +32,7 @@ def close_config_layers(child_env):
 
 
 def tree_state(work_dir):
-    """Hash of HEAD plus the full porcelain status; None outside a git work tree.
+    """Hash HEAD, status, and shared local branches; None outside a git work tree.
 
     An unborn HEAD (fresh repo) hashes as ``unborn``: the status still counts.
     """
@@ -42,7 +42,11 @@ def tree_state(work_dir):
     try:
         status = git('status', '--porcelain=v1', '-uall').stdout
         head = git('rev-parse', '--verify', '-q', 'HEAD', check=False)
-        return hashlib.sha256((head.stdout if head.returncode == 0 else b'unborn') + b'\0' + status).hexdigest()
+        # Linked worktree commits move shared heads, not this cwd's HEAD/status.
+        # Remote-tracking refs are deliberately absent: a fetch is not writer work.
+        heads = git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads').stdout
+        return hashlib.sha256((head.stdout if head.returncode == 0 else b'unborn')
+                              + b'\0' + status + b'\0' + heads).hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
 
