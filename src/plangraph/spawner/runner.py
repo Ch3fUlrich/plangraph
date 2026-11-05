@@ -642,7 +642,10 @@ class SpawnerRunner:
         """Cancel after a service restart: prove the recorded root by its persisted start token,
         kill its tree, verify.  Returns survivors ([] = clean); unprovable and alive = survivors."""
         plat = 'nt' if self._nt() else None
-        if pid_start is None or plat == 'nt':   # nt: the job died with the old service
+        if plat == 'nt' and type(pid_start) is int:
+            from .win_recorded import kill
+            return await kill(pid, pid_start)
+        if pid_start is None or plat == 'nt':
             return unproven_survivors(pid, plat)
         return await kill_proven(self, pid, pid_start, plat=plat) or []
 

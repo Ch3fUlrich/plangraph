@@ -43,6 +43,9 @@ def test_foreign_identity_and_stale_parent(monkeypatch):
     with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as foreign:
         try:
             token = win.creation(foreign.pid)
+            assert type(token) is int
+            for legacy in (None, 'nt'):
+                assert asyncio.run(SpawnerRunner().kill_recorded(foreign.pid, legacy)) == [foreign.pid]
             assert asyncio.run(SpawnerRunner().kill_recorded(foreign.pid, token + 1)) == [foreign.pid]
             assert foreign.poll() is None
             with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as root:
