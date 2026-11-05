@@ -213,6 +213,46 @@ def test_delivery_retry(tmp_path, capsys):
     assert json.loads((tmp_path / "state").read_text()) == []
 
 
+def test_conflicting_without_checks(tmp_path, capsys):
+    fake = Fake()
+    fake.prs = [pr(mergeable="CONFLICTING")]
+    fake.counts = iter([0] * 3)
+    state = tmp_path / "state"
+    for head, code in [("a" * 40, 1), ("a" * 40, 0), ("b" * 40, 1)]:
+        fake.prs[0]["headRefOid"] = head
+        assert invoke(fake, "check", "--state", str(state)) == code
+        lines = capsys.readouterr().out.splitlines()
+        assert lines == ([ci.alert(7, head, "conflicting", "merge conflict")] if code else [])
+    assert {row[2] for row in json.loads(state.read_text())} == {"conflicting"}
+
+
+@pytest.mark.parametrize("age,code", [(299, 0), (300, 0), (301, 1)])
+def test_injected_grace_boundary(age, code, tmp_path, capsys, monkeypatch):
+    fake = Fake()
+    fake.prs = [pr()]
+    fake.counts = iter([0])
+    def unexpected_time():
+        pytest.fail("grace must use injected now")
+    monkeypatch.setattr(ci.time, "time", unexpected_time)
+    assert ci.main(["check", "--repo", "owner/project", "--state", str(tmp_path / "state")],
+                   runner=fake, now=lambda: ci.timestamp(OLD) + age) == code
+    assert ("no_check_run" in capsys.readouterr().out) == bool(code)
+
+
+@pytest.mark.parametrize("command", ["  ", ""])
+def test_empty_alert_command(command, tmp_path, capsys):
+    fake = Fake()
+    fake.prs = [pr(mergeable="CONFLICTING")]
+    state = tmp_path / "state"
+    state.write_text("[]")
+    assert invoke(fake, "check", "--state", str(state), "--alert-cmd", command) == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == "ERROR alert command must not be empty\n"
+    assert not fake.calls
+    assert state.read_text() == "[]"
+
+
 @pytest.fixture(autouse=True)
 def no_dangerous_calls():
     yield

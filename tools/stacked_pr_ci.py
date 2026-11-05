@@ -21,9 +21,11 @@ class Failure(Exception):
 
 
 class CI:
-    def __init__(self, repo, runner=run, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, repo, runner=run, clock=time.monotonic, sleep=time.sleep,
+                 now=time.time):
         self.repo, self.runner = repo, runner
         self.clock, self.sleep = clock, sleep
+        self.now = now
 
     def call(self, argv, **kwargs):
         result = self.runner(argv, **kwargs)
@@ -104,11 +106,11 @@ class CI:
             if base != "main":
                 if self.merged_base(base):
                     findings.append((number, head, "base_merged", f"base {base} merged"))
-            elif not self.checks(head):
+            elif pr["mergeable"] != "CONFLICTING" and not self.checks(head):
                 commit = self.api(f"commits/{head}")
                 newest = max(timestamp(pr["createdAt"]),
                              timestamp(commit["commit"]["committer"]["date"]))
-                if time.time() - newest > args.grace_s:
+                if self.now() - newest > args.grace_s:
                     findings.append((number, head, "no_check_run", "head has no check run"))
         # Finish every read before emitting alerts or replacing state.
         opened = {p["number"] for p in prs}
@@ -155,7 +157,7 @@ def atomic_state(path, rows):
             os.unlink(name)
 
 
-def main(argv=None, runner=run, clock=time.monotonic, sleep=time.sleep):
+def main(argv=None, runner=run, clock=time.monotonic, sleep=time.sleep, now=time.time):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     retarget = commands.add_parser("retarget")
@@ -170,7 +172,9 @@ def main(argv=None, runner=run, clock=time.monotonic, sleep=time.sleep):
         command.add_argument("--repo", required=True)
     args = parser.parse_args(argv)
     try:
-        ci = CI(args.repo, runner, clock, sleep)
+        if args.command == "check" and args.alert_cmd is not None and not shlex.split(args.alert_cmd):
+            raise Failure("alert command must not be empty")
+        ci = CI(args.repo, runner, clock, sleep, now)
         return getattr(ci, args.command)(args)
     except (Failure, OSError, ValueError, KeyError) as exc:
         print("ERROR " + " ".join(str(exc).split()), file=sys.stderr)
