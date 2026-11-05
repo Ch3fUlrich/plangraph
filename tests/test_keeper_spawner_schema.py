@@ -106,6 +106,9 @@ def test_checks(pg, table, column, value):
         if column == 'total_size' and value > 0:
             raw.execute('UPDATE spawner_blobs SET total_size=%s, chunks=%s',
                         (67108865, [b'x' * 4194304] * 16 + [b'x']))
+        elif column == 'chunks' and value[0] and len(value[0]) > 4194304:
+            # total_size matches the chunk sum, so only the per-chunk limit can refuse this.
+            raw.execute('UPDATE spawner_blobs SET total_size=%s, chunks=%s', (len(value[0]), value))
         else:
             raw.execute(f'UPDATE {table} SET {column}=%s', (value,))
 
