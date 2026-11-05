@@ -227,16 +227,26 @@ def _scan_routing_tree(routing_root: Path, strict: bool) -> list[Hit]:
             raise RootScanError(f"cannot read {routing_root}: {type(exc).__name__}") from exc
         if not stat.S_ISDIR(mode):
             raise RootScanError(f"cannot read {routing_root}: not a directory")
+        _listing(routing_root, True)
     hits: list[Hit] = []
     ops = routing_root / "ops"
-    if ops.is_dir():
+    try:
+        ops_mode = os.stat(ops).st_mode if strict else 0
+    except FileNotFoundError:
+        ops_mode = 0
+    if stat.S_ISDIR(ops_mode) if strict else ops.is_dir():
         for p in _listing(ops, strict):
             if p.name.endswith(".mcp.json"):
                 hits.extend(check_file(p, "routing-mcp"))
-    elif strict and ops.exists():
+    elif strict and ops_mode:
         raise RootScanError(f"cannot read {ops}: not a directory")
     bin_dir = routing_root / "bin"
-    if strict and bin_dir.is_dir():
-        _listing(bin_dir, True)  # an unreadable bin/ must not look clean
+    if strict:
+        try:
+            bin_mode = os.stat(bin_dir).st_mode
+        except FileNotFoundError:
+            bin_mode = 0
+        if stat.S_ISDIR(bin_mode):
+            _listing(bin_dir, True)  # an unreadable bin/ must not look clean
     hits.extend(scan_bin_dir(bin_dir, "routing-bin"))
     return hits

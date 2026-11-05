@@ -15,6 +15,7 @@ depth <= 2, no deeper) or globs; every file is resolved and must stay inside the
 """
 from __future__ import annotations
 
+import errno
 import fnmatch
 import math
 import os
@@ -171,6 +172,11 @@ def _collect(entries: list[str], root: Path, forbid: list[str],
         for path in kept:
             rel = Path(os.path.relpath(path, root)).as_posix()
             try:
+                try:
+                    os.stat(path)
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise
                 real = path.resolve()
                 real_rel = real.relative_to(root).as_posix()
             except (ValueError, OSError, RuntimeError):
