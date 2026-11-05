@@ -1,13 +1,13 @@
 //! Unwired store contract: no writes, launches, kills, or lifecycle callers.
-//! Lifecycle consumers must later share this session/run record; none is wired here.
+//! Later readers consume this record under their own keys; none is in this slice.
 //! JSON uses schema_version=1 and externally tagged Unknown/Free/Busy states;
 //! every lifecycle field is required. Identity includes pid, start and group.
 //! v0 decoding preserves identity/epoch but requires explicit reconciliation.
-//! Python consumers read JSON; SourceFileLoader cannot import Rust.
+//! Python consumers read the JSON.
 //! Paths are caller-supplied relative slots, never derived from opaque IDs.
-//! Part 2 owns explicit expected-epoch reconciliation, durable CAS and activation.
+//! Part 2 owns comparison and reconciliation; part 3 owns filesystem CAS.
 //! Known is validated data, not ownership permission; Unknown never authorizes.
-//! Read never infers death, expiry or freedom from process observations.
+//! Neither expiry nor process death frees a slot.
 use serde::{Deserialize, Serialize};
 use std::{
     io,
@@ -75,8 +75,6 @@ pub enum Refusal {
     Invalid,
     Clock,
     Unresolved,
-    Expired,
-    ReconciliationRequired,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // One slot per read; keep the public value API unboxed.
@@ -98,10 +96,23 @@ fn identity(i: &Identity) -> bool {
     i.pid > 0 && i.group > 0 && valid_id(&i.start)
 }
 impl Record {
+    /// Expiration is evidence for later reconciliation, never permission to own.
+    pub fn expired_leases(&self, now_s: i64) -> Vec<&Lease> {
+        let runners = match &self.runners {
+            State::Busy(r) => r.as_slice(),
+            _ => &[],
+        };
+        [&self.pause, &self.finalizer]
+            .into_iter()
+            .filter_map(|s| match s {
+                State::Busy(l) => Some(l),
+                _ => None,
+            })
+            .chain(runners)
+            .filter(|l| now_s >= l.expires_at)
+            .collect()
+    }
     fn validate(&self, now_s: i64) -> Result<(), Refusal> {
-        if self.reconciliation_required {
-            return Err(Refusal::ReconciliationRequired);
-        }
         if self.schema_version != 1 || !valid_id(&self.session_id) || !valid_id(&self.run_id) {
             return Err(Refusal::Invalid);
         }
@@ -139,18 +150,6 @@ impl Record {
         if self.identity == State::Free && !self.clear() {
             return Err(Refusal::Unresolved);
         }
-        // Expiry is an alarm, never evidence of freedom or permission to take over.
-        if [&self.pause, &self.finalizer]
-            .into_iter()
-            .filter_map(|s| match s {
-                State::Busy(l) => Some(l),
-                _ => None,
-            })
-            .chain(runners)
-            .any(|l| now_s >= l.expires_at)
-        {
-            return Err(Refusal::Expired);
-        }
         Ok(())
     }
     fn clear(&self) -> bool {
@@ -159,61 +158,6 @@ impl Record {
             && self.finalizer == State::Free
             && self.runners == State::Free
     }
-}
-/// Pure comparison only: callers must later persist with durable CAS.
-#[derive(Clone, Debug)]
-pub enum Transition {
-    /// Acquire a free, clear record.
-    Acquire(Identity),
-    /// Confirm a launched transaction; retain successor.
-    Complete(String),
-    /// Launch the matching prepared transaction.
-    Launch(String, String),
-    /// Release an occupied, clear record.
-    Release,
-}
-pub fn advance(
-    record: &Record,
-    expected_epoch: u64,
-    expected_identity: &State<Identity>,
-    transition: Transition,
-    now_s: i64,
-) -> Result<Record, Refusal> {
-    record.validate(now_s)?;
-    if record.epoch != expected_epoch || &record.identity != expected_identity {
-        return Err(Refusal::Invalid);
-    }
-    let mut next = record.clone();
-    match transition {
-        Transition::Acquire(i) if record.identity == State::Free && record.clear() => {
-            next.identity = State::Busy(i);
-        }
-        Transition::Release if matches!(record.identity, State::Busy(_)) && record.clear() => {
-            next.identity = State::Free;
-        }
-        Transition::Complete(id)
-            if matches!(&record.pending, State::Busy(t) if t.id == id && t.phase == Phase::Launched && matches!(t.successor, Successor::Id(_)))
-                && matches!(record.identity, State::Busy(_)) =>
-        {
-            if let State::Busy(t) = &mut next.pending {
-                t.phase = Phase::Confirmed;
-            }
-        }
-        Transition::Launch(id, successor)
-            if matches!(&record.pending, State::Busy(t) if t.id == id && t.phase == Phase::Prepared && t.successor == Successor::Unknown)
-                && matches!(record.identity, State::Busy(_)) =>
-        {
-            if let State::Busy(t) = &mut next.pending {
-                t.phase = Phase::Launched;
-                t.successor = Successor::Id(successor);
-            }
-        }
-        _ => return Err(Refusal::Unresolved),
-    }
-    next.epoch = record.epoch.checked_add(1).ok_or(Refusal::Invalid)?;
-    next.updated_at = now_s;
-    next.validate(now_s)?;
-    Ok(next)
 }
 /// Explicit bootstrap only; the caller must prove the slot has never existed.
 pub fn bootstrap(session: &str, run: &str, now_s: i64) -> Result<Record, Refusal> {
@@ -233,43 +177,31 @@ pub fn bootstrap(session: &str, run: &str, now_s: i64) -> Result<Record, Refusal
     r.validate(now_s)?;
     Ok(r)
 }
-/// Lexical confinement; root and each existing component must also be symlink-free.
-pub fn slot_path(root: &Path, slot: &Path) -> Result<PathBuf, Refusal> {
+fn lexical_slot(slot: &Path) -> Result<(), Refusal> {
     if slot.as_os_str().is_empty()
         || slot
             .components()
             .any(|c| !matches!(c, Component::Normal(_)))
+        || slot.as_os_str().as_encoded_bytes().contains(&0)
     {
         return Err(Refusal::Invalid);
     }
-    let mut p = root.to_path_buf();
-    if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(Refusal::Invalid);
-    }
-    for c in slot.components() {
-        p.push(c);
-        if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(Refusal::Invalid);
-        }
-    }
-    Ok(p)
+    Ok(())
+}
+/// Lexical confinement only; does not inspect the filesystem.
+pub fn slot_path(root: &Path, slot: &Path) -> Result<PathBuf, Refusal> {
+    lexical_slot(slot)?;
+    Ok(root.join(slot))
 }
 /// Inject I/O results for deterministic unreadable/lost-record handling. Never bootstraps.
 pub fn decode(session: &str, run: &str, bytes: io::Result<Vec<u8>>, now_s: i64) -> Read {
     decode_inner(session, run, bytes, now_s, false)
 }
 /// Explicitly validate v0; unknown lifecycle fields remain non-authorizing.
-pub fn migrate_v0(
-    session: &str,
-    run: &str,
-    bytes: io::Result<Vec<u8>>,
-    now_s: i64,
-) -> Result<Record, Refusal> {
-    match decode_inner(session, run, bytes, now_s, true) {
-        Read::Known(r) => Ok(r),
-        Read::Unknown { .. } => Err(Refusal::Invalid),
-    }
+pub fn migrate_v0(session: &str, run: &str, bytes: io::Result<Vec<u8>>, now_s: i64) -> Read {
+    decode_inner(session, run, bytes, now_s, true)
 }
+
 fn decode_inner(
     session: &str,
     run: &str,
@@ -318,12 +250,7 @@ fn decode_inner(
         if r.session_id != session || r.run_id != run {
             return Err("slot mismatch".into());
         }
-        // Validate migration evidence only; part 2 owns reconciliation/CAS.
-        let mut evidence = r.clone();
-        if migration {
-            evidence.reconciliation_required = false;
-        }
-        evidence.validate(now_s).map_err(|e| format!("{e:?}"))?;
+        r.validate(now_s).map_err(|e| format!("{e:?}"))?;
         Ok(r)
     })();
     match result {
@@ -338,13 +265,7 @@ fn decode_inner(
 #[cfg(unix)]
 fn confined_read(root: &Path, slot: &Path) -> io::Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
-    if slot.as_os_str().is_empty()
-        || slot
-            .components()
-            .any(|c| !matches!(c, Component::Normal(_)))
-    {
-        return Err(io::ErrorKind::InvalidInput.into());
-    }
+    lexical_slot(slot).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
     let root = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
@@ -393,7 +314,6 @@ pub fn read(root: &Path, slot: &Path, session: &str, run: &str, now_s: i64) -> R
     decode(session, run, bytes, now_s)
 }
 
-#[rustfmt::skip]
 #[cfg(test)]
 #[path = "fleet_owner_lease_tests.rs"]
 mod tests;
