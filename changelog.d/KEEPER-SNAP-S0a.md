@@ -1,0 +1,1 @@
+- **KEEPER-SNAP-S0-TIMINGS S0a:** Add payload-free, best-effort request lock, snapshot writer, snapshot, changelog and anchor-cycle timing lines on stderr.

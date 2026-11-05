@@ -54,11 +54,13 @@ def _emit(event, kind, wait, hold, parts):
     try:
         if event not in _events or kind not in {"read", "write", "other"}:
             return
-        if (event in {"snapshot_timing", "changelog_timing", "reaper_timing"}
-                or event == "request_timing" and kind in {"read", "write"}) and wait + hold < THRESHOLD_MS:
+        if parts is None:
             return
         values = (wait, hold, *(parts.get(field, 0) for field in _fields))
         if any(type(value) is not int or value < 0 for value in values):
+            return  # a failed clock sample leaves None and its line is dropped here
+        if (event in {"snapshot_timing", "changelog_timing", "reaper_timing"}
+                or event == "request_timing" and kind in {"read", "write"}) and wait + hold < THRESHOLD_MS:
             return
         names = ("wait_ms", "hold_ms", *_fields)
         line = f"keeper: {event} kind={kind} " + " ".join(
@@ -128,7 +130,7 @@ def measured(event=None, part=None):
                         parts[part] = None if elapsed is None or previous is None else previous + elapsed
                         if elapsed is None and parent is not None:
                             parent[part] = None
-                    if event and token is not None:
+                    if event and token is not None and elapsed is not None:
                         _emit(event, "other", 0, elapsed, parts)
                 except Exception:
                     pass
