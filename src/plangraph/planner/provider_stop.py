@@ -1,4 +1,5 @@
-"""Provider-stop recording and fallback selection for spawn plans."""
+"""Advance a spawn plan after witnessed provider quota stops."""
+
 from plangraph.routing_errors import SpawnRefused
 from plangraph.routing_support.liveness import unavailable
 

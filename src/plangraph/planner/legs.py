@@ -101,13 +101,6 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
-    Leg("opencode-console-sonnet-5.5", "subscription", "opencode",
-        "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
-        180000, False, claude_family=True,
-        note="console sonnet credits; listed by opencode models --standalone, not by the "
-              "background service list; D-3901: disabled, never a seat",
-        roles=(), expires="2026-11-30",
-        disabled="D-3893 no Sonnet writers, kept per D-3828"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
@@ -148,7 +141,6 @@ WRITER_ORDER: tuple[str, ...] = (
     "agy-gemini-3.8-flash",
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
-    "opencode-console-sonnet-5.5",
 )
 LEAD_WRITER = "cx-gpt-6.1-sol"
 

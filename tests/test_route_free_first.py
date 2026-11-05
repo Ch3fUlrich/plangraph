@@ -122,9 +122,9 @@ def test_fixed_review_order():
         "mimo-v2.6-flash", "deepseek", "agy-gemini-3.8-flash", "claude-haiku-5.5"]
 
 
-def test_no_anthropic_implement_leg_retains_sonnet():
+def test_no_anthropic_implement_leg_removes_sonnet():
     from plangraph.planner.legs import DEFAULT_LEGS
-    assert any(leg.id == "opencode-console-sonnet-5.5" for leg in DEFAULT_LEGS)
+    assert all(leg.id != "opencode-console-sonnet-5.5" for leg in DEFAULT_LEGS)
     assert all("implement" not in leg.roles for leg in DEFAULT_LEGS
                 if leg.claude_family or leg.family in ("claude", "anthropic"))
 
