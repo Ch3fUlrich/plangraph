@@ -10,6 +10,7 @@ import pytest
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
+    monkeypatch.setenv('PYTHONPATH', str(Path(__file__).resolve().parents[1] / 'src'))
     remote = tmp_path / 'remote.git'
     subprocess.run(['git', 'init', '--bare', str(remote)], check=True, capture_output=True)
     monkeypatch.setenv('PLANGRAPH_ARTIFACT_REMOTE', str(remote))
