@@ -33,5 +33,6 @@
 - Do not touch omniroute worktree while seats run; do not run npm ci there (husky)
 - Free deepseek exit 7; qwen and Haiku cannot run tests; paid leg `deepseek` needs inline diff in prompt
 - Launch prompt gen-70 is stale; use this card
+- Push this branch ONLY to control (git push control build-L1); never origin: public repo, D-1751
 ## Drill-down
 - handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-86 block); K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79
