@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **OPERATOR-STEP-PROBE (D-3773):** flag unprobed operator commands, missing host guards and stale gates on important work; render shared shell guards.
 - **SPAWNER-CANCEL-KILLS (register 42):** a cancel from another process kills a run started on a named leg: its record now keeps the root's start token.
 - **SPAWNER-MCP-STDIO-GUARD (D-3753):** ignore notifications, compact MCP ps records, and guard stdio reply sizes with ReplyTooLarge errors.
 - **SPAWNER-GIT-GUARD-FLAKE (D-3739):** stub both synchronous and async host-probe entry points in tests and fail closed on unmarked binary probes.
