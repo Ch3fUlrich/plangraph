@@ -65,7 +65,7 @@ def one_refresh(registry, status=None, probe=lambda endpoint: True, now=LAST_SEE
 def test_bus_hosts_table_declared_in_both_ddls():
     from plangraph.keeper import schema_pg
     assert "bus_hosts" in schema.SCHEMA
-    assert any("bus_hosts" in m.sql for m in schema_pg.MIGRATIONS)
+    assert any(re.search(r"CREATE TABLE (?:IF NOT EXISTS )?bus_hosts\s*\(", m.sql) for m in schema_pg.MIGRATIONS)
     body = re.search(r"CREATE TABLE (?:IF NOT EXISTS )?bus_hosts \(\n(.*?)\n\);",
                      schema.SCHEMA, re.S)
     assert body is not None, "bus_hosts must be created in the SQLite schema"
