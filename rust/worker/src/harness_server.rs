@@ -3,6 +3,23 @@ use super::*;
 /// Both historical and current human-readable serve banners. Never accept a
 /// remote address, credentials, path, or arbitrary suffix from server output.
 pub(super) fn server_url(line: &str) -> Option<String> {
+    let mut plain = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.next() != Some('[') {
+                return None;
+            }
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    let line = plain.as_str();
     let url = line
         .trim()
         .strip_prefix("opencode server listening on ")
@@ -58,13 +75,14 @@ pub(super) fn run_opencode_server(
     let mut stderr = child.stderr.take().unwrap();
     let mut server = Server(child);
     let (tx, rx) = mpsc::channel();
+    let stdout_tx = tx.clone();
     let reader = std::thread::spawn(move || {
         for line in std::io::BufReader::new(stdout)
             .lines()
             .map_while(Result::ok)
         {
             if let Some(url) = server_url(&line) {
-                let _ = tx.send(url);
+                let _ = stdout_tx.send(url);
             }
             // Password announcements and all other stdout are discarded.
         }
@@ -79,6 +97,13 @@ pub(super) fn run_opencode_server(
             }
             let mut tail = dest.lock().unwrap();
             tail.extend_from_slice(&buf[..n]);
+            for line in tail.split_inclusive(|b| *b == b'\n') {
+                if line.last() == Some(&b'\n') {
+                    if let Some(url) = server_url(&String::from_utf8_lossy(line)) {
+                        let _ = tx.send(url);
+                    }
+                }
+            }
             if tail.len() > 65536 {
                 let excess = tail.len() - 65536;
                 tail.drain(..excess);
@@ -86,10 +111,9 @@ pub(super) fn run_opencode_server(
         }
     });
     let start = Instant::now();
-    let limit = opts
-        .timeout
-        .unwrap_or(Duration::from_secs(30))
-        .min(Duration::from_secs(30));
+    // Startup is not model execution: allow cold initialization independently
+    // of the client's run budget and never classify it as a run timeout.
+    let limit = Duration::from_secs(120);
     let url = loop {
         if let Ok(url) = rx.recv_timeout(Duration::from_millis(25)) {
             break Some(url);
@@ -100,8 +124,9 @@ pub(super) fn run_opencode_server(
     };
     let result = if let Some(url) = url {
         let mut cmd = Command::new(h.binary().unwrap_or("opencode"));
-        cmd.args(["run", "--server", &url]);
-        opencode_options(&mut cmd);
+        cmd.args(["run", "--server", &url, "--format", "json"]);
+        cmd.env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+            .env(OPENCODE_CONFIG_ENV, opencode_permission_config());
         cmd.env("OPENCODE_PASSWORD", &password)
             .env("OPENCODE_SERVER_PASSWORD", &password);
         cmd.args(["-m", run.model, "--", run.prompt])
@@ -120,7 +145,7 @@ pub(super) fn run_opencode_server(
             code: Some(1),
             signal: None,
             stalled: false,
-            timed_out: start.elapsed() >= limit,
+            timed_out: false,
             cancelled: cancelled(),
             output: format!("opencode server startup failed: {last}").into_bytes(),
         });
@@ -140,6 +165,7 @@ pub(super) fn run_opencode_server(
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    include!("../tests/support/harness_server_regressions.rs");
     #[test]
     fn opencode_command_has_args_cwd_and_env() {
         let h = Opencode::new();
@@ -184,10 +210,9 @@ mod tests {
 
     #[test]
     fn serve_readiness_225_and_2032_are_loopback_only() {
-        // Captured with isolated HOME/XDG directories and the production flags.
         for banner in [
-            "server listening on http://127.0.0.1:39701", // 2.2.5
-            "server listening on http://127.0.0.1:41303", // 2.0.32
+            include_str!("../tests/fixtures/opencode/serve-2.2.5-stdout.txt"),
+            include_str!("../tests/fixtures/opencode/serve-2.0.32-stdout.txt"),
         ] {
             assert!(server_url(banner).is_some());
         }
