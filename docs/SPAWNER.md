@@ -1,8 +1,7 @@
 # Plangraph Spawner & Model Routing Architecture
 ## Spawn by card
 Install the package on each host, then use `python -m plangraph.spawner.cli`
-(or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
-or Temporal service is required for this slice.
+(or `python tools/plangraph-spawn.py` from a source checkout). No central keeper or Temporal service is required for this slice.
 ```bash
 python -m plangraph.spawner.cli route --card @card.json --role implement --json
 python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
