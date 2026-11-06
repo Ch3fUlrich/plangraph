@@ -286,10 +286,7 @@ fn replay_inner(
             }
             continue;
         }
-        if class == Class::ToolCallOnly {
-            if role != Role::Review {
-                continue;
-            }
+        if class == Class::ToolCallOnly && role == Role::Review {
             health.review_unfit = true;
         }
         health.non_verdict_count = 0;

@@ -8,7 +8,8 @@ without Closed/Degraded peers floors exactly its first eligible heuristic OPEN
 to available Degraded, preserving evidence and deadline. Hard reset facts and
 provider overlays never qualify. Healthy peers are never demoted for a floor.
 Review TOOL_CALL_ONLY retains review_unfit until a later review OK; other roles
-are unaffected. Stable order is tier, review-unfit (review only), then
+still strike, open, and reset the non-verdict counter without setting review_unfit.
+Stable order is tier, review-unfit (review only), then
 Closed/Degraded/HalfOpen/Open. Unfit is last within its tier, even after reprobes.
 OPEN filtering remains RL18's responsibility.
 

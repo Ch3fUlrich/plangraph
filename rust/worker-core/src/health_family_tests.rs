@@ -106,10 +106,32 @@ fn review_tool_only_peer_and_last_leg() {
     assert!(out[0].1.review_unfit);
     let mut r = row(Class::ToolCallOnly, 1);
     r.role = Role::Implement;
-    assert_eq!(
-        fold("a", "served", Role::Implement, &[r], 2),
-        Health::default()
-    );
+    let h = fold("a", "served", Role::Implement, &[r], 2);
+    assert_eq!(h.strikes, 1);
+    assert_eq!(h.reason, Some(Class::ToolCallOnly));
+    assert_eq!(h.state, State::Open);
+    assert!(!h.review_unfit);
+}
+
+#[test]
+fn non_review_tool_only_resets_probe_nonverdict_count() {
+    let mut rows = vec![
+        row(Class::HangSilent, 1),
+        row(Class::MaxTime, 302),
+        row(Class::ToolCallOnly, 303),
+    ];
+    for r in &mut rows {
+        r.role = Role::Implement;
+    }
+    let probe = fold("a", "served", Role::Implement, &rows[..2], 302);
+    assert_eq!(probe.state, State::HalfOpen);
+    assert_eq!(probe.non_verdict_count, 1);
+    let h = fold("a", "served", Role::Implement, &rows, 304);
+    assert_eq!(h.non_verdict_count, 0);
+    assert_eq!(h.strikes, 2);
+    assert_eq!(h.reason, Some(Class::ToolCallOnly));
+    assert_eq!(h.state, State::Open);
+    assert!(!h.review_unfit);
 }
 
 #[test]
