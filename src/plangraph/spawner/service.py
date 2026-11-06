@@ -19,6 +19,7 @@ from .cancel_recorded import cancel_recorded
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
+from .item_key import annotate_item
 
 
 class SpawnService(SeatSpawnMixin):
@@ -86,10 +87,11 @@ class SpawnService(SeatSpawnMixin):
             if isinstance(value, dict):
                 return {k: v if k in IDENTIFIER_KEYS else clean(v) for k, v in value.items()}
             return value
-        host = record.get('host')
+        host, item_key = record.get('host'), record.get('item_key')
         if record.get('ended') is not None:
             terminal_reason(record)
         record.update(clean(record))
+        if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
         if host is not None:
             record['host'] = host   # top-level run host is an identifier (D-2960); nested 'host' keys stay redacted
         for attempt in record.get('attempts', []):
@@ -108,7 +110,7 @@ class SpawnService(SeatSpawnMixin):
         for target in [record, *record.get('attempts', [])]:
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
-        atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
+        atomic_write_private(self._path(record['run_id']), json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
@@ -164,7 +166,8 @@ class SpawnService(SeatSpawnMixin):
                 return await self._spawn(**options)
             return await self._spawn(*args, **kwargs)
         except Exception as exc:
-            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'))
+            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'),
+                              card=kwargs.get('card', args[0] if args else None))
             raise
 
     async def _continue_writer(self, record, output):
@@ -182,6 +185,7 @@ class SpawnService(SeatSpawnMixin):
                      chosen_leg=record['chosen_leg'], started=time.time(), ended=None,
                      status='running', exit_code=None, gaps=gaps)
         record['continuation_run_id'] = child['run_id']
+        annotate_item(child, {'item': record.get('item_key')}, inherit=True)
         self._save(record)
         self._save(child)
         try:
@@ -201,7 +205,7 @@ class SpawnService(SeatSpawnMixin):
             child['ended'] = time.time()
             self._save(child)
 
-    def save_refusal(self, exc, role='implement', **extra):
+    def save_refusal(self, exc, role='implement', *, card=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
@@ -212,6 +216,7 @@ class SpawnService(SeatSpawnMixin):
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
         try:
+            annotate_item(record, card)
             self._save(record)
         except Exception as storage_error:
             import logging
@@ -300,7 +305,7 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running',
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
-        pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
+        pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
 
         async def execute():
             try:
