@@ -79,6 +79,7 @@ No auth-door paths, admission policies or host-registry defaults change here.
 
 The 400-line budget counts production lines only; sibling tests do not count
 against that budget, and every file independently remains at most 400 lines.
-Build `cargo build -p pg-worker-core --bin pg-placement-rules` before running
-the filtered placement-rule tests: the sibling binary tests execute and reap
-that real executable, with a cleared child environment.
+Cargo builds the executable for the integration tests; no separate pre-build
+or nested Cargo invocation is needed. Run `cargo test -p pg-worker-core
+placement_rule`: the integration tests execute and reap Cargo's binary with
+a cleared child environment.

@@ -1,49 +1,25 @@
-// Cargo also discovers this sibling as a binary target.
-#[cfg(not(test))]
-fn main() {}
-
-#[cfg(test)]
 mod placement_rule_binary {
     use std::io::Write;
-    use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
-    use std::sync::OnceLock;
 
-    fn executable() -> &'static PathBuf {
-        static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
-        EXECUTABLE.get_or_init(|| {
-            let test = std::env::current_exe().unwrap();
-            let target = test.parent().unwrap().parent().unwrap().parent().unwrap();
-            // Unit-test targets do not cause Cargo to build the runnable binary.
-            let build = Command::new(env!("CARGO"))
-                .args([
-                    "build",
-                    "--locked",
-                    "--package",
-                    "pg-worker-core",
-                    "--bin",
-                    "pg-placement-rules",
-                ])
-                .arg("--manifest-path")
-                .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
-                .arg("--target-dir")
-                .arg(target)
-                .output()
-                .unwrap();
-            assert!(
-                build.status.success(),
-                "{}",
-                String::from_utf8_lossy(&build.stderr)
-            );
-            target.join("debug").join(format!(
-                "pg-placement-rules{}",
-                std::env::consts::EXE_SUFFIX
-            ))
-        })
+    #[test]
+    fn no_sibling_binary_target() {
+        assert!(!std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/pg-placement-rules_tests.rs"
+        ))
+        .exists());
+    }
+
+    #[test]
+    fn documentation_uses_cargo_integration_binary() {
+        let docs = include_str!("../../../docs/placement-rules.md");
+        assert!(docs.contains("Cargo builds the executable for the integration tests"));
+        assert!(!docs.contains("Build `cargo build -p pg-worker-core --bin pg-placement-rules`"));
     }
 
     fn child(input: &[u8], args: &[&str]) -> Output {
-        let mut child = Command::new(executable())
+        let mut child = Command::new(env!("CARGO_BIN_EXE_pg-placement-rules"))
             .args(args)
             .env_clear()
             .env("PG_RULE_HOST_WORKER_CAP_COUNT", "1")

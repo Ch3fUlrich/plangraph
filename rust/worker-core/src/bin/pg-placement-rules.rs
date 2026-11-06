@@ -30,7 +30,3 @@ fn main() {
     }
     std::process::exit(code);
 }
-
-#[cfg(test)]
-#[path = "pg-placement-rules_tests.rs"]
-mod tests;
