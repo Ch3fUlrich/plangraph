@@ -12,21 +12,44 @@ import os
 import uuid
 
 
+def _refuse_oversized_diff(exc, leg):
+    from .context_pack import PromptBoundError
+    if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1' and exc.chars is not None:
+        raise PromptBoundError(
+            f'inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
+            f'max_request_tokens {leg.max_request_tokens}') from None
+
+
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
-    def _leg_prompt(self, prompt, card, role, leg, pack=None):
+    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
+        """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
+        from . import context_pack
+        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review)
+        if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
+            return context_pack.bound_prompt(prompt, leg.max_request_tokens)
+        return prompt
+
+    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
-        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here."""
+        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
+        ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
+        inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3)."""
         if getattr(leg, 'tool_mode', 'tools') != 'inline-only':
             return prompt
         from . import context_pack
         prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
-        if role != 'review':
-            return prompt
-        from .inline_diff import inline_diff_prompt
-        return inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3)
+        if role == 'review':
+            from .inline_diff import InlineDiffError, inline_diff_prompt
+            try:
+                prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
+                                            allow_document=document_review)
+            except InlineDiffError as exc:
+                _refuse_oversized_diff(exc, leg)
+                raise
+        return prompt
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
                            **options):
@@ -63,7 +86,7 @@ class SeatSpawnMixin:
             for i, seat in enumerate(plan.review_seats)), return_exceptions=True)
         # A seat that raised still gets a record (with its group and coverage); the
         # others keep running and are awaited by callers.
-        runs = [self.save_refusal(r, role, seat_leg=seat.id, plan={'seat_coverage': [own[i]]})
+        runs = [self.save_refusal(r, role, card=card, seat_leg=seat.id, plan={'seat_coverage': [own[i]]})
                 if isinstance(r, Exception) else r
                 for i, (seat, r) in enumerate(zip(plan.review_seats, runs))]
         records = [r for r in runs if not isinstance(r, BaseException)]

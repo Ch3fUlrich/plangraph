@@ -49,7 +49,8 @@ def _validate(req):
         job_id=lambda v: isinstance(v, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', v),
         role=lambda v: isinstance(v, str) and v in ('implement', 'review', 'orchestrate'),
         dry_run=lambda v: type(v) is bool,
-        leg=lambda v: isinstance(v, dict) and isinstance(v.get('id'), str) and bool(v['id']),
+        leg=lambda v: isinstance(v, dict) and isinstance(v.get('id'), str) and bool(v['id'])
+            and ('explicit' not in v or type(v['explicit']) is bool),
         prompt=lambda v: isinstance(v, str), card=lambda v: isinstance(v, dict),
         cwd=lambda v: isinstance(v, str) and os.path.isabs(v) and os.path.isdir(v),
         state=lambda v: isinstance(v, str) and os.path.isabs(v))
@@ -109,13 +110,15 @@ def build(request: dict) -> dict:
         except context_pack.ContextError as exc:
             raise LaunchRefused('context', str(exc)) from None
         try:
-            prompt = service._leg_prompt(request['prompt'], request['card'], request['role'], leg, pack)
+            prompt = service._leg_prompt(request['prompt'], request['card'], request['role'], leg, pack,
+                                         document_review=request['leg'].get('explicit') is True)
         except InlineDiffError as exc:
             raise LaunchRefused('inline_diff_failed', str(exc)) from None
         prompt, writer_env = writer_launch(prompt, request['role'], leg.model, request['run_id'])
         try:
             job = asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
-                role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env))
+                role=request['role'], dry_run=True, client=leg.harness, extra_env=writer_env,
+                prepare_launch=True))  # REMOVE-AT-R10: Rust owns redaction and recording.
         except (SpawnRefused, ValueError) as exc:
             raise LaunchRefused('refused', str(exc)) from None
         for event in job.events:
@@ -141,6 +144,7 @@ def build(request: dict) -> dict:
                     raise WindowsEnvIncomplete(name)
         events.append(dict(event='launch_spec', python_job_id=job.job_id))
         return dict(argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
+                    prompt=job.task_prompt,  # REMOVE-AT-R10: Rust redacts the final prompt.
                     stdin=job.task_prompt if cmd[0] in runner.STDIN_PROMPT_HARNESSES else None,
                     warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events)
     finally:

@@ -24,7 +24,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from . import anchord
+from . import anchord, timing
 
 __all__ = ["AnchorError", "enabled", "read_records", "latest", "submit", "check_start",
            "verify", "append_only", "Anchorer", "HOURLY_S", "DONE_TYPES", "RETRY_AFTER_S"]
@@ -119,6 +119,7 @@ def _iso(ts):
         .isoformat().replace("+00:00", "Z")
 
 
+@timing.measured(part="submit_ms")
 def submit(cfg, rec) -> str:
     """Write one record through the socket service, or append to the interim file."""
     if cfg.get("anchor_socket"):
@@ -237,6 +238,7 @@ class Anchorer:
         self.error = None
         self.retry_at = 0.0
 
+    @timing.measured(part="record_ms")
     def record(self, conn, reason):
         seq, head = _head(conn)
         if not head or seq <= self.last_seq:   # nothing new since the newest anchor
@@ -264,6 +266,7 @@ class Anchorer:
                 pass
         return answer
 
+    @timing.reaper_cycle
     def tick(self, conn):
         if conn.in_transaction:          # never anchor a head this connection has not committed
             return None

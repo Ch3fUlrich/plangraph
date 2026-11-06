@@ -3,11 +3,15 @@ mod cli;
 #[cfg(test)]
 mod error_tests;
 mod errors;
+mod evidence;
+mod evidence_row;
 mod jobs;
 mod launch;
+mod leg_ref;
 mod placement;
 mod pyjson;
 mod records;
+mod review_artifacts;
 mod runs;
 mod serve;
 mod serve_options;

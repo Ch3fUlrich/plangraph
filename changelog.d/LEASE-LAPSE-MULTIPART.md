@@ -1,0 +1,1 @@
+- **LEASE-LAPSE-MULTIPART:** An open part prevents an already-merged claim refusal; unknown or empty lanes and newer-decision refusals remain unchanged (D-4033).

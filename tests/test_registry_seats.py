@@ -25,6 +25,22 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 # --- 5. inline-only legs get the diff ----------------------------------------
 
+@pytest.fixture(autouse=True)
+def fixed_seat_table(monkeypatch):
+    # Exercise seat transport/failures independently of provider credits.
+    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
+                 else leg for leg in DEFAULT_LEGS)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "legs", legs)
+
+@pytest.fixture
+def inline_seat_table(monkeypatch):
+    # Test inline transport, not the production review preference order.
+    from plangraph.planner import routing
+    ids = ("qodercli-qwen3.8-flash", "cx-gpt-6-luna")
+    table = tuple(replace(next(leg for leg in DEFAULT_LEGS if leg.id == id), disabled=None)
+                  for id in ids)
+    monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, "legs", table)
+
 def test_inline_only_leg_skipped_without_diff_ref():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     assert "cx-gpt-6-luna" not in [leg.id for leg in plan.review_seats]
@@ -39,8 +55,7 @@ def test_bad_diff_ref_refused(ref):
         plan_spawn(dict(CARD, diff_ref=ref), role="review")
 
 
-def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_policy):
-    # Pinned to the pre-D-3552 policy (no review lift): luna is the inline-only seat.
+def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
     repo, base, head = _repo(tmp_path)
     card = dict(CARD, diff_ref={"repo": str(repo), "base": base, "head": head})
     svc = _service(tmp_path / "state", monkeypatch)
@@ -54,9 +69,8 @@ def test_inline_only_seat_gets_diff_inlined(tmp_path, monkeypatch, pre_d3552_pol
     assert {r["chosen_leg"]["family"] for r in out["seats"]} == {"qwen", "gpt"}
 
 
-def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy):
+def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
     # The production path (runner.spawn_service DispatchService) via MCP.
-    # Pinned to the pre-D-3552 policy (no review lift): luna is the inline-only seat.
     from plangraph.spawner.mcp import MCPSpawnerServer
     repo, base, head = _repo(tmp_path)
     runner = _Runner()
@@ -75,8 +89,7 @@ def test_mcp_dispatch_seats_inline_diff(tmp_path, monkeypatch, pre_d3552_policy)
     assert all(c["covers"] == ["anthropic"] for c in out["seat_coverage"])
 
 
-def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_policy):
-    # Pinned to the pre-D-3552 policy (no review lift): luna is the inline-only seat.
+def test_inline_diff_failure_falls_to_next_leg(tmp_path, monkeypatch, pre_d3552_policy, inline_seat_table):
     from plangraph.spawner.mcp import MCPSpawnerServer
     runner = _Runner()
     server = MCPSpawnerServer(runner, state=tmp_path / "state")

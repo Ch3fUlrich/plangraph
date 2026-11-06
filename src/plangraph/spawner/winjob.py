@@ -3,6 +3,7 @@
 ``runner.WinJobApi`` re-exports :class:`WinJobApi`; tests patch it there.
 """
 import ctypes
+import uuid
 
 
 class _JobBasicLimitInformation(ctypes.Structure):
@@ -33,7 +34,8 @@ class WinJobApi:
 
     def create_job(self):
         k32, v = self._k32, ctypes.c_void_p
-        handle = k32.CreateJobObjectW(None, None)
+        self.name = 'Local\\plangraph-' + uuid.uuid4().hex
+        handle = k32.CreateJobObjectW(None, ctypes.c_wchar_p(self.name))
         if not handle:
             raise OSError(ctypes.get_last_error(), 'CreateJobObjectW')
         info = _JobExtendedLimitInformation()

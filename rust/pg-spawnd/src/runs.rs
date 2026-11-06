@@ -59,7 +59,7 @@ impl Runs {
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
-        let launch = launch(
+        let mut launch = launch(
             state,
             &json!({
                 "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
@@ -70,9 +70,35 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
+        let item = args["card"]["item"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                std::env::var("PLANGRAPH_SPAWN_ITEM")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            });
+        base["item_key"] = match item {
+            Some(s) if crate::records::valid_item(&s) => {
+                json!(s)
+            }
+            Some(_) => {
+                if base.get("warnings").is_none() {
+                    base["warnings"] = json!([]);
+                }
+                base["warnings"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!("invalid item_key; stored as null"));
+                Value::Null
+            }
+            None => Value::Null,
+        };
         let events: Vec<Value> = launch
             .events
             .unwrap_or_default()
@@ -132,10 +158,71 @@ impl Runs {
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 }
+fn store_prompt(
+    state: &Path,
+    id: &str,
+    launch: &mut crate::launch::LaunchSpec,
+    base: &mut Value,
+    dry: bool,
+) -> Result<(), ToolError> {
+    use sha2::{Digest, Sha256};
+    let raw = launch
+        .prompt
+        .as_ref()
+        .ok_or_else(|| internal("launch prompt missing"))?;
+    let mut carriers = launch
+        .stdin
+        .iter()
+        .chain(launch.argv.iter())
+        .chain(launch.env.values())
+        .filter(|s| !raw.is_empty() && s.contains(raw));
+    let channel = if raw.is_empty() {
+        String::new()
+    } else {
+        carriers
+            .next()
+            .ok_or_else(|| internal("launch prompt carrier missing"))?
+            .clone()
+    };
+    if carriers.any(|s| s != &channel) {
+        return Err(internal("launch prompt carriers differ"));
+    }
+    let redacted = pg_worker_core::redact::redact(raw);
+    for arg in launch.argv.iter_mut().chain(launch.env.values_mut()) {
+        *arg = arg.replace(raw, &redacted);
+    }
+    if let Some(stdin) = &mut launch.stdin {
+        *stdin = stdin.replace(raw, &redacted);
+    }
+    if let Some(warnings) = &mut launch.warnings {
+        for warning in warnings {
+            *warning = pg_worker_core::redact::redact(warning);
+        }
+    }
+    if let Some(events) = &mut launch.events {
+        for event in events {
+            let clean = pg_worker_core::redact::redact(&Value::Object(event.clone()).to_string());
+            *event = serde_json::from_str(&clean)
+                .map_err(|_| internal("could not redact launch event"))?;
+        }
+    }
+    let prompt = channel.replace(raw, &redacted);
+    let path = pg_worker_core::run::record::run_dir(state, id)
+        .map_err(|_| internal("invalid run id"))?
+        .join("prompt.txt");
+    if !dry {
+        pg_worker_core::run::record_io::atomic_write_private(&path, prompt.as_bytes())
+            .map_err(|_| internal("could not save prompt"))?;
+    }
+    base["prompt_sha256"] = json!(format!("{:x}", Sha256::digest(prompt.as_bytes())));
+    base["wake_variant"] = json!("initial");
+    launch.prompt = Some(prompt);
+    Ok(())
+}
 fn internal(message: &str) -> ToolError {
     ToolError::Internal(message.into())
 }
-fn create(
+pub(crate) fn create(
     state: &Path,
     id: &str,
     host: &str,
@@ -172,7 +259,7 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
     record.set("attempts", json!([{"leg":leg,"status":status.as_str(),
@@ -191,8 +278,50 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         },
     );
     record.set("writer_family", leg["family"].clone());
+    if let Some(state) = record
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_owned)
+    {
+        let value = record.to_value();
+        let (rows, skipped) = crate::evidence_row::adapted(&value);
+        if !dry {
+            record.set("evidence_unclassified_attempts", json!(skipped));
+        }
+        if value["role"] == "review" {
+            let text = crate::review_artifacts::review_text(&state, &value)
+                .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
+            let result = crate::review_artifacts::write_review_artifacts(&state, &value, &text);
+            if result.is_ok() {
+                record.set("seat_dir", json!(record.path().with_file_name("seat")));
+            } else {
+                record.set(
+                    "review_artifact_error",
+                    json!("review artifacts unavailable"),
+                );
+            }
+        }
+        let role = value["role"].as_str().unwrap_or("");
+        if let Ok(store) =
+            crate::evidence::EvidenceStore::open(&state, crate::evidence::enabled(&state, role))
+        {
+            if store.backfill(&crate::records::list_runs(&state)).is_err() {
+                record.set("evidence_error", json!("evidence unavailable"));
+            }
+            for row in rows {
+                if store.append(&row).is_err() {
+                    record.set("evidence_error", json!("evidence unavailable"));
+                }
+            }
+        }
+    }
 }
 
+#[cfg(all(test, unix))]
+#[path = "runs_record_tests.rs"]
+mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;

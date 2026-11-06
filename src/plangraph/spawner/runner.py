@@ -46,7 +46,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, notify_leg_refused, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
@@ -62,7 +62,7 @@ def redact(value):
     if isinstance(value, (list, tuple)):
         return [redact(v) for v in value]
     if isinstance(value, str):
-        value = re.sub(r'sk-[\w-]+', '[REDACTED]', value)
+        value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
         value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
         return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
     return value
@@ -116,6 +116,7 @@ class JobInfo:
     risk: str = "normal"
     command: list[str] = field(default_factory=list)
     start_time: float = field(default_factory=time.time)
+    writer_email: str | None = None
     end_time: float | None = None
     exit_code: int | None = None
     stdout: str = ""
@@ -250,7 +251,7 @@ class SpawnerRunner:
         self._git_guards = {}
         self._stdin_payloads = {}
 
-    def served_witness(self, job_id, model, *, adapter_token):
+    def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
         """Record transport telemetry authenticated by an in-process adapter.
 
         Do not expose this capability to the child: even a child that knows its
@@ -272,6 +273,7 @@ class SpawnerRunner:
         job.served_model = model
         job.served_family = family
         job.served_witness_reason = 'authenticated gateway adapter telemetry'
+        job.response_finish_reason = finish_reason  # final witness telemetry, never inherited
 
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
@@ -317,13 +319,25 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None,
-        watchdog=None, live_log=None,
+        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
+        # REMOVE-AT-R10: capture the final prompt before command construction.
+        if prepare_launch and not dry_run:  # REMOVE-AT-R10
+            raise ValueError('launch preparation requires dry run')
+        prompt = redact(prompt)  # REMOVE-AT-R10
+        if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
+            from .private_io import atomic_write_private
+            path, record, save = prompt_record
+            if not dry_run:  # REMOVE-AT-R10
+                atomic_write_private(path, prompt)
+            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant)
+            if not dry_run:  # REMOVE-AT-R10
+                save(record)
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
         if timeout:
             try:
@@ -485,6 +499,7 @@ class SpawnerRunner:
                 if tools_event:
                     job.events.append(tools_event)
                 self.jobs[job_id] = job
+                job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
                 return job
 
             job = JobInfo(
@@ -497,11 +512,13 @@ class SpawnerRunner:
                 command=cmd,
                 dry_run=False,
                 cwd=work_dir,
+                writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
             from .probe_cleanup import register
             self.jobs[job_id] = job; register(job_id)
+            job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
             from .run_watchdog import thresholds, edit_signature
-            job._watchdog_limits = watchdog or thresholds()
+            job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
             if tools_event:
@@ -591,6 +608,7 @@ class SpawnerRunner:
                     self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
                     # Descendants made before assign() are not job members: record them now, kill+verify at reap.
                     self._escapees = {**getattr(self, '_escapees', {}), job_id: proc_kill.escapees(root_pid, self.win_job_api.pids(handle) if hasattr(type(self.win_job_api), 'pids') else [])}
+                    self._owned[job_id].update(job_name=getattr(self.win_job_api, 'name', None), escapees=list(self._escapees[job_id]))
                 except Exception:
                     stale = self._win_jobs.pop(job_id, None)
                     if stale is not None:   # assigned but unverifiable: release the handle, the run does not start
@@ -639,12 +657,15 @@ class SpawnerRunner:
     def _nt(self) -> bool:
         return self.platform == 'nt' or _is_nt()
 
-    async def kill_recorded(self, pid, pid_start=None):
+    async def kill_recorded(self, pid, pid_start=None, job_name=None, escapees=()):
         """Cancel after a service restart: prove the recorded root by its persisted start token,
         kill its tree, verify.  Returns survivors ([] = clean); unprovable and alive = survivors."""
         plat = 'nt' if self._nt() else None
-        if pid_start is None or plat == 'nt':   # nt: the job died with the old service
-            return unproven_survivors(pid, plat)
+        if plat == 'nt' and type(pid_start) is int:
+            from .win_recorded import kill
+            return await kill(pid, pid_start, job_name, escapees)
+        if pid_start is None or plat == 'nt':
+            return [pid] if plat == 'nt' else unproven_survivors(pid, plat)
         return await kill_proven(self, pid, pid_start, plat=plat) or []
 
     async def _own_kill(self, pid, ident=None):
@@ -713,6 +734,8 @@ class SpawnerRunner:
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
                 job.status = "completed" if exit_code == 0 else "failed"
+            if job.status == 'failed' and is_opencode(job):
+                job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
             await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
@@ -873,8 +896,7 @@ def spawn_service(*args, **kwargs):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = (redact(first_reason(job.stderr))
-                            if first_reason(job.stderr) else f'harness exit code {job.exit_code}')
+                        attempt['skip_reason'] = redact(failure_reason(job))
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -965,7 +987,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import thresholds
+            from .run_watchdog import terminal_status, thresholds
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -993,7 +1015,9 @@ def spawn_service(*args, **kwargs):
                 writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             from .context_pack import annotate
+            from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
+            annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
@@ -1016,7 +1040,7 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
-                    limits = thresholds(card)
+                    limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
@@ -1034,14 +1058,15 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
+                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
                         job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env,
+                            prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         self._running_records[job.job_id] = record
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
@@ -1067,7 +1092,7 @@ def spawn_service(*args, **kwargs):
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
@@ -1085,7 +1110,7 @@ def spawn_service(*args, **kwargs):
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(first_reason(job.stderr)) if first_reason(job.stderr) else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+                            reason = redact(failure_reason(job, stop))
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
@@ -1147,7 +1172,7 @@ def spawn_service(*args, **kwargs):
                     elif record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
-                    terminal_reason(record)
+                    terminal_reason(record, job if record.get('job_id') else None)
                     release_attempts(self, record)
                     self._save(record)
 

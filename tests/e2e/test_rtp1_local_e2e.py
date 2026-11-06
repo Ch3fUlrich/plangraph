@@ -103,8 +103,9 @@ def rig(tmp_path, monkeypatch, request):
         r.workroot = tmp_path / "workroot"
         r.workroot.mkdir()
         bin_dir = tmp_path / "stub-bin"
-        u.write_fake_opencode(bin_dir)
+        pid_dir = u.write_fake_opencode(bin_dir)
         env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path),
+               "PG_FAKE_PID_DIR": str(pid_dir),
                "PG_TEMPORAL_ADDR": f"http://{r.addr}", "PG_BUILD_ID": BUILD_ID, "PG_NAMESPACE": "default",
                "PG_KEEPER_URL": r.keeper.base, "PG_KEEPER_TOKEN": r.world.tok("workerA"),
                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",

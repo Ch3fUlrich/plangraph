@@ -88,7 +88,8 @@ def root_identity(pid, *, platform=None, proc_root='/proc'):
 
     None means "not proven ours": nothing is snapshotted or killed for it."""
     if (platform or os.name) == 'nt':
-        return 'nt' if isinstance(pid, int) and _nt_table().get(pid) == os.getpid() else None
+        from .win_recorded import creation
+        return creation(pid) if isinstance(pid, int) and _nt_table().get(pid) == os.getpid() else None
     st = _stat(pid, proc_root) if isinstance(pid, int) else None
     return st[4] if st and st[1] == os.getpid() and st[2] == pid else None
 

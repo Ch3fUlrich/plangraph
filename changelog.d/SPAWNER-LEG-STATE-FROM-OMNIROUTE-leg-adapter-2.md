@@ -1,0 +1,1 @@
+- **SPAWNER-LEG-STATE-FROM-OMNIROUTE:** Add an opt-in cached leg reader with explicit unknown/stale admission and standalone identity checks; default-off declarations remain unchanged. Hermetic regressions are not live acceptance.
