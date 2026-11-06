@@ -73,29 +73,46 @@ _MACHINE_PREFIX = re.compile(
 
 
 def attended_until(payload, doc):
-    """Bounded tail only; truncated/oversized history cannot prove attendance."""
+    """Prove launch identity in a bounded head, then attendance in a bounded tail."""
     try:
         window = (doc or {}).get("attended_window_s", 1800)
         if type(window) is not int or window <= 0:
             return None
         with open(payload["transcript_path"], "rb") as fh:
             size = fh.seek(0, os.SEEK_END)
-            fh.seek(max(0, size - ATTENDED_TAIL_MAX))
-            tail = fh.read(ATTENDED_TAIL_MAX + 1)
-        if size > ATTENDED_TAIL_MAX:
-            return None  # cannot establish the first user record within this budget
-        first, last = True, None
-        for line in tail.decode("utf-8").splitlines():
+            fh.seek(0)
+            head = fh.read(ATTENDED_TAIL_MAX)
+            start = max(0, size - ATTENDED_TAIL_MAX)
+            fh.seek(start)
+            tail = fh.read(ATTENDED_TAIL_MAX)
+        if start:
+            head = head[:head.rfind(b"\n") + 1]  # only complete head lines
+            cut = tail.find(b"\n") + 1
+            if not cut:
+                return None
+            tail, start = tail[cut:], start + cut  # discard the initial partial line
+        first, offset = None, 0
+        for line in head.splitlines(keepends=True):
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                return None
+            if first is None and record.get("type") == "user":
+                first = offset
+            offset += len(line)
+        if first is None:
+            return None
+        last, offset = None, start
+        for line in tail.splitlines(keepends=True):
+            position, offset = offset, offset + len(line)
             record = json.loads(line)
             if not isinstance(record, dict):
                 return None
             if record.get("type") != "user":
                 continue
-            if first:
-                first = False
+            if position == first:
                 continue  # launch brief never establishes attendance
             if (record.get("isMeta") or record.get("isSidechain") or
-                    record.get("promptSource") != "typed" or
+                    record.get("promptSource") not in ("typed", "queued") or
                     record.get("turnOrigin") != "human" or
                     record.get("origin", {"kind": "human"}) != {"kind": "human"}):
                 continue

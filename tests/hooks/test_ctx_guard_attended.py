@@ -34,8 +34,40 @@ class Attended(WrapperCase):
         self.assertFalse(self.marker().exists())
 
     def test_launch_only(self):
-        self.transcript_records(self.user())
+        for source in ("typed", "queued", "sdk"):
+            self.transcript_records(self.user(promptSource=source))
+            self.assertIn("HARD-CAP", self.line(self.guard()))
+
+    def large_transcript(self, *tail, first=None):
+        padding = json.dumps({"type": "assistant", "padding": "x" * 8192}) + "\n"
+        self.write(json.dumps(first or self.user()) + "\n" + padding * 384 +
+                   "".join(json.dumps(r) + "\n" for r in tail) + usage_line(read=301000))
+
+    def test_large_queued_tail_is_attended(self):
+        self.large_transcript(self.user(age=60, promptSource="queued"))
+        self.assert_silent(self.guard())
+        self.assertTrue(self.marker().exists())
+
+    def test_large_peer_tail_is_not_attended(self):
+        self.large_transcript(self.user(promptSource="system", turnOrigin="peer"))
         self.assertIn("HARD-CAP", self.line(self.guard()))
+
+    def test_large_launch_only_is_not_attended(self):
+        self.large_transcript()
+        self.assertIn("HARD-CAP", self.line(self.guard()))
+
+    def test_queued_operator_is_attended(self):
+        self.transcript_records(self.user(), self.user(promptSource="queued"))
+        self.assert_silent(self.guard())
+
+    def test_large_missing_launch_and_invalid_windows_fail_closed(self):
+        self.large_transcript(self.user(), first={"type": "assistant"})
+        self.assertIn("HARD-CAP", self.line(self.guard()))
+        for where in ("head", "tail"):
+            self.large_transcript(self.user(promptSource="queued"))
+            text = self.transcript.read_text()
+            self.write("{broken\n" + text if where == "head" else text + "{broken\n")
+            self.assertIn("HARD-CAP", self.line(self.guard()))
 
     def test_relays_and_machine_records_cannot_lift_cap(self):
         records = [self.user(text=t) for t in (
@@ -43,7 +75,9 @@ class Attended(WrapperCase):
             '<system-reminder>synthetic</system-reminder>',
             'SYSTEM NOTIFICATION: synthetic', '<task-notification>synthetic</task-notification>',
             '<command-output>synthetic</command-output>', '<local-command-stdout>synthetic</local-command-stdout>')]
-        records += [self.user(isMeta=True), self.user(promptSource="sdk"),
+        records += [self.user(isMeta=True), self.user(isSidechain=True), self.user(promptSource="sdk"),
+                    self.user(promptSource="system", turnOrigin="peer"),
+                    self.user(promptSource="system", turnOrigin="task_notification"),
                     self.user(message={"role": "user", "content": [{"type": "tool_result", "content": "synthetic"}]})]
         for record in records:
             with self.subTest(record=record):
