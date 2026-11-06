@@ -10,8 +10,13 @@ from plangraph.spawner import launch_spec as spec
 
 @pytest.fixture
 def request_data(tmp_path, monkeypatch):
+    from dataclasses import replace
     from plangraph.spawner import runner, opencode_overlay
     from plangraph.routing_support import host_keys, opencode_render
+    # Exercise launch mechanics with an enabled qodercli review leg.
+    monkeypatch.setattr(spec, 'DEFAULT_LEGS', tuple(
+        replace(leg, disabled=None) if leg.id == 'qodercli-qwen3.8-flash' else leg
+        for leg in spec.DEFAULT_LEGS))
     monkeypatch.setattr(opencode_overlay, 'overlay_env', lambda env: env)
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: None)
     monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
