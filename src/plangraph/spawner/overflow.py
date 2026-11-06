@@ -118,7 +118,9 @@ def remote_spawn(name, host, card, prompt, options):
         spawn = shlex.join(command) + ' "$(cat ' + q(directory + '/prompt.txt') + ')" ' + shlex.join(options)
         commands.append('PLANGRAPH_HOST_NAME=' + q(name) + ' PYTHONPATH=' + q(host['spawner_src']) + ' ' + spawn)
         result = ssh(' && '.join(commands))
-        return json.loads(result.stdout) if result.returncode == 0 else None
+        lines = result.stdout.splitlines()
+        payload = next((line for line in reversed(lines) if line.strip()), '')
+        return json.loads(payload) if result.returncode == 0 else None
     finally:
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
             '; rmdir -- ' + q(directory))
@@ -137,6 +139,10 @@ def main(argv=None):
             config = json.loads(path.read_text())
         except (OSError, ValueError):
             config = {}
+        live, memory = local_resources()
+        if decide(live, memory, config.get('local_run_cap', 4),
+                  config.get('local_floor_mb', 3000), {}, False).reason == 'local room':
+            return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
         public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
                                                   for p in config.get('public_repos', [])]
         card = json.loads(Path(args.card).read_text())
@@ -144,14 +150,11 @@ def main(argv=None):
         if diff and Path(diff['repo']).resolve() != Path(args.repo).resolve():
             public = False
         prompt = Path(args.prompt).read_text()
-        live, memory = local_resources()
         records = ready_records(config)
         attempts = 0
         while True:
             decision = decide(live, memory, config.get('local_run_cap', 4),
                               config.get('local_floor_mb', 3000), records, public)
-            if decision.reason == 'local room':
-                return cli.main(['spawn', '--card', '@' + args.card, prompt, *options])
             if decision.host is None:
                 print(json.dumps({'overflow_reason': decision.reason}))
                 return 5

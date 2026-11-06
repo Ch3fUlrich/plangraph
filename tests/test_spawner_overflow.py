@@ -92,6 +92,42 @@ def test_readiness_fail_closed(inputs, contents):
     (directory / 'ash.json').write_text(contents)
     records = o.ready_records({'hosts': {'ash': {'ssh': 'invented-alias'}}})
     assert o.decide(4, 6000, 4, 3000, records, True).host is None
+    if 'checked_at' in contents:
+        assert 'stale' in o.decide(4, 6000, 4, 3000, records, True).reason
+
+
+@pytest.mark.parametrize('card', ['{"diff_ref": {}}', '{"diff_ref": {"base": "abc"}}', None])
+def test_local_before_card_parsing(inputs, monkeypatch, card):
+    root, _, args = inputs
+    if card is None:
+        (root / 'card.json').unlink()
+    else:
+        (root / 'card.json').write_text(card)
+    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o, 'ready_records', lambda config: pytest.fail('local readiness read'))
+    monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
+    assert o.main(args) == 3
+
+
+def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys):
+    root, path, args = inputs
+    host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src',
+                env_file=str(root / 'env'))
+    (root / 'env').write_text('echo hi\n')
+    path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host, 'birch': host}}))
+    monkeypatch.setattr(o, 'ready_records', lambda config: {'ash': healthy(), 'birch': healthy()})
+    spawns = []
+    def run(argv, **kwargs):
+        stdout = '/invented-stage\n'
+        if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
+            spawns.append(argv)
+            assert '. ' + str(root / 'env') in argv[-1]
+            stdout = 'hi\n{"status":"running"}\n\n'
+        return SimpleNamespace(returncode=0, stdout=stdout)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    assert o.main(args) == 0
+    assert len(spawns) == 1
+    assert json.loads(capsys.readouterr().out)['host'] == 'ash'
 
 
 def test_remote_rewrite_and_quoting(monkeypatch):
