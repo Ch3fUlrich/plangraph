@@ -352,7 +352,7 @@ class LegAdapter:
     @staticmethod
     def standalone_models():
         import subprocess
-        result = subprocess.run(['opencode', 'models'], capture_output=True,
+        result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
                                 text=True, timeout=8, shell=False, check=True)
         return result.stdout.splitlines()
 

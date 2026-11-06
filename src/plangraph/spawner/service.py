@@ -20,12 +20,13 @@ from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
+from plangraph.routing_support.leg_state_flag import service_reader, service_plan
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
-        self.leg_reader = leg_reader
+        self.leg_reader = leg_reader = service_reader(self, leg_reader)
         if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):  # probes write where the planner reads
             self.runner.leg_reader = leg_reader
         self.tasks, self._running_records = {}, {}   # run tasks; job id -> record (Q13/M8)
@@ -131,7 +132,7 @@ class SpawnService(SeatSpawnMixin):
             raise
 
     def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
-        from plangraph.planner.routing import plan_spawn, SpawnRefused
+        from plangraph.planner.routing import SpawnRefused
         families = list(writer_families)
         if review_of:
             record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
@@ -142,8 +143,7 @@ class SpawnService(SeatSpawnMixin):
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-        return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
-
+        return service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
     async def spawn(self, *args, **kwargs):
         try:
             import inspect

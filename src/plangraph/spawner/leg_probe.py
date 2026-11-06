@@ -231,7 +231,8 @@ async def before_launch(runner, leg, role, dry_run):
         if adapter:
             status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
                                         combo=getattr(leg, 'combo', None))
-            if status['state'] != 'ok':
+            from plangraph.routing_support.leg_state_flag import reader_failed
+            if status['state'] != 'ok' and not reader_failed(status):
                 return status.get('reason', status['state'])
         return None
     # D-3685: a leg booked limited is known-unusable until its reset. Skip it

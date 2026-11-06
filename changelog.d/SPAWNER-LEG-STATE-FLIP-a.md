@@ -1,0 +1,1 @@
+- **SPAWNER-LEG-STATE-FLIP:** Enable shared leg state by default, retain declared availability with reader-failure reporting, order waiting legs last, and discover standalone models (D-3991, D-4020).

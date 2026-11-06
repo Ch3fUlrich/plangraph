@@ -577,6 +577,9 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
     enabled = getattr(leg_state_reader, 'enabled', False)
+    from .leg_state_flag import reader_failed
+    if enabled and reader_failed(leg_state_reader(str(model.get('id') or model.get('model_id') or ''), account=account, combo=combo)):
+        return model_admitted(model) and leg_state_reader.store.leg_status(str(model.get('id') or model.get('model_id') or ''), account=account, combo=combo)['state'] != 'limited'
     if not model_admitted(model, enabled=enabled):
         return False
     reader = leg_state_reader or leg_status
