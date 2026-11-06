@@ -102,6 +102,26 @@ def test_prospective_host_and_size_limits_atomic(keeper, monkeypatch):
     assert store.edit_placement_rule(principal, edit(128))['revision'] == 129
 
 
+def test_non_ascii_host_envelope_boundary():
+    host = 'é' * 32
+    assert len(host.encode()) == 64
+    snapshot = dict(revision=0, fleet={}, hosts={host: {}}, padding='')
+    request = dict(op='report', snapshot=snapshot, host_class='dispatch_vm',
+                   host_id=host, process={}, env_file={})
+
+    def request_size():
+        return len(json.dumps(request, separators=(',', ':')).encode()) + 1
+
+    snapshot['padding'] = 'x' * (1024 * 1024 - request_size())
+    assert request_size() == 1024 * 1024
+    assert projection.bounded_snapshot(snapshot) == snapshot
+    snapshot['padding'] += 'x'
+    assert len(json.dumps(snapshot, separators=(',', ':')).encode()) < 1024 * 1024
+    assert request_size() == 1024 * 1024 + 1
+    with pytest.raises(Refused, match='rules_invalid'):
+        projection.bounded_snapshot(snapshot)
+
+
 @pytest.mark.parametrize('host', ['', '   ', '\x00', '\x85', 'a' * 65, 'é' * 33])
 def test_invalid_host_ids_atomic(keeper, host):
     store, principal = keeper

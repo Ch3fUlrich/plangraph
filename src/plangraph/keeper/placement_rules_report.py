@@ -17,8 +17,9 @@ def bounded_snapshot(snapshot):
             raise ValueError
         snapshot = json.loads(raw)
         # Reserve the C1 request envelope too: accepted snapshots must fit stdin.
+        # Two-byte UTF-8 characters maximize JSON escaping: 6 bytes per 2 input bytes.
         envelope = dict(op="report", snapshot=snapshot, host_class="dispatch_vm",
-                        host_id="x" * 64, process={}, env_file={})
+                        host_id="é" * 32, process={}, env_file={})
         if len(json.dumps(envelope, separators=(",", ":")).encode()) + 1 > 1024 * 1024:
             raise ValueError
         hosts = snapshot["hosts"]
