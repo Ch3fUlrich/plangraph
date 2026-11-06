@@ -12,10 +12,26 @@ import os
 import uuid
 
 
+def _refuse_oversized_diff(exc, leg):
+    from .context_pack import PromptBoundError
+    if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1' and exc.chars is not None:
+        raise PromptBoundError(
+            f'inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
+            f'max_request_tokens {leg.max_request_tokens}') from None
+
+
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
+        """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
+        from . import context_pack
+        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review)
+        if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
+            return context_pack.bound_prompt(prompt, leg.max_request_tokens)
+        return prompt
+
+    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
@@ -26,11 +42,13 @@ class SeatSpawnMixin:
         from . import context_pack
         prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if role == 'review':
-            from .inline_diff import inline_diff_prompt
-            prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
-                                        allow_document=document_review)
-        if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
-            return context_pack.bound_prompt(prompt, leg.max_request_tokens)
+            from .inline_diff import InlineDiffError, inline_diff_prompt
+            try:
+                prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
+                                            allow_document=document_review)
+            except InlineDiffError as exc:
+                _refuse_oversized_diff(exc, leg)
+                raise
         return prompt
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
