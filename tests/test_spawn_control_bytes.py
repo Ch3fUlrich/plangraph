@@ -1,5 +1,7 @@
 import asyncio
 import json
+import io
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -69,6 +71,26 @@ def test_launch_spec(tmp_path, monkeypatch):
     req.update(prompt='clean', card={'context': '\x0c'})
     with pytest.raises(ContextReached):
         spec.build(req)
+
+
+def test_launch_spec_cli(tmp_path, monkeypatch, capsys):
+    from plangraph.spawner import cli
+    calls = []
+    def no_process(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('process launch forbidden')
+    monkeypatch.setattr(subprocess, 'Popen', no_process)
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))
+    req = dict(run_id='run-' + 'b' * 32, job_id='test', role='implement', dry_run=False,
+               leg={'id': 'mimo-v2.6-flash'}, prompt='private-prompt\x0b', card={},
+               cwd=str(tmp_path), state=str(tmp_path / 'state'))
+    monkeypatch.setattr('sys.stdin', io.TextIOWrapper(io.BytesIO(json.dumps(req).encode('utf-8'))))
+    assert cli.main(['--state', req['state'], 'launch-spec']) == 2
+    captured = capsys.readouterr()
+    assert 'U+000B' in captured.err and 'private-prompt' not in captured.err
+    assert captured.out == '' and calls == []
+    assert not (tmp_path / 'state').exists()
 
 
 @pytest.mark.parametrize('file', [False, True])
