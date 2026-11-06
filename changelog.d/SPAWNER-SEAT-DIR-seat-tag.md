@@ -1,0 +1,1 @@
+- **SPAWNER-SEAT-DIR:** Tag configured MiMo and OmniRoute providers without losing headers; admit response-side MiMo witnesses only for the configured gateway endpoint, with parent-only management access and no deployment endpoint fallback.

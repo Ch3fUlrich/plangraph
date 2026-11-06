@@ -19,7 +19,6 @@ import urllib.request
 SESSION_HEADER = 'x-omniroute-session-id'
 TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
-DEFAULT_URL = 'http://127.0.0.1:20128'
 WITNESS_KIND = 'response-side-gateway-call-log'
 
 
@@ -28,24 +27,76 @@ def session_tag(job_id):
 
 
 def tag_session(cfg, job_id):
-    """Add the session header to every ``omniroute`` provider block in an opencode config.
+    """Add the session header to configured gateway-capable provider blocks.
 
     It goes into the provider-level ``headers`` map, where build_child_env puts the
     envelope headers that reach the gateway, and into ``options.headers``.
     """
     for key in ('provider', 'providers'):
-        block = (cfg.get(key) or {}).get('omniroute') if isinstance(cfg.get(key), dict) else None
-        if isinstance(block, dict):
-            options = block.setdefault('options', {})
-            for target in (block, options if isinstance(options, dict) else {}):
-                headers = target.setdefault('headers', {})
-                if isinstance(headers, dict):
-                    headers[SESSION_HEADER] = session_tag(job_id)
+        providers = cfg.get(key)
+        if isinstance(providers, dict):
+            for name in ('omniroute', 'mimo'):
+                _tag_block(providers.get(name), job_id)
 
 
-def tagged(config_content, job_id):
+def _tag_block(block, job_id):
+    if isinstance(block, dict):
+        options = block.setdefault('options', {})
+        for target in (block, options if isinstance(options, dict) else {}):
+            headers = target.setdefault('headers', {})
+            if isinstance(headers, dict):
+                headers[SESSION_HEADER] = session_tag(job_id)
+
+
+def tagged(config_content, job_id, provider=None):
     """True when the child's final config carries this job's session header."""
-    return session_tag(job_id) in (config_content or '') and SESSION_HEADER in (config_content or '')
+    cfg = _config(config_content)
+    for key in ('provider', 'providers'):
+        providers = cfg.get(key)
+        if not isinstance(providers, dict):
+            continue
+        for name in ((provider,) if provider else ('omniroute', 'mimo')):
+            block = providers.get(name)
+            if not isinstance(block, dict):
+                continue
+            options = block.get('options')
+            for target in (block, options if isinstance(options, dict) else {}):
+                headers = target.get('headers')
+                if isinstance(headers, dict) and headers.get(SESSION_HEADER) == session_tag(job_id):
+                    return True
+    return False
+
+
+def _config(content):
+    try:
+        cfg = json.loads(content or '{}')
+        return cfg if isinstance(cfg, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _gateway(env):
+    return next((env[n].strip().rstrip('/') for n in URL_ENVS
+                 if isinstance(env.get(n), str) and env[n].strip()), None)
+
+
+def _gateway_mimo(env):
+    gateway = _gateway(env)
+    if not gateway:
+        return False
+    cfg = _config(env.get('OPENCODE_CONFIG_CONTENT'))
+    endpoints = []
+    for key in ('provider', 'providers'):
+        providers = cfg.get(key)
+        block = providers.get('mimo') if isinstance(providers, dict) else None
+        if not isinstance(block, dict):
+            continue
+        for name in ('options', 'settings'):
+            options = block.get(name)
+            if isinstance(options, dict) and 'baseURL' in options:
+                endpoints.append(options['baseURL'])
+    normalize = lambda value: value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
+    return bool(endpoints) and all(normalize(e) == normalize(gateway) for e in endpoints)
 
 
 def served_models(rows, tag):
@@ -74,7 +125,9 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=os
     token = secrets.get(TOKEN_ENV)
     if not token:
         raise LookupError(f'no {TOKEN_ENV}')
-    base = next((env[n] for n in URL_ENVS if env.get(n)), DEFAULT_URL).rstrip('/')
+    base = _gateway(env)
+    if not base:
+        raise LookupError('gateway endpoint not configured')
     if base.endswith('/v1'):
         base = base[:-3]
     query = urllib.parse.urlencode({'sessionTag': tag, 'limit': 200})
@@ -92,13 +145,14 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     fetch = fetch or fetch_rows
     # Only a leg served through the gateway can have rows: build_child_env adds an
     # omniroute block to every config, so the tag alone does not mean a gateway leg.
-    if not str(getattr(job, 'model_or_combo', '') or '').startswith('omniroute/'):
+    provider = str(getattr(job, 'model_or_combo', '') or '').split('/', 1)[0]
+    if provider != 'omniroute' and not (provider == 'mimo' and _gateway_mimo(env)):
         return
     if job.served_model not in (None, '', 'unwitnessed'):
         return
     tag = session_tag(job_id)
     reason = 'no call log row for the session tag'
-    if not tagged(env.get('OPENCODE_CONFIG_CONTENT'), job_id):
+    if not tagged(env.get('OPENCODE_CONFIG_CONTENT'), job_id, provider):
         attempts, reason = 0, 'final config carries no session tag'
     for attempt in range(attempts):   # the gateway may write the row after the response
         try:
