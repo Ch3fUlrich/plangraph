@@ -231,6 +231,7 @@ def test_transport_rejects_overflow_exit_and_timeout(monkeypatch, script, budget
 
 
 def test_transport_overflow_names_host(monkeypatch):
+    """Error-path contract guard, not fix coverage: base already names the host."""
     original = subprocess.Popen
     monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: original(
         ['python3', '-c', 'import json; print(json.dumps({"runs": ['
@@ -275,6 +276,26 @@ def test_collect_local_protocol(monkeypatch):
         return [dict(run_id='r', host='h', status='running', private='omitted')]
     monkeypatch.setattr(stall_watchdog, 'read_runs', read_runs)
     assert remote_ps.collect_local(state) == {'runs': [dict(run_id='r', host='h', status='running')]}
+
+
+@pytest.mark.parametrize('status,terminal', [
+    ('running', False), ('queued', False), ('needs_input', False),
+    ('stalled', False), ('future_status', False), ('unknown', False),
+    ('completed', True), ('failed', True), ('cancelled', True),
+    ('killed', True), ('dry_run', True), ('succeeded', True),
+    ('timeout', True), ('refused', True), ('skipped', True),
+])
+@pytest.mark.parametrize('path', ['local', 'remote'])
+def test_status_visibility(monkeypatch, status, terminal, path):
+    from plangraph.spawner import stall_watchdog
+    row = dict(run_id='run-a', host='node-a', status=status)
+    if path == 'local':
+        monkeypatch.setattr(stall_watchdog, 'read_runs', lambda state: [row])
+        rows = remote_ps.collect_local(object())['runs']
+    else:
+        rows = remote_ps._fetch(dict(name='node-a'),
+                                lambda *a: json.dumps({'runs': [row]}))
+    assert rows == ([] if terminal else [row])
 
 
 @pytest.mark.parametrize('terminal', [

@@ -7,6 +7,7 @@ import re
 import subprocess
 import selectors
 import time
+from .runner import is_terminal
 
 MAX_OUTPUT = 1024 * 1024
 MAX_WORKERS = 16
@@ -81,9 +82,7 @@ def _fetch(host, transport):
             raise ValueError()
         clean = []
         for row in rows:
-            if isinstance(row, dict) and row.get('status') in (
-                    'completed', 'failed', 'cancelled', 'killed', 'dry_run',
-                    'succeeded', 'needs_input', 'stalled', 'timeout'):
+            if isinstance(row, dict) and is_terminal(row.get('status')):
                 continue
             if (not isinstance(row, dict)
                     or not all(k in row for k in ('run_id', 'host', 'status'))
@@ -95,8 +94,7 @@ def _fetch(host, transport):
                                0xD800 <= ord(c) <= 0xDFFF for c in row[k])
                            for k in FIELDS if k in row and isinstance(row[k], str))):
                 raise ValueError()
-            if row['status'] in ('running', 'queued'):
-                clean.append({k: row[k] for k in FIELDS if k in row})
+            clean.append({k: row[k] for k in FIELDS if k in row})
         return clean
     except Exception:
         return [dict(host=host['name'], status='unknown', reason='host query failed')]
@@ -124,7 +122,7 @@ def collect_local(state):
     # Local-only protocol endpoint: never invoke ps (which would fan out again).
     from .stall_watchdog import read_runs
     return {'runs': [{k: r[k] for k in FIELDS if k in r} for r in read_runs(state)
-                     if r.get('status') in ('running', 'queued')]}
+                     if not is_terminal(r.get('status'))]}
 
 
 if __name__ == '__main__':
