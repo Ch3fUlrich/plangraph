@@ -19,7 +19,11 @@ def evidence_ref(args) -> dict:
     if kind == "commit+ci":
         return {"commit": args.commit}
     if kind == "run-record":
-        return {"run_id": args.run}
+        ref = {"run_id": args.run}
+        for key in ("host", "writer"):
+            if getattr(args, key, None) is not None:
+                ref[key] = getattr(args, key)
+        return ref
     if kind == "semaphore-task":
         ref = {"task_id": args.task, "project_id": getattr(args, "project", None)}
         if getattr(args, "template", None):
