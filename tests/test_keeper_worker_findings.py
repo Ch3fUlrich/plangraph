@@ -18,7 +18,8 @@ def test_forged_worker_scope_is_refused(scoped, tmp_path, identity, name):
     token = auth.add_principal(world.conn, "forged-" + name, name, ["demo"])
     stored = auth.authenticate(world.conn, token)
     principal = identity(stored.name, stored.role, stored.projects)
-    principal.worker_scope = True
+    # Deliberately bypass immutability to exercise the independent policy gate.
+    object.__setattr__(principal, "worker_scope", True)
     with pytest.raises(Refused, match="worker scope"):
         plan_phase(world.store, principal, "demo:PH-X", repo_root=tmp_path)
 
