@@ -2,7 +2,7 @@
 ## Goal
 - D-3893 phase 0 first; D-3956/D-3957/D-3959 rulings; KEEPER-SNAP S0 to S3; #419 + #407 ff live; #314 seat; orphan slices
 ## Keeper
-- claimed: S0-TIMINGS (ep3), HOOKS S06 + S13 (ep1), ROUTERCTL-CTX-GUARD-CAPS (ep1), OOM (ep1), RIN-LEDGER + REPOINT (ep4), VERDICT (ep2), ORPHAN (ep1), INBOX (ep1), FLEET-MSG (ep5): leases 01:38Z, keys need plangraph: prefix
+- claimed: leases lapsed 01:38Z, RE-CHECK KEEPER; KEEPER-SNAP-S0 + #314 handed to replan-0207, #338 too; RIN and ROUTER items stay build-L1, re-claim them
 - ready next: KEEPER-SNAP S1 after S0; HOOKS S09 after S06, S14 after S13 + S06
 ## Done
 - 11-05T23:40Z SEAT-VERDICT-FROM-RECORD cd7146308 D-3956 one-line trim pushed, 172 passed, file-size ok, no seat yet
@@ -13,7 +13,7 @@
 - SEAT-VERDICT-FROM-RECORD ci-wait 314 since 23:41Z next check at restart
 ## Planned
 1. Heartbeat all claims before 01:38Z
-2. Retry seats after free reset about 00:10Z: 314d-0208 on dell, S0a r2 non-mimo delta
+2. Seats on #314 and S0a r2 now belong to replan-0207, do not start
 3. #451 round 2: read diff, mimo delta seat, run once on 18-de-2053, CI (round 3 is the cap)
 4. D-3986 + D-3987: no spawner-main move, Haiku probe or cherry-pick for #419 until OS-OPENCODE-GO-BILLING answered ~04:10Z; meanwhile read-only review of what the 242+ commits change live, for its own GO-REQ (D-3975); #407 after replan merges
 5. REPOINT + LEDGER after router applies: merge lanes, submit; INBOX one GO-REQ; resend gen-89 open
