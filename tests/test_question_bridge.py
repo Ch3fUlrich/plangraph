@@ -211,8 +211,10 @@ def test_dispatch_wait_event_and_no_continuation(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_MAX_QUESTION_ROUNDS', 'x')
     assert asyncio.run(service._spawn(card={'title': 'x', 'item': 'plangraph:x'}, wait_seconds=None))['status'] == 'needs_input'
     monkeypatch.setenv('PLANGRAPH_MAX_QUESTION_ROUNDS', '1')
-    refused = asyncio.run(service._spawn(card={'title': 'changed', 'item': 'plangraph:x'}, wait_seconds=None))
-    assert refused['reason'] == 'question_rounds_exhausted' and len(calls) == 2
+    from plangraph.routing_errors import SpawnRefused
+    with pytest.raises(SpawnRefused, match='question_rounds_exhausted'):
+        asyncio.run(service._spawn(card={'title': 'changed', 'item': 'plangraph:x'}, wait_seconds=None))
+    assert len(calls) == 2
 
 
 def test_monitor_skips_unchanged_writer(tmp_path, monkeypatch):

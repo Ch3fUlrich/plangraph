@@ -59,12 +59,13 @@ def test_listed_refusal_and_refresh(tmp_path, monkeypatch, model, line, enabled)
 
 @pytest.mark.parametrize('model,line', CASES)
 @pytest.mark.parametrize('code,prose', [(0, False), (1, True)])
-def test_no_booking_for_success_or_prose(tmp_path, model, line, code, prose):
+@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+def test_no_booking_for_success_or_prose(tmp_path, model, line, code, prose, stream):
     reader = LegStateStore(tmp_path / 'state.sqlite')
     text = 'The documentation discusses ' + line if prose else line
     record = {}
     assert exit_outcome.fallthrough_reason(NS(leg_reader=reader), NS(model=model),
-                                         NS(exit_code=code, stdout='', stderr=text), record) is None
+                                         NS(exit_code=code, **{stream: text, ('stderr' if stream == 'stdout' else 'stdout'): ''}), record) is None
     assert record == {}
     assert not reader.path.exists()
 
@@ -140,7 +141,10 @@ def test_shaped_unavailable_keeps_legacy_diagnostic(stream):
 
 
 def test_legacy_unavailable_stderr():
-    assert unavailable_reason(1, '', 'prefix model unavailable') == 'prefix model unavailable'
+    # Unshaped text is prose on either stream, not harness evidence.
+    assert unavailable_reason(1, '', 'prefix model unavailable') is None
+    assert unavailable_reason(0, '', 'prefix model unavailable') is None
+    assert unavailable_reason(1, 'prefix model unavailable', '') is None
 
 
 def test_adapter_keeps_original_documentation():
