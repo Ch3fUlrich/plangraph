@@ -158,7 +158,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         effort = self._check_choice(effort, cfg.get("efforts"), "effort")
         mode = self._check_choice(permission_mode, cfg.get("permission_modes"), "permission_mode")
         mcp_path = self._check_mcp(mcp_config, cfg)
-        text = self._prompt_text(prompt, prompt_file, cfg)
+        from .prompt_guard import admit_prompt; text = admit_prompt(self._prompt_text(prompt, prompt_file, cfg), _refuse)
         handoff_path = self._handoff_arg(handoff, cfg) if handoff is not None else None
         prompt_arg = (f"Restart from handoff {handoff_path}.\n\n" + text) if handoff_path else text
         style = self._style_text(cfg)
