@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn foundation_docs_exclude_followup_slice_narrative() {
+    let docs = include_str!("../../../docs/spawner-reliability.md");
+    let foundation = docs.split("The RL12 B1 foundation").nth(1).unwrap();
+    let foundation = foundation.split("The remaining behavior").next().unwrap();
+    assert!(!foundation.contains("Stop retains"));
+    assert!(!foundation.contains("stdin writer is retained"));
+    assert!(foundation.contains("Watched.io_error"));
+    assert!(foundation.contains("`killpg` rejects"));
+}
+
+#[test]
+fn foundation_dead_code_allowances_are_production_only() {
+    for source in [include_str!("watch_unix.rs"), include_str!("watch.rs")] {
+        for line in source
+            .lines()
+            .filter(|line| line.contains("allow(dead_code)"))
+        {
+            assert!(line.starts_with("#[cfg_attr(not(test), allow(dead_code))]"));
+        }
+    }
+}
+
+#[test]
+fn stdin_writer_cancels_when_child_does_not_read() {
+    let mut cmd = Command::new("sleep");
+    cmd.arg("30").stdin(std::process::Stdio::piped());
+    let mut child = UnixChild::spawn(&mut cmd).unwrap();
+    let writer = stdin_writer(child.child.stdin.take().unwrap(), &vec![0; 1024 * 1024]);
+    let started = std::time::Instant::now();
+    let result = writer.unwrap().finish();
+    let cleanup = child.kill();
+    child.child.wait().unwrap();
+    result.unwrap();
+    cleanup.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
 fn grandchild_group_killed_even_after_leader_exit() {
     let mut sentinel_cmd = Command::new("sleep");
     sentinel_cmd.arg("30");

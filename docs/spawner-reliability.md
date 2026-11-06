@@ -90,12 +90,6 @@ Only a freshly spawned owned group enters the watch signal path. A reaped
 leader does not relinquish surviving descendants; an unrelated sentinel
 group remains alive when the owned descendant group is killed.
 
-Stop retains the reaped root status and probes at the root-exit edge, signal
-points, and final proof deadline rather than every tick. TERM and KILL occur
-once each, with grace and a bounded proof interval supplied by the caller.
-An unproven group remains `Survivors`, carrying the first cleanup error.
-The nonblocking, cancellable stdin writer is retained for the next slice.
-
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.

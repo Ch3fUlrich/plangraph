@@ -8,13 +8,11 @@ use std::{
 };
 
 #[cfg_attr(not(test), allow(dead_code))] // Stdin delivery awaits the RL12 supervisor slice.
-#[cfg_attr(test, allow(dead_code))] // Its process test remains with the RL12 supervisor slice.
 pub(super) struct Writer {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<io::Result<()>>>,
 }
 #[cfg_attr(not(test), allow(dead_code))] // Stdin teardown awaits the RL12 supervisor slice.
-#[cfg_attr(test, allow(dead_code))] // Its process test remains with the RL12 supervisor slice.
 impl Writer {
     pub(super) fn finish(mut self) -> io::Result<()> {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -34,7 +32,6 @@ impl Drop for Writer {
     }
 }
 #[cfg_attr(not(test), allow(dead_code))] // Stdin delivery awaits the RL12 supervisor slice.
-#[cfg_attr(test, allow(dead_code))] // Its process test remains with the RL12 supervisor slice.
 pub(super) fn stdin_writer(mut pipe: std::process::ChildStdin, input: &[u8]) -> io::Result<Writer> {
     use std::{
         io::Write,
