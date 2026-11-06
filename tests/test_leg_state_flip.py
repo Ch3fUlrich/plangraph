@@ -48,9 +48,9 @@ def test_off_byte_identical(monkeypatch, tmp_path):
     monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
     s = service(monkeypatch, tmp_path, lambda: pytest.fail('disabled reader called'))
     assert s.leg_reader.enabled is False
+    assert not hasattr(s.runner, 'leg_reader')
     card = dict(estimate_tokens=1000)
-    s.hung.waiting.update(m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS)
-    assert json.dumps(asdict(s._route(card))) == json.dumps(asdict(plan_spawn(card, role='implement', leg_reader=s.leg_reader.store)))
+    assert json.dumps(asdict(s._route(card))) == json.dumps(asdict(plan_spawn(card, role='implement', leg_reader=None)))
     assert [m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS if resolver.is_model_available(m, s.leg_reader)] == MAIN_ORDER
 
 
@@ -94,7 +94,8 @@ def test_hung_routing_stable(monkeypatch, tmp_path, on):
     card = dict(estimate_tokens=1000)
     before = s._route(card).legs
     assert len(before) > 2
-    s.hung.waiting.add(key(before[0]))
+    if on:
+        s.hung.waiting.add(key(before[0]))
     after = s._route(card).legs
     assert after == (before[1:] + before[:1] if on else before)
 
@@ -123,7 +124,26 @@ def test_flip_explicit_plan_reader(monkeypatch, tmp_path, on):
     reader = leg_state.LegStateStore(tmp_path / 'override')
     original = routing.plan_spawn
     def plan_spawn(**kwargs):
-        assert kwargs['leg_reader'] is reader
+        if not on:
+            assert kwargs['leg_reader'] is reader
         return original(dict(estimate_tokens=1000), role='implement', **kwargs)
     monkeypatch.setattr(routing, 'plan_spawn', plan_spawn)
     assert flag.service_plan(s, leg_reader=reader).legs
+
+
+def test_flip_disabled_waiting(monkeypatch, tmp_path):
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
+    s = service(monkeypatch, tmp_path)
+    before = s._route(dict(estimate_tokens=1000))
+    from plangraph.spawner.leg_probe import key
+    s.hung.waiting.add(key(before.legs[0]))
+    assert s._route(dict(estimate_tokens=1000)) == before
+
+
+def test_flip_explicit_reader_failure(monkeypatch, tmp_path):
+    s = service(monkeypatch, tmp_path)
+    reader = leg_state.LegAdapter(s.leg_reader.store, SimpleNamespace(
+        snapshot=lambda: (_ for _ in ()).throw(RuntimeError('unreachable'))), enabled=True)
+    plan = flag.service_plan(s, card=dict(estimate_tokens=1000), role='implement', leg_reader=reader)
+    assert plan.legs
+    assert any(c.get('leg_state_reason') == 'unknown' for c in plan.candidates)

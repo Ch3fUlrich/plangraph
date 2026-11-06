@@ -22,9 +22,10 @@ def reader_failed(status):
 def service_plan(service, **kwargs):
     from plangraph.planner.routing import plan_spawn
     if not enabled():
-        kwargs.setdefault('leg_reader', service.leg_reader)
+        reader = service.leg_reader
+        kwargs.setdefault('leg_reader', None if getattr(reader, 'enabled', None) is False else reader)
         return plan_spawn(**kwargs)
-    reader = service.hung.reader if service.hung.enabled else service.leg_reader
+    reader = kwargs.pop('leg_reader', service.hung.reader if service.hung.enabled else service.leg_reader)
     reasons = {}
     def read(model, **scope):
         status = reader.leg_status(model, **scope) if hasattr(reader, 'leg_status') else reader(model, **scope)
@@ -32,7 +33,7 @@ def service_plan(service, **kwargs):
             reasons[model] = status['reason']
             return reader.store.leg_status(model, **scope)
         return status
-    kwargs.setdefault('leg_reader', read)
+    kwargs['leg_reader'] = read
     plan = plan_spawn(**kwargs)
     if not getattr(reader, 'enabled', False):
         return plan
