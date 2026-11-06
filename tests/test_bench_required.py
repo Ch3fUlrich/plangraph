@@ -3,6 +3,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from dataclasses import replace
 
 import pytest
 
@@ -26,16 +27,25 @@ def rows(legs):
 
 
 @pytest.mark.parametrize("as_list", [False, True])
-def test_missing_ranked_last_in_tier(as_list):
-    data = rows(WRITERS[1:])
-    p = plan(benchmark=list(data.values()) if as_list else data)
-    assert p.gaps == ({"leg": WRITERS[0].id, "model": WRITERS[0].model,
+def test_missing_ranked_last_in_tier(as_list, monkeypatch):
+    reviewers = tuple(replace(WRITERS[0], id=f"review-{i}", model=f"test/review-{i}",
+                              family=family, roles=("review",), tier="subscription")
+                      for i, family in enumerate(("gpt", "claude", "gemini")))
+    monkeypatch.setattr("plangraph.planner.legs.DEFAULT_LEGS", reviewers)
+    def review_plan(**kwargs):
+        return routing.plan_spawn({"estimate_tokens": 1000}, role="review",
+                                  writer_families=("glm",), legs=reviewers,
+                                  leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
+                                  **kwargs)
+    data = rows(reviewers[1:])
+    p = review_plan(benchmark=list(data.values()) if as_list else data)
+    assert p.gaps == ({"leg": reviewers[0].id, "model": reviewers[0].model,
                        "reason": "no benchmark row"},)
-    assert any(WRITERS[0].id in r and "no benchmark row" in r for r in p.reasons)
+    assert any(reviewers[0].id in r and "no benchmark row" in r for r in p.reasons)
     assert [l.id for l in p.legs if l.tier == "subscription"] == [
-        "cx-gpt-6.1-sol"]
+        reviewers[1].id, reviewers[2].id, reviewers[0].id]
     assert p.to_dict()["gaps"] == p.gaps
-    assert not plan(benchmark=rows(WRITERS)).gaps
+    assert not review_plan(benchmark=rows(reviewers)).gaps
 
 
 def test_absent_explicit_operator_order():

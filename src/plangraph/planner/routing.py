@@ -388,7 +388,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             if positions:
                 source = "benchmark"
     if role == "review":
-        table_order = {leg.id: i for i, leg in enumerate(legs)}
+        table_order = {leg.id: i for i, leg in enumerate(ordered)}
         ordered.sort(key=lambda leg: review_key(
             leg, TIERS.index(leg.tier), table_order[leg.id]))
     seats, coverage, open_parts = [], (), []
