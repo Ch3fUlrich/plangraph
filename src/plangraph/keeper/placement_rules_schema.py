@@ -5,6 +5,11 @@ including expected_revision and rollback_of. Rollback appends a forward event;
 this ledger is independent of item events. No secrets or host metrics belong here.
 """
 
+# D-4081 option A: SQLite-only until C3 supplies PostgreSQL storage.
+SQLITE_ONLY_TABLES = frozenset({
+    "placement_rule_revision", "placement_rule_values", "placement_rule_audit",
+})
+
 SQLITE = """
 CREATE TABLE IF NOT EXISTS placement_rule_revision (
     id INTEGER PRIMARY KEY CHECK (id=1),
