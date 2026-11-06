@@ -1,7 +1,5 @@
-//! Unversioned synthetic process-death regression; NOT pinned-build acceptance.
-//! Both children use the same executable. CRASH_BUILD changes activity behavior,
-//! not the compiled build identity or Temporal deployment routing. See the open
-//! V1/V2 acceptance gaps in docs/plan/rt-p1-wf-versioning-audit.md.
+//! Real deployment-routing process-death regression using one compiled binary.
+//! This proves server pinning, not compatibility between independently built releases.
 #![cfg(unix)]
 use std::{
     path::Path,
@@ -12,6 +10,9 @@ use std::{
 use temporalio_client::{
     Client, ClientOptions, Connection, ConnectionOptions, Url, WorkflowFetchHistoryOptions,
     WorkflowGetResultOptions, WorkflowStartOptions,
+};
+use temporalio_common::worker::{
+    VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion,
 };
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::{
@@ -75,7 +76,9 @@ impl Probe {
     }
     #[activity]
     async fn attempt(self: Arc<Self>, _: ActivityContext, _: ()) -> Result<String, ActivityError> {
-        if std::env::var("CRASH_BUILD").as_deref() == Ok("old") {
+        if std::env::var("CRASH_BUILD").as_deref() == Ok("old")
+            && !Path::new(&std::env::var("CRASH_READY").unwrap()).exists()
+        {
             std::fs::write(std::env::var("CRASH_READY").unwrap(), b"attempt").unwrap();
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
@@ -106,6 +109,17 @@ fn child_worker() {
                         .register_workflow::<CrashWorkflow>()
                         .unwrap()
                         .register_activities(Probe)
+                        .deployment_options(
+                            WorkerDeploymentOptions::new(
+                                WorkerDeploymentVersion::builder()
+                                    .deployment_name(std::env::var("CRASH_QUEUE").unwrap())
+                                    .build_id(std::env::var("CRASH_BUILD").unwrap())
+                                    .build(),
+                            )
+                            .use_worker_versioning(true)
+                            .default_versioning_behavior(VersioningBehavior::Pinned)
+                            .build(),
+                        )
                         .build();
                     Worker::new(&rt, client(&addr).await, opts)
                         .unwrap()
@@ -140,7 +154,7 @@ fn worker(addr: &str, queue: &str, build: &str, ready: &Path) -> Process {
 }
 
 #[test]
-fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
+fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
     use std::os::unix::process::ExitStatusExt;
     let cli = std::env::var("PG_TEMPORAL_CLI")
         .or_else(|_| std::env::var("TEMPORAL_CLI"))
@@ -153,7 +167,7 @@ fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
     drop(listener);
     let log = std::fs::File::create(temp.path().join("server.log")).unwrap();
     let _server = Process(
-        Command::new(cli)
+        Command::new(&cli)
             .args([
                 "server",
                 "start-dev",
@@ -189,6 +203,7 @@ fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
             for mode in ["attempt", "timer"] {
                 let ready = temp.path().join(mode);
                 let mut old = worker(&addr, mode, "old", &ready);
+                set_current(&cli, port, mode, "old");
                 c.start_workflow(
                     CrashWorkflow::run,
                     mode.to_string(),
@@ -222,6 +237,10 @@ fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
                 old.0.kill().unwrap();
                 assert_eq!(old.0.wait().unwrap().signal(), Some(9));
                 let _new = worker(&addr, mode, "new", &ready);
+                set_current(&cli, port, mode, "new");
+                // A replacement old-build poller is required: the new current
+                // build must not steal an already pinned execution.
+                let _replacement = worker(&addr, mode, "old", &ready);
                 let result = tokio::time::timeout(
                     Duration::from_secs(30),
                     handle.get_result(WorkflowGetResultOptions::default()),
@@ -229,10 +248,11 @@ fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
                 .await
                 .unwrap()
                 .unwrap();
-                assert_eq!(result, "new");
+                assert_eq!(result, "old");
             }
             let ready = temp.path().join("limits");
             let _limits = worker(&addr, "limits", "new", &ready);
+            set_current(&cli, port, "limits", "new");
             for mode in ["rollover-events", "rollover-waits", "retry-cap"] {
                 c.start_workflow(
                     CrashWorkflow::run,
@@ -259,4 +279,29 @@ fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
                 );
             }
         });
+}
+
+fn set_current(cli: &str, port: u16, deployment: &str, build: &str) {
+    for _ in 0..100 {
+        let output = Command::new(cli)
+            .args([
+                "worker",
+                "deployment",
+                "set-current-version",
+                "--address",
+                &format!("127.0.0.1:{port}"),
+                "--deployment-name",
+                deployment,
+                "--build-id",
+                build,
+                "--yes",
+            ])
+            .output()
+            .unwrap();
+        if output.status.success() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("deployment {deployment}/{build} did not become current");
 }
