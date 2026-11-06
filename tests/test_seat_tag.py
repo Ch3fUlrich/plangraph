@@ -155,7 +155,22 @@ def test_mimo_without_baseurl_is_gateway_backed_and_alias_is_mapped():
     assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=json.dumps({'provider': {'omniroute': {}}})))
     direct = json.dumps({'provider': {'mimo': {'options': {'baseURL': '/direct/v1'}}}})
     assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=direct))
+    off = json.dumps({'provider': {'mimo': {'disabled': True}}})
+    assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=off))
     both = json.dumps({'provider': {'mimo': {'options': {}}}, 'providers': {'mimo': {'settings': {'baseURL': '/direct/v1'}}}})
     assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=both))
-    rows = [{'sessionTag': 't', 'status': 200, 'provider': 'xiaomi-mimo', 'model': 'mimo-v2.6-pro'}]
+
+
+def test_xiaomi_alias_with_bare_and_prefixed_model():
+    rows = [{'sessionTag': 't', 'status': 200, 'provider': 'xiaomi-mimo', 'model': 'mimo-v2.6-pro'},
+            {'sessionTag': 't', 'status': 200, 'provider': 'xiaomi-mimo', 'model': 'xiaomi-mimo/mimo-v2.6-pro'}]
     assert gw.served_models(rows, 't') == {'mimo/mimo-v2.6-pro'}
+
+
+def test_no_baseurl_mimo_without_a_tagged_row_stays_unwitnessed():
+    cfg = {'provider': {'mimo': {'options': {}}}}
+    gw.tag_session(cfg, 'seat')
+    env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg), 'OMNIROUTE_BASE_URL': '/gateway/v1'}
+    seat = job()
+    gw.witness(SimpleNamespace(), 'seat', seat, env, fetch=lambda *a: [])
+    assert seat.served_model is None and seat.events
