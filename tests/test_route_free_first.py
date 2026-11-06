@@ -34,7 +34,7 @@ def test_explicit_disabled_qwen_refused(tmp_path):
     import pytest
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.routing import SpawnRefused
-    with pytest.raises(SpawnRefused, match=r"^leg disabled: qodercli-qwen3\.8-flash: D-3950 credits out; re-enable after one passing probe seat, one try per day$"):
+    with pytest.raises(SpawnRefused, match=r"^leg disabled: qodercli-qwen3\.8-flash: D-3950 credits out; re-enable after one passing probe seat, one try per day; override cannot enable a disabled leg$"):
         asyncio.run(SpawnService(state=tmp_path).spawn(
             card=CARD, leg="qodercli-qwen3.8-flash",
             override_reason="test disabled leg", dry_run=True))
