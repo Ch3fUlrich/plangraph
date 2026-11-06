@@ -268,8 +268,7 @@ def test_run_does_not_shadow_signal_module(e2e):
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGALRM, signal.SIGINT])
 @pytest.mark.parametrize("window", ["constructor", "ownership"])
 def test_worker_spawn_signal_is_deferred_until_registered(e2e, sig, window):
-    import ast
-    tree = ast.parse(SCRIPT.read_text())
+    import ast, threading; tree = ast.parse(SCRIPT.read_text())
     run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
     body = next(n.body for n in run.body if isinstance(n, ast.Try))
     start = next(i for i, n in enumerate(body) if isinstance(n, ast.Assign)
@@ -285,11 +284,11 @@ def test_worker_spawn_signal_is_deferred_until_registered(e2e, sig, window):
         proc = SimpleNamespace(pid=FAKE_PID)
         def __init__(self, *args):
             if window == "constructor":
-                os.kill(os.getpid(), sig)
+                os.kill(os.getpid(), sig); time.sleep(0.01)  # allow peer delivery
             events.append("constructed")
         def __setattr__(self, name, value):
             if window == "ownership":
-                os.kill(os.getpid(), sig)
+                os.kill(os.getpid(), sig); time.sleep(0.01)
             object.__setattr__(self, name, value)
     def interrupt(signum, frame):
         events.append("interrupted")
@@ -297,6 +296,7 @@ def test_worker_spawn_signal_is_deferred_until_registered(e2e, sig, window):
         raise e2e.Fail("spawn interrupted")
     previous = signal.signal(sig, interrupt)
     mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    idle = threading.Event(); peer = threading.Thread(target=idle.wait); peer.start()
     try:
         with pytest.raises(e2e.Fail, match="spawn interrupted"):
             try:
@@ -310,8 +310,8 @@ def test_worker_spawn_signal_is_deferred_until_registered(e2e, sig, window):
         assert stopped[0].owned_pgid == FAKE_PID
         assert events == ["constructed", "interrupted"]
     finally:
-        signal.signal(sig, previous)
-        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        idle.set(); peer.join(timeout=5)
+        signal.signal(sig, previous); signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 @pytest.mark.parametrize("failure", ["signal", "waitid", "permission"])
 def test_stop_worker_grace_failure_still_kills_and_reaps(e2e, tmp_path, monkeypatch, failure):
     child = tmp_path / "child"

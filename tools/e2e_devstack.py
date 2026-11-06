@@ -215,13 +215,26 @@ def run(args) -> int:
         if args.leg in ("stub", "stub-fail"):              # isolated HOME: the stubs need no config
             env["PATH"] = f"{scratch / 'stub-bin'}:{env['PATH']}"
             env["HOME"] = str(scratch)
-        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM, signal.SIGTERM, signal.SIGINT})
+        blocked = {}  # Python handlers run on the main thread, even for peer delivery.
+        pending = []
+        def defer(signum, frame):
+            pending.append((signum, frame))
         try:
+            for sig in (signal.SIGALRM, signal.SIGTERM, signal.SIGINT):
+                blocked[sig] = signal.signal(sig, defer)
             worker = u.WorkerProc(worker_bin, env, Path(os.devnull))
             worker.owned_pgid = worker.proc.pid  # WorkerProc creates a new session; do not reap early.
             cleanup.append(("worker", lambda: stop_worker(worker)))
         finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+            for sig, handler in blocked.items():
+                signal.signal(sig, handler)
+            if pending:
+                sig, frame = pending[0]
+                handler = blocked[sig]
+                if callable(handler):
+                    handler(sig, frame)
+                elif handler == signal.SIG_DFL:
+                    signal.raise_signal(sig)
         try:
             u.set_current_version(cli, args.temporal, build_id)  # deployment pg-worker, unique build
             step(f"worker up, build {build_id} current")
