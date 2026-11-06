@@ -9,6 +9,24 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
 
 
+def without_progress(text):
+    """OpenCode tool diagnostics are not failure evidence (including ANSI output)."""
+    from .env_redact import normalize
+    return '\n'.join(line for line in text.splitlines()
+                     if not normalize(line).lstrip().startswith(('✱', '→', '>', '$')))
+
+
+def is_opencode(job):
+    from pathlib import Path
+    command = getattr(job, 'command', ()) if job is not None else ()
+    return bool(command and Path(command[0]).name == 'opencode')
+
+
+def failure_reason(job, stop=None):
+    text = without_progress(job.stderr) if is_opencode(job) else job.stderr
+    return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+
+
 def _booking_seconds():
     """H1: the booked-down window is clamped to [60, 86400] seconds.
 
@@ -89,22 +107,39 @@ def notify_leg_refused(service, record, chosen, reason):
         logging.getLogger(__name__).exception('leg refusal notify failed')
 
 
+def _limit_target(service):
+    from . import leg_state
+    target = service.leg_reader
+    if not hasattr(target, 'record_harness_limit'):
+        target = getattr(target, '__self__', None)
+    return target if hasattr(target, 'record_harness_limit') else leg_state
+
+
+def _book_failure(service, chosen, line):
+    """Book legacy evidence and quarantine the enabled reader's cached identity.
+
+    The adapter replaces its served set on authoritative refresh, so this
+    observation is transient, not a second availability catalog. Read the
+    injected adapter flag only; disabled readers retain legacy store semantics.
+    """
+    from plangraph.routing_support.leg_state import LegAdapter
+    from .leg_probe import key
+    target = _limit_target(service)
+    target.record_harness_limit(key(chosen), line, 'spawner:harness', down_s=_booking_seconds())
+    if isinstance(target, LegAdapter) and target.enabled:
+        target.quarantine(key(chosen))
+
+
 def fallthrough_reason(service, chosen, job, record):
     if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
-    from . import leg_state
-    from .leg_probe import key as leg_key
-    line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
+    streams = (job.stdout, job.stderr)
+    line = harness_limit_line(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
         # not in the captured output) books and notifies like any harness limit.
         line = job.refusal
     if line:
-        target = service.leg_reader
-        if not hasattr(target, 'record_harness_limit'):
-            target = getattr(target, '__self__', None)
-        if not hasattr(target, 'record_harness_limit'):
-            target = leg_state
         # Q16/M8: one leg key shared with the probe path -- 'agy/<model>' only
         # for an agy leg's bare model.
         # D-3605 (a): every harness-limit line without a provider reset time
@@ -113,15 +148,17 @@ def fallthrough_reason(service, chosen, job, record):
         # 'Resets in ...' lines keep their own reset because
         # record_harness_limit applies down_s only when the line carries no
         # reset time.
-        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness', down_s=_booking_seconds())
+        _book_failure(service, chosen, line)
         # M9/M15: a guard or cancel verdict is never stomped by a fallthrough.
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
         reason = 'harness_limit: ' + line
         notify_leg_refused(service, record, chosen, reason)
         return reason
-    reason = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+    streams = (job.stdout, job.stderr)
+    reason = unavailable_reason(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if reason is not None:
+        _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
     return reason
 
@@ -142,7 +179,7 @@ def release_attempts(service, record):
         tasks.pop(job_id, None)
 
 
-def terminal_reason(record):
+def terminal_reason(record, job=None):
     """Q8/M15: the run's reason describes how the run ENDED.
 
     A 'harness_limit' stamped by an earlier fallthrough leg never survives a
@@ -157,6 +194,11 @@ def terminal_reason(record):
     if special is not None:
         record['reason'] = special
         return
+    opencode = is_opencode(job) or (record.get('chosen_leg') or {}).get('harness') == 'opencode'
+    if opencode:
+        for field in ('reason', 'error'):
+            if record.get(field):
+                record[field] = without_progress(record[field])
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
@@ -170,15 +212,19 @@ def terminal_reason(record):
         real = [a for a in (record.get('attempts') or ()) if a.get('status') != 'skipped']
         last = real[-1] if real else None
         if last is not None:
-            if last.get('status') == 'timeout':
+            # r3: 'timed_out' is the review wall-cap spelling of 'timeout'
+            if last.get('status') in ('timeout', 'timed_out'):
                 reason = 'timeout'
             elif not (last.get('skip_reason') or '').startswith('harness_limit'):
                 reason = last.get('skip_reason') or reason
         record['reason'] = reason
         return
     if record.get('exit_code') not in (None, 0):
+        stderr = record.get('stderr_tail', '')
+        if opencode:
+            stderr = without_progress(stderr)
         record['reason'] = (reason or record.get('error')
-                            or first_reason(record.get('stderr_tail', ''))
+                            or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
 
 

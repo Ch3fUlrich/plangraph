@@ -1,6 +1,23 @@
 use super::*;
 use std::os::unix::process::ExitStatusExt;
 
+#[test]
+fn review_layout_contract() {
+    let stall = include_str!("stall/unix.rs");
+    assert!(!stall.contains("rustfmt::skip"));
+    assert!(!stall.contains("fn group_empty"));
+    assert_eq!(
+        include_str!("../../../changelog.d/SPAWNER-RL12-B1.md")
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count(),
+        1
+    );
+    let process = include_str!("watch_process_tests.rs");
+    assert_eq!(process.matches("let deadline =").count(), 2);
+    assert!(process.contains("read_dir(\"/proc\")"));
+}
+
 #[derive(Default)]
 struct Fake {
     terms: u32,

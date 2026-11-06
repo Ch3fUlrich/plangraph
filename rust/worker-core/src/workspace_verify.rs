@@ -64,6 +64,7 @@ pub fn configure_import_environment(
 ) -> Result<(), ResolveError> {
     let mut roots = Vec::new();
     for root in &repo.import_roots {
+        require(!Path::new(root).is_absolute(), "import_root_relative")?;
         let path = checkout.join(root).canonicalize()?;
         require(path == checkout || inside(&path, checkout), "import_root")?;
         roots.push(path);
@@ -104,7 +105,9 @@ fn canary(repo: &RepoEntry, checkout: &Path, package: &str) -> Result<(), Resolv
     let mut cmd = Command::new(python);
     // Path containment is checked in the child, not parsed from mixed stdout/stderr.
     cmd.args(["-c", "import importlib,pathlib,sys; m=importlib.import_module(sys.argv[1]); p=pathlib.Path(m.__file__).resolve(strict=True); r=pathlib.Path.cwd().resolve(strict=True); sys.exit(0 if p != r and r in p.parents else 1)", package]);
-    configure_import_environment(&mut cmd, repo, checkout)?;
+    let temp = std::env::temp_dir();
+    crate::sandbox_env::confine_check(&mut cmd, &temp);
+    crate::workspace_launch::apply_child_env(&mut cmd, repo, checkout, "canary", &temp)?;
     let out = stall::supervise(
         cmd,
         &Opts {

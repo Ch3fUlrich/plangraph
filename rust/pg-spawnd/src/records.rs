@@ -8,6 +8,14 @@ use std::path::Path;
 
 const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 
+pub(crate) fn valid_item(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 200
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -124,9 +132,13 @@ pub(crate) fn list_runs(state: &Path) -> Vec<Value> {
             continue;
         }
         for (source, dest) in [("parent_session", "parent_session"), ("item", "item_key")] {
-            if record.get(dest).is_none() {
+            if (dest == "item_key" && record[dest].is_null())
+                || (dest != "item_key" && record.get(dest).is_none())
+            {
                 if let Some(value) = record["completion"].get(source).cloned() {
-                    record[dest] = value;
+                    if dest != "item_key" || value.as_str().is_some_and(valid_item) {
+                        record[dest] = value;
+                    }
                 }
             }
         }

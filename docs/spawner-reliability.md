@@ -1,5 +1,22 @@
 # Spawner reliability
 
+## RL17: derived evidence and review seats
+
+Evidence defaults off. `reliability.json` accepts `evidence` values off/shadow/on,
+with `roles.<role>.evidence` overriding the default and
+`PLANGRAPH_RELIABILITY_EVIDENCE` overriding configuration. Shadow and on persist
+derived data only; neither enables routing. Operators roll back with off and may
+delete the derived evidence directory while writers are stopped.
+
+Rows use a separate stable lock file, tolerate an incomplete final line, and
+refuse malformed complete lines. Outcome corrections use last physical row per
+run/attempt before window filtering. Observations are separate from outcomes;
+canaries never become health incidents. Existing unclassified attempts are
+counted and skipped, not guessed from status. Legacy leg_events stay in the
+adapter until P-R11. Review seats remain enabled even when evidence is off.
+Only supported complete result frames supply rendered review text; missing or
+unknown output produces HALT, never a manufactured witness or finish reason.
+
 ## RL10b: observation-anchored health deadlines (P-R11 pulled forward)
 
 `health_until::fold_with_provider` is a pure module without a production caller
@@ -163,3 +180,18 @@ A silent TERM-ignoring fixture with an escaped pipe holder proves prompt return
 after Empty; escaped fixture holders have unwind-safe cleanup. Unterminated
 stdout frames count exactly once, and the no-first-activity ignorer asserts its
 own HangNoActivity outcome and elapsed bound. The existing changelog remains true.
+
+The RL12 B1 foundation retains `Watched.io_error` for the first drain or
+stdin-writer failure. The supervisor returns `Ok(Watched)` after
+teardown, preserving exit status, decisions, channel summary, and kill proof;
+RL14 reads the error field. Existing part A callers remain unchanged.
+
+`killpg` rejects pgids at most one and the caller's own group. ESRCH from
+TERM/KILL is success; signal-zero still reports absence to the sticky
+group-empty probe. Other errors surface, and EPERM never proves emptiness.
+Only a freshly spawned owned group enters the watch signal path. A reaped
+leader does not relinquish surviving descendants; an unrelated sentinel
+group remains alive when the owned descendant group is killed.
+
+The remaining behavior and tests from the B1 foundation are implemented by
+the Unix event supervisor described above. RL14 integration remains pending.

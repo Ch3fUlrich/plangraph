@@ -35,6 +35,7 @@ from .evidence_forgejo import ForgejoStatusAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_repo import repo_key
 from .evidence_runs import RunRecordAdapter
+from .evidence_spawner import SpawnerRecordAdapter
 from .evidence_semaphore import SemaphoreAdapter, SemaphoreError, positive_int
 from .item_fixes import ErrorRecordVerifier
 from .evidence_types import (
@@ -429,6 +430,9 @@ class RunRecordVerifier:
     def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
         ref = _ref(ref)
         run_id = ref.get("run_id")
+        if "host" in ref:
+            adapter = getattr(ctx, "spawner_records", None) or SpawnerRecordAdapter(None)
+            return adapter.verify(item, ref)
         if not isinstance(run_id, str) or not run_id:
             return _fail("run-record requires a 'run_id'", ref)
         if ctx.runs is None or not ctx.runs.valid_run_id(run_id):
@@ -670,14 +674,16 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
     forgejo_token_file = _cfg(config, "forgejo_token_file")
     if forgejo_url and forgejo_token_file:
         forgejo = ForgejoStatusAdapter(str(forgejo_url), str(forgejo_token_file))
-    return Context(
+    context = Context(
         git=GitAdapter(_cfg(config, "repos", {}) or {}),
         ci=CIAdapter(_cfg(config, "ci", {}) or {}, forgejo=forgejo),
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file")),
+        spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
         merge_principals=_principals(_cfg(config, "merge_principals")),
         skew=float(_cfg(config, "skew", DEFAULT_SKEW_S)),
     )
+    return context

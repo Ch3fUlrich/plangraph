@@ -18,9 +18,11 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 from plangraph.keeper import api, auth, config, db as kdb
 from plangraph.keeper.store import Store
+from plangraph.keeper.evidence_decisions import DecisionsAdapter
 
 
 def _items(n, offset=0):
@@ -47,8 +49,13 @@ def _pct(xs, p):
 
 def run(backend, n, writes, reads, extra=None):
     tmp = Path(tempfile.mkdtemp(prefix="bench-snap-"))
+    decisions = tmp / "DECISIONS.md"
+    decisions.write_text("".join(
+        f"| D-{i + 1} | bench | Keep bench:L{i}: {'decision text ' * 12} |\n"
+        for i in range(n)), encoding="utf-8")
     cfg_doc = {"db": str(tmp / "keeper.db"), "snapshot": str(tmp / "plan.snapshot.json"),
-               "bind": "127.0.0.1:0", "reap_interval": 3600, **(extra or {})}
+               "bind": "127.0.0.1:0", "reap_interval": 3600,
+               "decisions_file": str(decisions), **(extra or {})}
     opts = {}
     if backend == "postgres":
         import os
@@ -60,7 +67,7 @@ def run(backend, n, writes, reads, extra=None):
     cfg_path.chmod(0o600)
     cfg = config.load_config(cfg_path)
     conn = kdb.open_db(cfg.db, create=True, **opts)
-    store = Store(conn)
+    store = Store(conn, ctx=SimpleNamespace(decisions=DecisionsAdapter(decisions)))
     token = auth.add_principal(conn, "router", "router", [])
     who = auth.authenticate(conn, token)
     for off in range(0, n, 200):
@@ -68,6 +75,11 @@ def run(backend, n, writes, reads, extra=None):
         goal = {"project": "bench", "id": f"G{off}", "kind": "goal", "title": f"Goal {off}",
                 "description": "g", "depends_on": [i["id"] for i in lanes]}
         store.create_items(who, lanes + [goal])
+    for i in range(n):
+        conn.execute("INSERT INTO evidence(key, epoch, kind, ref, verified, at) "
+                     "VALUES (?, 0, 'decision', ?, 1, ?)",
+                     (f"bench:L{i}", json.dumps({"id": f"D-{i + 1}"}), store._iso(store.now())))
+    conn.commit()
     for r in range(4):                                  # event churn (events >> items, like live)
         for i in range(0, n, max(1, n // 100)):
             store.set_priority(who, f"bench:L{i}", r)

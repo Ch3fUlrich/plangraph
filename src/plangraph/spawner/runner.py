@@ -46,7 +46,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, notify_leg_refused, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
@@ -250,7 +250,7 @@ class SpawnerRunner:
         self._git_guards = {}
         self._stdin_payloads = {}
 
-    def served_witness(self, job_id, model, *, adapter_token):
+    def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
         """Record transport telemetry authenticated by an in-process adapter.
 
         Do not expose this capability to the child: even a child that knows its
@@ -272,6 +272,7 @@ class SpawnerRunner:
         job.served_model = model
         job.served_family = family
         job.served_witness_reason = 'authenticated gateway adapter telemetry'
+        job.response_finish_reason = finish_reason  # final witness telemetry, never inherited
 
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
@@ -497,6 +498,7 @@ class SpawnerRunner:
                 if tools_event:
                     job.events.append(tools_event)
                 self.jobs[job_id] = job
+                job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
                 return job
 
             job = JobInfo(
@@ -512,8 +514,9 @@ class SpawnerRunner:
                 writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
             self.jobs[job_id] = job
+            job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
             from .run_watchdog import thresholds, edit_signature
-            job._watchdog_limits = watchdog or thresholds()
+            job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
             if tools_event:
@@ -731,6 +734,8 @@ class SpawnerRunner:
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
                 job.status = "completed" if exit_code == 0 else "failed"
+            if job.status == 'failed' and is_opencode(job):
+                job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
             await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
@@ -910,8 +915,7 @@ def spawn_service(*args, **kwargs):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = (redact(first_reason(job.stderr))
-                            if first_reason(job.stderr) else f'harness exit code {job.exit_code}')
+                        attempt['skip_reason'] = redact(failure_reason(job))
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -1002,7 +1006,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import thresholds
+            from .run_watchdog import terminal_status, thresholds
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1030,7 +1034,9 @@ def spawn_service(*args, **kwargs):
                 writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             from .context_pack import annotate
+            from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
+            annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
@@ -1053,7 +1059,7 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
-                    limits = thresholds(card)
+                    limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
@@ -1071,7 +1077,7 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
+                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
@@ -1105,7 +1111,7 @@ def spawn_service(*args, **kwargs):
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
@@ -1123,7 +1129,7 @@ def spawn_service(*args, **kwargs):
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(first_reason(job.stderr)) if first_reason(job.stderr) else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+                            reason = redact(failure_reason(job, stop))
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
@@ -1183,7 +1189,7 @@ def spawn_service(*args, **kwargs):
                     if record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
-                    terminal_reason(record)
+                    terminal_reason(record, job if record.get('job_id') else None)
                     release_attempts(self, record)
                     self._save(record)
 

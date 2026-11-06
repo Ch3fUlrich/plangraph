@@ -11,8 +11,10 @@ def probe_setting(name, default, maximum):
     except ValueError:
         return default
 
-def probe_run(state, record, now, *, dry_run=False):
+def probe_run(state, record, now, *, dry_run=False, hung=None):
     """Independent host sampling; missing evidence never authorizes cancellation."""
+    if hung is not None and hung.enabled:
+        return hung.probe(state, record, now, dry_run=dry_run)
     import asyncio
     import math
     from .private_io import atomic_write_private
@@ -84,4 +86,3 @@ def probe_run(state, record, now, *, dry_run=False):
         return None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError):
         return event
-
