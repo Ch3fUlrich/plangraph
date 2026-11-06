@@ -1,0 +1,1 @@
+- **SPAWNER-LEG-STATE-FROM-OMNIROUTE:** Book complete usage and model-unavailable refusals, quarantine enabled adapter observations until authoritative refresh, and flatten ANSI-free busy evidence; synthetic regressions only, not live acceptance.
