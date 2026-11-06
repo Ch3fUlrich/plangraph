@@ -1,3 +1,6 @@
+/// A cancelled attempt: keep the branch and head the caller already knows and
+/// skip the commit, confinement and check stages. `output_tail` carries what
+/// the harness printed before it was killed.
 fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptResult {
     AttemptResult {
         exit_class: ExitClass::Cancelled,

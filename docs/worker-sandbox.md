@@ -4,6 +4,10 @@ An attempt runs `opencode run` as a child of the worker, with cwd set to the
 attempt worktree. Confinement combines a filesystem jail, resource limits, and
 standalone agent mode.
 
+Worker CI checks formatting and warning-free Clippy before running the attempt
+tests against a Temporal dev server; extracted result helpers retain their
+function documentation in the included source file.
+
 ## What confines an attempt
 
 - Filesystem: `pg-jail` applies a Landlock allow-list before exec. Writes are

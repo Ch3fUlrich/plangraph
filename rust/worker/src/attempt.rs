@@ -521,9 +521,6 @@ fn violations_tail(violations: &[Violation]) -> String {
         .join("\n")
 }
 
-/// A cancelled attempt: keep the branch and head the caller already knows and
-/// skip the commit, confinement and check stages. `output_tail` carries what
-/// the harness printed before it was killed.
 include!("attempt_result_helpers.rs");
 
 /// Run the check; on failure run it once more unchanged. A pass on the second
