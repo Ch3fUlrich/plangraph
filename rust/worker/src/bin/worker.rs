@@ -124,9 +124,7 @@ fn select_keeper(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let allowlist = std::env::var_os("PG_CARD_ALLOWLIST");
-    let cfg =
-        Config::default().with_card_allowlist(allowlist.as_deref().map(std::path::Path::new))?;
+    let cfg = Config::default().with_card_allowlist_env()?;
     let addr = env_or("PG_TEMPORAL_ADDR", "http://127.0.0.1:7233");
     let namespace = env_or("PG_NAMESPACE", "default");
 

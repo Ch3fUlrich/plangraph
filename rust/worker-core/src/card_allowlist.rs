@@ -1,5 +1,9 @@
 use super::*;
 impl Config {
+    pub fn with_card_allowlist_env(self) -> std::io::Result<Self> {
+        let path = std::env::var_os("PG_CARD_ALLOWLIST");
+        self.with_card_allowlist(path.as_deref().map(std::path::Path::new))
+    }
     /// Load once at startup; never expose file contents in an error.
     pub fn with_card_allowlist(mut self, path: Option<&std::path::Path>) -> std::io::Result<Self> {
         if let Some(path) = path {
@@ -9,8 +13,14 @@ impl Config {
             if !path.is_absolute() {
                 return Err(invalid());
             }
-            let text = std::fs::read_to_string(path).map_err(|_| invalid())?;
+            let text = std::fs::read_to_string(path).map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("PG_CARD_ALLOWLIST {}: {:?}", path.display(), error.kind()),
+                )
+            })?;
             let keys: std::collections::BTreeSet<String> = text
+                .trim_start_matches('\u{feff}')
                 .lines()
                 .map(str::trim)
                 .filter(|s| !s.is_empty() && !s.starts_with('#'))

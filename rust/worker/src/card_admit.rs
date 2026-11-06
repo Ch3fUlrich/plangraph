@@ -19,7 +19,10 @@ pub(crate) enum EntryError {
     Attempt(#[from] crate::attempt::AttemptError),
 }
 pub(crate) fn attempt_error(error: EntryError) -> ActivityError {
-    if matches!(&error, EntryError::Admission(_)) {
+    if matches!(
+        &error,
+        EntryError::Admission(_) | EntryError::Attempt(crate::attempt::AttemptError::Admission(_))
+    ) {
         refusal("card_admission_refused", &error.to_string())
     } else {
         ActivityError::application(
@@ -31,7 +34,9 @@ pub(crate) fn allow(cfg: &Config, key: &str) -> Result<(), ActivityError> {
     if cfg.card_allowed(key) {
         Ok(())
     } else {
-        Err(refusal("card_not_allowlisted", key))
+        Err(attempt_error(EntryError::Admission(format!(
+            "not allowlisted: {key}"
+        ))))
     }
 }
 pub(crate) fn claimed(
@@ -40,7 +45,7 @@ pub(crate) fn claimed(
 ) -> Result<Option<crate::keeper::Claim>, ActivityError> {
     claim
         .map(Some)
-        .ok_or_else(|| refusal("card_not_claimable", key))
+        .ok_or_else(|| attempt_error(EntryError::Admission(format!("not claimable: {key}"))))
 }
 fn owners() -> &'static Mutex<BTreeSet<String>> {
     static OWNERS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
@@ -67,11 +72,9 @@ pub(crate) fn run_attempt(
     harness: Option<&dyn crate::harness::Harness>,
     cfg: &Config,
     patterns: &pg_worker_core::exit_class::Patterns,
-    input: Option<&crate::attempt::AttemptInput>,
+    input: &crate::attempt::AttemptInput,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<crate::attempt::AttemptResult, EntryError> {
-    let input = input.ok_or_else(|| EntryError::Admission("no claimed card".into()))?;
-    let _owner = enter(cfg, &input.claim.card)?;
     Ok(crate::attempt::run_attempt_with(
         harness, cfg, patterns, input, cancelled,
     )?)
