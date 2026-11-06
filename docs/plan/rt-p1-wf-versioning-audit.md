@@ -17,17 +17,40 @@
   `replays_pre_reobserve_cap_park` replay old histories. New command changes
   use `bounded-runs-v1`; runbook specifies patch/version and drain policy.
   Remaining: automated workflow-change policy CI wiring.
-- Done: hermetic subprocess test SIGKILLs at a started activity and timer,
-  verifies signal 9 and completion by replacement build. Remaining: this
-  synthetic SDK workflow does not prove real Card deployment-routing migration.
-- Done: attempt schedule-to-close and state-preserving Continue-As-New at
-  event/wait caps. Process test exercises retries until total timeout and both
-  rollover commands. Remaining: real Card rollover state-transfer e2e coverage.
+- Partial, not acceptance evidence: subprocess test targets a started activity
+  and timer, but uses an unversioned synthetic workflow and the same executable.
+  Missing CLI now fails rather than passing silently. No real run was obtained
+  in the replan environment (Temporal CLI unavailable). Required slice: pinned
+  Card workflows, registered distinct deployment builds, explicit routing
+  transition, SIGKILL at both crash points and bounded replacement completion.
+- Partial: only attempt schedule-to-close is implemented. Synthetic rollover
+  exercises commands, not Card state transfer. Required slices: replay-guarded
+  bounds at every activity site; Resume restoration and queued-signal splice;
+  Card event/history and per-run wait-cap rollover with preserved attempt,
+  budget, question and base state. These clauses remain unproven.
 - Done: operational runbook in `rt-p1-wf-versioning-runbook.md`.
 - Remaining: two independent non-Claude review seats; no agents requested.
 
 Mutation probes failed for identity defaults, ignored promotion, archive overwrite,
 shifted caps, extended retry timeout and SIGTERM; all restored before final checks.
+
+## Replan review disposition
+
+Root causes are evidence validity, incomplete replay-safe options/state coverage,
+archive enforcement scope, bootstrap lifecycle, and helper/API documentation drift.
+The fixtures policy now rejects edits/deletions throughout the fixtures tree,
+even if an archived copy is added; required CI wiring remains blocked by the
+Gate-Edit boundary below. Identity fallback APIs were removed rather than kept
+as a second, contradictory identity policy.
+
+Unclosed findings: distinct pinned-build crash recovery, production Card Resume
+coverage, all-activity bounds, fresh-stack promotion, duplicate archive tests and
+I2/D7 comment restoration. The latter files, plus workflow.rs and devstack.sh,
+already exceed 400 lines. No new exemption was added; splitting these production
+and integration-test modules and validating historical replay needs a dedicated
+slice rather than another unverified local patch. This PR is not ready on these
+acceptance clauses. The file-size gate must be reported as failing if it fails,
+not interpreted as permission to enlarge grandfathered modules.
 
 ## Original pre-implementation snapshot
 

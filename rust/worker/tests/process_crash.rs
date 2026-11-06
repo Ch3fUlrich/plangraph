@@ -139,9 +139,8 @@ fn worker(addr: &str, queue: &str, build: &str, ready: &Path) -> Process {
 #[test]
 fn sigkill_mid_attempt_and_mid_timer_new_build_resumes() {
     use std::os::unix::process::ExitStatusExt;
-    let Ok(cli) = std::env::var("PG_TEMPORAL_CLI") else {
-        return;
-    };
+    let cli = std::env::var("PG_TEMPORAL_CLI")
+        .expect("SIGKILL acceptance requires PG_TEMPORAL_CLI; absence is not evidence");
     let temp = tempfile::tempdir().unwrap();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

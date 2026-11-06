@@ -6,12 +6,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE = "rust/worker/tests/fixtures/releases"
+FIXTURES = "rust/worker/tests/fixtures"
 
 
 def reject_changes(base, root=ROOT):
     """CI entry point after Gate-Edit: only additions under a new build are legal."""
     result = subprocess.run(
-        ["git", "diff", "--name-status", "--no-renames", base, "--", ARCHIVE],
+        ["git", "diff", "--name-status", "--no-renames", base, "--", FIXTURES],
         cwd=root, text=True, capture_output=True, check=True,
     )
     return [line for line in result.stdout.splitlines() if not line.startswith("A\t")]
@@ -75,6 +76,25 @@ def test_archive_policy_rejects_edit_and_delete(tmp_path):
     added.write_text("new")
     git("add", ".")
     assert not reject_changes("HEAD", tmp_path)
+
+
+def test_policy_rejects_top_level_rerecord_even_with_archived_copy(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, check=True,
+                              capture_output=True, text=True)
+    git("init")
+    path = tmp_path / FIXTURES / "cancel.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("old")
+    git("add", ".")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "-m", "baseline")
+    old = tmp_path / ARCHIVE / "old" / path.name
+    old.parent.mkdir(parents=True)
+    old.write_text("old")
+    path.write_text("new")
+    git("add", ".")
+    assert reject_changes("HEAD", tmp_path) == [f"M\t{FIXTURES}/cancel.json"]
 
 
 if __name__ == "__main__":

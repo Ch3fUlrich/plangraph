@@ -6,19 +6,6 @@
 //! stable function of the binary, with an explicit runtime override so a
 //! locally built binary can join a named deployment.
 
-/// Default deployment name when `PG_DEPLOYMENT` is not set.
-pub const DEPLOYMENT: &str = "pg-worker";
-
-/// Build id for this binary: the runtime `PG_BUILD_ID` when set and non-empty,
-/// otherwise `<package-version>-<git-sha>` stamped in by `build.rs`. The runtime
-/// override lets an operator pin an otherwise-unnamed local build.
-pub fn build_id() -> String {
-    match std::env::var("PG_BUILD_ID") {
-        Ok(v) if !v.is_empty() => v,
-        _ => format!("{}-{}", env!("CARGO_PKG_VERSION"), env!("PG_BUILD_SHA")),
-    }
-}
-
 /// Whether `id` is a build id Temporal will accept: 1..=63 characters from
 /// `[A-Za-z0-9._-]`, starting with an alphanumeric. Temporal rejects anything
 /// else, so we check before handing an id to the server.
@@ -106,28 +93,6 @@ mod tests {
         assert!(!validate(".leading"));
         assert!(!validate("_leading"));
         assert!(!validate("caf\u{e9}"));
-    }
-
-    #[test]
-    fn build_id_default_uses_package_version() {
-        let id = with_env(&[("PG_BUILD_ID", None)], build_id);
-        assert_eq!(
-            id,
-            format!("{}-{}", env!("CARGO_PKG_VERSION"), env!("PG_BUILD_SHA"))
-        );
-        assert!(validate(&id));
-    }
-
-    #[test]
-    fn build_id_env_override_wins_at_runtime() {
-        let id = with_env(&[("PG_BUILD_ID", Some("override-1"))], build_id);
-        assert_eq!(id, "override-1");
-    }
-
-    #[test]
-    fn build_id_empty_env_falls_back_to_stamp() {
-        let id = with_env(&[("PG_BUILD_ID", Some(""))], build_id);
-        assert!(id.starts_with(concat!(env!("CARGO_PKG_VERSION"), "-")));
     }
 
     #[test]
