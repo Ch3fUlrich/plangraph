@@ -54,7 +54,7 @@ def test_listing_confirmation(stale_listing, asynchronous, case):
     def admit():
         return asyncio.run(r.host_skip_reason_async(row)) if asynchronous else r.host_skip_reason(row)
 
-    expected = 'not_served_on_host: ' + model if case in ('absent', 'variant') else None
+    expected = 'not_served_on_host: ' + model if case in ('absent', 'variant', 'unknown') else None
     assert admit() == expected
     assert len(calls) == (0 if case == 'present' else 1)
     if calls:

@@ -198,15 +198,7 @@ def unavailable_reason(exit_code, stdout, stderr):
             return any(error_message(item) for item in value)
         return False
 
-    for line in stderr.splitlines():
-        if 'model unavailable:' in line.lower():
-            if _MODEL_UNAVAILABLE.fullmatch(line):
-                return line.strip()
-            if not _ERROR_SHAPED.match(line):
-                continue
-        if marked(line):
-            return line
-    for line in stdout.splitlines():
+    for line in [*stderr.splitlines(), *stdout.splitlines()]:
         text = line.strip()
         if 'model unavailable' in text.lower() and not text.startswith('{'):
             if _ERROR_SHAPED.match(text) and _MODEL_UNAVAILABLE.fullmatch(text):

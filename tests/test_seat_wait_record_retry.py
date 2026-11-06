@@ -37,7 +37,11 @@ def test_record_collision(tmp_path, monkeypatch, capsys, verb, failures, winerro
     monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
     code = cli.main(['--state', str(tmp_path), verb, record['run_id']])
     out, err = capsys.readouterr()
-    if failures == 2:
+    if winerror is None:
+        assert code != 0 and not out
+        assert err == 'run-collision: PermissionError\n'
+        assert len(calls) == 1
+    elif failures == 2:
         assert code == 0 and json.loads(out) == record and not err
         assert len(calls) == 3
     else:
