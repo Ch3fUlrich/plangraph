@@ -1,0 +1,266 @@
+use super::*;
+
+/// Both historical and current human-readable serve banners. Never accept a
+/// remote address, credentials, path, or arbitrary suffix from server output.
+pub(super) fn server_url(line: &str) -> Option<String> {
+    let url = line
+        .trim()
+        .strip_prefix("opencode server listening on ")
+        .or_else(|| line.trim().strip_prefix("server listening on "))?;
+    let port = url.strip_prefix("http://127.0.0.1:")?.parse::<u16>().ok()?;
+    (port != 0).then(|| format!("http://127.0.0.1:{port}"))
+}
+
+#[cfg(unix)]
+pub(super) fn run_opencode_server(
+    h: &dyn Harness,
+    run: &HarnessRun,
+    home: &Path,
+    opts: &Opts,
+    cancelled: &dyn Fn() -> bool,
+    jail: Option<&JailConfig>,
+) -> std::io::Result<Supervised> {
+    use std::io::{BufRead, Read};
+    use std::os::unix::process::CommandExt;
+    use std::sync::{Mutex, mpsc};
+    use std::time::{Duration, Instant};
+    let mut random = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let password: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    // The CLI's standalone child silently drops stderr and can re-exec through
+    // procfs paths unavailable to descendants in the Landlock jail. Launch the
+    // actual binary explicitly, inside the same confinement as its tools.
+    let mut serve = Command::new(h.binary().unwrap_or("opencode"));
+    serve
+        .args(["serve", "--hostname", "127.0.0.1", "--port", "0"])
+        .current_dir(run.workdir)
+        .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+        .env(OPENCODE_CONFIG_ENV, opencode_permission_config())
+        .env("OPENCODE_PASSWORD", &password)
+        .env("OPENCODE_SERVER_PASSWORD", &password);
+    let mut serve = confined_command(serve, h, run, home, jail)?;
+    serve
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let mut child = serve.spawn()?;
+    struct Server(std::process::Child);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(-(self.0.id() as i32), libc::SIGKILL);
+            }
+            let _ = self.0.wait();
+        }
+    }
+    let stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let mut server = Server(child);
+    let (tx, rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some(url) = server_url(&line) {
+                let _ = tx.send(url);
+            }
+            // Password announcements and all other stdout are discarded.
+        }
+    });
+    let tail = Arc::new(Mutex::new(Vec::new()));
+    let dest = tail.clone();
+    let errors = std::thread::spawn(move || {
+        let mut buf = [0; 1024];
+        while let Ok(n) = stderr.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            let mut tail = dest.lock().unwrap();
+            tail.extend_from_slice(&buf[..n]);
+            if tail.len() > 65536 {
+                let excess = tail.len() - 65536;
+                tail.drain(..excess);
+            }
+        }
+    });
+    let start = Instant::now();
+    let limit = opts
+        .timeout
+        .unwrap_or(Duration::from_secs(30))
+        .min(Duration::from_secs(30));
+    let url = loop {
+        if let Ok(url) = rx.recv_timeout(Duration::from_millis(25)) {
+            break Some(url);
+        }
+        if cancelled() || start.elapsed() >= limit || server.0.try_wait()?.is_some() {
+            break None;
+        }
+    };
+    let result = if let Some(url) = url {
+        let mut cmd = Command::new(h.binary().unwrap_or("opencode"));
+        cmd.args(["run", "--server", &url]);
+        opencode_options(&mut cmd);
+        cmd.env("OPENCODE_PASSWORD", &password)
+            .env("OPENCODE_SERVER_PASSWORD", &password);
+        cmd.args(["-m", run.model, "--", run.prompt])
+            .current_dir(run.workdir)
+            .stdin(Stdio::null());
+        supervise_with_cancel(confined_command(cmd, h, run, home, jail)?, opts, cancelled)
+    } else {
+        drop(server);
+        let _ = reader.join();
+        let _ = errors.join();
+        let raw = tail.lock().unwrap();
+        let safe =
+            String::from_utf8_lossy(&raw).replace(&password, pg_worker_core::redact::REDACTED);
+        let last = pg_worker_core::redact::redacted_tail(&safe, 1, 1024);
+        return Ok(Supervised {
+            code: Some(1),
+            signal: None,
+            stalled: false,
+            timed_out: start.elapsed() >= limit,
+            cancelled: cancelled(),
+            output: format!("opencode server startup failed: {last}").into_bytes(),
+        });
+    };
+    drop(server);
+    let _ = reader.join();
+    let _ = errors.join();
+    result.map(|mut result| {
+        result.output = String::from_utf8_lossy(&result.output)
+            .replace(&password, pg_worker_core::redact::REDACTED).into_bytes();
+        result
+    })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    #[test]
+    fn opencode_command_has_args_cwd_and_env() {
+        let h = Opencode::new();
+        let run = HarnessRun {
+            workdir: Path::new("/tmp/w"),
+            model: "some/model",
+            prompt: "fix the bug",
+        };
+        let c = h.command(&run);
+        assert_eq!(c.get_program(), OsStr::new("opencode"));
+        let args: Vec<String> = c
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "run",
+                "--standalone",
+                "--format",
+                "json",
+                "-m",
+                "some/model",
+                "--",
+                "fix the bug"
+            ]
+        );
+        assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
+        assert_eq!(
+            c.get_envs()
+                .find(|(k, _)| k.to_str() == Some("OPENCODE_DISABLE_AUTOUPDATE"))
+                .and_then(|(_, v)| v),
+            Some(OsStr::new("1"))
+        );
+        let cfg = c
+            .get_envs()
+            .find(|(k, _)| k.to_str() == Some(OPENCODE_CONFIG_ENV))
+            .and_then(|(_, v)| v)
+            .expect("per-attempt permission config is set");
+        assert_eq!(cfg, OsStr::new(&opencode_permission_config()));
+    }
+
+    #[test]
+    fn serve_readiness_225_and_2032_are_loopback_only() {
+        // Captured from this host's 2.2.5 in a scratch HOME.
+        assert_eq!(
+            server_url("server listening on http://127.0.0.1:37933"),
+            Some("http://127.0.0.1:37933".into())
+        );
+        assert_eq!(
+            server_url("opencode server listening on http://127.0.0.1:4096"),
+            Some("http://127.0.0.1:4096".into())
+        );
+        for line in [
+            "server password secret",
+            "server listening on http://0.0.0.0:4096",
+            "server listening on http://127.0.0.1:0",
+            "server listening on http://127.0.0.1:4096/secret",
+        ] {
+            assert!(server_url(line).is_none());
+        }
+    }
+
+    #[test]
+    fn explicit_server_failure_is_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = crate::testutil::write_script(
+            dir.path(),
+            "oc-fail",
+            "#!/bin/sh\necho 'API_KEY=sentinel-startup-secret' >&2\nexit 1\n",
+        );
+        let home = tempfile::tempdir().unwrap();
+        let r = run_harness(
+            &Opencode {
+                bin: bin.to_string_lossy().into_owned(),
+            },
+            &HarnessRun {
+                workdir: dir.path(),
+                model: "some/model",
+                prompt: "p",
+            },
+            home.path(),
+            &Opts::default(),
+            &|| false,
+            None,
+        )
+        .unwrap();
+        let output = String::from_utf8_lossy(&r.output);
+        assert!(output.starts_with("opencode server startup failed:"));
+        assert!(!output.contains("sentinel-startup-secret"));
+        assert!(output.contains(pg_worker_core::redact::REDACTED));
+    }
+
+    #[test]
+    #[ignore = "explicit opt-in: starts only a private loopback server, no model call"]
+    fn real_opencode_serve_readiness() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // Substitute only the client to avoid a model request. The server uses
+        // the installed binary and the production startup/readiness path.
+        let real = scope::binary_ro("opencode").unwrap()[0].join("opencode");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = serve ]; then exec '{}' \"$@\"; fi\nprintf 'client-after-readiness\\n'\n",
+            real.display()
+        );
+        let bin = crate::testutil::write_script(dir.path(), "oc-probe", &script);
+        let r = run_harness(
+            &Opencode {
+                bin: bin.to_string_lossy().into_owned(),
+            },
+            &HarnessRun {
+                workdir: dir.path(),
+                model: "some/model",
+                prompt: "p",
+            },
+            home.path(),
+            &Opts::default(),
+            &|| false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(r.code, Some(0));
+        assert_eq!(r.output, b"client-after-readiness\n");
+    }
+}

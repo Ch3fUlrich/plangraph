@@ -276,7 +276,7 @@ fn run_attempt_inner(
     home.stage_harness_auth()?;
     let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
-    let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
+    let output_tail = pg_worker_core::redact::redacted_tail(&output, cfg.check_tail_lines, pg_worker_core::redact::MAX_TAIL_BYTES);
 
     // A cancel that arrived while the harness ran kills the agent, so nothing
     // it wrote is committed and the commit/confinement/check stages are
