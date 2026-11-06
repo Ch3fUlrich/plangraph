@@ -32,12 +32,16 @@ def test_missing_ranked_last_in_tier(as_list, monkeypatch):
                               family=family, roles=("review",), tier="subscription")
                       for i, family in enumerate(("gpt", "claude", "gemini")))
     monkeypatch.setattr("plangraph.planner.legs.DEFAULT_LEGS", reviewers)
+    # Input order must differ from ranked order to catch a review tiebreak
+    # that accidentally restores the original legs instead of the ranked legs.
     def review_plan(**kwargs):
         return routing.plan_spawn({"estimate_tokens": 1000}, role="review",
-                                  writer_families=("glm",), legs=reviewers,
+                                  writer_families=("glm",), legs=reviewers[::-1],
                                   leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
                                   **kwargs)
-    data = rows(reviewers[1:])
+    data = rows(reviewers[:0:-1])
+    # Unequal scores force ranking to reverse the measured input/row order.
+    data[reviewers[1].model]["aa_intelligence"] = 60
     p = review_plan(benchmark=list(data.values()) if as_list else data)
     assert p.gaps == ({"leg": reviewers[0].id, "model": reviewers[0].model,
                        "reason": "no benchmark row"},)
