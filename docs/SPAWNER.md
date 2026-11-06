@@ -386,5 +386,8 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 ---
 
 Continue with [review protocol, interfaces, and operations](spawner-operations.md).
+See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
+The served-model probe cache has a five-minute freshness bound,
+not a five-minute completion or delivery SLA; see the operations guide for details.
 
 Cross-host ps: see [site configuration and transport](spawner-ps.md).
