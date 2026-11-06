@@ -295,7 +295,7 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
 }
 
 #[test]
-fn review_artifacts_finish_read_error_without_evidence() {
+fn review_artifacts_switch_off_still_artifacts() {
     let state = std::env::temp_dir().join(new_run_id());
     let mut record = create(
         &state,
@@ -311,6 +311,7 @@ fn review_artifacts_finish_read_error_without_evidence() {
     record.set("live_log", json!(log));
     assert!(crate::review_artifacts::review_text(&state, &record.to_value()).is_err());
     finish(&mut record, Status::Completed, &json!({}));
+    assert!(!state.join("evidence").exists());
     assert_eq!(record.to_value()["evidence_unclassified_attempts"], 1);
     let seat = record.path().with_file_name("seat");
     assert!(std::fs::read_to_string(seat.join("review.txt"))

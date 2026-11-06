@@ -114,7 +114,7 @@ impl EvidenceStore {
         Ok((rows, end as u64))
     }
     pub fn append(&self, row: &EvidenceRow) -> Result<bool, EvidenceError> {
-        self.append_using(row, false)
+        self.append_using(row, true)
     }
     fn append_using(&self, row: &EvidenceRow, once: bool) -> Result<bool, EvidenceError> {
         if !self.enabled {

@@ -31,10 +31,33 @@ fn child_append() {
         for ts in 0..30 {
             store.append(&observation(ts)).unwrap();
         }
+        for kind in [
+            ObservationKind::OmniRouteParked,
+            ObservationKind::OmniRouteSeen,
+            ObservationKind::OmniRouteStale,
+        ] {
+            for phase in [Phase::First, Phase::Cleared] {
+                store
+                    .append(&EvidenceRow::Observation(ObservationRow {
+                        leg_key: "leg".into(),
+                        ts: 1,
+                        kind: kind.clone(),
+                        until: if kind == ObservationKind::OmniRouteParked {
+                            Some(120)
+                        } else {
+                            None
+                        },
+                        state: Some("parked".into()),
+                        first_seen: Some(1),
+                        phase: Some(phase),
+                    }))
+                    .unwrap();
+            }
+        }
     }
 }
 #[test]
-fn two_process_append_no_loss() {
+fn all_observation_keys_two_process_append_once() {
     let temp = Temp::new();
     let mut children = Vec::new();
     for _ in 0..2 {
@@ -56,7 +79,7 @@ fn two_process_append_no_loss() {
             .unwrap()
             .observations
             .len(),
-        30
+        34
     );
 }
 #[test]
@@ -110,4 +133,70 @@ fn switch_off_no_rows_records_remain() {
     let store = EvidenceStore::open(&state, false).unwrap();
     assert!(store.window(0, 10).unwrap().outcomes.is_empty());
     assert!(!state.exists());
+}
+fn outcome(ts: i64) -> EvidenceRow {
+    serde_json::from_value(serde_json::json!({"type":"outcome","row":{
+        "leg_key":"leg","route_key":"route","ts":ts,"role":"review",
+        "outcome":"OK","run_id":"run-test","attempt":0,
+        "duration_s":600,"reset_at":null,"reset_assumed":false,
+        "reset_clamped":false,"open_tools_at_kill":null,"s_eff_s":600,"line":""
+    }}))
+    .unwrap()
+}
+#[test]
+fn last_outcome_wins() {
+    let temp = Temp::new();
+    let store = EvidenceStore::open(&temp.0, true).unwrap();
+    store.append(&outcome(1)).unwrap();
+    store.append(&outcome(20)).unwrap();
+    assert!(store.window(0, 10).unwrap().outcomes.is_empty());
+    assert_eq!(store.window(10, 30).unwrap().outcomes[0].ts, 20);
+    assert!(store.append(&outcome(1)).unwrap());
+    assert_eq!(store.window(0, 10).unwrap().outcomes.len(), 1);
+}
+#[test]
+fn backfill_twice_no_duplicate() {
+    let temp = Temp::new();
+    let store = EvidenceStore::open(&temp.0, true).unwrap();
+    let EvidenceRow::Outcome(row) = outcome(1) else {
+        unreachable!()
+    };
+    let record = serde_json::json!({"attempts":[{"outcome":row}]});
+    assert_eq!(store.backfill(std::slice::from_ref(&record)).unwrap(), 1);
+    assert_eq!(store.backfill(&[record]).unwrap(), 0);
+    assert!(!store.append(&outcome(1)).unwrap());
+    assert_eq!(
+        fs::read_to_string(temp.0.join("evidence/rows.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+}
+#[test]
+fn window_separates_observations() {
+    let temp = Temp::new();
+    let store = EvidenceStore::open(&temp.0, true).unwrap();
+    store.append(&outcome(1)).unwrap();
+    store.append(&observation(1)).unwrap();
+    store.append(&observation(2)).unwrap();
+    let window = store.window(1, 2).unwrap();
+    assert_eq!(window.outcomes.len(), 1);
+    assert_eq!(window.observations.len(), 1);
+    assert_eq!(window.observations[0].ts, 1);
+}
+#[cfg(unix)]
+#[test]
+fn symlink_invalid_complete_line_refuse() {
+    let temp = Temp::new();
+    let store = EvidenceStore::open(&temp.0, true).unwrap();
+    let target = temp.0.join("target");
+    fs::write(&target, b"invalid\n").unwrap();
+    let rows = temp.0.join("evidence/rows.jsonl");
+    std::os::unix::fs::symlink(&target, &rows).unwrap();
+    assert!(store.append(&observation(1)).is_err());
+    fs::remove_file(&rows).unwrap();
+    fs::write(&rows, b"invalid\n").unwrap();
+    assert!(store.append(&observation(1)).is_err());
+    assert_eq!(fs::read(&rows).unwrap(), b"invalid\n");
 }
