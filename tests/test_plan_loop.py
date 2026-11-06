@@ -91,9 +91,15 @@ def test_b8_four_families_clean(tmp_path, capsys):
 
 def test_unwitnessed_accept_never_counts(tmp_path, capsys):
     directory = plan(tmp_path, capsys, 'standard')
+    ready(directory)
+    command(directory, capsys, 'round', '--kind', 'scope-cut',
+            spawn=lambda *a, **k: SimpleNamespace(returncode=0, stdout=json.dumps({
+                'status': 'completed', 'attempts': [{'stdout_tail': '```plan-review\n```\nVERDICT: ACCEPT'}]})))
     for family in ('gpt', 'qwen', 'glm'):
         chat(directory, capsys, family)
-    assert 'unwitnessed_accepts=deepseek' in chat(directory, capsys, 'deepseek', False)[1]
+    line = chat(directory, capsys, 'deepseek', False)[1]
+    assert line.startswith('OPEN ') and 'accepted=3/4' in line
+    assert 'unwitnessed_accepts=deepseek' in line
     path = directory / 'plan-loop.toml'
     path.write_text('allow_unwitnessed = true\n' + path.read_text())
     assert command(directory, capsys, 'status')[0] == 1

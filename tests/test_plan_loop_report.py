@@ -153,3 +153,27 @@ def test_report_unreadable_input(tmp_path, bad):
 
 def test_check_inside_checkout_refused():
     assert report.check_batch(".", "unused.yaml")[0] == 1
+
+
+def test_check_concurrent_edit_refused(plan, monkeypatch):
+    directory, batch = plan
+    original = report.apply_batch.load_batch
+    def load(path):
+        data = original(path)
+        path.write_text(path.read_text() + '\n')
+        return data
+    monkeypatch.setattr(report.apply_batch, 'load_batch', load)
+    assert report.check_batch(directory, batch) == (1, ['refused: batch changed during check'])
+    assert not (directory / 'batches.json').exists()
+
+
+@pytest.mark.parametrize('bad', ['missing', 'syntax', 'records'])
+def test_check_invalid_input_exit(plan, bad):
+    directory, batch = plan
+    if bad == 'missing':
+        batch.unlink()
+    elif bad == 'syntax':
+        batch.write_text('[')
+    else:
+        write_json(directory / 'batches.json', {})
+    assert report.check_batch(directory, batch) == (1, ['refused: unreadable or invalid check input'])

@@ -60,14 +60,15 @@ def test_record_chosen_leg_is_not_a_witness():
 
 
 @pytest.mark.parametrize('kind', ['confirm', 'r0'])
-def test_exact_argv(tmp_path, monkeypatch, kind):
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_exact_argv(tmp_path, monkeypatch, kind, dry_run):
     monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
     seen = {}
     def fake(argv, **kwargs):
         seen.update(argv=argv, **kwargs)
         return subprocess.CompletedProcess(argv, 0, json.dumps(record()))
     spawn.call_cli(tmp_path, kind, LEG, Bundle('secret text', 'sha', []), POLICY,
-                   seat_id='seat', spawn=fake)
+                   seat_id='seat', spawn=fake, dry_run=dry_run)
     role = 'fact-check' if kind == 'r0' else 'review'
     expected = [spawn.sys.executable, '-m', 'plangraph.spawner.cli', 'spawn',
                 '--role', role, '--leg', LEG.id, '--override-reason', 'plan-loop.toml exact leg']
@@ -75,6 +76,8 @@ def test_exact_argv(tmp_path, monkeypatch, kind):
         expected += ['--writer-family', POLICY.planner_family]
     expected += ['--prompt-file', 'seat.prompt.md', '--card', '@seat.card.json',
                  '--wait', str(POLICY.seat_max_min * 60), '--json']
+    if dry_run:
+        expected += ['--dry-run']
     assert seen['argv'] == expected
     assert seen['cwd'] == tmp_path
     assert 'PLANGRAPH_CONTEXT_STRICT' not in seen['env']

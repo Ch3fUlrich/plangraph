@@ -106,6 +106,47 @@ def test_round_records_yield_and_discovery_baseline(tmp_path, capsys):
     assert completed[0]['kind'] == 'discovery'
     assert completed[0]['counts'] == {'blocker': 0, 'major': 0, 'minor': 0}
     assert '--prompt-file' in calls[0][0]
+    assert json.loads((directory / 'ledger.json').read_text()) == []
+    exported = [json.loads(line) for line in (directory / 'yield.jsonl').read_text().splitlines()]
+    assert exported == records
+    assert set(('round kind lens family leg run_id sha from_sha witnessed witness_kind '
+                'verdict status reason counts new_classes seconds served_model served_family').split()) <= completed[0].keys()
+
+
+def test_kill_after_journal_repairs_exports(tmp_path, capsys):
+    directory = setup_plan(tmp_path, capsys)
+    script = '''
+import os, signal, sys
+from tools import plan_loop as cli
+directory = cli.Path(sys.argv[1])
+_, manifest, rows, yields, _ = cli.load(directory)
+parsed = cli.ledger.parse_reply('```plan-review\\nF1-1 | major | state | plan | defect | proof | repair\\n```\\nVERDICT: REQUEST_CHANGES')
+cli.ledger.ingest(rows, parsed, round=1, seat_id='s1', family='qwen', lens='state', sha=manifest['text_sha'])
+yields.append(dict(round=1, kind='confirm', lens='state', family='qwen', leg='example',
+    run_id='run-1', sha=manifest['text_sha'], from_sha=None, witnessed=True,
+    witness_kind='response', verdict='REQUEST_CHANGES', status='completed', reason='',
+    counts=dict(blocker=0, major=1, minor=0), new_classes=['state'], seconds=0))
+original = cli.ledger.atomic_json
+def write(path, value):
+    original(path, value)
+    if path.name == 'manifest.json':
+        os.kill(os.getpid(), signal.SIGKILL)
+cli.ledger.atomic_json = write
+cli.save(directory, manifest, rows, yields)
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(directory)], capture_output=True)
+    assert result.returncode == -9
+    journal = json.loads((directory / 'manifest.json').read_text())['driver_projection']
+    assert json.loads((directory / 'ledger.json').read_text()) != journal['ledger']
+    assert invoke(capsys, 'status', '--dir', str(directory))[0] == 1
+    assert json.loads((directory / 'ledger.json').read_text()) == journal['ledger']
+    assert [json.loads(s) for s in (directory / 'yield.jsonl').read_text().splitlines()] == journal['yields']
+    assert 'open=0/1' in invoke(capsys, 'status', '--dir', str(directory))[1]
+    code, line = invoke(capsys, 'check-batch', '--dir', str(directory), 'missing.yaml')
+    assert code == 1 and 'open=0/1' in line
+    fields = ('id seat_id round family lens severity class claim location evidence fix scope_plus '
+              'disposition disposition_evidence trigger sha_seen sha_fixed closed_by unverified sightings dup_of')
+    assert set(fields.split()) <= journal['ledger'][0].keys()
 
 
 def test_accepted_unknown_sha_refused(tmp_path, capsys):
@@ -148,3 +189,32 @@ def test_discovery_shared_failure_limit(tmp_path, capsys):
     assert len(calls) == 3
     assert capsys.readouterr().out.strip() == (
         'BLOCKED plan:sample | review-loop-stalled | options: wait for a family, *waive by D-row')
+
+
+def test_auth_waiver_refused(tmp_path, capsys):
+    directory = setup_plan(tmp_path, capsys)
+    _, manifest, rows, yields, _ = cli.load(directory)
+    manifest.update(stalled=True, tags=['auth'])
+    cli.save(directory, manifest, rows, yields)
+    assert invoke(capsys, 'waive', '--dir', str(directory), '--decision', 'D-123')[0] == 2
+    assert invoke(capsys, 'status', '--dir', str(directory)) == (1,
+        'BLOCKED plan:sample | review-loop-stalled | options: wait for a family, *waive by D-row')
+
+
+def test_unwitnessed_findings_exported_after_fake_round(tmp_path, capsys):
+    directory = setup_plan(tmp_path, capsys)
+    def spawn(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=json.dumps(dict(status='completed',
+            run_id='run-1', attempts=[dict(stdout_tail='```plan-review\nF1-1 | minor | state | plan | defect | proof | repair\n```\nVERDICT: ACCEPT')])) )
+    assert cli.main(['round', '--dir', str(directory), '--kind', 'confirm'], spawn=spawn) == 0
+    line = capsys.readouterr().out.strip()
+    rows = json.loads((directory / 'ledger.json').read_text())
+    yields = [json.loads(s) for s in (directory / 'yield.jsonl').read_text().splitlines()]
+    assert rows[0]['family'] == 'xiaomi' and rows[0]['claim'] == 'defect'
+    completed = [row for row in yields if row['status'] == 'completed']
+    assert len(completed) == 1
+    assert completed[0]['leg'] == 'mimo-v2.6-pro' and not completed[0]['witnessed']
+    assert 'accepted=0/4' in line and 'unwitnessed_accepts=xiaomi' in line
+    fields = ('id seat_id round family lens severity class claim location evidence fix scope_plus '
+              'disposition disposition_evidence trigger sha_seen sha_fixed closed_by unverified sightings dup_of')
+    assert set(fields.split()) <= rows[0].keys()

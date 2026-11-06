@@ -47,6 +47,12 @@ def save(directory, manifest, rows, yields):
     # Journal the projections first so interruption can be recovered on load.
     manifest['driver_projection'] = {'ledger': rows, 'yields': yields}
     ledger.atomic_json(directory / 'manifest.json', manifest)
+    exports = {'ledger.json': json.dumps(rows, indent=2) + '\n',
+               'yield.jsonl': ''.join(json.dumps(row) + '\n' for row in yields)}
+    for name, text in exports.items():
+        path = directory / name
+        if not path.exists() or path.read_text(encoding='utf-8') != text:
+            atomic_text(path, text)
 
 
 def load(directory):
