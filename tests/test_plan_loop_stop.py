@@ -33,6 +33,26 @@ def test_four_families_and_alias():
     assert evaluate(*args).state == "OPEN"
 
 
+def test_stacked_precedes_scope_cut():
+    rows, manifest, seats, policy = state()
+    seats[:] = [seat()]
+    assert evaluate(rows, manifest, seats, policy).next == 'stacked'
+
+
+def test_standard_questions_are_printed():
+    rows, manifest, seats, policy = state()
+    manifest['claims']['C1']['state'] = 'open-question'
+    seats.pop()
+    assert 'open_questions=C1' in evaluate(rows, manifest, seats, policy).line
+
+
+def test_revert_uses_latest_material_epoch():
+    rows, manifest, seats, policy = state()
+    manifest['history'] += [dict(sha='b', material=True), dict(sha='a', material=True)]
+    manifest['report']['sha'] = 'b'
+    assert evaluate(rows, manifest, seats, policy).state == 'OPEN'
+
+
 @pytest.mark.parametrize("change", ["open", "unclosed", "latest", "scope", "report", "size"])
 def test_each_condition(change):
     ledger, manifest, seats, policy = state()

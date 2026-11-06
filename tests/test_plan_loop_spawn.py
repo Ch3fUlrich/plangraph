@@ -52,6 +52,13 @@ def test_witnesses():
     assert spawn.read_record(data, LEG)['reason'] == 'served_family_mismatch'
 
 
+def test_record_chosen_leg_is_not_a_witness():
+    data = record()
+    data.update(served_family='unwitnessed', served_model='unwitnessed',
+                witness_kind='record-chosen-leg', request_side_model=LEG.model)
+    assert not spawn.read_record(data, LEG)['witnessed']
+
+
 @pytest.mark.parametrize('kind', ['confirm', 'r0'])
 def test_exact_argv(tmp_path, monkeypatch, kind):
     monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')

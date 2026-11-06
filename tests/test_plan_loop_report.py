@@ -11,17 +11,44 @@ def write_json(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+@pytest.mark.parametrize('change', ['tier', 'journal', 'claims', 'extension'])
+def test_batch_uses_driver_state(plan, change):
+    from tools import plan_loop as cli
+    directory, _ = plan
+    _, manifest, rows, yields, _ = cli.load(directory)
+    if change == 'tier':
+        manifest['tier'] = 'high'
+        yields[0].update(kind='stacked', lens='scope-cut')
+    elif change == 'journal':
+        rows.append(dict(severity='blocker', disposition='open'))
+    elif change == 'claims':
+        manifest['claims']['C1']['state'] = 'open-question'
+        manifest['tier'] = 'high'
+        (directory / 'r0').mkdir()
+        write_json(directory / 'r0/claims.json', {'C1': {'state': 'verified'}})
+    else:
+        yields[:] = [dict(yields[0], round=i, kind='stacked') for i in range(1, 7)]
+        manifest['extra_rounds'] = 2
+    cli.save(directory, manifest, rows, yields)
+    actual = report._state(directory)[0]
+    expected = cli.load(directory)[-1]
+    assert actual == expected
+    assert actual.state == 'OPEN'
+
+
 @pytest.fixture
 def plan(tmp_path):
     (tmp_path / "plan.md").write_text("A small plan.\n")
     manifest = ledger.freeze(tmp_path)
     sha = manifest["text_sha"]
-    manifest.update(plan_chars_r1=14, plan_chars=14,
+    manifest.update(slug='sample', tier='standard', tags=[], plan_chars_r1=14, plan_chars=14,
                     report={"sha": sha, "ok": True, "claims": ["C1"]},
                     claims={"C1": {"state": "verified"}})
     write_json(tmp_path / "manifest.json", manifest)
     write_json(tmp_path / "ledger.json", [])
-    (tmp_path / "plan-loop.toml").write_text('slug = "sample"\naccept_families = 1\n')
+    from pathlib import Path
+    policy = Path('tools/plan-loop.default.toml').read_text().replace('accept_families = 4', 'accept_families = 1')
+    (tmp_path / "plan-loop.toml").write_text(policy)
     seat = dict(round=1, kind="scope-cut", family="qwen", sha=sha,
                 status="completed", witnessed=True, verdict="ACCEPT",
                 counts={}, new_classes=[])

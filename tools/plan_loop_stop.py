@@ -72,7 +72,7 @@ def _claims(manifest, policy, material_sha, history):
         state = claim.get("state")
         if state == "false":
             fixed = claim.get("sha_fixed")
-            settled &= fixed in history and history.index(fixed) > history.index(report["sha"])
+            settled &= plan_loop_ledger.later(history, fixed, report["sha"], claim.get('history_index'))
         elif state == "open-question":
             questions.append(key)
             settled &= policy.get("tier", "standard") != "high"
@@ -96,10 +96,11 @@ def evaluate(ledger, manifest, seats, policy):
     rounds = round_count(seats)
     history_rows = manifest.get("history", [])
     history = [r["sha"] for r in history_rows]
-    current = history.index(sha)
+    current = plan_loop_ledger.position(history, sha)
     material_index = max((i for i in range(current + 1) if history_rows[i].get("material", True)), default=0)
     material_sha = history[material_index]
-    completed = [s for s in seats if _completed(s)]
+    completed = [s for s in seats if _completed(s) and
+                 s.get('history_index', next((i for i, value in enumerate(history) if value == s.get('sha')), -1)) >= material_index]
     valid_shas = {sha}
     pending_diff = False
     for i in range(current, material_index, -1):
@@ -131,8 +132,8 @@ def evaluate(ledger, manifest, seats, policy):
     quiet = bool(latest and _quiet(latest[-1]) and not latest[-1].get("new_classes"))
     if latest and latest[-1].get("kind") == "diff":
         quiet &= latest[-1].get("verdict") == "ACCEPT"
-    stacked = [s for s in completed if s.get("kind") == "stacked"]
-    scope = any(s.get("kind") == "scope-cut" for s in completed) or (
+    stacked = [s for s in seats if _completed(s) and s.get("kind") == "stacked"]
+    scope = any(_completed(s) and s.get("kind") == "scope-cut" for s in seats) or (
         policy.get("tier", "standard") == "standard" and bool(stacked) and stacked[-1].get("lens") == "scope-cut")
     claims_ok, questions = _claims(manifest, policy, material_sha, history)
     baseline = manifest.get("plan_chars_r1")
@@ -161,9 +162,11 @@ def evaluate(ledger, manifest, seats, policy):
     if reason:
         return Status("BLOCKED", f"BLOCKED plan:{slug} | {reason} | options: {options}", rounds, families)
     if clean:
-        return Status("CLEAN", f"CLEAN plan:{slug} manifest={sha} families={','.join(families)}", rounds, families, open_questions=questions)
-    next_kind = "diff" if pending_diff else "r0" if not claims_ok else "discovery" if not rounds else "scope-cut" if not scope else "confirm"
+        return Status("CLEAN", f"CLEAN plan:{slug} manifest={sha} families={','.join(families)}"
+                      + (f" open_questions={','.join(questions)}" if questions else ""), rounds, families, open_questions=questions)
+    next_kind = "diff" if pending_diff else "r0" if not claims_ok else "discovery" if not rounds else "stacked" if not stacked else "scope-cut" if not scope else "confirm"
     line = (f"OPEN plan:{slug} round={rounds} open={blockers}/{majors} unverified={unverified} "
             f"accepted={len(families)}/{policy.get('accept_families', 4)} "
-            f"unwitnessed_accepts={','.join(unwitnessed)} operator_chat={','.join(operator)} next={next_kind}")
+             f"unwitnessed_accepts={','.join(unwitnessed)} operator_chat={','.join(operator)} next={next_kind}"
+             + (f" open_questions={','.join(questions)}" if questions else ""))
     return Status("OPEN", line, rounds, families, next_kind, questions)

@@ -88,7 +88,54 @@ def test_dispositions_and_minor_freeze(directory):
     ledger.close_accepted(rows, second, [{"status": "completed", "witnessed": True, "sha": second["text_sha"], "run_id": "run"}])
     assert rows[0]["closed_by"] == "run"
     assert second["history"][-1]["material"] is False
-    assert json.loads((directory / "ledger.json").read_text())[0]["disposition"] == "accepted"
+    assert second["driver_projection"]["ledger"][0]["disposition"] == "accepted"
+
+
+def test_alias_is_not_independent():
+    rows = []
+    ledger.ingest(rows, ledger.parse_reply(reply("F1-1 | blocker | state | p | claim | proof | fix")),
+                  round=1, seat_id="s", family="qwen", lens="", sha="a")
+    with pytest.raises(ValueError):
+        ledger.dispose(rows, rows[0]['id'], 'rejected', {'history': [{'sha': 'a'}]},
+                       disposition_evidence='proof', planner_family='gpt', third_party='r',
+                       seats=[dict(run_id='r', family='openai', status='completed')])
+
+
+def test_revert_fix_uses_later_occurrence():
+    rows = []
+    ledger.ingest(rows, ledger.parse_reply(reply("F1-1 | minor | state | p | claim | proof | fix")),
+                  round=1, seat_id="s", family="qwen", lens="", sha="a")
+    manifest = dict(history=[{'sha': s} for s in ('a', 'b', 'a')], text_sha='a')
+    ledger.dispose(rows, rows[0]['id'], 'accepted', manifest, sha_fixed='a')
+    assert rows[0]['disposition'] == 'accepted'
+
+
+def test_high_fact_check_survives_minor():
+    rows = []
+    ledger.ingest(rows, ledger.parse_reply(reply("F1-1 | major | state | p | claim | UNVERIFIED | fix")),
+                  round=1, seat_id="s", family="qwen", lens="", sha="a")
+    manifest = dict(history=[{'sha': 'a', 'material': True}, {'sha': 'b', 'material': False}], text_sha='b')
+    ledger.dispose(rows, rows[0]['id'], 'rejected', manifest, tier='high',
+                   disposition_evidence='proof', fact_check='C1',
+                   claims={'C1': {'sha': 'a', 'state': 'verified'}})
+
+
+def test_minor_commit_has_one_replace(directory, monkeypatch):
+    first = ledger.freeze(directory)
+    rows = []
+    ledger.ingest(rows, ledger.parse_reply(reply('F1-1 | minor | state | p | claim | proof | fix')),
+                  round=1, seat_id='s', family='qwen', lens='', sha=first['text_sha'])
+    (directory / 'plan.md').write_text('Small fix\n')
+    calls = []
+    original = ledger.os.replace
+    def replace(source, target):
+        calls.append(Path(target).name)
+        original(source, target)
+    monkeypatch.setattr(ledger.os, 'replace', replace)
+    ledger.freeze(directory, minor=True, fixes=[rows[0]['id']], rows=rows)
+    assert calls == ['manifest.json']
+    recovered = json.loads((directory / 'manifest.json').read_text())
+    assert recovered['driver_projection']['ledger'][0]['sha_fixed'] == recovered['text_sha']
 
 
 def test_dispose_guards():

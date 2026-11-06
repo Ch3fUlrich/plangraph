@@ -55,6 +55,14 @@ def test_registry_contributor_is_stricter(monkeypatch):
         seats.load_policy(DEFAULT)
 
 
+def test_registry_training_is_stricter(monkeypatch):
+    monkeypatch.setattr(seats, 'DEFAULT_LEGS', tuple(
+        replace(item, trains_on_data=True) if item.id == 'mimo-v2.6-pro'
+        else item for item in seats.DEFAULT_LEGS))
+    with pytest.raises(ValueError, match='training'):
+        seats.load_policy(DEFAULT)
+
+
 def test_ladder_and_exemptions():
     p = seats.load_policy(DEFAULT)
     state = seats.State(level=3, slug="sample")

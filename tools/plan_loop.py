@@ -47,8 +47,6 @@ def save(directory, manifest, rows, yields):
     # Journal the projections first so interruption can be recovered on load.
     manifest['driver_projection'] = {'ledger': rows, 'yields': yields}
     ledger.atomic_json(directory / 'manifest.json', manifest)
-    ledger.atomic_json(directory / 'ledger.json', rows)
-    atomic_text(directory / 'yield.jsonl', ''.join(json.dumps(r) + '\n' for r in yields))
 
 
 def load(directory):
@@ -73,16 +71,17 @@ def record_report(directory, manifest, text):
     target = directory / 'r0'
     target.mkdir(exist_ok=True)
     atomic_text(target / 'report.md', text)
-    claims = {c.id: dict(asdict(c), original_state=c.state, sha=manifest['text_sha']) for c in report.claims}
+    claims = {c.id: dict(asdict(c), original_state=c.state, sha=manifest['text_sha'], history_index=len(manifest['history']) - 1) for c in report.claims}
     manifest.update(report={'sha': manifest['text_sha'], 'ok': report.ok, 'claims': list(claims)}, claims=claims)
-    ledger.atomic_json(target / 'claims.json', claims)
     return report.ok
 
 
 def drive(args, directory, policy, manifest, rows, yields, status, spawn):
     ledger.require_frozen(directory)
-    if manifest.get('capped') or status.state in {'BLOCKED', 'WAIVED', 'CLEAN'}:
+    if manifest.get('capped') or status.state in {'WAIVED', 'CLEAN'}:
         raise ValueError('review is not OPEN')
+    manifest.pop('stalled', None)
+    manifest.pop('ladder_exhausted', None)
     if any(r['severity'] in {'blocker', 'major'} and r['disposition'] == 'open' for r in rows):
         raise ValueError('dispose blocker and major findings before another round')
     kind = 'r0' if args.verb == 'r0' else args.kind
@@ -176,11 +175,12 @@ def drive(args, directory, policy, manifest, rows, yields, status, spawn):
         for seat in result['seats']:
             seat_id = f's{len(yields) + 1}'
             parsed = {k: seat.get(k) for k in ('status', 'findings')}
-            classes = ledger.ingest(rows, parsed, round=number, seat_id=seat_id, family=seat['family'], lens=lens, sha=manifest['text_sha'])
+            classes = ledger.ingest(rows, parsed, round=number, seat_id=seat_id, family=seat['family'], lens=lens, sha=manifest['text_sha'], history_index=len(manifest['history']) - 1)
             counts = {severity: sum(f['severity'] == severity for f in seat.get('findings', [])) for severity in ('blocker', 'major', 'minor')}
             row = {k: v for k, v in seat.items() if k not in {'report', 'reply', 'findings'}}
             row.update(round=number, kind=kind, lens=lens, sha=manifest['text_sha'], from_sha=previous if kind == 'diff' else None,
-                       counts=counts, new_classes=classes, seconds=time.monotonic() - started)
+                       counts=counts, new_classes=classes, seconds=time.monotonic() - started,
+                       history_index=len(manifest['history']) - 1)
             yields.append(row)
             if seat['status'] == 'completed':
                 state.use(seat['family'])
@@ -296,10 +296,9 @@ def main(argv=None, *, spawn=subprocess.run):
             if args.disposition in {'verified', 'not-load-bearing'} and not args.evidence:
                 raise ValueError('claim evidence required')
             history = [h['sha'] for h in manifest['history']]
-            if args.disposition == 'false' and (args.sha_fixed not in history or history.index(args.sha_fixed) <= history.index(claim['sha'])):
+            if args.disposition == 'false' and not ledger.later(history, args.sha_fixed, claim['sha'], claim.get('history_index')):
                 raise ValueError('claim fix needs a later freeze')
             claim.update(state=args.disposition, evidence=args.evidence, sha_fixed=args.sha_fixed)
-            ledger.atomic_json(directory / 'r0/claims.json', manifest['claims'])
         elif args.verb == 'escalate':
             if not any(r['id'] == args.finding and r['severity'] == 'blocker' for r in rows):
                 raise ValueError('escalation needs a blocker')
@@ -313,8 +312,9 @@ def main(argv=None, *, spawn=subprocess.run):
             if parsed['status'] != 'completed':
                 raise ValueError('invalid review')
             number = max((s['round'] for s in yields), default=0) + 1
-            classes = ledger.ingest(rows, parsed, round=number, seat_id=f'chat{len(yields)}', family=args.family, lens='', sha=args.sha)
+            classes = ledger.ingest(rows, parsed, round=number, seat_id=f'chat{len(yields)}', family=args.family, lens='', sha=args.sha, history_index=len(manifest['history']) - 1)
             yields.append(dict(round=number, kind='operator-chat', lens='', family=args.family, leg='', run_id=f'chat{len(yields)}', sha=args.sha,
+                               history_index=len(manifest['history']) - 1,
                                witnessed=bool(args.decision), witness_kind='operator-chat', decision=args.decision or '', decision_by='operator',
                                verdict=parsed['verdict'], status='completed', reason='', new_classes=classes, seconds=0,
                                counts={s: sum(f['severity'] == s for f in parsed['findings']) for s in ('blocker', 'major', 'minor')}))

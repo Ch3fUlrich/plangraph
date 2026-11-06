@@ -106,3 +106,10 @@ def test_report_and_unverified_head(state):
     state.ledger = [dict(claim="check this", evidence="UNVERIFIED", severity="major")]
     assert "check this" in build("r0", Leg(10000), state).text
     assert "settled report" in build("discovery", Leg(10000), state).text
+
+
+def test_escalated_bundle_keeps_past_fixes(state):
+    state.ledger = [dict(id='R1.s.1', severity='major', disposition='accepted',
+                         claim='past defect', fix='past repair', sha_fixed='a')]
+    text = build('stacked', Leg(10000), state).text
+    assert 'past defect' in text and 'past repair' in text

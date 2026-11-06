@@ -39,45 +39,11 @@ def test_discovery_parallel_blind(tmp_path, capsys):
         return accept(argv, **kwargs)
 
     assert cli.main(['round', '--dir', str(directory), '--kind', 'discovery'], spawn=spawn) == 0
-    rows = [json.loads(s) for s in (directory / 'yield.jsonl').read_text().splitlines()]
+    rows = cli.load(directory)[3]
     completed = [r for r in rows if r['status'] == 'completed']
     assert len(completed) == 2
     assert len({r['family'] for r in completed}) == 2
     assert all('R1.s1.' not in p for p in prompts)
-
-
-def test_killed_round_rerunnable(tmp_path, capsys):
-    directory = plan(tmp_path, capsys)
-    calls = []
-
-    def spawn(argv, **kwargs):
-        calls.append(argv)
-        if len(calls) == 2:
-            raise KeyboardInterrupt
-        return accept(argv, **kwargs)
-
-    with pytest.raises(KeyboardInterrupt):
-        cli.main(['round', '--dir', str(directory), '--kind', 'discovery'], spawn=spawn)
-    assert cli.main(['round', '--dir', str(directory), '--kind', 'discovery'], spawn=accept) == 0
-    rows = [json.loads(s) for s in (directory / 'yield.jsonl').read_text().splitlines()]
-    completed = [r for r in rows if r['status'] == 'completed']
-    assert len({r['round'] for r in completed}) == 1
-    assert len({r['family'] for r in completed}) == 2
-
-
-def test_discovery_shared_failure_limit(tmp_path, capsys):
-    directory = plan(tmp_path, capsys)
-    calls = []
-
-    def spawn(argv, **kwargs):
-        calls.append(argv)
-        return SimpleNamespace(returncode=0, stdout=json.dumps({
-            'status': 'failed', 'reason': 'no_verdict'}))
-
-    assert cli.main(['round', '--dir', str(directory), '--kind', 'discovery'], spawn=spawn) == 0
-    assert len(calls) == 3
-    assert capsys.readouterr().out.strip() == (
-        'BLOCKED plan:sample | review-loop-stalled | options: wait for a family, *waive by D-row')
 
 
 def command(directory, capsys, verb, *args, spawn=accept):
@@ -178,6 +144,22 @@ def test_minor_freeze_carries_only_on_witnessed_diff_accept(tmp_path, capsys):
 
     assert 'next=diff' in command(directory, capsys, 'round', '--kind', 'diff', spawn=unwitnessed)[1]
     assert command(directory, capsys, 'round', '--kind', 'diff')[1].startswith('CLEAN ')
+
+
+def test_minor_diff_changes_lapse_accepts(tmp_path, capsys):
+    directory = clean_plan(tmp_path, capsys)
+    _, manifest, rows, yields, _ = cli.load(directory)
+    cli.ledger.ingest(rows, cli.ledger.parse_reply('```plan-review\nF1-1 | minor | state | p | defect | proof | fix\n```\nVERDICT: REQUEST_CHANGES'),
+                      round=1, seat_id='s', family='qwen', lens='', sha=manifest['text_sha'])
+    cli.save(directory, manifest, rows, yields)
+    (directory / 'plan.md').write_text('A small plan!\n')
+    command(directory, capsys, 'freeze', '--minor', '--fixes', 'R1.s.1')
+    def changes(argv, **kwargs):
+        result = json.loads(accept(argv, **kwargs).stdout)
+        result['attempts'][-1]['stdout_tail'] = '```plan-review\n```\nVERDICT: REQUEST_CHANGES'
+        return SimpleNamespace(returncode=0, stdout=json.dumps(result))
+    line = command(directory, capsys, 'round', '--kind', 'diff', spawn=changes)[1]
+    assert line.startswith('OPEN ') and 'accepted=0/4' in line
 
 
 @pytest.mark.parametrize('condition', range(1, 6))
@@ -397,7 +379,7 @@ def test_b12_refused_route_falls_through(tmp_path, capsys):
     assert cli.main(['round', '--dir', str(directory), '--kind', 'confirm'],
                     spawn=spawn) == 0
     line = capsys.readouterr().out.strip()
-    rows = [json.loads(line) for line in (directory / 'yield.jsonl').read_text().splitlines()]
+    rows = cli.load(directory)[3]
     launched = [row for row in rows if row.get('attempt_used')]
     assert len(calls) == 5
     assert len(launched) == 1

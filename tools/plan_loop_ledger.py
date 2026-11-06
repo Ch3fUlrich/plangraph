@@ -12,6 +12,18 @@ import subprocess
 import tempfile
 
 from plangraph.review.verdict import judge
+from plangraph.planner.seats import seat_family
+
+
+def position(history, sha):
+    return max(i for i, value in enumerate(history) if value == sha)
+
+
+def later(history, fixed, seen, seen_index=None):
+    if fixed not in history or seen not in history:
+        return False
+    origin = seen_index if seen_index is not None else next(i for i, s in enumerate(history) if s == seen)
+    return position(history, fixed) > origin
 
 
 def validate_directory(directory):
@@ -105,13 +117,11 @@ def freeze(directory, *, minor=False, fixes=(), rows=None, minor_max_chars=2000,
         projection = copy.deepcopy(rows)
         for row in projection:
             if row["id"] in fixes:
-                row.update(disposition="accepted", sha_fixed=sha, closed_by="")
-        result["ledger_projection"] = projection
+                row.update(disposition="accepted", sha_fixed=sha, closed_by="", sha_fixed_index=len(result['history']) - 1)
+        result["driver_projection"] = dict(old.get("driver_projection", {"yields": []}), ledger=projection)
     atomic_json(path, result)
-    if minor:
-        atomic_json(directory / "ledger.json", projection)
     for row in selected:
-        row.update(disposition="accepted", sha_fixed=sha, closed_by="")
+        row.update(disposition="accepted", sha_fixed=sha, closed_by="", sha_fixed_index=len(result['history']) - 1)
     return result
 
 
@@ -157,7 +167,7 @@ def parse_record(record):
     return parse_reply((attempts[-1].get("stdout_tail") or "") if attempts else "")
 
 
-def ingest(rows, parsed, *, round, seat_id, family, lens, sha):
+def ingest(rows, parsed, *, round, seat_id, family, lens, sha, history_index=None):
     if parsed["status"] != "completed":
         return []
     known = {row["class"] for row in rows}
@@ -169,7 +179,9 @@ def ingest(rows, parsed, *, round, seat_id, family, lens, sha):
             raise ValueError("duplicate finding id")
         row = dict(finding, id=key, seat_id=seat_id, round=round, family=family, lens=lens,
                    disposition="open", disposition_evidence="", trigger="", sha_seen=sha,
-                   sha_fixed="", closed_by="", sightings=1, dup_of="")
+                    sha_fixed="", closed_by="", sightings=1, dup_of="")
+        if history_index is not None:
+            row['sha_seen_index'] = history_index
         if row["class"] not in known:
             new.append(row["class"])
             known.add(row["class"])
@@ -195,7 +207,8 @@ def dispose(rows, finding_id, disposition, manifest, *, sha_fixed="", dispositio
     history = [entry["sha"] for entry in manifest["history"]]
     if tier == "high" and row["unverified"] and row["severity"] in {"blocker", "major"}:
         claim = (claims or {}).get(fact_check, {})
-        if claim.get("sha") != manifest["text_sha"] or claim.get("state") not in {"verified", "false"}:
+        material_sha = next((h['sha'] for h in reversed(manifest['history']) if h.get('material', True)), manifest['text_sha'])
+        if claim.get("sha") != material_sha or claim.get("state") not in {"verified", "false"}:
             raise ValueError("current fact check required")
     if dup_of:
         target = next(r for r in rows if r["id"] == dup_of)
@@ -205,14 +218,15 @@ def dispose(rows, finding_id, disposition, manifest, *, sha_fixed="", dispositio
         row["dup_of"] = dup_of
         return row
     if disposition == "accepted":
-        if sha_fixed not in history or row["sha_seen"] not in history or history.index(sha_fixed) <= history.index(row["sha_seen"]):
+        if not later(history, sha_fixed, row["sha_seen"], row.get('sha_seen_index')):
             raise ValueError("accepted fix needs a newer frozen sha")
+        row['sha_fixed_index'] = position(history, sha_fixed)
     elif disposition == "rejected":
         if not disposition_evidence:
             raise ValueError("rejection needs evidence")
         if row["severity"] == "blocker" and not row["unverified"]:
             if not planner_family or not any(s.get("run_id") == third_party and s.get("status") == "completed"
-                                            and s.get("family") != planner_family for s in seats):
+                                             and seat_family(s.get("family")) != seat_family(planner_family) for s in seats):
                 raise ValueError("verified blocker needs independent review")
     elif disposition == "deferred":
         if not trigger:
@@ -230,6 +244,7 @@ def close_accepted(rows, manifest, seats):
             continue
         for seat in seats:
             if (seat.get("status") == "completed" and seat.get("witnessed") and seat.get("sha") in history
-                    and history.index(seat["sha"]) >= history.index(row["sha_fixed"])):
+                    and seat.get('history_index', next(i for i, s in enumerate(history) if s == seat['sha']))
+                    >= row.get('sha_fixed_index', position(history, row["sha_fixed"]))):
                 row["closed_by"] = seat["run_id"]
                 break

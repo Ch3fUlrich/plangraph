@@ -41,19 +41,10 @@ def _records(path):
 
 
 def _state(directory):
-    manifest = ledger.require_frozen(directory)
-    policy = tomllib.loads((directory / "plan-loop.toml").read_text(encoding="utf-8"))
-    rows = _json(directory / "ledger.json")
-    seats = [json.loads(line) for line in
-             (directory / "yield.jsonl").read_text(encoding="utf-8").splitlines()
-             if line.strip()]
-    # Stop evaluation expects the driver-normalized report and claims. Support
-    # on-disk claim dispositions too, without reinterpreting report text here.
-    claims = directory / "r0" / "claims.json"
-    if claims.exists():
-        manifest["claims"] = _json(claims)
-    manifest["plan_chars"] = len((directory / "plan.md").read_text(encoding="utf-8"))
-    return stop.evaluate(rows, manifest, seats, policy), manifest
+    from tools.plan_loop import load
+    ledger.require_frozen(directory)
+    _, manifest, _, _, status = load(directory)
+    return status, manifest
 
 
 def _op_keys(ops):
