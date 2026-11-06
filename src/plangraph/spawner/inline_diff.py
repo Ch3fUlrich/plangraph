@@ -19,6 +19,10 @@ FOOTER = "\n=== END INLINE DIFF ===\n"
 class InlineDiffError(Exception):
     """The diff could not be produced or does not fit the leg."""
 
+    def __init__(self, message, *, chars=None, max_chars=None):
+        super().__init__(message)
+        self.chars, self.max_chars = chars, max_chars
+
 
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
                        allow_document: bool = False) -> str:
@@ -48,5 +52,6 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     if not proc.stdout.strip():
         raise InlineDiffError("empty diff")
     if len(proc.stdout) > max_chars:
-        raise InlineDiffError(f"diff too large for leg: {len(proc.stdout)} > {max_chars} chars")
+        raise InlineDiffError(f"diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
+                              chars=len(proc.stdout), max_chars=max_chars)
     return prompt + HEADER.format(base=base, head=head) + proc.stdout + FOOTER

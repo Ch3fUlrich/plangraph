@@ -9,8 +9,15 @@ import asyncio
 from dataclasses import replace
 import json
 import os
-import re
 import uuid
+
+
+def _refuse_oversized_diff(exc, leg):
+    from .context_pack import PromptBoundError
+    if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1' and exc.chars is not None:
+        raise PromptBoundError(
+            f'inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
+            f'max_request_tokens {leg.max_request_tokens}') from None
 
 
 class SeatSpawnMixin:
@@ -40,13 +47,8 @@ class SeatSpawnMixin:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
                                             allow_document=document_review)
             except InlineDiffError as exc:
-                size = re.fullmatch(r'diff too large for leg: (\d+) > (\d+) chars', str(exc))
-                if os.environ.get('PLANGRAPH_CONTEXT_STRICT') != '1' or size is None:
-                    raise
-                chars = int(size[1])
-                raise context_pack.PromptBoundError(
-                    f'inline_diff_oversized: chars {chars} estimated_tokens {(chars + 2) // 3} '
-                    f'max_request_tokens {leg.max_request_tokens}') from None
+                _refuse_oversized_diff(exc, leg)
+                raise
         return prompt
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,

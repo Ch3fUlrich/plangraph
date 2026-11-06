@@ -260,3 +260,41 @@ def test_launch_maps_real_oversized_diff_refusal(review_payload, monkeypatch):
     assert exc.value.kind == 'inline_diff_failed'
     assert str(exc.value) == (
         'inline_diff_oversized: chars 1200 estimated_tokens 400 max_request_tokens 200')
+
+
+@pytest.mark.parametrize('tool_mode', ['tools', 'inline-only'])
+@pytest.mark.parametrize('extra', [0, 1])
+def test_strict_assembled_boundary(review_payload, monkeypatch, tool_mode, extra):
+    root, seat, card, framing = review_payload
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
+    leg = SimpleNamespace(tool_mode=tool_mode, max_request_tokens=200)
+    prompt = 'x' * (600 - (len(framing) if tool_mode == 'inline-only' else 0) + extra)
+    calls = []
+    if extra:
+        with pytest.raises(cp.PromptBoundError, match='^inline_prompt_oversized: chars 601 '):
+            dispatch(seat, root, prompt, card, leg, calls, role='review')
+        assert calls == []
+    else:
+        dispatch(seat, root, prompt, card, leg, calls, role='review')
+        assert calls == [prompt + (framing if tool_mode == 'inline-only' else '')]
+
+
+def test_structured_diff_refusal_ignores_wording(review_payload, monkeypatch):
+    from plangraph.spawner import inline_diff
+    root, seat, card, _ = review_payload
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
+    original = inline_diff.InlineDiffError.__init__
+
+    def reword(self, message, **sizes):
+        original(self, 'private changed diagnostic' if sizes else message, **sizes)
+
+    monkeypatch.setattr(inline_diff.InlineDiffError, '__init__', reword)
+    monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, stdout='d' * 601, stderr=''))
+    calls = []
+    with pytest.raises(cp.PromptBoundError) as exc:
+        dispatch(seat, root, 'tiny', card, SimpleNamespace(
+            tool_mode='inline-only', max_request_tokens=200), calls, role='review')
+    assert calls == []
+    assert str(exc.value) == (
+        'inline_diff_oversized: chars 601 estimated_tokens 201 max_request_tokens 200')
