@@ -142,6 +142,21 @@ def _verify_messages_chain(conn) -> list[dict]:
     return problems
 
 
+def _verify_table(src, conn, table):
+    """Compare every copied value, not just counts (including the rule ledger)."""
+    cols, order = _columns(src, table)
+    columns = ','.join(f'"{c}"' for c in cols)
+    ordering = ','.join(f'"{c}"' for c in order)
+    sql = f'SELECT {columns} FROM "{table}" ORDER BY {ordering}'
+    source, target = src.execute(sql), conn.execute(sql)
+    while True:
+        want, have = source.fetchmany(_BATCH), target.fetchmany(_BATCH)
+        if [tuple(r) for r in want] != [tuple(r) for r in have]:
+            raise CopyError(f'copied table {table} differs between source and target')
+        if not want:
+            return
+
+
 def _triggers(conn, tables, enable):
     """User triggers (the key-lock guards) would refuse the copy: events are loaded before
     the items/evidence they lock.  Toggled inside the copy transaction only (DDL is
@@ -191,6 +206,8 @@ def _apply(src, tables, source_counts, source_head, cfg_db, opts):
                 raise CopyError("row counts differ between source and target: "
                                 + ", ".join(t for t in tables
                                             if target_counts[t] != source_counts[t]))
+            for table in tables:
+                _verify_table(src, conn, table)
             if _head(conn) != source_head:
                 raise CopyError("events chain head differs between source and target")
             if events.verify_chain(conn):

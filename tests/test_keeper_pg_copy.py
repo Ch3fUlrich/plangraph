@@ -39,6 +39,8 @@ def source(tmp_path):
         raw.execute('INSERT INTO placement_rule_revision VALUES (1,7)')
         raw.execute("INSERT INTO placement_rule_values VALUES ('fleet','','key','9')")
         raw.execute("INSERT INTO placement_rule_audit VALUES (7,'actor','{}',NULL,'now')")
+    raw.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    raw.close()
     return w.path
 
 
@@ -72,6 +74,25 @@ def test_copy_includes_placement_tables(tmp_path):
         raw.execute('INSERT INTO unexpected VALUES(1)')
     with pytest.raises(copy_to_pg.CopyError, match="does not know: unexpected"):
         copy_to_pg._open_source(path)
+
+
+@pytest.mark.parametrize('table', RULE_TABLES)
+def test_copy_verification_rejects_changed_values(source, table):
+    src, _ = copy_to_pg._open_source(source)
+    target = sqlite3.connect(':memory:')
+    try:
+        src.backup(target)
+        copy_to_pg._verify_table(src, target, table)
+        if table == 'placement_rule_audit':
+            target.execute('DROP TRIGGER trg_placement_rule_audit_no_update')
+        column = {'placement_rule_revision': 'revision', 'placement_rule_values': 'value',
+                  'placement_rule_audit': 'actor'}[table]
+        target.execute(f'UPDATE {table} SET {column}=?', (8 if column == 'revision' else 'changed',))
+        with pytest.raises(copy_to_pg.CopyError, match=f'copied table {table} differs'):
+            copy_to_pg._verify_table(src, target, table)
+    finally:
+        src.close()
+        target.close()
 
 
 def raw_counts(path):
