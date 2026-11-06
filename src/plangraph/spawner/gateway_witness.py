@@ -19,6 +19,7 @@ import urllib.request
 SESSION_HEADER = 'x-omniroute-session-id'
 TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
+PROVIDER_ALIASES = {'xiaomi-mimo': 'mimo'}   # the gateway names the connection xiaomi-mimo
 WITNESS_KIND = 'response-side-gateway-call-log'
 
 
@@ -97,7 +98,8 @@ def _gateway_mimo(env):
                 endpoints.append(options['baseURL'])
     def normalize(value):
         return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
-    return bool(endpoints) and all(normalize(e) == normalize(gateway) for e in endpoints)
+    # No baseURL means the template default, which the gateway serves; only a different one is direct.
+    return all(normalize(e) == normalize(gateway) for e in endpoints)
 
 
 def served_models(rows, tag):
@@ -113,6 +115,7 @@ def served_models(rows, tag):
         model = str(row.get('model') or '').strip()
         if ok and model:
             provider = str(row.get('provider') or '').strip()
+            provider = PROVIDER_ALIASES.get(provider, provider)
             served.add(model if '/' in model or not provider else f'{provider}/{model}')
     return served
 
