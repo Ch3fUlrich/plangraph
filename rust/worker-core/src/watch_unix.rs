@@ -7,12 +7,10 @@ use std::{
     process::{Command, ExitStatus},
 };
 
-#[cfg_attr(not(test), allow(dead_code))] // Stdin delivery awaits the RL12 supervisor slice.
 pub(super) struct Writer {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<io::Result<()>>>,
 }
-#[cfg_attr(not(test), allow(dead_code))] // Stdin teardown awaits the RL12 supervisor slice.
 impl Writer {
     pub(super) fn finish(mut self) -> io::Result<()> {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -31,7 +29,6 @@ impl Drop for Writer {
         }
     }
 }
-#[cfg_attr(not(test), allow(dead_code))] // Stdin delivery awaits the RL12 supervisor slice.
 pub(super) fn stdin_writer(mut pipe: std::process::ChildStdin, input: &[u8]) -> io::Result<Writer> {
     use std::{
         io::Write,
@@ -110,6 +107,8 @@ impl Child for UnixChild {
         self.signal(libc::SIGKILL)
     }
     fn empty(&mut self) -> io::Result<bool> {
+        #[cfg(test)]
+        PROBES.with(|n| n.set(n.get() + 1));
         // Continuous ownership survives leader reaping; never revive an absent group.
         self.gone = self.gone || group_empty(self.pgid)?;
         Ok(self.gone)
@@ -125,4 +124,9 @@ pub(super) fn group_empty(pgid: i32) -> io::Result<bool> {
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(true),
         Err(e) => Err(e),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
