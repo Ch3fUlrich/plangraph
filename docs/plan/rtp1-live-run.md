@@ -68,3 +68,26 @@ options before it can reach the cluster (live gap).
 ## Pass criteria
 Same asserts as locally, plus: no `unknown_shape` alarm, `answer_question` reports signal status
 `sent`, the card outcome is `done` (detail `merged`), and the projector watermark is current.
+
+## Pilot step A
+
+Run `python3 tools/pilot_preflight.py preflight` on dell before starting the pilot.
+An unset or empty `PLANGRAPH_TEMPORAL_HTTP` is a refusal: the stub leg must not
+merge until the keeper has this setting. All required worker settings above,
+plus `PG_CARD_ALLOWLIST` (absolute existing UTF-8 file), must be present.
+Use `python3 tools/pilot_preflight.py setup-repo /persistent/pilot-a` to create
+an isolated main-branch repository with only `check.sh`, no remote, and a sibling
+`pilot-a.cards.allow` containing exactly `pilot:PILOT-1` and `pilot:PILOT-2`.
+The allowlist is one card key per line; blank lines and `#` comments are allowed.
+Set `PG_CARD_ALLOWLIST` to that sibling path; never use production cards.
+
+Run `python3 tools/pilot_preflight.py verify --temporal-db /persistent/temporal.db
+--jail-bin /absolute/pg-jail --repo /persistent/pilot-a` (one shell command).
+If `PG_TOKEN_FILE` is set, it must name a regular file with mode 0600.
+Pins accept exact version output or `name version`; subprocess output is never
+printed. `rust/pg-jail/src/main.rs:19–33` has no `--help` branch, so the jail
+check asserts a regular executable only; it does not prove sandbox enforcement.
+Record all command output and exit codes in dell run evidence, along with the
+isolated two-card run. Do not claim a live pass from hermetic tests: persistence,
+auth, jail, pins and checks must each be OK on dell. Live dell evidence is not
+yet recorded by this step's implementation.

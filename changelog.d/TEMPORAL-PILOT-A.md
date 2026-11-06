@@ -1,0 +1,1 @@
+- **TEMPORAL-PILOT-A:** Add fail-closed pilot preflight, isolated repository/card setup and redacted persistence, auth, jail, pin and check verification.
