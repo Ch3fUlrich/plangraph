@@ -1,4 +1,4 @@
-"""Offline guard for retrying workflow curl downloads."""
+"""Offline guard for retrying workflow curl downloads (7f96931 already complies)."""
 from pathlib import Path
 import shlex
 
@@ -42,6 +42,8 @@ def downloads(text):
                         output = any(
                             t in {"-o", "-O", "--output", "--remote-name"}
                             or t.startswith(("--output=", "-o"))
+                            or (t.startswith('-') and not t.startswith('--')
+                                and any(c in t[1:] for c in 'oO'))
                             for t in command[1:]
                         )
                         redirect = any(
@@ -66,7 +68,7 @@ def assert_retries(text, source):
             for i, token in enumerate(command) if token == "--retry"
         ]
         counts += [t.partition("=")[2] for t in command if t.startswith("--retry=")]
-        assert counts and all(c == "5" for c in counts) and (
+        assert counts == ["5"] and (
             "--retry-all-errors" in command and "--no-retry-all-errors" not in command
         ), f"{source}:{line}: curl download requires --retry 5 --retry-all-errors"
     return len(found)
@@ -89,6 +91,7 @@ def workflow(command):
     "", "--retry 5", "--retry-all-errors", "--retry 3 --retry-all-errors",
     "--retry 5 --retry 2 --retry-all-errors",
     "--retry=2 --retry 5 --retry-all-errors",
+    "--retry 5 --retry 5 --retry-all-errors",
 ])
 def test_multiline_missing_or_conflicting_retry(flags):
     text = workflow(f"curl {flags} \\\n  -o artifact \\\n  https://example.invalid/archive")
@@ -106,7 +109,8 @@ def test_comments_and_non_downloads_are_ignored():
     assert assert_retries(text, "synthetic") == 0
 
 
-@pytest.mark.parametrize("output", ["-o artifact", "--output=artifact", "> artifact", "1>>artifact"])
+@pytest.mark.parametrize("output", ["-o artifact", "--output=artifact", "> artifact", "1>>artifact",
+                                    "-fsSLo artifact", "-fsSLO"])
 def test_output_downloads(output):
     command = f"curl https://example.invalid/archive {output}"
     with pytest.raises(AssertionError, match="curl download"):
