@@ -64,5 +64,6 @@ pub mod writer_blob;
 pub mod writer_result;
 pub mod wsl;
 
+pub mod fleet_foundation_hysteresis;
 #[cfg(test)]
 pub(crate) mod testutil;

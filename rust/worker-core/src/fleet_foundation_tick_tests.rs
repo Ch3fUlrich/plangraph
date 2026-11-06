@@ -1,5 +1,26 @@
 use super::*;
 #[test]
+fn fleet_relative_state_parent() {
+    let d = tempfile::tempdir().unwrap();
+    let config = json!({"schema_version":1,"enabled":true,"state_path":"state.json",
+        "outbox_path":d.path().join("out"),"acks_path":d.path().join("acks"),
+        "wall_jump_tolerance_s":2});
+    let file = tempfile::NamedTempFile::new_in(".").unwrap();
+    let bare = PathBuf::from(file.path().file_name().unwrap());
+    let mut c: Config = serde_json::from_value(config.clone()).unwrap();
+    c.state_path = Some(bare.clone());
+    fs::write(&bare, br#"{"schema_version":1,"clock":null,"pairs":{}}"#).unwrap();
+    run(c, 0, 0).unwrap();
+    assert!(serde_json::from_slice::<Value>(&fs::read(&bare).unwrap()).is_ok());
+    assert!(d.path().join("out").exists());
+    fs::remove_file(format!("{}.lock", bare.display())).unwrap();
+    fs::remove_file(d.path().join("out")).unwrap();
+    let mut c: Config = serde_json::from_value(config).unwrap();
+    c.state_path = Some(d.path().join("missing/state.json"));
+    assert!(run(c, 0, 0).is_err());
+    assert!(!d.path().join("out").exists());
+}
+#[test]
 fn fleet_foundation_clock() {
     let (a, _) = advance(None, 100_000, 100, 2);
     let (b, jump) = advance(Some(&a), 1000, 101, 2);
@@ -8,8 +29,7 @@ fn fleet_foundation_clock() {
     assert!(advance(Some(&b), 2000, 200, 2).1);
     assert!(advance(Some(&b), 2000, 50, 2).1);
 }
-#[test]
-fn fleet_foundation_files() {
+fn foundation_clause(clause: u8) {
     let d = tempfile::tempdir().unwrap();
     let p = |n| d.path().join(n);
     let mut c = json!({"schema_version":1,"enabled":false,"stale_pair":true,
@@ -41,6 +61,9 @@ fn fleet_foundation_files() {
     bad["unknown"] = json!(true);
     assert!(tick(&bad, 0).is_err());
     assert!(!p("state.lock").exists());
+    if clause == 0 {
+        return;
+    }
     for (name, age) in [("alpha", 80), ("beta", 100)] {
         let members: Vec<_> = ["one", "two"]
             .iter()
@@ -61,6 +84,9 @@ fn fleet_foundation_files() {
     );
     let state = || serde_json::from_slice::<Value>(&fs::read(p("state")).unwrap()).unwrap();
     let beta = serde_json::to_vec(&state()["pairs"]["beta"]).unwrap();
+    if clause == 1 {
+        return;
+    }
     c["pairs"]["groups"].as_array_mut().unwrap().pop();
     assert_eq!(tick(&c, 1).unwrap()["attempts_sent"], 1);
     assert_eq!(tick(&c, 5).unwrap()["attempts_sent"], 2);
@@ -79,6 +105,9 @@ fn fleet_foundation_files() {
         json!(["invalid acknowledgement"])
     );
     assert_eq!(tick(&c, 10).unwrap()["attempts_sent"], 1);
+    if clause == 2 {
+        return;
+    }
     let alpha = fs::read(p("alpha")).unwrap();
     fs::remove_file(p("alpha")).unwrap();
     tick(&c, 26).unwrap();
@@ -95,6 +124,9 @@ fn fleet_foundation_files() {
     assert_eq!(serde_json::to_vec(&state()["pairs"]["beta"]).unwrap(), beta);
     for line in lines().iter().filter(|line| line["kind"] == "alarm") {
         assert_eq!(line["group"], "alpha");
+    }
+    if clause == 3 {
+        return;
     }
     fs::remove_file(p("acks")).unwrap();
     fs::remove_file(p("state")).unwrap();
@@ -153,6 +185,9 @@ fn fleet_foundation_files() {
             .count(),
         1
     );
+    if clause == 4 {
+        return;
+    }
     let original = fs::read(p("out")).unwrap();
     for bytes in [
         b"bad".as_slice(),
@@ -185,6 +220,8 @@ fn fleet_foundation_lock() {
         schema_version: 1,
         enabled: true,
         stale_pair: false,
+        hysteresis: false,
+        hysteresis_config: None,
         state_path: Some(state.clone()),
         outbox_path: Some(d.path().join("out")),
         acks_path: Some(d.path().join("acks")),
@@ -218,4 +255,34 @@ fn fleet_foundation_missing_episode() {
     assert_eq!(active.as_deref(), Some("previous"));
     assert!(opened.is_empty());
     assert_eq!(diagnostics, ["new alarm missing episode"]);
+}
+
+#[test]
+fn fleet_foundation_default_off() {
+    foundation_clause(0);
+}
+
+#[test]
+fn fleet_foundation_group_isolation() {
+    foundation_clause(1);
+}
+
+#[test]
+fn fleet_foundation_retry_ack() {
+    foundation_clause(2);
+}
+
+#[test]
+fn fleet_foundation_heartbeat() {
+    foundation_clause(3);
+}
+
+#[test]
+fn fleet_foundation_outbox_failure() {
+    foundation_clause(4);
+}
+
+#[test]
+fn fleet_foundation_corrupt_state() {
+    foundation_clause(5);
 }

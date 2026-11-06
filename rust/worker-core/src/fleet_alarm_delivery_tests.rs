@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn fleet_stale_heartbeat_does_not_rearm() {
+    let mut monitor = HeartbeatMonitor::new("test".into(), 0, 10, 1, 1).unwrap();
+    let mut sent = Vec::new();
+    let mut sink = |id: &str| {
+        sent.push(id.to_owned());
+        Ok::<_, ()>(())
+    };
+    monitor.tick(None, 25, &mut sink);
+    monitor.tick(Some(15), 25, &mut sink);
+    assert_eq!(monitor.last_heartbeat, 15);
+    assert_eq!(sent, ["test:silence:1"]);
+}
+
 fn restore<T: Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
     serde_json::from_slice(&serde_json::to_vec(value).unwrap()).unwrap()
 }
