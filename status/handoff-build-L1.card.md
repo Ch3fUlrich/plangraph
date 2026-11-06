@@ -19,7 +19,7 @@
 - D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
 - #528 run-34a2095f since 10:16Z next check 10:40Z, replan-0251 takes over after commit
 ## Planned
-00. D-4251 after CARRY: why only 2/400 runs witnessed (OP-D4-WITNESS-TOKEN, D-2905 refuses verdicts, 68 in_review); fix via gateway log, non-Claude writer; DONE sha + witnessed count on new runs
+00. D-4257+D-4251 after CARRY, names-only host check, no value read, copy BLOCKED sent (operator OK needed): why only 2/400 runs witnessed (OP-D4-WITNESS-TOKEN, D-2905 refuses verdicts, 68 in_review); fix via gateway log, non-Claude writer; DONE sha + witnessed count on new runs
 0a. D-4220 STUCK-WATCH after writer: 2 non-writer seats, GO-REQ, per-host timer proof; cause: 4 dell reviews banner-only until 1500 s; then CLAUDE-DAILY-BUDGET D-4239 (router files item)
 0b. D-4214 GW-QUEUE-WAIT-VISIBLE in Ch3fUlrich/OmniRoute after terra: fill call-log addedWaitMs/addedWaitCause (empty on 15.7k rows), merged, CI green, 1 non-writer seat, prox deploys; router files the item
 1. D-4207 terra PARKED D-4238, restart only on request
