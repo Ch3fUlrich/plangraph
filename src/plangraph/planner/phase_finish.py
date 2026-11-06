@@ -221,7 +221,18 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
 
     expected_branch = phase_branch(key)
     if branch != expected_branch:
-        raise Refused("validation", f"branch must be {expected_branch}")
+        # Pre-patch workflows finish the legacy branch already checked out by
+        # ensure_phase_branch. A same-named, unchecked-out ref is not enough.
+        current = None
+        if branch == _legacy_phase_branch(key) and Path(repo_root).is_dir():
+            proc = subprocess.run(
+                ["git", "-C", str(repo_root), "symbolic-ref", "--quiet", "HEAD"],
+                capture_output=True, text=True, timeout=30, check=False,
+                env=gitenv.git_env())
+            if proc.returncode == 0:
+                current = proc.stdout.strip()
+        if current != f"refs/heads/{branch}":
+            raise Refused("validation", f"branch must be {expected_branch}")
     if _SHA_RE.fullmatch(head) is None:
         raise Refused("validation", "head must be a 40-character lowercase hex sha")
 
