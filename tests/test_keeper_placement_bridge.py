@@ -1,6 +1,9 @@
 """C4 real child transport tests; no network or live configuration."""
 import os
 from pathlib import Path
+import shutil
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -9,19 +12,38 @@ from plangraph.keeper.errors import Refused
 
 
 @pytest.fixture
-def helper(monkeypatch):
-    binary = Path(__file__).resolve().parents[1] / 'rust/target/debug/pg-placement-rules'
-    assert binary.is_file(), 'build pg-placement-rules first'
-    monkeypatch.setattr(bridge.os, 'environ', {'PG_PLACEMENT_RULES_BIN': str(binary)})
+def helper(monkeypatch, rules_binary):
+    binary = rules_binary
+    monkeypatch.setattr(bridge, '_bin_env', lambda: {'PG_PLACEMENT_RULES_BIN': str(binary)})
     return binary
+
+
+@pytest.fixture(scope='session')
+def rules_binary(tmp_path_factory):
+    import fcntl
+    root = Path(__file__).resolve().parents[1]
+    cargo = shutil.which('cargo')
+    if cargo is None:
+        pytest.fail('cargo is required to build the real pg-placement-rules helper')
+    shared = tmp_path_factory.getbasetemp()
+    if shared.name.startswith('popen-gw'):
+        shared = shared.parent
+    with (shared / 'placement-rules-build.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        stamp = shared / 'placement-rules-built'
+        if not stamp.exists():
+            subprocess.run([cargo, 'build', '-p', 'pg-worker-core', '--bin',
+                            'pg-placement-rules'], cwd=root / 'rust', check=True)
+            stamp.touch()
+    return root / 'rust/target/debug/pg-placement-rules'
 
 
 def fake(tmp_path, monkeypatch, script):
     binary = tmp_path / 'helper'
     binary.write_text('#!/bin/sh\n' + script)
     binary.chmod(0o700)
-    monkeypatch.setattr(bridge.os, 'environ', {'PG_PLACEMENT_RULES_BIN': str(binary),
-                                            'TOKEN': 'private' + '-fixture'})
+    monkeypatch.setattr(bridge, '_bin_env', lambda: {
+        'PG_PLACEMENT_RULES_BIN': str(binary), 'TOKEN': 'private' + '-fixture'})
     return binary
 
 
@@ -49,12 +71,26 @@ def test_oversized_output_refused(tmp_path, monkeypatch):
 
 def test_missing_binary_no_secrets(tmp_path, monkeypatch):
     secret = 'credential' + '-fixture'
-    monkeypatch.setattr(bridge.os, 'environ', {
+    monkeypatch.setattr(bridge, '_bin_env', lambda: {
         'PG_PLACEMENT_RULES_BIN': str(tmp_path / 'missing'), 'TOKEN': secret})
     with pytest.raises(Refused) as exc:
         bridge.call_rules({'op': secret})
     assert secret not in str(exc.value)
     assert str(tmp_path) not in str(exc.value)
+
+
+def test_success_after_deadline_during_cleanup(tmp_path, monkeypatch):
+    fake(tmp_path, monkeypatch, 'read -r body; printf \'{"ok":{}}\'')
+    ticks = iter([0, 0, 6])
+    monkeypatch.setattr(bridge.time, 'monotonic', lambda: next(ticks))
+    assert bridge.call_rules({}) == {}
+
+
+def test_fixture_preserves_process_environ(tmp_path, monkeypatch):
+    real = os.environ
+    fake(tmp_path, monkeypatch, 'exit 0')
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(lambda: os.environ is real).result()
 
 
 def test_injection_is_stdin_not_shell(tmp_path, monkeypatch, helper):

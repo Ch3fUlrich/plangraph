@@ -10,6 +10,7 @@ import pytest
 from plangraph.keeper import auth, db, db_pg, placement_rules_bridge
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.store import Store
+from test_keeper_placement_bridge import rules_binary  # shared session fixture
 
 KEY = 'PG_RULE_HOST_WORKER_CAP_COUNT'
 
@@ -24,7 +25,7 @@ def test_placement_modules_are_auth_doors():
 
 def test_pg_rollback_composes_migration_guard():
     from contextlib import nullcontext
-    from psycopg import sql
+    sql = pytest.importorskip('psycopg').sql
     from plangraph.keeper import placement_rules_schema as rules
 
     class Connection:
@@ -68,10 +69,9 @@ def edit(revision=0, value='4', scope='Fleet', **extra):
 
 
 @pytest.fixture(params=['sqlite', 'postgres'])
-def backend(request, tmp_path, monkeypatch):
-    binary = Path(__file__).resolve().parents[1] / 'rust/target/debug/pg-placement-rules'
-    monkeypatch.setattr(placement_rules_bridge.os, 'environ',
-                        dict(os.environ) | {'PG_PLACEMENT_RULES_BIN': str(binary)})
+def backend(request, tmp_path, monkeypatch, rules_binary):
+    monkeypatch.setattr(placement_rules_bridge, '_bin_env',
+                        lambda: {'PG_PLACEMENT_RULES_BIN': str(rules_binary)})
     connections = []
     if request.param == 'sqlite':
         def connect():
@@ -197,13 +197,18 @@ def test_rollback_new_revision_previous_value_and_initial_insert_deletion(backen
 
 @pytest.mark.parametrize('change', [
     {'rollback_of': 99}, {'scope': {'Host': 'other'}}, {'value': '5'},
+    {'key': 'PG_RULE_HOST_MEMORY_FLOOR_MIB'},
 ])
 def test_cross_scope_key_missing_rollback_refused(backend, change):
     store, router, _ = backend
     store.edit_placement_rule(router, edit())
+    revision = 1
+    if 'key' in change:
+        store.edit_placement_rule(router, edit(1, '4096', key=change['key']))
+        revision = 2
     with pytest.raises(Refused, match='rules_invalid'):
-        store.edit_placement_rule(router, edit(1, None, rollback_of=1) | change)
-    assert store.placement_rules(router)['revision'] == 1
+        store.edit_placement_rule(router, edit(revision, None, rollback_of=1) | change)
+    assert store.placement_rules(router)['revision'] == revision
 
 
 def test_fault_after_value_before_audit_rolls_back(backend):

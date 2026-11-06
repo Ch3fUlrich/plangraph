@@ -11,10 +11,14 @@ _MAX = 1024 * 1024
 _TIMEOUT = 5
 
 
+def _bin_env():
+    return os.environ
+
+
 def call_rules(request: dict) -> dict:
     """Send data only on stdin; never inherit credentials or invoke a shell."""
     unavailable = Refused("rules_unavailable", "placement rules helper unavailable")
-    binary = os.environ.get("PG_PLACEMENT_RULES_BIN", "/usr/local/bin/pg-placement-rules")
+    binary = _bin_env().get("PG_PLACEMENT_RULES_BIN", "/usr/local/bin/pg-placement-rules")
     if not os.path.isabs(binary):
         raise unavailable
     try:
@@ -69,7 +73,7 @@ def call_rules(request: dict) -> dict:
         reader.join()
         child.stdin.close()
         child.stdout.close()
-    if failed.is_set() or time.monotonic() > deadline:
+    if failed.is_set():
         raise unavailable
     try:
         result = json.loads(output)
