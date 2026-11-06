@@ -87,15 +87,18 @@ def idle_snapshot(payload, idle_min):
     if not isinstance(items, list):
         raise ValueError("invalid messages")
     if not items:
-        return None  # No last-message age can be established: fail closed.
+        return hashlib.sha256(b"[]").hexdigest()
     latest = 0
     for item in items:
         info = item.get("info", item)
         clock = info.get("time", {})
         if not isinstance(clock, dict):
             clock = {"created": clock}
-        latest = max(latest, *(timestamp(clock[k]) for k in
-                              ("created", "updated", "completed") if clock.get(k) is not None))
+        ages = [timestamp(clock[k]) for k in
+                ("created", "updated", "completed") if clock.get(k) is not None]
+        if not ages:
+            return None  # Unknown message age: fail closed without crashing.
+        latest = max([latest, *ages])
         role = info.get("role", info.get("type"))
         status = info.get("status")
         if role == "assistant" and (status in ("running", "pending") or
@@ -134,9 +137,11 @@ def tick(args, password):
             return True
         snapshot = idle_snapshot(request(args, password, "GET", "message?order=desc&limit=5"),
                                  args.idle_min)
-        if snapshot is None or (state.get("session_id") == args.sid and
-                                state.get("snapshot") == snapshot):
+        if snapshot is None:
             event(args, "busy", count + 1)
+        elif (state.get("session_id") == args.sid and
+              state.get("snapshot") == snapshot):
+            event(args, "unchanged", count + 1)
         elif count >= len(lines):
             event(args, "empty", count + 1)
         else:

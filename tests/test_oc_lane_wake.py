@@ -92,6 +92,24 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(self.run_wake(), 0)
         self.assertEqual(self.posts[-1]["text"], "New task from the L1: second task")
 
+    def test_fresh_session_posts_once(self):
+        self.messages = []
+        self.assertEqual(self.run_wake(), 0)
+        self.assertEqual(self.run_wake(), 0)
+        self.assertEqual(self.posts, [{"text": "New task from the L1: first task"}])
+
+    def test_unknown_message_age_does_not_crash_or_post(self):
+        self.messages = [{"info": {"role": "user", "time": {}}}]
+        self.assertEqual(self.run_wake(), 0)
+        self.assertFalse(self.posts)
+        self.assertEqual(json.loads((self.root / "log").read_text())["result"], "busy")
+
+    def test_unchanged_idle_snapshot_is_not_logged_busy(self):
+        self.assertEqual(self.run_wake(), 0)
+        self.assertEqual(self.run_wake(), 0)
+        records = [json.loads(line) for line in (self.root / "log").read_text().splitlines()]
+        self.assertEqual([record["result"] for record in records], ["posted", "unchanged"])
+
     def test_busy_no_post(self):
         for status in ("running", "pending"):
             self.messages[0]["info"]["status"] = status
