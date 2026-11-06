@@ -54,8 +54,9 @@ def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
 def ready_records(config):
     records = {}
     for name, host in config.get('hosts', {}).items():
-        row = dict(host)
+        row = {}
         try:
+            row = dict(host)
             if Path(name).name != name or name in ('.', '..'):
                 raise ValueError('invalid host name')
             path = Path.home() / '.local/state/plangraph/host-ready' / (name + '.json')
@@ -117,8 +118,9 @@ def remote_spawn(name, host, card, prompt, options):
                 commands.append(shlex.join(['git', 'fetch', 'origin', '--', diff[ref]]))
         command = ['python3', '-m', 'plangraph.spawner.cli', 'spawn', '--card',
                    '@' + directory + '/card.json']
-        # Read the copied prompt remotely rather than interpreting it as shell text.
-        spawn = shlex.join(command) + ' "$(cat ' + q(directory + '/prompt.txt') + ')" ' + shlex.join(options)
+        # A sentinel prevents command substitution from stripping trailing newlines.
+        commands.append('prompt=$(cat ' + q(directory + '/prompt.txt') + ' && printf .)')
+        spawn = shlex.join(command) + ' "${prompt%.}" ' + shlex.join(options)
         commands.append('PLANGRAPH_HOST_NAME=' + q(name) + ' PYTHONPATH=' + q(host['spawner_src']) + ' ' + spawn)
         result = ssh(' && '.join(commands))
         if result.returncode:
@@ -152,9 +154,15 @@ def main(argv=None):
             config = json.loads(path.read_text())
         except (OSError, ValueError):
             config = {}
+        limits = []
+        for key, default in (('local_run_cap', 4), ('local_floor_mb', 3000)):
+            try:
+                limits.append(int(config.get(key, default)))
+            except (TypeError, ValueError, OverflowError):
+                limits.append(default)
+        run_cap, floor_mb = limits
         live, memory = local_resources()
-        if decide(live, memory, config.get('local_run_cap', 4),
-                  config.get('local_floor_mb', 3000), {}, False).reason == 'local room':
+        if decide(live, memory, run_cap, floor_mb, {}, False).reason == 'local room':
             return cli.main(['spawn', '--card', '@' + args.card, Path(args.prompt).read_text(), *options])
         public = str(Path(args.repo).resolve()) in [str(Path(p).expanduser().resolve())
                                                   for p in config.get('public_repos', [])]
@@ -166,8 +174,7 @@ def main(argv=None):
         records = ready_records(config)
         attempts = 0
         while True:
-            decision = decide(live, memory, config.get('local_run_cap', 4),
-                              config.get('local_floor_mb', 3000), records, public)
+            decision = decide(live, memory, run_cap, floor_mb, records, public)
             if decision.host is None:
                 print(json.dumps({'overflow_reason': decision.reason}))
                 return 5
@@ -186,7 +193,7 @@ def main(argv=None):
                 print(json.dumps(result))
                 return 0
             records[name]['refusal'] = 'remote spawn failed'
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         print('overflow input or resource check failed', file=__import__('sys').stderr)
         return 1
 

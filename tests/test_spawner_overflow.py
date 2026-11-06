@@ -1,4 +1,6 @@
 import json
+import shlex
+import subprocess
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
@@ -199,3 +201,50 @@ def test_record_host(tmp_path, monkeypatch):
     service = o.cli.SpawnService(state=str(tmp_path))
     record = service.save_refusal(ValueError('invented refusal'), 'implement')
     assert record['host'] == 'invented-local'
+
+
+@pytest.mark.parametrize('hosts,code', [({'invented': 'alias'}, 5), ([], 1), (None, 1)])
+def test_malformed_host_config(inputs, monkeypatch, capsys, hosts, code):
+    root, path, args = inputs
+    path.write_text(json.dumps({'hosts': hosts, 'public_repos': [str(root)]}))
+    monkeypatch.setattr(o, 'remote_spawn', lambda *a: pytest.fail('malformed host copied'))
+    assert o.main(args) == code
+    output = capsys.readouterr()
+    if code == 5:
+        assert 'queue:' in output.out and 'malformed readiness' in output.out
+    else:
+        assert 'input or resource check failed' in output.err
+
+
+@pytest.mark.parametrize('key', ['local_run_cap', 'local_floor_mb'])
+@pytest.mark.parametrize('value', ['4', 'invalid', None, [], {}])
+def test_local_limits_coerce_or_default(inputs, monkeypatch, key, value):
+    _, path, args = inputs
+    path.write_text(json.dumps({key: value}))
+    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
+    assert o.main(args) == 3
+
+
+@pytest.mark.parametrize('prompt', ['trailing\n', 'trailing\n\n', 'literal $(false) .\n'])
+def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
+    stage = tmp_path / 'stage with spaces'
+    stage.mkdir()
+    real_run = subprocess.run
+    received = []
+    def run(argv, **kwargs):
+        if argv[0] == 'scp':
+            (stage / 'prompt.txt').write_bytes(o.Path(argv[3]).read_bytes())
+        if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
+            # Execute the actual generated shell, replacing only its spawn command.
+            command = argv[-1].replace('python3 -m plangraph.spawner.cli spawn',
+                                      shlex.join(['python3', '-c',
+                                                  'import sys; print(repr(sys.argv[3]))']))
+            result = real_run(['sh', '-c', command], capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+            received.append(result.stdout.strip())
+        return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
+    assert o.remote_spawn('invented', host, {}, prompt, []) == {}
+    assert received == [repr(prompt)]
