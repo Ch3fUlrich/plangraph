@@ -169,6 +169,30 @@ def test_projector_waiting_refuses_delayed_same_run_park_without_expected_state(
     assert snapshot(w, key) == before
 
 
+@pytest.mark.parametrize("owned", [False, True], ids=["unowned", "seeded-no-audit"])
+@pytest.mark.xfail(strict=True, reason="No audited owner start or observed state: delayed and normal parks are indistinguishable")
+def test_delayed_blind_park_without_owner_start(w, owned):
+    key, = seed(w, [("A", [])])
+    projector = Projector(w.store, w.p("system"), now=w.clock)
+    full = history("usage_limit")
+    running = project_history({"events": full["events"][:3]},
+                              workflow_id="card:" + key, run_id="run")
+    projector.apply_run(running, run_ord=0)
+    identity = {"workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
+    if owned:
+        seed_exec_owner(w, key, ("card:" + key, "run", 1))
+    waiting = project_history(full, workflow_id="card:" + key, run_id="run")
+    projector.apply_run(waiting, run_ord=0)
+    assert snapshot(w, key)[0] == "waiting"
+    assert not w.store._exec_state_after_owner(w.conn, key)
+    before = snapshot(w, key)
+    with pytest.raises(Refused):
+        w.store.worker_park(w.p("workerA"), {
+            "card": key, "tier": "free", "exit_class": "needs_input",
+            **(identity if owned else {})})
+    assert snapshot(w, key) == before
+
+
 def test_delayed_park_cannot_overwrite_a_projector_move_made_after_park(w):
     """RT-P1 sq12 fix 2 on the production ordering branch.
 

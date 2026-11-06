@@ -1,4 +1,5 @@
 """Append-only event log: hash chain, fold, and integrity checks.
+
 Each event's hash is ``sha256(prev_hash + canonical_json(event))`` where the
 canonical event is the ordered dict of ``ts, actor, role, model, key, type,
 payload`` (``prev_hash`` and ``hash`` are deliberately excluded).  The genesis
@@ -8,23 +9,22 @@ this build does not know (a newer keeper wrote it) never reaches the cache: it
 is reported as ``unknown_event_type`` with its ``seq``.
 """
 from __future__ import annotations
+
 import hashlib
 import json
 from collections import Counter
+
 from .token_fold import verify_tokens
+
 from .item_fields import SMALL_FIELDS
 # PG-FOLD-UNKNOWN-TYPE: schema imports nothing back, so no cycle -- ``events``
 # may name the authoritative list of types this build knows how to replay.
 from .schema import EVENT_TYPES
+
 __all__ = ["canonical", "event_hash", "append_event", "read_events", "fold",
            "verify_chain", "verify_integrity", "FIELDS"]
+
 FIELDS = ("ts", "actor", "role", "model", "key", "type", "payload")
-STATE_EVENT_TYPES = frozenset({
-    "item_created", "claimed", "released", "lease_expired", "submitted",
-    "changes_requested", "review_withdrawn", "item_reopened", "review_passed",
-    "closed_on_decision", "answered", "legacy_state_set", "cancelled",
-    "state_set",
-})
 
 
 def canonical(obj) -> str:

@@ -35,7 +35,7 @@ from datetime import date
 from plangraph.card_paths import normalise_path, path_problem
 from .credential_guard import guard
 from .errors import Refused
-from .events import STATE_EVENT_TYPES
+STATE_EVENT_TYPES = frozenset({"item_created", "claimed", "released", "lease_expired", "submitted", "changes_requested", "review_withdrawn", "item_reopened", "review_passed", "closed_on_decision", "answered", "legacy_state_set", "cancelled", "state_set"})
 from .schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 __all__ = ["CardsMixin", "SETTABLE_STATES", "TRANSITIONS", "NO_DEFAULT_TAGS"]
 #: States ``set_state`` moves between (none of them carries a claim, lease or epoch).

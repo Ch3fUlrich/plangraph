@@ -49,6 +49,12 @@ def owner_principal(w, key):
     return row[0]
 
 
+def test_state_event_types_stay_in_store_gate():
+    from plangraph.keeper import events, store_cards
+    assert not hasattr(events, "STATE_EVENT_TYPES")
+    assert "state_set" in store_cards.STATE_EVENT_TYPES
+
+
 def retired_runs(w, key):
     """The retired-run fence kept across owner clears (RT-P1 V1-1)."""
     row = w.conn.execute("SELECT exec_retired_runs FROM items WHERE key=?",
