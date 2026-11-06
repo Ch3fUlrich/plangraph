@@ -124,17 +124,20 @@ def test_paid_pin_measured(tmp_path, monkeypatch, one_up):
         assert asyncio.run(service.spawn(**options))['status'] == 'dry_run'
 
 
-@pytest.mark.parametrize('status,stop,expected', [
-    ('failed', {'status': 402}, 'credit_limit'),
-    ('failed', {'status': 429}, 'usage_limit'),
-    ('failed', None, None), ('completed', None, None)])
-def test_live_evidence(tmp_path, monkeypatch, status, stop, expected):
+@pytest.mark.parametrize('status,stop,unavailable,expected', [
+    ('failed', {'status': 402}, False, 'credit_limit'),
+    ('failed', {'status': 429}, False, 'usage_limit'),
+    ('failed', None, True, 'not_served_on_host'),
+    ('failed', None, False, None), ('completed', None, False, None)])
+def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expected):
     from plangraph.planner.measured_down import measured_down
     free = replace(legs.DEFAULT_LEGS[1], id='free', model='test/free', family='glm',
                    tier='free', tool_mode='tools', disabled=None, roles=('review',))
     use_table(monkeypatch, (free, replace(free, id='other', model='test/other', family='other')))
     text = 'prompt: usage limit; credit usage limit; not_served_on_host; model not available'
     runner = fake_runner(tmp_path, status, stop, text)
+    if unavailable:
+        runner = fake_runner(tmp_path, status, stop, 'not_served_on_host')
     service = SpawnService(runner=runner, state=tmp_path,
         leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
     record = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt=text,
@@ -142,6 +145,8 @@ def test_live_evidence(tmp_path, monkeypatch, status, stop, expected):
     assert runner.calls and record['host']
     assert record['attempts'][0]['down_reason'] == expected
     assert bool(measured_down(tmp_path)) == bool(expected)
+    if expected:
+        assert measured_down(tmp_path)[free.id]['reason'] == expected
 
 
 @pytest.mark.parametrize('free_up', [True, False])
@@ -168,7 +173,8 @@ def test_record_window_and_corruption(tmp_path, monkeypatch):
     from plangraph.planner.measured_down import LEG_DOWN_WINDOW_S
     free = replace(legs.DEFAULT_LEGS[1], id='free', model='test/free', family='glm',
                    tier='free', tool_mode='tools', disabled=None)
-    use_table(monkeypatch, (free, replace(free, id='other', model='test/other', family='other')))
+    paid = replace(free, id='paid', model='test/paid', tier='paid', family='other')
+    use_table(monkeypatch, (free, paid))
     service = SpawnService(state=tmp_path, leg_reader=lambda *a, **k: {'state': 'available'})
     now = time.time()
     for i in range(3000):
@@ -190,9 +196,9 @@ def test_record_window_and_corruption(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'open', counted)
     assert service.route({'estimate_tokens': 100}, role='review', writer_families=['gpt']).first_leg == free
     assert len(opened) == 3
-    with pytest.raises(SpawnRefused):
+    with pytest.raises(SpawnRefused, match='paid pin refused; free legs up: free; --override-reason required'):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, role='review',
-            writer_families=['gpt'], model=free.model, override_reason='x', require_bench=True))
+            writer_families=['gpt'], leg=paid.id, override_reason='x', dry_run=True))
 
 
 @pytest.mark.parametrize('status', ['failed', 'skipped', 'completed'])
