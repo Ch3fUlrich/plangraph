@@ -25,8 +25,7 @@ from plangraph.keeper import snapshot_serve_path as ssp  # noqa: E402
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 
-BLOB = ("AAAAC3NzaC1lZDI1NTE5AAAAIFAKEKEYMATERIALDONOTPRINT"
-        "000000000000000000000000000000000000000")
+BLOB = "AAAA" + "FAKEKEY" * 10
 
 
 def key_line(command, comment="pull@hostA"):
