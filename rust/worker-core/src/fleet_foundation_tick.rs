@@ -230,9 +230,7 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             state.delivery.silence.tick(heartbeat, now, &mut sink);
         }
     }
-    if let Err(e) = send("heartbeat", &format!("heartbeat:{now}"), None) {
-        diagnostics.push(e);
-    }
+    let _ = send("heartbeat", &format!("heartbeat:{now}"), None);
     s.clock = Some(clock);
     diagnostics.extend(send_errors);
     let parent = state_path

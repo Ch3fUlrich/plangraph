@@ -16,7 +16,7 @@ fn fleet_foundation_files() {
         "state_path":p("state"),"outbox_path":p("out"),"acks_path":p("acks"),
         "wall_jump_tolerance_s":2,"pairs":{"config":{"maximum_age":10,
         "divergence_tolerance":5,"compaction_cap":10,"silence_deadline":20,
-        "retry_delay":5,"maximum_attempts":2},"groups":[
+        "retry_delay":5,"maximum_attempts":3},"groups":[
         {"group":"alpha","snapshot_path":p("alpha")},
         {"group":"beta","snapshot_path":p("beta")}]}});
     let tick = |c: &Value, t: u64| {
@@ -59,14 +59,27 @@ fn fleet_foundation_files() {
         tick(&c, 0).unwrap()["alarms_opened"],
         json!(["stale-pair:alpha:pair:1"])
     );
+    let state = || serde_json::from_slice::<Value>(&fs::read(p("state")).unwrap()).unwrap();
+    let beta = serde_json::to_vec(&state()["pairs"]["beta"]).unwrap();
+    c["pairs"]["groups"].as_array_mut().unwrap().pop();
     assert_eq!(tick(&c, 1).unwrap()["attempts_sent"], 1);
     assert_eq!(tick(&c, 5).unwrap()["attempts_sent"], 2);
     assert_eq!(tick(&c, 6).unwrap()["attempts_sent"], 1);
-    fs::write(p("acks"), "bad\nheartbeat:6\n").unwrap();
+    let lines = || {
+        fs::read_to_string(p("out"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lines()[3]["id"], "stale-pair:alpha:pair:1");
+    fs::write(p("acks"), "bad\nheartbeat:6\nstale-pair:alpha:pair:1\n").unwrap();
     assert_eq!(
         tick(&c, 7).unwrap()["diagnostics"],
         json!(["invalid acknowledgement"])
     );
+    assert_eq!(tick(&c, 10).unwrap()["attempts_sent"], 1);
+    let alpha = fs::read(p("alpha")).unwrap();
     fs::remove_file(p("alpha")).unwrap();
     tick(&c, 26).unwrap();
     tick(&c, 27).unwrap();
@@ -79,6 +92,40 @@ fn fleet_foundation_files() {
     tick(&c, 28).unwrap();
     tick(&c, 47).unwrap();
     assert!(fs::read_to_string(p("out")).unwrap().contains("silence:2"));
+    assert_eq!(serde_json::to_vec(&state()["pairs"]["beta"]).unwrap(), beta);
+    for line in lines().iter().filter(|line| line["kind"] == "alarm") {
+        assert_eq!(line["group"], "alpha");
+    }
+    fs::remove_file(p("acks")).unwrap();
+    fs::remove_file(p("state")).unwrap();
+    fs::remove_file(p("out")).unwrap();
+    fs::write(p("alpha"), alpha).unwrap();
+    c["outbox_path"] = json!(d.path());
+    let failed = tick(&c, 0).unwrap();
+    assert_eq!(failed["attempts_sent"], 2);
+    assert_eq!(
+        failed["diagnostics"],
+        json!(["outbox append failed", "outbox append failed"])
+    );
+    let saved = state();
+    assert_eq!(saved["clock"]["total_ms"], 0);
+    assert_eq!(
+        saved["pairs"]["alpha"]["delivery"]["primary"]["records"]["stale-pair:alpha:pair:1"]
+            ["attempts"],
+        1
+    );
+    c["outbox_path"] = json!(p("out"));
+    assert_eq!(tick(&c, 5).unwrap()["attempts_sent"], 2);
+    assert_eq!(lines()[0]["id"], "stale-pair:alpha:pair:1");
+    tick(&c, 20).unwrap();
+    tick(&c, 21).unwrap();
+    assert_eq!(
+        fs::read_to_string(p("out"))
+            .unwrap()
+            .matches("heartbeat:silence:1")
+            .count(),
+        1
+    );
     let original = fs::read(p("out")).unwrap();
     for bytes in [
         b"bad".as_slice(),
