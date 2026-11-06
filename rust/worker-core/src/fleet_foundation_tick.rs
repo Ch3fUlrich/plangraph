@@ -205,6 +205,8 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
         .iter()
         .filter_map(|a| a.strip_prefix("heartbeat:")?.parse::<u64>().ok())
         .max();
+    // Reserve the save file before any externally visible delivery.
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state temporary file")?;
     let mut opened = Vec::new();
     let mut attempts = 0;
     let mut send_errors = Vec::new();
@@ -238,7 +240,7 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
     if let Some(p) = pairs {
         for g in &p.groups {
             let namespace = format!("stale-pair:{}", g.group);
-            let state = s.pairs.get_mut(&g.group).expect("prepared group state");
+            let state = s.pairs.get_mut(&g.group).ok_or("missing group state")?;
             let finding = state.detector.observe(
                 &p.config,
                 &fs::read(&g.snapshot_path).unwrap_or_default(),
@@ -285,7 +287,6 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
     let _ = send("heartbeat", &format!("heartbeat:{now}"), None);
     s.clock = Some(clock);
     diagnostics.extend(send_errors);
-    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state temporary file")?;
     serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
     temp.as_file().sync_all().map_err(|_| "state sync")?;
     temp.persist(state_path).map_err(|_| "state rename")?;

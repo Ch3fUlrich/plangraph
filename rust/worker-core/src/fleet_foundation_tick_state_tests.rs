@@ -36,8 +36,10 @@ fn fleet_relative_state_parent() {
             }
         }
         let _cleanup = Cleanup;
+        let writable = tempfile::tempdir().unwrap();
+        let outbox = writable.path().join("out");
         let config = json!({"schema_version":1,"enabled":true,"state_path":"state.json",
-            "outbox_path":"out","acks_path":"acks","wall_jump_tolerance_s":2});
+            "outbox_path":outbox,"acks_path":"acks","wall_jump_tolerance_s":2});
         fs::write(
             "state.json",
             br#"{"schema_version":1,"clock":null,"pairs":{}}"#,
@@ -45,8 +47,8 @@ fn fleet_relative_state_parent() {
         .unwrap();
         run(serde_json::from_value(config.clone()).unwrap(), 0, 0).unwrap();
         assert!(serde_json::from_slice::<Value>(&fs::read("state.json").unwrap()).is_ok());
-        assert!(Path::new("out").exists());
-        fs::remove_file("out").unwrap();
+        assert!(outbox.exists());
+        fs::remove_file(&outbox).unwrap();
         let saved = fs::read("state.json").unwrap();
         // Keep the existing lock writable, but deny creation of the save tempfile.
         fs::set_permissions(".", fs::Permissions::from_mode(0o500)).unwrap();
@@ -54,7 +56,7 @@ fn fleet_relative_state_parent() {
         fs::set_permissions(".", fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(result.unwrap_err(), "state temporary file");
         assert_eq!(fs::read("state.json").unwrap(), saved);
-        assert!(!Path::new("out").exists());
+        assert!(!outbox.exists());
     }
 }
 #[test]

@@ -96,18 +96,28 @@ pub fn tick(
         s.mono = s
             .mono
             .saturating_add(elapsed.saturating_mul(c.tick_seconds));
-        let bytes = c.sources.each_ref().map(fs::read);
-        let inputs = bytes
-            .each_ref()
-            .map(|r| r.as_deref().map_err(|_| "source read failed"));
-        let names = c.sources.each_ref().map(|p| p.to_str().unwrap_or("source"));
-        let end = slot
-            .checked_mul(c.tick_seconds as i64)
-            .ok_or("slot overflow")?;
-        let snapshot = acquire(inputs, names, end, c.tick_seconds as i64);
-        findings = s.evaluator.evaluate(&snapshot, s.mono, jump)?;
         s.slot = Some(slot);
+        let evaluation = (|| {
+            let bytes = c.sources.each_ref().map(fs::read);
+            let inputs = bytes
+                .each_ref()
+                .map(|r| r.as_deref().map_err(|_| "source read failed"));
+            let names = c.sources.each_ref().map(|p| p.to_str().unwrap_or("source"));
+            let end = slot
+                .checked_mul(c.tick_seconds as i64)
+                .ok_or("slot overflow")?;
+            let snapshot = acquire(inputs, names, end, c.tick_seconds as i64);
+            s.evaluator.evaluate(&snapshot, s.mono, jump)
+        })();
+        match evaluation {
+            Ok(result) => findings = result,
+            Err(error) => diagnostics.push(error.into()),
+        }
         for f in &findings {
+            if !matches!(f.observation, router::Observation::Overload(_)) {
+                let prefix = format!("hysteresis:{}:", f.signal);
+                s.active.retain(|id| !id.starts_with(&prefix));
+            }
             if let router::Observation::Overload(n) = f.observation {
                 let id = format!("hysteresis:{}:{n}", f.signal);
                 if s.active.insert(id.clone()) {
@@ -116,10 +126,15 @@ pub fn tick(
             }
         }
     }
-    for id in &s.active {
+    s.active.retain(|id| {
         if acks.contains(id) {
             s.deliveries.acknowledge(id);
+            false
+        } else {
+            true
         }
+    });
+    for id in &s.active {
         s.deliveries.tick(id, now, sink);
     }
     s.silence.tick(heartbeat, now, sink);

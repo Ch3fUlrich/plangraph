@@ -146,7 +146,7 @@ impl State {
                         .is_none_or(|p| changed || m.freshness > p.freshness);
                     advanced[i] = self.evidence[i]
                         .as_ref()
-                        .is_none_or(|p| m.freshness > p.freshness);
+                        .is_some_and(|p| m.freshness > p.freshness);
                     if advances {
                         self.ages[i] = m
                             .freshness
