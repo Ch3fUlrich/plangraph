@@ -28,6 +28,8 @@ def busy_refusal(text):
     for line in normalize(text).splitlines():
         if _BUSY_LINE.match(line):
             return line.strip()
+        if not line.strip().startswith('{'):
+            continue
         try:
             response = json.loads(line).get('autoos_provider_response', {})
             if response.get('status') == 503:

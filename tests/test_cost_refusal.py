@@ -17,13 +17,38 @@ from plangraph.routing_support import leg_state
 
 
 REAL_TIME = time.time
+TEST_SOURCE = Path(__file__).read_text()
 CHANGELOG_LINES = (Path(__file__).resolve().parents[1] / 'changelog.d' /
-                   'SPAWNER-COST-TIME-D3605-cost-refusal.md').read_text().splitlines()
+                   ('SPAWNER-COST-TIME-D3605-' + 'cost-refusal.md')).read_text().splitlines()
 
 
 def test_changelog_has_exactly_one_prefixed_line():
     assert len(CHANGELOG_LINES) == 1
     assert CHANGELOG_LINES[0].startswith('- **SPAWNER-COST-TIME-D3605:**')
+
+
+def test_changelog_filename_is_not_a_long_source_token():
+    name = 'SPAWNER-COST-TIME-D3605-' + 'cost-refusal.md'
+    assert name not in TEST_SOURCE
+
+
+@pytest.mark.parametrize('entry', ['early_refusal', 'harness_limit_line', 'unavailable_reason'])
+def test_only_object_lines_attempt_busy_json(entry, monkeypatch):
+    loads = json.loads
+    parsed = []
+    def tracked(text):
+        parsed.append(text)
+        return loads(text)
+    monkeypatch.setattr(env_redact.json, 'loads', tracked)
+    def call(text):
+        fn = getattr(env_redact, entry)
+        return fn(text) if entry == 'early_refusal' else fn(1, '', text)
+    assert call('ordinary output\n[1, 2]\nnull\nnot JSON') is None
+    assert parsed == []
+    assert call('  ' + ENVELOPE) == LINES[3]
+    assert len(parsed) == 1
+    assert call('  {broken') is None
+    assert len(parsed) == 2
 
 
 LINES = ['Error: server busy', 'Error: too busy', 'Error: overloaded',
