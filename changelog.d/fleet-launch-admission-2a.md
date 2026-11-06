@@ -1,0 +1,1 @@
+Context caps now exempt sessions with recent genuinely typed operator input (default 1800 seconds, configurable with attended_window_s). Bounded transcript inspection rejects launch briefs, relay/system/tool output and uncertain history; private atomic attended leases are removed when unattended. Deployment remains a separate router GO.

@@ -21,6 +21,9 @@ import json
 import os
 import re
 import sys
+import time
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -61,6 +64,88 @@ def add_card_rule(out: str) -> str:
 
 def overrides_dir() -> Path:
     return state_home() / "claude-hooks" / "ctx-guard-session"
+
+
+ATTENDED_TAIL_MAX = 1024 * 1024
+_MACHINE_PREFIX = re.compile(
+    r"^(?:<\s*(?:cross-session-message|system-reminder|task-notification|"
+    r"command[^>]*|local-command[^>]*|hook[^>]*)\b|SYSTEM NOTIFICATION)", re.I)
+
+
+def attended_until(payload, doc):
+    """Bounded tail only; truncated/oversized history cannot prove attendance."""
+    try:
+        window = (doc or {}).get("attended_window_s", 1800)
+        if type(window) is not int or window <= 0:
+            return None
+        with open(payload["transcript_path"], "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - ATTENDED_TAIL_MAX))
+            tail = fh.read(ATTENDED_TAIL_MAX + 1)
+        if size > ATTENDED_TAIL_MAX:
+            return None  # cannot establish the first user record within this budget
+        first, last = True, None
+        for line in tail.decode("utf-8").splitlines():
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                return None
+            if record.get("type") != "user":
+                continue
+            if first:
+                first = False
+                continue  # launch brief never establishes attendance
+            if (record.get("isMeta") or record.get("isSidechain") or
+                    record.get("promptSource") != "typed" or
+                    record.get("turnOrigin") != "human" or
+                    record.get("origin", {"kind": "human"}) != {"kind": "human"}):
+                continue
+            message = record.get("message", {})
+            content = message.get("content")
+            if isinstance(content, list):
+                if not content or any(not isinstance(b, dict) or b.get("type") != "text"
+                                      or not isinstance(b.get("text"), str) for b in content):
+                    continue
+                content = "\n".join(b["text"] for b in content)
+            if message.get("role") != "user" or not isinstance(content, str):
+                return None
+            if not content.strip() or _MACHINE_PREFIX.match(content.lstrip()):
+                continue
+            stamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                return None
+            last = stamp.timestamp()
+            if last > time.time():
+                return None
+        now = time.time()
+        return last + window if last is not None and 0 <= now - last < window else None
+    except Exception:
+        return None
+
+
+def session_attended(text, doc):
+    """Publish a private atomic lease; failure must never bypass the guard."""
+    tmp = None
+    try:
+        payload = json.loads(text)
+        sid = payload.get("session_id")
+        if not safe_id(sid):
+            return False
+        path = state_home() / "autoos" / "ctx-guard" / (sid + ".attended.json")
+        until = attended_until(payload, doc)
+        if until is None:
+            path.unlink(missing_ok=True)
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+        with os.fdopen(fd, "w") as fh:  # mkstemp creates mode 0600
+            json.dump({"until": until}, fh)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
+    finally:
+        if tmp is not None:
+            Path(tmp).unlink(missing_ok=True)
 
 
 def session_override(text: str):
@@ -144,6 +229,8 @@ def main() -> int:
     os.environ.update(settings_thresholds(cwd))
     doc = session_override(text)
     if doc and doc.get("off") is True:
+        return 0
+    if session_attended(text, doc):
         return 0
     if doc:
         # Launch-time, session-local private destination, alongside handoff/hard.
