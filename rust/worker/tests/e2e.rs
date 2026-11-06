@@ -19,6 +19,7 @@
 //! hence the counter-file check.
 
 #![cfg(unix)]
+mod archive;
 
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::redact::REDACTED;
@@ -250,6 +251,7 @@ impl Env {
             smoke_checks: Vec::new(),
             exports: Vec::new(),
             base_sha: None,
+            resume: None,
         };
         let wf_id = workflow_id(id);
         self.client
@@ -577,10 +579,8 @@ async fn record(name: &str, id: &str, handle: &Handle) {
     };
     scrub(&mut value);
     let json = serde_json::to_string(&value).unwrap_or_default();
-    let dir = Path::new(&dir);
-    if std::fs::create_dir_all(dir).is_ok() {
-        let _ = std::fs::write(dir.join(format!("{name}.json")), json);
-    }
+    let dir = archive::directory(Path::new(&dir));
+    archive::append(&dir.join(format!("{name}.json")), json.as_bytes());
 
     // The proto-JSON dump the projector consumes needs the CLI; `PG_TEMPORAL_CLI`
     // together with `PG_RECORD_DIR` opts in, anything else stays silent.
@@ -615,8 +615,7 @@ async fn record(name: &str, id: &str, handle: &Handle) {
         .unwrap_or_else(|e| panic!("temporal CLI emitted invalid JSON: {e}"));
     scrub(&mut value);
     let json = serde_json::to_string(&value).unwrap_or_default();
-    std::fs::write(dir.join(format!("{name}.proj.json")), json)
-        .unwrap_or_else(|e| panic!("write {name}.proj.json: {e}"));
+    archive::append(&dir.join(format!("{name}.proj.json")), json.as_bytes());
 }
 
 /// Replace host-specific identity strings (`pid@hostname`, sticky queue names)
@@ -2057,10 +2056,8 @@ async fn record_phase(name: &str, handle: &WorkflowHandle<Client, Phase>) {
     };
     scrub(&mut value);
     let json = serde_json::to_string(&value).unwrap_or_default();
-    let dir = Path::new(&dir);
-    if std::fs::create_dir_all(dir).is_ok() {
-        let _ = std::fs::write(dir.join(format!("{name}.json")), json);
-    }
+    let dir = archive::directory(Path::new(&dir));
+    archive::append(&dir.join(format!("{name}.json")), json.as_bytes());
 }
 
 fn plan_json(key: &str, cards: &[(&str, bool)]) -> pg_worker::phase::PhasePlan {

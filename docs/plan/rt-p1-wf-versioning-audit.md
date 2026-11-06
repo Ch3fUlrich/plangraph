@@ -1,4 +1,35 @@
-# RT-P1-WF-VERSIONING: blocked implementation audit
+# RT-P1-WF-VERSIONING: acceptance inventory
+
+## Fix-round status (supersedes the original snapshot below)
+
+- Done: mandatory explicit deployment/build identity before connecting;
+  `identity_is_mandatory_even_without_versioning_switch` covers absent/invalid
+  values with the versioning switch unset and rejects opt-out.
+- Done: current-version promotion is retained and failure now aborts startup;
+  `test_set_current_failure_fails_start` covers the exhausted retry path.
+- Done: released `baseline-v1` archive with provenance and checksums, exclusive
+  per-build recording, and a merge-base policy checker with edit/delete tests.
+  Archive pins current fixtures by hash and copies on change: missing old bytes
+  fail Rust/Python pin checks; temporary-file tests cover rejection and retention.
+  Replay also runs every kept history under `releases/`; baseline needs no copies.
+  Remaining: wire the checker into required CI after Gate-Edit.
+- Existing patch guards preserved: `replays_pre_observe_cap_park` and
+  `replays_pre_reobserve_cap_park` replay old histories. New command changes
+  use `bounded-runs-v1`; runbook specifies patch/version and drain policy.
+  Remaining: automated workflow-change policy CI wiring.
+- Done: hermetic subprocess test SIGKILLs at a started activity and timer,
+  verifies signal 9 and completion by replacement build. Remaining: this
+  synthetic SDK workflow does not prove real Card deployment-routing migration.
+- Done: attempt schedule-to-close and state-preserving Continue-As-New at
+  event/wait caps. Process test exercises retries until total timeout and both
+  rollover commands. Remaining: real Card rollover state-transfer e2e coverage.
+- Done: operational runbook in `rt-p1-wf-versioning-runbook.md`.
+- Remaining: two independent non-Claude review seats; no agents requested.
+
+Mutation probes failed for identity defaults, ignored promotion, archive overwrite,
+shifted caps, extended retry timeout and SIGTERM; all restored before final checks.
+
+## Original pre-implementation snapshot
 
 Audited local `origin/main` at
 `b4a2751eb8fd7ada22a7b59ef921502c2347b671`; no remote refresh or push.

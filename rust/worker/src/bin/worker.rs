@@ -28,7 +28,7 @@
 //! issuing strictly monotonic tokens, which only carries cross-host value once
 //! a real keeper implements the lock endpoint (RELEASE-DEPLOY gap, see
 //! docs/plan/rtp1-predeploy-gaps.md row 17). Worker deployment versioning is
-//! opt-in via [`pg_worker::buildid::from_env`], which stays off unless a valid
+//! required via [`pg_worker::buildid::from_env`], which refuses missing or invalid
 //! build id is available (see that module for the switch).
 
 use std::str::FromStr;
@@ -124,6 +124,7 @@ fn select_keeper(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let identity = buildid::from_env().map_err(anyhow::Error::msg)?;
     let addr = env_or("PG_TEMPORAL_ADDR", "http://127.0.0.1:7233");
     let namespace = env_or("PG_NAMESPACE", "default");
 
@@ -187,8 +188,8 @@ async fn main() -> anyhow::Result<()> {
         .register_workflow::<Card>()?
         .register_workflow::<Phase>()?
         .register_activities(CardActivities::new(deps));
-    let opts = match buildid::from_env() {
-        Some((deployment, build)) => {
+    let opts = {
+        let (deployment, build) = identity;
             println!("worker versioning on: deployment={deployment} build_id={build}");
             let version = WorkerDeploymentVersion::builder()
                 .deployment_name(deployment)
@@ -202,8 +203,6 @@ async fn main() -> anyhow::Result<()> {
                         .build(),
                 )
                 .build()
-        }
-        None => builder.build(),
     };
 
     let mut worker = Worker::new(&runtime, client, opts)?;

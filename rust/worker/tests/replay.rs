@@ -3,7 +3,6 @@
 //! `PG_RECORD_DIR`), with host identity scrubbed. Replay only re-executes the
 //! workflow code against the recorded event stream, so it catches any
 //! non-deterministic edit before it reaches a live worker.
-
 use pg_worker::activities::{CardActivities, CardInput, CardOutput, Tick};
 use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::Card;
@@ -15,21 +14,34 @@ use temporalio_sdk::{
     workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions},
 };
 
-/// Load one recorded history from `tests/fixtures/<name>.json`.
-///
-/// A missing fixture is a hard failure, never a silent pass: a replay test with
-/// no evidence to replay would hide a broken recording step.
-/// A fixture may also carry a payload as `data_json` (the decoded JSON value)
-/// instead of `data` (its base64), which is expanded back to the recorded shape
-/// here before the history is handed to `WorkflowHistory::from_json`.
+/// Load a required current fixture, expanding decoded payloads for replay.
 fn history(name: &str) -> WorkflowHistory {
     let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    history_path(std::path::Path::new(&path))
+}
+
+fn history_path(path: &std::path::Path) -> WorkflowHistory {
+    let bytes = std::fs::read(path).expect("read history");
     let mut value: serde_json::Value =
-        serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {path}: {e}"));
+        serde_json::from_slice(&bytes).expect("parse history");
     expand_data_json(&mut value);
     let bytes = serde_json::to_vec(&value).expect("re-serialize history json");
     WorkflowHistory::from_json(&bytes).expect("parse history json")
+}
+
+#[tokio::test]
+async fn replays_all_kept_release_copies() {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/releases"));
+    for release in std::fs::read_dir(root).unwrap() {
+        for entry in std::fs::read_dir(release.unwrap().path()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json")
+                && path.file_name().unwrap() != "manifest.json" {
+                replayer().replay_workflow(history_path(&path)).await
+                    .expect("kept release history replays");
+            }
+        }
+    }
 }
 
 /// Standard base64 alphabet (RFC 4648 §4) with `=` padding.
@@ -221,13 +233,7 @@ async fn replays_check_fails() {
         .expect("check_fails history replays");
 }
 
-/// I2 / D7 (a): a pre-OBSERVE parking history -- a card that parked before the
-/// `park-observe-v1` marker existed -- must replay unchanged: `observe_card`
-/// returns `None` (no observe scheduled, no marker command issued), so the run
-/// reproduces exactly. The fixture is asserted marker-free (neither the observe
-/// nor the re-observe marker) and to contain the park activity.
-/// `check_fails` is that history: it parks and carries no core_patch marker,
-/// and every park runs through `observe_card`, so no new recording is needed.
+/// I2 / D7 (a): pre-OBSERVE parking replays without either patch marker.
 #[tokio::test]
 async fn replays_pre_observe_cap_park() {
     let markers = fixture_patch_markers("check_fails");
@@ -251,11 +257,7 @@ async fn replays_pre_observe_cap_park() {
         .expect("pre-observe parking history replays clean");
 }
 
-/// I2 / D7 (b): a post-OBSERVE, pre-REOBSERVE parking history -- observe ran and
-/// recorded `park-observe-v1`, but the park 409 re-observe loop (gated behind
-/// `park-reobserve-v1`) did not -- must replay unchanged: the observe replays,
-/// the park lands once, and no re-observe is scheduled. The fixture is asserted
-/// to carry `park-observe-v1`, to lack `park-reobserve-v1`, and to park.
+/// I2 / D7 (b): post-OBSERVE, pre-REOBSERVE parking replays unchanged.
 #[tokio::test]
 async fn replays_pre_reobserve_cap_park() {
     let markers = fixture_patch_markers("pre_reobserve_cap_park");
@@ -279,9 +281,7 @@ async fn replays_pre_reobserve_cap_park() {
         .expect("pre-reobserve parking history replays clean");
 }
 
-/// The gate-block run (a first attempt blocked on the card's check, main left
-/// untouched, then a retry that passes and merges) must replay
-/// deterministically like any other recorded run.
+/// A blocked check followed by a successful retry replays deterministically.
 #[tokio::test]
 async fn replays_gate_blocks() {
     replayer()

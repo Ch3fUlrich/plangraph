@@ -283,8 +283,7 @@ start_temporal() {
 }
 
 start_set_current() {
-  # The build-id only becomes settable once a worker has registered it; on a bare devstack that
-  # hasn't happened yet, so warn with the exact retry command and let start continue.
+  # Retry registration races; never report a ready stack without promotion.
   local i
   for ((i = 1; i <= 5; i++)); do
     if set_current_version; then
@@ -293,7 +292,8 @@ start_set_current() {
     fi
     sleep 2
   done
-  echo "WARNING: set-current-version failed; the driver hangs without it — once a worker registers build-id '$DEVSTACK_BUILD_ID' re-run: '$TEMPORAL_CLI worker deployment set-current-version --address $TEMPORAL_ADDR --deployment-name $DEVSTACK_DEPLOYMENT --build-id $DEVSTACK_BUILD_ID --yes' (or 'devstack.sh set-current')" >&2
+  echo "ERROR: set-current-version failed; register the build then retry devstack.sh set-current" >&2
+  return 1
 }
 
 start_pg_local() {

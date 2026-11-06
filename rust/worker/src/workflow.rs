@@ -78,37 +78,7 @@ const PARK_REOBSERVE_PATCH: &str = "park-reobserve-v1";
 /// workflow fails with the last cause (D3).
 const PARK_REOBSERVES: u32 = 2;
 
-/// Workflow wire input. Kept here so gate metadata does not change the legacy
-/// activity input contract; missing fields preserve recorded start payloads.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CardInput {
-    #[serde(flatten)]
-    pub legacy: crate::activities::CardInput,
-    #[serde(default)]
-    pub risk_tagged: bool,
-    #[serde(default)]
-    pub heldout_cmd: String,
-    #[serde(default)]
-    pub smoke_checks: Vec<String>,
-    #[serde(default)]
-    pub exports: Vec<String>,
-    #[serde(default)]
-    pub base_sha: Option<String>,
-}
-
-impl std::ops::Deref for CardInput {
-    type Target = crate::activities::CardInput;
-
-    fn deref(&self) -> &Self::Target {
-        &self.legacy
-    }
-}
-
-impl std::ops::DerefMut for CardInput {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.legacy
-    }
-}
+pub use crate::card_input::CardInput;
 
 /// Alarm reason when a question stayed unanswered until the wait cap.
 const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
@@ -229,7 +199,7 @@ impl Card {
     #[run]
     pub async fn run(
         ctx: &mut WorkflowContext<Self>,
-        input: CardInput,
+        mut input: CardInput,
     ) -> WorkflowResult<CardOutput> {
         // A constant: the policy and the activity options must not vary per run.
         let cfg = Config::default();
@@ -242,7 +212,6 @@ impl Card {
             op.cancel_with_reason("cancel before start".to_string());
         }
 
-        // Local state, rebuilt exactly on replay.
         let mut history: Vec<Attempt> = Vec::new();
         let mut base_sha = input.claim.base_sha.clone();
         let mut n: u32 = 0;
@@ -256,8 +225,25 @@ impl Card {
         // Questions answered so far; at the limit the next one parks the card.
         let mut question_rounds: u32 = 0;
         let max_question_rounds = input.max_question_rounds.unwrap_or(cfg.max_question_rounds);
-
+        let bounded = ctx.patched(crate::rollover::LIMITS_PATCH);
+        if let Some(r) = input.resume.take() {
+            history = r.history; base_sha = r.base_sha; n = r.n;
+            waits = r.waits; waited = r.waited; context = r.context;
+            limited = r.limited; leg = r.leg; answers = r.answers;
+            question_rounds = r.question_rounds;
+            ctx.state_mut(|s| s.answers.splice(0..0, r.signals).for_each(drop));
+        }
+        let initial_waits = waits;
         loop {
+            if bounded && n > 0 && crate::rollover::due(
+                ctx.history_length(), waits - initial_waits, ctx.continue_as_new_suggested(),
+            ) && !ctx.state(|s| s.cancel_requested) {
+                input.resume = Some(crate::rollover::Resume {
+                    history, base_sha, n, waits, waited, context, limited, leg, answers,
+                    question_rounds, signals: ctx.state(|s| s.answers.clone()),
+                });
+                return ctx.continue_as_new(input, Default::default()).map(|v| match v {});
+            }
             // A cancel that landed between attempts must not start another one.
             if ctx.state(|s| s.cancel_requested) {
                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
@@ -283,11 +269,12 @@ impl Card {
                 .initial_interval(Duration::from_secs(1))
                 .maximum_attempts(1)
                 .build();
-            let opts = ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+            let mut opts = ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
                 .heartbeat_timeout(cfg.heartbeat_timeout)
                 .retry_policy(retry)
                 .cancellation_token(op.clone())
                 .build();
+            if bounded { crate::rollover::bound(&mut opts, cfg.start_to_close); }
             let attempt_input = AttemptInput {
                 claim: Claim {
                     base_sha: base_sha.clone(),
@@ -1714,6 +1701,7 @@ mod tests {
             smoke_checks: Vec::new(),
             exports: Vec::new(),
             base_sha: None,
+            resume: None,
         };
         (root, input)
     }

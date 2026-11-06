@@ -27,7 +27,7 @@ fn with_gate_inputs(legacy: crate::activities::CardInput) -> CardInput {
         smoke_checks: legacy.claim.smoke_checks.clone(),
         exports: legacy.claim.exports.clone(),
         base_sha: Some(legacy.claim.base_sha.clone()),
-        legacy,
+        resume: None, legacy,
     }
 }
 

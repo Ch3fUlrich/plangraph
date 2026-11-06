@@ -282,11 +282,11 @@ def test_docker_run_failure_removes_partial_container_with_volume(stack):
     assert not any(l.startswith("docker rm") and " -v" not in l for l in stack.lines())
 
 
-def test_set_current_failure_does_not_fail_start(stack):
+def test_set_current_failure_fails_start(stack):
     # the script retries 5x with 2 s sleeps; allow headroom
     r = stack.run("start", timeout=40, extra_env={"FAKE_SETCUR_FAIL": "1"})
-    assert r.returncode == 0
-    assert "WARNING: set-current-version failed" in r.stderr
+    assert r.returncode != 0
+    assert "ERROR: set-current-version failed" in r.stderr
 
 
 def test_bogus_pg_mode_exits_2(stack):
