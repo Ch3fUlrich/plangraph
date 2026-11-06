@@ -131,7 +131,7 @@ fn unknown_gate_not_a_skip() {
     assert_eq!(o["unknown_gate"], 1);
     assert_eq!(o["without_gate"], 0);
     assert_eq!(o["gate_denominator"], 0);
-    assert!(o["skip_fraction"].is_null());
+    assert_eq!(o["skip_fraction"], 0.0);
 }
 #[test]
 fn fixture_backfill_within_five_percent() {
@@ -145,4 +145,19 @@ fn fixture_backfill_within_five_percent() {
     ] {
         assert!((r["totals"][field].as_f64().unwrap() - expected).abs() / expected <= 0.05);
     }
+}
+
+#[test]
+fn skip_fraction_over_all_launches() {
+    let mut a = row("override", "OK", 10, 1);
+    a["override"] = json!(true);
+    a["gate"] = json!(false);
+    let r = build_report(&[], &[a, row("ordinary", "OK", 11, 1)], 0, 20).unwrap();
+    let o = &r["totals"]["overrides"];
+    assert_eq!(o["without_gate"], 1);
+    assert_eq!(o["gate_denominator"], 1);
+    assert_eq!(o["skip_fraction"], 0.5);
+    assert!(
+        build_report(&[], &[], 0, 1).unwrap()["totals"]["overrides"]["skip_fraction"].is_null()
+    );
 }

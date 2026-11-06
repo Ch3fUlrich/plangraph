@@ -78,12 +78,58 @@ fn baseline(state: &std::path::Path, since: i64, until: i64, report: &Value) -> 
         .map_err(|e| e.to_string())
 }
 fn timestamp(s: &str) -> Result<i64, String> {
-    if s.as_bytes().get(10) != Some(&b'T') {
-        return Err("invalid RFC3339 timestamp".into());
-    }
-    pg_worker_core::reset::http_date(s)
-        .map(|t| t.floor() as i64)
-        .ok_or("invalid RFC3339 timestamp".into())
+    let parse = || -> Option<i64> {
+        let b = s.as_bytes();
+        if !s.is_ascii()
+            || !matches!(b.len(), 20 | 25)
+            || b[4] != b'-'
+            || b[7] != b'-'
+            || b[10] != b'T'
+            || b[13] != b':'
+            || b[16] != b':'
+        {
+            return None;
+        }
+        let number = |a: usize, z: usize| -> Option<i64> {
+            b[a..z].iter().all(u8::is_ascii_digit).then_some(())?;
+            s[a..z].parse().ok()
+        };
+        let (year, month, day) = (number(0, 4)?, number(5, 7)?, number(8, 10)?);
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days = match month {
+            2 => 28 + i64::from(leap),
+            4 | 6 | 9 | 11 => 30,
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            _ => return None,
+        };
+        let (hour, minute, second) = (number(11, 13)?, number(14, 16)?, number(17, 19)?);
+        if day < 1 || day > days || hour > 23 || minute > 59 || second > 59 {
+            return None;
+        }
+        let offset = if b.len() == 20 {
+            if b[19] != b'Z' {
+                return None;
+            }
+            0
+        } else {
+            if !matches!(b[19], b'+' | b'-') || b[22] != b':' {
+                return None;
+            }
+            let (h, m) = (number(20, 22)?, number(23, 25)?);
+            if h > 23 || m > 59 {
+                return None;
+            }
+            (h * 3600 + m * 60) * if b[19] == b'+' { 1 } else { -1 }
+        };
+        let y = year - i64::from(month <= 2);
+        let era = y.div_euclid(400);
+        let yo = y - era * 400;
+        let m = month + if month > 2 { -3 } else { 9 };
+        let days =
+            era * 146097 + yo * 365 + yo / 4 - yo / 100 + (153 * m + 2) / 5 + day - 1 - 719468;
+        Some(days * 86400 + hour * 3600 + minute * 60 + second - offset)
+    };
+    parse().ok_or_else(|| "invalid RFC3339 timestamp".into())
 }
 
 #[cfg(test)]

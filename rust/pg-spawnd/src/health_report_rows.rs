@@ -87,12 +87,21 @@ pub(crate) fn corrected(records: &[Value], evidence: &[Value]) -> Vec<Value> {
             if row["outcome"].is_null() {
                 legacy(&mut row);
             }
-            rows.insert((row["run_id"].to_string(), row["attempt"].to_string()), row);
+            rows.insert(
+                (
+                    row["run_id"].to_string(),
+                    row["attempt"].as_u64().unwrap_or(0),
+                ),
+                row,
+            );
         }
     }
     for row in evidence.iter().filter(|r| r.get("kind").is_none()) {
         rows.insert(
-            (row["run_id"].to_string(), row["attempt"].to_string()),
+            (
+                row["run_id"].to_string(),
+                row["attempt"].as_u64().unwrap_or(0),
+            ),
             row.clone(),
         );
     }

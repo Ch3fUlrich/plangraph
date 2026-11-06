@@ -16,8 +16,9 @@ It never writes the private historical baseline or enables routing. Rollback:
 complete history, including prior-start holds and cleared no-time episodes.
 MAX_TIME is neutral for strikes. Unknown legacy evidence remains unknown.
 Legacy classification uses known exit/role facts; successful rows without usable
-facts remain unknown. Gate skip fractions use only overrides with boolean gate
-evidence; missing gates are reported separately, never inferred as skips.
+facts remain unknown. Gate skip fractions divide gate-less overrides by all launches.
+The gate-known override denominator and unknown-gate count are separate metrics;
+missing gates are never inferred as skips.
 Recovery metrics retain full corrected history, and leg metadata is chronological.
 
 The immutable operator baseline lives in private plangraph-data at

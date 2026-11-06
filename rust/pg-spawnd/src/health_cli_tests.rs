@@ -6,6 +6,9 @@ fn health_json_and_report_flags_help() {
         execute(args.into_iter().map(String::from).collect(), &mut out).unwrap();
         assert!(String::from_utf8(out).unwrap().contains("--baseline"));
     }
+    assert_eq!(timestamp("1970-01-01T00:00:00Z").unwrap(), 0);
+    assert_eq!(timestamp("1969-12-31T23:00:00-01:00").unwrap(), 0);
+    assert!(timestamp("2024-02-29T00:00:00Z").is_ok());
     assert_eq!(timestamp("1970-01-01T01:00:00+01:00").unwrap(), 0);
     assert_eq!(
         timestamp("2026-11-02T10:30:00Z").unwrap() - timestamp("2026-10-30T10:30:00Z").unwrap(),
@@ -19,6 +22,9 @@ fn invalid_windows_and_duplicates() {
         "2026-01-01T24:00:00Z",
         "2026-01-01T00:00:00",
         "bad",
+        "2026-01-01T00:00:00.1Z",
+        "2026-01-01T00:00:00+24:00",
+        "2026-01-01T00:00:60Z",
     ] {
         assert!(timestamp(s).is_err());
     }
@@ -52,4 +58,25 @@ fn baseline_stored_private_not_symlink() {
         assert!(baseline(&dir, 1, 2, &Value::Null).is_err());
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn equal_and_inverted_cli_windows() {
+    for until in ["2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z"] {
+        let error = execute(
+            [
+                "report",
+                "--since",
+                "2026-01-02T00:00:00Z",
+                "--until",
+                until,
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error, "health report: InvalidWindow");
+    }
 }

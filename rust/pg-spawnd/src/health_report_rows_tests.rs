@@ -21,7 +21,15 @@ fn legacy_known_facts() {
         ]})],
         &[],
     );
-    for (i, expected) in ["RATE_LIMIT", "MAX_TIME", "cancelled"].iter().enumerate() {
+    for (i, expected) in [
+        "RATE_LIMIT",
+        "MAX_TIME",
+        pg_worker_core::outcome::Class::Neutral(pg_worker_core::outcome::Terminal::Cancelled)
+            .as_str(),
+    ]
+    .iter()
+    .enumerate()
+    {
         assert_eq!(rows[i]["outcome"], *expected);
     }
     assert!(rows[3]["outcome"].is_null());
@@ -92,4 +100,27 @@ fn legacy_classifier_unknown_not_guessed() {
         &[],
     );
     assert!(rows[0]["outcome"].is_null());
+}
+
+#[test]
+fn attempts_sort_numerically() {
+    let evidence: Vec<_> = (0..13)
+        .rev()
+        .map(|n| json!({"run_id":"run", "attempt":n}))
+        .collect();
+    let rows = corrected(&[], &evidence);
+    assert_eq!(
+        rows.iter()
+            .map(|r| r["attempt"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        (0..13).collect::<Vec<_>>()
+    );
+    let records = [json!({"run_id":"run", "attempts":evidence})];
+    assert_eq!(
+        corrected(&records, &[])
+            .iter()
+            .map(|r| r["attempt"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        (0..13).collect::<Vec<_>>()
+    );
 }
