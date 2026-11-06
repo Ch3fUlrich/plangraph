@@ -1,0 +1,1 @@
+- **FLEET-SEAT-SUPPLY (part 2):** Add inactive, authority-covered daily probe planning with persisted attempt budgets and different-family void retries.

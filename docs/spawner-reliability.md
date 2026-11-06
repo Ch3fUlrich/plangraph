@@ -17,6 +17,26 @@ adapter until P-R11. Review seats remain enabled even when evidence is off.
 Only supported complete result frames supply rendered review text; missing or
 unknown output produces HALT, never a manufactured witness or finish reason.
 
+## RL26: exact references
+
+RL26 exact references accept registered ids or unique exact role-eligible models.
+Ambiguous and fuzzy matches refuse, with deterministic bounded suggestions.
+The read-only Python catalog bridge supplies id, model and roles; AdapterCatalog
+caches successful reads for 60 seconds, keyed by state directory.
+
+PLANGRAPH_RELIABILITY_LEG_REF overrides $XDG_CONFIG_HOME/plangraph/reliability.json
+leg_ref (string or role map); default root is ~/.config (APPDATA on Windows), independent of state.
+Default and invalid switches are off; warn/shadow observes without changing args.
+On validates references before routing or spawning and canonicalizes args.leg.
+RL26 is admission only: all modes retain the existing planner flow and its choice.
+Selecting a leg by explicit reference belongs to RL20, the override gate.
+Admission refusals retain validation refusal records and local host handling.
+Non-null diff_ref with implement refuses in every mode, including dry runs,
+and names role review. No live switch is enabled by this change.
+
+No external STD ACCEPT or historical live gate is claimed. Synthetic tests do
+not satisfy either gate; independent acceptance remains required.
+
 ## RL12: backend/API foundation (partial)
 
 The Unix-only `watch` module defines metadata-only hooks and results, an owned
@@ -41,23 +61,3 @@ No production caller is enabled.
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
-# Review artifact fix-round verification
-
-Only exact `VERDICT: PASS` lines authorize passing evidence; noncanonical,
-hyphenated, or later unknown verdicts fail closed. Raw review text is retained
-(with secret redaction), including incomplete-evidence diagnostics and empty text.
-The artifact regression test dry-runs `tools/seat_verdict.py` on canonical PASS,
-HALT, and the quoted-HALT/markdown-ACCEPT pair. The external tool accepts that
-last pair; the stricter artifact producer deliberately records HALT instead.
-Temporarily restoring the old parser reproduced failures for the markdown pair
-and `verdict: pass-through`; restoring the old body replacement failed the
-missing-witness test. Dry runs keep the existing record schema without a new
-unclassified-attempt counter; the existing placement-tools schema test covers it.
-
-The reported HIGH CI excerpts are successful negative-path checks:
-`pg-jail/src/lib.rs:229` (`missing_allow_path_is_rejected`),
-`pg-jail/tests/escape.rs:332` (`fail_closed_missing_path`, including the expected
-`pg-jail/src/main.rs:36` missing-command diagnostic),
-`pg-spawnd/src/launch_tests.rs:152` (`lookup_rules_and_missing_program`),
-`pg-spawnd/src/review_artifacts_tests.rs:75` (`missing_witness_or_finish_never_pass`),
-and `pg-spawnd/src/runs_tests.rs:179` (`env_prompt_and_missing_carrier`).

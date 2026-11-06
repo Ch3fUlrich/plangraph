@@ -13,7 +13,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
-    "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna", "opencode-console-sonnet-5.5",
+    "openrouter-free", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
     "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
@@ -144,7 +144,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
-                      "opencode-console-sonnet-5.5", "agy-gemini-3.8-flash",
+                      "agy-gemini-3.8-flash",
                       "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
     assert all("256k" in leg.windows for leg in r.legs)
 
@@ -331,10 +331,10 @@ def test_writer_order_d2683_unavailable_skipped():
 
 
 def test_writer_order_d2683_review_order_unchanged():
-    # (c) review plan order is unchanged (qodercli-qwen3.8-flash first)
+    # D-3950: the first eligible free review leg now leads.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "qodercli-qwen3.8-flash"
+    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
@@ -374,12 +374,11 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
 
 
 def test_no_implement_plan_leg_has_claude_family():
-    # F5 amended by D-3455: the console Sonnet writer is the one claude_family implement
-    # leg, and it is never a review seat.
+    # D-3817/D-3763: no claude-family implement leg.
     for estimate in (1000, 20000, 100000):
         plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
         assert plan.legs
-        assert {leg.id for leg in plan.legs if leg.claude_family} <= {"opencode-console-sonnet-5.5"}
+        assert {leg.id for leg in plan.legs if leg.claude_family} == set()
         review = plan_spawn({"estimate_tokens": estimate}, role="review", writer_families=("gpt",))
         assert not any(leg.claude_family for leg in review.review_seats)
 
@@ -397,7 +396,7 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
         return {"state": "available", "evidence": None}
 
     c_rev = {"estimate_tokens": 20000, "risk_tags": []}
-    plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader)
+    plan_rev = plan_spawn(c_rev, role="review", writer_families=("claude",), leg_reader=qoder_mock_reader, legs=tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l for l in DEFAULT_LEGS))
     assert plan_rev.first_leg.id == "qodercli-qwen3.8-flash"
     assert not any(s["leg"] == "qodercli-qwen3.8-flash" for s in plan_rev.skipped)
 

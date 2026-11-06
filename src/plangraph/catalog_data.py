@@ -52,7 +52,7 @@ SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
         "trains_on_prompts": 0,
     },
     {
-        "model_id": "opencode-go/gemini-4-argon-contributor",
+        "model_id": "opencode-go/gemini-4-argon",
         "provider_id": "opencode-go",
         "upstream_id": "gemini-4-argon",
         "family": "gemini",
@@ -283,9 +283,9 @@ SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
         "trains_on_prompts": 0,
     },
     {
-        "model_id": "opencode-go/deepseek-v4-flash-max",
+        "model_id": "opencode-go/deepseek-v4.1-flash",
         "provider_id": "opencode-go",
-        "upstream_id": "deepseek-v4-flash-max",
+        "upstream_id": "deepseek-v4.1-flash",
         "family": "deepseek",
         "parameter_effort": None,
         "max_safe_effort": None,
@@ -325,9 +325,9 @@ SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
         "trains_on_prompts": 0,
     },
     {
-        "model_id": "opencode-go/glm-5.2-max",
+        "model_id": "opencode-go/glm-5.2",
         "provider_id": "opencode-go",
-        "upstream_id": "glm-5.2-max",
+        "upstream_id": "glm-5.2",
         "family": "glm",
         "parameter_effort": None,
         "max_safe_effort": None,
