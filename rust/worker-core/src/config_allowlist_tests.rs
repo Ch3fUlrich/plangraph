@@ -57,5 +57,8 @@ fn permission_denied_allowlist_fails_without_contents() {
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
         assert!(error.to_string().contains(&file.display().to_string()));
         assert!(!error.to_string().contains(&contents));
+    } else {
+        assert_eq!(read.unwrap(), contents);
+        assert!(result.unwrap().card_allowed(&contents));
     }
 }

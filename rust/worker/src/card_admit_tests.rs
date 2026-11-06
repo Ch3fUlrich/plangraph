@@ -3,8 +3,8 @@ use super::*;
 #[test]
 fn only_admission_is_non_retryable() {
     assert_failure(
-        attempt_error(EntryError::Admission("s2-mapping".into())),
-        Some("card_admission_refused"),
+        attempt_error(AdmissionReason::NotAllowlisted("s2-mapping".into()).into()),
+        Some("card_not_allowlisted"),
         true,
     );
     let io = crate::attempt::AttemptError::Io(std::io::Error::from(
