@@ -1,30 +1,24 @@
 use super::*;
 
-#[derive(Default)]
-pub(crate) struct CountingHarness(pub std::sync::atomic::AtomicUsize);
-impl crate::harness::Harness for CountingHarness {
-    fn name(&self) -> &str {
-        "fake"
-    }
-    fn command(&self, _: &crate::harness::HarnessRun) -> std::process::Command {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        std::process::Command::new("true")
-    }
-}
-
 #[test]
 fn only_admission_is_non_retryable() {
-    let refused = format!(
-        "{:?}",
-        attempt_error(EntryError::Admission("s2-mapping".into()))
+    assert_failure(
+        attempt_error(EntryError::Admission("s2-mapping".into())),
+        Some("card_admission_refused"),
+        true,
     );
-    assert!(refused.contains("card_admission_refused") && refused.contains("non_retryable: true"));
     let io = crate::attempt::AttemptError::Io(std::io::Error::from(
         std::io::ErrorKind::PermissionDenied,
     ));
-    let retryable = format!("{:?}", attempt_error(io.into()));
-    assert!(!retryable.contains("card_admission_refused"));
-    assert!(retryable.contains("non_retryable: false"));
+    assert_failure(attempt_error(io.into()), None, false);
+}
+
+pub(crate) fn assert_failure(error: ActivityError, kind: Option<&str>, terminal: bool) {
+    let ActivityError::Application(failure) = error else {
+        panic!("expected application failure")
+    };
+    assert_eq!(failure.type_name(), kind);
+    assert_eq!(failure.is_non_retryable(), terminal);
 }
 
 #[test]

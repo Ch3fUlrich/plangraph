@@ -31,10 +31,7 @@ fn unlisted_claim_never_calls_keeper() {
         ..Config::default()
     };
     let error = admitted_claim(&keeper, &cfg, "unlisted").unwrap_err();
-    let text = format!("{error:?}");
-    assert!(text.contains("card_not_allowlisted"), "{text}");
-    assert!(text.contains("unlisted"), "{text}");
-    assert!(text.contains("non_retryable: true"), "{text}");
+    crate::card_admit::tests::assert_failure(error, Some("card_admission_refused"), true);
     assert!(keeper.claim_card_calls().is_empty());
 }
 
@@ -43,12 +40,6 @@ fn empty_claim_never_starts_attempt() {
     let keeper = StubKeeper::default();
     let cfg = Config::default();
     let result = admitted_claim(&keeper, &cfg, "empty-claim-entry-s2");
-    let text = format!("{:?}", result.unwrap_err());
-    assert!(text.contains("card_not_claimable"), "{text}");
-    assert!(text.contains("empty-claim-entry-s2"), "{text}");
-    assert!(text.contains("non_retryable: true"), "{text}");
-    let harness = crate::card_admit::tests::CountingHarness::default();
-    assert!(crate::card_admit::run_attempt(Some(&harness), &cfg, &Patterns::default(), None, &|| false).is_err());
-    assert_eq!(harness.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    crate::card_admit::tests::assert_failure(result.unwrap_err(), Some("card_admission_refused"), true);
     assert_eq!(keeper.claim_card_calls().len(), 1);
 }

@@ -1,1 +1,1 @@
-Worker: enforce startup card allowlists and exclusive activity admission without treating filesystem permission errors as permanent refusals.
+Worker: enforce BOM-aware card allowlists at every attempt entry, unify typed admission refusals, preserve exclusive ownership, and report startup read paths and error kinds without exposing contents.

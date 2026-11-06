@@ -721,6 +721,10 @@ pub(crate) fn admitted_claim(
     cfg: &Config,
     key: &str,
 ) -> Result<Option<Claim>, ActivityError> {
+    let cfg = &cfg
+        .clone()
+        .with_card_allowlist_env()
+        .map_err(activity_error)?;
     crate::card_admit::allow(cfg, key)?;
     crate::card_admit::claimed(
         settle_refusal(do_claim_card(keeper, key), "claim_card").map(Option::flatten)?,
@@ -1249,7 +1253,7 @@ impl CardActivities {
                     harness.as_deref(),
                     &deps.cfg,
                     &deps.patterns,
-                    Some(&input),
+                    &input,
                     &is_cancelled,
                 )
             })
