@@ -31,6 +31,30 @@ Seed timed and no-time parked observations for the operator check. No network
 is used by the verb. Synthetic public fixtures are not historical measurements
 and do not satisfy this live gate or independent ACCEPT.
 
+## RL11: family floor and served-rate ordering
+
+Pure `health::family_floor` and `health::order_legs` use first plan metadata per
+leg id. Missing health is Closed; unknown metadata retains its evidence. A family
+without Closed/Degraded peers floors exactly its first eligible heuristic OPEN
+to available Degraded, preserving evidence and deadline. Hard reset facts and
+provider overlays never qualify. Healthy peers are never demoted for a floor.
+Review TOOL_CALL_ONLY retains review_unfit until a later review OK; other roles
+still strike, open, and reset the non-verdict counter without setting review_unfit.
+Stable order is tier, review-unfit (review only), then
+Closed/Degraded/HalfOpen/Open. Unfit is last within its tier, even after reprobes.
+OPEN filtering remains RL18's responsibility.
+
+`health_rates` counts only first attempts, last physical correction per
+run/served-route/model. Default minimum is 20 samples and 50 percent usable;
+below the minimum no demotion occurs. Only Closed becomes Degraded: rates never
+create hard OPEN, reset evidence, or expiry. Authenticated served identifiers
+must be supplied by RL18/R11, never guessed from requested models. RL10B's
+provider window still outranks quota midnight when applicable.
+
+No switch, daemon caller, or live routing is added. Rollback is `git revert`.
+Hermetic fixtures are not recorded harness-version/oracle parity or live GO.
+Those gates, green CI and independent HIGH acceptance remain required.
+
 ## RL17: derived evidence and review seats
 
 Evidence defaults off. `reliability.json` accepts `evidence` values off/shadow/on,

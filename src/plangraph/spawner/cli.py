@@ -143,7 +143,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.verb == 'catalog':
         from plangraph.routing_support.resolver import get_catalog_models
-        print(json.dumps([dict(id=row['id'], model=row.get('model', row['id']), roles=row.get('roles', []))
+        from plangraph.planner.legs import REVIEW_UNFIT_SEATS
+        print(json.dumps([dict(dict(id=row['id'], model=row.get('model', row['id']), roles=row.get('roles', [])),
+                               **({'review_unfit': True} if row.get('model', row['id']) in REVIEW_UNFIT_SEATS else {}))
                           for row in get_catalog_models()]))
         return 0
     if args.verb == 'launch-spec':
