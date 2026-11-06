@@ -363,6 +363,10 @@ class LegAdapter:
     def __call__(self, leg, **kwargs):
         return self.leg_status(leg, **kwargs)
 
+    def quarantine(self, leg):
+        if self.enabled:
+            self.leg_status(leg)
+            self._served.discard(self.identity(leg))
     def leg_status(self, leg, **kwargs):
         if not self.enabled:
             return self.store.leg_status(leg, **kwargs)

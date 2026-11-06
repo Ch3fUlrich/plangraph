@@ -89,22 +89,38 @@ def notify_leg_refused(service, record, chosen, reason):
         logging.getLogger(__name__).exception('leg refusal notify failed')
 
 
+def _limit_target(service):
+    from . import leg_state
+    target = service.leg_reader
+    if not hasattr(target, 'record_harness_limit'):
+        target = getattr(target, '__self__', None)
+    return target if hasattr(target, 'record_harness_limit') else leg_state
+
+
+def _book_failure(service, chosen, line):
+    """Book legacy evidence and quarantine the enabled reader's cached identity.
+
+    The adapter replaces its served set on authoritative refresh, so this
+    observation is transient, not a second availability catalog. Read the
+    injected adapter flag only; disabled readers retain legacy store semantics.
+    """
+    from plangraph.routing_support.leg_state import LegAdapter
+    from .leg_probe import key
+    target = _limit_target(service)
+    target.record_harness_limit(key(chosen), line, 'spawner:harness', down_s=_booking_seconds())
+    if isinstance(target, LegAdapter) and target.enabled:
+        target.quarantine(key(chosen))
+
+
 def fallthrough_reason(service, chosen, job, record):
     if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
-    from . import leg_state
-    from .leg_probe import key as leg_key
     line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
         # not in the captured output) books and notifies like any harness limit.
         line = job.refusal
     if line:
-        target = service.leg_reader
-        if not hasattr(target, 'record_harness_limit'):
-            target = getattr(target, '__self__', None)
-        if not hasattr(target, 'record_harness_limit'):
-            target = leg_state
         # Q16/M8: one leg key shared with the probe path -- 'agy/<model>' only
         # for an agy leg's bare model.
         # D-3605 (a): every harness-limit line without a provider reset time
@@ -113,7 +129,7 @@ def fallthrough_reason(service, chosen, job, record):
         # 'Resets in ...' lines keep their own reset because
         # record_harness_limit applies down_s only when the line carries no
         # reset time.
-        target.record_harness_limit(leg_key(chosen), line, 'spawner:harness', down_s=_booking_seconds())
+        _book_failure(service, chosen, line)
         # M9/M15: a guard or cancel verdict is never stomped by a fallthrough.
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
@@ -122,6 +138,7 @@ def fallthrough_reason(service, chosen, job, record):
         return reason
     reason = unavailable_reason(job.exit_code, job.stdout, job.stderr)
     if reason is not None:
+        _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
     return reason
 

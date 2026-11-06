@@ -81,6 +81,7 @@ def status(findings):
     return '\n'.join('! stall ' + json.dumps(f, sort_keys=True) for f in findings)
 
 def read_runs(state, *, dry_run=False):
+    from .item_key import valid_item
     from .private_io import atomic_write_private, read_text_retry
     runs, bad = [], []
     for path in sorted((Path(state) / 'runs').glob('run-*/record.json')):
@@ -91,7 +92,7 @@ def read_runs(state, *, dry_run=False):
             completion = record.get('completion') if isinstance(record.get('completion'), dict) else {}
             if completion.get('parent_session') and not record.get('parent_session'):
                 record['parent_session'] = completion['parent_session']
-            if completion.get('item') and not record.get('item_key'):
+            if record.get('item_key') is None and valid_item(completion.get('item')):
                 record['item_key'] = completion['item']
             if (path.parent / 'parent.delivered').exists():
                 record['_completion_acknowledged'] = True
