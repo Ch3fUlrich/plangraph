@@ -26,6 +26,7 @@
 - D-4377 server-L1 opencode hold, no new spawn | default until its DONE or 16:05Z | deadline 16:05Z
 - BLOCKED L1-PLAN-PROMPT finish_reason absent until spawner-main moves | default wait | deadline none
 - BLOCKED OP-D4 Sol and mimo unwitnessed | default BLOCKED, D-4388 gate stays | deadline 16:45Z
+- D-4394 ROUTE-PLAN keys from build-L1-route-0292: phase/route-plan-p5-lite f40a9603, no counting seat, nothing claimed; next phase review 2 counting seats; card /home/s/code/plangraph-data-worktrees/route-plan-briefs/docs/proposals/2026-11-04-routing-planning/HANDOFF-2026-11-06-e.card.md | default take it after the seats queue | deadline none
 ## Traps
 - seat() can lose the gate race: retry until the json exists; never run a list script in zsh
 - Use build-L1.token, never router.token
