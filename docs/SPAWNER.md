@@ -39,7 +39,7 @@ it does not close items or bypass the keeper's authorization checks.
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
-`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds;
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
 expiry kills its process tree and records rc 124 with FAILED completion.
 The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to

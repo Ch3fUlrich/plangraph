@@ -4,6 +4,7 @@ import os
 
 
 def thresholds(card=None, *, role=None):
+    """Unset PLANGRAPH_SPAWN_RUN_TIMEOUT gives a 25-minute review cap; empty means no review cap."""
     from plangraph.planner.routing import SpawnRefused
     card = card or {}
     result = {'hard_max': False}   # table max_min may carry the first-edit hold (M5)
