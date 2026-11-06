@@ -1,8 +1,8 @@
 use super::*;
 use crate::evidence_row::{ObservationKind, ObservationRow};
-struct Temp(PathBuf);
+pub(super) struct Temp(pub(super) PathBuf);
 impl Temp {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let p = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
         fs::create_dir(&p).unwrap();
         Self(p)
@@ -13,7 +13,7 @@ impl Drop for Temp {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn observation(ts: i64) -> EvidenceRow {
+pub(super) fn observation(ts: i64) -> EvidenceRow {
     EvidenceRow::Observation(ObservationRow {
         leg_key: "leg".into(),
         ts,
@@ -49,7 +49,7 @@ fn child_append() {
                         },
                         state: Some("parked".into()),
                         first_seen: Some(1),
-                        phase: Some(phase),
+                        phase: (kind == ObservationKind::OmniRouteSeen).then_some(phase),
                     }))
                     .unwrap();
             }
@@ -134,7 +134,7 @@ fn switch_off_no_rows_records_remain() {
     assert!(store.window(0, 10).unwrap().outcomes.is_empty());
     assert!(!state.exists());
 }
-fn outcome(ts: i64) -> EvidenceRow {
+pub(super) fn outcome(ts: i64) -> EvidenceRow {
     serde_json::from_value(serde_json::json!({"type":"outcome","row":{
         "leg_key":"leg","route_key":"route","ts":ts,"role":"review",
         "outcome":"OK","run_id":"run-test","attempt":0,
@@ -214,7 +214,7 @@ fn parked_no_time_phase_does_not_duplicate() {
     assert!(store
         .append(&EvidenceRow::Observation(row.clone()))
         .unwrap());
-    row.phase = Some(Phase::First);
+    row.ts = 2;
     assert!(!store.append(&EvidenceRow::Observation(row)).unwrap());
     assert_eq!(store.window(0, 10).unwrap().observations.len(), 1);
 }
