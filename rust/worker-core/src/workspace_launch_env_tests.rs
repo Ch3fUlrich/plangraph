@@ -45,12 +45,32 @@ fn checkout_mode_applies_env_before_canary() {
     let f = Fixture::new();
     let tree = f.writer();
     verify_workspace(&f.repo, &f.ws, &tree, None).unwrap();
-    git(&tree, &["commit", "--allow-empty", "-m", "changed"]).unwrap();
+    // Mask inherited identity so this probe also covers identity-free workers.
+    git(&tree, &["config", "--worktree", "user.name", ""]).unwrap();
+    git(&tree, &["config", "--worktree", "user.email", ""]).unwrap();
+    git(
+        &tree,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.org",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "changed",
+        ],
+    )
+    .unwrap();
     let mut cmd = Command::new("unused");
     cmd.env("GIT_DIR", "wrong")
-        .env("KEEPER_DATABASE_TOKEN", "wrong");
+        .env("KEEPER_DATABASE_TOKEN", "wrong")
+        .env("UNCHANGED", "caller-value");
     let result = launch(&f, &mut cmd, Some(&tree));
     assert!(result.is_err());
+    assert!(cmd
+        .get_envs()
+        .any(|(k, v)| { k == "UNCHANGED" && v == Some(std::ffi::OsStr::new("caller-value")) }));
     assert_eq!(cmd.get_current_dir(), Some(tree.as_path()));
     let pwd = cmd.get_envs().find(|(k, _)| *k == "PWD").unwrap().1;
     assert_eq!(pwd, Some(tree.as_os_str()));
