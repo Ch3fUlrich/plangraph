@@ -1,11 +1,11 @@
-# L1 card · build-L1-0252 · 2026-11-06T10:40Z
+# L1 card · build-L1-0252 · 2026-11-06T10:33Z
 ## Goal
 - D-4207 terra leg first, then D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
 ## Keeper
 - claimed: plangraph:AUTOOS-HOOKS-INTERIM-S06, plangraph:SPAWNER-ORPHAN-REAP, plangraph:RIN-PATH-REPOINT, plangraph:ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z)
 - ready next: plangraph:AUTOOS-HOOKS-INTERIM-S09, plangraph:AUTOOS-HOOKS-INTERIM-S14 after #446 #447
 ## Done
-- 11-06T10:37Z D-4099 - GO-REQ #446 #447 resent, incident mcp-proxy PG_TOKEN sent
+- 11-06T10:32Z D-4099 - GO-REQ #446 #447 resent, incident mcp-proxy PG_TOKEN sent
 - 11-06T10:05Z D-4185 - watchdog uses spawner.token, watchdog.token absent, sent
 - 11-06T10:05Z D-4179 - witness token BLOCKED sent, workstation only
 - 11-06T10:07Z D-4179 - fleet keys placed 0600 on 2 hosts, sha prefix match, inventory on 3 hosts
@@ -29,6 +29,7 @@
 - BLOCKED D-4195 lane/d4195-caps b2d7c6827beb GO-REQ, dell cap number after D-4198 | default keep 100 | deadline none
 - BLOCKED RIN-LEDGER-VIEWS, ROUTER-LAUNCH-OOM-SCOPE, #451 as previous card | default as sent | deadline none
 ## Traps
+- 10:35Z my pkill killed gen-100 writer.sh wait wrappers; runs alive, w-*.res in f3b904c3 are stale, use spawner result
 - git push control build-L1 ONLY, never origin (D-1751)
 - Review card without diff_ref fails inline_diff_failed
 - Haiku seat in plan mode did not run tests: does not count for HIGH 3.3
