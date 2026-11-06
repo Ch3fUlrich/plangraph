@@ -163,3 +163,95 @@ def test_check_failure_leaves_tick_working(tmp_path, monkeypatch):
                                  lambda s: 0, now=2000, state=tmp_path, deliver=events.append, stuck=True)
     assert [r['rule'] for r in result] == ['stuck-watch-error', 'idle-claim']
     assert events
+
+
+def test_unrelated_proc_race_does_not_reset_idle(seat):
+    _, proc, _, calls, _, check = seat
+    check(0)
+    (proc / '99').mkdir()
+    assert check(300)[0]['rule'] == 'stuck-watch-idle'
+    assert calls == ['cancel']
+
+
+def test_unavailable_table_preserves_samples(seat, monkeypatch):
+    root, _, _, _, _, check = seat
+    check(0)
+    path = root / 'watchdog/stuck-samples.json'
+    before = path.read_bytes()
+    def unavailable(*args):
+        raise OSError('unavailable')
+    monkeypatch.setattr(watch, 'processes', unavailable)
+    assert check(120) == []
+    assert path.read_bytes() == before
+
+
+def test_absolute_job_title_matches_record(seat):
+    _, _, _, calls, process, check = seat
+    process(cmd='/usr/bin/plangraph-job-run-test')
+    assert not check(0)
+    assert check(300)[0]['run_id'] == 'run-test'
+    assert calls == ['cancel']
+
+
+@pytest.mark.parametrize('shape', ['idle', 'terminal', 'unclaimed', 'protected'])
+def test_repeats_are_persistently_limited(seat, shape, monkeypatch):
+    root, _, record, calls, process, check = seat
+    monkeypatch.setenv('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')
+    if shape == 'terminal':
+        record['status'] = 'completed'
+    elif shape == 'unclaimed':
+        process(cmd='opencode serve --stdio')
+    elif shape == 'protected':
+        process(tty=1)
+    if shape == 'idle':
+        check(0)
+    assert check(300)
+    assert not check(420)
+    sample = json.loads((root / 'watchdog/stuck-samples.json').read_text())
+    assert next(iter(sample.values()))['last_alert'] == 300
+    if shape in ('idle', 'terminal'):
+        assert next(iter(sample.values()))['last_action'] == 300
+    assert check(2100)
+    assert len(calls) == (0 if shape in ('unclaimed', 'protected') else 2)
+
+
+def test_empty_stuck_findings_keep_legacy_probe_diagnostic(tmp_path, monkeypatch):
+    from plangraph.spawner import stall_watchdog
+    monkeypatch.setattr(watch, 'check', lambda *a, **kw: [])
+    seen = []
+    monkeypatch.setattr(stall_watchdog, 'probe_run',
+                        lambda *a, **kw: seen.append(kw['dry_run']))
+    stall_watchdog.tick([dict(status='running')], [], lambda s: None,
+                        state=tmp_path, stuck=True)
+    assert seen == [True]
+
+
+def test_platform_limitation_is_not_routed(tmp_path, monkeypatch):
+    from plangraph.spawner import stall_watchdog
+    original = watch.check
+    monkeypatch.setattr(watch, 'check',
+                        lambda *a, **kw: original(*a, **kw, platform='win32'))
+    events = []
+    for _ in range(2):
+        assert stall_watchdog.tick([], [], lambda s: None, state=tmp_path,
+                                   stuck=True, deliver=events.append)
+    assert not events
+
+
+def test_new_condition_is_not_suppressed(seat):
+    _, _, record, calls, _, check = seat
+    check(0)
+    assert check(300)[0]['rule'] == 'stuck-watch-idle'
+    record['status'] = 'completed'
+    assert check(420)[0]['rule'] == 'stuck-watch-reap'
+    assert calls == ['cancel', 'kill']
+
+
+def test_reused_unclaimed_pid_is_not_suppressed(seat):
+    _, _, _, calls, process, check = seat
+    process(cmd='/usr/bin/opencode serve --stdio')
+    assert check(0)
+    assert not check(120)
+    process(start=8, cmd='/usr/bin/opencode serve --stdio')
+    assert check(240)
+    assert not calls

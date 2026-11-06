@@ -29,11 +29,12 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=
     if state is not None and stuck:
         try:
             from .stuck_watch import check
-            stuck = check(state, runs, now, dry_run=dry_run)
-            findings.extend(stuck)
+            stuck_findings = check(state, runs, now, dry_run=dry_run)
+            findings.extend(stuck_findings)
             if deliver:
-                for finding in stuck:
-                    deliver(dict(finding, kind='alert', recipient='routing'))
+                for finding in stuck_findings:
+                    if not finding.get('diagnostic_only'):
+                        deliver(dict(finding, kind='alert', recipient='routing'))
         except Exception as exc:
             findings.append(dict(rule='stuck-watch-error', reason=type(exc).__name__))
     for run in runs:

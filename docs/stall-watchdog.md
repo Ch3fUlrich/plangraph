@@ -56,6 +56,12 @@ evidence and initial idle samples do not authorize actions. TTY trees, service
 trees and unproven processes are report-only. Unclaimed servers are reported
 after five minutes; orphan stdio and protected interactive/service shapes are
 reported immediately. Alerts use the existing routing outbox and re-alert limits.
+Samples persist the last alert and action timestamps: the same condition on the
+same process identity is emitted and acted on at most once per
+`PLANGRAPH_WATCHDOG_REALERT_SECONDS` (default 1800). A changed condition or process
+identity is eligible immediately. Unreadable individual PIDs are skipped; failure
+to enumerate the process table preserves the previous samples without acting.
 Dry-run reports without writing samples or cancelling/reaping anything. Platforms
-without Linux process/socket evidence report that limitation, without signalling.
+without Linux process/socket evidence report that limitation in status only,
+without routing alerts or signalling.
 Check failures are isolated from completion and claim processing.

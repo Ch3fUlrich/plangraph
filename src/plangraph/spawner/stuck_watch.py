@@ -8,6 +8,7 @@ Reuse reap.snapshot (also used by sample_tree) and kill_proven, never a new kill
 import asyncio
 import ipaddress
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -21,11 +22,14 @@ def processes(proc):
     for path in Path(proc).iterdir():
         if not path.name.isdigit():
             continue
-        fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
-        table[int(path.name)] = dict(parent=int(fields[1]), tty=int(fields[4]),
-                                    cpu=int(fields[11]) + int(fields[12]),
-                                    start=int(fields[19]),
-                                    cmd=(path / 'cmdline').read_bytes().replace(b'\0', b' ').decode())
+        try:
+            fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+            table[int(path.name)] = dict(parent=int(fields[1]), tty=int(fields[4]),
+                                        cpu=int(fields[11]) + int(fields[12]),
+                                        start=int(fields[19]),
+                                        cmd=(path / 'cmdline').read_bytes().replace(b'\0', b' ').decode())
+        except (OSError, ValueError, IndexError, UnicodeError):
+            continue
     return table
 
 
@@ -69,11 +73,26 @@ def _kill(state, pid, start, members):
                                       start, plat=None, seen=members))
 
 
+def _alert_due(sample, old, finding, now):
+    """Persist rate limits with the process identity, including action attempts."""
+    condition = [finding['rule'], finding['reason']]
+    interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800'))
+    if old.get('condition') == condition:
+        for key in ('condition', 'last_alert', 'last_action'):
+            if key in old:
+                sample[key] = old[key]
+        if now - old.get('last_alert', now) < interval:
+            return False
+    sample.update(condition=condition, last_alert=now)
+    return True
+
+
 def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
           cancel=None, kill=None):
     """One finding per tree. Unknown evidence resets the sampling interval."""
     if not (platform or sys.platform).startswith('linux'):
-        return [dict(rule='stuck-watch-report', reason='process/socket evidence unavailable on this platform')]
+        return [dict(rule='stuck-watch-report', diagnostic_only=True,
+                     reason='process/socket evidence unavailable on this platform')]
     state = Path(state)
     path = state / 'watchdog/stuck-samples.json'
     try:
@@ -86,16 +105,14 @@ def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
     try:
         table = processes(proc)
     except (OSError, ValueError, IndexError, UnicodeError):
-        if not dry_run:
-            atomic_write_private(path, '{}')
         return []
     records = {r['run_id']: r for r in runs}
     covered = set()
     roots = [p for p, row in table.items() if row['cmd'].split() and
-             row['cmd'].split()[0].startswith('plangraph-job-')]
+              Path(row['cmd'].split()[0]).name.startswith('plangraph-job-')]
     for pid in roots:
         row = table[pid]
-        run_id = row['cmd'].split()[0][len('plangraph-job-'):]
+        run_id = Path(row['cmd'].split()[0]).name[len('plangraph-job-'):]
         record = records.get(run_id)
         try:
             members = reap.snapshot(pid, row['start'], proc_root=proc)
@@ -139,9 +156,14 @@ def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
                 finding = dict(rule='stuck-watch-reap', reason='proven orphan stdio')
             if finding:
                 finding.update(run_id=run_id, pid=pid)
+                alert_old = old if old.get('identity') == identity else {}
+                if not _alert_due(samples[run_id], alert_old, finding, now):
+                    continue
                 if not dry_run and finding['rule'] == 'stuck-watch-idle':
+                    samples[run_id]['last_action'] = now
                     finding['result'] = (cancel or _cancel)(state, record)
                 elif not dry_run and finding['rule'] == 'stuck-watch-reap':
+                    samples[run_id]['last_action'] = now
                     finding['survivors'] = (kill or _kill)(state, pid, row['start'], members)
                 findings.append(finding)
         except (OSError, ValueError, TypeError, KeyError, IndexError):
@@ -155,8 +177,11 @@ def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
             samples[key] = dict(start=row['start'], since=since)
             orphan = '--stdio' in words and (row['parent'] == 1 or row['parent'] not in table)
             if orphan or row['tty'] or '--service' in words or now - since >= 300:
-                findings.append(dict(rule='stuck-watch-report', run_id=key, pid=pid,
-                                     reason='unclaimed opencode serve; ownership unproven'))
+                finding = dict(rule='stuck-watch-report', run_id=key, pid=pid,
+                               reason='unclaimed opencode serve; ownership unproven')
+                alert_old = old if old.get('start') == row['start'] else {}
+                if _alert_due(samples[key], alert_old, finding, now):
+                    findings.append(finding)
     if not dry_run:
         atomic_write_private(path, json.dumps(samples))
     return findings
