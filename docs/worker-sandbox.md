@@ -28,6 +28,16 @@ standalone agent mode.
 | `PG_ATTEMPT_MEMORY_MAX` | Value for the scope's `MemoryMax` property. |
 | `PG_ATTEMPT_TASKS_MAX` | Value for the scope's `TasksMax` property. |
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
+| `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset preserves unrestricted selection. Unlisted keys are refused before claim and before attempt setup. |
+
+Harness tails use the check-tail redactor and 64 KiB cap before entering
+attempt results, including cancellation and defect helpers. Harness questions
+are redacted too. Prefixed secrets wrapped onto a second line are removed
+before line trimming. Git/SSH environment credentials are not inherited;
+harness auth staging skips `.git-credentials`, `.gitconfig`, and `.ssh`.
+This is not a network prohibition or a guarantee against credentials supplied
+in arbitrary other auth files. The current `Claim` wire type carries no owner
+identity, so this worker cannot yet verify foreign-owner claim responses.
 
 Each attempt creates its own private temporary directory under the system temp
 directory, removed on drop alongside its private HOME. Only that temporary

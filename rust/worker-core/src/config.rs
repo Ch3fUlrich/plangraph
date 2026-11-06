@@ -27,6 +27,7 @@ impl Tier {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    pub card_allowlist: Option<std::collections::BTreeSet<String>>,
     pub heartbeat: Duration,
     pub heartbeat_timeout: Duration,
     pub start_to_close: Duration,
@@ -51,6 +52,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            card_allowlist: None,
             heartbeat: Duration::from_secs(30),
             heartbeat_timeout: Duration::from_secs(120),
             start_to_close: Duration::from_secs(90 * 60),
@@ -67,9 +69,67 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Load once at startup; never expose file contents in an error.
+    pub fn with_card_allowlist(mut self, path: Option<&std::path::Path>) -> std::io::Result<Self> {
+        if let Some(path) = path {
+            let invalid = || {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "PG_CARD_ALLOWLIST must name an absolute readable UTF-8 file containing card keys")
+            };
+            if !path.is_absolute() {
+                return Err(invalid());
+            }
+            let text = std::fs::read_to_string(path).map_err(|_| invalid())?;
+            let keys: std::collections::BTreeSet<String> = text
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && !s.starts_with('#'))
+                .map(str::to_owned)
+                .collect();
+            if keys.is_empty() {
+                return Err(invalid());
+            }
+            self.card_allowlist = Some(keys);
+        }
+        Ok(self)
+    }
+
+    pub fn card_allowed(&self, key: &str) -> bool {
+        self.card_allowlist
+            .as_ref()
+            .is_none_or(|keys| keys.contains(key))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allowlist_comments_and_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cards");
+        std::fs::write(&file, "# lane A\n\n c1 \n").unwrap();
+        let cfg = Config::default().with_card_allowlist(Some(&file)).unwrap();
+        assert!(cfg.card_allowed("c1"));
+        assert!(!cfg.card_allowed("c2"));
+        assert!(Config::default().card_allowed("c2"));
+    }
+
+    #[test]
+    fn empty_allowlist_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cards");
+        std::fs::write(&file, "# nothing\n\n").unwrap();
+        assert!(Config::default().with_card_allowlist(Some(&file)).is_err());
+    }
+
+    #[test]
+    fn unreadable_allowlist_fails_closed() {
+        assert!(Config::default()
+            .with_card_allowlist(Some(std::path::Path::new("/nonexistent/pilot/cards")))
+            .is_err());
+    }
 
     #[test]
     fn defaults_match_spec() {

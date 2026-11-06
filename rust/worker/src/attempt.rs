@@ -163,6 +163,13 @@ fn run_attempt_inner(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<AttemptResult, AttemptError> {
     let claim = &inp.claim;
+    if !cfg.card_allowed(&claim.card) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("card not allowlisted: {}", claim.card),
+        )
+        .into());
+    }
     let id = AttemptId::new(claim.card.clone(), inp.n);
     let branch = id.branch();
     let repo = Path::new(&claim.repo);
@@ -313,7 +320,12 @@ fn run_attempt_inner(
     } else {
         match question::scan_output(&output) {
             Scan::None => (None, None),
-            Scan::Asked(q) => (Some(q), None),
+            Scan::Asked(mut q) => {
+                q.text = history_text(&q.text);
+                q.default = q.default.map(|s| history_text(&s));
+                q.risk_tags = q.risk_tags.iter().map(|s| history_text(s)).collect();
+                (Some(q), None)
+            }
             Scan::Malformed(why) => (None, Some(why)),
         }
     };
@@ -426,7 +438,7 @@ fn run_attempt_inner(
         exit_class: classification.class,
         diff_hash,
         check_hash,
-        check_tail,
+        check_tail: history_text(&check_tail),
         context_overflow: classification.context_overflow,
         branch,
         head,
@@ -525,7 +537,7 @@ fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptRes
         context_overflow: false,
         branch: branch.to_string(),
         head: head.to_string(),
-        output_tail,
+        output_tail: history_text(&output_tail),
         harness: None,
         model: None,
         combo: None,
@@ -557,7 +569,7 @@ fn defect_result(
         context_overflow: false,
         branch: branch.to_string(),
         head: head.to_string(),
-        output_tail,
+        output_tail: history_text(&output_tail),
         harness: None,
         model: None,
         combo: None,
@@ -574,6 +586,10 @@ fn defect_result(
 
 /// Run the check; on failure run it once more unchanged. A pass on the second
 /// run is a flake, not a fix. Returns the outcome and the last run's result.
+fn history_text(text: &str) -> String {
+    pg_worker_core::redact::redacted_tail(text, usize::MAX, pg_worker_core::redact::MAX_TAIL_BYTES)
+}
+
 fn check_with_rerun(
     cmd: &str,
     dest: &Path,
@@ -961,6 +977,72 @@ mod tests {
             check_tail_lines: 20,
             ..Config::default()
         }
+    }
+
+    fn secret_attempt(script: &'static str, timeout: bool, cancel: bool) {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let inp = input(
+            claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"),
+            1,
+            root.path(),
+        );
+        let h = Fake::new(script);
+        let mut cfg = tiny();
+        if timeout {
+            cfg.start_to_close = Duration::from_millis(300);
+        }
+        let start = std::time::Instant::now();
+        let res = run_attempt(&h, &cfg, &Patterns::default(), &inp, &|| {
+            cancel && start.elapsed() > Duration::from_millis(300)
+        })
+        .unwrap();
+        let json = serde_json::to_string(&res).unwrap();
+        assert!(!json.contains("pilotseed"), "{json}");
+        assert!(!json.contains("0123456789abcdef"), "{json}");
+        if timeout {
+            assert_eq!(res.exit_class, ExitClass::Timeout);
+        }
+        if cancel {
+            assert_eq!(res.exit_class, ExitClass::Cancelled);
+        }
+    }
+
+    #[test]
+    fn pilot_clean_secret() {
+        secret_attempt(
+            "echo sk-pilotseed-0123456789abcdef; echo hi > out.txt",
+            false,
+            false,
+        );
+    }
+    #[test]
+    fn pilot_failed_secret() {
+        secret_attempt("echo sk-pilotseed-0123456789abcdef; exit 1", false, false);
+    }
+    #[test]
+    fn pilot_cancelled_secret() {
+        secret_attempt("echo sk-pilotseed-0123456789abcdef; sleep 5", false, true);
+    }
+    #[test]
+    fn pilot_timed_out_secret() {
+        secret_attempt("echo sk-pilotseed-0123456789abcdef; sleep 5", true, false);
+    }
+    #[test]
+    fn pilot_stderr_secret() {
+        secret_attempt(
+            "echo sk-pilotseed-0123456789abcdef >&2; exit 1",
+            false,
+            false,
+        );
+    }
+    #[test]
+    fn pilot_split_secret() {
+        secret_attempt(
+            "printf 'sk-pilotseed-\n0123456789abcdef\n'; exit 1",
+            false,
+            false,
+        );
     }
 
     fn claim(repo: &str, base: &str, allow: &[&str], check_cmd: &str) -> Claim {

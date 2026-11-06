@@ -1558,6 +1558,16 @@ impl CardActivities {
     ) -> Result<Option<Claim>, ActivityError> {
         let keeper = self.deps.keeper.clone();
         let key = input.key;
+        if !self.deps.cfg.card_allowed(&key) {
+            return Err(ActivityError::application(
+                temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!(
+                    "card not allowlisted: {key}"
+                ))
+                .type_name("card_not_allowlisted".to_owned())
+                .non_retryable(true)
+                .build(),
+            ));
+        }
         let res = tokio::task::spawn_blocking(move || do_claim_card(&*keeper, &key))
             .await
             .map_err(activity_error)?;
