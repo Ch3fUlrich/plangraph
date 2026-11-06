@@ -43,8 +43,10 @@ fn pilot_activity_owner_and_empty_claim() {
         Some(&never), &cfg, &Patterns::default(), &inp, &|| false,
     );
     held.1.wait();
+    let error = second.unwrap_err();
+    assert!(matches!(&error, crate::card_admit::EntryError::Attempt(AttemptError::Admission(crate::AdmissionReason::Overlap(card))) if card == &inp.claim.card));
     crate::card_admit::tests::assert_failure(
-        crate::card_admit::attempt_error(second.unwrap_err()),
+        crate::card_admit::attempt_error(error),
         Some("card_attempt_overlap"), true,
     );
     assert_eq!(first.join().unwrap().unwrap().exit_class, ExitClass::Ok);
@@ -58,7 +60,7 @@ fn pilot_activity_owner_and_empty_claim() {
 }
 
 #[test]
-fn pilot_history_and_keeper_payloads_exclude_secrets() {
+fn pilot_history_excludes_secrets_and_preserves_below_floor_second_line() {
     use crate::keeper::AttemptReport;
     use pg_worker_core::packet::ParkPacket;
     let secret = ["sk-", "pilotseed0123456789abcdef"].concat();
@@ -78,7 +80,7 @@ fn pilot_history_and_keeper_payloads_exclude_secrets() {
             root.path(),
         );
         let script = match mode {
-            "split" => format!("printf '[REDACTED]\\n0123456789abcdef\\n'; {ending}"),
+            "split" => format!("printf '{secret}\\n0123456789abcdef\\n'; {ending}"),
             "question" => format!(
                 "echo 'PG_QUESTION: {{\"text\":\"{secret}\",\"default\":\"{secret}\",\"risk_tags\":[\"{secret}\"]}}'"
             ),
@@ -100,13 +102,12 @@ fn pilot_history_and_keeper_payloads_exclude_secrets() {
         .unwrap();
         assert_eq!(result.exit_class, expected, "{mode}");
         let safe = |body: &str| {
-            for fragment in ["sk-pilotseed", "0123456789abcdef"] {
-                if mode != "split" || fragment != "0123456789abcdef" {
-                    assert!(!body.contains(fragment), "{mode}: {body}");
-                }
-            }
+            assert!(!body.contains(&secret), "{mode}: {body}");
+            assert!(!body.contains("sk-pilotseed"), "{mode}: {body}");
         };
         if mode == "split" {
+            // S1's floor policy never joins the next line after reaching the floor.
+            // This standalone 16-hex second line is below the floor, not a secret.
             assert_eq!(result.output_tail, "[REDACTED]\n0123456789abcdef");
         }
         safe(&serde_json::to_string(&result).unwrap());

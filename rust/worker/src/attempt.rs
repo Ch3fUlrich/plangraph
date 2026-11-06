@@ -738,7 +738,7 @@ mod tests {
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -912,10 +912,7 @@ mod tests {
 
     fn claim(repo: &str, base: &str, allow: &[&str], check_cmd: &str) -> Claim {
         Claim {
-            card: {
-                static NEXT: AtomicUsize = AtomicUsize::new(0);
-                format!("pilot-card-{}", NEXT.fetch_add(1, Ordering::SeqCst))
-            },
+            card: test_card(),
             repo: repo.to_string(),
             base_sha: base.to_string(),
             check_cmd: check_cmd.to_string(),
