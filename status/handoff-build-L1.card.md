@@ -17,7 +17,7 @@
 - plangraph:TEMPORAL-PILOT-B build-L2-temporal-pilot-0288 S3 Sol since 16:33Z next check on its DONE
 ## Planned
 1. D-4424 send plangraph-prs sha dca2f07e569c with counts
-2. TEMPORAL-PILOT-B send S1 S2 seat findings to L2
+2. TEMPORAL-PILOT-B S1 S2 delta seats on L2 DONE
 3. PR#562 read Haiku seat, GO-REQ with refutation
 4. PR#570 PR#571 PR#34 seats status failed: read why, then counting seats
 ## Open
