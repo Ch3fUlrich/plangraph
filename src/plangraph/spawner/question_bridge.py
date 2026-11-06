@@ -22,10 +22,12 @@ def question_exit(job, record):
         text = getattr(job, 'final_message', None)
         if text is None:
             final = final_text(job.stdout)
-            text = final[0] if final else ''
+            text = final[0] if final else None
+        lines = text.splitlines() if text is not None else job.stdout.splitlines()[-1:]
         job.question = None
-        line = text.splitlines()[-1].lstrip() if text.splitlines() else ''
-        if line.startswith('PG_QUESTION:'):
+        for line in reversed(lines):
+            if not line.lstrip().startswith('PG_QUESTION:'):
+                continue
             try:
                 q = json.loads(line.lstrip()[12:].strip())
                 if not (isinstance(q, dict) and isinstance(q.get('text'), str) and q['text'].strip()
@@ -36,6 +38,7 @@ def question_exit(job, record):
                         isinstance(q.get('risk_tags', []), list) and all(isinstance(t, str) for t in q.get('risk_tags', []))):
                     raise ValueError('invalid question deadline/tags')
                 job.question = {k: q.get(k, [] if k == 'risk_tags' else None) for k in ('text', 'default', 'deadline_s', 'risk_tags')}
+                break
             except ValueError:
                 job.events.append({'event': 'question_packet_malformed'})
     if job.question is None:

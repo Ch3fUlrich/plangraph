@@ -24,12 +24,25 @@ def test_final_only_and_last_line_rule():
     j = job(stdout=json.dumps({'type': 'tool_result', 'content': PACKET}) + '\n' +
             json.dumps({'type': 'result', 'result': 'Done'}), final_message=None)
     assert not question_exit(j, {})
-    j = job(stdout=PACKET + '\nPG_QUESTION: {"text":"new"}\nPG_QUESTION: nope')
+    assert not question_exit(job(stdout=json.dumps({'type': 'tool_result', 'content': PACKET}), final_message=None), {})
+
+
+def test_combined_output_last_line_question():
+    j = job(stdout='progress\n' + PACKET, final_message=None)
+    assert question_exit(j, {}) and j.question['text'] == 'Which database?'
+    assert not question_exit(job(stdout=PACKET + '\nDone', final_message=None), {})
+    j = job(stdout=PACKET + '\nPG_QUESTION: nope', final_message=None)
     assert not question_exit(j, {})
     assert j.events == [{'event': 'question_packet_malformed'}]
-    assert not question_exit(job(final_message=None), {})
-    assert not question_exit(job(final_message=PACKET + '\nDone'), {})
-    assert not question_exit(job(stdout=json.dumps({'type': 'tool_result', 'content': PACKET}), final_message=None), {})
+
+
+@pytest.mark.parametrize('streamed', [False, True])
+def test_final_message_last_valid_packet(streamed):
+    text = PACKET + '\nPG_QUESTION: {"text":"new"}\nPG_QUESTION: nope\nDone'
+    j = (job(stdout=json.dumps({'type': 'result', 'result': text}), final_message=None)
+         if streamed else job(final_message=text))
+    assert question_exit(j, {}) and j.question['text'] == 'new'
+    assert j.events == [{'event': 'question_packet_malformed'}]
 
 
 @pytest.mark.parametrize('packet', ['nope', '{}', '{"text":" "}',
