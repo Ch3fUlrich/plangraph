@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from .. import views
 from . import auth, evidence
 from . import db_errors
+from .worker_policy import check_identity
 from .errors import Refused
 from .store_answer import AnswerMixin
 from .store_audit_meta import AuditMetaMixin
@@ -170,6 +171,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         """
         row = self.conn.execute("SELECT role,projects,active FROM principals WHERE name=?",
             (getattr(principal, "name", None),)).fetchone()
+        check_identity(principal, row)
         if row is None:
             if (getattr(principal, "name", None) == "system"
                     and getattr(principal, "role", None) == "system"):

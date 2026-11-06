@@ -1,4 +1,5 @@
 """Opt-in phase worker scope; provisioning and token selection are operator-only."""
+from .auth import PhaseWorkerPrincipal
 from .errors import Refused
 
 # Every HTTP call in rust/worker/src/keeper.rs, no administrative/read extras.
@@ -9,6 +10,14 @@ ACTIONS = frozenset({"claim", "show", "worker_attempt", "worker_park",
                      "worker_complete", "worker_alarm", "lock_acquire",
                      "lock_release", "ask_question", "answer_question",
                      "get_card", "attach_merge_evidence"})
+
+
+def check_identity(principal, row):
+    """Require worker scope to match both the identity type and stored role."""
+    if getattr(principal, "worker_scope", False):
+        if not isinstance(principal, PhaseWorkerPrincipal) \
+                or row is None or row["role"] != "phase-worker":
+            raise Refused("forbidden", "principal changed since authentication: worker scope requires a stored phase-worker identity")
 
 
 def check(principal, action, *, transport=False):

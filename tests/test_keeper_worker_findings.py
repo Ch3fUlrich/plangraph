@@ -7,6 +7,22 @@ from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 
 
+@pytest.mark.parametrize("identity", [auth.Principal, auth.PhaseWorkerPrincipal])
+@pytest.mark.parametrize("name", ["reader", "system"])
+def test_forged_worker_scope_is_refused(scoped, tmp_path, identity, name):
+    from plangraph.planner.phase import plan_phase
+    from test_phase_finish import gate
+
+    world, _ = scoped
+    gate(world)
+    token = auth.add_principal(world.conn, "forged-" + name, name, ["demo"])
+    stored = auth.authenticate(world.conn, token)
+    principal = identity(stored.name, stored.role, stored.projects)
+    principal.worker_scope = True
+    with pytest.raises(Refused, match="worker scope"):
+        plan_phase(world.store, principal, "demo:PH-X", repo_root=tmp_path)
+
+
 @pytest.mark.parametrize("method", ["lock_acquire", "lock_release"])
 @pytest.mark.parametrize("repo", ["repo", "owner/repo", "other:repo"])
 def test_lock_requires_project(scoped, method, repo):
