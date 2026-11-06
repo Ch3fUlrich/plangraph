@@ -105,7 +105,7 @@ On Windows remove inherited grants to other accounts from that file's ACL.
 Missing/private-file problems print `OPERATOR:` instructions without values.
 Linux installs a mode-0600 profile, sourced once by `.profile` and existing
 `.zshenv`; tokens are reread at shell start with permissions checked again.
-Windows stores both values in the user environment. Start a new login/session
+Windows stores both values in the user environment. Start a new session
 after setup (Windows applications may require sign-out to refresh environment).
 Unchanged files and cached pins are skipped on rerun; verification still runs.
 Dry-run only describes these steps: no reads of secrets, writes, npm or network.
