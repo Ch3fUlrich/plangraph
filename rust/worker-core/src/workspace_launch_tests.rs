@@ -1,5 +1,16 @@
 use super::*;
 use tempfile::{tempdir, TempDir};
+fn apply(f: &Fixture, tree: &Path) -> Result<(), ResolveError> {
+    let mut cmd = Command::new("unused");
+    apply_child_env(&mut cmd, &f.repo, tree, "seat", f.tmp.path())
+}
+fn launch(
+    f: &Fixture,
+    cmd: &mut Command,
+    tree: Option<&Path>,
+) -> Result<Option<VerifiedWorkspace>, ResolveError> {
+    prepare_launch(cmd, &f.repo, &f.ws, tree, "seat", f.tmp.path(), None)
+}
 struct Fixture {
     tmp: TempDir,
     repo: RepoEntry,
@@ -92,6 +103,9 @@ fn worktree_local_config_does_not_mutate_main() {
     git(root, &["config", "core.autocrlf", "true"]).unwrap();
     git(root, &["config", "core.longpaths", "false"]).unwrap();
     let tree = f.writer();
+    assert_eq!(fs::read(tree.join("tracked")).unwrap(), b"initial\n");
+    assert_eq!(git(&tree, &["status", "--porcelain"]).unwrap(), "");
+    verify_workspace(&f.repo, &f.ws, &tree, None).unwrap();
     let format = git(root, &["config", "core.repositoryformatversion"]).unwrap();
     assert_eq!(format, "0");
     assert_eq!(git(root, &["config", "core.autocrlf"]).unwrap(), "true");
@@ -188,7 +202,10 @@ fn outside_root_foreign_common_dir_main_refuses() {
     assert!(verify_owned(&f.repo, &foreign).is_err());
     f.repo.worktrees_root = other.repo.worktrees_root;
     assert!(verify_owned(&f.repo, &tree).is_err());
-    assert!(verify_owned(&f.repo, &foreign).is_err());
+    assert!(matches!(
+        verify_owned(&f.repo, &foreign),
+        Err(ResolveError::Verify("common_dir"))
+    ));
 }
 #[test]
 fn dirty_owned_tree_can_be_proven_without_reset() {
@@ -200,6 +217,20 @@ fn dirty_owned_tree_can_be_proven_without_reset() {
 }
 #[test]
 fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
+    if std::env::var_os("PINNED_ENV_PROBE").is_none() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "workspace_launch::tests::child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache"])
+            .env("PINNED_ENV_PROBE", "1")
+            .env("PYTHONPATH", "wrong").env("TMPDIR", std::env::temp_dir())
+            .env("TMP", std::env::temp_dir()).env("PYTEST_ADDOPTS", "wrong")
+            .output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        return;
+    }
     let mut f = Fixture::new();
     let tree = f.writer();
     let cache = f.tmp.path().join("cache");
@@ -219,25 +250,28 @@ fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
     crate::sandbox_env::confine_check(&mut cmd, f.tmp.path());
     cmd.env("PYTHONDONTWRITEBYTECODE", "0");
     apply_child_env(&mut cmd, &f.repo, &tree, "seat-one", f.tmp.path()).unwrap();
+    for (key, expected) in [
+        ("TMPDIR", f.tmp.path().as_os_str()),
+        ("TEMP", f.tmp.path().as_os_str()),
+        ("TMP", f.tmp.path().as_os_str()),
+        (
+            "PYTEST_ADDOPTS",
+            std::ffi::OsStr::new("-p no:cacheprovider"),
+        ),
+    ] {
+        assert!(cmd.get_envs().any(|(k, v)| k == key && v == Some(expected)));
+    }
     assert_eq!(cmd.get_current_dir(), Some(tree.as_path()));
     let out = cmd.output().unwrap();
     assert!(out.status.success());
-    let lines: Vec<_> = String::from_utf8(out.stdout)
-        .unwrap()
-        .lines()
-        .map(str::to_owned)
-        .collect();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<_> = stdout.lines().map(str::to_owned).collect();
     assert_eq!(
         lines,
         vec![
             tree.display().to_string(),
             tree.display().to_string(),
-            cache
-                .canonicalize()
-                .unwrap()
-                .join("seat-one")
-                .display()
-                .to_string(),
+            cache.join("seat-one").display().to_string(),
             "1".into(),
             tree.display().to_string()
         ]
@@ -282,19 +316,17 @@ fn slot_cache_symlink_escape_and_reserved_env_refused() {
     let tree = f.writer();
     for (key, value) in [
         ("PWD", f.tmp.path().display().to_string()),
+        ("DYLD_INSERT_LIBRARIES", f.tmp.path().display().to_string()),
+        ("DYLD_OTHER", f.tmp.path().display().to_string()),
+        ("LD_AUDIT", f.tmp.path().display().to_string()),
+        ("RUSTC_WRAPPER", f.tmp.path().display().to_string()),
+        ("BASH_ENV", f.tmp.path().display().to_string()),
         ("CARGO_TARGET_DIR", tree.display().to_string()),
         ("CACHE", f.tmp.path().join("%OTHER%").display().to_string()),
     ] {
         f.repo.cache_env.clear();
         f.repo.cache_env.insert(key.into(), value);
-        assert!(apply_child_env(
-            &mut Command::new("unused"),
-            &f.repo,
-            &tree,
-            "seat",
-            f.tmp.path()
-        )
-        .is_err());
+        assert!(apply(&f, &tree).is_err());
     }
     #[cfg(unix)]
     {
@@ -305,14 +337,7 @@ fn slot_cache_symlink_escape_and_reserved_env_refused() {
         f.repo
             .cache_env
             .insert("CACHE".into(), cache.join("%SLOT%").display().to_string());
-        assert!(apply_child_env(
-            &mut Command::new("unused"),
-            &f.repo,
-            &tree,
-            "seat",
-            f.tmp.path()
-        )
-        .is_err());
+        assert!(apply(&f, &tree).is_err());
     }
     assert!(apply_child_env(
         &mut Command::new("unused"),
@@ -339,23 +364,10 @@ fn none_has_no_checkout_and_no_cwd_fallback() {
     f.ws.revision_sha = None;
     f.ws.branch = None;
     let mut cmd = Command::new("unused");
-    assert!(
-        prepare_launch(&mut cmd, &f.repo, &f.ws, None, "seat", f.tmp.path(), None)
-            .unwrap()
-            .is_none()
-    );
+    assert!(launch(&f, &mut cmd, None).unwrap().is_none());
     assert!(cmd.get_current_dir().is_none());
     assert!(!cmd.get_envs().any(|(k, _)| k == "PYTHONPATH"));
-    assert!(prepare_launch(
-        &mut cmd,
-        &f.repo,
-        &f.ws,
-        Some(&tree),
-        "seat",
-        f.tmp.path(),
-        None
-    )
-    .is_err());
+    assert!(launch(&f, &mut cmd, Some(&tree)).is_err());
 }
 #[test]
 fn launch_reverifies_head_after_prior_token() {
@@ -376,24 +388,10 @@ fn launch_reverifies_head_after_prior_token() {
         ],
     )
     .unwrap();
-    assert!(prepare_launch(
-        &mut Command::new("unused"),
-        &f.repo,
-        &f.ws,
-        Some(&tree),
-        "seat",
-        f.tmp.path(),
-        None
-    )
-    .is_err());
-    assert!(prepare_launch(
-        &mut Command::new("unused"),
-        &f.repo,
-        &f.ws,
-        None,
-        "seat",
-        f.tmp.path(),
-        None
-    )
-    .is_err());
+    let mut cmd = Command::new("unused");
+    cmd.env("UNCHANGED", "yes");
+    assert!(launch(&f, &mut cmd, Some(&tree)).is_err());
+    assert!(cmd.get_current_dir().is_none());
+    assert_eq!(cmd.get_envs().count(), 1);
+    assert!(launch(&f, &mut Command::new("unused"), None).is_err());
 }

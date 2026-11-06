@@ -149,8 +149,13 @@ pub fn create_writer(
         .args([
             "-c",
             "core.hooksPath=",
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.longpaths=true",
             "worktree",
             "add",
+            "--no-checkout",
             "-b",
             branch,
             "--",
@@ -169,6 +174,7 @@ pub fn create_writer(
         &checkout,
         &["config", "--worktree", "core.longpaths", "true"],
     )?;
+    git(&checkout, &["-c", "core.hooksPath=", "checkout", branch])?;
     let mut marker = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -241,6 +247,7 @@ pub fn apply_child_env(
     strip_git(cmd);
     cmd.env("TMPDIR", &temp)
         .env("TEMP", &temp)
+        .env("TMP", &temp)
         .env("PYTEST_ADDOPTS", "-p no:cacheprovider");
     for (key, template) in &repo.cache_env {
         let upper = key.to_ascii_uppercase();
@@ -249,6 +256,7 @@ pub fn apply_child_env(
                 && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 && !upper.starts_with("GIT_")
                 && !upper.starts_with("PYTHON")
+                && !upper.starts_with("DYLD_")
                 && ![
                     "PWD",
                     "TMPDIR",
@@ -259,6 +267,9 @@ pub fn apply_child_env(
                     "HOME",
                     "LD_PRELOAD",
                     "LD_LIBRARY_PATH",
+                    "LD_AUDIT",
+                    "RUSTC_WRAPPER",
+                    "BASH_ENV",
                     "SYSTEMROOT",
                     "COMSPEC",
                 ]
@@ -306,11 +317,12 @@ pub fn prepare_launch(
         return Ok(None);
     }
     let checkout = checkout.ok_or(ResolveError::Invalid("checkout"))?;
-    apply_child_env(cmd, repo, checkout, slot, temp)?;
     if workspace.mode == Mode::Writer {
         verify_owned(repo, checkout)?;
     }
-    verify_workspace(repo, workspace, checkout, import_package).map(Some)
+    let verified = verify_workspace(repo, workspace, checkout, import_package)?;
+    apply_child_env(cmd, repo, checkout, slot, temp)?;
+    Ok(Some(verified))
 }
 
 #[cfg(test)]

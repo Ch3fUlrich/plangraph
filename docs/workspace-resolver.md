@@ -50,7 +50,8 @@ after both R4B and R4C merged). No existing Temporal attempt tree is reused.
 `create_writer` creates exactly the requested fresh lane branch under the
 canonical worktrees root. Existing branches/destinations refuse without force.
 Worktree config is enabled under a common-dir config lock; shared autocrlf and
-longpaths values remain unchanged. Partial failures leave explicit state for
+longpaths values remain unchanged; checkout follows worktree-local configuration.
+Partial failures leave explicit state for
 operator inspection, never automatic destructive cleanup of unverified paths.
 
 `verify_owned` re-resolves identity independently of clean HEAD and requires an
@@ -65,9 +66,9 @@ variables. All git location variables are removed; cwd/PWD and
 canonical import-root-only PYTHONPATH are pinned using platform path joining.
 The shared `configure_import_environment` helper pins `PYTHONDONTWRITEBYTECODE=1`
 even over explicit command overrides. Bytecode and pytest caches are disabled,
-TMPDIR/TEMP pinned outside the worktrees root, and safe seat slots
+TMPDIR/TEMP/TMP pinned outside the worktrees root, and safe seat slots
 expand cache templates outside worktrees. Canonical ancestors prevent symlink
-escape. `prepare_launch` re-verifies immediately; none mode requires no checkout
+escape. `prepare_launch` verifies before configuring the command; none mode requires no checkout
 and invents no cwd or PYTHONPATH. The standalone canary uses the same builder
 with a canary slot and system temp; the launch child uses caller per-run temp.
 
