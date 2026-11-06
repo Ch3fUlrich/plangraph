@@ -114,6 +114,8 @@ def assert_no_runtime_invocation(text):
 
 def test_no_runtime_invocation():
     assert_no_runtime_invocation(Path(av.__file__).read_text())
+    from plangraph import agent_view_projection as projection
+    assert_no_runtime_invocation(Path(projection.__file__).read_text())
 
 
 @pytest.mark.parametrize('invocation', [
@@ -127,9 +129,12 @@ def test_runtime_guard_rejects_invocations(invocation):
 
 
 def test_render_uses_shared_projector(monkeypatch):
+    from plangraph import agent_view_projection as projection
     from plangraph.render import _load_agents_view
+    assert av.project is projection.project
+    assert av.load_view is projection.load_view
     sentinel = {'hosts': []}
-    monkeypatch.setattr(av, 'load_view', lambda: sentinel)
+    monkeypatch.setattr(projection, 'load_view', lambda: sentinel)
     assert _load_agents_view() is sentinel
 
 

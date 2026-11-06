@@ -257,7 +257,7 @@ def build_sha(pkg_dir: Path | None = None) -> str:
 
 def _load_agents_view():
     """Use the inventory's single whitelist projector for public rendering."""
-    from .spawner.agent_view import load_view
+    from .agent_view_projection import load_view
 
     return load_view()
 

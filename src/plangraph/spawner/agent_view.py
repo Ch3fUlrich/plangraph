@@ -12,43 +12,8 @@ import time
 
 from plangraph.routing_support.private_io import atomic_write_private
 
-FIELDS = ('host', 'name', 'runtime', 'model', 'state', 'item', 'age_s')
+from plangraph.agent_view_projection import FIELDS, load_view, project, read, unavailable
 FINISHED = {'done', 'stopped', 'completed', 'failed', 'cancelled', 'exited'}
-
-
-def read(path):
-    value = json.loads(Path(path).read_text(encoding='utf-8'))
-    if not isinstance(value, dict):
-        raise ValueError('expected object')
-    return value
-
-
-def project(source, host, runtime=None, now=None):
-    """Whitelist scalars, including when reading a remote result."""
-    row = {k: source.get(k) if isinstance(source.get(k), (str, int, float))
-           and not isinstance(source.get(k), bool) else None for k in FIELDS}
-    row['host'] = host
-    row['runtime'] = runtime or (row['runtime'] if row['runtime'] in
-                               ('claude', 'opencode', 'spawner-run') else None)
-    if now is not None:
-        for field, alias in [('name', 'run_id'), ('item', 'item_key')]:
-            if row[field] is None and isinstance(source.get(alias), str):
-                row[field] = source[alias]
-        row['state'] = source.get('state', source.get('status'))
-        if not isinstance(row['state'], str):
-            row['state'] = None
-        stamp = source.get('started', source.get('launched_ts', source.get('createdAt')))
-        try:
-            if isinstance(stamp, str):
-                stamp = datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
-            row['age_s'] = max(0, now - float(stamp))
-        except (ValueError, TypeError, OverflowError):
-            row['age_s'] = None
-    return row
-
-
-def unavailable(host, reason):
-    return dict(host=host, readable=False, reason=reason, agents=[])
 
 
 def local(home=None, host=None, now=None):
@@ -138,24 +103,6 @@ def collect(home=None, run=subprocess.run, timeout=20, local_only=False):
 def write(data, home=None):
     path = Path(home or Path.home()) / '.local/state/plangraph/agents-view.json'
     atomic_write_private(path, json.dumps(data) + '\n')
-
-
-def load_view(home=None):
-    """Re-project the private file before embedding it in a public page."""
-    try:
-        data = read(Path(home or Path.home()) / '.local/state/plangraph/agents-view.json')
-        hosts = []
-        for entry in data['hosts']:
-            host = entry['host'] if isinstance(entry['host'], str) else 'unknown'
-            if entry.get('readable') is not True:
-                hosts.append(unavailable(host, 'unreadable'))
-            else:
-                hosts.append(dict(host=host, readable=True, reason=None,
-                                  agents=[project(r, host) for r in entry['agents']]))
-        return dict(generated_at=data.get('generated_at') if isinstance(
-            data.get('generated_at'), str) else None, hosts=hosts)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return None
 
 
 def main():
