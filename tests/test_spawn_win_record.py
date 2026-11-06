@@ -7,6 +7,7 @@ import pytest
 
 from plangraph.routing_support import private_io
 from plangraph.spawner.service import SpawnService
+from plangraph.spawner.private_io import SAVE_READ_ATTEMPTS
 from plangraph.spawner import stall_watchdog
 
 
@@ -66,8 +67,8 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
     """Worst-case retry sleeps stay inside the I13 budget (SYNC_SAVE_BUDGET_S),
     exact call count.
 
-    Covers the write alone and a save operation whose record read shares the
-    synchronous stretch with the write (SpawnService.cancel): two read sleeps
+    Covers the write alone and a direct save whose record read shares the
+    synchronous stretch with the write: two read sleeps
     plus 23 write sleeps must still sum to at most SYNC_SAVE_BUDGET_S.
     """
     target = tmp_path / "record.json"
@@ -117,7 +118,8 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
     slept.clear()
 
     with pytest.raises(PermissionError):
-        asyncio.run(SpawnService(state=tmp_path).cancel(run_id))
+        service = SpawnService(state=tmp_path)
+        service._save(service.result(run_id, attempts=SAVE_READ_ATTEMPTS))
 
     assert len(reads) == 3
     assert len(calls) == 24

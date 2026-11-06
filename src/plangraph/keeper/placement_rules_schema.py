@@ -85,11 +85,22 @@ def rollback_pg(conn) -> None:
     with conn.transaction():
         conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(current_schema()))",
                      (_MIGRATE_LOCK,))
-        indexes = [t + "_pkey" for t in TABLES]
+        schema = conn.execute("SELECT current_schema()").fetchone()[0]
+        migration_table = conn.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=%s "
+            "AND table_name='schema_migrations'", (schema,)).fetchone()
+        if not migration_table:
+            raise ValueError("placement_rules_keeper_schema_required")
+        indexes = [row[0] for row in conn.execute(
+            "SELECT indexname FROM pg_indexes WHERE schemaname=%s "
+            "AND tablename=ANY(%s)", (schema, list(TABLES))).fetchall()]
         for name in (*TABLES, *indexes):
             if conn.execute("SELECT to_regclass(%s)",
                             (name + "_retired_v11",)).fetchone()[0]:
                 raise ValueError("placement_rules_retired_names_exist")
+        if not conn.execute(sql.SQL("SELECT 1 FROM {}.schema_migrations WHERE version=11")
+                            .format(sql.Identifier(schema))).fetchone():
+            raise ValueError("placement_rules_migration_11_required")
         conn.execute("LOCK TABLE placement_rule_revision, placement_rule_values, "
                      "placement_rule_audit IN ACCESS EXCLUSIVE MODE")
         for name in indexes:
