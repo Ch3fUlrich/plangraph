@@ -4,11 +4,18 @@ param(
     [switch]$DryRun,
     [switch]$SkipAutoOS,
     [string]$AutoOSRoot,
-    [string]$CatalogDbPath
+    [string]$CatalogDbPath,
+    [string]$ProbeHost,
+    [string]$ProbeConfig
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$pythonCommand = @('python3', 'python', 'py') | Where-Object {
+    $candidate = Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue
+    $candidate -and $candidate.Source -notmatch '[\\/]WindowsApps[\\/]'
+} | Select-Object -First 1
+if (-not $pythonCommand) { throw "Python interpreter required (python3, python or py)" }
 
 function Resolve-AutoOSRoot {
     [CmdletBinding()]
@@ -27,6 +34,12 @@ function Invoke-PlangraphBootstrap {
     [CmdletBinding()]
     param()
 
+    if ($ProbeHost -or $ProbeConfig) {
+        & $pythonCommand -m plangraph.spawner.probe_enroll $ProbeHost $ProbeConfig ([int]$DryRun.IsPresent)
+        if ($LASTEXITCODE -ne 0) { throw "Probe enrollment failed" }
+        return
+    }
+
     $reqPath = Join-Path $PSScriptRoot "requirements-host.json"
     if (-not (Test-Path $reqPath)) {
         Write-Error "Host requirements file not found: $reqPath"
@@ -40,7 +53,7 @@ function Invoke-PlangraphBootstrap {
 
     Write-Host "Resolved host components ($($allComponents.Count)): $($allComponents -join ', ')"
 
-    & python -m plangraph.spawner.stall_watchdog tick --dry-run
+    & $pythonCommand -m plangraph.spawner.stall_watchdog tick --dry-run
     if ($LASTEXITCODE -ne 0) { throw "Watchdog count failed" }
 
     if (-not $SkipAutoOS -and $AutoOSRoot) {
@@ -77,12 +90,12 @@ function Invoke-PlangraphBootstrap {
     }
 
     if ($DryRun) {
-        Write-Host "[DRY-RUN] Would execute: python $($pythonArgs -join ' ')"
+        Write-Host "[DRY-RUN] Would execute: $pythonCommand $($pythonArgs -join ' ')"
     } else {
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
-            & python @pythonArgs
+            & $pythonCommand @pythonArgs
             if ($LASTEXITCODE -ne 0) {
                 throw "Catalog DB init-and-seed failed with exit code $LASTEXITCODE"
             }
@@ -92,9 +105,9 @@ function Invoke-PlangraphBootstrap {
     }
 
     $watchdogArgs = @("-m", "plangraph.spawner.stall_watchdog", "install", "--host", "windows")
-    if ($DryRun) { Write-Host "[DRY-RUN] Would execute: python $($watchdogArgs -join ' ')" }
+    if ($DryRun) { Write-Host "[DRY-RUN] Would execute: $pythonCommand $($watchdogArgs -join ' ')" }
     else {
-        & python @watchdogArgs
+        & $pythonCommand @watchdogArgs
         if ($LASTEXITCODE -ne 0) { throw "Watchdog installation failed" }
     }
 

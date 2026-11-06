@@ -67,6 +67,9 @@ _USAGE_LIMIT = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
     r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'
     r'|\.\s*Please try again later[.!]?|,\s*retry in \d+(?:\.\d+)?\s*(?:s|m|h|d))\s*', re.I)
+_CREDIT_LIMIT = re.compile(
+    r"\s*You've reached your credit usage limit\. Please upgrade your subscription plan "
+    r'to get more resources\. Report Issue \(input /feedback\)\s*', re.I)
 _MODEL_UNAVAILABLE = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?Model unavailable:\s*\S+\s*', re.I)
 _BUSY_LINE = re.compile(
@@ -118,6 +121,8 @@ def harness_limit_line(exit_code, stdout, stderr):
     # a mid-line mention in prose, a traceback or a retry log never marks a
     # leg. Agent prose on stdout only counts via its error-shaped lines.
     def quota(line):
+        if _CREDIT_LIMIT.fullmatch(line):
+            return True
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             return _USAGE_LIMIT.fullmatch(line)
         if _ERROR_SHAPED.match(line):
@@ -128,7 +133,7 @@ def harness_limit_line(exit_code, stdout, stderr):
             _RESET_AFTER.match(line.strip()) and _QUOTA_MARKER.search(line))
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
         line for line in normalize(stdout).splitlines()
-        if _ERROR_SHAPED.match(line) and quota(line)]
+        if (_ERROR_SHAPED.match(line) and quota(line)) or _CREDIT_LIMIT.fullmatch(line)]
     return lines[0].strip() if lines else None
 
 

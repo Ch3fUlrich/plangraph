@@ -1,0 +1,1 @@
+- **KEEPER-REFUSE-DIRECT-MERGE-COMMIT:** Require authoritative merged PR provenance for commit+ci evidence, including direct-pushed merges (D-3928).
