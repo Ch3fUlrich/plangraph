@@ -21,11 +21,11 @@ from registry_route_util import CARD, live_policy  # noqa: F401
 NEW_IDS = ("opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
            "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash")
 CATALOG_MODELS = {
-    "opencode-go-gemini-4-argon": "opencode-go/gemini-4-argon-contributor",
-    "opencode-go-glm-5.2": "opencode-go/glm-5.2-max",
+    "opencode-go-gemini-4-argon": "opencode-go/gemini-4-argon",
+    "opencode-go-glm-5.2": "opencode-go/glm-5.2",
     "opencode-go-qwen3.8-max": "opencode-go/qwen3.8-max",
     "opencode-go-muse-spark": "opencode-go/muse-spark-1.3-contributor",
-    "opencode-go-deepseek-v4-flash": "opencode-go/deepseek-v4-flash-max",
+    "opencode-go-deepseek-v4-flash": "opencode-go/deepseek-v4.1-flash",
 }
 
 

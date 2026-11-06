@@ -24,6 +24,7 @@ fn save(state: &Path, host: &str, base: Value, status: Status) -> Result<Value, 
     .map_err(|_| ToolError::Internal("could not save run record".into()))
 }
 fn validate(args: &Args) -> Result<(), ToolError> {
+    crate::leg_ref::check_review_role(args)?;
     if !args.contains_key("prompt") {
         return Err(ToolError::Key("prompt".into()));
     }
@@ -124,10 +125,16 @@ pub(crate) fn spawn(
     runs: &crate::runs::Runs,
 ) -> Result<Value, ToolError> {
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
-    if let Err(error) = validate(args) {
-        record_validation_error(state, host, role, &error)?;
-        return Err(error);
-    }
+    let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
+        .and_then(|a| validate(&a).map(|()| a));
+    let admitted = match admitted {
+        Ok(args) => args,
+        Err(error) => {
+            record_validation_error(state, host, role, &error)?;
+            return Err(error);
+        }
+    };
+    let args = &admitted;
     let plan: Value = serde_json::from_str(&placement::route(state, args)?)
         .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
     let leg = &plan["first_leg"];

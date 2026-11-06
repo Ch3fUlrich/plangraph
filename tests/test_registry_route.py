@@ -29,6 +29,13 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 # --- 1. harness/tool_mode are catalog data -----------------------------------
 
+@pytest.fixture(autouse=True)
+def fixed_route_table(monkeypatch):
+    # Registry/coverage behavior is independent of current provider credits.
+    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
+                 else leg for leg in DEFAULT_LEGS)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "legs", legs)
+
 def test_schema_has_harness_and_tool_mode_columns():
     db = _seeded()
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(catalog_models)")}
@@ -42,7 +49,7 @@ def test_every_seed_row_declares_harness_and_tool_mode():
 
 
 @pytest.mark.parametrize("model_id, harness", [
-    ("opencode-go/glm-5.2-max", "opencode"),
+    ("opencode-go/glm-5.2", "opencode"),
     ("opencode-go/qwen3.8-max", "opencode"),
     ("mimo/mimo-v2.6-pro", "opencode"),
     ("omniroute/cx-gpt-6-luna", "opencode"),
@@ -77,7 +84,7 @@ def test_migration_adds_columns_to_an_old_catalog(tmp_path):
     db.close()
     db = CatalogDB(path)
     db.init_and_seed()
-    assert _row(db, "opencode-go/glm-5.2-max")["harness"] == "opencode"
+    assert _row(db, "opencode-go/glm-5.2")["harness"] == "opencode"
     assert _row(db, "omniroute/cx-gpt-6-luna")["tool_mode"] == "inline-only"
 
 
