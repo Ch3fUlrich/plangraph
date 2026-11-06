@@ -6,12 +6,24 @@ import json
 from pathlib import Path
 import socket
 import subprocess
+import time
 from types import SimpleNamespace as NS
 
 import pytest
 
 from plangraph.spawner import env_redact, exit_outcome, run_watchdog
 from plangraph.routing_support.leg_state import LegStateStore
+from plangraph.routing_support import leg_state
+
+
+REAL_TIME = time.time
+CHANGELOG_LINES = (Path(__file__).resolve().parents[1] / 'changelog.d' /
+                   'SPAWNER-COST-TIME-D3605-cost-refusal.md').read_text().splitlines()
+
+
+def test_changelog_has_exactly_one_prefixed_line():
+    assert len(CHANGELOG_LINES) == 1
+    assert CHANGELOG_LINES[0].startswith('- **SPAWNER-COST-TIME-D3605:**')
 
 
 LINES = ['Error: server busy', 'Error: too busy', 'Error: overloaded',
@@ -45,7 +57,8 @@ def test_live_collect_fails_then_next_eligible(line, monkeypatch, tmp_path):
     # Real collector and streams, injected process/clock/reaper, no subprocess.
     async def exercise():
         clock = [1000.0]
-        monkeypatch.setattr(run_watchdog.time, 'time', lambda: clock[0])
+        monkeypatch.setattr(run_watchdog, 'time', NS(time=lambda: clock[0]))
+        assert time.time is REAL_TIME  # unrelated modules keep the real clock
         async def tick(gate):
             while not gate.refused.is_set():
                 await asyncio.sleep(0)
@@ -83,7 +96,8 @@ def test_live_collect_fails_then_next_eligible(line, monkeypatch, tmp_path):
 @pytest.mark.parametrize('line', CASES)
 def test_exit_replay_cooldown_and_probe(line, monkeypatch, tmp_path):
     clock = [1000.0]
-    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: clock[0])
+    monkeypatch.setattr(leg_state, 'time', NS(time=lambda: clock[0]))
+    assert time.time is REAL_TIME  # unrelated modules keep the real clock
     store = LegStateStore(tmp_path / 'legs.sqlite')
     notices = []
     service = NS(leg_reader=store.leg_status,
@@ -138,7 +152,8 @@ def test_quiet_guard_and_provider_reset(monkeypatch, tmp_path):
     gate.activity(1002)
     gate.poll(1010)
     assert gate.pending is None  # later healthy activity still cancels refusal
-    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
+    monkeypatch.setattr(leg_state, 'time', NS(time=lambda: 1000))
+    assert time.time is REAL_TIME  # unrelated modules keep the real clock
     store = LegStateStore(tmp_path / 'legs.sqlite')
     line = 'Error: server busy (reset after 2h)'
     service = NS(leg_reader=store.leg_status)
