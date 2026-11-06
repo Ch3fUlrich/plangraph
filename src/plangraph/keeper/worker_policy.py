@@ -14,8 +14,10 @@ ACTIONS = frozenset({"claim", "show", "worker_attempt", "worker_park",
 
 def check_identity(principal, row):
     """Require worker scope to match both the identity type and stored role."""
-    if getattr(principal, "worker_scope", False):
-        if not isinstance(principal, PhaseWorkerPrincipal) \
+    scoped = getattr(principal, "worker_scope", False)
+    stored_worker = row is not None and row["role"] == "phase-worker"
+    if scoped or stored_worker or isinstance(principal, PhaseWorkerPrincipal):
+        if not scoped or not isinstance(principal, PhaseWorkerPrincipal) \
                 or row is None or row["role"] != "phase-worker":
             raise Refused("forbidden", "principal changed since authentication: worker scope requires a stored phase-worker identity")
 
@@ -30,9 +32,24 @@ def check(principal, action, *, transport=False):
 
 def check_lock_project(store, principal, repo):
     if getattr(principal, "worker_scope", False):
-        if not isinstance(repo, str) or ":" not in repo:
-            raise Refused("forbidden", "worker lock needs a project prefix")
-        check_project(store, principal, repo)
+        import os
+
+        store._check_principal(principal)
+        if isinstance(repo, str) and ":" in repo:
+            check_project(store, principal, repo)
+            return
+        # worker_claim returns the configured root, and Rust forwards it as-is.
+        # Resolve scope from the server's cards, never from a caller's path.
+        if not repo or repo != os.environ.get("PG_PHASE_REPO_ROOT"):
+            raise Refused("forbidden", "worker lock needs a configured project repository")
+        rows = store.conn.execute(
+            "SELECT DISTINCT i.project FROM items i JOIN cards c ON c.key=i.key"
+            " WHERE i.claimed_by=?",
+            (principal.name,)).fetchall()
+        if not rows:
+            raise Refused("forbidden", "worker lock needs a claimed project card")
+        for row in rows:
+            store._require_project(principal, row["project"])
 
 
 def check_project(store, principal, key):

@@ -53,7 +53,9 @@ def test_worker_store_lifecycle(scoped):
     question = world.store.ask_question(principal, key, "question", default_answer="no",
         deadline=world.store._iso(world.clock() + 1))
     world.clock.advance(2)
-    assert world.store.answer_question(principal, question["id"], source="question_timeout")
+    with pytest.raises(Refused, match="may not do this"):
+        world.store.answer_question(principal, question["id"], source="question_timeout")
+    assert world.store.answer_question(world.p("router"), question["id"], source="question_timeout")
     assert world.store.worker_park(principal, {"card": key, "exit_class": "ok"})
     rows = world.conn.execute("SELECT action FROM audit_log WHERE actor=? AND ok=1",
                               (principal.name,)).fetchall()

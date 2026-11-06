@@ -37,6 +37,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from . import jev_client, jev_questions
+from .jev_observer import observer_connection
 
 __all__ = ["Sink", "store_sink", "guarded", "shadow_routing", "fill_outcome",
            "jsonl_sink", "shadow_qc_accept", "qc_hook"]
@@ -126,17 +127,6 @@ def guarded(fn, timeout_s):
     if "error" in box:
         return ("error", None, box["error"])
     return ("ok", box.get("value"), "")
-
-
-def observer_connection(store):
-    """Capture connection configuration on the owner thread; open per observer."""
-    from plangraph.keeper import db, db_pg
-    if isinstance(store.conn, db_pg.PgConnection):
-        dsn = store.conn._raw.info.dsn
-        schema = store.conn.schema
-        return lambda: db_pg.open_pg(None, dsn=dsn, schema=schema)
-    database = store.conn.execute("PRAGMA database_list").fetchone()[2]
-    return lambda: db.open_db(database, backend="sqlite")
 
 
 def store_sink(store, principal) -> Sink:

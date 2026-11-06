@@ -131,7 +131,7 @@ class VerbsMixin:
 
     def _claim(self, principal, key, lease_s, now, *, allow_system=False,
                force_stale=None):
-        # Only the worker_claim door admits the system principal (the phase worker runs as it); /v1/claim stays l1/worker.
+        # Only worker_claim admits system; plain claim admits l1/worker/phase-worker.
         self._require_role(principal, *(("l1", "worker", "system", "phase-worker") if allow_system else ("l1", "worker", "phase-worker")))
         lease_seconds = self._lease_seconds(lease_s)
         force_stale = self._force_stale_reason(force_stale)
