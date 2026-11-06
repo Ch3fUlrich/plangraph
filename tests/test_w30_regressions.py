@@ -48,8 +48,9 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
     assert calls == []
 
 
-@pytest.mark.parametrize('leg', [l for l in DEFAULT_LEGS if l.model.startswith('opencode/')])
-def test_explicit_disabled_zen_leg_refused(tmp_path, leg):
+@pytest.mark.parametrize('leg_id', ['opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'])
+def test_explicit_disabled_zen_leg_refused(tmp_path, leg_id):
+    leg = next(l for l in DEFAULT_LEGS if l.id == leg_id)  # D-3828: disabled, never removed
     from plangraph.planner.routing import SpawnRefused
     service = spawn_service(state=tmp_path)
     with pytest.raises(SpawnRefused, match='leg disabled: .*D-4196.*D-3828'):

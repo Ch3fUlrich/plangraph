@@ -19,6 +19,13 @@ def rows():
             for i, l in enumerate(WRITERS)}
 
 
+def test_disabled_writer_never_routed():
+    disabled = {l.id for l in DEFAULT_LEGS if l.disabled and 'implement' in l.roles}
+    assert disabled
+    plan = plan_spawn(CARD, role='implement', benchmark=rows())
+    assert plan.legs and not disabled & {l.id for l in plan.legs}
+
+
 def test_tier_first_and_swap():
     data = rows()
     plan = plan_spawn(CARD, role='implement', benchmark=data)
