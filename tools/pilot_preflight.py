@@ -24,7 +24,9 @@ def emit(check, good, detail):
 def command(argv, cwd=None, timeout=10):
     # Never forward subprocess output: child processes can echo sensitive values.
     return subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout,
-                          check=False)
+                          check=False, env={"PATH": os.environ.get("PATH", os.defpath),
+                                            "LANG": "C.UTF-8", "HOME": "/nonexistent",
+                                            "TERM": "dumb"})
 
 
 def pins(value):
@@ -45,7 +47,8 @@ def http_url(value):
     try:
         url = urlsplit(value)
         return (url.scheme in ("http", "https") and bool(url.hostname)
-                and url.port != 0 and not any(c.isspace() for c in value))
+                and url.port != 0 and not url.username and not url.password
+                and not url.fragment and not any(ord(c) < 33 for c in value))
     except ValueError:
         return False
 
@@ -53,6 +56,16 @@ def http_url(value):
 def absolute_file(value):
     path = Path(value)
     return bool(value) and path.is_absolute() and path.is_file()
+
+
+def card_keys(text):
+    keys = [line.strip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+    # The pilot namespace/form is the boundary, not a hardcoded PILOT-1/2 pair.
+    if not 1 <= len(keys) <= 20 or any(
+            not re.fullmatch(r"pilot:PILOT-[0-9]+", key) for key in keys):
+        raise ValueError("invalid pilot keys")
+    return keys
 
 
 def preflight():
@@ -64,10 +77,12 @@ def preflight():
             valid = valid and http_url(value)
         elif name in ("PG_JAIL_BIN", "PG_CARD_ALLOWLIST"):
             valid = valid and absolute_file(value)
+            if name == "PG_JAIL_BIN":
+                valid = valid and os.access(value, os.X_OK)
             if valid and name == "PG_CARD_ALLOWLIST":
                 try:
-                    Path(value).read_text(encoding="utf-8")
-                except (OSError, UnicodeError):
+                    card_keys(Path(value).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
                     valid = False
         elif name == "PG_HARNESS_VERSIONS":
             try:
@@ -76,6 +91,8 @@ def preflight():
                 valid = False
         elif name == "PG_BUILD_ID":
             valid = bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}", value))
+        elif name == "PG_KEEPER_TOKEN":
+            valid = valid and not any(c.isspace() or ord(c) < 32 for c in value)
         elif name == "PG_TEMPORAL_ADDR":
             valid = valid and http_url(value if "://" in value else "http://" + value)
         results.append(emit(name, valid, "present and valid" if valid else "missing, empty or malformed"))
@@ -92,16 +109,12 @@ def setup_repo(directory):
     if allow.exists() or allow.is_symlink():
         return emit("setup-repo", False, "allowlist already exists")
     repo.mkdir(parents=True, exist_ok=True)
-    # Isolate Git from global/system configuration, templates, hooks and identity.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-
+    # Empty HOME and explicit config operands isolate Git without extra env keys.
     def git(*args):
-        result = subprocess.run(["git", "-c", "user.name=Pilot", "-c",
-                                 "user.email=pilot@localhost", "-c",
-                                 "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
-                                 *args], cwd=repo, env=env, capture_output=True,
-                                timeout=30, check=False)
+        result = command(["git", "-c", "user.name=Pilot", "-c",
+                          "user.email=pilot@localhost", "-c",
+                          "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                          *args], cwd=repo, timeout=30)
         if result.returncode:
             raise ValueError("git failed")
 
@@ -112,35 +125,45 @@ def setup_repo(directory):
     git("add", "--", "check.sh")
     git("commit", "-m", "Initialize isolated pilot")
     with allow.open("x", encoding="utf-8") as stream:
-        stream.write("pilot:PILOT-1\npilot:PILOT-2\n")
+        stream.write("\n".join(card_keys("pilot:PILOT-1\npilot:PILOT-2\n")) + "\n")
     # Paths are explicit CLI operands, never environment values.
     emit("setup-repo", True, f"repo={ascii(str(repo))} allowlist={ascii(str(allow))}")
     return True
 
 
-def persistent(path):
+def persistent(path, mountinfo=None):
     path = path.resolve()
     if path.is_relative_to(Path("/tmp")) or not path.is_file() or not os.access(path, os.W_OK):
         return False
     # Longest matching Linux mount wins, including bind-mounted tmpfs paths.
     mounts = []
-    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+    for line in (Path("/proc/self/mountinfo").read_text()
+                 if mountinfo is None else mountinfo).splitlines():
         left, right = line.split(" - ", 1)
         mount = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), left.split()[4])
         if path.is_relative_to(Path(mount)):
             mounts.append((len(mount), right.split()[0]))
-    return bool(mounts) and max(mounts)[1] not in ("tmpfs", "ramfs")
+    return bool(mounts) and max(mounts)[1] in {
+        "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs"}
 
 
 def verify(args):
     results = []
+    failed = None
 
     def check(name, operation, detail):
+        nonlocal failed
+        if failed:
+            print(f"SKIP {name} not run: {failed} failed")
+            results.append(False)
+            return
         try:
             good = bool(operation())
-        except (OSError, ValueError, subprocess.SubprocessError):
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
             good = False
         results.append(emit(name, good, detail if good else "verification failed"))
+        if not good:
+            failed = name
 
     check("persistence", lambda: persistent(Path(args.temporal_db)), "regular persistent writable database")
 
@@ -148,8 +171,17 @@ def verify(args):
         token = os.environ.get("PG_TOKEN_FILE")
         if token is not None:
             p = Path(token)
-            if not token or not p.is_file() or stat.S_IMODE(p.stat().st_mode) != 0o600:
+            if not absolute_file(token) or stat.S_IMODE(p.stat().st_mode) != 0o600:
                 return False
+            credential = p.read_text(encoding="utf-8").strip()
+        else:
+            credential = os.environ.get("PG_KEEPER_TOKEN", "").strip()
+        if not credential or any(c.isspace() or ord(c) < 32 for c in credential):
+            return False
+        allow = os.environ.get("PG_CARD_ALLOWLIST", "")
+        if not absolute_file(allow):
+            return False
+        card_keys(Path(allow).read_text(encoding="utf-8"))
         repo = Path(args.repo).resolve()
         top = command(["git", "rev-parse", "--show-toplevel"], repo)
         if top.returncode or Path(os.fsdecode(top.stdout).strip()).resolve() != repo:
@@ -192,7 +224,7 @@ def main(argv=None):
     try:
         good = (preflight() if args.action == "preflight" else
                 setup_repo(args.directory) if args.action == "setup-repo" else verify(args))
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         good = emit(args.action, False, "operation failed; details redacted")
     return 0 if good else 2
 

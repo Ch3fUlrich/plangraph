@@ -78,12 +78,17 @@ plus `PG_CARD_ALLOWLIST` (absolute existing UTF-8 file), must be present.
 Use `python3 tools/pilot_preflight.py setup-repo /persistent/pilot-a` to create
 an isolated main-branch repository with only `check.sh`, no remote, and a sibling
 `pilot-a.cards.allow` containing exactly `pilot:PILOT-1` and `pilot:PILOT-2`.
-The allowlist is one card key per line; blank lines and `#` comments are allowed.
+The allowlist requires 1–20 `pilot:PILOT-<digits>` keys, one per line; blank
+lines and `#` comments are allowed. Preflight and verify enforce the same parser.
 Set `PG_CARD_ALLOWLIST` to that sibling path; never use production cards.
 
 Run `python3 tools/pilot_preflight.py verify --temporal-db /persistent/temporal.db
 --jail-bin /absolute/pg-jail --repo /persistent/pilot-a` (one shell command).
-If `PG_TOKEN_FILE` is set, it must name a regular file with mode 0600.
+If `PG_TOKEN_FILE` is set, it must name an absolute regular UTF-8 file with mode
+0600 and a nonempty credential; otherwise `PG_KEEPER_TOKEN` must be nonempty.
+Persistence permits only ext2/3/4, xfs, btrfs, zfs and f2fs mounts, never `/tmp`.
+After a failed check, all later checks print `SKIP` and do not execute.
+Children receive only PATH, LANG, HOME and TERM, with timeouts and no credentials.
 Pins accept exact version output or `name version`; subprocess output is never
 printed. `rust/pg-jail/src/main.rs:19–33` has no `--help` branch, so the jail
 check asserts a regular executable only; it does not prove sandbox enforcement.

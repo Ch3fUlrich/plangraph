@@ -49,7 +49,7 @@ def run(capsys, *args):
     assert SECRET not in output.out + output.err
     assert "Traceback" not in output.out + output.err
     assert not output.err
-    assert all(line.startswith(("OK ", "REFUSE ")) for line in output.out.splitlines())
+    assert all(line.startswith(("OK ", "REFUSE ", "SKIP ")) for line in output.out.splitlines())
     return code, output.out
 
 
@@ -142,6 +142,7 @@ def test_tmp_db_refused(env, capsys):
 
 
 def test_token_mode_refused(env, monkeypatch, capsys):
+    monkeypatch.setattr(pilot, "persistent", lambda p: True)
     token = env / "token"
     token.write_text(SECRET)
     token.chmod(0o644)
@@ -150,6 +151,7 @@ def test_token_mode_refused(env, monkeypatch, capsys):
 
 
 def test_pin_drift(env, monkeypatch, capsys):
+    monkeypatch.setattr(pilot, "persistent", lambda p: True)
     monkeypatch.setenv("PG_HARNESS_VERSIONS", "helper=2.0")
     assert "REFUSE pins" in verify(env, capsys)[1]
 
@@ -246,7 +248,68 @@ def test_verify_success(env, monkeypatch, capsys):
 def test_verify_exception_continues(env, monkeypatch, capsys, operation):
     def fail(*args, **kwargs):
         raise OSError(SECRET)
+    assert run(capsys, "setup-repo", str(env / "repo"))[0] == 0
     monkeypatch.setattr(pilot, operation, fail)
-    code, output = verify(env, capsys)
+    code, output = run(capsys, "verify", "--temporal-db", str(env / "db"),
+                       "--jail-bin", os.environ["PG_JAIL_BIN"], "--repo", str(env / "repo"))
     assert code == 2
     assert_checks(output)
+
+
+@pytest.mark.parametrize('text', ['', '# comment\n', 'production:OTHER\n',
+                                      'pilot:PILOT-x\n', 'pilot:PILOT-1\n' * 21])
+def test_allowlist_content(env, monkeypatch, capsys, text):
+    Path(os.environ['PG_CARD_ALLOWLIST']).write_text(text)
+    assert run(capsys, 'preflight')[0] == 2
+    monkeypatch.setattr(pilot, 'persistent', lambda p: True)
+    assert verify(env, capsys)[0] == 2
+
+
+@pytest.mark.parametrize('credential', ['empty-file', 'empty-env'])
+def test_empty_credentials_stop_checks(env, monkeypatch, capsys, credential):
+    repo = env / 'repo'
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    marker = env / 'executed'
+    (repo / 'check.sh').write_text(f'#!/bin/sh\ntouch {marker}\n')
+    if credential == 'empty-file':
+        token = env / 'token'
+        token.write_text('')
+        token.chmod(0o600)
+        monkeypatch.setenv('PG_TOKEN_FILE', str(token))
+    else:
+        monkeypatch.setenv('PG_KEEPER_TOKEN', '')
+    monkeypatch.setattr(pilot, 'persistent', lambda p: True)
+    code, output = run(capsys, 'verify', '--temporal-db', str(env / 'db'),
+                       '--jail-bin', os.environ['PG_JAIL_BIN'], '--repo', str(repo))
+    assert code == 2
+    assert not marker.exists()
+    assert 'SKIP checks not run: auth failed' in output
+
+
+def test_children_sanitized(env, monkeypatch, capsys):
+    repo = env / 'repo'
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    token = env / 'token'
+    token.write_text('fixture-credential')
+    token.chmod(0o600)
+    monkeypatch.setenv('PG_TOKEN_FILE', str(token))
+    for name in ('helper', 'check.sh'):
+        target = env / name if name == 'helper' else repo / name
+        target.write_text(f'#!/bin/sh\n/usr/bin/env > {env / (name + ".env")}\n' +
+                          ("echo 'helper 1.0'\n" if name == 'helper' else 'exit 0\n'))
+    monkeypatch.setattr(pilot, 'persistent', lambda p: True)
+    assert run(capsys, 'verify', '--temporal-db', str(env / 'db'), '--jail-bin',
+               os.environ['PG_JAIL_BIN'], '--repo', str(repo))[0] == 0
+    for name in ('helper', 'check.sh'):
+        names = {line.split('=')[0] for line in (env / (name + '.env')).read_text().splitlines()}
+        assert not names & {'PG_KEEPER_TOKEN', 'PG_TOKEN_FILE'}
+        assert names <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD'}
+
+
+@pytest.mark.parametrize('fs,expected', [('overlay', False), ('9p', False),
+    ('fuse.sshfs', False), ('tmpfs', False), ('ramfs', False), ('nfs', False), ('ext4', True)])
+def test_mount_types(tmp_path, monkeypatch, fs, expected):
+    db = tmp_path / 'db'
+    db.touch()
+    text = f'1 0 8:1 / {tmp_path} rw - {fs} /dev/example rw\n'
+    assert pilot.persistent(db, mountinfo=text) is expected
