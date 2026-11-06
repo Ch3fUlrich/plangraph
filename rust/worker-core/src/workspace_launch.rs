@@ -189,10 +189,18 @@ fn strip_git(cmd: &mut Command) {
         .chain(cmd.get_envs().map(|(k, _)| k.to_os_string()))
         .collect();
     for key in keys {
-        if key
-            .to_string_lossy()
-            .to_ascii_uppercase()
-            .starts_with("GIT_")
+        let upper = key.to_string_lossy().to_ascii_uppercase();
+        if upper.starts_with("GIT_")
+            || [
+                "TOKEN",
+                "SECRET",
+                "PASSWORD",
+                "CREDENTIAL",
+                "API_KEY",
+                "PRIVATE_KEY",
+            ]
+            .iter()
+            .any(|part| upper.contains(part))
         {
             cmd.env_remove(key);
         }
