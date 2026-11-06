@@ -67,13 +67,10 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            role="review",
-            writer_families=("gpt",),
-            leg="mimo-v2.6-pro",
-            model="mimo/mimo-v2.6-pro",
+            role="review", writer_families=("gpt",),
+            leg="mimo-v2.6-pro", model="mimo/mimo-v2.6-pro",
             override_reason="testing manual model override",
-            prompt="test",
-            wait_seconds=0.1,
+            prompt="test", wait_seconds=0.1,
         )
         assert factory.call_count == 0
         assert record["status"] == "failed"
