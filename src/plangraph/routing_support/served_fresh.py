@@ -15,14 +15,19 @@ def served_fresh(model, models, config, env, *, probe=None):
 
     if present(models) or probe is not None:
         return present(models)
+    try:
+        providers = json.loads(config).get('providers', {})
+    except (ValueError, AttributeError, TypeError):
+        providers = {}
+    names = sorted(name for name in credential_names(providers) if env.get(name))
+    key = (r.provider_config_digest(config), hashlib.sha256(json.dumps(names).encode()).hexdigest())
+    with r._served_lock:
+        cached = r._served_cache.get(key)
+    if (cached is None or cached[1] != models
+            or time.monotonic() - (cached[0] - (300 if cached[1] else 30)) <= 5):
+        return present(models)
     fresh = r._probe_served_models(config, env=env)
     if fresh is not None and present(fresh):
-        try:
-            providers = json.loads(config).get('providers', {})
-        except (ValueError, AttributeError, TypeError):
-            providers = {}
-        names = sorted(name for name in credential_names(providers) if env.get(name))
-        key = (r.provider_config_digest(config), hashlib.sha256(json.dumps(names).encode()).hexdigest())
         with r._served_lock:
             r._served_cache[key] = (time.monotonic() + 300, fresh)
     return present(fresh)
