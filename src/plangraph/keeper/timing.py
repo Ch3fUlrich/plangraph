@@ -65,12 +65,21 @@ def _emit(event, kind, wait, hold, parts):
         names = ("wait_ms", "hold_ms", *_fields)
         line = f"keeper: {event} kind={kind} " + " ".join(
             f"{name}={value}" for name, value in zip(names, values))
+        if event == "request_timing" and parts.get("filtered"):
+            line += " filtered=1"
         if getattr(parts, "pending", None) is not None:
             parts.pending.append(line)
         else:
             _output(line)
     except Exception:
         pass  # closed stderr (or broken instrumentation) must never affect the operation
+
+
+def filtered_read(active):
+    """Mark only the enclosing request; never copy query content to timings."""
+    parts = _context(get=True)
+    if parts is not None and active:
+        parts["filtered"] = True
 
 
 class RequestTimer:

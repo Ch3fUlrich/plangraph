@@ -37,7 +37,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .. import inbox, views
-from . import outage, timing
+from . import outage, snapshot_params, timing
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from .snapshot_writer import SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
@@ -353,8 +353,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
             data = store.digest(principal)
             return (fmt.digest_text(data), True) if as_text else (data, False)
         if name == "snapshot":
-            data = store.snapshot(principal)
-            return (fmt.snapshot_text(data), True) if as_text else (data, False)
+            return snapshot_params.read(store, principal, query)
         if name == "changelog":
             data = store.changelog(principal, self._one(query, "since"))
             return (changelog.render(data), True) if as_text else (data, False)
