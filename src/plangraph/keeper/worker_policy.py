@@ -12,13 +12,17 @@ ACTIONS = frozenset({"claim", "show", "worker_attempt", "worker_park",
 
 
 def check(principal, action, *, transport=False):
+    if getattr(principal, "role", None) == "phase-worker" and not getattr(principal, "worker_scope", False):
+        raise Refused("forbidden", "phase worker requires authenticated worker scope")
     if getattr(principal, "worker_scope", False):
         if action not in (VERBS if transport else ACTIONS):
             raise Refused("forbidden", "phase worker scope excludes this verb")
 
 
 def check_lock_project(store, principal, repo):
-    if isinstance(repo, str) and ":" in repo:
+    if getattr(principal, "worker_scope", False):
+        if not isinstance(repo, str) or ":" not in repo:
+            raise Refused("forbidden", "worker lock needs a project prefix")
         check_project(store, principal, repo)
 
 

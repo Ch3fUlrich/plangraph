@@ -430,8 +430,7 @@ class CardsMixin(ExecMixin):
         return {"id": row[0], "key": key, "state": "open"}
 
     def answer_question(self, principal, question_id, text=None, source="answer"):
-        row = self.conn.execute("SELECT key FROM questions WHERE id=?", (question_id,)).fetchone()
-        return self._run(principal, "answer_question", row["key"] if row else None,
+        return self._run(principal, "answer_question", None,
                          lambda now: self._answer_question(principal, question_id,
                                                            text, source, now))
 
@@ -451,10 +450,12 @@ class CardsMixin(ExecMixin):
             raise Refused("validation", "question_id must be an integer")
         with self._write():
             row = self.conn.execute(
-                "SELECT id,state,default_answer,deadline,risk_tags FROM questions"
+                "SELECT id,key,state,default_answer,deadline,risk_tags FROM questions"
                 " WHERE id=?", (question_id,)).fetchone()
             if row is None:
                 raise Refused("not_found", f"no question {question_id}")
+            from .worker_policy import check_project
+            check_project(self, principal, row["key"])
             if row["state"] != "open":
                 raise Refused("conflict", f"question {question_id} is {row['state']}")
             if source == "question_timeout":

@@ -83,9 +83,9 @@ def test_scoped_worker_claim_show_and_locks(scoped):
     key, = seed(world, [("A", [])])
     world.store.claim(principal, key)
     assert world.store.show(principal, key)
-    fence = world.store.lock_acquire(principal, "repo", {"owner": "owner", "ttl_s": 30})
+    fence = world.store.lock_acquire(principal, key, {"owner": "owner", "ttl_s": 30})
     assert fence
-    assert world.store.lock_release(principal, "repo", fence) is not None
+    assert world.store.lock_release(principal, key, fence) is not None
 
 
 def test_scoped_phase_routes(scoped, tmp_path, monkeypatch):
