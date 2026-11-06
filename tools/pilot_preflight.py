@@ -10,6 +10,10 @@ from urllib.parse import urlsplit
 
 
 CHECKOUT = Path(__file__).resolve().parents[1]
+# PLANGRAPH_TEMPORAL_HTTP is read by the keeper, not the Rust worker.
+REQUIRED_ENV = ("PLANGRAPH_TEMPORAL_HTTP", "PG_KEEPER_URL", "PG_KEEPER_TOKEN",
+                "PG_JAIL_BIN", "PG_HARNESS_VERSIONS", "PG_BUILD_ID",
+                "PG_CARD_ALLOWLIST", "PG_TEMPORAL_ADDR")
 
 
 def emit(check, good, detail):
@@ -53,15 +57,18 @@ def absolute_file(value):
 
 def preflight():
     results = []
-    for name in ("PLANGRAPH_TEMPORAL_HTTP", "PG_KEEPER_URL", "PG_KEEPER_TOKEN",
-                 "PG_JAIL_BIN", "PG_HARNESS_VERSIONS", "PG_BUILD_ID",
-                 "PG_CARD_ALLOWLIST", "PG_TEMPORAL_ADDR"):
+    for name in REQUIRED_ENV:
         value = os.environ.get(name, "")
         valid = bool(value.strip()) and not any(c in value for c in "\x00\r\n")
         if name in ("PLANGRAPH_TEMPORAL_HTTP", "PG_KEEPER_URL"):
             valid = valid and http_url(value)
         elif name in ("PG_JAIL_BIN", "PG_CARD_ALLOWLIST"):
             valid = valid and absolute_file(value)
+            if valid and name == "PG_CARD_ALLOWLIST":
+                try:
+                    Path(value).read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    valid = False
         elif name == "PG_HARNESS_VERSIONS":
             try:
                 pins(value)
