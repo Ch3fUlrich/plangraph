@@ -50,6 +50,24 @@ def test_system_phase_holder_exec_triple_does_not_record_owner(w):
     ).fetchone()[0] == 0
 
 
+def test_system_phase_holder_validates_exec_gate_once(w, monkeypatch):
+    from unittest.mock import Mock
+
+    gate(w)
+    claim_as_runner(w, "demo:C1")
+    exec_gate = Mock(wraps=w.store._exec_gate)
+    monkeypatch.setattr(w.store, "_exec_gate", exec_gate)
+
+    complete_with_exec(w)
+
+    exec_gate.assert_called_once_with("demo:C1", {
+        "card": "demo:C1", "merged_sha": "abcdef1",
+        "expected_state": LIVE_STATES, "workflow_id": "wf",
+        "run_id": "R1", "attempt": 2,
+    }, w.p("system"), record=False)
+    assert w.store._get_or_refuse("demo:C1")["state"] == "in_review"
+
+
 @pytest.mark.parametrize("run_id,attempt", [("R2", 2), ("R1", 1)])
 def test_system_phase_holder_exec_triple_preserves_stale_owner_checks(w, run_id, attempt):
     gate(w)
