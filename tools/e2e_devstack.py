@@ -322,15 +322,18 @@ def run(args) -> int:
         finally:
             primary_failure = sys.exc_info()[0] is not None
             teardown_failed = False
+            teardown_reason = None
             while cleanup:
                 name, stop = cleanup.pop()
                 try:
                     stop()
                 except Exception as exc:               # noqa: BLE001 - keep tearing down
                     teardown_failed = True
+                    if isinstance(exc, Fail) and teardown_reason is None:
+                        teardown_reason = exc
                     sys.stderr.write(f"teardown {name}: {type(exc).__name__}\n")
             if teardown_failed and not primary_failure:
-                raise Fail("teardown_failed")
+                raise teardown_reason or Fail("teardown_failed")
     except Fail as exc:
         print(f"E2E-DEVSTACK-FAIL: {exc}", file=sys.stderr)
         return 1

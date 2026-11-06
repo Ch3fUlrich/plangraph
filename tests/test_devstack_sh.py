@@ -333,8 +333,8 @@ def test_shellcheck_clean():
 
 def test_start_defaults_temporal_http_port_to_18233(stack):
     # devstack.sh defaults TEMPORAL_HTTP_PORT to 18233, the devstack's own HTTP API port: the live
-    # one is 8233 and the keeper signals workflows through this URL, so both the start-dev flag and
-    # the status export must land on 18233 when the variable is unset.
+    # HTTP API uses 7243 (8233 is the UI). The keeper signals workflows through this URL,
+    # so both the start-dev flag and status export must use 18233 when the variable is unset.
     stack.env.pop("TEMPORAL_HTTP_PORT")
     try:
         assert stack.run("start").returncode == 0

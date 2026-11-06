@@ -16,7 +16,7 @@ import rtp1_local_util as u
 
 REPO = Path(__file__).resolve().parents[1]
 # Live/default Temporal, UI, Postgres and keeper ports must never be touched.
-REFUSED_PORTS = frozenset({7233, 8233, 55432, 8787})
+REFUSED_PORTS = frozenset({7233, 7243, 8233, 55432, 8787})
 
 
 class Fail(Exception):
@@ -135,8 +135,13 @@ def stop_worker(worker) -> None:
                 except subprocess.TimeoutExpired:
                     pass
         finally:
-            send(signal.SIGKILL)  # also kill descendants after the parent has exited
-            worker.proc.wait(timeout=10)
+            blocked = signal.pthread_sigmask(
+                signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGALRM})
+            try:
+                send(signal.SIGKILL)  # also kill descendants after the parent has exited
+                worker.proc.wait(timeout=10)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
     finally:
         worker.out.close()
 

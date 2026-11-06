@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest; from fake_pid import FAKE_PID
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "e2e_devstack.py"
-LIVE_PORTS = (7233, 8233, 55432, 8787)
+LIVE_PORTS = (7233, 7243, 8233, 55432, 8787)
 DEVSTACK_PORTS = (17252, 18235, 55440, 18787, 18233)
 @pytest.fixture(scope="module")
 def e2e():
@@ -64,7 +64,7 @@ def test_hostport_requires_host_and_port(e2e, addr):
         e2e._hostport(addr, "--temporal")
     assert "must be HOST:PORT" in str(exc.value)
 @pytest.mark.parametrize("url", ["http://127.0.0.1:8787", "http://127.0.0.1:8233",
-                                 "http://127.0.0.1:7233", "http://127.0.0.1:55432"])
+                                 "http://127.0.0.1:7233", "http://127.0.0.1:7243", "http://127.0.0.1:55432"])
 def test_check_url_refuses_each_live_port(e2e, url):
     with pytest.raises(e2e.Fail) as exc:
         e2e._check_url(url, "--keeper")
@@ -113,27 +113,6 @@ def test_stub_resume_emits_recognizable_text(e2e, tmp_path):
     assert proc.returncode == 0 and (tmp_path / "out.txt").read_text() == "done\n"
     event = json.loads(proc.stdout)
     assert event["type"] == "text" and event["part"]["text"] == "wrote out.txt"
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGALRM])
-def test_signal_cleanup_reaps_only_owned_worker(e2e, tmp_path, sig):
-    owned = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    old = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)}
-    try:
-        with pytest.raises(e2e.Fail):
-            try:
-                e2e.interrupted(sig, None)
-            finally:
-                with open(tmp_path / "log", "wb") as out:
-                    e2e.stop_worker(SimpleNamespace(proc=owned, out=out))
-        assert owned.returncode is not None
-        assert other.poll() is None
-    finally:
-        for s, handler in old.items():
-            signal.signal(s, handler)
-        for proc in (owned, other):
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
 def test_url_refusal_does_not_echo_credentials(e2e):
     with pytest.raises(e2e.Fail) as exc:
         e2e._check_url("http://private:do-not-print@127.0.0.1:18787", "--keeper")
@@ -159,16 +138,7 @@ def test_stop_worker_kills_group_after_parent_exit(e2e, tmp_path):
             os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOWAIT)
             e2e.stop_worker(SimpleNamespace(proc=proc, out=out, owned_pgid=proc.pid))
         pid = int(child.read_text())
-        for _ in range(100):
-            status = Path(f"/proc/{pid}/stat")
-            try:
-                if status.read_text().split()[2] == "Z":
-                    break
-            except (FileNotFoundError, ProcessLookupError):
-                break
-            time.sleep(0.01)
-        else:
-            pytest.fail("worker descendant survived teardown")
+        assert_descendant_stopped(pid)
     finally:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -180,13 +150,14 @@ def test_validate_args_rejects_a_live_keeper_port(e2e):
     with pytest.raises(e2e.Fail) as exc:
         e2e.validate_args(args)
     assert "--keeper" in str(exc.value) and "8787" in str(exc.value)
-def test_validate_args_rejects_a_live_temporal_http_port(e2e):
+@pytest.mark.parametrize("port", [7243, 8233])
+def test_validate_args_rejects_a_live_temporal_http_port(e2e, port):
     args = e2e.parse_args(["--temporal", "127.0.0.1:17252",
                            "--keeper", "http://127.0.0.1:18787",
-                           "--temporal-http", "http://127.0.0.1:8233"])
+                           "--temporal-http", f"http://127.0.0.1:{port}"])
     with pytest.raises(e2e.Fail) as exc:
         e2e.validate_args(args)
-    assert "--temporal-http" in str(exc.value) and "8233" in str(exc.value)
+    assert "--temporal-http" in str(exc.value) and str(port) in str(exc.value)
 def test_validate_args_opencode_leg_needs_a_model(e2e):
     args = e2e.parse_args(["--temporal", "127.0.0.1:17252",
                            "--keeper", "http://127.0.0.1:18787", "--leg", "opencode"])
@@ -270,24 +241,25 @@ def test_foreign_keeper_refused_before_any_contact(e2e, tmp_path, monkeypatch):
     monkeypatch.setattr(e2e.u, "call", lambda *a, **kw: pytest.fail("foreign service contacted"))
     with pytest.raises(e2e.Fail, match="keeper_state_mismatch"):
         e2e.run(args)
+@pytest.mark.parametrize("stop_reason", [None, "run interrupted", "run time box expired"])
 @pytest.mark.parametrize("reason", ["workflow_not_merged", "merge_sha_mismatch", None])
-def test_teardown_preserves_primary_reason(e2e, capsys, reason):
+def test_teardown_preserves_primary_reason(e2e, capsys, reason, stop_reason):
     import ast
     tree = ast.parse(SCRIPT.read_text())
     final = next(n.finalbody for n in ast.walk(tree) if isinstance(n, ast.Try)
                  and any(isinstance(x, ast.Assign) and any(isinstance(t, ast.Name)
                          and t.id == "teardown_failed" for t in x.targets) for x in n.finalbody))
     def stop():
-        raise RuntimeError("withheld")
+        raise e2e.Fail(stop_reason) if stop_reason else RuntimeError("withheld")
     body = [ast.If(test=ast.Name(id="reason", ctx=ast.Load()),
                    body=[ast.Raise(exc=ast.Call(func=ast.Name(id="Fail", ctx=ast.Load()),
                          args=[ast.Name(id="reason", ctx=ast.Load())], keywords=[]))], orelse=[])]
     code = ast.fix_missing_locations(ast.Module(body=[ast.Try(body=body, handlers=[],
                                                              orelse=[], finalbody=final)], type_ignores=[]))
-    with pytest.raises(e2e.Fail, match=reason or "teardown_failed"):
+    with pytest.raises(e2e.Fail, match=reason or stop_reason or "teardown_failed"):
         exec(compile(code, str(SCRIPT), "exec"), dict(sys=sys, Fail=e2e.Fail, reason=reason,
                                                     cleanup=[("worker", stop)]))
-    assert "teardown worker: RuntimeError" in capsys.readouterr().err
+    assert f"teardown worker: {'Fail' if stop_reason else 'RuntimeError'}" in capsys.readouterr().err
 @pytest.mark.parametrize("forbidden", ["WSL", "npm shim", "/tmp/opencode"])
 def test_driver_has_no_site_specific_assumptions(forbidden):
     assert forbidden not in SCRIPT.read_text()
@@ -379,16 +351,7 @@ def test_stop_worker_grace_failure_still_kills_and_reaps(e2e, tmp_path, monkeypa
                 with pytest.raises(e2e.Fail if failure == "signal" else OSError):
                     e2e.stop_worker(worker)
         assert proc.returncode is not None and out.closed, "worker not reaped or output not closed"
-        for _ in range(100):
-            status = Path(f"/proc/{pid}/stat")
-            try:
-                if status.read_text().split()[2] == "Z":
-                    break
-            except (FileNotFoundError, ProcessLookupError):
-                break
-            sleep(0.01)
-        else:
-            pytest.fail("worker descendant survived grace failure")
+        assert_descendant_stopped(pid)
     finally:
         for sig, handler in old.items():
             signal.signal(sig, handler)
@@ -398,3 +361,37 @@ def test_stop_worker_grace_failure_still_kills_and_reaps(e2e, tmp_path, monkeypa
             pass
         proc.wait(timeout=5)
         out.close()
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT, signal.SIGALRM])
+@pytest.mark.parametrize("window", ["kill", "reap"])
+def test_final_worker_cleanup_defers_first_signal(e2e, monkeypatch, sig, window):
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    killpg, wait = os.killpg, proc.wait
+    old = {s: signal.signal(s, e2e.interrupted) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)}
+    out = open(os.devnull, "wb")
+    def send(pgid, sent):
+        if sent == signal.SIGTERM: return
+        if window == "kill": os.kill(os.getpid(), sig)
+        killpg(pgid, sent)
+    def reap(**kwargs):
+        if window == "reap": os.kill(os.getpid(), sig)
+        return wait(**kwargs)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "killpg", send); patch.setattr(os, "waitid", lambda *a: True)
+            patch.setattr(proc, "wait", reap)
+            with pytest.raises(e2e.Fail, match="run time box expired" if sig == signal.SIGALRM else "run interrupted"):
+                e2e.stop_worker(SimpleNamespace(proc=proc, out=out, owned_pgid=proc.pid))
+        assert proc.returncode is not None and out.closed
+    finally:
+        for s, handler in old.items(): signal.signal(s, handler)
+        try: killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        wait(timeout=5); out.close()
+def assert_descendant_stopped(pid):
+    for _ in range(100):
+        try:
+            if Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z": return
+        except (FileNotFoundError, ProcessLookupError): return
+        time.sleep(0.01)
+    pytest.fail("worker descendant survived teardown")
