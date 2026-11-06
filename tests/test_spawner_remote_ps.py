@@ -73,11 +73,46 @@ def test_unreachable_does_not_log_secrets(caplog):
     assert caplog.text == ''
 
 
-def test_service_uses_fanout(tmp_path, monkeypatch):
+def test_overflow_counts_only_local_with_hosts(tmp_path, monkeypatch):
+    from plangraph.spawner import cli, overflow, stall_watchdog
     from plangraph.spawner.service import SpawnService
-    monkeypatch.setattr(remote_ps, 'list_runs', lambda local: local + [
-        dict(host='node-a', status='unknown', reason='host query failed')])
-    assert SpawnService(state=tmp_path).ps()['runs'][0]['host'] == 'node-a'
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='private-target')])
+    local = [dict(run_id='local', status='running', started=1),
+             dict(run_id='ended', status='completed', started=0)]
+    monkeypatch.setattr(stall_watchdog, 'read_runs', lambda state: local)
+    real_list = remote_ps.list_runs
+    def transport(host, timeout):
+        return json.dumps({'runs': [dict(run_id='remote', host='node-a', status='running')]})
+    monkeypatch.setattr(remote_ps, 'list_runs',
+                        lambda rows: real_list(rows, transport=transport))
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kwargs: SpawnService(state=tmp_path))
+    assert len(remote_ps.list_runs(local)) == 3
+    assert overflow.local_resources()[0] == 1
+    assert SpawnService(state=tmp_path).ps() == {'runs': local}
+
+
+@pytest.mark.parametrize('surface', ['cli', 'mcp'])
+def test_ps_surfaces_use_fanout(tmp_path, monkeypatch, capsys, surface):
+    import asyncio
+    from plangraph.spawner import cli
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    from plangraph.spawner.service import SpawnService
+    local = dict(run_id='local', host='local', status='running')
+    remote = dict(run_id='remote', host='node-a', status='running')
+    monkeypatch.setattr(SpawnService, 'ps', lambda self: {'runs': [local]})
+    calls = []
+    def fanout(rows):
+        calls.append(rows)
+        return rows + [remote]
+    monkeypatch.setattr(remote_ps, 'list_runs', fanout)
+    if surface == 'mcp':
+        result = asyncio.run(MCPSpawnerServer(state=tmp_path).call_tool('plangraph_agent_ps', {}))
+    else:
+        monkeypatch.setattr(cli, 'SpawnService', lambda **kwargs: SpawnService(state=tmp_path))
+        cli.main(['ps'])
+        result = json.loads(capsys.readouterr().out)
+    assert calls == [[local]]
+    assert [row['run_id'] for row in result['runs']] == ['local', 'remote']
 
 
 @pytest.mark.parametrize('contents', ['not json', '{}', 'null', '[]',

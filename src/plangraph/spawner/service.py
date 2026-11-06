@@ -113,8 +113,8 @@ class SpawnService(SeatSpawnMixin):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
     def ps(self):
-        from .stall_watchdog import read_runs; from .remote_ps import list_runs
-        return {'runs': list_runs(sorted(read_runs(self.state), key=lambda r: r.get('started', 0), reverse=True))}
+        from .stall_watchdog import read_runs
+        return {'runs': sorted(read_runs(self.state), key=lambda r: r.get('started', 0), reverse=True)}
 
     def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         try:
