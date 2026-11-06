@@ -207,7 +207,7 @@ class CardsMixin(ExecMixin):
     def _may_act_in(self, principal, project):
         if principal.role in ("router", "system"):
             return
-        self._require_role(principal, "l1", "worker", "spawner")
+        self._require_role(principal, "l1", "worker", "spawner", "phase-worker")
         self._require_project(principal, project)
 
     def _iso_or_none(self, name, value):
@@ -377,7 +377,7 @@ class CardsMixin(ExecMixin):
     def _ask_question(self, principal, key, text, default_answer, deadline, risk_tags,
                       now, exec_workflow_id=None, exec_run_id=None, exec_attempt=None,
                       expected_state=None):
-        self._require_role(principal, "router", "l1", "worker", "spawner", "system")
+        self._require_role(principal, "router", "l1", "worker", "spawner", "system", "phase-worker")
         body = _text("text", text, required=True, key=key)
         default = _text("default_answer", default_answer, key=key)
         if default is not None and not default.strip():
@@ -430,7 +430,8 @@ class CardsMixin(ExecMixin):
         return {"id": row[0], "key": key, "state": "open"}
 
     def answer_question(self, principal, question_id, text=None, source="answer"):
-        return self._run(principal, "answer_question", None,
+        row = self.conn.execute("SELECT key FROM questions WHERE id=?", (question_id,)).fetchone()
+        return self._run(principal, "answer_question", row["key"] if row else None,
                          lambda now: self._answer_question(principal, question_id,
                                                            text, source, now))
 
@@ -439,7 +440,7 @@ class CardsMixin(ExecMixin):
             self._require_role(principal, "router")
             body = _text("text", text, required=True)
         elif source == "question_timeout":
-            self._require_role(principal, "router", "system")
+            self._require_role(principal, "router", "system", "phase-worker")
             if text is not None:
                 raise Refused("validation", "a timeout answer is the stored default;"
                               " pass no text")

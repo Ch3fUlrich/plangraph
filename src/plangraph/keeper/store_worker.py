@@ -80,7 +80,7 @@ _ALARM_KEYS = frozenset(("card", "reason", "workflow_id", "run_id", "attempt"))
 _ACQUIRE_KEYS = frozenset(("owner", "ttl_s"))
 _RELEASE_KEYS = frozenset(("token", "owner"))
 _SHA_RE = re.compile(r"[0-9a-fA-F]{7,64}\Z")
-_LOCK_ROLES = ("router", "system", "l1", "worker", "spawner")
+_LOCK_ROLES = ("router", "system", "l1", "worker", "spawner", "phase-worker")
 _OWNER_MAX = 512
 
 
@@ -122,7 +122,7 @@ class WorkerMixin:
     # ------------------------------------------------------------- helpers
     def _system_phase_holder(self, principal, item):
         """Recognize only the system phase-worker claim door, not plain claims."""
-        if not (principal is not None and principal.role == "system"
+        if not (principal is not None and principal.role in ("system", "phase-worker")
                 and (principal.name == "system" or getattr(principal, "worker_scope", False)) and item["kind"] == "lane"
                 and item["state"] == "claimed"
                 and item["claimed_by"] == principal.name):

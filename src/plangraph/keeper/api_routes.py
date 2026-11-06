@@ -212,12 +212,15 @@ def _phase_plan(store, principal, body, need):
     from .worker_policy import check
     check(principal, "phase_plan", transport=True)
     # Role first: a non-router/system principal gets 403 before env or key checks.
-    store._require_role(principal, "router", "system")
+    store._require_role(principal, "router", "system", "phase-worker")
     from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
     key = need(body, "key")
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
     from .worker_policy import check_project
     check_project(store, principal, key)
+    if getattr(principal, "worker_scope", False):
+        from dataclasses import replace
+        principal = replace(principal, role="system")  # planner compatibility, scope retained
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
     # repo_root is server-side only; plan_phase also re-checks the role first.
@@ -232,11 +235,14 @@ def _phase_finish(store, principal, body, need):
     from .worker_policy import check
     check(principal, "phase_finish", transport=True)
     # Role first: a non-router/system principal gets 403 before env, key or GitHub access checks.
-    store._require_role(principal, "router", "system")
+    store._require_role(principal, "router", "system", "phase-worker")
     from ..planner.phase_finish import finish_phase
     key, branch, head = need(body, "key"), need(body, "branch"), need(body, "head")
     from .worker_policy import check_project
     check_project(store, principal, key)
+    if getattr(principal, "worker_scope", False):
+        from dataclasses import replace
+        principal = replace(principal, role="system")  # planner compatibility, scope retained
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
@@ -249,7 +255,12 @@ def _phase_finish(store, principal, body, need):
 def _worker_claim(store, principal, body, need):
     # Role first: a non-worker principal gets 403 before key or env access checks.
     # The phase runner's system principal also claims cards, so this is not worker-only.
-    store._require_role(principal, "worker", "system")
+    store._require_role(principal, "worker", "system", "phase-worker")
+    from .worker_policy import check_project
+    check_project(store, principal, need(body, "card"))
+    if getattr(principal, "worker_scope", False):
+        from dataclasses import replace
+        principal = replace(principal, role="system")  # planner compatibility, scope retained
     key = need(body, "card")
     # body.worker is informational (a worker process id) and is ignored.
     # The calling principal from the token is the only identity.

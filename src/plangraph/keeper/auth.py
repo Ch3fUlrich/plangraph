@@ -34,7 +34,7 @@ class Principal:
 
 @dataclass
 class PhaseWorkerPrincipal(Principal):
-    """System-compatible implementation identity, constrained at both doors."""
+    """Distinct worker identity; never admitted by a generic system-role gate."""
 
     worker_scope: bool = field(default=True, init=False)
 
@@ -131,7 +131,7 @@ def _as_principal(row) -> Principal:
     except (ValueError, TypeError):
         projects = []
     if row["role"] == "phase-worker":
-        return PhaseWorkerPrincipal(row["name"], "system", projects,
+        return PhaseWorkerPrincipal(row["name"], "phase-worker", projects,
                                     norm_family(row["family"]))
     return Principal(row["name"], row["role"], projects,
                      norm_family(row["family"]))

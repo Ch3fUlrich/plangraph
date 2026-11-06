@@ -20,6 +20,7 @@ def check(principal, action, *, transport=False):
 def check_project(store, principal, key):
     if getattr(principal, "worker_scope", False):
         store._check_principal(principal)
-        item = store._item(key) if key else None
-        if item is not None:
-            store._require_project(principal, item["project"])
+        if key is not None:
+            if not isinstance(key, str) or ":" not in key:
+                raise Refused("forbidden", "worker key needs a project prefix")
+            store._require_project(principal, key.split(":", 1)[0])
