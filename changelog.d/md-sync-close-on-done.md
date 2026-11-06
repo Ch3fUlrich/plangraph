@@ -1,0 +1,1 @@
+- md-sync treats a close refused because the item is already DONE as a no-op instead of halting (D-4162).
