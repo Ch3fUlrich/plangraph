@@ -1,0 +1,1 @@
+- **AGENT-EXIT-S3A:** Bridge final question packets to terminal needs_input spawner records and parent events, with bounded question rounds and no automatic resume.

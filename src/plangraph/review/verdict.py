@@ -24,8 +24,8 @@ __all__ = [
 
 VERDICTS = ("pass", "fix", "halt")
 
-PASS_WORDS = frozenset({"pass", "approve", "accept"})
-FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+PASS_WORDS = frozenset({"pass", "approve", "accept", "go"})
+FIX_WORDS = frozenset({"fail", "fix", "halt", "change", "changes", "reject", "no", "no-go", "blocked"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
 # [*_`]* before/after the word: markdown-bold labels like **MED**: or
 # _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
@@ -90,8 +90,13 @@ def _scan_verdict(text: str) -> tuple[str | None, bool]:
         stripped = match.group(1).strip()
         if _REQUEST_CHANGES.match(stripped):
             return "fix", False
-        word_m = _FIRST_WORD.match(stripped)
+        if re.match(r"no(?:-|\s+)go\b", stripped, re.I):
+            word_m = re.match(r"(no(?:-|\s+)go)" + _WORD_END, stripped, re.I)
+        else:
+            word_m = _FIRST_WORD.match(stripped)
         word = word_m.group(1).lower() if word_m else ""
+        if word_m and re.match(r"no(?:-|\s+)go\b", stripped, re.I):
+            word = "no-go"
         if word in PASS_WORDS:
             return "pass", False
         if word == "halt":
