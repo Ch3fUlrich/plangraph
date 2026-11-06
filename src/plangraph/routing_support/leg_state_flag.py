@@ -10,7 +10,7 @@ def enabled():
 
 
 @lru_cache(maxsize=1)
-def default_reader():
+def default_reader(state_home=None):
     from .leg_state import LegAdapter, _default_store
     from .omniroute_state import from_env
     reader = LegAdapter(_default_store(), from_env(), enabled=enabled())
@@ -25,15 +25,8 @@ def default_reader():
 
 
 def initialize(service, reader, boundary):
-    if reader is None:
-        from .leg_state import _default_store
-        cached = default_reader()
-        store = _default_store()
-        if cached.store.path != store.path:
-            cached.store, cached._at = store, None
-    service.leg_reader = reader = default_reader() if reader is None else reader
-    service.hung = boundary(reader, sample=lambda r: {}, identity=lambda p, i: False,
-                            cancel=lambda r: False, fallthrough=lambda r: None)
+    service.leg_reader = reader = default_reader(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")) if reader is None and enabled() else reader
+    service.hung = boundary(reader)
     return reader
 
 
@@ -53,6 +46,7 @@ def service_plan(service, **kwargs):
     by_id = {leg.id: leg.model for leg in plan.legs}
     details = tuple(dict(c, leg_state_reason=reasons[by_id[c['leg']]])
                     if by_id.get(c['leg']) in reasons else c for c in plan.candidates)
-    models = service.hung.rank([leg.model for leg in plan.legs])
-    ordered = tuple(sorted(plan.legs, key=lambda leg: models.index(leg.model)))
+    rank = {key: i for i, key in enumerate(service.hung.rank([leg.id for leg in plan.legs]))}
+    ordered = tuple(leg for i, leg in sorted(enumerate(plan.legs),
+                    key=lambda row: (rank.get(row[1].id, float("inf")), row[0])))
     return replace(plan, legs=ordered, candidates=details)

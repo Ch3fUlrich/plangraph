@@ -14,15 +14,40 @@ from .private_io import atomic_write_private
 
 
 class HungBoundary:
-    def __init__(self, reader, *, sample, identity, cancel, fallthrough,
+    def __init__(self, reader, *, sample=None, identity=None, cancel=None, fallthrough=None,
                  minutes=12, write=atomic_write_private):
         if type(minutes) not in (int, float) or not math.isfinite(minutes) or minutes <= 0:
             raise ValueError('requires finite positive minutes')
-        self.reader, self.sample, self.identity = reader, sample, identity
-        self.cancel, self.fallthrough, self.write = cancel, fallthrough, write
+        self.reader, self.sample, self.identity = reader, sample or self._sample, identity or self._identity
+        self.cancel, self.fallthrough, self.write = cancel or self._cancel, fallthrough or self._fallthrough, write
         self.seconds, self.waiting = minutes * 60, set()
         if not math.isfinite(self.seconds):
             raise ValueError('threshold overflow')
+
+    @staticmethod
+    def _identity(pid, ident):
+        from .proc_kill import alive
+        return ident is not None and alive(pid, ident)
+
+    @staticmethod
+    def _sample(record):
+        from .proc_kill import snapshot, _stat
+        tree = snapshot(record['pid'], record['root_identity'])
+        if HungBoundary._identity(record['pid'], record['root_identity']):
+            tree[record['pid']] = record['root_identity']
+        return dict(tokens=record.get('tokens'), output_bytes=record.get('output_bytes'),
+                    gateway_socket=record.get('gateway_socket'), queue_limit=record.get('queue_limit'),
+                    tree=[dict(pid=p, parent=_stat(p)[1], start=t) for p, t in tree.items()])
+
+    def _cancel(self, record):
+        import os
+        import signal
+        if self._identity(record['pid'], record['root_identity']):
+            os.kill(record['pid'], signal.SIGTERM)
+        return not self._identity(record['pid'], record['root_identity'])
+
+    def _fallthrough(self, record):
+        self.waiting.discard(record.get('leg'))
 
     @property
     def enabled(self):
