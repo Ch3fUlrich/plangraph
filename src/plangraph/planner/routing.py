@@ -167,14 +167,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         raise RouteError(f"no eligible leg for {window_class} (effective {effective}): "
                          + "; ".join(reasons), exclusion_reasons=dropped)
     if effective_role == "implement":
-        def sort_key(t):
-            tier_idx, pos, leg = t
-            try:
-                w_idx = WRITER_ORDER.index(leg.id)
-            except ValueError:
-                w_idx = len(WRITER_ORDER)
-            return (leg.id != LEAD_WRITER, tier_idx, w_idx, pos)
-        eligible.sort(key=sort_key)
+        from .route_policy import implement_key
+        eligible.sort(key=lambda t: implement_key(t[2], t[0], t[1]))
     elif effective_role == "review":
         eligible.sort(key=lambda t: review_key(t[2], t[0], t[1]))
     else:
@@ -254,7 +248,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     The implement role ignores benchmark permutation (operator order D-2683).
     ``exclude_families`` excludes the specified family names from candidate legs.
     ``policy`` (default :func:`load_route_policy`) skips banned/off families and
-    paused harnesses.  A review leg whose family is EVERY writer family is
+    paused harnesses.  A review leg whose family is ANY writer family is
     excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     Readers may be a LegStateStore or a callable with the leg_status contract.
@@ -324,8 +318,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     writer_set = writer_parts(writer_families) if role == "review" else {w for w in writer_families if w}
     if role == "review" and not writer_set:   # D-1533: no writer named = none excluded; fail closed
         raise SpawnRefused("review needs a writer family (writer_families or review_of)")
-    # D-3084 per-part seats: only a family that is EVERY writer covers no part.
-    excluded = family_spellings((writer_set if role == "review" and len(writer_set) == 1 else set())
+    # D-2511: exclude every writer family from all review seats.
+    excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
@@ -394,9 +388,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             if positions:
                 source = "benchmark"
     if role == "review":
-        measured_order = {leg.id: i for i, leg in enumerate(ordered)}
+        table_order = {leg.id: i for i, leg in enumerate(legs)}
         ordered.sort(key=lambda leg: review_key(
-            leg, TIERS.index(leg.tier), measured_order[leg.id]))
+            leg, TIERS.index(leg.tier), table_order[leg.id]))
     seats, coverage, open_parts = [], (), []
     if role == "review":
         high = ranking_risk in ("high", "critical") or bool(card.get('risk_tags'))
