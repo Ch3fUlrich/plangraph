@@ -68,7 +68,7 @@ class SeatSpawnMixin:
             for i, seat in enumerate(plan.review_seats)), return_exceptions=True)
         # A seat that raised still gets a record (with its group and coverage); the
         # others keep running and are awaited by callers.
-        runs = [self.save_refusal(r, role, seat_leg=seat.id, plan={'seat_coverage': [own[i]]})
+        runs = [self.save_refusal(r, role, card=card, seat_leg=seat.id, plan={'seat_coverage': [own[i]]})
                 if isinstance(r, Exception) else r
                 for i, (seat, r) in enumerate(zip(plan.review_seats, runs))]
         records = [r for r in runs if not isinstance(r, BaseException)]

@@ -74,6 +74,31 @@ impl Runs {
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
+        let item = args["card"]["item"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                std::env::var("PLANGRAPH_SPAWN_ITEM")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            });
+        base["item_key"] = match item {
+            Some(s) if crate::records::valid_item(&s) => {
+                json!(s)
+            }
+            Some(_) => {
+                if base.get("warnings").is_none() {
+                    base["warnings"] = json!([]);
+                }
+                base["warnings"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!("invalid item_key; stored as null"));
+                Value::Null
+            }
+            None => Value::Null,
+        };
         let events: Vec<Value> = launch
             .events
             .unwrap_or_default()
