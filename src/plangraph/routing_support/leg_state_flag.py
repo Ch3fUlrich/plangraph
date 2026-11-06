@@ -10,7 +10,7 @@ def enabled():
 
 
 @lru_cache(maxsize=1)
-def default_reader(state_home=None):
+def default_reader():
     from .leg_state import LegAdapter, _default_store
     from .omniroute_state import from_env
     reader = LegAdapter(_default_store(), from_env(), enabled=enabled())
@@ -25,7 +25,7 @@ def default_reader(state_home=None):
 
 
 def initialize(service, reader, boundary):
-    service.leg_reader = reader = default_reader(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")) if reader is None and enabled() else reader
+    service.leg_reader = reader = default_reader() if reader is None and enabled() else reader
     service.hung = boundary(reader)
     return reader
 

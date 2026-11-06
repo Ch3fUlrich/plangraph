@@ -10,9 +10,12 @@ from plangraph.routing_support import leg_state_flag as flag, leg_state
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.service import SpawnService
 
+_production_reader = flag.default_reader
+
 
 @pytest.fixture
 def boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(flag, 'default_reader', _production_reader)
     flag.default_reader.cache_clear()
     monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
     monkeypatch.setattr(leg_state, '_default_store', lambda: leg_state.LegStateStore(tmp_path / 'state'))
@@ -97,9 +100,19 @@ def test_standalone_exact(monkeypatch):
 
 def test_cache_path_resolved(boundary, tmp_path, monkeypatch):
     a = service(tmp_path).leg_reader
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'different-state'))
     monkeypatch.setattr(leg_state, '_default_store', lambda: pytest.fail('second store'))
     assert service(tmp_path).leg_reader is a
     assert a._at is None
+
+
+def test_service_fixture_never_constructs_live_reader(tmp_path, monkeypatch):
+    monkeypatch.setattr(leg_state, 'LegAdapter', lambda *a, **k: pytest.fail('live adapter'))
+    from plangraph.routing_support import omniroute_state
+    monkeypatch.setattr(omniroute_state, 'from_env', lambda: pytest.fail('live provider'))
+    s = service(tmp_path)
+    assert s.leg_reader is not None
+    assert s.leg_reader.enabled is False  # injected declared-state reader
 
 
 def test_rank_subset_and_leg_keys(boundary, tmp_path):
