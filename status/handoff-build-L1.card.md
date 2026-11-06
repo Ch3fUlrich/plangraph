@@ -1,29 +1,31 @@
-# L1 card · build-L1-0262 · 2026-11-06T12:08Z
+# L1 card · build-L1-0265 · 2026-11-06T12:27Z
 ## Goal
-- D-4253 data lanes by 15:17Z, D-4220 stuck watch, D-4196, D-4177, carry; token per gateway answer
+- D-4280 plan loop tool L1 L2 L3 L4; D-4253 data lanes by 15:17Z; D-4220 stuck watch; D-4196 + D-4281; D-4177; carry
 ## Keeper
-- claimed: plangraph:OP-D4-WITNESS-TOKEN (claimed ep1, since 11:46Z), plangraph:OPENCODE-STUCK-WATCH, plangraph:HANDOFF-MSG-CARRY, plangraph:RIN-PATH-REPOINT
-- ready next: plangraph:AUTOOS-HOOKS-INTERIM-S09, plangraph:AUTOOS-HOOKS-INTERIM-S14 after #446 #447
+- claimed: plangraph:L1-PLAN-PROMPT (claimed, since 12:20Z), plangraph:OPENCODE-STUCK-WATCH (claimed, since 11:00Z), plangraph:HANDOFF-MSG-CARRY (claimed, since 11:30Z), plangraph:RIN-PATH-REPOINT (claimed, since 11:00Z), plangraph:RIN-LEDGER-VIEWS (claimed, since 11:00Z), plangraph:OP-D4-WITNESS-TOKEN (claimed, since 11:46Z)
+- ready next: plangraph:L2-PLAN-LOOP, plangraph:L3-FACT-CHECK-ROLE
 ## Done
-- 11-06T11:47Z OP-D4-WITNESS-TOKEN - review seats witnessed on workstation run-5bdea093 run-7ded13ae run-aff3ec55; submit waits on decision D-id
-- 11-06T12:10Z OS-219 - operator deleted origin/build-L1, ls-remote empty
+- 11-06T12:18Z OP-D4-WITNESS-TOKEN - coding.vm run-c5ea08b8 run-82f59273 run-f678f253 served deepseek/deepseek-flash witnessed; submit waits on decision evidence
+- 11-06T12:14Z RIN-PATH-REPOINT a0199c77f9bc GO-REQ sent, live scan 0 outside exceptions
+- 11-06T12:20Z RIN-LEDGER-VIEWS 8ab878b0 s2 run-eae3dba0 ACCEPT, 349 lines
 ## In flight
-- none
+- plangraph:L1-PLAN-PROMPT run-746e900d since 12:26Z next check 12:50Z
+- plangraph:HANDOFF-MSG-CARRY run-2034d223 since 12:25Z next check 12:35Z
 ## Planned
-1. RIN-LEDGER-VIEWS s2 Sol fixer r2 from seat-s2-r2.txt, then seat; deadline 15:17Z
-2. RIN-PATH-REPOINT + s1 GO-REQ, delta seats ACCEPT
-3. OPENCODE-STUCK-WATCH tests seat + second family when routing answers
-4. D-4196, D-4177, carry seats when a family is live, then GO-REQ
+1. plangraph:L1-PLAN-PROMPT verify, push, PR, MiMo seat; operator order D-4280
+2. seats3.sh seats for d4177, d4196, stuck when slots free
+3. plangraph:RIN-LEDGER-VIEWS s2 snapshot refresh after s1 merge; deadline 15:17Z
+4. D-4281 real spawn proof from the d4196 lane, ask D-id to ff spawner-main
 ## Open
-- BLOCKED seats excluding openai+mimo no live family | default wait for routing paid deepseek ruling | deadline none
-- BLOCKED OP-D4 decision D-id for submit | default item stays claimed | deadline none
-- BLOCKED coding.vm witness token: copy useless, 401 | default wait GATEWAY-LOG-TOKEN-MINT or operator mints | deadline none
-- BLOCKED keeper drop-in PLANGRAPH_BUS_INVENTORY + restart GO-REQ | default hold | deadline none
-- BLOCKED #451 no GO-REQ possible, r3 used | default lane replan after #436 | deadline 15:17Z
+- BLOCKED fleet wiring of witness token + OP-D4 decision | default my spawns export it | deadline none
+- BLOCKED stuck HIGH 3.3 no seat that ran tests | default wait routing | deadline none
+- BLOCKED GO-REQ repoint, s1 no ruling yet | default wait | deadline 15:17Z
+- BLOCKED #436 #446 #447 no ruling on 11:26Z GO-REQs | default re-read D-log | deadline none
+- BLOCKED keeper drop-in PLANGRAPH_BUS_INVENTORY | default hold | deadline none
 ## Traps
-- Operator 11:32Z: writers cx-gpt-6.1-sol, never mimo-pro; brief no-Sol lines are older
-- Worktree git push goes to control by pushDefault: push origin HEAD:refs/heads/<branch> for lanes; build-L1 to control only
-- seats5.sh runs all sp lines: edit first or it duplicates seats
-- Never print the token; test by status code with curl -K -
+- Deepseek leg with tools emits DSML, no verdict: inline no-tools prompts only
+- Launch prompts' no-Sol line predates the operator's 11:32Z Sol writer order
+- Run gate is <4 live, other sessions count; seats3.sh prints floor and spawns nothing
+- Scripts: a failed pytest does not stop a later commit; check before git commit
 ## Drill-down
-- handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools /home/s/.local/share/plangraph/handoffs/build-L1-0262
+- handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools /home/s/.local/share/plangraph/handoffs/build-L1-0265
