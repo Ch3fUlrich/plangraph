@@ -1,0 +1,1 @@
+- **KEEPER-VERIFY-SPAWNER-RECORD (part 2):** Add spawn-time item keys to Python and Rust records and a manual, reduced, immutable record mirror.

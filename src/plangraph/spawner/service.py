@@ -86,10 +86,11 @@ class SpawnService(SeatSpawnMixin):
             if isinstance(value, dict):
                 return {k: v if k in IDENTIFIER_KEYS else clean(v) for k, v in value.items()}
             return value
-        host = record.get('host')
+        host, item_key = record.get('host'), record.get('item_key')
         if record.get('ended') is not None:
             terminal_reason(record)
         record.update(clean(record))
+        if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
         if host is not None:
             record['host'] = host   # top-level run host is an identifier (D-2960); nested 'host' keys stay redacted
         for attempt in record.get('attempts', []):
@@ -108,7 +109,7 @@ class SpawnService(SeatSpawnMixin):
         for target in [record, *record.get('attempts', [])]:
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
-        atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
+        atomic_write_private(self._path(record['run_id']), json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
@@ -301,7 +302,8 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running',
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
-        pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
+        from .item_key import annotate_item
+        pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
 
         async def execute():
             try:
