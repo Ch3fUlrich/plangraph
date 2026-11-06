@@ -23,6 +23,42 @@ fn fact() -> Envelope {
     }
 }
 #[test]
+fn every_slug_rejects_routing_and_bad_grammar() {
+    for field in 0..3 {
+        for slug in ["routing-owner", "Bad!"] {
+            let mut e = fact();
+            e.relations.push(Relation {
+                edge: "DecidedIn".into(),
+                target_slug: "global".into(),
+            });
+            *[&mut e.project, &mut e.slug, &mut e.relations[0].target_slug][field] = slug.into();
+            let want = if slug.starts_with("routing-") {
+                Refusal::RoutingSlug
+            } else if field == 0 {
+                Refusal::InvalidProject
+            } else {
+                Refusal::InvalidSlug
+            };
+            refused(&e, SCHEMA, want);
+        }
+    }
+}
+#[test]
+fn edges_require_live_kind_and_project_endpoints() {
+    let mut e = fact();
+    e.relations.push(Relation {
+        edge: "ConstrainsProject".into(),
+        target_slug: "global".into(),
+    });
+    refused(&e, SCHEMA, Refusal::MissingEdge);
+    e.relations[0].edge = "DecidedIn".into();
+    assert!(validate(&e, &Capabilities::from_schema(SCHEMA)).is_ok());
+    for endpoints in ["Rule -> Project", "Decision -> Decision"] {
+        let schema = SCHEMA.replace("Decision -> Project", endpoints);
+        refused(&e, &schema, Refusal::MissingEdge);
+    }
+}
+#[test]
 fn all_kinds_and_global() {
     for kind in ["Decision", "Rule", "Convention", "Preference"] {
         let mut e = fact();

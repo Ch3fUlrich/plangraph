@@ -53,7 +53,7 @@ impl std::error::Error for Refusal {}
 #[derive(Default, Debug)]
 pub struct Capabilities {
     nodes: BTreeMap<String, BTreeSet<String>>,
-    edges: BTreeSet<String>,
+    edges: BTreeMap<String, (String, String)>,
 }
 impl Capabilities {
     /// Reads node/property and edge declarations, ignoring // comments and annotations.
@@ -76,8 +76,11 @@ impl Capabilities {
                     node = Some((*name).to_owned());
                 }
                 ["}"] => node = None,
-                ["edge", name, ..] => {
-                    caps.edges.insert(name.trim_end_matches(':').into());
+                ["edge", name, from, "->", to] if name.ends_with(':') => {
+                    caps.edges.insert(
+                        name.trim_end_matches(':').into(),
+                        ((*from).into(), (*to).into()),
+                    );
                 }
                 _ => {
                     if let (Some(n), Some((property, _))) = (&node, line.split_once(':')) {
@@ -182,7 +185,11 @@ pub fn validate(e: &Envelope, caps: &Capabilities) -> Result<Validated, Refusal>
         .iter()
         .find(|m| m.0 == e.kind)
         .ok_or(Refusal::UnknownKind)?;
-    if e.slug.starts_with("routing-") {
+    if [&e.project, &e.slug]
+        .into_iter()
+        .chain(e.relations.iter().map(|r| &r.target_slug))
+        .any(|s| s.starts_with("routing-"))
+    {
         return Err(Refusal::RoutingSlug);
     }
     if !slug_ok(&e.project) {
@@ -202,10 +209,14 @@ pub fn validate(e: &Envelope, caps: &Capabilities) -> Result<Validated, Refusal>
             }
         }
     }
-    if (!mapping.1.is_empty() && !caps.edges.contains(mapping.1))
+    let edge_ok = |edge: &str| {
+        caps.edges
+            .get(edge)
+            .is_some_and(|(from, to)| from == &e.kind && to == "Project")
+    };
+    if (!mapping.1.is_empty() && !edge_ok(mapping.1))
         || e.relations.iter().any(|r| {
-            !caps.edges.contains(&r.edge)
-                || (mapping.1.is_empty() && V1.iter().any(|m| m.1 == r.edge))
+            !edge_ok(&r.edge) || (mapping.1.is_empty() && V1.iter().any(|m| m.1 == r.edge))
         })
     {
         return Err(Refusal::MissingEdge);
