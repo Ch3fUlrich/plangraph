@@ -1,13 +1,53 @@
 // Included in harness_server::tests to exercise the actual supervised path.
+fn retry_fake_server_spawn<T>(mut run: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    // Another test's fork can temporarily inherit the script's write descriptor,
+    // even after write_script closes it here. Retry only that transient error;
+    // never hide other failures or wait indefinitely for the inherited fd.
+    for attempt in 0..20 {
+        match run() {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 19 => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            result => return result,
+        }
+    }
+    unreachable!()
+}
+
 fn serve_probe(script: &str, opts: &Opts, cancelled: &dyn Fn() -> bool) -> Supervised {
     serve_probe_with_limit(script, opts, cancelled, std::time::Duration::from_millis(800))
+}
+
+#[test]
+fn fake_server_spawn_retry_is_bounded_and_error_specific() {
+    let mut attempts = 0;
+    let result = retry_fake_server_spawn(|| {
+        attempts += 1;
+        if attempts < 3 { Err(std::io::Error::from_raw_os_error(libc::ETXTBSY)) } else { Ok(42) }
+    });
+    assert_eq!(result.unwrap(), 42);
+    assert_eq!(attempts, 3);
+    attempts = 0;
+    let result: std::io::Result<()> = retry_fake_server_spawn(|| {
+        attempts += 1;
+        Err(std::io::Error::from_raw_os_error(libc::ETXTBSY))
+    });
+    assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::ETXTBSY));
+    assert_eq!(attempts, 20);
+    attempts = 0;
+    let result: std::io::Result<()> = retry_fake_server_spawn(|| {
+        attempts += 1;
+        Err(std::io::Error::from_raw_os_error(libc::EACCES))
+    });
+    assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EACCES));
+    assert_eq!(attempts, 1);
 }
 
 fn serve_probe_with_limit(script: &str, opts: &Opts, cancelled: &dyn Fn() -> bool, limit: std::time::Duration) -> Supervised {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let bin = crate::testutil::write_script(dir.path(), "oc-regression", script);
-    run_opencode_server(
+    retry_fake_server_spawn(|| run_opencode_server(
         &Opencode {
             bin: bin.to_string_lossy().into_owned(),
         },
@@ -21,7 +61,7 @@ fn serve_probe_with_limit(script: &str, opts: &Opts, cancelled: &dyn Fn() -> boo
         cancelled,
         None,
         limit,
-    )
+    ))
     .unwrap()
 }
 
