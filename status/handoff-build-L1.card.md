@@ -12,6 +12,7 @@
 - 11-06T10:23Z D-4162 62542ed0 md-sync restarted, one run applied, error none, refused 1 untraced
 - 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
 ## In flight
+- HANDOFF-MSG-CARRY D-4243 run-8c801660 lane/handoff-msg-carry (plangraph-data), brief b-carry.md, next check 11:35Z; then seat non-mimo, real recycle proof, DONE sha to routing
 - #436 572e6428e327 CI 42203474824 success, GO-REQ sent 10:43Z, waiting on ruling
 - OPENCODE-STUCK-WATCH run-b4a5255b lane/opencode-stuck-watch since 11:11Z next check 11:35Z; brief job tmp b-stuck.md
 - D-4196 run-baea999e lane/d4196-go-legs since 10:19Z next check 10:45Z
@@ -35,6 +36,5 @@
 - 10:35Z my pkill killed gen-100 writer.sh wait wrappers; runs alive, w-*.res in f3b904c3 are stale, use spawner result
 - git push control build-L1 ONLY, never origin (D-1751)
 - Key bytes never in env, logs, git, messages; WSL holds workstation keys
-- Workstation mcp-proxy shows PG_TOKEN inline in its cmdline, not yet reported
 ## Drill-down
 - handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools ~/.local/share/plangraph/handoffs/build-L1-0245
