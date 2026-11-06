@@ -142,32 +142,6 @@ class SpawnService(SeatSpawnMixin):
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
 
-    async def spawn(self, *args, **kwargs):
-        try:
-            import inspect
-            bound = inspect.signature(self._spawn).bind(*args, **kwargs)
-            options = dict(bound.arguments)
-            card = options.get('card')
-            if card and card.get('findings') and options.get('role', 'implement') == 'implement':
-                from .fixer import split_findings, render_fixer_brief
-                from plangraph.settings import admit_fixer_threshold
-                # No keeper item is held here: the trusted layers are global
-                # and the card's project/phase layers may only tighten (R3).
-                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card=card))
-                if len(groups) > 1:
-                    async def dispatch(group):
-                        child = dict(card, findings=list(group))
-                        child_options = dict(options, card=child, prompt=render_fixer_brief(group))
-                        return await self._spawn(**child_options)
-                    return {'writers': await asyncio.gather(*(dispatch(g) for g in groups))}
-                options['prompt'] = render_fixer_brief(groups[0])
-                return await self._spawn(**options)
-            return await self._spawn(*args, **kwargs)
-        except Exception as exc:
-            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'),
-                              card=kwargs.get('card', args[0] if args else None))
-            raise
-
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)

@@ -84,6 +84,9 @@ def _sweep(service, current):
 
 def build(request: dict) -> dict:
     _validate(request)
+    from .prompt_guard import admit_prompt
+    if request['role'] == 'implement':
+        admit_prompt(request['prompt'], lambda reason: LaunchRefused('refused', reason))
     leg = next((leg for leg in DEFAULT_LEGS if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
