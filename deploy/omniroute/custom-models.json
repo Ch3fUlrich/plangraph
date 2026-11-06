@@ -16,7 +16,7 @@
     "authoritative catalog does not exclude (src/sse/services/model.ts lookupModelMeta).",
     "",
     "PROVIDER: the Token Plan key lives on the connection of provider xiaomi-mimo",
-    "(base URL overridden to the AMS token-plan host in the connection's",
+    "(base URL overridden to the vendor's token-plan host in the connection's",
     "provider_specific_data), so the rows target xiaomi-mimo, not xiaomi-mimo-token-plan.",
     "",
     "Numbers: context and output are the vendor's v2.6 figures (1M context, 128K =",
