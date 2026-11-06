@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **RT-P1-EXEC-OWNERSHIP-SQ12 (D-4146):** retain every retired run identity, fence delayed worker parks while preserving legal claim release, and detect PG parity column reorders. Reap and existing event replay are unchanged.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.
 - **SPAWNER-CANCEL-KILLS (register 42):** a cancel from another process kills a run started on a named leg: its record now keeps the root's start token.
 - **SPAWNER-MCP-STDIO-GUARD (D-3753):** ignore notifications, compact MCP ps records, and guard stdio reply sizes with ReplyTooLarge errors.

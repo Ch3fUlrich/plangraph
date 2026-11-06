@@ -1,11 +1,9 @@
 """Design-3 (W2) store verbs: cards, attempts, decisions, questions/answers, budget, states.
-
 Every verb is portable SQL (``?`` placeholders, ``ON CONFLICT`` upserts, ids assigned
 as ``MAX(id)+1`` inside the write lock) so it runs unchanged on SQLite and Postgres.
 Only ``set_state`` touches the hash chain, with the new ``state_set`` event; the other
 tables are plain rows (``attempts``, ``decisions`` and ``answers`` are append-only by
 trigger).
-
 * ``put_card`` / ``get_card``: the 1:1 card of an item (full replace).
 * ``record_attempt``: one finished attempt (append-only; ``exit_class`` is required).
 * ``add_decision``: an operator decision or judge ruling (router only).
@@ -30,24 +28,19 @@ trigger).
   (sq5 fix 1), and every clear keeps a retired-run fence (sq5 fix 2).
 """
 from __future__ import annotations
-
 import json
 import math
 import re
 from datetime import date
-
 from plangraph.card_paths import normalise_path, path_problem
-
 from .credential_guard import guard
 from .errors import Refused
+from .events import STATE_EVENT_TYPES
 from .schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
-
 __all__ = ["CardsMixin", "SETTABLE_STATES", "TRANSITIONS", "NO_DEFAULT_TAGS"]
-
 #: States ``set_state`` moves between (none of them carries a claim, lease or epoch).
 SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed",
                    "parked")
-
 #: RT-P1-EXEC-OWNERSHIP: the hand-back states.  An EXPLICIT ``set_state`` move
 #: (``hand_back=True``) that lands on one of these and changes the state is a
 #: router/operator hand-back: it frees the exec owner so the next run can claim
@@ -55,7 +48,6 @@ SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed
 #: projector/planner write path -- is never a hand-back and keeps the owner; so
 #: do run-carrying moves, no-op moves and moves to any other state.
 _HAND_BACK_STATES = frozenset({"open", "ready"})
-
 #: RT-P1-EXEC-OWNERSHIP: direct successors of each settable state (same-state always
 #: allowed; reachability is the transitive closure).  A set-state move that carries a
 #: ``run`` may only follow these edges forward; the back-moves (``failed``/``parked``
@@ -63,9 +55,9 @@ _HAND_BACK_STATES = frozenset({"open", "ready"})
 #: ownership; an explicit hand-back (``hand_back=True``) to ``open``/``ready``
 #: does (see ``_HAND_BACK_STATES``).
 #: Moves without a ``run``
-#: keep their historical behaviour. Worker parks do not consult this table at
-#: all: ``_worker_park`` applies its state move with no ``run``, so park never
-#: raises ``bad_transition`` (it refuses ``bad_state`` instead).
+#: keep their historical behaviour. Worker parks explicitly consult this table
+#: before releasing a claim; claimed is their lease-bound entry exception.
+#: A claim release does not exempt other states from forward ordering.
 TRANSITIONS: dict[str, frozenset[str]] = {
     "open":        frozenset({"open", "ready"}),
     "ready":       frozenset({"ready", "running"}),
@@ -75,12 +67,10 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "failed":      frozenset({"failed", "parked"}),
     "parked":      frozenset({"parked", "failed"}),
 }
-
 #: Question tags: the card tags plus the design's "public release".
 QUESTION_TAGS = RISK_TAGS + ("public-release",)
 #: design 4.8: a question carrying one of these has no default and is never timed out.
 NO_DEFAULT_TAGS = frozenset({"auth", "secrets", "money", "live-step", "public-release"})
-
 _CARD_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks", "check_reads")
 _CARD_TEXT = ("check_cmd", "heldout_check")
 _CARD_KEYS = frozenset(("outcome", "window_class", "risk_tags", "estimate_tokens",
@@ -94,20 +84,14 @@ _PROVIDER_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}\Z")
 _TEXT_CAP = 2000
 _LIST_CAP = 500
 _ITEM_CAP = 500
-
-
 def _dump(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
 def _load_list(value):
     try:
         parsed = json.loads(value) if isinstance(value, str) else (value or [])
     except (ValueError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []
-
-
 def _text(name, value, required=False, cap=_TEXT_CAP, key=None):
     if value is None:
         if required:
@@ -120,8 +104,6 @@ def _text(name, value, required=False, cap=_TEXT_CAP, key=None):
         raise Refused("validation", f"{name} exceeds {cap} characters")
     guard(name, value, key)
     return value
-
-
 def _str_list(name, value, allowed=None, key=None):
     if value is None:
         return []
@@ -139,8 +121,6 @@ def _str_list(name, value, allowed=None, key=None):
         if entry not in out:
             out.append(entry)
     return out
-
-
 def _count(name, value, nullable=True):
     if value is None and nullable:
         return None
@@ -148,8 +128,6 @@ def _count(name, value, nullable=True):
         raise Refused("validation", f"{name} must be a non-negative integer"
                       + (" or null" if nullable else ""))
     return value
-
-
 def _number(name, value, nullable=True):
     if value is None and nullable:
         return None
@@ -584,9 +562,9 @@ class CardsMixin:
                             "attempt": row["exec_attempt"]})
         conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
                      " exec_attempt=NULL, exec_principal=NULL, exec_retired_runs=? WHERE key=?",
-                     (_dump(retired[-16:]), key))
+                     (_dump(retired), key))
         self._append(principal, key, "exec_owner_changed",
-                     {"action": "clear", "retired": retired[-16:]}, now)
+                     {"action": "clear", "retired": retired}, now)
 
     def _exec_record(self, conn, item_id, wf, run, attempt, principal=None, now=None):
         """Record the exec owner of *item_id*: the first owner of an unowned card.
@@ -684,6 +662,28 @@ class CardsMixin:
             self._append(principal, item_id, "exec_owner_changed",
                          {"action": "advance", "workflow_id": wf, "run_id": run,
                           "attempt": attempt}, now if now is not None else self.clock())
+
+    def _exec_state_after_owner(self, conn, item_id):
+        """Whether a state write followed the current attempt record/advance.
+
+        No new event fields: historical replay stays unchanged on both backends.
+        Seeded owners without an audit event have no observable start.
+        """
+        owner_seq = state_seq = None
+        for event in conn.execute(
+                "SELECT seq, type, payload FROM events WHERE key=?"
+                " ORDER BY seq DESC", (item_id,)):
+            kind = event["type"]
+            if state_seq is None and kind in STATE_EVENT_TYPES:
+                state_seq = event["seq"]
+            if owner_seq is None and kind == "exec_owner_changed":
+                payload = json.loads(event["payload"] or "{}")
+                if payload.get("action") in ("record", "advance"):
+                    owner_seq = event["seq"]
+            if owner_seq is not None and state_seq is not None:
+                break
+        return (owner_seq is not None and state_seq is not None
+                and state_seq > owner_seq)
 
     def _apply_state(self, principal, key, state, why, now, scope,
                      guard=None, release_claim=False, run=None, new_run=False,

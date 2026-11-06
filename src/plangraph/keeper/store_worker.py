@@ -1,9 +1,7 @@
 """Worker verbs: the calls the Rust worker (rust/worker/src/keeper.rs) makes.
-
 A worker/spawner/l1 principal is scoped to the card's project via
 ``self._may_act_in(principal, item["project"])`` (defined in ``CardsMixin``);
 router and system principals pass anywhere.
-
 ``worker_park`` is bound to the card's current claim: the caller must be the
 claim holder (or its delegate) and the lease must still be alive.  Merge-lock
 owners are bound to the calling principal: the stored and echoed owner is
@@ -14,11 +12,9 @@ monotonically growing advisory generation.  The keeper does not fence writes
 store-side — it never rejects a stale writer's later writes.  The Rust client
 names this value ``Fence``; the keeper guarantees a lease lock, not store-side
 fencing of writes.
-
 ``attempts`` rows are written ONLY by the projector, which reads Temporal
 history: it numbers them ``MAX(n)+1`` and carries the cost.  ``worker_attempt``
 therefore records an audit row only — inserting here would double the rows.
-
 RT-P1-EXEC-OWNERSHIP: park, complete, alarm and audit-only attempt calls
 are checked against the card's recorded exec owner (``_exec_gate``).  A body
 that names ``workflow_id``, ``run_id`` or ``attempt`` must present all three
@@ -27,7 +23,6 @@ or a lower attempt is refused as ``exec_stale`` — and a card that already has
 an owner refuses bodies that omit all three, so one run cannot act on another
 run's card.  Bodies without the fields keep the historical behaviour on
 unowned cards.
-
 Order inside the park/complete guards: the stale-run and lower-attempt checks
 run first (validating only), then a DUPLICATE -- the card already reached the
 verb's final state (``parked``/``done``) and the body either names the
@@ -35,23 +30,19 @@ recorded owner or, with no owner, names no triple -- is a success no-op that
 short-circuits before ``expected_state``.  A retried park whose response was
 lost therefore succeeds instead of failing every retry with
 ``exec_stale_state``; a different run is still ``exec_stale``.
-
 An open ``worker_alarm`` row is a DUPLICATE FACT, never a fence: ``alarm``
 records on an OWNED card even when that row already exists -- the attempt
 advances, a stale run or a backwards attempt is refused as ``exec_stale`` --
 while on an UNOWNED card an existing open alarm still acquires no owner.
-
 All SQL is portable (``?`` placeholders, ids assigned as ``MAX(id)+1`` inside
 the write lock) so it runs unchanged on SQLite and Postgres.
 """
 from __future__ import annotations
-
 import json
 import re
-
 from .errors import Refused
 from .schema import EXIT_CLASSES
-from .store_cards import SETTABLE_STATES, _count, _exec_parts, _number, _text
+from .store_cards import _forward, SETTABLE_STATES, _count, _exec_parts, _number, _text
 
 __all__ = ["WorkerMixin"]
 
@@ -330,10 +321,19 @@ class WorkerMixin:
             # 2. A duplicate park is a success no-op, ahead of expected_state.
             if self._exec_duplicate(item, body, "parked"):
                 return
+            # A claim release is not permission to roll back a newer state.
+            if (body.get("expected_state") is None
+                    and item["exec_run_id"] is not None
+                    and self._exec_state_after_owner(self.conn, item["key"])):
+                raise Refused("exec_stale", f"{key}: state changed after exec owner")
             # 3. Observed-state CAS (park: the live set is a fallback, never
             #    an observation), then the claim binding, then ownership.
             self._exec_expect_state(item, body.get("expected_state"), principal,
                                     park=True)
+            # Claimed is the normal lease-bound park entry, not a set_state
+            # state. All other park entries must follow the forward table.
+            if item["state"] != "claimed" and not _forward(item["state"], "parked"):
+                raise Refused("bad_transition", f"{key}: {item['state']} -> parked")
             self._park_guard(principal, item, epoch, now)
             if item["state"] != "parked":
                 self._exec_gate(item["key"], body, principal, record=True)
