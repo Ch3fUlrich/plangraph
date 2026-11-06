@@ -31,7 +31,8 @@ def main():
     for name, features, caller, diagnostic in probes:
         print(f"Running {name}", flush=True)
         try:
-            assert "default =" not in manifest, "probe expects no existing defaults"
+            if "default =" in manifest:
+                raise SystemExit(f"FAIL: {name}: probe expects no existing defaults")
             MANIFEST.write_text(manifest + "\n[features]\n" + features)
             SOURCE.write_text(source + caller)
             result = subprocess.run(
@@ -42,7 +43,8 @@ def main():
                 timeout=590,
             )
             print(result.stdout + result.stderr, flush=True)
-            assert result.returncode != 0 and diagnostic in result.stdout + result.stderr, name
+            if not (result.returncode != 0 and diagnostic in result.stdout + result.stderr):
+                raise SystemExit(f"FAIL: {name}")
             print(f"PASS: {name} rejected by guard", flush=True)
         finally:
             MANIFEST.write_text(manifest)

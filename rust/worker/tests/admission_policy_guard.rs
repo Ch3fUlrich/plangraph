@@ -9,14 +9,7 @@ fn check(
 ) -> std::process::Output {
     let mut command = Command::new(env!("CARGO"));
     command
-        .args([
-            "check",
-            "--offline",
-            "--workspace",
-            "--lib",
-            "--bins",
-            "--manifest-path",
-        ])
+        .args(["check", "--workspace", "--lib", "--bins", "--manifest-path"])
         .arg(manifest)
         .env("CARGO_TARGET_DIR", target);
     if !defaults {
@@ -30,6 +23,8 @@ fn check(
 
 #[test]
 fn unrestricted_policy_is_test_only() {
+    // Allow Cargo to fetch dependencies: CI may not have cached the parent
+    // workspace's dev-dependencies. Resolution/build failures must still fail.
     // A separate target directory avoids the outer cargo test's build lock.
     // Rustc checks callers under their actual cfg attributes, independently
     // of checkout paths, comments, and unrelated test modules.
@@ -42,7 +37,6 @@ fn unrestricted_policy_is_test_only() {
         let metadata = Command::new(env!("CARGO"))
             .args([
                 "metadata",
-                "--offline",
                 "--no-deps",
                 "--format-version",
                 "1",
@@ -130,7 +124,7 @@ fn unrestricted_policy_is_test_only() {
     )
     .unwrap();
     let output = Command::new(env!("CARGO"))
-        .args(["check", "--offline", "--manifest-path"])
+        .args(["check", "--manifest-path"])
         .arg(probe.path().join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", target.path())
         .output()
