@@ -16,9 +16,13 @@ MEMORY = 'PG_RULE_HOST_MEMORY_FLOOR_MIB'
 
 def test_projection_is_auth_door():
     import fnmatch
+    import inspect
+    from pathlib import Path
     from tools.ci_commit_gate import AUTH_DOOR_PATHS
-    assert any(fnmatch.fnmatchcase('src/plangraph/keeper/placement_rules_report.py', p)
-               for p in AUTH_DOOR_PATHS)
+    root = Path(__file__).resolve().parents[1]
+    for entrypoint in (projection.bounded_snapshot, projection.build_report):
+        path = Path(inspect.getsourcefile(entrypoint)).resolve().relative_to(root).as_posix()
+        assert any(fnmatch.fnmatchcase(path, p) for p in AUTH_DOOR_PATHS)
 
 
 @pytest.fixture
