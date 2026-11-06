@@ -49,7 +49,7 @@ def question_exit(job, record):
 
 
 def rounds_exhausted(service, card, role):
-    if role == 'review':
+    if not card or role == 'review':
         return False
     from .item_key import annotate_item
     identity = {'card_hash': hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest()}

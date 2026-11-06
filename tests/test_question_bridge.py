@@ -133,6 +133,30 @@ def test_rounds_item_then_hash(monkeypatch):
     assert not rounds_exhausted(service, card, 'implement')
 
 
+@pytest.mark.parametrize('card', [None, {}])
+def test_rounds_without_card(card, monkeypatch):
+    def forbidden(*a):
+        pytest.fail('cardless run attempted item annotation')
+    monkeypatch.setattr('plangraph.spawner.item_key.annotate_item', forbidden)
+    assert not rounds_exhausted(NS(ps=lambda: {'runs': []}), card, 'implement')
+
+
+@pytest.mark.parametrize('override', [dict(seats=True), dict(model='test'), dict(leg='test')])
+def test_spawn_without_card_delegates(tmp_path, monkeypatch, override):
+    service = spawn_service(NS(), tmp_path / 'state')
+    calls = []
+    async def base_spawn(self, **kw):
+        calls.append(kw)
+        return {'status': 'delegated'}
+    monkeypatch.setattr(type(service).__mro__[1], '_spawn', base_spawn)
+    def forbidden(*a):
+        pytest.fail('cardless override attempted item annotation')
+    monkeypatch.setattr('plangraph.spawner.item_key.annotate_item', forbidden)
+    assert asyncio.run(service._spawn(card=None, **override)) == {'status': 'delegated'}
+    assert len(calls) == 1 and calls[0]['card'] is None
+    assert all(calls[0][key] == value for key, value in override.items())
+
+
 def test_dispatch_wait_event_and_no_continuation(tmp_path, monkeypatch):
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnPlan
