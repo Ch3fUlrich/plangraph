@@ -133,7 +133,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     async def factory(*args, **kwargs):
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
         async def communicate():
-            return b'VERDICT: ACCEPT', b''
+            return (b'VERDICT: ACCEPT' if returncode == 0 else b'seat died, no verdict line'), b''   # D-4430: a final verdict at rc 1 completes
         return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():
