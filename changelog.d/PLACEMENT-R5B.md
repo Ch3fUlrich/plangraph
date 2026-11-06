@@ -1,1 +1,1 @@
-Added shared reachable-content secret gating; sanitized writer salvage remains pending.
+Added shared reachable-content secret gating and sanitized writer salvage.

@@ -59,6 +59,8 @@ pub mod workspace_verify;
 pub mod worktree;
 pub mod writer_blob;
 pub mod writer_result;
+pub mod writer_salvage;
+pub mod writer_sanitize;
 pub mod writer_secret;
 pub mod wsl;
 

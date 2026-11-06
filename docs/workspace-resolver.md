@@ -81,6 +81,15 @@ No daemon caller exists. Lifecycle, result bundles, keeper coordination,
 publication and live acceptance remain R5–R7. Rollback uses `git revert`.
 # Writer result boundary
 
+`writer_salvage::export_salvage` validates NUL-delimited repository-relative paths
+and exports sanitized committed history (the path list is validation-only, not a
+dirty-file selection). A private index rebuilds each tree, dropping secret blobs
+and replacing messages; original export commits are not parents of rebuilt commits.
+The prerequisite remains required, not sanitized. The shared `SecretGate` scans
+every exported tree, including inherited blobs, before bundle creation. Salvage
+does not stage, reset, or modify the owned checkout. Temporary refs use create-only
+updates and compare-and-delete cleanup; export never publishes them.
+
 `writer_result::check_result` checks owned writer lanes after execution, including
 cleanliness, ancestry and terminal Writer trailers on every new commit.
 `export_result` requires a reachable-content gate before R4 bundle export and

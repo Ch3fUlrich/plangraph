@@ -74,11 +74,14 @@ pub(crate) fn object(root: &Path, sha: &str) -> Result<(String, Vec<u8>), Writer
     Ok((fields[1].into(), bytes[end + 1..end + 1 + size].to_vec()))
 }
 pub(crate) fn message(commit: &[u8]) -> Result<&[u8], WriterError> {
-    let end = commit
-        .windows(2)
-        .position(|w| w == b"\n\n")
-        .ok_or(WriterError::Git)?;
-    Ok(&commit[end + 2..])
+    let mut offset = 0;
+    for line in commit.split_inclusive(|b| *b == b'\n') {
+        offset += line.len();
+        if line == b"\n" {
+            return Ok(&commit[offset..]);
+        }
+    }
+    Err(WriterError::Git)
 }
 pub fn findings(
     repo: &RepoEntry,
@@ -91,35 +94,61 @@ pub fn findings(
     let root = Path::new(&repo.root);
     let list = command(
         root,
-        &["rev-list", "--objects", &format!("{prerequisite}..{tip}")],
+        &["rev-list", "--reverse", &format!("{prerequisite}..{tip}")],
         &[],
         None,
     )?;
     let mut found = Vec::new();
     for line in list.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
-        let split = line.iter().position(|b| *b == b' ').unwrap_or(line.len());
-        let sha = std::str::from_utf8(&line[..split]).map_err(|_| WriterError::Git)?;
+        let sha = std::str::from_utf8(line).map_err(|_| WriterError::Git)?;
         let (kind, bytes) = object(root, sha)?;
-        let matching = match kind.as_str() {
-            "blob" => scan_bytes(&bytes),
-            "commit" => scan_bytes(message(&bytes)?),
-            _ => false,
-        };
-        if matching {
+        if kind != "commit" {
+            return Err(WriterError::Git);
+        }
+        if scan_bytes(message(&bytes)?) {
             found.push(SecretFinding {
                 commit: sha.into(),
-                path: if kind == "blob" {
-                    Some(
-                        String::from_utf8(line.get(split + 1..).unwrap_or_default().to_vec())
-                            .map_err(|_| WriterError::Verify)?,
-                    )
-                } else {
-                    None
-                },
+                path: None,
             });
+        }
+        for (mode, blob, path) in entries(root, sha)? {
+            if mode == "160000" {
+                continue;
+            }
+            if scan_bytes(&object(root, &blob)?.1)
+                && !found.iter().any(|f| f.path.as_ref() == Some(&path))
+            {
+                found.push(SecretFinding {
+                    commit: sha.into(),
+                    path: Some(path),
+                });
+            }
         }
     }
     Ok(found)
+}
+pub(crate) fn entries(
+    root: &Path,
+    tree: &str,
+) -> Result<Vec<(String, String, String)>, WriterError> {
+    let bytes = command(root, &["ls-tree", "-rz", tree], &[], None)?;
+    bytes
+        .split(|b| *b == 0)
+        .filter(|e| !e.is_empty())
+        .map(|e| {
+            let tab = e.iter().position(|b| *b == b'\t').ok_or(WriterError::Git)?;
+            let header = std::str::from_utf8(&e[..tab]).map_err(|_| WriterError::Git)?;
+            let fields: Vec<_> = header.split_whitespace().collect();
+            if fields.len() != 3 {
+                return Err(WriterError::Git);
+            }
+            Ok((
+                fields[0].into(),
+                fields[2].into(),
+                String::from_utf8(e[tab + 1..].to_vec()).map_err(|_| WriterError::Verify)?,
+            ))
+        })
+        .collect()
 }
 impl ContentGate for SecretGate {
     fn check(&self, repo: &RepoEntry, prerequisite: &str, tip: &str) -> Result<(), WriterError> {
@@ -132,4 +161,4 @@ impl ContentGate for SecretGate {
 }
 #[cfg(test)]
 #[path = "writer_secret_tests.rs"]
-mod tests;
+pub(crate) mod tests;
