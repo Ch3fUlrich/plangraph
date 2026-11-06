@@ -1,16 +1,18 @@
-# L1 card · build-L1-0245 · 2026-11-06T10:30Z
+# L1 card · build-L1-0252 · 2026-11-06T10:40Z
 ## Goal
 - D-4207 terra leg first, then D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
 ## Keeper
-- claimed: plangraph:AUTOOS-HOOKS-INTERIM-S06, plangraph:SPAWNER-ORPHAN-REAP, plangraph:RIN-PATH-REPOINT, plangraph:ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z); S13 lapsed per digest, reclaim
+- claimed: plangraph:AUTOOS-HOOKS-INTERIM-S06, plangraph:SPAWNER-ORPHAN-REAP, plangraph:RIN-PATH-REPOINT, plangraph:ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z)
 - ready next: plangraph:AUTOOS-HOOKS-INTERIM-S09, plangraph:AUTOOS-HOOKS-INTERIM-S14 after #446 #447
 ## Done
+- 11-06T10:37Z resend - GO-REQ #446 #447, incident mcp-proxy PG_TOKEN sent
 - 11-06T10:05Z D-4185 - watchdog uses spawner.token, watchdog.token absent, sent
 - 11-06T10:05Z D-4179 - witness token BLOCKED sent, workstation only
 - 11-06T10:07Z D-4179 - fleet keys placed 0600 on 2 hosts, sha prefix match, inventory on 3 hosts
 - 11-06T10:23Z D-4162 62542ed0 md-sync restarted, one run applied, error none, refused 1 untraced
 - 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
 ## In flight
+- #436 572e6428e327 main merged D-4109 (runner.py overlap), CI running, then GO-REQ
 - D-4207 lane/terra-review-leg writer job biwkrk6bm since 10:27Z next check 10:45Z
 - D-4196 run-baea999e lane/d4196-go-legs since 10:19Z next check 10:45Z
 - D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
