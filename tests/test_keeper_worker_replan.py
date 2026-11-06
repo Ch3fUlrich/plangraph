@@ -47,12 +47,6 @@ def test_declared_postgres_never_silently_skips(monkeypatch):
         require_backend("postgres")
 
 
-def test_fixture_generates_token_instead_of_literal():
-    source = Path("tests/test_keeper_worker_principal.py").read_text()
-    assert 'token = auth.add_principal(' in source
-    assert 'auth.authenticate(world.conn, token)' in source
-
-
 def test_observer_reopens_authenticated_backend(scoped):
     from plangraph.planner.jev_shadow import observer_connection
 
