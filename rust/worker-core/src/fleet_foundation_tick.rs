@@ -321,17 +321,34 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
     let _ = send("heartbeat", &format!("heartbeat:{now}"), None);
     s.clock = Some(clock);
     diagnostics.extend(send_errors);
-    serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
-    temp.as_file().sync_all().map_err(|_| "state sync")?;
-    temp.persist(state_path).map_err(|_| "state rename")?;
+    save_then_requests(
+        || {
+            serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
+            temp.as_file().sync_all().map_err(|_| "state sync")?;
+            temp.persist(state_path).map_err(|_| "state rename")?;
+            Ok(())
+        },
+        outbox,
+        requests,
+        &mut diagnostics,
+    )?;
+    Ok(
+        json!({"seat_supply":seat_summary,"observations":observations,"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
+    )
+}
+pub(super) fn save_then_requests(
+    save: impl FnOnce() -> Result<(), String>,
+    outbox: &Path,
+    requests: Vec<crate::fleet_seat_probe::Request>,
+    diagnostics: &mut Vec<String>,
+) -> Result<(), String> {
+    save()?;
     for request in requests {
         if let Err(error) = append(outbox, json!({"kind":"probe_request","request":request})) {
             diagnostics.push(error);
         }
     }
-    Ok(
-        json!({"seat_supply":seat_summary,"observations":observations,"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
-    )
+    Ok(())
 }
 fn record_alarm(
     finding: &pair::Finding,

@@ -88,7 +88,7 @@ pub fn tick(
     };
     let counted = supply::count(&c.policy, &input);
     let id = format!("seat-supply:{}:{}", counted.sha, counted.epoch_day);
-    s.active.retain(|old| counted.hold && old == &id);
+    s.active.retain(|_| counted.hold);
     if counted.hold && s.deliveries.record(&id).is_none() && s.active.insert(id.clone()) {
         opened.push(id);
     }

@@ -1,6 +1,5 @@
 use super::*;
 use crate::fleet_foundation_tick::invoke;
-
 fn setup() -> (tempfile::TempDir, Value) {
     let d = tempfile::tempdir().unwrap();
     let identity = json!({"role":"judge","model":"synthetic","harness":"fake"});
@@ -75,10 +74,12 @@ fn fleet_seats_quorum_restore() {
     let (d, mut c) = setup();
     let first = run(&d, &c, 0).unwrap();
     assert_eq!(first["alarms_opened"].as_array().unwrap().len(), 1);
-    assert!(run(&d, &c, 1).unwrap()["alarms_opened"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let ruling = json!({"decision_reference":"decision","sha":"a".repeat(40),"reason":"review"});
+    c["seat_supply_config"]["ruling"] = ruling.clone();
+    let ruled = run(&d, &c, 1).unwrap();
+    assert_eq!(ruled["seat_supply"]["count"]["ruling"], ruling);
+    assert_eq!(ruled["seat_supply"]["count"]["hold"], true);
+    assert_eq!(state(&d)["seat_supply"]["active"], first["alarms_opened"]);
     c["seat_supply_config"]["seats"][0]["probe"]["successful"] = json!(true);
     let next = run(&d, &c, 2).unwrap();
     assert_eq!(next["seat_supply"]["count"]["hold"], false);
@@ -98,10 +99,20 @@ fn fleet_seats_delivery_retry_ack_clear() {
     run(&d, &c, 4).unwrap();
     assert_eq!(state(&d)["seat_supply"]["active"], json!([]));
     run(&d, &c, 86400).unwrap();
-    assert_eq!(
-        state(&d)["seat_supply"]["active"].as_array().unwrap().len(),
-        1
-    );
+    assert_eq!(state(&d)["seat_supply"]["active"].as_array().unwrap().len(), 1);
+    c["seat_supply_config"]["seats"][0]["probe"]["successful"] = json!(true);
+    run(&d, &c, 86401).unwrap();
+    assert_eq!(state(&d)["seat_supply"]["active"], json!([]));
+}
+#[test]
+fn fleet_seats_midnight_hold() {
+    let (d, mut c) = setup();
+    let first = run(&d, &c, 86399).unwrap()["alarms_opened"][0].clone();
+    let second = run(&d, &c, 86400).unwrap()["alarms_opened"][0].clone();
+    assert_eq!(state(&d)["seat_supply"]["active"], json!([first, second]));
+    let delivered = lines(&d, "alarm");
+    assert_eq!(delivered.iter().filter(|l| l["id"] == first).count(), 2);
+    assert_eq!(delivered.iter().filter(|l| l["id"] == second).count(), 1);
     c["seat_supply_config"]["seats"][0]["probe"]["successful"] = json!(true);
     run(&d, &c, 86401).unwrap();
     assert_eq!(state(&d)["seat_supply"]["active"], json!([]));
@@ -124,26 +135,19 @@ fn fleet_seats_request_save_and_failed_append() {
     let (d, mut c) = setup();
     authority(&mut c);
     fs::create_dir(d.path().join("outbox")).unwrap();
-    assert!(!run(&d, &c, 0).unwrap()["diagnostics"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    assert_eq!(
-        state(&d)["seat_supply"]["probe"]["attempts"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    assert!(!run(&d, &c, 0).unwrap()["diagnostics"].as_array().unwrap().is_empty());
+    assert_eq!(state(&d)["seat_supply"]["probe"]["attempts"].as_array().unwrap().len(), 1);
     fs::remove_dir(d.path().join("outbox")).unwrap();
     run(&d, &c, 1).unwrap();
     assert!(lines(&d, "probe_request").is_empty());
     let (d, mut c) = setup();
     authority(&mut c);
-    fs::create_dir(d.path().join("state")).unwrap();
-    assert!(run(&d, &c, 0).is_err());
+    let config: Config = serde_json::from_value(c["seat_supply_config"].clone()).unwrap();
+    let (_, requests) = tick(&config, &mut None, 0, 0, &BTreeSet::new(), None, &mut |_| Ok(()), &mut Vec::new()).unwrap();
+    assert_eq!(requests.len(), 1);
+    let error = crate::fleet_foundation_tick::save_then_requests(|| Err("state rename".into()), &d.path().join("outbox"), requests, &mut Vec::new());
+    assert_eq!(error, Err("state rename".into()));
     assert!(lines(&d, "probe_request").is_empty());
-    fs::remove_dir(d.path().join("state")).unwrap();
     run(&d, &c, 1).unwrap();
     assert_eq!(lines(&d, "probe_request").len(), 1);
 }
@@ -156,14 +160,7 @@ fn fleet_seats_catalog_and_control_error() {
         "groups":[{"group":"alpha","snapshot_path":d.path().join("missing")}]});
     let rules = crate::fleet_router_hysteresis::NAMES
         .iter()
-        .zip([
-            "tokens",
-            "events",
-            "asks",
-            "IDs/second",
-            "claims",
-            "seconds",
-        ])
+        .zip(["tokens", "events", "asks", "IDs/second", "claims", "seconds"])
         .map(|(name, unit)| {
             json!({"name":name,"unit":unit,"cadence":10,
         "high":2,"low":1,"enter":3,"exit":2,"freshness":10})
@@ -175,16 +172,12 @@ fn fleet_seats_catalog_and_control_error() {
         d.path().join("missing")],"retry_delay":1,"maximum_attempts":1,"silence_after":100});
     fs::remove_file(d.path().join("catalog")).unwrap();
     let r = run(&d, &c, 0).unwrap();
-    assert!(r["seat_supply"]["count"]["findings"]
-        .to_string()
-        .contains("catalog:"));
+    assert!(r["seat_supply"]["count"]["findings"].to_string().contains("catalog:"));
     let mut s = state(&d);
     s["seat_supply"]["counted"]["monotonic_ms"] = json!(999999);
     fs::write(d.path().join("state"), s.to_string()).unwrap();
     let r = run(&d, &c, 10).unwrap();
-    assert!(r["diagnostics"]
-        .to_string()
-        .contains("seat control clock backwards"));
+    assert!(r["diagnostics"].to_string().contains("seat control clock backwards"));
     assert_eq!(state(&d)["seat_supply"], s["seat_supply"]);
     assert_eq!(state(&d)["clock"]["total_ms"], 10000);
     assert!(state(&d)["pairs"]["alpha"].is_object());
@@ -201,12 +194,7 @@ fn fleet_seats_heartbeat_rearms() {
     let silence = || {
         lines(&d, "alarm")
             .iter()
-            .filter(|l| {
-                l["id"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("seat-supply:silence:")
-            })
+            .filter(|l| l["id"].as_str().unwrap().starts_with("seat-supply:silence:"))
             .count()
     };
     assert_eq!(silence(), 1);
