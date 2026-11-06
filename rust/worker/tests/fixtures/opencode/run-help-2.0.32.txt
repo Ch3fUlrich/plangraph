@@ -1,0 +1,4 @@
+  opencode run [flags] [<message...>]
+  --server string         Connect to a server URL instead of the background service
+  --model, -m string      Model to use in the format provider/model#variant
+  --format choice         Output format (choices: default, json)

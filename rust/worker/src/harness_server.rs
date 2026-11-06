@@ -130,7 +130,8 @@ pub(super) fn run_opencode_server(
     let _ = errors.join();
     result.map(|mut result| {
         result.output = String::from_utf8_lossy(&result.output)
-            .replace(&password, pg_worker_core::redact::REDACTED).into_bytes();
+            .replace(&password, pg_worker_core::redact::REDACTED)
+            .into_bytes();
         result
     })
 }
@@ -183,11 +184,13 @@ mod tests {
 
     #[test]
     fn serve_readiness_225_and_2032_are_loopback_only() {
-        // Captured from this host's 2.2.5 in a scratch HOME.
-        assert_eq!(
-            server_url("server listening on http://127.0.0.1:37933"),
-            Some("http://127.0.0.1:37933".into())
-        );
+        // Captured with isolated HOME/XDG directories and the production flags.
+        for banner in [
+            "server listening on http://127.0.0.1:39701", // 2.2.5
+            "server listening on http://127.0.0.1:41303", // 2.0.32
+        ] {
+            assert!(server_url(banner).is_some());
+        }
         assert_eq!(
             server_url("opencode server listening on http://127.0.0.1:4096"),
             Some("http://127.0.0.1:4096".into())
@@ -233,16 +236,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "explicit opt-in: starts only a private loopback server, no model call"]
+    #[ignore = "set OPENCODE_PROBE_BINARY; private loopback server, real run --help, no model call"]
     fn real_opencode_serve_readiness() {
         let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
-        // Substitute only the client to avoid a model request. The server uses
-        // the installed binary and the production startup/readiness path.
-        let real = scope::binary_ro("opencode").unwrap()[0].join("opencode");
+        // Execute the real CLI parser with the complete production client argv.
+        // --help prevents a provider request while proving the flag contract.
+        let real = std::env::var("OPENCODE_PROBE_BINARY").expect("explicit probe binary");
         let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = serve ]; then exec '{}' \"$@\"; fi\nprintf 'client-after-readiness\\n'\n",
-            real.display()
+            "#!/bin/sh\nif [ \"$1\" = serve ]; then exec '{}' \"$@\"; fi\nshift\nexec '{}' run --help \"$@\"\n",
+            real, real
         );
         let bin = crate::testutil::write_script(dir.path(), "oc-probe", &script);
         let r = run_harness(
@@ -260,7 +263,31 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(r.code, Some(0));
-        assert_eq!(r.output, b"client-after-readiness\n");
+        assert_eq!(r.code, Some(0), "{}", String::from_utf8_lossy(&r.output));
+        assert_run_help(&String::from_utf8_lossy(&r.output));
+    }
+
+    fn assert_run_help(help: &str) {
+        for required in [
+            "opencode run [flags]",
+            "--server string",
+            "--model, -m string",
+            "--format choice",
+            "json",
+        ] {
+            assert!(help.contains(required), "missing CLI contract: {required}");
+        }
+    }
+
+    #[test]
+    fn captured_real_run_help_contract() {
+        // Relevant verbatim lines from `run --help`, captured on both versions.
+        // 2.2.5 lists --server under GLOBAL FLAGS; 2.0.32 under FLAGS.
+        for help in [
+            include_str!("../tests/fixtures/opencode/run-help-2.2.5.txt"),
+            include_str!("../tests/fixtures/opencode/run-help-2.0.32.txt"),
+        ] {
+            assert_run_help(help);
+        }
     }
 }
