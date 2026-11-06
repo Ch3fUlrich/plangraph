@@ -186,6 +186,13 @@ def terminal_reason(record, job=None):
     later attempt's outcome.  Guard evidence names the run (M9), and guard and
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
     """
+    from plangraph.planner.legs import REVIEW_UNFIT_SEATS
+    chosen = record.get('chosen_leg') or {}
+    if (record.get('role') == 'review' and (record.get('plan') or {}).get('p_source') == 'override'
+            and chosen.get('model') in REVIEW_UNFIT_SEATS):
+        warning = 'review_unfit: ' + chosen['model']
+        if warning not in record.setdefault('warnings', []):
+            record['warnings'].append(warning)
     if record.get('reason') == 'kill_incomplete':
         return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()
@@ -202,6 +209,16 @@ def terminal_reason(record, job=None):
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
+    if (record.get('role') == 'review' and record.get('status') == 'completed'
+            and record.get('exit_code') == 0):
+        from plangraph.review.verdict import judge
+        # Base dispatch has no job here: use only the final attempt, never the
+        # combined stdout tail (an earlier leg's verdict cannot bless this one).
+        attempts = record.get('attempts') or ()
+        text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
+        if judge(text, getattr(job, 'response_finish_reason', None)).verdict is None:
+            record.update(status='failed', reason='no_verdict')
+            return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
     if reason == 'harness_limit':
         if ended_ok:
