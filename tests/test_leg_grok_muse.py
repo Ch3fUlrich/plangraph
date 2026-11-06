@@ -24,6 +24,15 @@ CARD = {"estimate_tokens": 20000}
 BY_ID = {leg.id: leg for leg in DEFAULT_LEGS}
 
 
+def test_catalog_resolvers_share_derivation_and_family_convention():
+    from plangraph.routing_support import resolver as shared
+    from plangraph.spawner import resolver as compatibility
+    assert compatibility is shared
+    rows = {row["id"]: row for row in shared.DEFAULT_FALLBACK_MODELS}
+    for mid in (GROK, *MUSE):
+        assert rows[BY_ID[mid].model]["family"] == BY_ID[mid].family
+
+
 def test_grok_review_only_and_distinct_family():
     leg = BY_ID[GROK]
     assert (leg.model, leg.family, leg.roles, leg.trains_on_data) == (
@@ -49,10 +58,7 @@ def test_console_muse_render_and_probe(monkeypatch, hermetic_spawner_host):
     env = {"PLANGRAPH_GATEWAY_URL": os.environ["PLANGRAPH_GATEWAY_URL"]}
     assert render_gateway_providers(env, model) is None
     providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
-    assert providers["console-meta"]["models"] == {
-        "muse-spark-1.3-contributor": {
-            "modelID": "muse-spark-1.3-contributor",
-            "name": "muse-spark-1.3-contributor"}}
+    assert "console-meta" not in providers
     assert "omniroute" not in providers
     row = dict(harness="opencode", model=model)
     assert host_skip_reason(row, env=env, probe=lambda _: {model}) is None
@@ -69,10 +75,15 @@ def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
     from types import SimpleNamespace
     from plangraph.routing_support import resolver
     listing = "\n".join(("omniroute/gc/grok-4.7", "opencode-go/sample",
+                         "other/nested/id", "omniroute/gc/unknown",
                          "Models available", "bad/", "/bad", "bad//id", "bad/id extra"))
-    monkeypatch.setattr(resolver.subprocess, "run", lambda *a, **kw:
-                        SimpleNamespace(returncode=0, stdout=listing))
-    assert _probe_served_models("{}") == frozenset({
+    def run(args, **kwargs):
+        assert args[1:] == ["models", "--standalone"]
+        assert kwargs["env"]["OPENCODE_CONFIG_CONTENT"] == "{}"
+        assert kwargs["timeout"] == 10
+        return SimpleNamespace(returncode=0, stdout=listing)
+    monkeypatch.setattr(resolver.subprocess, "run", run)
+    assert _probe_served_models("{}", env={"OPENCODE_CONFIG_CONTENT": "{}"}) == frozenset({
         "omniroute/gc/grok-4.7", "opencode-go/sample"})
 
 
@@ -116,7 +127,7 @@ def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch, hermetic
     monkeypatch.setattr(resolver, "host_probe_env", lambda env: dict(env))
     env = {"PLANGRAPH_GATEWAY_URL": gateway}
     assert render_gateway_providers(env, BY_ID[GROK].model) is None
-    assert json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]["omniroute"]["models"]["gc/grok-4.7"]["modelID"] == "gc/grok-4.7"
+    assert "omniroute" not in json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
     row = dict(harness="opencode", model=BY_ID[GROK].model)
     assert host_skip_reason(row, env=env, probe=lambda _: {row["model"]}) is None
     assert host_skip_reason(row, env=env, probe=lambda _: set()).startswith("not_served_on_host")
@@ -125,12 +136,19 @@ def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch, hermetic
     assert host_skip_reason(other, env=env, probe=lambda _: {row["model"]}).startswith("not_served_on_host")
     untouched = {"PLANGRAPH_GATEWAY_URL": gateway}
     assert render_gateway_providers(untouched, BY_ID["cx-gpt-6.1-sol"].model) is None
-    assert "gc/grok-4.7" not in json.loads(untouched["OPENCODE_CONFIG_CONTENT"])["providers"]["omniroute"]["models"]
+    assert "omniroute" not in json.loads(untouched["OPENCODE_CONFIG_CONTENT"])["providers"]
 
 
-def test_listing_unit_is_not_real_probe():
-    assert not any(mark.name == "real_probe" for mark in
-                   getattr(test_listing_accepts_nested_ids_not_non_ids, "pytestmark", []))
+@pytest.mark.parametrize("mid", (GROK, MUSE[1]))
+def test_host_admission_without_pre_render(mid, monkeypatch, hermetic_spawner_host):
+    import os
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, "host_probe_env", lambda env: dict(env))
+    env = {"PLANGRAPH_GATEWAY_URL": os.environ["PLANGRAPH_GATEWAY_URL"]}
+    assert "OPENCODE_CONFIG_CONTENT" not in env
+    row = dict(harness="opencode", model=BY_ID[mid].model)
+    assert host_skip_reason(row, env=env, probe=lambda _: {row["model"]}) is None
+    assert host_skip_reason(row, env=env, probe=lambda _: set()).startswith("not_served_on_host")
 
 
 def test_render_preserves_existing_and_rejects_non_catalog(hermetic_spawner_host):

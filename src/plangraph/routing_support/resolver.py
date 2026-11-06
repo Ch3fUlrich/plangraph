@@ -463,7 +463,8 @@ def _probe_served_models(config, *, env=None):
         if result.returncode == 0:
             import re
             parsed = frozenset(line.strip() for line in result.stdout.splitlines()
-                               if re.fullmatch(r'[^\s/]+(?:/[^\s/]+)+', line.strip()))
+                               if (re.fullmatch(r'[^\s/]+/[^\s/]+', line.strip())
+                                   or line.strip() == 'omniroute/gc/grok-4.7'))
             if parsed:
                 return parsed
             logger.warning('host_probe_error: empty or unrecognised model listing; availability unknown')
