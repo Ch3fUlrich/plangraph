@@ -41,9 +41,6 @@ impl EventParser for Parser {
         &self.health
     }
     fn feed(&mut self, chunk: &[u8], now: u64) -> Vec<Signal> {
-        if chunk == b"\n" {
-            self.health.line(LineKind::NotJson, now);
-        }
         self.framer
             .push(chunk)
             .into_iter()
@@ -163,14 +160,21 @@ fn parsing_long_silent_tool_survives_byte_deadline() {
 }
 #[test]
 fn no_first_activity_ignorer_gone_within_f_confirm_grace_two_second_proof() {
-    sigterm_ignorer_reaped();
+    let start = Instant::now();
+    let r = run("trap '' TERM; while :; do :; done", false, b"", false);
+    assert_eq!(
+        r.decisions.last().unwrap().outcome,
+        KillOutcome::HangNoActivity
+    );
+    assert_eq!(r.proof, KillProof::Empty);
+    assert!(start.elapsed() < Duration::from_millis(6100) + SCHEDULER_SLACK);
 }
 #[test]
 fn escaped_pipe_holder_cannot_hang_teardown() {
     let start = Instant::now();
-    // Escaped fixture expires itself; it is never targeted by the owned group.
+    let holder = EscapedHolder::new();
     let r = run_timeout(
-        "setsid sh -c 'sleep 4' & exit 0",
+        &holder.script("exit 0"),
         false,
         b"",
         false,
@@ -179,6 +183,78 @@ fn escaped_pipe_holder_cannot_hang_teardown() {
     assert_eq!(r.run.code, Some(0));
     assert!(!r.run.timed_out && !r.run.stalled);
     assert!(start.elapsed() < Duration::from_millis(3500));
+}
+
+// The pid file lets Drop clean up even if supervision or an assertion panics.
+struct EscapedHolder(std::path::PathBuf);
+impl EscapedHolder {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        Self(std::env::temp_dir().join(format!(
+            "watch-holder-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )))
+    }
+    fn script(&self, tail: &str) -> String {
+        format!("setsid sleep 20 & echo $! > '{}'; {tail}", self.0.display())
+    }
+}
+impl Drop for EscapedHolder {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.0) {
+            if let Ok(pid) = pid.trim().parse::<i32>() {
+                assert!(pid > 1);
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+#[test]
+fn escaped_holder_guard_cleans_up_on_unwind() {
+    let holder = EscapedHolder::new();
+    let mut child = Command::new("sleep").arg("20").spawn().unwrap();
+    std::fs::write(&holder.0, child.id().to_string()).unwrap();
+    let result = std::panic::catch_unwind(|| {
+        let _guard = holder;
+        panic!("exercise fixture cleanup");
+    });
+    assert!(result.is_err());
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("guard left escaped holder alive");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+#[test]
+fn empty_proof_does_not_wait_for_escaped_pipe_holder() {
+    let holder = EscapedHolder::new();
+    let start = Instant::now();
+    let r = run(
+        &holder.script("trap '' TERM; while :; do :; done"),
+        false,
+        b"",
+        false,
+    );
+    assert_eq!(r.proof, KillProof::Empty);
+    assert_eq!(
+        r.decisions.last().unwrap().outcome,
+        KillOutcome::HangNoActivity
+    );
+    assert!(start.elapsed() < Duration::from_millis(4100) + SCHEDULER_SLACK);
+}
+#[test]
+fn final_unterminated_stdout_frame_counts_once() {
+    let r = run("printf '{}'", false, b"", false);
+    assert_eq!((r.channel.lines, r.channel.bad), (1, 0));
+    assert!(r.activity.is_some());
 }
 
 #[test]

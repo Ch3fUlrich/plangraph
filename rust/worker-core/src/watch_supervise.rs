@@ -277,7 +277,9 @@ fn supervise_with_writer(
                 status = status.or(stop.status);
             }
         }
-        if finished_at.is_some_and(|t| events.eof == 2 || now.saturating_sub(t) >= 2000) {
+        if finished_at.is_some_and(|t| {
+            events.eof == 2 || now.saturating_sub(t) >= if stop.is_some() { 100 } else { 2000 }
+        }) {
             if stop.is_none() {
                 match child.empty() {
                     Ok(true) => {}

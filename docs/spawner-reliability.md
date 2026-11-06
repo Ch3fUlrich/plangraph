@@ -154,3 +154,12 @@ tree context and CPU signals through `supervise_events`, without a repository.
 The escaped-pipe fixture has a three-second wall timeout and retains its
 3.5-second teardown assertion. The existing `lib.rs` Unix module gate also
 excludes watch tests from Windows all-targets builds.
+
+### RL12 EOF-bound fix round
+
+After Stop reaches its terminal proof, pipe draining has a 100 ms budget rather
+than another two seconds. Natural exits retain the two-second output drain.
+A silent TERM-ignoring fixture with an escaped pipe holder proves prompt return
+after Empty; escaped fixture holders have unwind-safe cleanup. Unterminated
+stdout frames count exactly once, and the no-first-activity ignorer asserts its
+own HangNoActivity outcome and elapsed bound. The existing changelog remains true.
