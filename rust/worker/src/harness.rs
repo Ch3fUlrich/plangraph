@@ -124,24 +124,8 @@ impl Harness for Opencode {
         true
     }
 
-    fn command(&self, run: &HarnessRun) -> Command {
-        let mut cmd = Command::new(&self.bin);
-        // No shell: the prompt is a single argv element, so nothing in it is parsed.
-        cmd.arg("run")
-            // Tools run in this process tree, not the shared host service (which
-            // would sit outside the attempt jail and the worker's confined env).
-            .arg("--standalone");
-        // The JSON event stream, no self-update and the per-attempt permission
-        // policy every `opencode run` leg carries.
-        opencode_options(&mut cmd);
-        cmd.arg("-m")
-            .arg(run.model)
-            // `--` ends options: a prompt starting with `-` stays the prompt.
-            .arg("--")
-            .arg(run.prompt)
-            .current_dir(run.workdir)
-            .stdin(Stdio::null());
-        cmd
+    fn command(&self, _run: &HarnessRun) -> Command {
+        unreachable!("Opencode requires the confined private-server path")
     }
 }
 
@@ -384,7 +368,15 @@ pub fn run_harness(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     #[cfg(unix)]
     if h.private_server() {
-        return run_opencode_server(h, run, home, opts, cancelled, jail);
+        return run_opencode_server(
+            h,
+            run,
+            home,
+            opts,
+            cancelled,
+            jail,
+            std::time::Duration::from_secs(120),
+        );
     }
     let cmd = confined_command(h.command(run), h, run, home, jail)?;
     supervise_with_cancel(cmd, opts, cancelled)
@@ -816,7 +808,7 @@ mod tests {
             model: "some/model",
             prompt: "p",
         };
-        let mut c = Opencode::new().command(&run);
+        let mut c = OpencodeServer::new("http://127.0.0.1:4096").command(&run);
         pg_worker_core::sandbox_env::confine_harness(&mut c, home.path());
         let got = c
             .get_envs()
@@ -927,7 +919,6 @@ mod tests {
             prompt: "--dangerously-skip-permissions",
         };
         let hs: Vec<Box<dyn Harness>> = vec![
-            Box::new(Opencode::new()),
             Box::new(ClaudeCode::new()),
             Box::new(OpencodeServer::new("http://127.0.0.1:4096")),
         ];

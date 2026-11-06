@@ -36,6 +36,7 @@ pub(super) fn run_opencode_server(
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
     jail: Option<&JailConfig>,
+    startup_limit: std::time::Duration,
 ) -> std::io::Result<Supervised> {
     use std::io::{BufRead, Read};
     use std::os::unix::process::CommandExt;
@@ -98,10 +99,10 @@ pub(super) fn run_opencode_server(
             let mut tail = dest.lock().unwrap();
             tail.extend_from_slice(&buf[..n]);
             for line in tail.split_inclusive(|b| *b == b'\n') {
-                if line.last() == Some(&b'\n') {
-                    if let Some(url) = server_url(&String::from_utf8_lossy(line)) {
-                        let _ = tx.send(url);
-                    }
+                if line.last() == Some(&b'\n')
+                    && let Some(url) = server_url(&String::from_utf8_lossy(line))
+                {
+                    let _ = tx.send(url);
                 }
             }
             if tail.len() > 65536 {
@@ -113,12 +114,11 @@ pub(super) fn run_opencode_server(
     let start = Instant::now();
     // Startup is not model execution: allow cold initialization independently
     // of the client's run budget and never classify it as a run timeout.
-    let limit = Duration::from_secs(120);
     let url = loop {
         if let Ok(url) = rx.recv_timeout(Duration::from_millis(25)) {
             break Some(url);
         }
-        if cancelled() || start.elapsed() >= limit || server.0.try_wait()?.is_some() {
+        if cancelled() || start.elapsed() >= startup_limit || server.0.try_wait()?.is_some() {
             break None;
         }
     };
@@ -164,48 +164,15 @@ pub(super) fn run_opencode_server(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
     include!("../tests/support/harness_server_regressions.rs");
     #[test]
-    fn opencode_command_has_args_cwd_and_env() {
-        let h = Opencode::new();
-        let run = HarnessRun {
-            workdir: Path::new("/tmp/w"),
+    #[should_panic(expected = "Opencode requires the confined private-server path")]
+    fn opencode_rejects_unattached_command() {
+        Opencode::new().command(&HarnessRun {
+            workdir: Path::new("."),
             model: "some/model",
-            prompt: "fix the bug",
-        };
-        let c = h.command(&run);
-        assert_eq!(c.get_program(), OsStr::new("opencode"));
-        let args: Vec<String> = c
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            args,
-            [
-                "run",
-                "--standalone",
-                "--format",
-                "json",
-                "-m",
-                "some/model",
-                "--",
-                "fix the bug"
-            ]
-        );
-        assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
-        assert_eq!(
-            c.get_envs()
-                .find(|(k, _)| k.to_str() == Some("OPENCODE_DISABLE_AUTOUPDATE"))
-                .and_then(|(_, v)| v),
-            Some(OsStr::new("1"))
-        );
-        let cfg = c
-            .get_envs()
-            .find(|(k, _)| k.to_str() == Some(OPENCODE_CONFIG_ENV))
-            .and_then(|(_, v)| v)
-            .expect("per-attempt permission config is set");
-        assert_eq!(cfg, OsStr::new(&opencode_permission_config()));
+            prompt: "p",
+        });
     }
 
     #[test]
@@ -306,13 +273,24 @@ mod tests {
 
     #[test]
     fn captured_real_run_help_contract() {
-        // Relevant verbatim lines from `run --help`, captured on both versions.
+        // Complete `run --help` captures from both versions.
         // 2.2.5 lists --server under GLOBAL FLAGS; 2.0.32 under FLAGS.
         for help in [
             include_str!("../tests/fixtures/opencode/run-help-2.2.5.txt"),
             include_str!("../tests/fixtures/opencode/run-help-2.0.32.txt"),
         ] {
             assert_run_help(help);
+            for header in [
+                "DESCRIPTION\n",
+                "USAGE\n",
+                "ARGUMENTS\n",
+                "FLAGS\n",
+                "GLOBAL FLAGS\n",
+            ] {
+                assert!(help.contains(header), "missing help section: {header}");
+            }
+            assert!(help.contains("--auto"));
+            assert!(help.contains("--print-logs"));
         }
     }
 }

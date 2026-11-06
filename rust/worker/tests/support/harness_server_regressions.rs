@@ -1,9 +1,13 @@
 // Included in harness_server::tests to exercise the actual supervised path.
 fn serve_probe(script: &str, opts: &Opts, cancelled: &dyn Fn() -> bool) -> Supervised {
+    serve_probe_with_limit(script, opts, cancelled, std::time::Duration::from_millis(800))
+}
+
+fn serve_probe_with_limit(script: &str, opts: &Opts, cancelled: &dyn Fn() -> bool, limit: std::time::Duration) -> Supervised {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let bin = crate::testutil::write_script(dir.path(), "oc-regression", script);
-    run_harness(
+    run_opencode_server(
         &Opencode {
             bin: bin.to_string_lossy().into_owned(),
         },
@@ -16,6 +20,7 @@ fn serve_probe(script: &str, opts: &Opts, cancelled: &dyn Fn() -> bool) -> Super
         opts,
         cancelled,
         None,
+        limit,
     )
     .unwrap()
 }
@@ -52,13 +57,13 @@ fn captured_streams_drive_stderr_readiness_and_json_client_argv() {
 }
 
 #[test]
-fn cold_start_over_thirty_seconds_has_independent_run_budget() {
+fn cold_start_has_independent_run_budget() {
     let opts = Opts {
-        timeout: Some(std::time::Duration::from_secs(2)),
+        timeout: Some(std::time::Duration::from_millis(100)),
         ..Opts::default()
     };
     let r = serve_probe(
-        "#!/bin/sh\nif [ \"$1\" = serve ]; then\nsleep 31\necho 'server listening on http://127.0.0.1:4096'\nsleep 5\nelse\necho ready\nfi\n",
+        "#!/bin/sh\nif [ \"$1\" = serve ]; then\nsleep 0.2\necho 'server listening on http://127.0.0.1:4096'\nsleep 5\nelse\necho ready\nfi\n",
         &opts,
         &|| false,
     );
@@ -76,4 +81,13 @@ fn startup_failure_is_not_a_run_timeout() {
     let r = serve_probe("#!/bin/sh\nsleep 1\nexit 1\n", &opts, &|| false);
     assert_eq!(r.code, Some(1));
     assert!(!r.timed_out);
+}
+
+#[test]
+fn injected_startup_limit_is_enforced() {
+    let start = std::time::Instant::now();
+    let r = serve_probe_with_limit("#!/bin/sh\nsleep 2\n", &Opts::default(), &|| false, std::time::Duration::from_millis(50));
+    assert_eq!(r.code, Some(1));
+    assert!(!r.timed_out);
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
 }
