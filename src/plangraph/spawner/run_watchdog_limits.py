@@ -14,7 +14,9 @@ def thresholds(card=None, *, role=None):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise SpawnRefused('invalid watchdog threshold: ' + key)
         result[key.replace('_min', '_s')] = value * 60
-    timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT') or ('1500' if role == 'review' else None)
+    timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
+    if timeout is None and role == 'review':
+        timeout = '1500'
     if timeout and 'max_min' not in card:
         try:
             value = float(timeout)

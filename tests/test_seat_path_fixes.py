@@ -110,6 +110,18 @@ def test_review_default_wall_cap(monkeypatch, tmp_path):
     assert asyncio.run(capped("review"))["status"] == "timed_out"
 
 
+def test_empty_run_timeout_keeps_default_limits(monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", "")
+    for role in ("review", "implement", "orchestrate", None):
+        limits = thresholds(role=role)
+        assert limits["max_s"] == 5400
+        assert limits["hard_max"] is False
+    monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT")
+    limits = thresholds(role="review")
+    assert limits["max_s"] == 1500
+    assert limits["hard_max"] is True
+
+
 def test_timed_out_is_read_as_timeout():
     # r3: the review wall-cap spelling maps back to 'timeout' in the reason
     # reader; a run that ended on the quota leg keeps the timeout reason.
