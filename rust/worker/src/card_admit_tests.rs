@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn startup_loads_env_policy_and_unloaded_config_refuses() {
+    // Pin the production construction site without mutating process-global env
+    // while the parallel library suite is running.
+    let startup = include_str!("bin/worker.rs");
+    assert!(startup.contains("Config::default().with_card_allowlist_env()?"));
+    assert!(!startup.contains("allow_all_for_tests"));
+    let cfg = Config::default();
+    assert_failure(
+        allow(&cfg, "unloaded").unwrap_err(),
+        Some("card_not_allowlisted"),
+        true,
+    );
+    let reason = enter(&cfg, "unloaded")
+        .err()
+        .expect("unloaded policy admitted");
+    assert!(matches!(reason, AdmissionReason::NotAllowlisted(_)));
+    assert_failure(
+        attempt_error(reason.into()),
+        Some("card_not_allowlisted"),
+        true,
+    );
+}
+
+#[test]
 fn only_admission_is_non_retryable() {
     assert_failure(
         attempt_error(AdmissionReason::NotAllowlisted("s2-mapping".into()).into()),
@@ -23,10 +47,12 @@ pub(crate) fn assert_failure(error: ActivityError, kind: Option<&str>, terminal:
 
 #[test]
 fn concurrent_key_and_release_on_unwind() {
-    let cfg = Config::default();
+    let cfg = Config::allow_all_for_tests();
     let key = "pilot-owner-test";
     let first = enter(&cfg, key).unwrap();
-    assert!(enter(&cfg, key).err().unwrap().to_string().contains(key));
+    assert!(
+        matches!(enter(&cfg, key), Err(AdmissionReason::Overlap(ref refused)) if refused == key)
+    );
     drop(first);
     assert!(
         std::panic::catch_unwind(|| {
@@ -42,7 +68,7 @@ fn concurrent_key_and_release_on_unwind() {
 fn admission_and_no_claim_are_refusals() {
     let cfg = Config {
         card_allowlist: Some(["listed".to_owned()].into()),
-        ..Config::default()
+        ..Config::allow_all_for_tests()
     };
     assert!(allow(&cfg, "listed").is_ok());
     assert!(allow(&cfg, "unlisted").is_err());

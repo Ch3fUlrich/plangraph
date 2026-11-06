@@ -2072,7 +2072,7 @@ mod tests {
         Config {
             start_to_close: Duration::from_secs(10),
             check_tail_lines: 20,
-            ..Config::default()
+            ..Config::allow_all_for_tests()
         }
     }
 

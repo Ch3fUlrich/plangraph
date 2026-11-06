@@ -1,4 +1,3 @@
-use crate::harness::{Harness, HarnessRun};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn test_card() -> String { format!("c1-{}", std::thread::current().name().unwrap_or("attempt")) }

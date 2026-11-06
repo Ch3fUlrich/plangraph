@@ -3,7 +3,8 @@
 pub mod activities;
 pub mod attempt;
 pub mod buildid;
-pub mod card_admit;
+mod card_admit;
+pub use card_admit::AdmissionReason;
 pub mod harness;
 pub mod keeper;
 pub mod mergelock;

@@ -7,7 +7,8 @@ fn allowlist_comments_and_keys() {
     assert!(cfg.card_allowed("c1"));
     assert!(cfg.card_allowed("c0"));
     assert!(!cfg.card_allowed("c2"));
-    assert!(Config::default().card_allowed("c2"));
+    assert!(!Config::default().card_allowed("c2"));
+    assert!(Config::allow_all_for_tests().card_allowed("c2"));
 }
 
 #[test]

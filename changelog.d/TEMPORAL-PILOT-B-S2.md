@@ -1,1 +1,1 @@
-Worker: snapshot BOM-aware card allowlists at startup for every admission entry, distinguish typed terminal admission refusals, preserve exclusive ownership, and report startup read paths and error kinds without exposing contents.
+Worker: snapshot BOM-aware card allowlists at startup, fail closed at every admission entry without a loaded policy, distinguish typed terminal admission refusals, preserve exclusive ownership, and report startup read paths and error kinds without exposing contents.

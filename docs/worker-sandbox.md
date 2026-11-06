@@ -28,7 +28,7 @@ standalone agent mode.
 | `PG_ATTEMPT_MEMORY_MAX` | Value for the scope's `MemoryMax` property. |
 | `PG_ATTEMPT_TASKS_MAX` | Value for the scope's `TasksMax` property. |
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
-| `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset preserves unrestricted selection. Unlisted keys are refused before claim and attempt setup. |
+| `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset refuses all cards. Unlisted keys are refused before claim and attempt setup. |
 
 Cross-worker exclusivity uses keeper claim arbitration. Each claim sends
 `merge_owner_id()`, the process-stable random worker identity also used for merge
@@ -39,8 +39,8 @@ filesystem permission errors retain the ordinary retryable attempt failure.
 Typed admission reasons map to terminal `card_not_allowlisted`,
 `card_not_claimable` (empty claim), and `card_attempt_overlap` failures.
 The worker loads the environment allowlist once at startup and passes an immutable
-Config to claim and attempt entry points; other callers must supply their startup
-Config. Programmatically supplied allowlists take precedence over the environment.
+Config to claim and attempt entry points; unloaded Configs refuse admission.
+Programmatically supplied allowlists take precedence over the environment.
 
 Each attempt creates its own private temporary directory under the system temp
 directory, removed on drop alongside its private HOME. Only that temporary

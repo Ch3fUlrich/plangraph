@@ -100,7 +100,7 @@ pub struct AttemptResult {
 #[derive(Debug, thiserror::Error)]
 pub enum AttemptError {
     #[error("card admission refused: {0}")]
-    Admission(crate::card_admit::AdmissionReason),
+    Admission(crate::AdmissionReason),
     #[error(transparent)]
     Git(#[from] GitError),
     #[error("refusing worktree git directory: {0}")]
@@ -954,7 +954,7 @@ mod tests {
             start_to_close: Duration::from_secs(10),
             kill_grace: Duration::from_millis(200),
             check_tail_lines: 20,
-            ..Config::default()
+            ..Config::allow_all_for_tests()
         }
     }
 
