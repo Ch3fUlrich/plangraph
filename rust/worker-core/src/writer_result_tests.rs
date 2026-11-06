@@ -43,8 +43,14 @@ fn writer_none_launch_missing_root_stays_confined() {
     };
     assert!(launch(&f.repo, temp).unwrap().is_none());
     assert!(!missing.exists());
-    f.repo.worktrees_root = temp.join("missing/../escape").to_str().unwrap().into();
-    assert!(launch(&f.repo, temp).is_err());
+    let nested = temp.join("existing/trees");
+    std::fs::create_dir_all(&nested).unwrap();
+    f.repo.worktrees_root = nested.to_str().unwrap().into();
+    assert!(launch(&f.repo, temp).unwrap().is_none());
+    for relative in ["../escape", "missing/../escape"] {
+        f.repo.worktrees_root = temp.join(relative).to_str().unwrap().into();
+        assert!(launch(&f.repo, temp).is_err(), "accepted {relative}");
+    }
     f.repo.worktrees_root = temp.to_str().unwrap().into();
     assert!(launch(&f.repo, temp).is_err());
     #[cfg(unix)]

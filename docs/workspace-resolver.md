@@ -84,6 +84,9 @@ Base and head are lowercase 40-hex object IDs, never revision expressions.
 Uppercase hex digits are rejected explicitly. None-mode launch permits an absent
 worktrees root without creating it; ancestor resolution still rejects traversal
 and temporary directories inside the resolved root, including symlink aliases.
+The none-mode path regression covers a true outside-base `../escape`, lexical
+`missing/../escape`, and an allowed existing nested root, without relaxing the
+fail-closed rejection of parent components.
 Bundle roundtrip tests cover base and head absent from origin; a separate-origin
 test verifies that export does not publish the writer lane.
 `LocalBlobStore` uses SHA-256, a 64 MiB limit and immutable execution sidecars;
