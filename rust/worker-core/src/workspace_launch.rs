@@ -321,6 +321,10 @@ pub fn prepare_launch(
         .map_err(|_| ResolveError::Invalid("workspace"))?;
     if workspace.mode == Mode::None {
         require(checkout.is_none(), "none_checkout")?;
+        let trees = Path::new(&repo.worktrees_root).canonicalize()?;
+        require(temp.is_absolute() && !temp.starts_with(&trees), "temp")?;
+        require(!temp.canonicalize()?.starts_with(&trees), "temp_escape")?;
+        crate::sandbox_env::confine_check(cmd, temp);
         strip_git(cmd);
         cmd.current_dir(temp).env("PWD", temp);
         return Ok(None);

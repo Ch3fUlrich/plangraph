@@ -5,6 +5,78 @@ use super::{
 
 #[test]
 #[cfg(unix)]
+fn none_mode_confines_inherited_dsn() {
+    const TEST: &str = "workspace_launch::env_tests::none_mode_confines_inherited_dsn";
+    if std::env::var_os("WORKSPACE_DSN_PROBE").is_none() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST])
+            .env("WORKSPACE_DSN_PROBE", "1")
+            .env("PG_DSN", "fake-canary")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        return;
+    }
+    assert!(std::env::var_os("PG_DSN").is_some());
+    let mut f = Fixture::new();
+    f.ws.mode = Mode::None;
+    f.ws.base_sha = None;
+    f.ws.revision_sha = None;
+    f.ws.branch = None;
+    let mut cmd = Command::new("/usr/bin/env");
+    launch(&f, &mut cmd, None).unwrap();
+    let out = cmd.output().unwrap();
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("PG_DSN="));
+}
+
+#[test]
+fn none_mode_rejects_relative_and_worktree_temp() {
+    let mut f = Fixture::new();
+    let tree = f.writer();
+    f.ws.mode = Mode::None;
+    f.ws.base_sha = None;
+    f.ws.revision_sha = None;
+    f.ws.branch = None;
+    for temp in [
+        Path::new("relative"),
+        Path::new(&f.repo.worktrees_root),
+        &tree,
+    ] {
+        assert!(prepare_launch(
+            &mut Command::new("unused"),
+            &f.repo,
+            &f.ws,
+            None,
+            "seat",
+            temp,
+            None,
+        )
+        .is_err());
+    }
+    #[cfg(unix)]
+    {
+        let link = f.tmp.path().join("tree-link");
+        std::os::unix::fs::symlink(&tree, &link).unwrap();
+        assert!(prepare_launch(
+            &mut Command::new("unused"),
+            &f.repo,
+            &f.ws,
+            None,
+            "seat",
+            &link,
+            None,
+        )
+        .is_err());
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn none_mode_child_runs_in_temp_not_process_cwd() {
     let mut f = Fixture::new();
     let tree = f.writer();
