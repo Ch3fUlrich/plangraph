@@ -81,10 +81,24 @@ class DevServer:
         self.proc: subprocess.Popen | None = None
 
     def start(self, timeout: float = 60.0) -> None:
+        tails = []
+        for attempt in range(1, 4):
+            if attempt > 1:
+                self.port, self.ui_port, self.metrics_port, http_port = _free_ports(4)
+                self.http_port = http_port if self.http_port is not None else None
+                self.address = f"127.0.0.1:{self.port}"
+            tail = self._start_attempt(timeout)
+            if tail is None:
+                return
+            tails.append(f"attempt {attempt}:\n{tail}")
+        raise RuntimeError("temporal dev server did not become ready after 3 attempts:\n"
+                           + "\n".join(tails))
+
+    def _start_attempt(self, timeout: float) -> str | None:
         cmd = [self.binary, "server", "start-dev", "--headless", "--ip", "127.0.0.1",
                "--port", str(self.port), "--ui-port", str(self.ui_port),
                "--metrics-port", str(self.metrics_port),
-               "--db-filename", str(self.workdir / "temporal.db")]
+               "--db-filename", str(self.workdir / f"temporal-{uuid4().hex}.db")]
         if self.http_port is not None:
             cmd += ["--http-port", str(self.http_port)]
         with open(self.log, "wb") as out:
@@ -96,15 +110,17 @@ class DevServer:
             while time.monotonic() < deadline:
                 if self.proc.poll() is not None:
                     break
-                if source.connect_check() and self._namespace_ready(source):
-                    return
+                try:
+                    if source.connect_check() and self._namespace_ready(source):
+                        return None
+                except RPCError:
+                    pass
                 time.sleep(0.3)
         except BaseException:                      # a propagating error is a bug, not a flaky
             self.stop()                            # server: fail fast with the real cause,
             raise                                  # not after the 60 s deadline
-        tail = self.log.read_text(errors="replace")[-1500:]
         self.stop()
-        raise RuntimeError(f"temporal dev server did not become ready:\n{tail}")
+        return self.log.read_text(errors="replace")[-1500:]
 
     @staticmethod
     def _namespace_ready(source: TemporalSource) -> bool:
