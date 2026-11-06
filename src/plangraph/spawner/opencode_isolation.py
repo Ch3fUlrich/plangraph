@@ -83,7 +83,10 @@ def install_go_credential(job_dir, source=None):
         write = None
         try:
             schema = [row[0] for row in read.execute(
-                'SELECT sql FROM sqlite_master WHERE sql IS NOT NULL')]
+                "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL"
+                " AND name NOT GLOB 'sqlite_*' AND tbl_name IN ('migration', 'credential')"
+                " AND type IN ('table', 'index')"
+                " ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name")]
             migrations = read.execute(
                 'SELECT id, time_completed FROM migration ORDER BY id').fetchall()
             creds = read.execute(

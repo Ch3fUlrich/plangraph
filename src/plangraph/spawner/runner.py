@@ -310,16 +310,10 @@ class SpawnerRunner:
         from plangraph.planner.routing import validate_model
         # Resolve local leg IDs and admitted combos before rendering providers
         # or deciding which isolated credential the child requires.
-        if client == 'opencode':
-            leg = next((leg for leg in DEFAULT_LEGS if leg.id == model_or_combo), None)
-            if leg is not None:
-                model_or_combo = leg.model
-            elif not any(leg.model == model_or_combo for leg in DEFAULT_LEGS):
-                from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
-                candidates = [m for m in get_catalog_models()
-                              if model_or_combo in (m.get('combos') or []) and catalog_row_admitted(m)]
-                if candidates:
-                    model_or_combo = candidates[0]['id']
+        from .target import resolve_target
+        model_or_combo, leg = resolve_target(model_or_combo)
+        if leg is not None:
+            client = leg.harness
 
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):

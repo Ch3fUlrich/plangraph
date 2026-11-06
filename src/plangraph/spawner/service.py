@@ -228,6 +228,9 @@ class SpawnService(SeatSpawnMixin):
             target = model if model is not None else (chosen.model if chosen else None)
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
+            from .target import resolve_target
+            target, resolved_leg = resolve_target(target)
+            chosen = resolved_leg or chosen
             # Every refusal runs before hand_picked: a refused override leaves no audit line.
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
@@ -238,7 +241,7 @@ class SpawnService(SeatSpawnMixin):
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is not None and not leg_active(chosen):
-                raise SpawnRefused('leg disabled: ' + chosen.id + ': ' + chosen.disabled)
+                raise SpawnRefused('leg disabled: ' + chosen.id + ': ' + (chosen.disabled or 'expired'))
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg

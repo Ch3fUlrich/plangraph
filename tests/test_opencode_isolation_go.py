@@ -75,6 +75,72 @@ def test_missing_store_is_clean(tmp_path):
     assert not install_go_credential(tmp_path / 'job', tmp_path / 'absent')
 
 
+def test_only_auth_schema_is_rebuilt(tmp_path):
+    source = tmp_path / 'source.db'
+    source_store(source)
+    with sqlite3.connect(source) as db:
+        db.execute('CREATE TABLE session(id INTEGER PRIMARY KEY AUTOINCREMENT, secret TEXT)')
+        db.execute('CREATE VIRTUAL TABLE search USING fts5(content)')
+        db.execute('CREATE INDEX credential_provider ON credential(integration_id)')
+    job = tmp_path / 'job'
+    assert install_go_credential(job, source)
+    with sqlite3.connect(job / 'opencode' / 'opencode.db') as db:
+        names = {r[0] for r in db.execute('SELECT name FROM sqlite_master')}
+        assert 'credential_provider' in names
+        assert not any(n.startswith(('session', 'search')) for n in names)
+
+
+@pytest.mark.parametrize('target', ['opencode-glm-5.3-flash-free',
+                                   'opencode/glm-5.3-flash-free', 'disabled-combo',
+                                   'aliases/disabled-combo'])
+@pytest.mark.parametrize('client', [None, 'opencode'])
+def test_runner_refuses_disabled_resolution(tmp_path, monkeypatch, target, client):
+    from plangraph.planner.routing import SpawnRefused
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        {'id': 'opencode/glm-5.3-flash-free',
+         'combos': ['disabled-combo', 'aliases/disabled-combo']}])
+    monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+    with pytest.raises(SpawnRefused, match='leg disabled'):
+        asyncio.run(runner.spawn('test', model_or_combo=target, client=client, dry_run=True))
+
+
+def test_disabled_skips_have_evidence():
+    from plangraph.planner.routing import plan_spawn
+    plan = plan_spawn({'estimate_tokens': 1000}, role='implement')
+    assert plan.skipped
+    assert all('evidence' in entry for entry in plan.skipped)
+
+
+def test_integration_is_opt_in():
+    config = pytest.Config.fromdictargs({}, [])
+    assert 'not integration' in config.getini('addopts')
+
+
+def test_resolution_preserves_harness(monkeypatch):
+    from plangraph.spawner.target import resolve_target
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        {'id': 'omniroute/cx-gpt-6.1-sol', 'combos': ['gpt-test']}])
+    monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
+    target, leg = resolve_target('gpt-test')
+    assert target == leg.model == 'omniroute/cx-gpt-6.1-sol'
+    assert leg.harness == 'opencode'
+
+
+@pytest.mark.parametrize('target', ['disabled-combo', 'aliases/disabled-combo'])
+def test_service_refuses_disabled_combo(tmp_path, monkeypatch, target):
+    from plangraph.spawner.service import SpawnService
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        {'id': 'opencode/glm-5.3-flash-free', 'combos': [target]}])
+    monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
+    service = SpawnService(state=tmp_path)
+    from plangraph.planner.routing import SpawnRefused
+    with pytest.raises(SpawnRefused, match='leg disabled'):
+        asyncio.run(service.spawn(card={'estimate_tokens': 1000}, prompt='test',
+            model=target, override_reason='regression test', dry_run=True))
+    assert not (tmp_path / 'spawn-overrides.jsonl').exists()
+
+
 def test_disabled_and_fallback_routes():
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import plan_spawn
