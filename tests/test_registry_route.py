@@ -172,6 +172,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
                            ("opencode-glm-5.3-flash-free", "off_family")):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
+            assert reasons == {}  # Role-ineligible legs are not policy skips.
             assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService

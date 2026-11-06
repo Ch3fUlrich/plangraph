@@ -97,6 +97,7 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     from plangraph.spawner.service import SpawnService
     plan = plan_spawn(CARD, role="implement")
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
+    assert reasons == {}  # Review-only legs never enter implement skip accounting.
     assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
     for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
         with pytest.raises(SpawnRefused, match=r"writer disabled \(D-3828\)"):
