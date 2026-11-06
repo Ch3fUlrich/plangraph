@@ -73,6 +73,20 @@ def test_protected(reason):
     assert r['reason'] == reason and r['status'] == 'failed'
 
 
+@pytest.mark.parametrize('source', ['record', 'job'])
+def test_model_refusal_reason_skips_question_and_fallthrough(source):
+    j, r = job(status='failed', exit_code=1), dict(status='failed', exit_code=1)
+    if source == 'record':
+        r['reason'] = 'model_refusal'
+    else:
+        j.reason = 'model_refusal'
+    assert not question_exit(j, r)
+    fallthrough_reason(None, None, j, r)
+    terminal_reason(r, j)
+    assert j.status == r['status'] == 'failed'
+    assert (r['reason'] if source == 'record' else j.reason) == 'model_refusal'
+
+
 @pytest.mark.parametrize('status', ['cancelled', 'timeout', 'stalled'])
 def test_killed(status):
     assert not question_exit(job(status=status), {})
@@ -158,6 +172,7 @@ def test_spawn_without_card_delegates(tmp_path, monkeypatch, override):
 
 
 def test_dispatch_wait_event_and_no_continuation(tmp_path, monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnPlan
     calls, delivered = [], []
@@ -182,7 +197,7 @@ def test_dispatch_wait_event_and_no_continuation(tmp_path, monkeypatch):
         pytest.fail('question spent a fix/continuation attempt')
     monkeypatch.setattr(service, '_continue_writer', forbidden)
     async def run():
-        r = await service._spawn(card={'title': 'x'}, wait_seconds=None)
+        r = await service._spawn(card={'title': 'x', 'item': 'plangraph:x'}, wait_seconds=None)
         assert (await service.wait(r['run_id'], timeout=0))['status'] == 'needs_input'
         return r
     r = asyncio.run(run())
@@ -192,10 +207,11 @@ def test_dispatch_wait_event_and_no_continuation(tmp_path, monkeypatch):
     assert all(e['question']['text'] == 'Which database?' for e in delivered)
     row = service.ps()['runs'][0]
     assert row['card_hash'] == r['card_hash'] and row['status'] == 'needs_input'
+    assert row['item_key'] == r['item_key'] == 'plangraph:x'
     monkeypatch.setenv('PLANGRAPH_MAX_QUESTION_ROUNDS', 'x')
-    assert asyncio.run(service._spawn(card={'title': 'x'}, wait_seconds=None))['status'] == 'needs_input'
+    assert asyncio.run(service._spawn(card={'title': 'x', 'item': 'plangraph:x'}, wait_seconds=None))['status'] == 'needs_input'
     monkeypatch.setenv('PLANGRAPH_MAX_QUESTION_ROUNDS', '1')
-    refused = asyncio.run(service._spawn(card={'title': 'x'}, wait_seconds=None))
+    refused = asyncio.run(service._spawn(card={'title': 'changed', 'item': 'plangraph:x'}, wait_seconds=None))
     assert refused['reason'] == 'question_rounds_exhausted' and len(calls) == 2
 
 

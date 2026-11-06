@@ -11,8 +11,8 @@ def answer_prompt(prompt, answer):
 def question_exit(job, record):
     events = [*record.get('events', ()), *getattr(job, 'events', ())]
     if (getattr(job, 'role', record.get('role')) == 'review'
-            or record.get('reason') in ('git_config_mutated', 'cancelled', 'kill_incomplete')
-            or getattr(job, 'reason', None) in ('git_config_mutated', 'cancelled', 'kill_incomplete')
+            or record.get('reason') in ('git_config_mutated', 'cancelled', 'kill_incomplete', 'model_refusal')
+            or getattr(job, 'reason', None) in ('git_config_mutated', 'cancelled', 'kill_incomplete', 'model_refusal')
             or any(e.get('event') in ('git_config_mutated', 'cancelled', 'kill_incomplete', 'model_refusal') for e in events)
             or getattr(job, 'survivors', ())
             or getattr(job, 'status', None) not in ('completed', 'failed', 'needs_input')):
