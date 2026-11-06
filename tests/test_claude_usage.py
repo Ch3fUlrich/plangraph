@@ -1,0 +1,206 @@
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+SPEC = importlib.util.spec_from_file_location("claude_usage", Path(__file__).parents[1] / "tools/claude_usage.py")
+usage = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(usage)
+
+
+def assistant(mid="m1", text="", read=100, output=10, timestamp="2026-11-06T00:00:00Z"):
+    return dict(type="assistant", timestamp=timestamp, message=dict(
+        id=mid, model="example-model", content=[dict(type="text", text=text)],
+        usage=dict(input_tokens=20, output_tokens=output,
+                   cache_creation_input_tokens=30, cache_read_input_tokens=read)))
+
+
+@pytest.fixture
+def tree(tmp_path):
+    project = tmp_path / "projects" / "example-project"
+    project.mkdir(parents=True)
+    return project
+
+
+def write(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def run(tree, capsys, *args, code=0):
+    assert usage.main(["--projects", str(tree.parent), *args, "--json"]) == code
+    return json.loads(capsys.readouterr().out)
+
+
+def test_v1_duplicates_subagents_role(tree, capsys):
+    write(tree / "s1.jsonl", [dict(type="custom-title", customTitle="routing-0191",
+                                   timestamp="2026-11-06T00:00:00Z"),
+                                assistant(output=1), assistant(output=20)])
+    write(tree / "s1/subagents/agent-a.jsonl", [assistant("sub")])
+    report = run(tree, capsys, "roles")["result"]["routing"]
+    assert report["requests"] == 2
+    assert report["weighted"] == 150
+    assert report["sessions"] == report["starts"] == 1
+    assert report["subagent_share"] == 70 / 150
+
+
+def test_pace_quiet_and_over(tree, capsys):
+    write(tree / "s.jsonl", [assistant()])
+    assert usage.main(["--projects", str(tree.parent), "pace", "--day", "2026-11-06"]) == 0
+    assert capsys.readouterr().out == ""
+    write(tree / "s.jsonl", [assistant(output=100000000)])
+    assert usage.main(["--projects", str(tree.parent), "pace", "--day", "2026-11-06"]) == 0
+    output = capsys.readouterr().out
+    assert output.startswith("over pace: 2026-11-06 weighted=")
+    assert len(output.splitlines()) == 1
+    assert usage.UNSEEN in output
+    assert run(tree, capsys, "pace", "--day", "2026-11-06")["result"]["over_pace"]
+
+
+def test_weights_median(tree, tmp_path, capsys):
+    write(tree / "s.jsonl", [assistant(str(i), read=n) for i, n in enumerate([10, 1000, 30, 50])])
+    target = tmp_path / "weights.json"
+    result = run(tree, capsys, "weights", "--baseline-since", "2026-11-06",
+                 "--baseline-until", "2026-11-07", "--out", str(target))
+    assert result["result"] == {"unnamed": 4}
+    assert json.loads(target.read_text()) == result["result"]
+
+
+def inputs(tmp_path):
+    files = {}
+    for name, text in dict(a="FLEET-LAUNCH\nSECOND\n", b="THIRD\n",
+                           landed="FLEET-LAUNCH\nTHIRD\n", sessions="owned\n").items():
+        path = tmp_path / name
+        path.write_text(text)
+        files[name] = str(path)
+    fixed = tmp_path / "fixed.json"
+    fixed.write_text('{"unnamed": 5}')
+    files["fixed"] = str(fixed)
+    return files
+
+
+def test_v3_v5_prorata_whole_token_fixed(tree, tmp_path, capsys):
+    f = inputs(tmp_path)
+    write(tree / "shared.jsonl", [
+        dict(type="user", message=dict(content="plangraph:FLEET-LAUNCH SECOND")),
+        assistant(text="THIRD", read=300),
+        assistant("m2", text="FLEET-LAUNCH-ADMISSION fleet-launch"),
+        assistant("m3", text="OTHER:FLEET-LAUNCHER")])
+    report = run(tree, capsys, "keys", "--arm", "A=" + f["a"], "--arm", "B=" + f["b"],
+                 "--weights", f["fixed"], "--landed", f["landed"])["result"]
+    assert report["A"]["turns"] == pytest.approx(2 / 3)
+    assert report["B"]["turns"] == pytest.approx(1 / 3)
+    assert report["A"]["actual"] == 60
+    assert report["A"]["fixed"] == pytest.approx(65 * 2 / 3)
+    assert report["A"]["tokens_per_accepted_actual"] == 60
+    assert report["A"]["keys_named"] == ["FLEET-LAUNCH", "SECOND"]
+
+
+def test_session_not_double_counted_includes_subagent(tree, tmp_path, capsys):
+    f = inputs(tmp_path)
+    write(tree / "owned.jsonl", [assistant(text="THIRD FLEET-LAUNCH")])
+    write(tree / "owned/subagents/agent-x.jsonl", [assistant(text="THIRD")])
+    write(tree / "shared.jsonl", [assistant(text="THIRD")])
+    report = run(tree, capsys, "keys", "--arm", "A=" + f["a"] + "," + f["sessions"],
+                 "--arm", "B=" + f["b"], "--weights", f["fixed"], "--landed", f["landed"])["result"]
+    assert report["A"]["turns"] == 2
+    assert report["A"]["actual"] == report["A"]["fixed"] == 140
+    assert report["B"]["turns"] == 1
+
+
+@pytest.mark.parametrize("failure", ["zero", "empty", "missing", "no-transcripts"])
+def test_v4_no_result(tree, tmp_path, capsys, failure):
+    f = inputs(tmp_path)
+    if failure != "no-transcripts":
+        write(tree / "s.jsonl", [assistant(text="SECOND")])
+    if failure == "empty":
+        Path(f["a"]).write_text("")
+    if failure == "missing":
+        f["a"] = str(tmp_path / "absent")
+    result = run(tree, capsys, "keys", "--arm", "A=" + f["a"],
+                 "--weights", f["fixed"], code=3)
+    assert result["status"] == "no result"
+    assert "result" not in result
+
+
+def test_malformed_and_utc_boundary(tree, capsys):
+    path = tree / "s.jsonl"
+    write(path, [assistant(timestamp="2026-11-06T00:30:00+01:00"),
+                 assistant("m2", timestamp="2026-11-06T00:00:00Z")])
+    with path.open("a") as handle:
+        handle.write("not json\n")
+    result = run(tree, capsys, "daily", "--since", "2026-11-05", "--until", "2026-11-07")
+    assert result["malformed_lines"] == 1
+    assert result["result"]["2026-11-05"]["requests"] == 1
+    assert result["result"]["2026-11-06"]["requests"] == 1
+
+
+def test_v2_read_only_and_no_text(tree, capsys, monkeypatch):
+    import socket
+    import subprocess
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("external execution forbidden")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    write(tree / "s.jsonl", [assistant(text="PRIVATE_TRANSCRIPT_SENTINEL")])
+    before = (tree / "s.jsonl").read_bytes()
+    result = run(tree, capsys, "daily")
+    assert "PRIVATE_TRANSCRIPT_SENTINEL" not in json.dumps(result)
+    assert (tree / "s.jsonl").read_bytes() == before
+
+
+def test_v6_no_machine_identifiers():
+    source = Path(usage.__file__).read_text()
+    assert "subprocess" not in source
+    assert "socket" not in source
+    assert "/home/" not in source
+
+
+def test_streaming_reader(tree, capsys, monkeypatch):
+    write(tree / "s.jsonl", [assistant()])
+    original = Path.open
+
+    class StreamOnly:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return iter(self.handle)
+
+        def __exit__(self, *args):
+            self.handle.close()
+
+    def opened(path, *args, **kwargs):
+        handle = original(path, *args, **kwargs)
+        return StreamOnly(handle) if path.suffix == ".jsonl" else handle
+
+    monkeypatch.setattr(Path, "open", opened)
+    assert run(tree, capsys, "daily")["result"]["2026-11-06"]["requests"] == 1
+
+
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_snapshot_tool_input_and_unlanded_numerator(tree, tmp_path, capsys, as_dict):
+    f = inputs(tmp_path)
+    first = assistant(text="", read=200)
+    first["message"]["content"] = [dict(type="tool_use", input=dict(query="FLEET-LAUNCH"))]
+    write(tree / "s.jsonl", [first, dict(type="user", message=dict(content=[
+        dict(type="tool_result", content="SECOND")])), assistant("m2")])
+    snapshot = tmp_path / "snapshot.json"
+    item = dict(key="plangraph:FLEET-LAUNCH", state="done")
+    snapshot.write_text(json.dumps(dict(items={"one": item} if as_dict else [item])))
+    report = run(tree, capsys, "keys", "--arm", "A=" + f["a"],
+                 "--snapshot", str(snapshot))["result"]["A"]
+    assert report["accepted"] == 1
+    assert report["actual"] == report["tokens_per_accepted_actual"] == 150
+    assert report["turns"] == 2
+
+
+def test_last_record_controls_day_and_usage(tree, capsys):
+    write(tree / "s.jsonl", [assistant(timestamp="2026-11-05T23:59:59Z"),
+                             assistant(output=40, timestamp="2026-11-06T00:00:00Z")])
+    result = run(tree, capsys, "daily")["result"]
+    assert list(result) == ["2026-11-06"]
+    assert result["2026-11-06"]["weighted"] == 100
