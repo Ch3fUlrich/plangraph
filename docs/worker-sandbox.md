@@ -34,6 +34,17 @@ directory, removed on drop alongside its private HOME. Only that temporary
 directory is writable in the jail, not the shared system temp root; the child
 receives its path as `TMPDIR` after environment confinement.
 
+Output-redaction helpers apply the check-tail redactor and 64 KiB cap and
+redact question text, defaults, and risk tags; worker integration follows in
+the next pilot slice. Prefixed secrets wrapped onto a second line are removed
+before line trimming. Git/SSH environment credentials are not inherited;
+harness auth staging skips `.git-credentials`, `.gitconfig`, and `.ssh`.
+This is not a network prohibition or a guarantee against credentials supplied
+in arbitrary other auth files. Regression coverage stages the same auth source
+into separate harness and check homes, verifies an ordinary auth file survives
+while Git/SSH files do not, and runs a failing push with no configured remote
+through both environment-confinement helpers.
+
 The local devstack e2e test profile (`tests/e2e/rtp1_local_util.py`) selects a
 built `pg-jail` beside the worker binary when present, otherwise explicitly sets
 `PG_JAIL=off`. This fallback is test-profile-only, never a worker default;

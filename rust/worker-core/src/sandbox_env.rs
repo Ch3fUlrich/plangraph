@@ -172,6 +172,9 @@ fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()
     }
     for entry in std::fs::read_dir(&src)? {
         let entry = entry?;
+        if crate::sandbox_push::excluded(&entry.file_name()) {
+            continue;
+        }
         // file_type comes from symlink_metadata: it never follows the link.
         let ft = entry.file_type()?;
         if ft.is_symlink() {
@@ -279,28 +282,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn allowlist_is_exact_names_only() {
-        for n in ["PATH", "LANG", "TERM", "CARGO_HOME", "RUSTUP_HOME"] {
-            assert!(is_passed(n) && is_passed_check(n), "{n} must pass");
-        }
-        for n in [
-            // The harness sets this on its own Command; it survives via
-            // `explicit`, it is not forwarded from the worker env.
-            "OPENCODE_DISABLE_AUTOUPDATE",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "OPENCODE_API_KEY",
-            "PG_KEEPER_URL",
-            "TEMPORAL_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "HOME",
-        ] {
-            assert!(!is_passed(n), "{n} must not pass");
-            assert!(!is_passed_check(n), "{n} must not reach a check child");
-        }
-    }
-
+    include!("sandbox_existing_tests.rs");
     #[test]
     fn allowlist_never_names_a_secret() {
         // The allowlist is an env-forwarding policy: one TOKEN/KEY/... name in
@@ -568,3 +550,7 @@ mod tests {
         assert!(home.is_dir());
     }
 }
+
+#[cfg(test)]
+#[path = "sandbox_push_tests.rs"]
+mod push_tests;
