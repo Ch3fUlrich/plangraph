@@ -107,13 +107,19 @@ mod tests {
                     ],
                     from_env,
                 );
-                assert_eq!(
-                    result.is_ok(),
-                    deployment == Some("custom") && build == Some("id-1")
-                );
+                let expected = match (deployment, build) {
+                    (None, _) => Err("PG_DEPLOYMENT is required".into()),
+                    (Some("custom"), None) => Err("PG_BUILD_ID is required".into()),
+                    (Some("custom"), Some("id-1")) => Ok(("custom".into(), "id-1".into())),
+                    (Some("custom"), _) => {
+                        Err("PG_BUILD_ID must be a valid non-empty identity".into())
+                    }
+                    _ => Err("PG_DEPLOYMENT must be a valid non-empty identity".into()),
+                };
+                assert_eq!(result, expected);
             }
         }
-        assert!(
+        assert_eq!(
             with_env(
                 &[
                     ("PG_VERSIONING", Some("off")),
@@ -121,8 +127,8 @@ mod tests {
                     ("PG_BUILD_ID", Some("id-1"))
                 ],
                 from_env
-            )
-            .is_err()
+            ),
+            Err("PG_VERSIONING=off is not permitted".into())
         );
     }
 }
