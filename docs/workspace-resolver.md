@@ -74,3 +74,15 @@ with a canary slot and system temp; the launch child uses caller per-run temp.
 
 No daemon caller exists. Lifecycle, result bundles, keeper coordination,
 publication and live acceptance remain R5–R7. Rollback uses `git revert`.
+# Writer result boundary
+
+`writer_result::check_result` checks owned writer lanes after execution, including
+cleanliness, ancestry and terminal Writer trailers on every new commit.
+`export_result` requires a reachable-content gate before R4 bundle export and
+seals bytes through `BlobStore`. It never pushes or removes a checkout.
+`LocalBlobStore` uses SHA-256, a 64 MiB limit and immutable execution sidecars;
+the local R6 store location is `state/blobs`. Sealing is not a keeper receipt or
+attempt completion. This slice performs no garbage collection. Referenced
+pending/conflicted results must not expire; finalized results receive salvage
+retention (seven days or acknowledgment), and only unreferenced orphan blobs
+use a 24-hour retention period.
