@@ -157,13 +157,15 @@ def test_npm_missing_skips(host):
 
 
 @pytest.mark.parametrize('platform', ['nt', 'posix'])
-def test_npm_cache_spaced_path_without_shell(host, monkeypatch, platform):
+def test_npm_cache_spaced_path_without_shell(host, monkeypatch, capsys, platform):
     home, site, _, _, _, _ = host
     site.write_text('')  # Stop before platform-specific session configuration.
     spec = importlib.util.spec_from_file_location('omnigraph_step', ROOT / 'deploy/omnigraph_step.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, 'os', SimpleNamespace(**{**vars(os), 'name': platform}))
+    if platform == 'nt':
+        monkeypatch.delattr(module.os, 'fchmod', raising=False)
     monkeypatch.setenv('USERPROFILE', str(home))
     monkeypatch.setenv('PLANGRAPH_SITE_ENV', str(site))
     monkeypatch.setattr(sys, 'argv', ['omnigraph_step.py', '0'])
@@ -183,6 +185,11 @@ def test_npm_cache_spaced_path_without_shell(host, monkeypatch, platform):
                     ['mcpServers']['omnigraph']['args'] if arg.startswith('@modernrelay/omnigraph-mcp@'))
     assert calls == [[npm, 'cache', 'add', expected]]
     assert (home / '.config/plangraph/omnigraph-cache-spec').read_text() == expected
+    output = capsys.readouterr().out
+    for name in ('OMNIGRAPH_BASE_URL', 'OMNIGRAPH_TOKEN_FILE'):
+        assert 'OPERATOR: place private ' + name in output
+    if platform == 'posix':
+        assert (home / '.config/plangraph/omnigraph-cache-spec').stat().st_mode & 0o777 == 0o600
 
 
 def test_health_404_no_second_guess(host, monkeypatch):

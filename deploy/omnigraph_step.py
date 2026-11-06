@@ -46,7 +46,8 @@ def update(path, text, mode=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     if mode is not None:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-        os.fchmod(fd, mode)
+        if os.name != 'nt':
+            os.fchmod(fd, mode)
         with os.fdopen(fd, 'w') as stream:
             stream.write(text)
     else:
