@@ -73,12 +73,15 @@ pub fn check_result(
     checkout: &Path,
     workspace: &Workspace,
 ) -> Result<CheckedResult, WriterError> {
+    let base = workspace.base_sha.as_deref().ok_or(WriterError::Invalid)?;
+    if !oid(base) {
+        return Err(WriterError::Invalid);
+    }
     workspace.validate().map_err(|_| WriterError::Invalid)?;
     if workspace.mode != Mode::Writer {
         return Err(WriterError::Invalid);
     }
     crate::workspace_launch::verify_owned(repo, checkout).map_err(|_| WriterError::Verify)?;
-    let base = workspace.base_sha.as_deref().ok_or(WriterError::Invalid)?;
     let branch = workspace.branch.as_deref().ok_or(WriterError::Invalid)?;
     let head = git(checkout, &["rev-parse", "HEAD"])?;
     if !oid(&head)

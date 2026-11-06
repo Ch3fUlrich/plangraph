@@ -68,6 +68,87 @@ impl Fixture {
 }
 struct Gate(bool);
 #[test]
+fn base_requires_lowercase_oid() {
+    let mut f = Fixture::new();
+    f.commit("result\n\nWriter: test");
+    for base in [
+        "refs/heads/main",
+        "--all",
+        "HEAD",
+        "../escape",
+        &"A".repeat(40),
+    ] {
+        f.ws.base_sha = Some(base.into());
+        assert!(matches!(
+            check_result(&f.repo, &f.tree, &f.ws),
+            Err(WriterError::Invalid)
+        ));
+    }
+}
+fn separate_origin(f: &mut Fixture) -> PathBuf {
+    let origin = f._dir.path().join("origin");
+    git(
+        f._dir.path(),
+        &["clone", "--bare", &f.repo.root, origin.to_str().unwrap()],
+    )
+    .unwrap();
+    f.repo.remote = origin.to_str().unwrap().into();
+    git(
+        Path::new(&f.repo.root),
+        &["remote", "set-url", "origin", &f.repo.remote],
+    )
+    .unwrap();
+    origin
+}
+#[test]
+fn unpushed_base_and_head_bundle_roundtrip() {
+    let mut f = Fixture::new();
+    let origin = separate_origin(&mut f);
+    git(&origin, &["update-ref", "-d", "refs/heads/lane/result"]).unwrap();
+    f.commit("unpushed base\n\nWriter: test");
+    let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
+    f.ws.base_sha = Some(base.clone());
+    f.ws.revision_sha = Some(base.clone());
+    f.commit("unpushed head\n\nWriter: test");
+    let checked = check_result(&f.repo, &f.tree, &f.ws).unwrap();
+    for sha in [&base, &checked.head_sha] {
+        assert!(git(&origin, &["cat-file", "-e", sha]).is_err());
+    }
+    let receiver = f._dir.path().join("receiver");
+    git(
+        f._dir.path(),
+        &[
+            "clone",
+            origin.to_str().unwrap(),
+            receiver.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    let mut store = crate::writer_blob::LocalBlobStore::open(&f._dir.path().join("blobs")).unwrap();
+    let blob = export_result(&f.repo, &checked, "roundtrip", &Gate(true), &mut store).unwrap();
+    let bundle = f._dir.path().join("result.bundle");
+    std::fs::write(&bundle, store.read(&blob).unwrap()).unwrap();
+    git(&receiver, &["bundle", "verify", bundle.to_str().unwrap()]).unwrap();
+    git(
+        &receiver,
+        &[
+            "fetch",
+            bundle.to_str().unwrap(),
+            "refs/spawner/bundle/roundtrip",
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        git(&receiver, &["rev-parse", "FETCH_HEAD"]).unwrap(),
+        checked.head_sha
+    );
+    git(
+        &receiver,
+        &["merge-base", "--is-ancestor", &base, &checked.head_sha],
+    )
+    .unwrap();
+}
+#[test]
 fn descendant_all_new_trailers_including_merge() {
     let f = Fixture::new();
     f.commit("first\n\nWriter: test");
@@ -138,7 +219,9 @@ fn empty_range_dirty_tree_wrong_branch_refuse() {
 }
 #[test]
 fn daemon_never_pushes() {
-    let f = Fixture::new();
+    let mut f = Fixture::new();
+    let origin = separate_origin(&mut f);
+    git(&origin, &["update-ref", "-d", "refs/heads/lane/result"]).unwrap();
     f.commit("result\n\nWriter: test");
     let checked = check_result(&f.repo, &f.tree, &f.ws).unwrap();
     let root = Path::new(&f.repo.root);
@@ -146,6 +229,9 @@ fn daemon_never_pushes() {
     let mut store = crate::writer_blob::LocalBlobStore::open(&f._dir.path().join("blobs")).unwrap();
     let blob = export_result(&f.repo, &checked, "export", &Gate(true), &mut store).unwrap();
     assert!(!store.read(&blob).unwrap().is_empty());
+    assert!(git(&origin, &["for-each-ref", "refs/heads/lane/result"])
+        .unwrap()
+        .is_empty());
     assert_eq!(git(root, &["rev-parse", "main"]).unwrap(), before);
     assert!(f.tree.exists());
     assert!(git(root, &["for-each-ref", "refs/spawner/bundle/"])

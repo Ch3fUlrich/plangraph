@@ -80,6 +80,9 @@ publication and live acceptance remain R5–R7. Rollback uses `git revert`.
 cleanliness, ancestry and terminal Writer trailers on every new commit.
 `export_result` requires a reachable-content gate before R4 bundle export and
 seals bytes through `BlobStore`. It never pushes or removes a checkout.
+Base and head are lowercase 40-hex object IDs, never revision expressions.
+Bundle roundtrip tests cover base and head absent from origin; a separate-origin
+test verifies that export does not publish the writer lane.
 `LocalBlobStore` uses SHA-256, a 64 MiB limit and immutable execution sidecars;
 the local R6 store location is `state/blobs`. Sealing is not a keeper receipt or
 attempt completion. This slice performs no garbage collection. Referenced
