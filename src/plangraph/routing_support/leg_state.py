@@ -345,17 +345,17 @@ class LegAdapter:
         self.models = models or self.standalone_models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
-
     def __getattr__(self, name):
         return getattr(self.store, name)
-
     @staticmethod
     def standalone_models():
         import subprocess
-        result = subprocess.run(['opencode', 'models'], capture_output=True,
-                                text=True, timeout=8, shell=False, check=True)
+        try:
+            result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
+                                    text=True, timeout=8, shell=False, check=True)
+        except (OSError, subprocess.SubprocessError):
+            return []
         return result.stdout.splitlines()
-
     @staticmethod
     def identity(model):
         return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)

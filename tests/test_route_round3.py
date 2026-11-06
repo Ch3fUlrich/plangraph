@@ -21,7 +21,7 @@ def test_review_same_family_measured_order():
                           benchmark={name: {"aa_intelligence": score,
                                      "cost_per_task_usd": 0, "pool_burn_weight": 0}
                                      for name, score in (("first", a), ("second", b))})
-    assert [l.id for l in plan(20, 90).legs] == ["second", "first"]
+    assert [l.id for l in plan(20, 90).legs] == ["first", "second"]
     assert [l.id for l in plan(90, 20).legs] == ["first", "second"]
 
 

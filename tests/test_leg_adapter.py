@@ -100,11 +100,20 @@ def test_catalog_policy_is_not_mutated(tmp_path):
 
 def test_bounded_discovery(monkeypatch):
     def run(argv, **kwargs):
-        assert argv == ['opencode', 'models']
+        assert argv == ['opencode', 'models', '--standalone']
         assert kwargs['timeout'] == 8 and kwargs['shell'] is False
         return SimpleNamespace(stdout='opencode-go/sample\n')
     monkeypatch.setattr(subprocess, 'run', run)
     assert leg_state.LegAdapter.standalone_models() == ['opencode-go/sample']
+
+
+@pytest.mark.parametrize('error', [subprocess.CalledProcessError(1, 'opencode'),
+                                  subprocess.TimeoutExpired('opencode', 8), OSError()])
+def test_bounded_discovery_failure(monkeypatch, error):
+    def run(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert leg_state.LegAdapter.standalone_models() == []
 
 
 def test_refresh_recovers_without_failure_becoming_health(tmp_path):
