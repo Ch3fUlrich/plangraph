@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import subprocess
+import os
 import types
 from pathlib import Path
 
@@ -27,6 +29,57 @@ def test_build_claim_preserves_gate_inputs():
     assert got["exports"] == ["api"]
     assert got["heldout_cmd"] == "heldout"
     assert got["risk_tagged"] is True
+
+
+@pytest.mark.skipif(
+    not os.environ.get("PG_DSN"),
+    reason="Postgres parity runs in the pytest-postgres lane",
+)
+@pytest.mark.parametrize("metadata", [False, True, "typo", ""])
+def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo, metadata):
+    assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
+    assert _metadata_claim(tmp_path, repo, "sqlite", metadata) == _metadata_claim(tmp_path, repo, "postgres", metadata)
+
+
+@pytest.mark.parametrize("metadata", [False, True, "typo", ""])
+def test_claim_metadata_sqlite(tmp_path, repo, metadata):
+    _metadata_claim(tmp_path, repo, "sqlite", metadata)
+
+
+def _metadata_claim(tmp_path, repo, backend, metadata):
+    world = World(tmp_path / backend, backend=backend, dsn=os.environ.get("PG_DSN"))
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("C", []), defn("GOAL", ["C"], kind="goal")])
+        card = {"outcome": "fix", "check_cmd": "false", "write_set": []}
+        if metadata is True:
+            card.update(check_kind="regression", check_reads=["fixtures/input.json"],
+                        smoke_checks=["true"], exports=["api"],
+                        heldout_check="heldout", risk_tags=["migration"])
+        world.store.put_card(world.p("router"), "demo:C", card)
+        if isinstance(metadata, str):
+            # Model a legacy/hand-written stored card, bypassing card-write validation.
+            original = world.store.get_card
+            world.store.get_card = lambda *args: dict(original(*args), check_kind=metadata)
+            with pytest.raises(Refused) as exc:
+                worker_claim(world.store, world.p("workerA"), "demo:C", repo_root=str(repo[0]))
+            assert exc.value.code == "validation"
+            row = world.store.conn.execute(
+                "SELECT state, claimed_by FROM items WHERE key = ?", ("demo:C",)).fetchone()
+            assert tuple(row) == ("open", None)
+            return exc.value.code
+        payload = worker_claim(world.store, world.p("workerA"), "demo:C",
+                               repo_root=str(repo[0]))
+        assert payload == build_claim("demo:C", card, repo=str(repo[0]), base_sha=repo[1])
+        row = world.store.conn.execute(
+            "SELECT state, claimed_by FROM items WHERE key = ?", ("demo:C",)).fetchone()
+        assert tuple(row) == ("claimed", "workerA")
+        with pytest.raises(Refused) as exc:
+            worker_claim(world.store, world.p("workerB"), "demo:C", repo_root=str(repo[0]))
+        assert exc.value.code == "conflict"
+        return payload
+    finally:
+        world.close()
 
 def _code(exc: Refused):
     return getattr(exc, "code", exc.args[0] if exc.args else None)
@@ -262,3 +315,14 @@ def test_rev_parse_uses_hooks_path(monkeypatch):
     assert gitenv.rev_parse("/tmp", "HEAD") == "abc123"
     assert calls
     assert "core.hooksPath=/dev/null" in calls[0]
+
+
+def test_builder_matches_rust_wire_fixture():
+    card = dict(check_cmd="false", write_set=["src/a.py"], outcome="implement")
+    explicit = dict(card, check_kind="regression", check_reads=["fixtures/input.json"],
+                    smoke_checks=["true"], exports=["api"],
+                    heldout_check="test -f heldout", risk_tags=["high"])
+    fixture = Path(__file__).resolve().parents[1] / "rust/worker/tests/fixtures/keeper_claim_payload.json"
+    assert json.loads(fixture.read_text()) == [
+        build_claim("demo:C", c, repo="repo", base_sha="abc123") for c in (card, explicit)
+    ]

@@ -13,12 +13,15 @@ from __future__ import annotations
 import json
 import os
 import time
+import types
 import urllib.parse
 import urllib.request
 
 SESSION_HEADER = 'x-omniroute-session-id'
 TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
+# Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg.
+PROVIDER_ALIASES = types.MappingProxyType({'xiaomi-mimo': 'mimo'})
 WITNESS_KIND = 'response-side-gateway-call-log'
 
 
@@ -86,18 +89,22 @@ def _gateway_mimo(env):
         return False
     cfg = _config(env.get('OPENCODE_CONFIG_CONTENT'))
     endpoints = []
+    seen = False   # a mimo block must exist; no config is not evidence
     for key in ('provider', 'providers'):
         providers = cfg.get(key)
         block = providers.get('mimo') if isinstance(providers, dict) else None
-        if not isinstance(block, dict):
+        if not isinstance(block, dict) or block.get('disabled') is True:
             continue
+        seen = True
         for name in ('options', 'settings'):
             options = block.get(name)
             if isinstance(options, dict) and 'baseURL' in options:
                 endpoints.append(options['baseURL'])
     def normalize(value):
         return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
-    return bool(endpoints) and all(normalize(e) == normalize(gateway) for e in endpoints)
+    # No baseURL is the template default; a direct leg yields no tagged call-log row, so it stays
+    # unwitnessed. Only an explicit different baseURL is refused here.
+    return seen and all(normalize(e) == normalize(gateway) for e in endpoints)
 
 
 def served_models(rows, tag):
@@ -113,6 +120,10 @@ def served_models(rows, tag):
         model = str(row.get('model') or '').strip()
         if ok and model:
             provider = str(row.get('provider') or '').strip()
+            provider = PROVIDER_ALIASES.get(provider, provider)
+            head, sep, rest = model.partition('/')
+            if sep and head in PROVIDER_ALIASES:
+                model = PROVIDER_ALIASES[head] + '/' + rest
             served.add(model if '/' in model or not provider else f'{provider}/{model}')
     return served
 

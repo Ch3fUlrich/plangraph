@@ -123,3 +123,20 @@ def test_refusal_line_matches_apply_batch_format_with_and_without_message():
     assert md_sync._refused_key("op 2 edit p:A: validation bad field\n") == "p:A"
     assert md_sync._refused_key("op 2 edit p:A: not_found \n") == "p:A"
     assert md_sync._refused_key("op 2 edit p:A: forbidden no\n") is None
+
+
+def test_close_on_done_item_is_a_noop(world, srv, token, site, tmp_path, monkeypatch):
+    synthetic(site)
+    seen = []
+    monkeypatch.setattr(md_sync, "_apply", _fake_apply(
+        "op 1 close_on_decision routing:Q-SHAPY: locked routing:Q-SHAPY is DONE", seen))
+    monkeypatch.setattr(md_sync, "MAX_ITEM_DROPS", 0)  # a DONE close spends no drop
+    status = tmp_path / "md-sync.status.json"
+    sync(site, srv, token, "--status-file", str(status))
+    skipped_before = status_of(status)["skipped"]
+    rc, out, err = sync(site, srv, token, "--apply", "--status-file", str(status))
+    assert len(seen) == 2 and "routing:Q-SHAPY" not in seen[1], out + err
+    assert "already done routing:Q-SHAPY" in out and rc == 0
+    assert status_of(status)["applied"] is True and status_of(status)["refused"] == 0
+    assert status_of(status)["skipped"] == skipped_before + 1
+    assert not md_sync._ALREADY_DONE_RE.search("op 1 close_on_decision a:B: locked a:B is CANCELLED")

@@ -93,7 +93,11 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     first = [m['id'] for m in before if resolver.is_model_available(m, reader)]
     second = [m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS
               if resolver.is_model_available(m, reader)]
-    expected = list(MAIN_ORDER)
+    # New review seats extend the catalog, never reorder the existing entries.
+    expected = MAIN_ORDER.copy()
+    expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gc/grok-4.7')
+    expected.insert(expected.index('omniroute/deepseek-direct-flash'),
+                    'console-meta/muse-spark-1.3-contributor')
     expected.insert(expected.index('omniroute/deepseek-direct-flash'), 'omniroute/gemini-3.8-flash')
     assert first == second == expected
     assert resolver.DEFAULT_FALLBACK_MODELS == before

@@ -237,5 +237,5 @@ def test_main_policy_gpt_first_and_retained_routes():
     assert {leg.id for leg in DEFAULT_LEGS} == {
         "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5",
-        "omniroute-gemini-3.8-flash"}
+        "omniroute-grok-4.7", "opencode-console-muse-spark",
+        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5", "omniroute-gemini-3.8-flash"}

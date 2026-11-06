@@ -49,9 +49,12 @@ pub mod placement_rule_store;
 pub mod placement_rules;
 pub mod probe;
 pub mod redact;
+mod redact_tokens;
+mod redact_wrapped;
 pub mod reset;
 pub mod run;
 pub mod sandbox_env;
+mod sandbox_push;
 pub mod scope;
 pub mod slots;
 pub mod stall;
@@ -69,5 +72,7 @@ pub mod writer_sanitize;
 pub mod writer_secret;
 pub mod wsl;
 
+pub mod fleet_foundation_hysteresis;
+pub mod fleet_foundation_seats;
 #[cfg(test)]
 pub(crate) mod testutil;

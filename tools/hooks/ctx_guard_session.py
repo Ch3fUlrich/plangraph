@@ -21,6 +21,9 @@ import json
 import os
 import re
 import sys
+import time
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -61,6 +64,119 @@ def add_card_rule(out: str) -> str:
 
 def overrides_dir() -> Path:
     return state_home() / "claude-hooks" / "ctx-guard-session"
+
+
+ATTENDED_TAIL_MAX = 1024 * 1024
+_MACHINE_PREFIX = re.compile(
+    r"^(?:<\s*/?[a-z_:][\w:.-]*|SYSTEM NOTIFICATION)", re.I)
+
+
+def human_provenance(record, sources):
+    """Unknown provenance cannot prove a launch or operator attendance."""
+    origin = record.get("origin")
+    return (not record.get("isMeta") and not record.get("isSidechain") and
+            record.get("promptSource") in sources and record.get("turnOrigin") == "human" and
+            isinstance(origin, dict) and origin.get("kind") == "human")
+
+
+def human_content(record):
+    """Use the same non-machine user content check for launch and attendance."""
+    message = record.get("message", {})
+    content = message.get("content")
+    if isinstance(content, list):
+        if not content or any(not isinstance(b, dict) or b.get("type") != "text"
+                              or not isinstance(b.get("text"), str) for b in content):
+            return False
+        content = "\n".join(b["text"] for b in content)
+    if message.get("role") != "user" or not isinstance(content, str):
+        raise ValueError("invalid user content")
+    return bool(content.strip()) and not _MACHINE_PREFIX.match(content.lstrip())
+
+
+def attended_until(payload, doc):
+    """Prove launch identity in a bounded head, then attendance in a bounded tail."""
+    try:
+        window = (doc or {}).get("attended_window_s", 1800)
+        if type(window) is not int or window <= 0:
+            return None
+        with open(payload["transcript_path"], "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(0)
+            head = fh.read(ATTENDED_TAIL_MAX)
+            start = max(0, size - ATTENDED_TAIL_MAX)
+            fh.seek(max(0, start - 1))
+            partial = bool(start and fh.read(1) != b"\n")
+            tail = fh.read(ATTENDED_TAIL_MAX)
+        if start:
+            head = head[:head.rfind(b"\n") + 1]  # only complete head lines
+        if partial:
+            cut = tail.find(b"\n") + 1
+            if not cut:
+                return None
+            tail, start = tail[cut:], start + cut  # discard the initial partial line
+        first, offset = None, 0
+        for line in head.splitlines(keepends=True):
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                return None
+            if first is None and record.get("type") == "user":
+                if (not human_provenance(record, ("typed", "queued", "sdk")) or
+                        not human_content(record)):
+                    return None
+                first = offset
+            offset += len(line)
+        if first is None:
+            return None
+        last, offset = None, start
+        for line in tail.splitlines(keepends=True):
+            position, offset = offset, offset + len(line)
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                return None
+            if record.get("type") != "user":
+                continue
+            if position == first:
+                continue  # launch brief never establishes attendance
+            if not human_provenance(record, ("typed", "queued")):
+                continue
+            if not human_content(record):
+                continue
+            stamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                return None
+            last = stamp.timestamp()
+            if last > time.time():
+                return None
+        now = time.time()
+        return last + window if last is not None and 0 <= now - last < window else None
+    except Exception:
+        return None
+
+
+def session_attended(text, doc):
+    """Publish a private atomic lease; failure must never bypass the guard."""
+    tmp = None
+    try:
+        payload = json.loads(text)
+        sid = payload.get("session_id")
+        if not safe_id(sid):
+            return False
+        path = state_home() / "autoos" / "ctx-guard" / (sid + ".attended.json")
+        until = attended_until(payload, doc)
+        if until is None:
+            path.unlink(missing_ok=True)
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+        with os.fdopen(fd, "w") as fh:  # mkstemp creates mode 0600
+            json.dump({"until": until}, fh)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
+    finally:
+        if tmp is not None:
+            Path(tmp).unlink(missing_ok=True)
 
 
 def session_override(text: str):
@@ -144,6 +260,8 @@ def main() -> int:
     os.environ.update(settings_thresholds(cwd))
     doc = session_override(text)
     if doc and doc.get("off") is True:
+        return 0
+    if session_attended(text, doc):
         return 0
     if doc:
         # Launch-time, session-local private destination, alongside handoff/hard.

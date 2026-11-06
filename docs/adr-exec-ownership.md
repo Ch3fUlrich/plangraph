@@ -14,10 +14,19 @@ owner. `new_run=True` is refused as validation, never silently ignored.
 
 Owner recording, attempt advances and clears append `exec_owner_changed` events
 inside their write transaction, so the hash chain attests these changes on both
-backends. The retired-run fence retains only the last 16 run identities, keeping
-the maximum attempt for each retained identity. Older evicted identities are no
-longer fenced; this bounds per-card storage rather than promising eternal replay
-protection.
+backends. The retired-run fence retains every run identity ever retired for the
+card (no cap), keeping the maximum attempt for each identity, so a run retired
+arbitrarily long ago is still refused `exec_stale`. (An earlier 16-identity
+bound evicted still-live identities after 17 clears; RT-P1 sq12 removed it.) Growth is per item,
+with no age or count bound; closing the item does not clear the fence.
+`ExecMixin._exec_clear` in `src/plangraph/keeper/store_exec.py` preserves it.
+Clear-event `retired` payloads historically held a fence snapshot (last 16
+entries); new rows carry only the cleared run's entry, including its maximum
+attempt. The authoritative full fence is `items.exec_retired_runs`; neither
+payload shape changes the card fold, on SQLite or PostgreSQL.
+Park checks forward ordering even when releasing a claim; a park omitting an
+observed state cannot overwrite a state event newer than its attempt's owner
+record/advance. Existing event payloads and replay semantics are unchanged.
 
 ## Context
 
@@ -221,3 +230,17 @@ The shared seed helper no longer fabricates delegation. Tests needing a
 delegate use claim then the real delegate verb; acquisition tests use real
 worker claims. Tests of already-owned projected states explicitly seed the
 prior execution owner rather than pretending an unclaimed delegate can acquire.
+
+## sq12 blind park ordering
+
+Exec ownership helpers live in `keeper/store_exec.py`. For unowned cards (and
+seeded owners without an audit start), the existing durable `state_set` reason
+`exit_class=...` or `timer started` signals a projected waiting/needs-input
+write. A blind park must supply `expected_state` after that signal; refusal
+leaves both the state and claim intact. Plain administrative writes keep their
+legacy semantics. No event fields or replay folds change.
+
+The retired-run fence in `store_exec.py:_exec_clear` is per item and uncapped.
+Closing an item does not truncate it; there is no item-fence pruning policy.
+Its growth is bounded only by the number of distinct retired runs for that item,
+not by a fixed retention limit (a deferred growth concern).
