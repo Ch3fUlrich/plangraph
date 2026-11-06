@@ -70,5 +70,6 @@ pub mod writer_secret;
 pub mod wsl;
 
 pub mod fleet_foundation_hysteresis;
+pub mod fleet_foundation_seats;
 #[cfg(test)]
 pub(crate) mod testutil;
