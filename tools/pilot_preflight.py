@@ -4,8 +4,10 @@ import argparse
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
+import tempfile
 from urllib.parse import urlsplit
 
 
@@ -21,12 +23,17 @@ def emit(check, good, detail):
     return good
 
 
-def command(argv, cwd=None, timeout=10):
+def command(argv, cwd=None, timeout=10, home=None):
     # Never forward subprocess output: child processes can echo sensitive values.
-    return subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout,
-                          check=False, env={"PATH": os.environ.get("PATH", os.defpath),
-                                            "LANG": "C.UTF-8", "HOME": "/nonexistent",
-                                            "TERM": "dumb"})
+    private_home = tempfile.mkdtemp(prefix="pilot-home-") if home is None else None
+    try:
+        return subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout,
+                              check=False, env={"PATH": os.environ.get("PATH", os.defpath),
+                                                "LANG": "C.UTF-8", "HOME": private_home if home is None else home,
+                                                "TERM": "dumb"})
+    finally:
+        if private_home is not None:
+            shutil.rmtree(private_home)
 
 
 def pins(value):
@@ -183,11 +190,13 @@ def verify(args):
             return False
         card_keys(Path(allow).read_text(encoding="utf-8"))
         repo = Path(args.repo).resolve()
-        top = command(["git", "rev-parse", "--show-toplevel"], repo)
+        home = os.environ.get("HOME", str(Path.home()))
+        top = command(["git", "rev-parse", "--show-toplevel"], repo, home=home)
         if top.returncode or Path(os.fsdecode(top.stdout).strip()).resolve() != repo:
             return False
-        helper = command(["git", "config", "--get-regexp", r"^credential(\..*)?\.helper$"], repo)
-        remotes = command(["git", "remote"], repo)
+        helper = command(["git", "config", "--get-regexp", r"^credential(\..*)?\.helper$"],
+                         repo, home=home)
+        remotes = command(["git", "remote"], repo, home=home)
         return helper.returncode == 1 and remotes.returncode == 0 and not remotes.stdout.strip()
 
     check("auth", auth, "token mode checked; no credential helper or remote")

@@ -26,6 +26,9 @@ def env(tmp_path, monkeypatch):
             monkeypatch.delenv(key)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     helper = tmp_path / "helper"
     helper.write_text("#!/bin/sh\necho 'helper 1.0'\n")
     helper.chmod(0o755)
@@ -289,21 +292,62 @@ def test_empty_credentials_stop_checks(env, monkeypatch, capsys, credential):
 def test_children_sanitized(env, monkeypatch, capsys):
     repo = env / 'repo'
     assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    real_home = os.environ['HOME']
     token = env / 'token'
     token.write_text('fixture-credential')
     token.chmod(0o600)
     monkeypatch.setenv('PG_TOKEN_FILE', str(token))
     for name in ('helper', 'check.sh'):
         target = env / name if name == 'helper' else repo / name
-        target.write_text(f'#!/bin/sh\n/usr/bin/env > {env / (name + ".env")}\n' +
+        target.write_text('#!/bin/sh\n[ -d "$HOME" ] && [ -w "$HOME" ] || exit 1\n'
+                          'touch "$HOME/writable" || exit 1\n' +
+                          f'/usr/bin/env > {env / (name + ".env")}\n' +
                           ("echo 'helper 1.0'\n" if name == 'helper' else 'exit 0\n'))
     monkeypatch.setattr(pilot, 'persistent', lambda p: True)
     assert run(capsys, 'verify', '--temporal-db', str(env / 'db'), '--jail-bin',
                os.environ['PG_JAIL_BIN'], '--repo', str(repo))[0] == 0
+    homes = []
     for name in ('helper', 'check.sh'):
-        names = {line.split('=')[0] for line in (env / (name + '.env')).read_text().splitlines()}
+        values = dict(line.split('=', 1) for line in
+                      (env / (name + '.env')).read_text().splitlines())
+        names = set(values)
         assert not names & {'PG_KEEPER_TOKEN', 'PG_TOKEN_FILE'}
         assert names <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD'}
+        assert values['HOME'] != real_home
+        assert not Path(values['HOME']).exists()
+        homes.append(values['HOME'])
+    assert len(set(homes)) == 2
+
+
+@pytest.mark.parametrize('helper', [False, True])
+def test_auth_real_home(env, monkeypatch, capsys, helper):
+    home = Path(os.environ['HOME'])
+    if helper:
+        (home / '.gitconfig').write_text(
+            '[credential "https://github.com"]\n\thelper = false\n')
+    original = pilot.command
+    observed = []
+
+    def command(argv, *args, **kwargs):
+        if argv[0] == 'git':
+            result = original(['/usr/bin/env'], *args, **kwargs)
+            values = dict(line.split('=', 1) for line in result.stdout.decode().splitlines())
+            observed.append(values)
+        return original(argv, *args, **kwargs)
+
+    # Setup remains isolated; observe only the verification Git calls.
+    repo = env / 'repo'
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    monkeypatch.setattr(pilot, 'command', command)
+    monkeypatch.setattr(pilot, 'persistent', lambda p: True)
+    code, output = run(capsys, 'verify', '--temporal-db', str(env / 'db'),
+                       '--jail-bin', os.environ['PG_JAIL_BIN'], '--repo', str(repo))
+    assert code == (2 if helper else 0)
+    assert ('REFUSE auth' if helper else 'OK auth') in output
+    assert len(observed) == 3
+    for values in observed:
+        assert values['HOME'] == str(home)
+        assert set(values) <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD'}
 
 
 @pytest.mark.parametrize('fs,expected', [('overlay', False), ('9p', False),
