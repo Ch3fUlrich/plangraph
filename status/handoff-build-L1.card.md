@@ -19,6 +19,7 @@
 - D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
 - #528 run-34a2095f since 10:16Z next check 10:40Z, replan-0251 takes over after commit
 ## Planned
+00. D-4251 after CARRY: why only 2/400 runs witnessed (OP-D4-WITNESS-TOKEN, D-2905 refuses verdicts, 68 in_review); fix via gateway log, non-Claude writer; DONE sha + witnessed count on new runs
 0a. D-4220 STUCK-WATCH after writer: 2 non-writer seats, GO-REQ, per-host timer proof; cause: 4 dell reviews banner-only until 1500 s; then CLAUDE-DAILY-BUDGET D-4239 (router files item)
 0b. D-4214 GW-QUEUE-WAIT-VISIBLE in Ch3fUlrich/OmniRoute after terra: fill call-log addedWaitMs/addedWaitCause (empty on 15.7k rows), merged, CI green, 1 non-writer seat, prox deploys; router files the item
 1. D-4207 terra PARKED D-4238, restart only on request
@@ -35,6 +36,5 @@
 - D-4227 router is routing-0253; coding.vm at cap/floor: no queue, writers to dell/workstation by route table, Claude via L2-LAUNCH
 - 10:35Z my pkill killed gen-100 writer.sh wait wrappers; runs alive, w-*.res in f3b904c3 are stale, use spawner result
 - git push control build-L1 ONLY, never origin (D-1751)
-- Key bytes never in env, logs, git, messages; WSL holds workstation keys
 ## Drill-down
 - handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools ~/.local/share/plangraph/handoffs/build-L1-0245
