@@ -9,6 +9,9 @@ pub mod budget;
 pub mod check;
 pub mod config;
 pub mod confine;
+pub mod cpu;
+#[cfg(target_os = "linux")]
+pub mod cpu_linux;
 pub mod diffscan;
 pub mod events;
 pub mod exit_class;

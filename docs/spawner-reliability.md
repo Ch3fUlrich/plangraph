@@ -1,5 +1,29 @@
 # Spawner reliability
 
+## RL13: weak CPU activity (P-R6)
+
+`cpu::Sampler` is a pure thirty-second sampler with no daemon caller or switch.
+RL14 binds its closure to the owned spawn identity in RL12 `Hooks.cpu`; no
+child-id hook is assumed. Rollback is `git revert`.
+The first read establishes a baseline. Errors, regressing clocks/counters and
+Linux source transitions discard comparison evidence. Zero thresholds mean
+one millisecond; large time jumps produce at most one weak signal.
+
+Linux prefers a watchdog-validated run-scope cgroup `usage_usec`, otherwise
+enumerates the owned process group under `/proc`. Per-(pid,starttime) deltas
+exclude child cumulative times and baseline new members, preserving exited
+members' accumulated CPU without counting PID reuse. Paths and group identity
+are trusted supervisor inputs, never card authority. Empty groups add no CPU.
+Unsupported platforms expose no Linux source; Windows Job Object accounting
+remains the Windows supervisor's responsibility.
+
+CPU refreshes only ACTIVE last_signal, not last_strong, first activity or
+milestones; repeated CPU never satisfies F. Fixtures and owned local shell
+children exercise real accounting with scaled scheduling, not thirty-second
+sleeps. Historical harness-version fixtures/oracle parity, green CI and an
+ACCEPT outside writer families remain external acceptance requirements; these
+local tests do not claim them.
+
 ## RL27: inline review diff transport
 
 Tools-mode injection defaults off; rollback is off. The operator environment
