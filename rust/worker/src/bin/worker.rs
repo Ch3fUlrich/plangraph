@@ -28,8 +28,8 @@
 //! issuing strictly monotonic tokens, which only carries cross-host value once
 //! a real keeper implements the lock endpoint (RELEASE-DEPLOY gap, see
 //! docs/plan/rtp1-predeploy-gaps.md row 17). Worker deployment versioning is
-//! required via [`pg_worker::buildid::from_env`], which refuses missing or invalid
-//! build id is available (see that module for the switch).
+//! mandatory via [`pg_worker::buildid::from_env`], which refuses missing or invalid
+//! deployment and build identities; there is no opt-out switch.
 
 use std::str::FromStr;
 use std::sync::Arc;

@@ -31,6 +31,7 @@ async fn replays_all_kept_release_copies() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/releases"
     ));
+    let mut count = 0;
     for release in std::fs::read_dir(root).unwrap() {
         for entry in std::fs::read_dir(release.unwrap().path()).unwrap() {
             let path = entry.unwrap().path();
@@ -41,11 +42,12 @@ async fn replays_all_kept_release_copies() {
                     .replay_workflow(history_path(&path))
                     .await
                     .expect("kept release history replays");
+                count += 1;
             }
         }
     }
+    assert!(count > 0, "release archive must exercise replay");
 }
-/// Standard base64 alphabet (RFC 4648 §4) with `=` padding.
 fn base64_std(bytes: &[u8]) -> String {
     let alphabet: Vec<u8> = (b'A'..=b'Z')
         .chain(b'a'..=b'z')
@@ -196,7 +198,6 @@ fn data_json_expands_to_base64() {
     assert_eq!(value, serde_json::json!({"data": "eyJhIjoxfQ=="}));
 }
 
-/// A replayer that knows the production `Card` workflow.
 fn replayer() -> WorkflowReplayer {
     WorkflowReplayer::new(
         WorkflowReplayerOptions::new()
@@ -353,8 +354,7 @@ async fn replays_cancel() {
         .expect("cancel history replays");
 }
 
-/// Same workflow type name as `Card`, but the run now sleeps before its first
-/// activity. Replay must flag this as a non-deterministic change.
+/// Replay must flag sleeping before the first activity as non-deterministic.
 #[workflow]
 #[derive(Default)]
 pub struct CardDrifted;

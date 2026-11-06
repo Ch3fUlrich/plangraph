@@ -2,8 +2,10 @@
 Local launch: `DEVSTACK_DEPLOYMENT=d DEVSTACK_BUILD_ID=v1 tools/devstack.sh worker`
 exports the same identity used by `set-current`; `PG_WORKER_BIN` overrides the binary.
 1. Set explicit valid `PG_DEPLOYMENT` and unique `PG_BUILD_ID`; missing identity
-   or `PG_VERSIONING=off` refuses startup before connecting. Start the poller,
-   then `tools/devstack.sh set-current`; failed promotion makes `start` fail.
+   or `PG_VERSIONING=off` refuses startup before connecting. Run `tools/devstack.sh
+   start` to start Temporal and Postgres (initial promotion fails until a poller
+   registers). Start the worker in another terminal, then run `tools/devstack.sh
+   set-current`; retry `start` to verify promotion succeeds.
 2. Every command change requires stable `ctx.patched` or a new workflow version
    plus drain note. Never rename markers. Drain note: retain old pollers until
    pinned runs complete; never redirect incompatible histories to empty queues.

@@ -1212,6 +1212,7 @@ dependencies = [
  "pg-worker-core",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "temporalio-client",
  "temporalio-common",

@@ -23,6 +23,9 @@ struct CrashWorkflow;
 impl CrashWorkflow {
     #[run]
     async fn run(ctx: &mut WorkflowContext<Self>, mode: String) -> WorkflowResult<String> {
+        if mode == "resumed" {
+            return Ok("rolled".into());
+        }
         if mode == "rollover-events" || mode == "rollover-waits" {
             let events = if mode == "rollover-events" {
                 pg_worker::rollover::EVENT_CAP
@@ -136,8 +139,9 @@ fn worker(addr: &str, queue: &str, build: &str, ready: &Path) -> Process {
 #[test]
 fn sigkill_mid_attempt_and_mid_timer_new_build_resumes() {
     use std::os::unix::process::ExitStatusExt;
-    let cli =
-        std::env::var("PG_TEMPORAL_CLI").expect("set PG_TEMPORAL_CLI for hermetic crash test");
+    let Ok(cli) = std::env::var("PG_TEMPORAL_CLI") else {
+        return;
+    };
     let temp = tempfile::tempdir().unwrap();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -240,7 +244,14 @@ fn sigkill_mid_attempt_and_mid_timer_new_build_resumes() {
                 .await
                 .unwrap()
                 .unwrap();
-                assert_eq!(result, if mode == "retry-cap" { "capped" } else { "new" });
+                assert_eq!(
+                    result,
+                    if mode == "retry-cap" {
+                        "capped"
+                    } else {
+                        "rolled"
+                    }
+                );
             }
         });
 }

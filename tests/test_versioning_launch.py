@@ -22,19 +22,21 @@ def test_devstack_worker_launch_identity(tmp_path):
 
 def test_start_propagates_promotion_failure_in_conditional(tmp_path):
     # Calling in a conditional disables errexit inside the function: the caller
-    # must explicitly return before PostgreSQL can hide failed promotion.
+    # must still return failure after bootstrapping both services for promotion.
     source = SCRIPT.read_text().split('case "${1:-}" in')[0]
     harness = source + '''
 resolve_pg_mode() { return 0; }
-start_temporal() { return 0; }
-start_set_current() { return 1; }
+start_temporal() { echo temporal-started; }
+start_set_current() { echo promotion-failed; return 1; }
 start_postgres() { echo postgres-started; }
 if cmd_start; then exit 0; else exit 1; fi
 '''
     result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True,
                             env=dict(os.environ, DEVSTACK_STATE=str(tmp_path)))
     assert result.returncode == 1
-    assert "postgres-started" not in result.stdout
+    assert result.stdout.splitlines() == [
+        "temporal-started", "postgres-started", "promotion-failed",
+    ]
 
 
 def test_ci_worker_launch_supplies_deployment(tmp_path):

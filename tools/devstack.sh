@@ -362,8 +362,8 @@ start_postgres() {
 cmd_start() {
   resolve_pg_mode >/dev/null # fail on a bad DEVSTACK_PG_MODE before anything is started
   start_temporal
-  start_set_current || return 1
   start_postgres
+  start_set_current || return 1
 }
 
 stop_pidfile() { # TERM, grace 10 s, then KILL; the pid file goes away either way.
