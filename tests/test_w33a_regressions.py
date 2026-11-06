@@ -28,7 +28,8 @@ def test_stdout_error_is_unavailable(text):
 
 @pytest.mark.parametrize('marker', ['model unavailable', 'NOT SERVED', 'unknown model', 'not_served_on_host'])
 def test_stderr_diagnostics(marker):
-    assert unavailable_reason(1, '', 'prefix ' + marker)
+    # Stderr alone does not turn an arbitrary prefix into an error envelope.
+    assert unavailable_reason(1, '', 'prefix ' + marker) is None
 
 
 def test_redaction_values_and_multiline():

@@ -140,7 +140,8 @@ def test_shaped_unavailable_keeps_legacy_diagnostic(stream):
 
 
 def test_legacy_unavailable_stderr():
-    assert unavailable_reason(1, '', 'prefix model unavailable') == 'prefix model unavailable'
+    # Marker prose is not harness evidence, even on a failed process.
+    assert unavailable_reason(1, '', 'prefix model unavailable') is None
 
 
 def test_adapter_keeps_original_documentation():

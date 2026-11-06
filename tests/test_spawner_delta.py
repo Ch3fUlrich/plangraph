@@ -89,19 +89,26 @@ def test_rounds_refused_raises(tmp_path, monkeypatch):
         asyncio.run(service._spawn(card={'item': 'synthetic'}))
 
 
-def test_jobless_retry_preserves_old_review(tmp_path):
+@pytest.mark.parametrize('old_record', [False, True])
+def test_jobless_retry_preserves_old_review(tmp_path, old_record):
     from plangraph.spawner.runner import spawn_service
     sink = SimpleNamespace(deliver=lambda *a: None)
     service = spawn_service(runner=SimpleNamespace(jobs={}), state=tmp_path,
                             completion_sink=sink, keeper_sink=sink)
     record = dict(run_id='run-synthetic', host='fixture', role='review', status='completed',
                   exit_code=0, ended=1, started=0, attempts=[
-                      dict(leg='provider/model', status='completed', stdout_tail='VERDICT: PASS\nTEST_GAMING: NO\n'),
-                      dict(leg='provider/other', status='skipped')])
+                      dict(leg='provider/model', status='completed', stdout_tail='VERDICT: PASS\nTEST_GAMING: NO\n')],
+                  plan=dict(legs=[dict(id='provider/other')]))
     directory = service._path(record['run_id']).parent
     directory.mkdir(parents=True)
     for name in ('review.txt', 'evidence.json'):
         (directory / name).write_text('existing')
+    service._save(record)
+    assert record['attempts'][-1]['status'] == 'skipped'
+    assert 'stdout_tail' not in record['attempts'][-1]
+    assert not service.runner.jobs
+    if old_record:
+        record.pop('completion')
     service._save(record, retry=True)
     assert record['status'] == 'completed'
     assert record['completion']['event'] != 'FAILED'
