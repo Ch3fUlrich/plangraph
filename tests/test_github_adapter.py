@@ -242,6 +242,38 @@ def test_bad_repo_name_raises_value_error(tmp_path):
     for repo in ["owner", "owner/repo/extra", "owner name/repo", "/repo"]:
         with pytest.raises(ValueError):
             RestGitHub(repo, path)
+
+@pytest.mark.parametrize("repo", ["owner", "owner/repo/extra", "owner name/repo", "/repo"])
+def test_from_env_bad_repo_named_refusal(tmp_path, repo):
+    with pytest.raises(GitHubError) as exc:
+        RestGitHub.from_env({
+            "PG_PHASE_GITHUB_REPO": repo,
+            "PG_PHASE_GITHUB_TOKEN_FILE": str(tmp_path / "unused"),
+        })
+    assert str(exc.value) == "github repository configuration invalid"
+
+@pytest.mark.parametrize("operation", ["find_pr", "push_branch"])
+def test_token_file_symlink_refused_before_use(tmp_path, monkeypatch, operation):
+    target = token_file(tmp_path)
+    target.chmod(0o600)
+    link = tmp_path / "linked-token"
+    link.symlink_to(target)
+    opener = FakeOpener([(200, [])])
+    runner = FakeGitRunner()
+    gh = RestGitHub("owner/repo", link, opener=opener, git_runner=runner)
+
+    def refuse_read(*args, **kwargs):
+        pytest.fail("symlink token must not be read")
+
+    monkeypatch.setattr(type(link), "read_text", refuse_read)
+    with pytest.raises(GitHubError) as exc:
+        if operation == "find_pr":
+            gh.find_pr("phase")
+        else:
+            gh.push_branch(tmp_path, "phase", "a" * 40)
+    assert str(exc.value) == "github token file unavailable"
+    assert opener.calls == []
+    assert runner.calls == []
 import os
 
 import pytest
