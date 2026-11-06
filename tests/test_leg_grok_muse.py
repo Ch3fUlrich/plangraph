@@ -75,8 +75,10 @@ def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
     from types import SimpleNamespace
     from plangraph.routing_support import resolver
     listing = "\n".join(("omniroute/gc/grok-4.7", "opencode-go/sample",
+                         "omniroute/gc/grok-4.8", "console-meta/contributors/muse/spark",
                          "other/nested/id", "omniroute/gc/unknown",
-                         "Models available", "bad/", "/bad", "bad//id", "bad/id extra"))
+                         "Models available", "bad/", "/bad", "bad//id", "bad/id extra",
+                         "bad/nested/", "bad//nested/id", "bad/nested/id extra"))
     def run(args, **kwargs):
         assert args[1:] == ["models", "--standalone"]
         assert kwargs["env"]["OPENCODE_CONFIG_CONTENT"] == "{}"
@@ -84,7 +86,9 @@ def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
         return SimpleNamespace(returncode=0, stdout=listing)
     monkeypatch.setattr(resolver.subprocess, "run", run)
     assert _probe_served_models("{}", env={"OPENCODE_CONFIG_CONTENT": "{}"}) == frozenset({
-        "omniroute/gc/grok-4.7", "opencode-go/sample"})
+        "omniroute/gc/grok-4.7", "opencode-go/sample",
+        "omniroute/gc/grok-4.8", "console-meta/contributors/muse/spark",
+        "other/nested/id", "omniroute/gc/unknown"})
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
