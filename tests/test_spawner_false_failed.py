@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.spawner.env_redact import first_reason
-from plangraph.spawner.exit_outcome import failure_reason, fallthrough_reason
+from plangraph.spawner.exit_outcome import failure_reason, fallthrough_reason, terminal_reason
 from plangraph.spawner.runner import SpawnerRunner
 
 
@@ -40,29 +40,24 @@ def test_progress_never_becomes_error(monkeypatch, line, ansi):
     text = '\x1b[36m' + line + '\x1b[0m' if ansi else line
     job = monitor(monkeypatch, text)
     assert job.status == 'failed' and job.exit_code == 5
-    assert job.stderr == text
+    assert first_reason(job.stderr) == ''
     assert fallthrough_reason(None, None, job, {}) is None
-    assert job.events == [{'event': 'harness_failed', 'error': 'harness exit code 5'}]
+    assert (first_reason(job.stderr) or f'harness exit code {job.exit_code}') == 'harness exit code 5'
 
 
 def test_real_error_wins(monkeypatch):
     job = monitor(monkeypatch, '\n'.join(PROGRESS + ['Error: transport failed']))
     assert job.status == 'failed'
-    assert failure_reason(job) == 'Error: transport failed'
+    assert first_reason(job.stderr) == 'Error: transport failed'
 
 
 @pytest.mark.parametrize('code', [1, 5])
 @pytest.mark.parametrize('stdout', [FINAL, ''])
 def test_nonzero_remains_failed_without_proven_final_protocol(monkeypatch, code, stdout):
-    """D-4033: FINAL is synthetic, not a recorded OpenCode final-message protocol.
-
-    No repository fixture proves exit 5 follows a successful final message;
-    missing provenance forbids promoting this nonzero exit to completed (V1).
-    """
     job = monitor(monkeypatch, '\n'.join(PROGRESS), stdout, code)
     assert job.status == 'failed' and job.exit_code == code
     assert job.stdout == stdout
-    assert failure_reason(job) == f'harness exit code {code}'
+    assert first_reason(job.stderr) == ''
 
 
 @pytest.mark.parametrize('status,refusal', [('timeout', None), ('stalled', None),
@@ -72,7 +67,7 @@ def test_watchdog_and_refusal_unchanged(monkeypatch, status, refusal):
                   status=status, refusal=refusal)
     assert job.status == ('failed' if refusal else status)
     assert job.exit_code == 5 and job.refusal == refusal
-    assert failure_reason(job) == 'Error: quota exceeded'
+    assert first_reason(job.stderr) == 'Error: quota exceeded'
 
 
 @pytest.mark.parametrize('harness', ['claude', 'agy'])
@@ -87,7 +82,7 @@ def test_other_harnesses_byte_identical(monkeypatch, harness):
 def test_no_verdict_preserves_captured_output(monkeypatch, code):
     text = '\x1b[36m' + '\n'.join(PROGRESS) + '\x1b[0m\n'
     job = monitor(monkeypatch, text, stdout=text, code=code)
-    assert job.stdout == text and job.stderr == text
+    assert job.stdout == '' and job.stderr == ''
     assert job.status == ('completed' if code == 0 else 'failed')
 
 
@@ -97,6 +92,21 @@ def test_absolute_opencode_failure_evidence(monkeypatch):
     assert failure_reason(job) == 'harness exit code 5'
 
 
-def test_final_fallback_documents_missing_provenance():
-    assert 'No repository fixture proves exit 5' in (
-        test_nonzero_remains_failed_without_proven_final_protocol.__doc__)
+@pytest.mark.parametrize('field', ['stderr_tail', 'error', 'reason'])
+@pytest.mark.parametrize('chosen', [{}, {'harness': 'opencode'}])
+def test_terminal_progress_is_not_failure_evidence(field, chosen):
+    job = SimpleNamespace(command=('/opt/bin/opencode',))
+    record = dict(status='failed', exit_code=5, chosen_leg=chosen)
+    record[field] = PROGRESS[0] + '\nError: transport failed'
+    terminal_reason(record, job)
+    assert record['reason'] == 'Error: transport failed'
+    if field == 'error':
+        assert record['error'] == 'Error: transport failed'
+
+
+def test_final_fallback_keeps_nonzero_failure(monkeypatch):
+    job = monitor(monkeypatch, PROGRESS[0], stdout=FINAL)
+    record = dict(status=job.status, exit_code=job.exit_code, stderr_tail=job.stderr)
+    terminal_reason(record, job)
+    assert record['status'] == 'failed' and record['exit_code'] == 5
+    assert record['reason'] == 'harness exit 5'

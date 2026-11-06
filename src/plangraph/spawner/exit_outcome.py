@@ -180,7 +180,7 @@ def release_attempts(service, record):
         tasks.pop(job_id, None)
 
 
-def terminal_reason(record):
+def terminal_reason(record, job=None):
     """Q8/M15: the run's reason describes how the run ENDED.
 
     A 'harness_limit' stamped by an earlier fallthrough leg never survives a
@@ -195,6 +195,10 @@ def terminal_reason(record):
     if special is not None:
         record['reason'] = special
         return
+    if is_opencode(job) or (record.get('chosen_leg') or {}).get('harness') == 'opencode':
+        for field in ('reason', 'error', 'stderr_tail'):
+            if record.get(field):
+                record[field] = without_progress(record[field])
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
@@ -217,8 +221,6 @@ def terminal_reason(record):
         return
     if record.get('exit_code') not in (None, 0):
         stderr = record.get('stderr_tail', '')
-        if (record.get('chosen_leg') or {}).get('harness') == 'opencode':
-            stderr = without_progress(stderr)
         record['reason'] = (reason or record.get('error')
                             or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
