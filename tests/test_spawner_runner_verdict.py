@@ -38,14 +38,14 @@ def _monitor(tmp_path, monkeypatch, output, *, denied=True, role='review', clien
 
 @pytest.mark.parametrize('verdict', ['ACCEPT', 'REQUEST_CHANGES'])
 def test_denied_review_rc1_final_verdict_completed(tmp_path, monkeypatch, verdict):
-    job = _monitor(tmp_path, monkeypatch, f'Full review\nVERDICT: {verdict}\n')
+    job = _monitor(tmp_path, monkeypatch, f'Full review\nVERDICT: {verdict}\n\n')
     assert job.status == 'completed'
     assert not any(event['event'] == 'harness_failed' for event in job.events)
 
 
 @pytest.mark.parametrize('output', ['Full review', 'VERDICT: ACCEPT\nMore text',
                                      ' VERDICT: ACCEPT', 'VERDICT: ACCEPT ',
-                                     'VERDICT: ACCEPTED', 'VERDICT: ACCEPT\n\n'])
+                                     'VERDICT: ACCEPTED'])
 def test_denied_review_rc1_without_exact_final_verdict_failed(tmp_path, monkeypatch, output):
     assert _monitor(tmp_path, monkeypatch, output).status == 'failed'
 

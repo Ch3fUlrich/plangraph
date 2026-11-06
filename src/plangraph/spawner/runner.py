@@ -720,7 +720,7 @@ class SpawnerRunner:
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
                 # No-tools review seats can emit a complete verdict before rc 1 termination.
-                lines = stdout_text.splitlines()
+                lines = stdout_text.rstrip('\r\n').splitlines()
                 review_verdict = (
                     exit_code == 1 and is_opencode(job) and job.role == 'review'
                     and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
