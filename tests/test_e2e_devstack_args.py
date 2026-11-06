@@ -229,9 +229,10 @@ def test_stop_worker_kills_group_after_parent_exit(e2e, tmp_path):
             "open(sys.argv[1],'w').write(str(p.pid))")
     proc = subprocess.Popen([sys.executable, "-c", code, str(child)], start_new_session=True)
     try:
-        proc.wait(timeout=10)
         with open(os.devnull, "wb") as out:
-            e2e.stop_worker(SimpleNamespace(proc=proc, out=out))
+            # Observe exit without reaping: retain the leader's pid through teardown.
+            os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOWAIT)
+            e2e.stop_worker(SimpleNamespace(proc=proc, out=out, owned_pgid=proc.pid))
         pid = int(child.read_text())
         for _ in range(100):
             status = Path(f"/proc/{pid}/stat")
@@ -307,3 +308,78 @@ def test_env_temporal_addr_is_used_and_also_refused(e2e, monkeypatch):
     with pytest.raises(e2e.Fail) as exc:
         e2e.validate_args(args)
     assert "7233" in str(exc.value)
+
+
+@pytest.mark.parametrize("change", ["keeper", "port", "http", "db", "server", "missing", "none"])
+def test_state_binds_endpoints(e2e, tmp_path, monkeypatch, change):
+    args = e2e.parse_args(["--state", str(tmp_path), "--temporal", "127.0.0.1:17252",
+                          "--keeper", "http://127.0.0.1:18787", "--temporal-http",
+                          "http://127.0.0.1:18233"])
+    (tmp_path / "keeper.json").write_text(json.dumps({"bind": "127.0.0.1:18787"}))
+    (tmp_path / "temporal.pid").write_text("123")
+    cmd = ["temporal", "server", "start-dev", "--ip", "127.0.0.1", "--port", "17252",
+           "--http-port", "18233", "--db-filename", str(tmp_path / "temporal.db")]
+    if change == "keeper":
+        args.keeper = "http://127.0.0.1:18788"
+    for case, flag in [("port", "--port"), ("http", "--http-port"), ("db", "--db-filename")]:
+        if change == case:
+            cmd[cmd.index(flag) + 1] = "foreign"
+    if change == "server":
+        cmd[2] = "other"
+    def read_bytes(path):
+        if change == "missing":
+            raise FileNotFoundError
+        return "\0".join(cmd).encode()
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    if change == "none":
+        e2e.check_devstack(args, args.keeper, args.temporal_http)
+    else:
+        with pytest.raises(e2e.Fail, match="state_"):
+            e2e.check_devstack(args, args.keeper, args.temporal_http)
+
+
+def test_stop_worker_does_not_discover_or_guess_group(e2e, monkeypatch):
+    from types import SimpleNamespace
+    support = sys.modules["e2e_devstack_support"]
+    monkeypatch.setattr(os, "getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(os, "killpg", lambda *a: pytest.fail("unowned group"))
+    proc = SimpleNamespace(pid=123, poll=lambda: None, send_signal=lambda sig: None,
+                           wait=lambda **kw: None)
+    with open(os.devnull, "wb") as out:
+        support.stop_worker(SimpleNamespace(proc=proc, out=out))
+
+
+def test_foreign_keeper_refused_before_any_contact(e2e, tmp_path, monkeypatch):
+    args = e2e.parse_args(["--state", str(tmp_path), "--temporal", "127.0.0.1:17252",
+                          "--keeper", "http://127.0.0.1:18787", "--temporal-http",
+                          "http://127.0.0.1:18233", "--worker-bin", str(SCRIPT),
+                          "--temporal-cli", str(SCRIPT)])
+    (tmp_path / "keeper.json").write_text(json.dumps({"bind": "127.0.0.1:18788"}))
+    monkeypatch.setattr(e2e.u, "call", lambda *a, **kw: pytest.fail("foreign service contacted"))
+    with pytest.raises(e2e.Fail, match="keeper_state_mismatch"):
+        e2e.run(args)
+
+
+@pytest.mark.parametrize("reason", ["workflow_not_merged", "merge_sha_mismatch", None])
+def test_teardown_preserves_primary_reason(e2e, capsys, reason):
+    import ast
+    tree = ast.parse(SCRIPT.read_text())
+    final = next(n.finalbody for n in ast.walk(tree) if isinstance(n, ast.Try)
+                 and any(isinstance(x, ast.Assign) and any(isinstance(t, ast.Name)
+                         and t.id == "teardown_failed" for t in x.targets) for x in n.finalbody))
+    def stop():
+        raise RuntimeError("withheld")
+    body = [ast.If(test=ast.Name(id="reason", ctx=ast.Load()),
+                   body=[ast.Raise(exc=ast.Call(func=ast.Name(id="Fail", ctx=ast.Load()),
+                         args=[ast.Name(id="reason", ctx=ast.Load())], keywords=[]))], orelse=[])]
+    code = ast.fix_missing_locations(ast.Module(body=[ast.Try(body=body, handlers=[],
+                                                             orelse=[], finalbody=final)], type_ignores=[]))
+    with pytest.raises(e2e.Fail, match=reason or "teardown_failed"):
+        exec(compile(code, str(SCRIPT), "exec"), dict(sys=sys, Fail=e2e.Fail, reason=reason,
+                                                    cleanup=[("worker", stop)]))
+    assert "teardown worker: RuntimeError" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("forbidden", ["WSL", "npm shim", "/tmp/opencode"])
+def test_driver_has_no_site_specific_assumptions(forbidden):
+    assert forbidden not in SCRIPT.read_text()

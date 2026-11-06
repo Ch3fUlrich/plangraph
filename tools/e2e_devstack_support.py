@@ -111,17 +111,24 @@ def write_stub_opencode(bin_dir: Path) -> None:
 def stop_worker(worker) -> None:
     """Only the Popen child we own; never discover workers by name or kill a service."""
     try:
-        grouped = os.getpgid(worker.proc.pid) == worker.proc.pid if worker.proc.poll() is None else True
+        pgid = getattr(worker, "owned_pgid", None)
         def send(sig):
             try:
-                if grouped:
-                    os.killpg(worker.proc.pid, sig)
+                if pgid is not None:
+                    os.killpg(pgid, sig)
                 elif worker.proc.poll() is None:
                     worker.proc.send_signal(sig)
             except ProcessLookupError:
                 pass
         send(signal.SIGTERM)
-        if worker.proc.poll() is None:
+        if pgid is not None:
+            # WNOWAIT pins the leader's pid until the last group signal (no pgid reuse).
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if os.waitid(os.P_PID, worker.proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT):
+                    break
+                time.sleep(0.05)
+        elif worker.proc.poll() is None:
             try:
                 worker.proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -195,3 +202,26 @@ def check_keeper_config(cfg: Path) -> None:
     _host, sep, bind_port = str(data.get("bind", "")).rpartition(":")
     if sep and bind_port.isdigit():
         _refuse_port(bind_port, "keeper.json bind")
+
+
+def check_devstack(args, keeper: str, http: str) -> None:
+    """Fail closed unless endpoints match the selected state's running server."""
+    state = Path(args.state).resolve()
+    try:
+        data = json.loads((state / "keeper.json").read_text())
+        if keeper != "http://" + data["bind"]:
+            raise Fail("keeper_state_mismatch")
+        pid = int((state / "temporal.pid").read_text())
+        if pid <= 0:
+            raise ValueError
+        cmd = Path(f"/proc/{pid}/cmdline").read_bytes().decode().split("\0")
+        expected = {"--ip": "127.0.0.1", "--port": args.temporal.rsplit(":", 1)[1],
+                    "--http-port": str(urllib.parse.urlparse(http).port),
+                    "--db-filename": str(state / "temporal.db")}
+        if not any(cmd[i:i + 2] == ["server", "start-dev"] for i in range(len(cmd))):
+            raise Fail("temporal_state_mismatch")
+        for flag, value in expected.items():
+            if cmd.count(flag) != 1 or cmd[cmd.index(flag) + 1] != value:
+                raise Fail("temporal_state_mismatch")
+    except (OSError, ValueError, KeyError, IndexError) as exc:
+        raise Fail("devstack_state_unverifiable") from exc

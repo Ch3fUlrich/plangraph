@@ -39,7 +39,7 @@ sys.path.insert(0, str(REPO / "src"))             # plangraph for rtp1_local_uti
 import rtp1_local_util as u  # noqa: E402
 from e2e_devstack_support import (  # noqa: E402
     Fail, REFUSED_PORTS, _check_url, _hostport, _refuse_port, _run,
-    assert_verbs, check_keeper_config, interrupted, parse_args, step, stop_worker,
+    assert_verbs, check_keeper_config, check_devstack, interrupted, parse_args, step, stop_worker,
     validate_args, wait_until, write_failing_opencode, write_stub_opencode,
 )
 
@@ -153,6 +153,7 @@ def run(args) -> int:
     if not cfg.is_file():
         raise Fail("keeper config missing")
     check_keeper_config(cfg)
+    check_devstack(args, keeper, _http)
     worker_bin, cli = args.worker_bin, args.temporal_cli
     for what, path in (("--worker-bin", worker_bin), ("--temporal-cli", cli)):
         if not path or not Path(path).is_file():
@@ -161,7 +162,7 @@ def run(args) -> int:
     pid = os.getpid()
     key, wid = f"{PROJECT}:DS-{pid}", f"card:{PROJECT}:DS-{pid}"
     build_id = f"e2e-devstack-{pid}"
-    scratch = Path(tempfile.mkdtemp(prefix=f"e2e-devstack-{pid}-", dir="/tmp/opencode"))
+    scratch = Path(tempfile.mkdtemp(prefix=f"e2e-devstack-{pid}-"))
     cleanup = []                                   # teardown stack, popped in reverse
     step("preflight: isolated loopback endpoints validated")
     try:
@@ -203,8 +204,6 @@ def run(args) -> int:
         else:
             step("leg=opencode: the question step is skipped (that path needs a real model that "
                  "asks); this mode only requires the card to finish done/merged")
-            step("NOTE: the opencode leg is not verifiable from WSL (Windows npm shim); "
-                 "run it from a native opencode host")
 
         step("start pg-worker against the dev keeper")
         env = dict(os.environ, PG_TEMPORAL_ADDR=f"http://{args.temporal}", PG_BUILD_ID=build_id,
@@ -217,6 +216,7 @@ def run(args) -> int:
             env["PATH"] = f"{scratch / 'stub-bin'}:{env['PATH']}"
             env["HOME"] = str(scratch)
         worker = u.WorkerProc(worker_bin, env, Path(os.devnull))
+        worker.owned_pgid = worker.proc.pid  # WorkerProc creates a new session; do not reap early.
         cleanup.append(("worker", lambda: stop_worker(worker)))
         try:
             u.set_current_version(cli, args.temporal, build_id)  # deployment pg-worker, unique build
@@ -316,6 +316,7 @@ def run(args) -> int:
             if args.leg == "stub-fail":
                 raise Fail("workflow_parked")
         finally:
+            primary_failure = sys.exc_info()[0] is not None
             teardown_failed = False
             while cleanup:
                 name, stop = cleanup.pop()
@@ -324,7 +325,7 @@ def run(args) -> int:
                 except Exception as exc:               # noqa: BLE001 - keep tearing down
                     teardown_failed = True
                     sys.stderr.write(f"teardown {name}: {type(exc).__name__}\n")
-            if teardown_failed:
+            if teardown_failed and not primary_failure:
                 raise Fail("teardown_failed")
     except Fail as exc:
         print(f"E2E-DEVSTACK-FAIL: {exc}", file=sys.stderr)
