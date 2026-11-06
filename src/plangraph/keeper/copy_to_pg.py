@@ -17,7 +17,6 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import db as kdb, db_errors, events
-from .placement_rules_schema import SQLITE_ONLY_TABLES
 
 __all__ = ["run", "TABLES", "CopyError"]
 
@@ -31,7 +30,7 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           "messages", "message_nonces", "message_envelopes",
           # BUS-REGISTRY-PERSIST: the host registry; absent in an older source,
           # which skips it like every other table the source does not have.
-          "bus_hosts")
+          "bus_hosts", "placement_rule_revision", "placement_rule_values", "placement_rule_audit")
 _BATCH = 500
 
 
@@ -55,14 +54,10 @@ def _open_source(src):
     if "events" not in names or "items" not in names:
         conn.close()
         raise CopyError("source is not a keeper database")
-    unknown = sorted(set(names) - set(TABLES) - SQLITE_ONLY_TABLES)
+    unknown = sorted(set(names) - set(TABLES))
     if unknown:
         conn.close()
         raise CopyError("source has tables this tool does not know: " + ", ".join(unknown))
-    for table in sorted(set(names) & SQLITE_ONLY_TABLES):
-        if conn.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone():
-            conn.close()
-            raise CopyError(f"source SQLite-only table {table} is not empty; wait for C3")
     return conn, [t for t in TABLES if t in names]
 
 

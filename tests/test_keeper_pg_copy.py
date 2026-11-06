@@ -13,7 +13,7 @@ import pytest
 from plangraph.keeper import cli, config, db as kdb, events as keeper_events
 from keeper_util import World
 from plangraph.keeper import copy_to_pg
-from plangraph.keeper.placement_rules_schema import SQLITE_ONLY_TABLES
+RULE_TABLES = ("placement_rule_revision", "placement_rule_values", "placement_rule_audit")
 from test_keeper_pg_parity import replay
 
 DSN = os.environ.get("PG_DSN")
@@ -23,7 +23,8 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           "outbox_seen", "audit_log", "audit_findings",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
           "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
-          "jev_shadow", "messages")
+          "jev_shadow", "messages", "placement_rule_revision", "placement_rule_values",
+          "placement_rule_audit")
 
 
 @pytest.fixture
@@ -34,6 +35,10 @@ def source(tmp_path):
     w = World(d, backend="sqlite")
     replay(w)
     w.close()
+    with sqlite3.connect(w.path) as raw:
+        raw.execute('INSERT INTO placement_rule_revision VALUES (1,7)')
+        raw.execute("INSERT INTO placement_rule_values VALUES ('fleet','','key','9')")
+        raw.execute("INSERT INTO placement_rule_audit VALUES (7,'actor','{}',NULL,'now')")
     return w.path
 
 
@@ -52,30 +57,19 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-@pytest.mark.parametrize("table", sorted(SQLITE_ONLY_TABLES))
-def test_copy_refuses_nonempty_sqlite_only_table(tmp_path, table):
-    path = tmp_path / "source.db"
-    with sqlite3.connect(path) as raw:
-        raw.executescript(f'CREATE TABLE events(x); CREATE TABLE items(x); '
-                          f'CREATE TABLE "{table}"(x); INSERT INTO "{table}" VALUES(1);')
-    with pytest.raises(copy_to_pg.CopyError, match=f"SQLite-only table {table} is not empty"):
-        copy_to_pg._open_source(path)
-
-
-def test_copy_skips_only_empty_sqlite_only_tables(tmp_path):
-    assert SQLITE_ONLY_TABLES == {
-        "placement_rule_revision", "placement_rule_values", "placement_rule_audit",
-    }
+def test_copy_includes_placement_tables(tmp_path):
     path = tmp_path / "source.db"
     with sqlite3.connect(path) as raw:
         raw.executescript('CREATE TABLE events(x); CREATE TABLE items(x);')
-        for table in SQLITE_ONLY_TABLES:
+        for table in RULE_TABLES:
             raw.execute(f'CREATE TABLE "{table}"(x)')
+            raw.execute(f'INSERT INTO "{table}" VALUES(1)')
     conn, tables = copy_to_pg._open_source(path)
     conn.close()
-    assert tables == ["events", "items"]
+    assert set(RULE_TABLES) <= set(tables)
     with sqlite3.connect(path) as raw:
         raw.execute('CREATE TABLE unexpected(x)')
+        raw.execute('INSERT INTO unexpected VALUES(1)')
     with pytest.raises(copy_to_pg.CopyError, match="does not know: unexpected"):
         copy_to_pg._open_source(path)
 

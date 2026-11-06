@@ -46,7 +46,7 @@ def job(raw, status='queued', run='run', n=1):
 
 def test_upgrade(pg):
     raw, name = pg
-    assert schema_pg.LATEST == 10
+    assert schema_pg.LATEST == 11
     assert db_pg.migrate(raw, name) == [10]
     assert db_pg.migrate(raw, name) == []
     assert raw.execute("SELECT role FROM principals WHERE name='retained'").fetchone() == ('reader',)

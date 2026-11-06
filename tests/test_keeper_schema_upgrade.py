@@ -440,7 +440,7 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
-        assert schema_pg.LATEST == 10
+        assert schema_pg.LATEST == 11
         assert db_pg.migrate(raw, fresh) == list(range(1, 11))
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
 
@@ -630,5 +630,4 @@ def test_split_statements_refuses_pragma_and_vacuum_in_transaction(tmp_path, mon
     monkeypatch.setattr(kdb, "OVERSIGHT_DDL", "VACUUM;")
     with pytest.raises(ValueError, match="disallowed statement in transaction: VACUUM"):
         kdb.open_db(path, create=False)
-
 

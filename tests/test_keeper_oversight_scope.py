@@ -1149,7 +1149,7 @@ def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
     versions = [m.version for m in steps]
     assert versions == list(range(1, 11))             # 1..10 (10 = federation jobs): no gaps
     assert versions == sorted(set(versions))          # strictly increasing
-    assert schema_pg.LATEST == 10
+    assert schema_pg.LATEST == 11
 
     import re
     exec_cols = re.findall(
@@ -2800,5 +2800,4 @@ def test_oversight_ops_key_none_and_batch_ref_empty_satisfy_not_null(w):
                 raw.close()
             except Exception:
                 pass
-
 
