@@ -19,7 +19,8 @@ def isolated(monkeypatch):
     monkeypatch.setattr(host_keys, '_keys_path', denied)
 
 
-def test_default_off(tmp_path):
+def test_default_off(tmp_path, monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
     store = leg_state.LegStateStore(tmp_path / 'state')
     assert store.leg_status('opencode-go/absent') == {'state': 'ok', 'evidence': None}
 
@@ -31,8 +32,7 @@ def test_list_admission(tmp_path, listed, expected):
     def run(argv, **kw):
         calls.append((argv, kw))
         return SimpleNamespace(returncode=0, stdout=listed)
-    reader = SimpleNamespace(provider_state=lambda identity:
-                             SimpleNamespace(available=True, stale=False, until=''))
+    reader = SimpleNamespace(provider_state=lambda identity: None)
     store = leg_state.LegStateStore(tmp_path / 'state', omni=reader, enabled=True, run=run)
     assert store.leg_status('opencode-go/listed')['state'] == expected
     store.leg_status('opencode-go/listed')
@@ -57,6 +57,8 @@ def test_failure_unknown(tmp_path):
 
 
 def test_catalog_declarations_no_local_state():
+    from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
+    assert all('available' not in row for row in DEFAULT_FALLBACK_MODELS)
     for file, names in [('routing_support/resolver.py', {'DEFAULT_FALLBACK_MODELS'}),
                         ('planner/legs.py', {'DEFAULT_LEGS', 'Leg'})]:
         tree = ast.parse((Path('src/plangraph') / file).read_text())
@@ -89,3 +91,39 @@ def test_identity_and_recovery(tmp_path):
     store.leg_status('agy/claude-sonnet-5-5-medium')
     store.leg_status('agy/claude-sonnet-5-5-high')
     assert calls[-1] == calls[-2]
+
+
+@pytest.mark.parametrize('status', ['unavailable', 'stale'])
+def test_refreshed_probe_recovery(tmp_path, monkeypatch, status):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    store = leg_state.LegStateStore(tmp_path / 'state', enabled=True,
+        omni=SimpleNamespace(provider_state=lambda identity:
+                             SimpleNamespace(available=True, stale=False, until='')))
+    store.record_probe_fail('omniroute/test', 'transient', caller='test')
+    monkeypatch.setattr(store, 'leg_status', lambda leg: dict(state=status))
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    calls = []
+    async def probe(*a, **kw):
+        calls.append(kw['store'])
+        return dict(ok=True)
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(SimpleNamespace(leg_reader=store),
+        SimpleNamespace(model='omniroute/test'), 'fix', False)) is None
+    assert calls == [store]
+
+
+def test_flag_off_next_tick_baseline(monkeypatch):
+    from plangraph.routing_support import resolver
+    monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
+    rows = [dict(row) for row in resolver.DEFAULT_FALLBACK_MODELS]
+    def tick(state):
+        reader = lambda *a, **kw: dict(state=state)
+        admitted = [r for r in rows if resolver.is_model_available(r, reader)]
+        return [(r['id'], r.get('status', 'active'))
+                for r in resolver.rank_candidates(admitted)]
+    baseline = tick('ok')
+    assert baseline
+    for status in ('unavailable', 'stale', 'unknown', 'unreachable', 'not_listed', 'cooldown'):
+        assert tick(status) == baseline
+    assert tick('limited') == []

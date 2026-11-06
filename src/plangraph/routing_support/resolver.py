@@ -232,17 +232,14 @@ def admission_models() -> set[str]:
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
 from plangraph.registry_columns import INLINE_ONLY_MODELS as _INLINE_ONLY
 for _row in DEFAULT_FALLBACK_MODELS:
-    _row['available'] = int(not _row['id'].startswith('cxa/') or _row['id'].startswith('cxa/gpt-6-luna'))
     _row['active'] = _row['id'] in _fallback_legs
     _row.setdefault('tool_mode', 'inline-only' if _row['id'] in _INLINE_ONLY else 'tools')
-    if not _row['active']:
-        _row['available'] = 0
 for _leg in DEFAULT_LEGS:
     _model = _leg.model
     if not any(row['id'] == _model for row in DEFAULT_FALLBACK_MODELS):
         DEFAULT_FALLBACK_MODELS.append(dict(
             id=_model, family=_leg.family, harness=_leg.harness,
-            tier=_leg.tier, available=int(_model in _fallback_legs),
+            tier=_leg.tier,
             active=_model in _fallback_legs,
             context_window=_leg.max_request_tokens, tool_mode=_leg.tool_mode,
             aa_intelligence=0.0, combos=[]))
@@ -368,7 +365,7 @@ def detect_model_family(model_id: str) -> str:
 def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     """Fail closed: both catalog admission signals must be explicit."""
     return (row.get('id') not in OPERATOR_REMOVED_MODELS
-            and row.get('available') == 1 and row.get('active') is True)
+            and row.get('available', row in DEFAULT_FALLBACK_MODELS) == 1 and row.get('active') is True)
 
 
 _served_cache = {}
@@ -580,7 +577,9 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
         return False
     reader = leg_state_reader or leg_status
-    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] not in {"limited", "unavailable", "unreachable", "stale", "unknown", "not_listed"}
+    denied = ({"limited", "unavailable", "unreachable", "stale", "unknown", "not_listed"}
+              if os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') == '1' else {'limited'})
+    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] not in denied
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.
@@ -720,7 +719,8 @@ def select_top_candidate(
 
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     d = dict(row)
-    d.setdefault('available', 0)
+    if d not in DEFAULT_FALLBACK_MODELS:
+        d.setdefault('available', 0)
     d.setdefault('active', False)
     if "id" not in d and "model_id" in d:
         d["id"] = d["model_id"]

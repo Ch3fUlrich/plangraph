@@ -229,6 +229,8 @@ async def before_launch(runner, leg, role, dry_run):
     # without a probe run or a probe row; a newer success lifts the booking
     # and leg_status then says ok again.
     status = state.leg_status(key(leg))
+    if getattr(state, 'enabled', False):
+        status = state.authoritative_status(key(leg))
     if getattr(state, 'enabled', False) and status['state'] != 'ok':
         return status['state']
     if status.get('state') == 'limited':

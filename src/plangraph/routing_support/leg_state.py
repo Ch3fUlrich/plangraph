@@ -161,6 +161,7 @@ class LegStateStore:
                 return dict(state='unknown', evidence=None)
             if leg not in self._models:
                 return dict(state='not_listed', evidence=None)
+            return dict(state='ok', evidence=None)
         if self._omni is None:
             self._omni = from_env()
         identity = leg.removeprefix('omniroute/')
