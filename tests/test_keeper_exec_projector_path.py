@@ -222,3 +222,34 @@ def test_delayed_park_cannot_overwrite_a_projector_move_made_after_park(w):
             **identity})
     assert exc.value.code == "exec_stale"
     assert snapshot(w, key) == before
+
+
+def test_reclaim_then_blind_park_releases_claim(w):
+    key, = seed(w, [("A", [])])
+    body = {"card": key, "tier": "free", "exit_class": "check_fail",
+            "workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
+    for _ in range(2):
+        to_claimed(w, key, "workerA")
+        assert w.store.worker_park(w.p("workerA"), body)["changed"]
+        item = w.store._item(key)
+        assert item["state"] == "parked"
+        assert item["claimed_by"] is None and item["lease_until"] is None
+        # Isolate claim bookkeeping from a separate explicit hand-back event.
+        w.conn.execute("UPDATE items SET state='open' WHERE key=?", (key,))
+        w.conn.commit()
+
+
+def test_retired_run_park_from_failed_is_stale_before_forward_check(w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    body = {"card": key, "tier": "free", "exit_class": "check_fail",
+            "workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
+    w.store.worker_park(w.p("workerA"), body)
+    with w.store._write():
+        w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
+    w.store.set_state(w.p("system"), key, "failed")
+    before = snapshot(w, key)
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"), body)
+    assert exc.value.code == "exec_stale"
+    assert snapshot(w, key) == before

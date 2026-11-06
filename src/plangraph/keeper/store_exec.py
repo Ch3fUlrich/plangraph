@@ -165,11 +165,19 @@ class ExecMixin:
             " ORDER BY seq DESC LIMIT 1", (item_id,)).fetchone()
         if owner is not None and json.loads(owner["payload"] or "{}").get("action") == "clear":
             owner = None
-        kinds = tuple(sorted(STATE_EVENT_TYPES))
-        state = conn.execute(
-            "SELECT seq, payload FROM events WHERE key=? AND type IN ("
-            + ",".join("?" for _ in kinds) + ") ORDER BY seq DESC LIMIT 1",
-            (item_id, *kinds)).fetchone()
+        # Claim bookkeeping and the worker's own park are not projector moves.
+        kinds = tuple(sorted(STATE_EVENT_TYPES - {"claimed", "released", "lease_expired"}))
+        state = None
+        for row in conn.execute(
+                "SELECT seq, type, payload FROM events WHERE key=? AND type IN ("
+                + ",".join("?" for _ in kinds) + ") ORDER BY seq DESC",
+                (item_id, *kinds)):
+            payload = json.loads(row["payload"] or "{}")
+            if (row["type"] == "state_set" and payload.get("state") == "parked"
+                    and payload.get("reason", "").startswith("parked:")):
+                continue
+            state = row
+            break
         # Without an audited owner start, a state event is still an ordering
         # signal: a blind caller cannot prove it observed that write. Require
         # expected_state rather than silently treating the card as unordered.

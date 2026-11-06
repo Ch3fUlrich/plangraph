@@ -1,7 +1,9 @@
 """Worker verbs: the calls the Rust worker (rust/worker/src/keeper.rs) makes.
+
 A worker/spawner/l1 principal is scoped to the card's project via
 ``self._may_act_in(principal, item["project"])`` (defined in ``CardsMixin``);
 router and system principals pass anywhere.
+
 ``worker_park`` is bound to the card's current claim: the caller must be the
 claim holder (or its delegate) and the lease must still be alive.  Merge-lock
 owners are bound to the calling principal: the stored and echoed owner is
@@ -12,9 +14,11 @@ monotonically growing advisory generation.  The keeper does not fence writes
 store-side — it never rejects a stale writer's later writes.  The Rust client
 names this value ``Fence``; the keeper guarantees a lease lock, not store-side
 fencing of writes.
+
 ``attempts`` rows are written ONLY by the projector, which reads Temporal
 history: it numbers them ``MAX(n)+1`` and carries the cost.  ``worker_attempt``
 therefore records an audit row only — inserting here would double the rows.
+
 RT-P1-EXEC-OWNERSHIP: park, complete, alarm and audit-only attempt calls
 are checked against the card's recorded exec owner (``_exec_gate``).  A body
 that names ``workflow_id``, ``run_id`` or ``attempt`` must present all three
@@ -23,6 +27,7 @@ or a lower attempt is refused as ``exec_stale`` — and a card that already has
 an owner refuses bodies that omit all three, so one run cannot act on another
 run's card.  Bodies without the fields keep the historical behaviour on
 unowned cards.
+
 Order inside the park/complete guards: the stale-run and lower-attempt checks
 run first (validating only), then a DUPLICATE -- the card already reached the
 verb's final state (``parked``/``done``) and the body either names the
@@ -30,16 +35,20 @@ recorded owner or, with no owner, names no triple -- is a success no-op that
 short-circuits before ``expected_state``.  A retried park whose response was
 lost therefore succeeds instead of failing every retry with
 ``exec_stale_state``; a different run is still ``exec_stale``.
+
 An open ``worker_alarm`` row is a DUPLICATE FACT, never a fence: ``alarm``
 records on an OWNED card even when that row already exists -- the attempt
 advances, a stale run or a backwards attempt is refused as ``exec_stale`` --
 while on an UNOWNED card an existing open alarm still acquires no owner.
+
 All SQL is portable (``?`` placeholders, ids assigned as ``MAX(id)+1`` inside
 the write lock) so it runs unchanged on SQLite and Postgres.
 """
 from __future__ import annotations
+
 import json
 import re
+
 from .errors import Refused
 from .schema import EXIT_CLASSES
 from .store_cards import _forward, SETTABLE_STATES, _count, _exec_parts, _number, _text
@@ -221,7 +230,6 @@ class WorkerMixin:
         can never slip past a validate-only call, and permits a plain read for
         audit-only attempts.
         """
-        # No router/system exemption: router paths clear the owner instead.
         row = self.conn.execute(
             "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
         owned = row is not None and row["exec_run_id"] is not None
@@ -234,8 +242,6 @@ class WorkerMixin:
             return
         parts = _exec_parts(key, (body.get("workflow_id"), body.get("run_id"),
                                   body.get("attempt")))
-        # Always validate (stale / lower attempt / retired fence / principal);
-        # only ``record`` decides whether an unowned card may be acquired.
         self._exec_check(self.conn, key, *parts, principal=principal, record=record)
 
     @staticmethod
@@ -314,9 +320,7 @@ class WorkerMixin:
         why = f"parked: {exit_class} ({tier})"[:500]
 
         def guard(item):
-            # 1. Stale-run / lower-attempt checks decide first, and only
-            #    validate here: a call that fails later must not acquire
-            #    ownership (record=False).
+            # Validate stale runs first, without acquiring ownership.
             self._exec_gate(item["key"], body, principal, record=False)
             # 2. A duplicate park is a success no-op, ahead of expected_state.
             if self._exec_duplicate(item, body, "parked"):
@@ -325,12 +329,10 @@ class WorkerMixin:
             if (body.get("expected_state") is None
                     and self._exec_state_after_owner(self.conn, item["key"])):
                 raise Refused("exec_stale", f"{key}: state changed after exec owner")
-            # 3. Observed-state CAS (park: the live set is a fallback, never
-            #    an observation), then the claim binding, then ownership.
+            # Observed-state CAS, then claim binding and ownership.
             self._exec_expect_state(item, body.get("expected_state"), principal,
                                     park=True)
-            # Claimed is the normal lease-bound park entry, not a set_state
-            # state. All other park entries must follow the forward table.
+            # Claimed is lease-bound; other states follow the forward table.
             if item["state"] != "claimed" and not _forward(item["state"], "parked"):
                 raise Refused("bad_state", f"{key}: {item['state']} -> parked")
             self._park_guard(principal, item, epoch, now)
@@ -363,8 +365,7 @@ class WorkerMixin:
         key = self._resolve_scoped(principal, card)
         with self._write():
             item = self._get_or_refuse(key)
-            # 1. Stale-run / lower-attempt checks decide first (validate only,
-            #    so a call that fails below acquires nothing).
+            # Validate stale runs first, without acquiring ownership.
             self._exec_gate(key, body, principal, record=False)
             # 2. A duplicate complete is a success no-op, ahead of expected_state.
             duplicate = self._exec_duplicate(item, body, "done")
