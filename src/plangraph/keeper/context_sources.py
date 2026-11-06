@@ -242,16 +242,19 @@ _BOOK_SLOTS = 3
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 
 
-def decision_book(decisions):
+def decision_book(decisions, *, fresh=False):
     """``{"rows", "superseded", "index"}`` for a :class:`DecisionsAdapter`.
 
     ``rows`` = ``{"D-n": [row lines]}``, ``superseded`` = :func:`superseded_map`
     and ``index`` = ``{token: {D-ids}}`` over every key-like token, so naming
     lookups cost one dict probe.  Built once per file version (path, inode,
     mtime, size; up to three files kept); an unreadable source is an empty book.
+    ``fresh`` bypasses the cache for enforcement without replacing read books.
     """
     if decisions is None:
         return _build_book({})
+    if fresh:
+        return _build_book(_read_rows(decisions))
     path = getattr(decisions, "_path", None)
     try:
         stat = os.stat(path) if path is not None else None
