@@ -36,9 +36,11 @@ locks; an empty claim is a non-retryable refusal. A process-global
 drop guard prevents overlapping activity attempts for the same card key and
 releases ownership on return or unwind. Only admission errors are non-retryable;
 filesystem permission errors retain the ordinary retryable attempt failure.
-Claim and run admission refusals share `card_admission_refused`; overlap and an
-empty claim are terminal by policy. Public attempt entry points also load the
-environment allowlist before setup, including callers outside Temporal startup.
+Typed admission reasons map to terminal `card_not_allowlisted`,
+`card_not_claimable` (empty claim), and `card_attempt_overlap` failures.
+The worker loads the environment allowlist once at startup and passes an immutable
+Config to claim and attempt entry points; other callers must supply their startup
+Config. Programmatically supplied allowlists take precedence over the environment.
 
 Each attempt creates its own private temporary directory under the system temp
 directory, removed on drop alongside its private HOME. Only that temporary

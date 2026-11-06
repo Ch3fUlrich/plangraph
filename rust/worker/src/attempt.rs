@@ -100,7 +100,7 @@ pub struct AttemptResult {
 #[derive(Debug, thiserror::Error)]
 pub enum AttemptError {
     #[error("card admission refused: {0}")]
-    Admission(String),
+    Admission(crate::card_admit::AdmissionReason),
     #[error(transparent)]
     Git(#[from] GitError),
     #[error("refusing worktree git directory: {0}")]
@@ -112,6 +112,8 @@ pub enum AttemptError {
 }
 
 /// Run one attempt end to end and report how it ended.
+/// The caller supplies the immutable startup Config; this entry never reads
+/// the environment allowlist or its backing file.
 ///
 /// `cancelled` is polled before any harness work (a cancelled attempt still
 /// gets its fresh worktree so the caller's bookkeeping matches reality) and
@@ -138,9 +140,7 @@ pub fn run_attempt_with(
     inp: &AttemptInput,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<AttemptResult, AttemptError> {
-    let cfg = &cfg.clone().with_card_allowlist_env()?;
-    let _owner = crate::card_admit::enter(cfg, &inp.claim.card)
-        .map_err(|error| AttemptError::Admission(error.to_string()))?;
+    let _owner = crate::card_admit::enter(cfg, &inp.claim.card).map_err(AttemptError::Admission)?;
     // Stamped in one place so every caller's result carries the projector
     // keys, whether the attempt succeeded, was cancelled or was a defect.
     let started = std::time::SystemTime::now();
@@ -786,7 +786,7 @@ mod tests {
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
     use tempfile::TempDir;
 
