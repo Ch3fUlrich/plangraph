@@ -1,0 +1,92 @@
+"""Synthetic refusal boundary tests; no runtime discovery or credentials."""
+import json
+import socket
+import subprocess
+from types import SimpleNamespace as NS
+
+import pytest
+
+from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
+from plangraph.spawner import exit_outcome
+from plangraph.spawner.env_redact import busy_refusal, early_refusal, harness_limit_line
+
+
+@pytest.fixture(autouse=True)
+def hermetic(monkeypatch):
+    def denied(*args, **kwargs):
+        raise AssertionError('external access denied')
+    monkeypatch.setattr(socket, 'socket', denied)
+    monkeypatch.setattr(subprocess, 'run', denied)
+    monkeypatch.setattr('plangraph.routing_support.leg_state._default_store', denied)
+    monkeypatch.setattr(exit_outcome, '_booking_seconds', lambda: 60)
+    monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1000)
+
+
+CASES = [
+    ('opencode-go/muse-spark-1.3-contributor',
+     'Error: Model unavailable: opencode-go/muse-spark-1.3-contributor'),
+    ('opencode-go/glm-5.2', 'Error: Go usage limit exceeded'),
+]
+
+
+@pytest.mark.parametrize('model,line', CASES)
+@pytest.mark.parametrize('enabled', [False, True])
+def test_listed_refusal_and_refresh(tmp_path, monkeypatch, model, line, enabled):
+    clock = [0]
+    calls, notices = [], []
+    provider = NS(snapshot=lambda: calls.append('probe') or {
+        'opencode-go': NS(available=True, stale=False)})
+    store = LegStateStore(tmp_path / 'state.sqlite')
+    reader = LegAdapter(store, provider, models=lambda: [model],
+                        enabled=enabled, clock=lambda: clock[0], ttl_s=10)
+    assert reader(model)['state'] == 'ok'
+    monkeypatch.setattr(exit_outcome, 'notify_leg_refused',
+                        lambda *args: notices.append(args[-1]))
+    job = NS(exit_code=1, stdout='', stderr=line)
+    record = {}
+    reason = exit_outcome.fallthrough_reason(NS(leg_reader=reader), NS(model=model), job, record)
+    assert reason
+    assert len(notices) == 1
+    assert reader(model)['state'] == 'limited'
+    if enabled:
+        clock[0] = 11
+        assert reader(model)['state'] == 'ok'
+        assert calls == ['probe', 'probe']
+    else:
+        assert calls == []
+
+
+@pytest.mark.parametrize('model,line', CASES)
+@pytest.mark.parametrize('code,prose', [(0, False), (1, True)])
+def test_no_booking_for_success_or_prose(tmp_path, model, line, code, prose):
+    reader = LegStateStore(tmp_path / 'state.sqlite')
+    text = 'The documentation discusses ' + line if prose else line
+    record = {}
+    assert exit_outcome.fallthrough_reason(NS(leg_reader=reader), NS(model=model),
+                                         NS(exit_code=code, stdout='', stderr=text), record) is None
+    assert record == {}
+    assert not reader.path.exists()
+
+
+@pytest.mark.parametrize('line', ['Go usage limit exceeded', 'Free usage limit reached',
+                                'Error: Go usage limit exceeded (reset after 5h)'])
+def test_complete_usage_lines(line):
+    assert harness_limit_line(1, '', line) == line
+    assert harness_limit_line(0, '', line) is None
+    error = line if line.startswith('Error:') else 'Error: ' + line
+    assert early_refusal(error) == error
+    assert harness_limit_line(1, '', line + ' is documented here') is None
+
+
+def test_busy_envelope_evidence_is_flat(tmp_path, monkeypatch):
+    body = '\x1b[31mbusy\x1b[0m\n\tplease retry ' + 'x' * 220
+    text = json.dumps({'autoos_provider_response': {'status': 503, 'body': body}})
+    expected = 'HTTP 503: ' + ('busy please retry ' + 'x' * 220)[:200]
+    assert busy_refusal(text) == expected
+    notices = []
+    monkeypatch.setattr(exit_outcome, 'notify_leg_refused', lambda *args: notices.append(args[-1]))
+    store = LegStateStore(tmp_path / 'state.sqlite')
+    exit_outcome.fallthrough_reason(NS(leg_reader=store), NS(model='synthetic/model'),
+                                   NS(exit_code=1, stdout='', stderr=text), {})
+    assert notices == ['harness_limit: ' + expected]
+    assert '\x1b' not in str(store.leg_status('synthetic/model'))

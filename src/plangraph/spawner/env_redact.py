@@ -11,7 +11,7 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|quota threshold|exhausted their quota|usage limit|rate limit|resets in'
+    r'quota reached|quota exceeded|quota threshold|exhausted their quota|rate limit|resets in'
     r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
@@ -19,6 +19,12 @@ _QUOTA_MARKER = re.compile(
 #: next to a quota/rate-limit name.
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
+_USAGE_LIMIT = re.compile(
+    r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
+    r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'
+    r'|\.\s*Please try again later[.!]?|,\s*retry in \d+(?:\.\d+)?\s*(?:s|m|h|d))\s*', re.I)
+_MODEL_UNAVAILABLE = re.compile(
+    r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?Model unavailable:\s*\S+\s*', re.I)
 _BUSY_LINE = re.compile(
     r'\s*(?:error:\s*(?:server busy|too busy|overloaded)|HTTP 503: Service Unavailable)\s*$', re.I)
 
@@ -33,7 +39,7 @@ def busy_refusal(text):
         try:
             response = json.loads(line).get('autoos_provider_response', {})
             if response.get('status') == 503:
-                return 'HTTP 503: ' + str(response.get('body', ''))[:200]
+                return 'HTTP 503: ' + ' '.join(normalize(str(response.get('body', ''))).split())[:200]
         except (ValueError, TypeError, AttributeError):
             pass
     return None
@@ -68,6 +74,8 @@ def harness_limit_line(exit_code, stdout, stderr):
     # a mid-line mention in prose, a traceback or a retry log never marks a
     # leg. Agent prose on stdout only counts via its error-shaped lines.
     def quota(line):
+        if re.search(r'usage limit', line, re.I):
+            return _USAGE_LIMIT.fullmatch(line)
         if _ERROR_SHAPED.match(line):
             return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
         # Start-anchored only (D-3257): the reset-after suffix alone never
@@ -76,7 +84,7 @@ def harness_limit_line(exit_code, stdout, stderr):
             _RESET_AFTER.match(line.strip()) and _QUOTA_MARKER.search(line))
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
         line for line in normalize(stdout).splitlines()
-        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line))]
+        if _ERROR_SHAPED.match(line) and quota(line)]
     return lines[0].strip() if lines else None
 
 
@@ -94,6 +102,10 @@ def early_refusal(complete_text):
         return busy
     lines = normalize(complete_text).splitlines()
     for line in lines:
+        if re.search(r'usage limit', line, re.I):
+            if _ERROR_SHAPED.match(line) and _USAGE_LIMIT.fullmatch(line):
+                return line.strip()
+            continue
         text = line.strip()
         if text.startswith('{"autoos_provider_response"'):
             try:
@@ -110,7 +122,7 @@ def early_refusal(complete_text):
 
 def unavailable_reason(exit_code, stdout, stderr):
     """Failed harness evidence, in stderr-first order; never task prose on success."""
-    if exit_code == 0:
+    if exit_code in (None, 0):
         return None
     busy = busy_refusal(stderr) or busy_refusal(stdout)
     if busy:
@@ -129,10 +141,18 @@ def unavailable_reason(exit_code, stdout, stderr):
         return False
 
     for line in stderr.splitlines():
+        if 'model unavailable' in line.lower():
+            if _MODEL_UNAVAILABLE.fullmatch(line):
+                return line.strip()
+            continue
         if marked(line):
             return line
     for line in stdout.splitlines():
         text = line.strip()
+        if 'model unavailable' in text.lower() and not text.startswith('{'):
+            if _ERROR_SHAPED.match(text) and _MODEL_UNAVAILABLE.fullmatch(text):
+                return text
+            continue
         if not marked(text):
             continue
         if text.lower().startswith('error:') or re.match(r'^HTTP \d{3}:', text):
