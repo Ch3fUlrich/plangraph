@@ -221,14 +221,27 @@ def _health(endpoint, cfg, transport=None, expected=None):
 def _peer_endpoints(registry, status):
     """Bind each provisioned host to the endpoint ``Registry.refresh`` probes.
 
-    The derivation mirrors ``discovery.Registry.refresh`` exactly so the probe
-    pool knows which registry identity every endpoint must claim.
+    The derivation mirrors ``discovery.Registry.refresh`` exactly — including
+    the local node: tailscale lists it under ``Self``, not ``Peer`` (a stale
+    ``Peer`` entry sharing its key loses to ``Self``), and its endpoint is
+    loopback because the keeper binds ``127.0.0.1`` only — so the probe pool
+    knows which registry identity every endpoint must claim.  A malformed
+    ``Self`` fails closed, like ``refresh``: a Peer could pose as the local
+    node, so nothing is bound that round.
     """
-    peers = status.get("Peer", {}) if isinstance(status, dict) else {}
+    status = status if isinstance(status, dict) else {}
+    peers = status.get("Peer", {})
     peers = peers if isinstance(peers, dict) else {}
+    lookup = dict(peers)
+    local = status.get("Self")
+    if "Self" in status and not (isinstance(local, dict)
+                                 and isinstance(local.get("PublicKey"), str)):
+        lookup, local = {}, None     # fail closed: a Peer could pose as local
+    elif local is not None:
+        lookup[local["PublicKey"]] = local
     expected = {}
     for host in registry.hosts.values():
-        peer = peers.get(host.node_id)
+        peer = lookup.get(host.node_id)
         if not isinstance(peer, dict) or peer.get("Online") is not True:
             continue
         name = peer.get("DNSName") or peer.get("HostName")
@@ -237,7 +250,8 @@ def _peer_endpoints(registry, status):
         name = name.rstrip(".")
         if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", name):
             continue
-        endpoint = f"http://{name}:{registry.port}"
+        endpoint = (f"http://127.0.0.1:{registry.port}" if peer is local
+                    else f"http://{name}:{registry.port}")
         expected.setdefault(endpoint, {})[host.host] = host.key_id
     return expected
 
