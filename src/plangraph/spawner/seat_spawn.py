@@ -23,6 +23,15 @@ def _refuse_oversized_diff(exc, leg):
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
+    def _annotate_spawn(self, record, prompt, card, cwd, plan, explicit):
+        """Surface explicit-leg advisories before the first save or launch."""
+        from .context_pack import annotate
+        from plangraph.planner.legs import REVIEW_UNFIT_SEATS
+        pack = annotate(record, prompt, card, cwd)
+        if explicit and record['role'] == 'review' and plan.first_leg.model in REVIEW_UNFIT_SEATS:
+            record.setdefault('warnings', []).append('review_unfit: ' + plan.first_leg.model)
+        return pack
+
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
         """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
         from . import context_pack

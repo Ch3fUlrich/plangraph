@@ -186,13 +186,6 @@ def terminal_reason(record, job=None):
     later attempt's outcome.  Guard evidence names the run (M9), and guard and
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
     """
-    from plangraph.planner.legs import REVIEW_UNFIT_SEATS
-    chosen = record.get('chosen_leg') or {}
-    if (record.get('role') == 'review' and (record.get('plan') or {}).get('p_source') == 'override'
-            and chosen.get('model') in REVIEW_UNFIT_SEATS):
-        warning = 'review_unfit: ' + chosen['model']
-        if warning not in record.setdefault('warnings', []):
-            record['warnings'].append(warning)
     if record.get('reason') == 'kill_incomplete':
         return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()

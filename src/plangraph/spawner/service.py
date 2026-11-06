@@ -306,7 +306,7 @@ class SpawnService(SeatSpawnMixin):
             served_family=None, writer_family=plan.first_leg.family, status='running',
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
-        pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
+        pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
 
         async def execute():
             try:

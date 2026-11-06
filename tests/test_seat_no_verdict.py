@@ -30,6 +30,7 @@ def test_review_outcome_uses_judge(text, with_job):
 @pytest.mark.parametrize('reason', ['cancelled', 'git_config_mutated',
                                    'writer_no_changes', 'kill_incomplete'])
 def test_terminal_owner_preserved(reason):
+    """No-regression guard: terminal owners predate this change."""
     record = dict(role='review', status='failed', exit_code=0, reason=reason)
     before = record.copy()
     terminal_reason(record, SimpleNamespace(stdout=''))
@@ -37,6 +38,7 @@ def test_terminal_owner_preserved(reason):
 
 
 def test_writer_unchanged():
+    """No-regression guard: non-review classification stays byte-identical."""
     record = dict(role='implement', status='completed', exit_code=0)
     before = record.copy()
     terminal_reason(record, SimpleNamespace(stdout=''))
@@ -51,20 +53,40 @@ def test_catalog_flag(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)[0]['review_unfit'] is True
 
 
-def test_forced_leg_warning(tmp_path):
+@pytest.mark.parametrize('selection', [dict(leg='mimo-v2.6-flash'),
+                                       dict(model='mimo/mimo-v2.6-flash')])
+def test_forced_leg_warning(tmp_path, monkeypatch, selection):
     from plangraph.spawner.service import SpawnService
     service = SpawnService(runner=SimpleNamespace(), state=tmp_path)
+    saved = []
+    save = service._save
+    def capture(record):
+        saved.append(json.loads(json.dumps(record)))
+        save(record)
+    monkeypatch.setattr(service, '_save', capture)
     record = asyncio.run(service.spawn(
         card={'estimate_tokens': 100}, prompt='Review', role='review',
-        leg='mimo-v2.6-flash', writer_families=['gpt'], dry_run=True,
+        **selection, writer_families=['gpt'], dry_run=True,
         override_reason='hermetic regression'))
+    assert record['chosen_leg']['model'] == 'mimo/mimo-v2.6-flash'
     assert 'review_unfit: mimo/mimo-v2.6-flash' in record['warnings']
+    assert saved[0]['ended'] is None
+    assert saved[0]['warnings'] == ['review_unfit: mimo/mimo-v2.6-flash']
+
+
+def test_classifier_does_not_emit_spawn_warning():
+    record = dict(role='review', status='running', plan={'p_source': 'override'},
+                  chosen_leg={'model': 'mimo/mimo-v2.6-flash'})
+    before = record.copy()
+    terminal_reason(record)
+    assert record == before
 
 
 @pytest.mark.parametrize('harness,mode,inline', [('qodercli', 'tools', False),
                                                ('opencode', 'tools', False),
                                                ('opencode', 'inline-only', True)])
 def test_diff_delivery(monkeypatch, harness, mode, inline):
+    """No-regression guard: repository-tool legs never inline/refuse the diff."""
     seat = SeatSpawnMixin()
     seat.runner = SimpleNamespace(default_cwd=None)
     leg = replace(DEFAULT_LEGS[0], harness=harness, tool_mode=mode)
@@ -80,6 +102,7 @@ def test_diff_delivery(monkeypatch, harness, mode, inline):
 
 
 def test_existing_policy_and_inline_refusal():
+    """No-regression guard: existing seat exclusion and diff_ref refusal."""
     from plangraph.spawner.inline_diff import InlineDiffError
     leg = replace(DEFAULT_LEGS[0], model='opencode-go/qwen3.8-flash')
     assert RoutePolicy().skip_reason(leg, 'review') == 'no_verdict_seat'
