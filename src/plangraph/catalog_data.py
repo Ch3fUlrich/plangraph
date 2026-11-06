@@ -547,8 +547,8 @@ SEED_MODELS: list[dict[str, Any]] = tag_seed_rows([
         "quota_pool_id": "gemini-api-paid",
         "pool_burn_weight": 1.0,
         "status": "active",
-        "available": 1,
-        "unavailable_reason": None,
+        "available": 0,
+        "unavailable_reason": "D-4193 upstream route not verified",
         "supports_reasoning": 1, "supports_tool_calling": 1, "supports_vision": 1,
         "trains_on_prompts": 1,  # D-4193 upstream route not verified, conservative
     },

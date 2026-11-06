@@ -105,20 +105,29 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     assert [leg["id"] for leg in bare["legs"]] == [
         "opencode-go-deepseek-v4-flash",
         "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
-        "opencode-go-qwen3.8-max", "opencode-go-muse-spark", "omniroute-gemini-3.8-flash",
+        "opencode-go-qwen3.8-max", "opencode-go-muse-spark",
         ]
 
 
-def test_unmapped_leg_no_p(tmp_path, capsys):
+def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
     """I4/D2: a leg missing from the map/DB gets no p (mapped leg: positive control)."""
     from plangraph.spawner.bench_entry import LEG_BENCHMARK_MODEL
     db = seeded_db(tmp_path)
     rows = benchmark_options(False, str(db))["benchmark"]
     for leg_id, model_id in LEG_BENCHMARK_MODEL.items():
         assert rows[leg_id]["model_id"] == model_id
+    # Explicitly omit these rows: the production catalog now measures Go legs.
+    from plangraph.spawner import bench_entry
+    original = bench_entry.benchmark_options
+    def without_go(*args, **kwargs):
+        options = original(*args, **kwargs)
+        options['benchmark'] = {key: row for key, row in options['benchmark'].items()
+                                if not key.startswith('opencode-go/')}
+        return options
+    monkeypatch.setattr(bench_entry, 'benchmark_options', without_go)
     plan = route_json(tmp_path, capsys, "--bench-db", str(db))
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("omniroute-gemini-3.8-flash",):
+    for leg in ("opencode-go-glm-5.2", "opencode-go-deepseek-v4-flash"):
         assert leg not in LEG_BENCHMARK_MODEL
         assert by_leg[leg]["u_core"] is None and by_leg[leg]["p_source"] == "prior"
     assert by_leg["agy-gemini-3.8-flash"]["p_source"] == "measured"

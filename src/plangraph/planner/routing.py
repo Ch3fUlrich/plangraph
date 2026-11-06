@@ -309,7 +309,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS
     legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
     for candidate in legs:
-        validate_model(candidate.model)
+        if leg_active(candidate):
+            validate_model(candidate.model)
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}

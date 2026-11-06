@@ -134,6 +134,7 @@ DEFAULT_LEGS = (
     Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
         "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
         roles=("review",),
+        disabled="D-4193 upstream route not verified",
         note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.

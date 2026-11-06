@@ -192,10 +192,14 @@ def test_fixed_implement_sol_across_tiers():
 
 def test_writer_order_d2683_implement_first_seven():
     # D-3745: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
+    # Explicit historical table tests all seven ordering slots; production
+    # disabled-leg eligibility is independently asserted above and in Go tests.
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="implement")
+    legs = tuple(dataclasses.replace(leg, disabled=None) if leg.id in FREE[:2] else leg
+                 for leg in DEFAULT_LEGS)
+    plan = plan_spawn(c, role="implement", legs=legs)
     expected = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
                 "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
                 "mimo-v2.6-flash"]
-    expected = [x for x in expected if x not in {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"}]
-    assert [leg.id for leg in plan.legs[:len(expected)]] == expected
+    assert len(expected) == 7
+    assert [leg.id for leg in plan.legs[:7]] == expected

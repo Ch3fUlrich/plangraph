@@ -26,7 +26,8 @@ def source_store(path):
 
 @pytest.mark.usefixtures('fake_ownership')
 @pytest.mark.parametrize('present', [True, False])
-def test_review_provider_only(tmp_path, monkeypatch, present):
+@pytest.mark.parametrize('model', ['opencode-go/glm-5.2', 'opencode-go-glm-5.2', 'go-test-combo'])
+def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
     source = tmp_path / 'source.db'
     if present:
         source_store(source)
@@ -34,6 +35,10 @@ def test_review_provider_only(tmp_path, monkeypatch, present):
     async def probe(*args, **kwargs):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
+    if model == 'go-test-combo':
+        monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+            {'id': 'opencode-go/glm-5.2', 'combos': ['go-test-combo']}])
+        monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     seen = []
     async def factory(*args, **kwargs):
         env = kwargs['env']
@@ -51,14 +56,14 @@ def test_review_provider_only(tmp_path, monkeypatch, present):
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():
-        job = await runner.spawn('review', model_or_combo='opencode-go/glm-5.2',
+        job = await runner.spawn('review', model_or_combo=model,
                                  role='review', client='opencode', wait_seconds=3)
         if job.job_id in runner._tasks:
             await runner._tasks[job.job_id]
         return job
     job = asyncio.run(run())
     assert bool(seen) == present
-    assert 'synthetic-private-value' not in repr(seen) + repr(job.events)
+    assert 'synthetic-private-value' not in repr(seen) + repr(job.events) + job.stderr + caplog.text
     if present:
         assert not Path(seen[0]['HOME']).exists()
     else:
@@ -81,5 +86,65 @@ def test_disabled_and_fallback_routes():
             for plan in plans:
                 assert leg.id not in [l.id for l in plan.legs]
                 assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
-    assert 'omniroute-gemini-3.8-flash' in [l.id for l in plans[0].legs]
+    assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[0].legs]
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[1].legs]
+
+
+def test_source_path_uri_characters(tmp_path):
+    source = tmp_path / 'source?#.db'
+    source_store(source)
+    assert install_go_credential(tmp_path / 'job', source)
+
+
+def test_failed_write_leaves_no_database(tmp_path, monkeypatch):
+    source = tmp_path / 'source.db'
+    source_store(source)
+    connect = sqlite3.connect
+
+    class BrokenConnection(sqlite3.Connection):
+        def commit(self):
+            raise sqlite3.OperationalError('injected mid-write failure')
+
+    def failing_connect(path, **kwargs):
+        if not kwargs.get('uri'):
+            kwargs['factory'] = BrokenConnection
+        return connect(path, **kwargs)
+
+    monkeypatch.setattr(sqlite3, 'connect', failing_connect)
+    job = tmp_path / 'job'
+    assert not install_go_credential(job, source)
+    assert list((job / 'opencode').iterdir()) == []
+
+
+def test_real_models_probe(tmp_path):
+    """Real CLI discovery with only selected auth, no host config or registry rows."""
+    import os
+    import shutil
+    import subprocess
+    from plangraph.spawner.opencode_isolation import close_config_layers, go_source_db
+
+    executable = shutil.which('opencode')
+    source = go_source_db()
+    if executable is None or source is None or not source.is_file():
+        pytest.skip('real OpenCode binary and credential store required')
+    job = tmp_path / 'isolated-job'
+    job.mkdir()
+    assert install_go_credential(job, source)
+    env = {'PATH': os.environ['PATH'], 'HOME': str(job),
+           'XDG_DATA_HOME': str(job), 'XDG_CONFIG_HOME': str(job / 'config')}
+    config = close_config_layers(env)
+    try:
+        env['OPENCODE_CONFIG_CONTENT'] = json.dumps(
+            {'permission': {'*': 'deny'}, 'mcp': {}, 'plugin': []})
+        result = subprocess.run([executable, 'models', '--standalone'], cwd=job,
+                                env=env, capture_output=True, text=True, timeout=90)
+        # Never include raw command output in assertion failures: it may contain secrets.
+        assert result.returncode == 0
+        models = set(result.stdout.splitlines())
+        assert {'opencode-go/glm-5.2', 'opencode-go/deepseek-v4.1-flash',
+                'opencode-go/qwen3.8-max'} <= models
+        with sqlite3.connect(job / 'opencode' / 'opencode.db') as db:
+            values = db.execute('SELECT value FROM credential').fetchall()
+        assert all(value not in result.stdout + result.stderr for (value,) in values if value)
+    finally:
+        shutil.rmtree(config)

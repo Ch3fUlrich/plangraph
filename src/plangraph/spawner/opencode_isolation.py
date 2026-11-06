@@ -56,9 +56,8 @@ def install_go_credential(job_dir, source=None):
     """D-4196: give the isolated review child the opencode-go credential -- nothing else.
 
     Review isolation (D-3552) points HOME/XDG_DATA_HOME at the per-job dir,
-    which also hides the model registry that lives in the account's opencode
-    data store: the seat then sees zero opencode-go models and no leg on that
-    provider serves.  Restoring the host data dir is exactly the leak the
+    which hides the account's credentials. Model discovery is supplied by
+    OpenCode itself, not copied account table data. Restoring the host data dir is exactly the leak the
     isolation prevents, so this writes a *fresh, job-owned* store at
     ``<job_dir>/opencode/opencode.db`` (the review child's
     ``XDG_DATA_HOME/opencode``) holding the schema and only the selected provider auth
@@ -74,12 +73,13 @@ def install_go_credential(job_dir, source=None):
     src = source if source is not None else go_source_db()
     dst_dir = Path(job_dir) / 'opencode'
     dst = dst_dir / 'opencode.db'
+    temporary = None
     try:
         if src is None or not src.is_file():
             return False
         dst_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(dst_dir, 0o700)
-        read = sqlite3.connect(f'file:{src}?mode=ro', uri=True)
+        read = sqlite3.connect(Path(src).resolve().as_uri() + '?mode=ro', uri=True)
         write = None
         try:
             schema = [row[0] for row in read.execute(
@@ -92,11 +92,10 @@ def install_go_credential(job_dir, source=None):
                 ' WHERE integration_id = ? AND active = 1', (GO_PROVIDER,)).fetchall()
             if not creds:
                 return False
-            if dst.exists():
-                dst.unlink()
-            fd = os.open(dst, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd, name = tempfile.mkstemp(prefix='pg-auth-', suffix='.db', dir=dst_dir)
+            temporary = Path(name)
             os.close(fd)
-            write = sqlite3.connect(dst)
+            write = sqlite3.connect(temporary)
             for statement in schema:
                 write.execute(statement)
             write.executemany('INSERT OR IGNORE INTO migration(id, time_completed) VALUES(?, ?)', migrations)
@@ -108,10 +107,14 @@ def install_go_credential(job_dir, source=None):
             read.close()
             if write is not None:
                 write.close()
-        os.chmod(dst, 0o600)
+        os.replace(temporary, dst)
         return True
     except (OSError, sqlite3.Error):
         return False
+    finally:
+        if temporary is not None:
+            for suffix in ('', '-journal', '-wal', '-shm'):
+                Path(str(temporary) + suffix).unlink(missing_ok=True)
 
 
 def close_config_layers(child_env):

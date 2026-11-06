@@ -362,15 +362,21 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
         return {"state": "available", "evidence": None}
 
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader)
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    # Historical six-slot ordering contract, independent of production disable policy.
+    legs = tuple(replace(leg, disabled=None) if leg.id in {
+        "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"} else leg
+        for leg in DEFAULT_LEGS)
+    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader, legs=legs)
     assert plan.first_leg.id == "cx-gpt-6.1-sol"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
     expected_writers = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free",  # D-3745: lead first,
                         "opencode-glm-5.3-flash-free", "openrouter-free", "agy-gemini-3.8-flash",  # then tier/order
                         "mimo-v2.6-flash"]
-    expected_writers = [x for x in expected_writers if x not in {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"}]
-    assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
+    assert len(expected_writers) == 6
+    assert [l.id for l in plan.legs[:6]] == expected_writers
 
 
 def test_no_implement_plan_leg_has_claude_family():
