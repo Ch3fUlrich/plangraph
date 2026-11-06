@@ -46,7 +46,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason, without_progress
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
@@ -700,8 +700,6 @@ class SpawnerRunner:
             stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            if is_opencode(self.jobs[job_id]):
-                stdout_text, stderr_text = map(without_progress, (stdout_text, stderr_text))
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
