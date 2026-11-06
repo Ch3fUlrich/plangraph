@@ -6,7 +6,8 @@ import math
 import urllib.error
 import urllib.request
 
-TIMEOUT = 180
+TIMEOUT = 15
+MUTATION_TIMEOUT = 180
 READ_TIMEOUT = 15
 SNAPSHOT_TIMEOUT = 60
 
@@ -40,7 +41,7 @@ class Session:
     def __init__(self, url, token, *, errors, parse_error):
         self.BatchError, self.ApiError = errors
         self._parse_error = parse_error
-        self.mutation_timeout = TIMEOUT
+        self.mutation_timeout = MUTATION_TIMEOUT
         self.url = url.rstrip("/")
         self.token = token
         class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -77,8 +78,8 @@ class Session:
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
             raise self.ApiError("unknown outcome" if body is not None else "unreachable", exc.__class__.__name__) from None
 
-    def post(self, verb, body):
-        return self._call(verb, body, timeout=self.mutation_timeout)
+    def post(self, verb, body, timeout=TIMEOUT):
+        return self._call(verb, body, timeout=timeout)
 
     def get(self, verb, timeout=READ_TIMEOUT):
         try:

@@ -249,7 +249,7 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--from", dest="from_n", default=None)
     parser.add_argument("--allow-no-whoami", action="store_true")
     parser.add_argument("--per-op", action="store_true")
-    parser.add_argument("--timeout", default=TIMEOUT)
+    parser.add_argument("--timeout", default=transport.MUTATION_TIMEOUT)
     parser.add_argument("--queue-line", default=None)
     parser.add_argument("--queue-file", default=None)
     try:
@@ -473,7 +473,7 @@ def main(argv=None, out=None, err=None):
                 submitted = f"index {n}"
                 identity = transport.operation_identity(data["principal"], verb, body, digest, submitted)
                 line(f"operation {identity}; {submitted} (reconciliation fingerprint, not an idempotency key)")
-                reply = atomic.parsed(session.post(verb, body))
+                reply = atomic.parsed(session.post(verb, body, timeout=session.mutation_timeout))
                 for text in atomic.warnings(reply): line(text)
                 if not reply or ("applied" in reply and reply["applied"] != 1) or (verb == "apply_ops" and reply.get("applied") != 1):
                     raise ApiError("unknown outcome", "unreadable or short keeper reply "

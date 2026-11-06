@@ -82,6 +82,12 @@ def test_applied_then_timeout(fake):
 @pytest.mark.parametrize("extra,budget", [([], 180), (["--timeout", "240.5"], 240.5)])
 @pytest.mark.parametrize("per_op", [False, True])
 def test_budget_and_slow_completion(fake, extra, budget, per_op):
+    import yaml
+    doc = yaml.safe_load(fake[1].read_text())
+    from test_apply_batch import LANE_B
+    doc["ops"] = [{"op": "create", "item": [dict(LANE_B, id=f"C{i}", title="x" * 1000)
+                                           for i in range(100)]}]
+    fake[1].write_text(yaml.safe_dump(doc))
     original = fake[0].open
     def slow(req, timeout):
         # Simulated 100-second completion: old 15-second budget would expire.

@@ -97,7 +97,7 @@ def send(session, ops, start, source, digest, errors, op_key,
     try:
         raw = session.post("apply_ops",
                            payload(ops, start, source, digest,
-                                   base_seq=base_seq, dry_run=dry_run))
+                                   base_seq=base_seq, dry_run=dry_run), timeout=session.mutation_timeout)
     except errors as exc:
         if getattr(exc, "code", "") in ("unknown outcome", "unreachable"):
             return 1, uncertain(identity, submitted)
