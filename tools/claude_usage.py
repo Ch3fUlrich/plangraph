@@ -41,19 +41,22 @@ def canonical(key):
     return key.rsplit(":", 1)[-1]
 
 
-def content(value):
+def content(value, in_input=False):
     if isinstance(value, str):
         return value
     if isinstance(value, list):
-        return " ".join(content(v) for v in value)
+        return " ".join(content(v, in_input) for v in value)
     if isinstance(value, dict):
-        return " ".join(content(v) for k, v in value.items()
-                        if k in ("text", "content", "input") or "type" not in value)
+        return " ".join(content(v, in_input or k == "input") for k, v in value.items()
+                        if in_input or k in ("text", "content", "input") or "type" not in value)
     return ""
 
 
 def matches(record, patterns):
-    text = content(record.get("message", {}).get("content", record.get("content", "")))
+    message = record.get("message")
+    value = message.get("content", record.get("content", "")) if isinstance(message, dict) else (
+        message if isinstance(message, str) else record.get("content", ""))
+    text = content(value)
     return {key for key, pattern in patterns.items() if pattern.search(text)}
 
 

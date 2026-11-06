@@ -198,6 +198,31 @@ def test_snapshot_tool_input_and_unlanded_numerator(tree, tmp_path, capsys, as_d
     assert report["turns"] == 2
 
 
+def test_nested_typed_tool_input_attribution(tree, tmp_path, capsys):
+    f = inputs(tmp_path)
+    record = assistant()
+    record["message"]["content"] = [dict(type="tool_use", input={
+        "edits": [{"type": "replace", "old_string": "FLEET-LAUNCH"}]})]
+    write(tree / "s.jsonl", [record])
+    report = run(tree, capsys, "keys", "--arm", "A=" + f["a"],
+                 "--landed", f["landed"])
+    assert report["malformed_lines"] == 0
+    assert report["result"]["A"]["turns"] == 1
+    assert report["result"]["A"]["keys_named"] == ["FLEET-LAUNCH"]
+
+
+@pytest.mark.parametrize("kind", ["user", "tool_result"])
+def test_string_message_attribution(tree, tmp_path, capsys, kind):
+    f = inputs(tmp_path)
+    write(tree / "s.jsonl", [dict(type=kind, message="plangraph:FLEET-LAUNCH",
+                                  content="THIRD"), assistant()])
+    report = run(tree, capsys, "keys", "--arm", "A=" + f["a"],
+                 "--landed", f["landed"])
+    assert report["malformed_lines"] == 0
+    assert report["result"]["A"]["turns"] == 1
+    assert report["result"]["A"]["keys_named"] == ["FLEET-LAUNCH"]
+
+
 def test_last_record_controls_day_and_usage(tree, capsys):
     write(tree / "s.jsonl", [assistant(timestamp="2026-11-05T23:59:59Z"),
                              assistant(output=40, timestamp="2026-11-06T00:00:00Z")])
