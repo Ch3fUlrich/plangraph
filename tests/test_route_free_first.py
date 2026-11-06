@@ -13,6 +13,8 @@ from plangraph.spawner.cli import main
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
 FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free"]
+# D-4196: retain Zen rows for explicit-table probes, but never route them by default.
+ACTIVE_FREE = ["openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
 
 
@@ -68,7 +70,7 @@ def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
                  "--role", "implement", "--json"]) == 0
     plan = json.loads(capsys.readouterr().out)
     ids = [leg["id"] for leg in plan["legs"]]
-    assert ids == SUBS[:1] + FREE + SUBS[1:] + ["deepseek"]  # D-3745
+    assert ids == SUBS[:1] + ACTIVE_FREE + SUBS[1:] + ["deepseek"]  # D-3745, D-4196
     assert "agy-sonnet-5.5" not in ids
     assert [leg["id"] for leg in plan["legs"] if leg["claude_family"]] == []
 
@@ -85,7 +87,8 @@ def test_route_and_refusal(tmp_path, capsys):
 def test_review_free_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == [*FREE[:2], "mimo-v2.6-flash"]
+    assert ids[:3] == ["mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-deepseek-v4-flash"]
+    assert not set(FREE[:2]) & set(ids)  # D-4196: Go, not disabled Zen.
 
 
 def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
@@ -95,10 +98,14 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     imp = plan_spawn(CARD, role="implement")
     assert [leg.id for leg in imp.legs] == SUBS[:1] + ["openrouter-free"] + SUBS[1:]  # D-3745
     reasons = {s["leg"]: s["reason"] for s in imp.skipped}
-    assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
-    assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
+    for id in FREE[:2]:
+        assert reasons[id].startswith("disabled: D-4196 ")
+    assert reasons["deepseek"] == "banned_family"
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
     assert [leg.id for leg in rev.legs][:2] == ["mimo-v2.6-flash", "mimo-v2.6-pro"]
+    reasons = {s["leg"]: s["reason"] for s in rev.skipped}
+    assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
+    assert reasons["opencode-go-glm-5.2"] == "off_family"
 
 
 def test_agy_skipped_while_out_of_quota():
@@ -108,17 +115,20 @@ def test_agy_skipped_while_out_of_quota():
                 "evidence": {"unavailable_until": 1000} if limited else None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
     ids = [leg.id for leg in plan.legs]
-    assert ids == ["cx-gpt-6.1-sol"] + FREE + ["mimo-v2.6-pro", "mimo-v2.6-flash",  # D-3745
+    assert ids == ["cx-gpt-6.1-sol"] + ACTIVE_FREE + ["mimo-v2.6-pro", "mimo-v2.6-flash",  # D-3745, D-4196
                           "deepseek"]
     assert "agy-gemini-3.8-flash" not in ids
     assert {s["leg"]: s["reason"] for s in plan.skipped}["agy-gemini-3.8-flash"] == "limited"
 
 
-def test_cli_route_review_free_first(tmp_path, capsys):
+def test_cli_route_review_free_first(tmp_path, capsys, monkeypatch):
+    # Ordering without measurements must not depend on the host's catalog DB.
+    monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:3] == [*FREE[:2], "mimo-v2.6-flash"]
+    assert ids[:3] == ["mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-deepseek-v4-flash"]
+    assert not set(FREE[:2]) & set(ids)  # D-4196
     assert ids.index("agy-gemini-3.8-flash") > 2
 
 
@@ -127,7 +137,7 @@ def test_route_sol_unavailable_keeps_tier_writer_order():
     def reader(model, **kwargs):
         return {"state": "down" if model == "omniroute/cx-gpt-6.1-sol" else "available", "evidence": None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
-    assert [leg.id for leg in plan.legs] == FREE + SUBS[1:] + ["deepseek"]
+    assert [leg.id for leg in plan.legs] == ACTIVE_FREE + SUBS[1:] + ["deepseek"]
     assert {s["leg"]: s["reason"] for s in plan.skipped}[SUBS[0]] == "down"
 
 
