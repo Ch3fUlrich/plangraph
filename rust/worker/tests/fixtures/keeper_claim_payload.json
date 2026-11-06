@@ -1,0 +1,44 @@
+[
+  {
+    "card": "demo:C",
+    "repo": "repo",
+    "base_sha": "abc123",
+    "check_cmd": "false",
+    "allow": [
+      "src/a.py"
+    ],
+    "forbid": [],
+    "check_kind": "change",
+    "check_reads": [],
+    "smoke_checks": [],
+    "exports": [],
+    "heldout_cmd": "",
+    "risk_tagged": false,
+    "prompt": "implement"
+  },
+  {
+    "card": "demo:C",
+    "repo": "repo",
+    "base_sha": "abc123",
+    "check_cmd": "false",
+    "allow": [
+      "src/a.py"
+    ],
+    "forbid": [
+      "fixtures/input.json"
+    ],
+    "check_kind": "regression",
+    "check_reads": [
+      "fixtures/input.json"
+    ],
+    "smoke_checks": [
+      "true"
+    ],
+    "exports": [
+      "api"
+    ],
+    "heldout_cmd": "test -f heldout",
+    "risk_tagged": true,
+    "prompt": "implement"
+  }
+]

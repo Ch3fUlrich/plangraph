@@ -1,38 +1,10 @@
-//! Exercise the actual Python claim builder, not a hand-maintained wire fixture.
+//! Shared wire fixture pinned to the real Python builder by test_worker_claim.py.
 use pg_worker::keeper::Claim;
-use std::process::Command;
 
 #[test]
 fn keeper_payload_round_trips_with_and_without_check_metadata() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let script = r#"
-import json
-from plangraph.planner.worker_claim import build_claim
-def card():
-    return dict(check_cmd='false', write_set=['src/a.py'], outcome='implement')
-claims = [build_claim('demo:C', card(), repo='repo', base_sha='abc123')]
-explicit = dict(card(), check_kind='regression', check_reads=['fixtures/input.json'],
-            smoke_checks=['true'], exports=['api'], heldout_check='test -f heldout',
-            risk_tags=['high'])
-claims.append(build_claim('demo:C', explicit, repo='repo', base_sha='abc123'))
-print(json.dumps(claims))
-"#;
-    // Worktrees can share the repository's provisioned test environment via an
-    // explicit path; never fall back to an ambient PATH interpreter.
-    let python = std::env::var_os("PLANGRAPH_TEST_PYTHON")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| root.join(".venv/bin/python3"));
-    let output = Command::new(&python)
-        .args(["-E", "-s", "-c", script])
-        .current_dir(root.join("src"))
-        .output()
-        .expect("repository test Python required: provision .venv or set PLANGRAPH_TEST_PYTHON");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let payloads: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let payloads: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/keeper_claim_payload.json")).unwrap();
     for (index, payload) in payloads.into_iter().enumerate() {
         let claim: Claim = serde_json::from_value(payload.clone()).unwrap();
         assert_claim_projection(&claim, &payload);
@@ -59,13 +31,21 @@ print(json.dumps(claims))
 
 fn assert_claim_projection(claim: &Claim, payload: &serde_json::Value) {
     let serialized = serde_json::to_value(claim).unwrap();
+    let payload_keys: std::collections::BTreeSet<_> = payload.as_object().unwrap().keys().collect();
+    let claim_keys: std::collections::BTreeSet<_> =
+        serialized.as_object().unwrap().keys().collect();
+    assert_eq!(
+        payload_keys, claim_keys,
+        "unexpected builder fields (no readiness-only fields)"
+    );
     for (key, value) in serialized.as_object().unwrap() {
         assert_eq!(Some(value), payload.get(key), "claim field {key}");
     }
 }
 
 #[test]
-fn readiness_only_builder_keys_do_not_change_claim_contract() {
+#[should_panic(expected = "unexpected builder fields")]
+fn unexpected_builder_keys_fail_projection() {
     let mut payload = serde_json::json!({
         "card": "c", "repo": "r", "base_sha": "abc", "check_cmd": "false",
         "allow": [], "forbid": [], "prompt": "p", "check_kind": "change",
@@ -90,4 +70,30 @@ fn legacy_payload_missing_all_check_metadata_uses_defaults() {
     assert!(claim.smoke_checks.is_empty());
     assert!(claim.exports.is_empty());
     assert!(!claim.risk_tagged);
+}
+
+#[test]
+fn invalid_check_kinds_are_refused() {
+    let payloads: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/keeper_claim_payload.json")).unwrap();
+    for kind in ["typo", "unknown", "CHANGE"] {
+        let mut payload = payloads[0].clone();
+        payload["check_kind"] = kind.into();
+        assert!(serde_json::from_value::<Claim>(payload).is_err());
+    }
+}
+
+#[test]
+fn recorded_legacy_empty_check_kind_normalizes_to_change() {
+    let payloads: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/keeper_claim_payload.json")).unwrap();
+    let mut payload = payloads[0].clone();
+    payload["check_kind"] = "".into();
+    let claim: Claim = serde_json::from_value(payload).unwrap();
+    assert_eq!(claim.check_kind, "change");
+}
+
+#[test]
+fn constructed_default_matches_wire_default() {
+    assert_eq!(Claim::default().check_kind, "change");
 }

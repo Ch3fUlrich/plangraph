@@ -32,34 +32,9 @@ use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// One unit of work handed to a worker.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Claim {
-    pub card: String,
-    pub repo: String,
-    pub base_sha: String,
-    pub check_cmd: String,
-    /// Empty or `change` requires a red base; `regression` skips that gate.
-    #[serde(default = "default_check_kind")]
-    pub check_kind: String,
-    /// Repo-relative check inputs, protected unless explicitly allowed.
-    #[serde(default)]
-    pub check_reads: Vec<String>,
-    #[serde(default)]
-    pub smoke_checks: Vec<String>,
-    #[serde(default)]
-    pub exports: Vec<String>,
-    #[serde(default)]
-    pub heldout_cmd: String,
-    #[serde(default)]
-    pub risk_tagged: bool,
-    pub allow: Vec<String>,
-    pub forbid: Vec<String>,
-    pub prompt: String,
-}
-fn default_check_kind() -> String {
-    "change".into()
-}
+#[path = "keeper_claim.rs"]
+mod claim;
+pub use claim::Claim;
 /// What one attempt did, sent back so the keeper can pick the next move.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttemptReport {
