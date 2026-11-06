@@ -29,7 +29,7 @@ def seat(tmp_path):
         (directory / 'cmdline').write_bytes(cmd.encode())
         (directory / 'fd').mkdir(exist_ok=True)
         (directory / 'net').mkdir(exist_ok=True)
-        for name in ('tcp', 'tcp6'):
+        for name in ('tcp', 'tcp6', 'udp', 'udp6'):
             (directory / 'net' / name).write_text('header\n')
     process()
     def check(now, **kw):
@@ -99,6 +99,7 @@ def test_tty_service_unproven_report_only(seat, shape):
     else:
         record['pid_start'] = 99
     assert check(0)[0]['rule'] == 'stuck-watch-report'
+    check(300)
     assert not calls
 
 
@@ -254,4 +255,80 @@ def test_reused_unclaimed_pid_is_not_suppressed(seat):
     assert not check(120)
     process(start=8, cmd='/usr/bin/opencode serve --stdio')
     assert check(240)
+    assert not calls
+
+
+@pytest.mark.parametrize('shape', ['missing', 'pid-mismatch', 'start-mismatch'])
+def test_unproven_second_tick_never_actions(seat, shape):
+    root, _, record, calls, _, check = seat
+    if shape == 'missing':
+        record.clear()
+    elif shape == 'pid-mismatch':
+        record['pid'] = 99
+    else:
+        record['pid_start'] = 99
+    check(0)
+    check(300)
+    assert not calls
+    sample = json.loads((root / 'watchdog/stuck-samples.json').read_text())['run-test']
+    assert sample['proven'] is False
+
+
+@pytest.mark.parametrize('protocol,state', [('udp', '01'), ('udp6', '01'),
+                                          ('tcp', '02'), ('tcp6', '08')])
+def test_connected_network_prevents_cancel(seat, protocol, state):
+    _, proc, _, calls, _, check = seat
+    check(0)
+    remote = '08080808' if not protocol.endswith('6') else '00000000000000000000000008080808'
+    (proc / '42/fd/3').symlink_to('socket:[99]')
+    (proc / '42/net' / protocol).write_text(
+        f'header\n0: 00000000:1234 {remote}:0043 {state} 0 0 0 0 0 99\n')
+    assert not check(300)
+    assert not calls
+
+
+def test_two_hosts_do_not_share_proof_or_idle_interval(seat, monkeypatch):
+    root, _, record, calls, _, check = seat
+    monkeypatch.setenv('PLANGRAPH_HOST', 'host-a')
+    check(0)
+    monkeypatch.setenv('PLANGRAPH_HOST', 'host-b')
+    assert not check(300)
+    finding = check(600)[0]
+    assert finding['host'] == 'host-b'
+    from plangraph.spawner.stall_watchdog import status
+    assert json.loads(status([finding]).removeprefix('! stall '))['host'] == 'host-b'
+    sample = json.loads((root / 'watchdog/stuck-samples.json').read_text())['run-test']
+    assert sample['host'] == 'host-b'
+    record.clear()
+    monkeypatch.setenv('PLANGRAPH_HOST', 'host-a')
+    assert check(900)[0]['rule'] == 'stuck-watch-report'
+    assert calls == ['cancel']
+
+
+def test_racing_fd_reports_unavailable_and_resets_interval(seat, monkeypatch):
+    from pathlib import Path
+    _, proc, _, calls, _, check = seat
+    check(0)
+    fd = proc / '42/fd/3'
+    fd.symlink_to('socket:[99]')
+    original = Path.readlink
+    def racing(path):
+        if path == fd:
+            raise FileNotFoundError('racing fd')
+        return original(path)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'readlink', racing)
+        finding = check(300)[0]
+        assert finding['rule'] == 'stuck-watch-report'
+        assert finding['reason'] == 'process/socket evidence unavailable'
+    assert not check(301)
+    assert not calls
+
+
+def test_new_mismatched_record_overrides_previous_proof(seat):
+    _, _, record, calls, _, check = seat
+    check(0)
+    record['pid'] = 99
+    assert check(300)[0]['rule'] == 'stuck-watch-report'
+    check(600)
     assert not calls

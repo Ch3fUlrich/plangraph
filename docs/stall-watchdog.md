@@ -38,8 +38,11 @@ five-minute wall-clock SLA from exit.
 
 The existing two-minute watchdog tick also samples job trees; no additional timer
 or installation is required. `watchdog/stuck-samples.json` stores process start
-identities, summed CPU ticks and the beginning of the idle interval. CPU changes,
-tree changes, PID reuse and established non-loopback TCP connections reset that
+identities, proven ownership, host, summed CPU ticks and the beginning of the idle interval.
+The host is `PLANGRAPH_HOST` or the local hostname and is included in findings/status;
+samples from another host cannot establish ownership or continue an idle interval.
+CPU changes, tree changes, PID reuse and non-loopback TCP connections (including
+connecting/closing states) or connected UDP sockets reset that
 interval. After 300 seconds a proven running job is cancelled through the normal
 spawner cancellation path with reason `stuck_watch_idle_tree`. Log silence alone
 does not authorize this cancellation: a buffered seat with an outbound connection
@@ -51,7 +54,9 @@ limit. Process evidence detects this without relying on additional log bytes.
 
 Terminal or missing-record job trees and proven orphan stdio trees use the existing
 `reap.kill_proven` path. Ownership requires the job title and recorded start time
-or a matching earlier watchdog sample. Corrupt records, unreadable process/socket
+or a matching earlier proven same-host watchdog sample when the record is absent.
+A present PID/start-mismatched record cannot inherit earlier proof.
+Corrupt records, unreadable process/socket
 evidence and initial idle samples do not authorize actions. TTY trees, service
 trees and unproven processes are report-only. Unclaimed servers are reported
 after five minutes; orphan stdio and protected interactive/service shapes are
@@ -59,7 +64,9 @@ reported immediately. Alerts use the existing routing outbox and re-alert limits
 Samples persist the last alert and action timestamps: the same condition on the
 same process identity is emitted and acted on at most once per
 `PLANGRAPH_WATCHDOG_REALERT_SECONDS` (default 1800). A changed condition or process
-identity is eligible immediately. Unreadable individual PIDs are skipped; failure
+identity is eligible immediately. Unreadable individual PIDs are skipped; unreadable
+or racing file descriptors mark the tree's socket evidence unavailable, report it
+without action and reset its idle interval. Failure
 to enumerate the process table preserves the previous samples without acting.
 Dry-run reports without writing samples or cancelling/reaping anything. Platforms
 without Linux process/socket evidence report that limitation in status only,

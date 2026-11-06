@@ -9,6 +9,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import socket
 from pathlib import Path
 import sys
 
@@ -34,27 +35,33 @@ def processes(proc):
 
 
 def outbound(proc, members):
+    """None means incomplete evidence, never evidence of inactivity."""
     inodes = set()
     for pid in members:
-        for fd in (Path(proc) / str(pid) / 'fd').iterdir():
-            target = fd.readlink().as_posix()
-            if target.startswith('socket:['):
-                inodes.add(target[8:-1])
+        try:
+            for fd in (Path(proc) / str(pid) / 'fd').iterdir():
+                target = fd.readlink().as_posix()
+                if target.startswith('socket:['):
+                    inodes.add(target[8:-1])
+        except OSError:
+            return None
     active = False
     for pid in members:  # per-process network namespace, not the watchdog's
-        for name in ('tcp', 'tcp6'):
+        for name in ('tcp', 'tcp6', 'udp', 'udp6'):
             lines = (Path(proc) / str(pid) / 'net' / name).read_text().splitlines()
             if not lines:
                 raise ValueError('empty socket table')
             for line in lines[1:]:
                 f = line.split()
-                if f[3] != '01' or f[9] not in inodes:
+                # Include connecting/closing TCP and connected UDP, not listeners
+                # or unconnected sockets with an unspecified remote endpoint.
+                if f[3] == '0A' or f[9] not in inodes:
                     continue
                 raw = bytes.fromhex(f[2].split(':')[0])
                 raw = b''.join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4))
                 address = ipaddress.ip_address(raw)
                 mapped = getattr(address, 'ipv4_mapped', None)
-                active |= not (mapped or address).is_loopback
+                active |= not ((mapped or address).is_loopback or address.is_unspecified)
     return active
 
 
@@ -90,8 +97,9 @@ def _alert_due(sample, old, finding, now):
 def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
           cancel=None, kill=None):
     """One finding per tree. Unknown evidence resets the sampling interval."""
+    host = os.environ.get('PLANGRAPH_HOST') or socket.gethostname()
     if not (platform or sys.platform).startswith('linux'):
-        return [dict(rule='stuck-watch-report', diagnostic_only=True,
+        return [dict(rule='stuck-watch-report', diagnostic_only=True, host=host,
                      reason='process/socket evidence unavailable on this platform')]
     state = Path(state)
     path = state / 'watchdog/stuck-samples.json'
@@ -121,19 +129,25 @@ def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
             covered.update(members)
             safe = not any(table[p]['tty'] or '--service' in table[p]['cmd'].split() for p in members)
             old = previous.get(run_id, {})
+            if old.get('host') != host:
+                old = {}
             identity = {str(p): s for p, s in members.items()}
-            # A stored title/start sample or the spawn record establishes ownership.
+            # Only previously proven, same-host evidence can preserve ownership.
             proven = (record is not None and record.get('pid') == pid and
                       record.get('pid_start') == row['start']) or (
-                          old.get('identity') == identity and old.get('root') == pid)
+                           old.get('proven') is True and old.get('identity') == identity
+                           and old.get('root') == pid and record is None)
             cpu = sum(table[p]['cpu'] for p in members)
             network = outbound(proc, members)
             since = now
-            if old.get('identity') == identity and old.get('cpu') == cpu and not network:
+            if old.get('identity') == identity and old.get('cpu') == cpu and network is False:
                 since = min(now, old.get('since', now))
-            samples[run_id] = dict(root=pid, identity=identity, cpu=cpu, since=since)
+            samples[run_id] = dict(root=pid, identity=identity, cpu=cpu, since=since,
+                                   proven=bool(proven), host=host)
             finding = None
-            if not safe or not proven:
+            if network is None:
+                finding = dict(rule='stuck-watch-report', reason='process/socket evidence unavailable')
+            elif not safe or not proven:
                 finding = dict(rule='stuck-watch-report', reason='TTY/service or unproven job tree')
             elif record is None:
                 # Do not confuse an unreadable/corrupt record with an absent one.
@@ -155,7 +169,7 @@ def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
                     and (table[p]['parent'] == 1 or table[p]['parent'] not in table) for p in members):
                 finding = dict(rule='stuck-watch-reap', reason='proven orphan stdio')
             if finding:
-                finding.update(run_id=run_id, pid=pid)
+                finding.update(run_id=run_id, pid=pid, host=host)
                 alert_old = old if old.get('identity') == identity else {}
                 if not _alert_due(samples[run_id], alert_old, finding, now):
                     continue
@@ -173,11 +187,13 @@ def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
         if pid not in covered and words and Path(words[0]).name == 'opencode' and 'serve' in words:
             key = 'process-' + str(pid)
             old = previous.get(key, {})
+            if old.get('host') != host:
+                old = {}
             since = old.get('since', now) if old.get('start') == row['start'] else now
-            samples[key] = dict(start=row['start'], since=since)
+            samples[key] = dict(start=row['start'], since=since, host=host)
             orphan = '--stdio' in words and (row['parent'] == 1 or row['parent'] not in table)
             if orphan or row['tty'] or '--service' in words or now - since >= 300:
-                finding = dict(rule='stuck-watch-report', run_id=key, pid=pid,
+                finding = dict(rule='stuck-watch-report', run_id=key, pid=pid, host=host,
                                reason='unclaimed opencode serve; ownership unproven')
                 alert_old = old if old.get('start') == row['start'] else {}
                 if _alert_due(samples[key], alert_old, finding, now):
