@@ -213,7 +213,8 @@ def _finish_locked(key: str, branch: str, head: str, root: Path,
 
 def finish_phase(store, principal, key: str, branch: str, head: str, *,
                  repo_root: Path | str, github: GitHub, base: str = "main",
-                 lock_path: Path | str | None = None) -> dict[str, Any]:
+                 lock_path: Path | str | None = None,
+                 pre_patch_phase: str | None = None) -> dict[str, Any]:
     """Land the gate's phase branch after CI is green on exactly ``head``."""
     # Role gate comes first: do not read the store or filesystem before this.
     if principal.role not in ("router", "system"):
@@ -221,8 +222,10 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
 
     expected_branch = phase_branch(key)
     if branch != expected_branch:
-        # Pre-patch workflows finish the legacy branch already checked out by
-        # ensure_phase_branch. A same-named, unchecked-out ref is not enough.
+        # Authenticated worker requests bind the unpatched path to the original
+        # key, never its lossy branch spelling. Missing provenance fails closed.
+        if pre_patch_phase != key:
+            raise Refused("validation", f"branch must be {expected_branch}")
         current = None
         if branch == _legacy_phase_branch(key) and Path(repo_root).is_dir():
             proc = subprocess.run(

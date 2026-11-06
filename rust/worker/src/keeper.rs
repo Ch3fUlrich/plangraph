@@ -195,7 +195,7 @@ pub trait Keeper: Send + Sync {
         &self,
         key: &str,
         branch: &str,
-        head: &str,
+        head: &str, pre_patch_phase: Option<&str>,
     ) -> Result<crate::phase::PhaseFinish, KeeperError>;
     fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError>;
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError>;
@@ -474,11 +474,11 @@ impl Keeper for HttpKeeper {
         &self,
         key: &str,
         branch: &str,
-        head: &str,
+        head: &str, pre_patch_phase: Option<&str>,
     ) -> Result<crate::phase::PhaseFinish, KeeperError> {
         let value = self.post_json(
             "/v1/phase_finish",
-            &serde_json::json!({ "key": key, "branch": branch, "head": head }),
+            &serde_json::json!({ "key": key, "branch": branch, "head": head, "pre_patch_phase": pre_patch_phase }),
         )?;
         if !value.is_object() {
             return Err(KeeperError::Decode(
@@ -858,7 +858,7 @@ impl Keeper for StubKeeper {
         &self,
         key: &str,
         branch: &str,
-        head: &str,
+        head: &str, _pre_patch_phase: Option<&str>,
     ) -> Result<crate::phase::PhaseFinish, KeeperError> {
         let mut state = self.lock();
         state.calls.push("phase_finish");
@@ -2280,7 +2280,7 @@ mod tests {
         let keeper = HttpKeeper::new(&base);
 
         let got = keeper
-            .phase_finish("p1", "phase/p1", "abc")
+            .phase_finish("p1", "phase/p1", "abc", Some("p1"))
             .expect("phase_finish");
         let captured = handle.join().expect("server thread");
 
@@ -2289,7 +2289,7 @@ mod tests {
         let sent: serde_json::Value = serde_json::from_str(&captured.body).expect("json");
         assert_eq!(
             sent,
-            serde_json::json!({"key":"p1","branch":"phase/p1","head":"abc"})
+            serde_json::json!({"key":"p1","branch":"phase/p1","head":"abc","pre_patch_phase":"p1"})
         );
         assert_eq!(got.state, "merged");
         assert_eq!(got.pr.as_ref().map(|p| p.number), Some(7));
@@ -2301,7 +2301,7 @@ mod tests {
         let keeper = HttpKeeper::new(&base);
 
         let err = keeper
-            .phase_finish("p1", "phase/p1", "abc")
+            .phase_finish("p1", "phase/p1", "abc", None)
             .expect_err("phase_finish");
         let captured = handle.join().expect("server thread");
 
@@ -2314,7 +2314,7 @@ mod tests {
     fn stub_finish_queue_and_calls() {
         let keeper = StubKeeper::default();
         assert!(matches!(
-            keeper.phase_finish("p1", "phase/p1", "h"),
+            keeper.phase_finish("p1", "phase/p1", "h", None),
             Err(KeeperError::Status(404))
         ));
 
@@ -2326,7 +2326,7 @@ mod tests {
         keeper.push_finish(finish.clone());
 
         for _ in 0..2 {
-            let got = keeper.phase_finish("p1", "phase/p1", "h").unwrap();
+            let got = keeper.phase_finish("p1", "phase/p1", "h", None).unwrap();
             assert_eq!(got.state, finish.state);
             assert_eq!(got.pr, finish.pr);
             assert_eq!(got.detail, finish.detail);

@@ -687,16 +687,17 @@ pub struct PhaseFinishInput {
     pub key: String,
     pub branch: String,
     pub head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_patch_phase: Option<String>,
 }
-
 pub(crate) fn do_phase_finish(
     keeper: &dyn Keeper,
     key: &str,
     branch: &str,
-    head: &str,
+    head: &str, pre_patch_phase: Option<&str>,
 ) -> Result<crate::phase::PhaseFinish, crate::keeper::KeeperError> {
     retry_transient(&TRANSIENT_BACKOFF, || {
-        keeper.phase_finish(key, branch, head)
+        keeper.phase_finish(key, branch, head, pre_patch_phase)
     })
 }
 
@@ -1505,11 +1506,10 @@ impl CardActivities {
         input: PhaseFinishInput,
     ) -> Result<crate::phase::PhaseFinish, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let key = input.key.clone();
-        let branch = input.branch.clone();
-        let head = input.head.clone();
-        let res =
-            tokio::task::spawn_blocking(move || do_phase_finish(&*keeper, &key, &branch, &head))
+        let (key, branch) = (input.key.clone(), input.branch.clone());
+        let (head, provenance) = (input.head.clone(), input.pre_patch_phase);
+        let res = tokio::task::spawn_blocking(move ||
+            do_phase_finish(&*keeper, &key, &branch, &head, provenance.as_deref()))
                 .await
                 .map_err(activity_error)?;
         match res {
@@ -3519,7 +3519,7 @@ mod tests {
         };
         keeper.push_finish(finish.clone());
 
-        let got = do_phase_finish(&keeper, "p1", "phase/p1", "head1").unwrap();
+        let got = do_phase_finish(&keeper, "p1", "phase/p1", "head1", None).unwrap();
         assert_eq!(got.state, finish.state);
         assert_eq!(
             got.pr.as_ref().map(|p| (p.number, p.url.as_str())),
