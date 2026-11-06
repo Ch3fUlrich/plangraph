@@ -113,3 +113,29 @@ Totals: 68 failed, 559 passed, 284 skipped, 2 warnings, 4 errors in 415.77s (0:0
 - tests/test_spawner_silent_run.py::test_a_worktree_edit_after_the_late_line_keeps_the_run_alive | owner: none yet
 - tests/test_spawner_silent_run.py::test_silent_child_ends_stalled_with_no_activity | owner: none yet
 - tests/test_spawner_utf8.py::test_diff_cp1252 | owner: none yet
+
+## Delta at #530 merge (L1 measured 2026-11-06)
+Same command plus --continue-on-collection-errors, because three modules import fcntl and stop collection without it.
+base b5d533b9: 70 failed, 680 passed, 284 skipped, 2 warnings, 7 errors in 546 s.
+head 568d0d53: 70 failed, 726 passed, 284 skipped, 2 warnings, 7 errors in 517 s.
+Failed and error names at base and head are identical: 75 names, 0 new, 0 gone. 46 more passed at head are the lane's new tests.
+Not listed above, failing on both base and head:
+- tests/test_evidence_spawner_record.py
+- tests/test_evidence_spawner_store_path.py
+- tests/test_mirror_spawner_records.py
+- tests/test_spawner_context_pack.py::test_line_count_streams_and_matches_splitlines[x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx
+- tests/test_spawner_launch_spec.py::test_explicit_document_review[False
+- tests/test_spawner_launch_spec.py::test_explicit_document_review[True
+- tests/test_spawner_launch_spec.py::test_json[
+- tests/test_spawner_launch_spec.py::test_tools[False-implement
+- tests/test_spawner_launch_spec.py::test_tools[False-review
+- tests/test_spawner_launch_spec.py::test_tools[True-implement
+- tests/test_spawner_launch_spec.py::test_tools[True-review
+Listed above but not failing at head:
+- tests/test_spawner_cancel_cross_process.py::test_cancel_from_a_second_service_kills_the_child
+- tests/test_spawner_context_pack.py::test_line_count_streams_and_matches_splitlines[parameter
+- tests/test_spawner_host_bench.py::test_review_route_uses_benchmark_p
+- tests/test_spawner_launch_spec.py::test_json[parameter
+- tests/test_spawner_launch_spec.py::test_tools[implement
+- tests/test_spawner_launch_spec.py::test_tools[review
+Parametrized names are cut at the first space by the log filter.
