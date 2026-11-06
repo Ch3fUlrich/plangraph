@@ -325,7 +325,7 @@ def build(prompt: str, card, cwd) -> Pack:
     try:
         files = tracked(root) if ents or names else frozenset()
     except ContextError as exc:
-        if ents or os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
+        if ents:
             raise
         # Nothing is packed without entries; only the advisory scan lost its listing.  Report that instead of
         # passing a scan nobody ran as clean (D-3649 r2).

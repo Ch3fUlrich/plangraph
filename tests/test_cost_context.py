@@ -97,19 +97,50 @@ def test_launch_maps_strict_prompt_bound_before_runner(sandbox, monkeypatch):
     root, seat, _ = sandbox
     monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
     leg = SimpleNamespace(id='synthetic', roles=('implement',), tool_mode='inline-only',
-                          max_request_tokens=200)
+                          max_request_tokens=200, model='synthetic', harness='synthetic')
     monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
     monkeypatch.setattr(launch_spec, 'leg_active', lambda leg: True)
     seat.state = root / 'state'
     seat.runner.spawn = lambda **kw: pytest.fail('runner invoked')
     monkeypatch.setattr(launch_spec, 'SpawnService', lambda **kw: seat)
     monkeypatch.setattr(launch_spec, '_sweep', lambda *a: None)
+    monkeypatch.setattr(launch_spec, 'writer_launch', lambda p, *a: (p, {}))
     request = dict(run_id='run-' + '0' * 32, job_id='synthetic', role='implement',
                    dry_run=True, leg={'id': leg.id}, prompt='x' * 1000, card={},
                    cwd=str(root), state=str(seat.state))
     with pytest.raises(launch_spec.LaunchRefused, match='inline_prompt_oversized') as exc:
         launch_spec.build(request)
     assert exc.value.kind == 'inline_diff_failed'
+    request.update(prompt='edit large.py')
+    with pytest.raises(launch_spec.LaunchRefused, match='big_file_unsliced: count 1'):
+        launch_spec.build(request)
+
+
+@pytest.mark.parametrize('enabled', [None, '0', '1'])
+def test_listing_failure_stays_advisory_without_slices(sandbox, monkeypatch, enabled):
+    root, _, _ = sandbox
+    if enabled is not None:
+        monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
+
+    def unavailable(root):
+        raise cp.ContextError('tracked_listing_unavailable')
+
+    monkeypatch.setattr(cp, 'tracked', unavailable)
+    pack = cp.build('edit large.py', {}, root)
+    assert pack.text == ''
+    assert pack.warnings == ('big_file_scan_skipped: tracked_listing_unavailable',)
+    with pytest.raises(cp.ContextError, match='tracked_listing_unavailable'):
+        cp.build('edit large.py', {'context': ['large.py:101-130']}, root)
+
+
+def test_cost_context_changelog_is_one_line():
+    from pathlib import Path
+    fragment = Path(__file__).resolve().parents[1] / 'changelog.d' / (
+        'SPAWNER-COST-TIME-D3605-cost-context.md')
+    lines = fragment.read_text().splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith('- **SPAWNER-COST-TIME-D3605:**')
+    assert 'Whole-inline-prompt bounds' in lines[0]
 
 
 def test_synthetic_replay_exact_reductions(sandbox, monkeypatch):
