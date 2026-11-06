@@ -361,20 +361,22 @@ def test_stop_worker_grace_failure_still_kills_and_reaps(e2e, tmp_path, monkeypa
             pass
         proc.wait(timeout=5)
         out.close()
-
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT, signal.SIGALRM])
 @pytest.mark.parametrize("window", ["kill", "reap"])
 def test_final_worker_cleanup_defers_first_signal(e2e, monkeypatch, sig, window):
+    import threading  # pthread_sigmask protects this thread, not CI/plugin peers.
+    target, idle = threading.get_ident(), threading.Event()
+    peer = threading.Thread(target=idle.wait); peer.start()  # exercise an unblocked peer
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
     killpg, wait = os.killpg, proc.wait
     old = {s: signal.signal(s, e2e.interrupted) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)}
     out = open(os.devnull, "wb")
     def send(pgid, sent):
         if sent == signal.SIGTERM: return
-        if window == "kill": os.kill(os.getpid(), sig)
+        if window == "kill": signal.pthread_kill(target, sig)
         killpg(pgid, sent)
     def reap(**kwargs):
-        if window == "reap": os.kill(os.getpid(), sig)
+        if window == "reap": signal.pthread_kill(target, sig)
         return wait(**kwargs)
     try:
         with monkeypatch.context() as patch:
@@ -384,6 +386,7 @@ def test_final_worker_cleanup_defers_first_signal(e2e, monkeypatch, sig, window)
                 e2e.stop_worker(SimpleNamespace(proc=proc, out=out, owned_pgid=proc.pid))
         assert proc.returncode is not None and out.closed
     finally:
+        idle.set(); peer.join(timeout=5)
         for s, handler in old.items(): signal.signal(s, handler)
         try: killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError: pass
