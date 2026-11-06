@@ -933,6 +933,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     <button id="tab-needs" data-page="needs" type="button" role="tab" aria-selected="false" aria-controls="panel-needs"><span class="sb-label">Needs you</span><span class="sb-count" id="sb-count-needs" hidden>0</span></button>
     <button id="tab-activity" data-page="activity" type="button" role="tab" aria-selected="false" aria-controls="panel-activity">Activity</button>
     <button id="tab-progress" data-page="progress" type="button" role="tab" aria-selected="false" aria-controls="panel-progress">Progress</button>
+    <button id="tab-hosts" data-page="hosts" type="button" role="tab" aria-selected="false" aria-controls="panel-hosts">Hosts</button>
     <button id="tab-knowledge" data-page="knowledge" type="button" role="tab" aria-selected="false" aria-controls="panel-knowledge" hidden>Knowledge</button>
     <button id="tab-settings" data-page="settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" aria-label="Settings" title="Settings">&#9881;</button>
   </nav>
@@ -981,6 +982,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     </section>
     <section id="panel-activity" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-activity" hidden>
       <div id="sb-panel-activity" class="pg-body"></div>
+    </section>
+    <section id="panel-hosts" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-hosts" hidden>
+      <div id="sb-panel-hosts" class="pg-body"></div>
     </section>
     <section id="panel-progress" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-progress" hidden>
       <div id="sb-panel-progress" class="pg-body"></div>
@@ -8170,8 +8174,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
 
-  var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", knowledge: "panel-knowledge", settings: "panel-settings" };
-  var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", knowledge: "tab-knowledge", settings: "tab-settings" };
+  var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", hosts: "panel-hosts", knowledge: "panel-knowledge", settings: "panel-settings" };
+  var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", hosts: "tab-hosts", knowledge: "tab-knowledge", settings: "tab-settings" };
   var SBW_KEY = "plangraph.ui.sbw.v1", SBW_MIN = 180, SBW_MAX = 560;
   var ui = null, cur = "graph";
 
@@ -8200,6 +8204,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (name === "graph" && PP && PP.state && PP.state.cy) { try { PP.state.cy.resize(); } catch (e) { /* not ready */ } }
     if (name === "activity" && PlanUI.ActivityPage && PlanUI.ActivityPage.render) PlanUI.ActivityPage.render();
     if (name === "progress" && PlanUI.ProgressPage && PlanUI.ProgressPage.render) PlanUI.ProgressPage.render();
+    if (name === "hosts" && PlanUI.HostsPage) PlanUI.HostsPage.render();
     if (name === "knowledge" && PlanUI.KnowledgePage) PlanUI.KnowledgePage.render();
     if (PlanUI.Pages.onChange) PlanUI.Pages.onChange(name);
   }
@@ -8627,6 +8632,57 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 ;
 (function (global) {
   "use strict";
+  var PlanUI = (global.PlanUI = global.PlanUI || {});
+  var METRICS = ["cpu_percent", "ram_available_bytes", "gpu_percent",
+    "network_rx_bytes_per_s", "network_tx_bytes_per_s", "disk_free_bytes"];
+  var CAPS = ["max_runs", "max_writers", "max_seats", "max_sessions", "mem_floor_mb"];
+  function object(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
+  function number(v) { return typeof v === "number" && Number.isFinite(v) && v >= 0 ? String(v) : "unknown"; }
+  function text(v) { return typeof v === "string" && v.trim() ? v : "unknown"; }
+  function el(tag, value) {
+    var n = document.createElement(tag);
+    if (value !== undefined) n.textContent = value;
+    return n;
+  }
+  function render() {
+    if (typeof document === "undefined") return;
+    var box = document.getElementById("sb-panel-hosts");
+    if (!box) return;
+    while (box.firstChild) box.removeChild(box.firstChild);
+    var PP = global.PlanPage, fleet = PP && PP.state && PP.state.snapshot && PP.state.snapshot.fleet;
+    if (!object(fleet) || !Array.isArray(fleet.hosts)) {
+      box.appendChild(el("p", "Host fleet unavailable in this snapshot.")); return;
+    }
+    box.appendChild(el("p", "Fleet running agents: " + number(fleet.running_agents)));
+    var table = el("table"), head = el("thead"), titles = el("tr"), body = el("tbody");
+    table.appendChild(el("caption", "Fleet hosts"));
+    ["Host id", "Class", "Caps", "CPU %", "Available RAM bytes", "GPU %",
+      "Network RX bytes/s", "Network TX bytes/s", "Free disk bytes", "Running agents"].forEach(function (h) {
+      var th = el("th", h); th.setAttribute("scope", "col"); titles.appendChild(th);
+    });
+    head.appendChild(titles); table.appendChild(head);
+    fleet.hosts.slice().sort(function (a, b) {
+      var x = text(object(a) ? a.host_id : null), y = text(object(b) ? b.host_id : null);
+      return x < y ? -1 : x > y ? 1 : 0;
+    }).forEach(function (input) {
+      var r = object(input) ? input : {}, sample = object(r.sample) ? r.sample : {};
+      var caps = object(r.caps) ? CAPS.map(function (k) { return k + "=" + number(r.caps[k]); }).join(", ") : "unknown";
+      var values = [text(r.host_id), text(r.class), caps];
+      METRICS.forEach(function (k) { values.push(number(sample[k])); });
+      values.push(number(r.running_agents));
+      var row = el("tr");
+      values.forEach(function (v) { row.appendChild(el("td", v)); });
+      body.appendChild(row);
+    });
+    table.appendChild(body); box.appendChild(table);
+  }
+  PlanUI.HostsPage = { render: render };
+  if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
+})(typeof window !== "undefined" ? window : globalThis);
+
+;
+(function (global) {
+  "use strict";
 
   var PlanUI = (global.PlanUI = global.PlanUI || {});
 
@@ -8640,7 +8696,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var BOOLS = ["showCritical", "showCross", "autoCollapseDone", "animate", "showAllEdges"];
   var TABS = ["projects", "needs", "qa", "answers", "settings"];
   var body = document.body;
-  var HASH_PG = /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);   // read before the first writeHash drops it
+  var HASH_PG = /[#&]pg=(qa|needs|settings|hosts)\b/.exec(location.hash);   // read before the first writeHash drops it
 
   function $(id) { return document.getElementById(id); }
   function is(str) {
@@ -8949,7 +9005,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (ui.get("view") === "table") PP.setTab("list");
     else PP.setTab("graph");
     if (PlanUI.Pages) {
-      var m = HASH_PG || /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);
+      var m = HASH_PG || /[#&]pg=(qa|needs|settings|hosts)\b/.exec(location.hash);
       PlanUI.Pages.onChange = writeHash;
       var first = m ? m[1] : (ui.get("view") === "table" ? "table" : "graph");
       PlanUI.Pages.show(first);

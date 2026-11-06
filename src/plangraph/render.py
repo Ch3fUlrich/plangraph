@@ -76,6 +76,7 @@ JS_FILES = (
     "page_pages.js",
     "page_activity.js",
     "page_progress.js",
+    "page_hosts.js",
     "page_boot.js",  # T2: boot must be last — it wires the components it finds.
 )
 
