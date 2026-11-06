@@ -337,3 +337,7 @@ pub fn prepare_launch(
 #[cfg(test)]
 #[path = "workspace_launch_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "workspace_launch_env_tests.rs"]
+mod env_tests;
