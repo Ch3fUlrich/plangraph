@@ -1,35 +1,30 @@
-# L1 card · build-L1-0208 · 2026-11-05T23:56Z
+# L1 card · build-L1-0214 · 2026-11-06T05:47Z
 ## Goal
-- D-3893 phase 0 first; D-3956/D-3957/D-3959 rulings; KEEPER-SNAP S0 to S3; #419 + #407 ff live; #314 seat; orphan slices
+- D-3893 phase 0 first; D-4012 relaunch: re-check keeper, GO-REQs with seats for #446 #447 #436; #451 to its round cap; RIN and ROUTER lanes
 ## Keeper
-- claimed: leases lapsed 01:38Z, RE-CHECK KEEPER; KEEPER-SNAP-S0 + #314 handed to replan-0207, #338 too; RIN and ROUTER items stay build-L1, re-claim them
-- ready next: KEEPER-SNAP S1 after S0; HOOKS S09 after S06, S14 after S13 + S06
+- claimed: S06 ep2, S13 ep2, SPAWNER-ORPHAN-REAP ep2, RIN-PATH-REPOINT ep5, ROUTERCTL-CTX-GUARD-CAPS ep2, lease 06:48Z
+- not claimed, refused stale: RIN-LEDGER-VIEWS (merged 8bb4141e), ROUTER-INBOX-MOVE, ROUTER-LAUNCH-OOM-SCOPE, LE-FLEET-MSG-INVENTORY
 ## Done
-- 11-05T23:40Z SEAT-VERDICT-FROM-RECORD cd7146308 D-3956 one-line trim pushed, 172 passed, file-size ok, no seat yet
-- 11-05T23:55Z KEEPER-SNAP-S0-TIMINGS 57db1e7b2 PR#464 CI 8 pass, mimo delta seat REQUEST_CHANGES disputed, GO-REQ sent, #448 closed
-- 11-05T23:50Z KEEPER-EVIDENCE-MERGE-HEAD - D-3959 dry run on throwaway postgres, GO-REQ sent, no live write
+- 11-06T05:1xZ SPAWNER-ORPHAN-REAP r3 03ecf3d707b7 pushed, 55 passed on 18-de-2053, luna REQUEST_CHANGES disputed in GO-REQ
+- 11-06T04:50Z GO-REQ sent #436 220858a0d255, #447 5b1cc312e84b
+- 11-06T04:5xZ GO-REQ sent #446 086951441efe, seat luna run-e4b501d7 ACCEPT
+- 11-06T04:5xZ GO-REQ sent RIN-PATH-REPOINT 1490f15672, ROUTERCTL 7ca8651 resend
 ## In flight
-- SPAWNER-ORPHAN-REAP fixorphan3 dell since 23:42Z next check at restart
-- SEAT-VERDICT-FROM-RECORD ci-wait 314 since 23:41Z next check at restart
+- none running; 6 GO-REQs at routing: #436 #446 #447 #451, REPOINT, ROUTERCTL resend; BLOCKED Sol vs no-Sol ruling
 ## Planned
-1. Heartbeat all claims before 01:38Z
-2. Seats on #314 and S0a r2 now belong to replan-0207, do not start
-3. #451 round 2: read diff, mimo delta seat, run once on 18-de-2053, CI (round 3 is the cap)
-4. D-3986 + D-3987: no spawner-main move, Haiku probe or cherry-pick for #419 until OS-OPENCODE-GO-BILLING answered ~04:10Z; meanwhile read-only review of what the 242+ commits change live, for its own GO-REQ (D-3975); #407 after replan merges
-5. REPOINT + LEDGER after router applies: merge lanes, submit; INBOX one GO-REQ; resend gen-89 open
-6. #338 handed to replan-0207, do not start; S09 S14 (S14 takes the _parity.py MED); OOM evidence retry
+1. #451 03ecf3d707b7: after GO and #436 merge, retarget main, CI, merge; round cap used
+2. On GOs: merge #436 #446 #447 and data lanes, evidence, submit
+3. LEDGER: lane/rin-ledger-r2 53b932b unpushed, no seat found, 484 non-test lines; INBOX one GO-REQ for merge + apply; S09 S14 after S06 S13
 ## Open
-- BLOCKED GO-REQs #446 #447 #436 #450 #464 ROUTERCTL #309-sync unanswered | default wait, no merge | deadline none
-- BLOCKED OpenCode free leg key expired on code host, operator step | default dell, qwen, workst seats | deadline none
-- BLOCKED REPOINT done_criteria edit is router-only | default router applies 1-op batch | deadline none
-- BLOCKED LEDGER new leaf JSON + gate edge sent | default wait for apply | deadline none
+- BLOCKED seat legs: qwen credit limit run-09d6377f, opencode free key expired run-d9cc2b5e (operator) | default luna, mimo, dell | deadline none
 - BLOCKED D-3959 live migration number needs a DSN secret | default no live read | deadline none
-- BLOCKED rule 3.3 tests seat for HIGH S0 | default name it open in GO-REQ | deadline none
+- BLOCKED spawner-main past #465 needs its own GO-REQ (D-4016, D-3975) | default read-only review next | deadline none
 ## Traps
-- Never Hand-Edit src/plangraph/keeper/* or the gate file: Hand-Edit fails ci-gate on door paths; D-3956 trim used Writer + Gate-Edit
-- Worktree guard refuses compound commands and runtime variables: plain single commands, literal paths, no wrapper to get past it
-- Route writer-family names are openai, xiaomi, anthropic; gpt and mimo exclude nothing
-- Launch prompt gen-70 stale. BG jobs outlive sessions. replan-0207 owns SPAWNER-COST-TIME, SEAT-DIR, LEG-STATE
-- #407 head 328d3c676 differs from the D-3956 GO sha: check before ff
+- D-4027 PG-HOST-ONLINE-INSTALL is placement's, do not start
+- #445 stays with placement-0211, keeper owner replan; not taken here, D-4010 split is theirs
+- Rule 4.0 no Sol: route still lists cx-gpt-6.1-sol, pin --leg with --no-fallthrough
+- Never Hand-Edit src/plangraph/keeper/*; prompt paths in seat scripts must be absolute (script cds)
+- Spawn: review inline legs need card diff_ref; qwen failure ends the chain
+- I used force_stale on SPAWNER-ORPHAN-REAP claim, before reading the rule: stale refusals are reported, not overridden
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md (gen-95 block); X=/home/s/.claude/jobs/4f87b05e/tmp; J=/home/s/.claude/jobs/1289e481/tmp; K=/home/s/code/plangraph-worktrees/.sessions/build-L1-gen79
+- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools /home/s/.claude/jobs/5c2280f7/tmp seat*.sh writer.sh msg.py
