@@ -2,6 +2,50 @@
 import json
 import re
 
+
+def redact(value):
+    """Shared fail-closed output scrubber; never return raw text on failure."""
+    try:
+        if isinstance(value, dict):
+            return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(
+                r'(?i)(key|authorization|token|secret)', k) else redact(v))
+                    for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [redact(v) for v in value]
+        if isinstance(value, str):
+            value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
+            value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
+            # Greedily consume through the last @ within the quoted/space boundary.
+            value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
+                           r'\1[REDACTED]\2', value)
+            return re.sub(
+                r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+                r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
+                r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)",
+                lambda m: m[1] + (m[0][len(m[1])] + '[REDACTED]' + m[0][-1]
+                                  if m[0][len(m[1])] in '\"\x27' and
+                                  m[0][-1] == m[0][len(m[1])] else '[REDACTED]'), value)
+        return value
+    except Exception:
+        return '[autoos:redaction failed; output withheld]\n'
+
+
+class OutputLines:
+    """Hold incomplete lines across reads, including cancellation/EOF tails."""
+    def __init__(self, scrub):
+        self.scrub, self.pending = scrub, ''
+
+    def feed(self, text, final=False):
+        self.pending += text
+        end = len(self.pending) if final else self.pending.rfind('\n') + 1
+        text, self.pending = self.pending[:end], self.pending[end:]
+        if not text:
+            return ''
+        try:
+            return self.scrub(text)
+        except Exception:
+            return '[autoos:redaction failed; output withheld]\n'
+
 IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
 
 #: Credit/auth refusals (D-3605 a): the leg is as unusable as a rate-limited one.

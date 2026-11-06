@@ -29,12 +29,10 @@ class SpawnService(SeatSpawnMixin):
         if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):  # probes write where the planner reads
             self.runner.leg_reader = leg_reader
         self.tasks, self._running_records = {}, {}   # run tasks; job id -> record (Q13/M8)
-
     def _path(self, run_id):
         if not isinstance(run_id, str) or not run_id.startswith('run-') or not run_id[4:].isalnum():
             raise ValueError('unknown run id')
         return self.state / 'runs' / run_id / 'record.json'
-
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
@@ -261,6 +259,7 @@ class SpawnService(SeatSpawnMixin):
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
             from plangraph.planner.legs import NO_VERDICT_SEATS, leg_active
+            from plangraph.routing_support.liveness import require_available
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
@@ -291,6 +290,7 @@ class SpawnService(SeatSpawnMixin):
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
+            require_available(chosen, self.leg_reader, card)
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
