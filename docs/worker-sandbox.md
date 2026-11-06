@@ -142,6 +142,15 @@ from `osrelease`. The worker checks both at startup: on a WSL kernel it reads
 
 ## Host facts
 
+The admission policy guard runs exactly three production checks per workspace:
+no default features, defaults, and all named features except test-only features
+and their aliases. Metadata rejects defaults that transitively enable a forbidden
+feature; a downstream compile-fail probe verifies the bypass remains unavailable.
+Run `python3 tools/probe_admission_policy_guard.py` for the two negative probes
+(a caller gated on a disabled default feature and a forbidden default alias).
+Missing tools or paths fail rather than skip. The rust-worker job passed in
+235.1 seconds locally; its guard took 85.59 seconds (207.2 seconds standalone).
+
 Bubblewrap is not available and unprivileged user namespaces are blocked on the
 target host. Landlock and `systemd-run --user --scope` work there, so this layer
 uses them.

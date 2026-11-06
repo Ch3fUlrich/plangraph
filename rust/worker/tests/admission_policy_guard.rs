@@ -1,7 +1,12 @@
 //! Compile production targets without dev-dependency feature unification.
 use std::{path::Path, process::Command};
 
-fn check(manifest: &Path, target: &Path, features: &[String]) -> std::process::Output {
+fn check(
+    manifest: &Path,
+    target: &Path,
+    defaults: bool,
+    features: &[String],
+) -> std::process::Output {
     let mut command = Command::new(env!("CARGO"));
     command
         .args([
@@ -14,6 +19,9 @@ fn check(manifest: &Path, target: &Path, features: &[String]) -> std::process::O
         ])
         .arg(manifest)
         .env("CARGO_TARGET_DIR", target);
+    if !defaults {
+        command.arg("--no-default-features");
+    }
     if !features.is_empty() {
         command.arg("--features").arg(features.join(","));
     }
@@ -79,14 +87,26 @@ fn unrestricted_policy_is_test_only() {
                 }
                 forbidden.extend(additions);
             }
+            // The reverse transitive closure above includes `default` when
+            // any default-enabled feature or alias reaches a forbidden feature.
+            assert!(
+                !forbidden.iter().any(|name| name == "default"),
+                "{} default feature closure enables a forbidden test feature or alias",
+                package["name"]
+            );
             for feature in features.keys().filter(|name| !forbidden.contains(name)) {
                 all_features.push(format!("{}/{}", package["name"].as_str().unwrap(), feature));
             }
         }
-        // Exactly two production checks per workspace: defaults and all allowed
-        // features. Never enable test or test-support (including their aliases).
-        for features in [Vec::new(), all_features] {
-            let output = check(&manifest, target.path(), &features);
+        // Exactly three production checks per workspace. The no-default run
+        // also rejects cfg(not(feature = X)) callers for default-enabled X.
+        // Never enable test or test-support (including their aliases).
+        for (defaults, features) in [
+            (false, Vec::new()),
+            (true, Vec::new()),
+            (false, all_features),
+        ] {
+            let output = check(&manifest, target.path(), defaults, &features);
             assert!(
                 output.status.success(),
                 "production targets in {} with {features:?} must compile without the test-only admission bypass:\n{}",
