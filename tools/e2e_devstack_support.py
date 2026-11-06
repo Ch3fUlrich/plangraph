@@ -196,9 +196,17 @@ def check_keeper_config(cfg: Path) -> None:
         data = json.loads(cfg.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise Fail("keeper config unreadable") from exc
-    dsn_port = urllib.parse.urlparse(str(data.get("dsn", ""))).port
-    if dsn_port is not None:
-        _refuse_port(dsn_port, "keeper.json dsn")
+    try:
+        dsn = urllib.parse.urlparse(str(data.get("dsn", "")))
+        if dsn.scheme not in ("postgresql", "postgres") or dsn.query or dsn.fragment:
+            raise Fail("keeper.json dsn must be a Postgres URL without overrides")
+        if dsn.hostname != "127.0.0.1":
+            raise Fail("keeper.json dsn must be loopback")
+        if dsn.port is None:
+            raise Fail("keeper.json dsn needs an explicit port")
+        _refuse_port(dsn.port, "keeper.json dsn")
+    except ValueError as exc:
+        raise Fail("keeper.json dsn is invalid") from exc
     _host, sep, bind_port = str(data.get("bind", "")).rpartition(":")
     if sep and bind_port.isdigit():
         _refuse_port(bind_port, "keeper.json bind")

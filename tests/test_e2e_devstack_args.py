@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from fake_pid import FAKE_PID
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "e2e_devstack.py"
@@ -61,7 +62,8 @@ def test_standalone_help_preserves_driver_description():
 ])
 def test_keeper_config_refuses_live_ports_after_split(e2e, tmp_path, field, value):
     cfg = tmp_path / "keeper.json"
-    cfg.write_text(json.dumps({field: value}))
+    cfg.write_text(json.dumps({"dsn": "postgresql://postgres@127.0.0.1:55440/keeper",
+                               "bind": "127.0.0.1:18787", field: value}))
     with pytest.raises(e2e.Fail, match="live/default port"):
         e2e.check_keeper_config(cfg)
 
@@ -338,12 +340,21 @@ def test_state_binds_endpoints(e2e, tmp_path, monkeypatch, change):
             e2e.check_devstack(args, args.keeper, args.temporal_http)
 
 
+@pytest.mark.parametrize("dsn", ["postgresql://postgres@192.0.2.1:55440/keeper",
+                                 "postgresql://postgres@127.0.0.1/keeper"])
+def test_keeper_config_refuses_foreign_or_implicit_dsn(e2e, tmp_path, dsn):
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text(json.dumps({"dsn": dsn, "bind": "127.0.0.1:18787"}))
+    with pytest.raises(e2e.Fail, match="loopback|explicit port"):
+        e2e.check_keeper_config(cfg)
+
+
 def test_stop_worker_does_not_discover_or_guess_group(e2e, monkeypatch):
     from types import SimpleNamespace
     support = sys.modules["e2e_devstack_support"]
     monkeypatch.setattr(os, "getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(os, "killpg", lambda *a: pytest.fail("unowned group"))
-    proc = SimpleNamespace(pid=123, poll=lambda: None, send_signal=lambda sig: None,
+    proc = SimpleNamespace(pid=FAKE_PID, poll=lambda: None, send_signal=lambda sig: None,
                            wait=lambda **kw: None)
     with open(os.devnull, "wb") as out:
         support.stop_worker(SimpleNamespace(proc=proc, out=out))
@@ -354,7 +365,8 @@ def test_foreign_keeper_refused_before_any_contact(e2e, tmp_path, monkeypatch):
                           "--keeper", "http://127.0.0.1:18787", "--temporal-http",
                           "http://127.0.0.1:18233", "--worker-bin", str(SCRIPT),
                           "--temporal-cli", str(SCRIPT)])
-    (tmp_path / "keeper.json").write_text(json.dumps({"bind": "127.0.0.1:18788"}))
+    (tmp_path / "keeper.json").write_text(json.dumps({"bind": "127.0.0.1:18788",
+        "dsn": "postgresql://postgres@127.0.0.1:55440/keeper"}))
     monkeypatch.setattr(e2e.u, "call", lambda *a, **kw: pytest.fail("foreign service contacted"))
     with pytest.raises(e2e.Fail, match="keeper_state_mismatch"):
         e2e.run(args)
