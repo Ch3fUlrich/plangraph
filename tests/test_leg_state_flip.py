@@ -47,11 +47,23 @@ def test_off_byte_identical(monkeypatch, tmp_path):
     from test_leg_adapter import MAIN_ORDER
     monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
     s = service(monkeypatch, tmp_path, lambda: pytest.fail('disabled reader called'))
-    assert s.leg_reader.enabled is False
+    assert s.leg_reader is None
+    assert not hasattr(s.runner, 'leg_reader')
     card = dict(estimate_tokens=1000)
-    s.hung.waiting.update(m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS)
-    assert json.dumps(asdict(s._route(card))) == json.dumps(asdict(plan_spawn(card, role='implement', leg_reader=s.leg_reader.store)))
+    assert json.dumps(asdict(s._route(card))) == json.dumps(asdict(plan_spawn(card, role='implement', leg_reader=None)))
     assert [m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS if resolver.is_model_available(m, s.leg_reader)] == MAIN_ORDER
+
+
+def test_off_forwards_injected_reader(monkeypatch, tmp_path):
+    from plangraph.planner import routing
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
+    reader = leg_state.LegStateStore(tmp_path / 'legs')
+    s = SpawnService(runner=SimpleNamespace(), state=tmp_path, leg_reader=reader)
+    def plan_spawn(**kwargs):
+        assert kwargs['leg_reader'] is reader
+        return 'legacy'
+    monkeypatch.setattr(routing, 'plan_spawn', plan_spawn)
+    assert s._route(dict(estimate_tokens=1000)) == 'legacy'
 
 
 @pytest.mark.parametrize('failure', ['empty', 'exception', 'stale'])
@@ -82,7 +94,8 @@ def test_hung_routing_stable(monkeypatch, tmp_path, on):
     card = dict(estimate_tokens=1000)
     before = s._route(card).legs
     assert len(before) > 2
-    s.hung.waiting.add(key(before[0]))
+    if on:
+        s.hung.waiting.add(key(before[0]))
     after = s._route(card).legs
     assert after == (before[1:] + before[:1] if on else before)
 

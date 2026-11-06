@@ -21,6 +21,8 @@ def reader_failed(status):
 
 def service_plan(service, **kwargs):
     from plangraph.planner.routing import plan_spawn
+    if not enabled():
+        return plan_spawn(leg_reader=service.leg_reader, **kwargs)
     reader = service.hung.reader if service.hung.enabled else service.leg_reader
     reasons = {}
     def read(model, **scope):
@@ -44,6 +46,8 @@ def service_plan(service, **kwargs):
 
 def service_reader(service, reader):
     from plangraph.spawner.hung_capture import HungBoundary
+    if not enabled():
+        return reader
     reader = default_reader() if reader is None else reader
     service.hung = HungBoundary(reader, sample=lambda r: {}, identity=lambda p, i: False,
                                cancel=lambda r: False, fallthrough=lambda r: None)
