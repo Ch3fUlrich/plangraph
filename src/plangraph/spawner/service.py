@@ -140,7 +140,11 @@ class SpawnService(SeatSpawnMixin):
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-        return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
+        from dataclasses import replace
+        from plangraph.planner.measured_down import measured_down
+        down = measured_down(self.state)
+        plan = plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
+        return replace(plan, legs=tuple(sorted(plan.legs, key=lambda leg: leg.id in down)))
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
@@ -270,10 +274,14 @@ class SpawnService(SeatSpawnMixin):
             if chosen.tier == 'paid':
                 available = plan_spawn(card, role=role, legs=DEFAULT_LEGS,
                     writer_families=[*writer_families, *reviewed], leg_reader=self.leg_reader)
-                free = [candidate.id for candidate in available.legs if candidate.tier == 'free']
+                from plangraph.planner.measured_down import measured_down
+                down = measured_down(self.state)
+                free = [candidate.id for candidate in available.legs if candidate.tier == 'free' and candidate.id not in down]
                 if free and (not isinstance(override_reason, str) or len(override_reason.strip()) < 10):
                     raise SpawnRefused('paid pin refused; free legs up: ' + ', '.join(free) +
                         '; --override-reason required (D-4382: no free leg witnesses is a valid reason)')
+                if not free and not override_reason:
+                    override_reason = 'No eligible free leg is up on this host'
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
