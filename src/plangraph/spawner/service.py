@@ -265,6 +265,15 @@ class SpawnService(SeatSpawnMixin):
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             require_available(chosen, self.leg_reader, card)
+            if role == 'implement' and chosen.id != 'cx-gpt-6.1-sol':
+                raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
+            if chosen.tier == 'paid':
+                available = plan_spawn(card, role=role, legs=DEFAULT_LEGS,
+                    writer_families=[*writer_families, *reviewed], leg_reader=self.leg_reader)
+                free = [candidate.id for candidate in available.legs if candidate.tier == 'free']
+                if free and (not isinstance(override_reason, str) or len(override_reason.strip()) < 10):
+                    raise SpawnRefused('paid pin refused; free legs up: ' + ', '.join(free) +
+                        '; --override-reason required (D-4382: no free leg witnesses is a valid reason)')
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
@@ -278,7 +287,7 @@ class SpawnService(SeatSpawnMixin):
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
-            started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
+             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
 
