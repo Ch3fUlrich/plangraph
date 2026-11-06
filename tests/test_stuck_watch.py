@@ -140,7 +140,11 @@ def test_unreadable_evidence_no_action(seat, failure):
         path = root / 'runs/run-test/record.json'
         path.parent.mkdir(parents=True)
         path.write_text('broken')
-    assert not check(300)
+    findings = check(300)
+    if failure == 'socket':  # report-only, like a racing fd
+        assert findings[0]['reason'] == 'process/socket evidence unavailable'
+    else:
+        assert not findings
     assert not calls
 
 
