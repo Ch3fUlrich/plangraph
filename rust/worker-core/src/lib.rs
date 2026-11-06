@@ -53,6 +53,7 @@ pub mod reset;
 pub mod run;
 pub mod sandbox_env;
 pub mod scope;
+pub mod seat_pool;
 pub mod slots;
 pub mod stall;
 #[cfg(unix)]
@@ -64,6 +65,7 @@ pub mod workspace_resolver;
 pub mod workspace_verify;
 pub mod worktree;
 pub mod writer_blob;
+pub mod writer_cleanup;
 pub mod writer_result;
 pub mod writer_sanitize;
 pub mod writer_secret;
