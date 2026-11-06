@@ -21,8 +21,12 @@ def isolated(monkeypatch):
 
 def test_default_off(tmp_path, monkeypatch):
     monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
-    store = leg_state.LegStateStore(tmp_path / 'state')
+    def forbidden(*a, **kw):
+        pytest.fail('flag-off authority call')
+    store = leg_state.LegStateStore(tmp_path / 'state',
+        omni=SimpleNamespace(provider_state=forbidden), run=forbidden)
     assert store.leg_status('opencode-go/absent') == {'state': 'ok', 'evidence': None}
+    assert store.leg_status('omniroute/absent') == {'state': 'ok', 'evidence': None}
 
 
 @pytest.mark.parametrize('listed,expected', [('opencode-go/listed', 'ok'),
@@ -57,23 +61,60 @@ def test_failure_unknown(tmp_path):
     assert store.leg_status('opencode-go/absent')['state'] == 'unknown'
 
 
+def declaration_violations(source, names):
+    """Bounded to declarations and their construction loops, not runtime state."""
+    bad = []
+    for node in ast.parse(source).body:
+        targets = ([node.target] if isinstance(node, ast.AnnAssign) else
+                   node.targets if isinstance(node, ast.Assign) else [])
+        selected = any(isinstance(t, ast.Name) and t.id in names for t in targets)
+        selected |= isinstance(node, ast.ClassDef) and node.name == 'Leg'
+        selected |= isinstance(node, ast.For) and any(
+            isinstance(n, ast.Name) and n.id in names for n in ast.walk(node))
+        if not selected:
+            continue
+        for child in ast.walk(node):
+            pairs = []
+            if isinstance(child, ast.Dict):
+                pairs = [(k.value, v) for k, v in zip(child.keys, child.values)
+                         if isinstance(k, ast.Constant)]
+            elif isinstance(child, ast.Call):
+                pairs = [(k.arg, k.value) for k in child.keywords]
+            elif isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
+                pairs = [(child.target.id, child.value)]
+            elif isinstance(child, ast.Assign):
+                pairs = [(t.slice.value, child.value) for t in child.targets
+                         if isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)]
+            for key, value in pairs:
+                if key == 'expires' or (key in {'available', '_catalog_available'}
+                                        and not isinstance(value, (ast.Name, ast.Attribute, ast.Call))):
+                    bad.append((key, child.lineno))
+    return bad
+
+
 def test_catalog_declarations_no_local_state():
     from plangraph.routing_support.resolver import DEFAULT_FALLBACK_MODELS
     assert all('available' not in row for row in DEFAULT_FALLBACK_MODELS)
     for file, names in [('routing_support/resolver.py', {'DEFAULT_FALLBACK_MODELS'}),
                         ('planner/legs.py', {'DEFAULT_LEGS', 'Leg'})]:
-        tree = ast.parse((Path('src/plangraph') / file).read_text())
-        for node in tree.body:
-            targets = ([node.target] if isinstance(node, ast.AnnAssign) else
-                       node.targets if isinstance(node, ast.Assign) else [])
-            if any(isinstance(t, ast.Name) and t.id in names for t in targets):
-                for child in ast.walk(node):
-                    if isinstance(child, ast.Dict):
-                        assert not any(isinstance(k, ast.Constant) and
-                                       k.value in {'expires', 'available'} for k in child.keys)
-            if isinstance(node, ast.ClassDef) and node.name == 'Leg':
-                assert 'expires' not in {n.target.id for n in node.body
-                                        if isinstance(n, ast.AnnAssign)}
+        assert not declaration_violations((Path('src/plangraph') / file).read_text(), names)
+
+
+@pytest.mark.parametrize('declaration', [
+    "DEFAULT_LEGS = [dict(expires='2099-01-01')]",
+    "DEFAULT_LEGS = [{'available': True}]",
+    "DEFAULT_LEGS = [dict(_catalog_available=True)]",
+    "class Leg:\n expires: str = ''",
+    "for row in DEFAULT_LEGS:\n row['_catalog_available'] = True",
+])
+def test_declaration_scan_negative_fixtures(declaration):
+    assert declaration_violations(declaration, {'DEFAULT_LEGS'})
+
+
+def test_declaration_scan_allows_dynamic_and_unrelated_state():
+    assert not declaration_violations(
+        "DEFAULT_LEGS = [dict(available=state.available)]\n"
+        "def reader():\n return dict(available=False, expires='later')", {'DEFAULT_LEGS'})
 
 
 def test_identity_and_recovery(tmp_path):
@@ -92,6 +133,26 @@ def test_identity_and_recovery(tmp_path):
     store.leg_status('agy/claude-sonnet-5-5-medium')
     store.leg_status('agy/claude-sonnet-5-5-high')
     assert calls[-1] == calls[-2]
+
+
+def test_production_identity_aliases_and_disabled_retention(tmp_path):
+    import json
+    from plangraph.routing_support.omniroute_state import OmniRouteState
+    from plangraph.planner.legs import DEFAULT_LEGS, leg_active
+    rows = [dict(provider='cx-gpt-6-terra', isActive=True),
+            dict(provider='agy/claude-sonnet-5-5', isActive=True),
+            dict(provider='disabled', isActive=False)]
+    reader = OmniRouteState('injected-endpoint', key='synthetic',
+        fetch=lambda *a: (200, json.dumps({'connections': rows})))
+    store = leg_state.LegStateStore(tmp_path / 'state', enabled=True, omni=reader)
+    assert store.leg_status('omniroute/cx-gpt-6-terra')['state'] == 'ok'
+    assert store.leg_status('omniroute/cx-gpt-6.1-sol')['state'] == 'unavailable'
+    for effort in ('medium', 'high'):
+        assert store.leg_status('agy/claude-sonnet-5-5-' + effort)['state'] == 'ok'
+    assert 'disabled' in reader.snapshot()
+    assert not reader.snapshot()['disabled'].available
+    disabled = [leg for leg in DEFAULT_LEGS if leg.disabled]
+    assert disabled and all(not leg_active(leg) for leg in disabled)
 
 
 @pytest.mark.parametrize('status', ['unavailable', 'stale'])
@@ -126,8 +187,9 @@ def test_flag_off_next_tick_baseline(monkeypatch):
     baseline = tick('ok')
     assert baseline
     assert tick('cooldown') == baseline
-    for status in ('limited', 'unavailable', 'stale', 'unknown', 'unreachable', 'not_listed'):
-        assert tick(status) == []
+    assert tick('limited') == []
+    for status in ('unavailable', 'stale', 'unknown', 'unreachable', 'not_listed'):
+        assert tick(status) == baseline
 
 
 def test_catalog_explicit_admission():
@@ -137,7 +199,7 @@ def test_catalog_explicit_admission():
         candidate = dict(row, **extra)
         assert r.catalog_row_admitted(candidate)
         assert r.catalog_row_admitted(r._normalize_catalog_row(candidate))
-    row.pop('_catalog_available')
+    row.pop('active')
     assert not r.catalog_row_admitted(row)
     assert not r.catalog_row_admitted(r._normalize_catalog_row(row))
 

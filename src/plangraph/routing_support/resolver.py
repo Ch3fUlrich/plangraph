@@ -232,7 +232,6 @@ def admission_models() -> set[str]:
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
 from plangraph.registry_columns import INLINE_ONLY_MODELS as _INLINE_ONLY
 for _row in DEFAULT_FALLBACK_MODELS:
-    _row['_catalog_available'] = not _row['id'].startswith('cxa/') or _row['id'].startswith('cxa/gpt-6-luna')
     _row['active'] = _row['id'] in _fallback_legs
     _row.setdefault('tool_mode', 'inline-only' if _row['id'] in _INLINE_ONLY else 'tools')
 for _leg in DEFAULT_LEGS:
@@ -241,7 +240,6 @@ for _leg in DEFAULT_LEGS:
         DEFAULT_FALLBACK_MODELS.append(dict(
             id=_model, family=_leg.family, harness=_leg.harness,
             tier=_leg.tier,
-            _catalog_available=True,
             active=_model in _fallback_legs,
             context_window=_leg.max_request_tokens, tool_mode=_leg.tool_mode,
             aa_intelligence=0.0, combos=[]))
@@ -365,9 +363,9 @@ def detect_model_family(model_id: str) -> str:
     return mid
 
 def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
-    """Fail closed: both catalog admission signals must be explicit."""
+    """Policy admission; an optional dynamic availability field may veto it."""
     return (row.get('id') not in OPERATOR_REMOVED_MODELS
-            and row.get('available', row.get('_catalog_available', False)) == 1 and row.get('active') is True)
+            and row.get('available', True) == 1 and row.get('active') is True)
 
 
 _served_cache = {}
@@ -580,6 +578,8 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
         return False
     reader = leg_state_reader or leg_status
     denied = {"limited", "unavailable", "unreachable", "stale", "unknown", "not_listed"}
+    if os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') != '1':
+        denied = {"limited"}
     return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] not in denied
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
@@ -720,7 +720,6 @@ def select_top_candidate(
 
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     d = dict(row)
-    d.setdefault('available', int(d.get('_catalog_available', False)))
     d.setdefault('active', False)
     if "id" not in d and "model_id" in d:
         d["id"] = d["model_id"]
