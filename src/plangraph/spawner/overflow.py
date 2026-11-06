@@ -74,8 +74,11 @@ def ready_records(config):
 
 def local_resources():
     runs = cli.SpawnService().ps()['runs']
-    memory = next(int(line.split()[1]) // 1024 for line in Path('/proc/meminfo').read_text().splitlines()
-                  if line.startswith('MemAvailable:'))
+    try:
+        memory = next(int(line.split()[1]) // 1024 for line in Path('/proc/meminfo').read_text().splitlines()
+                      if line.startswith('MemAvailable:'))
+    except StopIteration as exc:
+        raise ValueError('MemAvailable missing') from exc
     return sum(row.get('status') == 'running' for row in runs), memory
 
 
@@ -118,9 +121,19 @@ def remote_spawn(name, host, card, prompt, options):
         spawn = shlex.join(command) + ' "$(cat ' + q(directory + '/prompt.txt') + ')" ' + shlex.join(options)
         commands.append('PLANGRAPH_HOST_NAME=' + q(name) + ' PYTHONPATH=' + q(host['spawner_src']) + ' ' + spawn)
         result = ssh(' && '.join(commands))
-        lines = result.stdout.splitlines()
-        payload = next((line for line in reversed(lines) if line.strip()), '')
-        return json.loads(payload) if result.returncode == 0 else None
+        if result.returncode:
+            return None
+        # Decode objects amid shell noise, including pretty-printed JSON. Never
+        # retry an acknowledged spawn merely because its receipt is unreadable.
+        decoder = json.JSONDecoder()
+        for index in reversed([i for i, char in enumerate(result.stdout) if char == '{']):
+            try:
+                payload, _ = decoder.raw_decode(result.stdout[index:])
+                if isinstance(payload, dict):
+                    return payload
+            except ValueError:
+                pass
+        return {'warning': 'remote spawn succeeded; receipt unavailable'}
     finally:
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
             '; rmdir -- ' + q(directory))

@@ -109,7 +109,12 @@ def test_local_before_card_parsing(inputs, monkeypatch, card):
     assert o.main(args) == 3
 
 
-def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys):
+@pytest.mark.parametrize('receipt', [
+    'hi\n{"status":"running"}\necho-trailing',
+    'hi\n{\n  "status": "running"\n}\necho-trailing',
+    'unreadable receipt',
+])
+def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys, receipt):
     root, path, args = inputs
     host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src',
                 env_file=str(root / 'env'))
@@ -122,12 +127,52 @@ def test_remote_env_echo_does_not_retry(inputs, monkeypatch, capsys):
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
             spawns.append(argv)
             assert '. ' + str(root / 'env') in argv[-1]
-            stdout = 'hi\n{"status":"running"}\n\n'
+            stdout = receipt
         return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(o.subprocess, 'run', run)
     assert o.main(args) == 0
     assert len(spawns) == 1
     assert json.loads(capsys.readouterr().out)['host'] == 'ash'
+
+
+def test_missing_memavailable_refuses(inputs, monkeypatch, capsys):
+    _, _, args = inputs
+    monkeypatch.setattr(o, 'local_resources', local_resources_real)
+    service = o.cli.SpawnService()
+    monkeypatch.setattr(service, 'ps', lambda: {'runs': []})
+    monkeypatch.setattr(o.cli, 'SpawnService', lambda **kw: service)
+    read_text = o.Path.read_text
+    monkeypatch.setattr(o.Path, 'read_text', lambda self, *a, **kw:
+                        'MemTotal: 4096 kB\n' if str(self) == '/proc/meminfo'
+                        else read_text(self, *a, **kw))
+    with pytest.raises(ValueError, match='MemAvailable'):
+        o.local_resources()
+    assert o.main(args) == 1
+    assert 'resource check failed' in capsys.readouterr().err
+
+
+local_resources_real = o.local_resources
+
+
+def test_local_real_cli_card_and_prompt(inputs, monkeypatch, capsys):
+    root, _, args = inputs
+    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    calls = []
+
+    async def spawn(**payload):
+        calls.append(payload)
+        return {'status': 'dry_run', 'exit_code': 0}
+
+    # Keep the real CLI parser and real service with temporary HOME/state;
+    # intercept only execution so no model or external process is needed.
+    service = o.cli.SpawnService()
+    monkeypatch.setattr(service, 'spawn', spawn)
+    monkeypatch.setattr(o.cli, 'SpawnService', lambda **kw: service)
+    assert o.main(args + ['--leg', 'invented-leg', '--dry-run']) == 0
+    assert calls[0]['card'] == json.loads((root / 'card.json').read_text())
+    assert calls[0]['prompt'] == 'a prompt'
+    assert calls[0]['leg'] == 'invented-leg'
+    assert json.loads(capsys.readouterr().out)['status'] == 'dry_run'
 
 
 def test_remote_rewrite_and_quoting(monkeypatch):
