@@ -74,12 +74,37 @@ def test_forced_leg_warning(tmp_path, monkeypatch, selection):
     assert saved[0]['warnings'] == ['review_unfit: mimo/mimo-v2.6-flash']
 
 
-def test_classifier_does_not_emit_spawn_warning():
+def test_classifier_warns_for_resolved_override():
     record = dict(role='review', status='running', plan={'p_source': 'override'},
                   chosen_leg={'model': 'mimo/mimo-v2.6-flash'})
-    before = record.copy()
     terminal_reason(record)
-    assert record == before
+    terminal_reason(record)
+    assert record['warnings'] == ['review_unfit: mimo/mimo-v2.6-flash']
+
+
+@pytest.mark.parametrize('mode', ['tools', 'inline-only'])
+def test_routed_spawn_diff_ref_refusal(tmp_path, monkeypatch, mode):
+    from plangraph.spawner.service import SpawnService
+    from plangraph.planner.routing import SpawnPlan, SpawnRefused
+    chosen = replace(DEFAULT_LEGS[0], tool_mode=mode)
+    service = SpawnService(runner=SimpleNamespace(), state=tmp_path)
+    monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'override', (), ()))
+    call = service.spawn(card={'estimate_tokens': 100}, prompt='Review', role='review',
+                         writer_families=['gpt'], dry_run=mode == 'tools', override_reason='regression')
+    if mode == 'inline-only':
+        with pytest.raises(SpawnRefused, match='diff_ref_required'):
+            asyncio.run(call)
+    else:
+        assert asyncio.run(call)['run_id'].startswith('run-')  # Admitted; fake runner cannot launch.
+
+
+def test_warning_uses_record_not_selector(monkeypatch):
+    seat = SeatSpawnMixin()
+    monkeypatch.setattr('plangraph.spawner.context_pack.annotate', lambda *a: None)
+    record = dict(role='review', plan={'p_source': 'override'},
+                  chosen_leg={'model': 'mimo/mimo-v2.6-flash'})
+    seat._annotate_spawn(record, '', {}, None, SimpleNamespace(first_leg=DEFAULT_LEGS[0]), False)
+    assert record['warnings'] == ['review_unfit: mimo/mimo-v2.6-flash']
 
 
 @pytest.mark.parametrize('harness,mode,inline', [('qodercli', 'tools', False),
