@@ -56,3 +56,57 @@ fn pilot_stderr_secret() {
 fn pilot_split_secret() {
     secret_attempt("printf 'SECRET\n0123456789abcdef\n'; exit 1", false, false);
 }
+
+#[test]
+fn pilot_attempt_owner_releases_on_error_and_panic() {
+    struct Panics;
+    impl Harness for Panics {
+        fn name(&self) -> &str {
+            "panic"
+        }
+        fn command(&self, _: &HarnessRun) -> Command {
+            panic!("owner unwind")
+        }
+    }
+    let (r, base) = repo();
+    let root = tempfile::tempdir().unwrap();
+    let mut inp = input(
+        claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"),
+        1,
+        root.path(),
+    );
+    inp.claim.card = "pilot-owner-attempt".into();
+    let cfg = tiny();
+    let patterns = Patterns::default();
+    assert!(
+        std::panic::catch_unwind(|| run_attempt(&Panics, &cfg, &patterns, &inp, &|| false))
+            .is_err()
+    );
+    inp.n += 1;
+    let h = Fake::new("echo hi > out.txt");
+    assert_eq!(
+        run_attempt(&h, &cfg, &patterns, &inp, &|| false)
+            .unwrap()
+            .exit_class,
+        ExitClass::Ok
+    );
+    inp.n += 1;
+    let valid_base = inp.claim.base_sha.clone();
+    inp.claim.base_sha = "missing-base".into();
+    assert!(run_attempt(&h, &cfg, &patterns, &inp, &|| false).is_err());
+    inp.claim.base_sha = valid_base;
+    inp.n += 1;
+    assert_eq!(
+        run_attempt(&h, &cfg, &patterns, &inp, &|| false)
+            .unwrap()
+            .exit_class,
+        ExitClass::Ok
+    );
+    inp.n += 1;
+    assert_eq!(
+        run_attempt(&h, &cfg, &patterns, &inp, &|| false)
+            .unwrap()
+            .exit_class,
+        ExitClass::Ok
+    );
+}

@@ -716,6 +716,18 @@ pub(crate) fn do_claim_card(
     })
 }
 
+fn admitted_claim(
+    keeper: &dyn Keeper,
+    cfg: &Config,
+    key: &str,
+) -> Result<Option<Claim>, ActivityError> {
+    crate::card_admit::allow(cfg, key)?;
+    crate::card_admit::claimed(
+        settle_refusal(do_claim_card(keeper, key), "claim_card").map(Option::flatten)?,
+        key,
+    )
+}
+
 pub(crate) fn do_ensure_phase_branch(
     input: &PhaseBranchInput,
 ) -> Result<PhaseBranchResult, String> {
@@ -1558,15 +1570,10 @@ impl CardActivities {
     ) -> Result<Option<Claim>, ActivityError> {
         let keeper = self.deps.keeper.clone();
         let key = input.key;
-        let claim_key = key.clone();
-        crate::card_admit::allow(&self.deps.cfg, &key)?;
-        let res = tokio::task::spawn_blocking(move || do_claim_card(&*keeper, &key))
+        let cfg = self.deps.cfg.clone();
+        tokio::task::spawn_blocking(move || admitted_claim(&*keeper, &cfg, &key))
             .await
-            .map_err(activity_error)?;
-        crate::card_admit::claimed(
-            settle_refusal(res, "claim_card").map(Option::flatten)?,
-            &claim_key,
-        )
+            .map_err(activity_error)?
     }
 
     /// Create the phase branch once; a racing creator simply wins the CAS.

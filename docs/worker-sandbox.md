@@ -120,3 +120,16 @@ from `osrelease`. The worker checks both at startup: on a WSL kernel it reads
 Bubblewrap is not available and unprivileged user namespaces are blocked on the
 target host. Landlock and `systemd-run --user --scope` work there, so this layer
 uses them.
+# Temporal pilot round-two evidence
+
+The pilot regression tests now check that a rejected allowlist key makes zero
+recorded keeper claim calls, that attempt ownership is released after a harness
+panic and a worktree error (and after normal completion), and that staging auth
+from the parent HOME excludes Git and SSH credentials. The latter uses separate
+harness and check homes, verifies an ordinary auth file really was staged, and
+runs a failing `git push` with no configured remote through both confinement
+helpers. Removing each corresponding production protection makes its test fail.
+
+These checks do not yet establish activity-entry concurrent-owner rejection,
+no-child execution after an empty claim, or serialized keeper projection payload
+redaction; those remain outstanding integration coverage.
