@@ -44,8 +44,8 @@ and are not touched.
 
 ## Provenance
 
-The live edit was delivered on 2026-09-30 (14:49Z) by an **untracked** diagnostic,
-`AutoOS-ws-qwenclamp/logs/patch_dist.py`. Its OLD/NEW strings and its six-file
+The live edit was delivered on 2026-09-30 (14:49Z) by an untracked diagnostic script.
+Its OLD/NEW strings and its six-file
 list match the live bytes exactly. Until this script existed, **no tracked file
 contained `maxOutputCap` or `clampToModelMaxOutput`** (`git log --all -S
 "maxOutputCap"` was empty), so a pristine reinstall plus the documented reapply
@@ -99,7 +99,7 @@ pwsh -File ./qwen-clamp-reapply.ps1
 pwsh -File ./qwen-clamp-reapply.ps1 -DryRun
 
 # Override the package directory:
-pwsh -File ./qwen-clamp-reapply.ps1 -PackageDir C:\dev\omniroute
+pwsh -File ./qwen-clamp-reapply.ps1 -PackageDir '<omniroute-package-dir>'
 ```
 
 The script backs each changed file up to `<file>.autoos-backup-<timestamp>`, is

@@ -34,7 +34,7 @@
 .EXAMPLE
   pwsh -File reason-fix-reapply.ps1
 .EXAMPLE
-  pwsh -File reason-fix-reapply.ps1 -PackageDir C:\omniroute-dev\node_modules\omniroute
+  pwsh -File reason-fix-reapply.ps1 -PackageDir '<omniroute-package-dir>'
 .NOTES
   AutoOS patch 2026-09-30  |  omniroute v3.8.50  |  branch L1-backlog/ws-fixes-20260930
 #>

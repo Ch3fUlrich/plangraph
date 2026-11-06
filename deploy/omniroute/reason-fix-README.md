@@ -115,7 +115,7 @@ The script:
 Override the package directory for a local/dev install:
 
 ```powershell
-pwsh -File ./reason-fix-reapply.ps1 -PackageDir C:\dev\omniroute
+pwsh -File ./reason-fix-reapply.ps1 -PackageDir '<omniroute-package-dir>'
 ```
 
 ## After `npm update omniroute`

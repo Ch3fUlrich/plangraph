@@ -68,9 +68,10 @@ Byte-difference inventory (all other copied bytes remain unchanged):
 | `apply-capability-overrides.ps1` | Local documentation paths; explicit read-only root; replace Gateway parameter/default with required environment URL or port; preserve BOM. |
 | `live/server-combos.json` | Replace source metadata with “read-only export of 2026-10-17”. |
 | `vertex-failover-knobs.json` | Replace site restart port with `<port>`. |
-| `qwen-clamp-reapply-README.md` | Three invocation paths use local sibling scripts. |
-| `reason-fix-README.md` | Two invocation paths use local sibling scripts; isolated-instance and shared-gateway verification ports both become `<port>`. |
-| `reason-fix-reapply.ps1` | Two patch comments refer to the local README. |
+| `qwen-clamp-reapply-README.md` | Three invocation paths use local sibling scripts; diagnostic origin becomes an untracked diagnostic script; example package directory becomes `<omniroute-package-dir>`. |
+| `qwen-clamp-reapply.ps1` | Diagnostic origin becomes an untracked diagnostic script; example package directory becomes `<omniroute-package-dir>`. |
+| `reason-fix-README.md` | Two invocation paths use local sibling scripts; isolated-instance and shared-gateway verification ports both become `<port>`; example package directory becomes `<omniroute-package-dir>`. |
+| `reason-fix-reapply.ps1` | Two patch comments refer to the local README; example package directory becomes `<omniroute-package-dir>`. |
 | `reasoning-defense.md` | Scope becomes `./`. |
 | `verify-clamp.mjs` | Patch documentation path becomes local. |
 | `custom-models.json` | Vendor documentation domain becomes `<vendor-model-documentation>`. |

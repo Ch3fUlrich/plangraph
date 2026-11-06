@@ -21,7 +21,7 @@
           maxOutputCap:16384,clampToModelMaxOutput:!0}];
 
   This reproduces, as a tracked artifact, the live edit delivered on 2026-09-30 by
-  an untracked diagnostic script (AutoOS-ws-qwenclamp/logs/patch_dist.py, 14:49Z).
+  an untracked diagnostic script (14:49Z).
   That edit was previously represented in no tracked file - see
   docs/handoff/2026-09-30-lanePatchIntegrity.md.
 
@@ -49,7 +49,7 @@
 .EXAMPLE
   pwsh -File qwen-clamp-reapply.ps1
 .EXAMPLE
-  pwsh -File qwen-clamp-reapply.ps1 -PackageDir C:\omniroute-dev\node_modules\omniroute
+  pwsh -File qwen-clamp-reapply.ps1 -PackageDir '<omniroute-package-dir>'
 
 .NOTES
   AutoOS patch 2026-09-30  |  omniroute v3.8.50  |  branch L1-backlog/ws-fixes-20260930
