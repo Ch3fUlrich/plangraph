@@ -134,11 +134,9 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         confine(&mut cmd, home.path());
         let out = cmd.output().unwrap();
         assert!(!out.status.success());
-        let stderr = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
+        let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("fatal:")
-                && stderr.contains("password")
-                && (stderr.contains("could not read") || stderr.contains("unable to get")),
+            stderr.contains("fatal: unable to get password from user"),
             "{stderr}"
         );
         assert!(!String::from_utf8_lossy(&out.stdout).contains("fixture"));
