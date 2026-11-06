@@ -2,6 +2,33 @@
 
 ## Fix-round status (supersedes the original snapshot below)
 
+### PR #536 run-3b6a01ae checkpoint
+
+- **V3 closed:** the mandatory-identity matrix now asserts the exact
+  `Ok(("custom", "id-1"))` value and each missing/invalid identity error,
+  including deployment-first error precedence and the explicit opt-out error.
+  All three `buildid::tests` pass; cargo fmt and the file-size gate pass.
+- **V2 remains open:** no behavioral restore/gating/splice tests or deletion
+  mutation proofs were added in this run. The existing live Card harness is
+  private to oversized `e2e.rs`; no tests were moved, and no source-text check
+  is offered as a substitute for executing Card. A dedicated Card harness or
+  testable production state boundary is still needed.
+- **V1 remains open:** neither `PG_TEMPORAL_CLI` nor `TEMPORAL_CLI` is set,
+  and `temporal` is absent from PATH. The real worker registers pinned
+  deployment options, but this crash harness does not. Missing evidence is a
+  local server plus two separately compiled worker identities, promotion and
+  old-build restart at both crash points. Disk space is available; no claim
+  is made that a second binary was too large or that this proof ran.
+- **CI inspection:** `.github/workflows/tests.yml` job `pytest` runs all
+  `tests` on push and affected tests on PRs; the aggregate `ci-gate` job depends
+  on it. This can run `test_workflow_archive.py`'s temporary-repository policy
+  tests and manifest checks. No job invokes `reject_changes` against the PR
+  merge base (the module's CLI entry point). Thus required archive-change
+  enforcement is still missing, even when those unit tests pass. No workflow
+  was edited; repository branch-protection settings were not queried.
+  Local archive unit tests passed (5) using `/tmp/opencode/venv/bin/python`;
+  system Python lacks pytest.
+
 ### PR #536 ruling checkpoint (run-5ba6e566f88e45d6a26a62af2feaf14b)
 
 **Not acceptance-ready. Both seat findings remain open.** This checkpoint does
