@@ -379,7 +379,7 @@ raise SystemExit(code)
             return code if code is not None else (0 if result.get('status') == 'running' else 1)
         return 0
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
-        print(f'{args.run_id}: {type(exc).__name__}' if isinstance(exc, PermissionError) and hasattr(args, 'run_id') else str(exc), file=sys.stderr)
+        print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
 
 

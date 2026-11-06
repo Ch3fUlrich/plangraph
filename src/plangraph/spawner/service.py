@@ -247,7 +247,7 @@ class SpawnService(SeatSpawnMixin):
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
             from plangraph.planner.seats import seat_family, writer_parts
-            reviewed = ((source.get('given_writer_families') or [source.get('writer_family')]) if (source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)) else []) if review_of else []
+            reviewed = ((source.get('given_writer_families') or [f for f in [source.get('writer_family')] if f]) if (source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)) else []) if review_of else []
             plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *reviewed])
             chosen = next((l for l in DEFAULT_LEGS if l.id == leg), None) if leg else None
             if leg and chosen is None: raise SpawnRefused('unknown leg')
@@ -303,7 +303,7 @@ class SpawnService(SeatSpawnMixin):
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run else None, served_model=None,
-            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [source.get('writer_family')] if review_of else []),
+            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
         pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
