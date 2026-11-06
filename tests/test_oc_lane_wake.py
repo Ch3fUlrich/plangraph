@@ -28,6 +28,7 @@ class WakeTests(unittest.TestCase):
         self.secret = "synthetic-" + "test-value"
         self.posts = []
         self.status = 200
+        self.truncated = False
         self.messages = [{"info": {"id": "msg_one", "role": "assistant",
                                   "time": {"created": time.time() - 900,
                                            "completed": time.time() - 800}}}]
@@ -42,6 +43,8 @@ class WakeTests(unittest.TestCase):
                 expected = base64.b64encode(("opencode:" + owner.secret).encode()).decode()
                 owner.assertEqual(self.headers["Authorization"], "Basic " + expected)
                 self.send_response(owner.status)
+                if owner.truncated:
+                    self.send_header("Content-Length", "1000000")
                 self.end_headers()
                 data = {"data": {"items": owner.messages}} if owner.status == 200 else owner.secret
                 self.wfile.write(json.dumps(data).encode())
@@ -139,6 +142,12 @@ class WakeTests(unittest.TestCase):
         self.status = 401
         self.assertEqual(self.run_wake(), 2)
         self.assertFalse(self.posts)
+
+    def test_truncated_response_returns_configuration_error(self):
+        self.truncated = True
+        self.assertEqual(self.run_wake(), 2)
+        self.assertFalse(self.posts)
+        self.assertEqual(json.loads((self.root / "log").read_text())["result"], "error")
 
     def test_server_down(self):
         # A bound but non-listening socket cannot accept a request.

@@ -11,6 +11,7 @@ import argparse
 import base64
 import fcntl
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -67,6 +68,8 @@ def request(args, password, method, suffix, body=None):
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError:
         raise ValueError("HTTP request rejected") from None
+    except http.client.HTTPException:
+        raise ValueError("invalid HTTP response") from None
     except (urllib.error.URLError, OSError):
         raise ServerDown() from None
 
