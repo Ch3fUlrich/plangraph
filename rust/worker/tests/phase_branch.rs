@@ -28,7 +28,7 @@ fn phase_branch_collision_and_utf8_vectors() {
 fn phase_branch_sanitizes_and_rejects_invalid_keys() {
     assert_eq!(
         phase_branch("demo:PH-X").unwrap(),
-        "phase/demo-PH-X-4095fd20aa975021"
+        concat!("phase/demo-PH-X-", "4095fd20aa975021")
     );
     assert_eq!(
         phase_branch("a b/c").unwrap(),
