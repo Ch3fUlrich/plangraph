@@ -190,19 +190,19 @@ async fn main() -> anyhow::Result<()> {
         .register_activities(CardActivities::new(deps));
     let opts = {
         let (deployment, build) = identity;
-            println!("worker versioning on: deployment={deployment} build_id={build}");
-            let version = WorkerDeploymentVersion::builder()
-                .deployment_name(deployment)
-                .build_id(build)
-                .build();
-            builder
-                .deployment_options(
-                    WorkerDeploymentOptions::new(version)
-                        .use_worker_versioning(true)
-                        .default_versioning_behavior(VersioningBehavior::Pinned)
-                        .build(),
-                )
-                .build()
+        println!("worker versioning on: deployment={deployment} build_id={build}");
+        let version = WorkerDeploymentVersion::builder()
+            .deployment_name(deployment)
+            .build_id(build)
+            .build();
+        builder
+            .deployment_options(
+                WorkerDeploymentOptions::new(version)
+                    .use_worker_versioning(true)
+                    .default_versioning_behavior(VersioningBehavior::Pinned)
+                    .build(),
+            )
+            .build()
     };
 
     let mut worker = Worker::new(&runtime, client, opts)?;

@@ -135,12 +135,29 @@ mod tests {
         for deployment in [None, Some(""), Some("bad deployment"), Some("custom")] {
             for build in [None, Some(""), Some("bad id"), Some("id-1")] {
                 let result = with_env(
-                    &[("PG_VERSIONING", None), ("PG_DEPLOYMENT", deployment),
-                      ("PG_BUILD_ID", build)], from_env);
-                assert_eq!(result.is_ok(), deployment == Some("custom") && build == Some("id-1"));
+                    &[
+                        ("PG_VERSIONING", None),
+                        ("PG_DEPLOYMENT", deployment),
+                        ("PG_BUILD_ID", build),
+                    ],
+                    from_env,
+                );
+                assert_eq!(
+                    result.is_ok(),
+                    deployment == Some("custom") && build == Some("id-1")
+                );
             }
         }
-        assert!(with_env(&[("PG_VERSIONING", Some("off")),
-            ("PG_DEPLOYMENT", Some("custom")), ("PG_BUILD_ID", Some("id-1"))], from_env).is_err());
+        assert!(
+            with_env(
+                &[
+                    ("PG_VERSIONING", Some("off")),
+                    ("PG_DEPLOYMENT", Some("custom")),
+                    ("PG_BUILD_ID", Some("id-1"))
+                ],
+                from_env
+            )
+            .is_err()
+        );
     }
 }

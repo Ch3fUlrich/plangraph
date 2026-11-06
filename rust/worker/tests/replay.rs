@@ -13,37 +13,38 @@ use temporalio_sdk::{
     ActivityOptions, WorkflowContext, WorkflowResult,
     workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions},
 };
-
 /// Load a required current fixture, expanding decoded payloads for replay.
 fn history(name: &str) -> WorkflowHistory {
     let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
     history_path(std::path::Path::new(&path))
 }
-
 fn history_path(path: &std::path::Path) -> WorkflowHistory {
     let bytes = std::fs::read(path).expect("read history");
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&bytes).expect("parse history");
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("parse history");
     expand_data_json(&mut value);
     let bytes = serde_json::to_vec(&value).expect("re-serialize history json");
     WorkflowHistory::from_json(&bytes).expect("parse history json")
 }
-
 #[tokio::test]
 async fn replays_all_kept_release_copies() {
-    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/releases"));
+    let root = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/releases"
+    ));
     for release in std::fs::read_dir(root).unwrap() {
         for entry in std::fs::read_dir(release.unwrap().path()).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().and_then(|s| s.to_str()) == Some("json")
-                && path.file_name().unwrap() != "manifest.json" {
-                replayer().replay_workflow(history_path(&path)).await
+                && path.file_name().unwrap() != "manifest.json"
+            {
+                replayer()
+                    .replay_workflow(history_path(&path))
+                    .await
                     .expect("kept release history replays");
             }
         }
     }
 }
-
 /// Standard base64 alphabet (RFC 4648 §4) with `=` padding.
 fn base64_std(bytes: &[u8]) -> String {
     let alphabet: Vec<u8> = (b'A'..=b'Z')
@@ -71,7 +72,6 @@ fn base64_std(bytes: &[u8]) -> String {
     }
     out
 }
-
 /// Recursively replace every `data_json` key with a `data` key holding the
 /// standard-alphabet, `=`-padded base64 of the COMPACT serialization of the
 /// value (`, ` / `: ` separators absent, non-ASCII kept as UTF-8, key order as

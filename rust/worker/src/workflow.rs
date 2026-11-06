@@ -6,7 +6,6 @@
 //! A pass runs one attempt on a fresh worktree, records it, then either merges
 //! an `ok` result or asks the budget for the next move: retry, re-route, wait,
 //! promote, upgrade the context class, quarantine or park.
-
 use crate::activities::AskInput;
 use crate::activities::{
     CardActivities, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput, GateResult,
@@ -32,25 +31,18 @@ use temporalio_sdk::{
     ActivityOptions, ApplicationFailure, SyncWorkflowContext, TimeoutType,
     WorkflowCancellationToken, WorkflowContext, WorkflowResult, WorkflowTermination,
 };
-
 /// Alarm reason when the total waited time reaches `Config::wait_cap`.
 pub const WAIT_CAP_PARK_REASON: &str = "wait cap reached";
-
 /// Alarm reason when a run of `probe_fail` attempts is abandoned.
 const PROBE_FAIL_PARK_REASON: &str = "probe fail cap reached";
-
 /// Consecutive `probe_fail` attempts tolerated before parking (R2 carry-over).
 const PROBE_FAIL_CAP: usize = 5;
-
 /// Durable pause before asking again when the keeper would not grant the merge lock.
 const MERGE_RETRY_WAIT: Duration = Duration::from_secs(15);
-
 /// Merge-lock retries before the card parks.
 const MERGE_RETRY_CAP: u32 = 20;
-
 /// Alarm reason when the keeper merge lock stayed unavailable.
 const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
-
 /// Temporal patch marker for the card's gate running before a merge.
 ///
 /// Scheduling the `gate` activity adds a command to the workflow history that a
@@ -59,13 +51,11 @@ const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 /// a card started after the change runs it. The id is pinned by a test: renaming
 /// it would strand every card whose history already carries the old marker.
 const GATE_PATCH: &str = "gate-before-merge-v1";
-
 /// `ctx.patched` marker for the `observe` activity that captures the state a
 /// park presents (EXEC-OBSERVED-STATE, G3-1). Scheduling it is a new command,
 /// so a history recorded before the marker replays without it and parks on the
 /// live-set fallback, exactly as those runs did.
 const OBSERVE_PATCH: &str = "park-observe-v1";
-
 /// `ctx.patched` marker for the park 409 (`exec_stale_state`) re-observe loop
 /// (D4). The loop issues `observe`/`park` commands a history recorded before
 /// the marker has no room for, so an old in-flight card keeps parking once and
@@ -73,13 +63,10 @@ const OBSERVE_PATCH: &str = "park-observe-v1";
 /// renaming it would strand every card whose history already carries the old
 /// marker.
 const PARK_REOBSERVE_PATCH: &str = "park-reobserve-v1";
-
 /// How many times a park refused as stale is re-observed and retried before the
 /// workflow fails with the last cause (D3).
 const PARK_REOBSERVES: u32 = 2;
-
 pub use crate::card_input::CardInput;
-
 /// Alarm reason when a question stayed unanswered until the wait cap.
 const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
 
@@ -227,22 +214,45 @@ impl Card {
         let max_question_rounds = input.max_question_rounds.unwrap_or(cfg.max_question_rounds);
         let bounded = ctx.patched(crate::rollover::LIMITS_PATCH);
         if let Some(r) = input.resume.take() {
-            history = r.history; base_sha = r.base_sha; n = r.n;
-            waits = r.waits; waited = r.waited; context = r.context;
-            limited = r.limited; leg = r.leg; answers = r.answers;
+            history = r.history;
+            base_sha = r.base_sha;
+            n = r.n;
+            waits = r.waits;
+            waited = r.waited;
+            context = r.context;
+            limited = r.limited;
+            leg = r.leg;
+            answers = r.answers;
             question_rounds = r.question_rounds;
             ctx.state_mut(|s| s.answers.splice(0..0, r.signals).for_each(drop));
         }
         let initial_waits = waits;
         loop {
-            if bounded && n > 0 && crate::rollover::due(
-                ctx.history_length(), waits - initial_waits, ctx.continue_as_new_suggested(),
-            ) && !ctx.state(|s| s.cancel_requested) {
+            if bounded
+                && n > 0
+                && crate::rollover::due(
+                    ctx.history_length(),
+                    waits - initial_waits,
+                    ctx.continue_as_new_suggested(),
+                )
+                && !ctx.state(|s| s.cancel_requested)
+            {
                 input.resume = Some(crate::rollover::Resume {
-                    history, base_sha, n, waits, waited, context, limited, leg, answers,
-                    question_rounds, signals: ctx.state(|s| s.answers.clone()),
+                    history,
+                    base_sha,
+                    n,
+                    waits,
+                    waited,
+                    context,
+                    limited,
+                    leg,
+                    answers,
+                    question_rounds,
+                    signals: ctx.state(|s| s.answers.clone()),
                 });
-                return ctx.continue_as_new(input, Default::default()).map(|v| match v {});
+                return ctx
+                    .continue_as_new(input, Default::default())
+                    .map(|v| match v {});
             }
             // A cancel that landed between attempts must not start another one.
             if ctx.state(|s| s.cancel_requested) {
@@ -274,7 +284,9 @@ impl Card {
                 .retry_policy(retry)
                 .cancellation_token(op.clone())
                 .build();
-            if bounded { crate::rollover::bound(&mut opts, cfg.start_to_close); }
+            if bounded {
+                crate::rollover::bound(&mut opts, cfg.start_to_close);
+            }
             let attempt_input = AttemptInput {
                 claim: Claim {
                     base_sha: base_sha.clone(),

@@ -18,18 +18,15 @@
 # (schema_migrations has 4 rows, verified against postgres:16); order: start, keeper, pg-drill-local.sh.
 #   devstack.sh set-current    # re-run just the worker deployment set-current-version step
 set -euo pipefail
-
 usage() {
   printf '%s\n' \
-    "usage: devstack.sh start|stop [--purge]|status|keeper|set-current" \
+    "usage: devstack.sh start|stop [--purge]|status|keeper|worker|set-current" \
     "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT DEVSTACK_DEPLOYMENT" \
     "     DEVSTACK_BUILD_ID PG_PORT DEVSTACK_PG_NAME KEEPER_PORT DEVSTACK_PG_MODE PG_BIN" \
     "     DEVSTACK_HEALTH_TIMEOUT" \
     "     TEMPORAL_CLI_VERSION TEMPORAL_CLI_SHA256 DEVSTACK_TEMPORAL_URL_BASE"
 }
-
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-
 # Defaults are overridable so CI and co-located stacks can move ports/paths without editing this file.
 DEVSTACK_STATE="${DEVSTACK_STATE:-$REPO_ROOT/.devstack}"
 # Captured before the default is applied: ensure_temporal_cli may only hit the network when
@@ -50,7 +47,6 @@ DEVSTACK_HEALTH_TIMEOUT="${DEVSTACK_HEALTH_TIMEOUT:-60}"
 TEMPORAL_CLI_VERSION="${TEMPORAL_CLI_VERSION:-1.9.1}"
 TEMPORAL_CLI_SHA256="${TEMPORAL_CLI_SHA256:-}"
 DEVSTACK_TEMPORAL_URL_BASE="${DEVSTACK_TEMPORAL_URL_BASE:-https://github.com/temporalio/cli/releases/download}"
-
 mkdir -p "$DEVSTACK_STATE"
 PG_DSN="postgresql://postgres@127.0.0.1:$PG_PORT/keeper"
 TEMPORAL_ADDR="127.0.0.1:$TEMPORAL_PORT"
@@ -366,7 +362,7 @@ start_postgres() {
 cmd_start() {
   resolve_pg_mode >/dev/null # fail on a bad DEVSTACK_PG_MODE before anything is started
   start_temporal
-  start_set_current
+  start_set_current || return 1
   start_postgres
 }
 
@@ -479,6 +475,10 @@ case "${1:-}" in
   stop) shift; cmd_stop "$@" ;;
   status) cmd_status ;;
   keeper) cmd_keeper ;;
+  worker)
+    export PG_DEPLOYMENT="$DEVSTACK_DEPLOYMENT" PG_BUILD_ID="$DEVSTACK_BUILD_ID"
+    export PG_TEMPORAL_ADDR="http://$TEMPORAL_ADDR"
+    exec "${PG_WORKER_BIN:-$REPO_ROOT/rust/worker/target/debug/pg-worker}" ;;
   set-current) ensure_temporal_cli; set_current_version ;;
   -h|--help|help) usage ;;
   "") usage; exit 2 ;;

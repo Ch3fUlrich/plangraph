@@ -1,4 +1,6 @@
 # Workflow versioning operations
+Local launch: `DEVSTACK_DEPLOYMENT=d DEVSTACK_BUILD_ID=v1 tools/devstack.sh worker`
+exports the same identity used by `set-current`; `PG_WORKER_BIN` overrides the binary.
 1. Set explicit valid `PG_DEPLOYMENT` and unique `PG_BUILD_ID`; missing identity
    or `PG_VERSIONING=off` refuses startup before connecting. Start the poller,
    then `tools/devstack.sh set-current`; failed promotion makes `start` fail.

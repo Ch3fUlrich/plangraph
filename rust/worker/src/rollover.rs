@@ -29,12 +29,15 @@ pub fn due(events: u32, waits: u32, suggested: bool) -> bool {
 
 /// Bound queue time and the entire retry sequence, not just each execution.
 pub fn schedule_to_close(start_to_close: Duration) -> Duration {
-    start_to_close.saturating_mul(5).saturating_add(Duration::from_secs(60))
+    start_to_close
+        .saturating_mul(5)
+        .saturating_add(Duration::from_secs(60))
 }
 
 pub fn bound(opts: &mut temporalio_sdk::ActivityOptions, start: Duration) {
     opts.close_timeouts = temporalio_sdk::ActivityCloseTimeouts::ScheduleAndStartToClose {
-        schedule_to_close: schedule_to_close(start), start_to_close: start,
+        schedule_to_close: schedule_to_close(start),
+        start_to_close: start,
     };
 }
 
@@ -52,6 +55,9 @@ mod tests {
 
     #[test]
     fn retry_window_includes_queue_and_all_five_attempts() {
-        assert_eq!(schedule_to_close(Duration::from_secs(2)), Duration::from_secs(70));
+        assert_eq!(
+            schedule_to_close(Duration::from_secs(2)),
+            Duration::from_secs(70)
+        );
     }
 }
