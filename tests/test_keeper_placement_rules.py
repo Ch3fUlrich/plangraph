@@ -150,6 +150,26 @@ def test_actor_body_cannot_spoof_and_invalid_no_mutation(backend, change):
     assert store.placement_rule_audit(router)['events'] == []
 
 
+@pytest.mark.parametrize('kind', ['nan', 'inf', '-inf', 'object', 'cycle', 'deep'])
+def test_unserializable_edit_refused_without_mutation(backend, kind):
+    store, router, _ = backend
+    if kind == 'object':
+        value = object()
+    elif kind == 'cycle':
+        value = []
+        value.append(value)
+    elif kind == 'deep':
+        value = '4'
+        for _ in range(2000):
+            value = [value]
+    else:
+        value = float(kind)
+    with pytest.raises(Refused, match='rules_invalid'):
+        store.edit_placement_rule(router, edit(value=value))
+    assert store.placement_rules(router) == dict(revision=0, fleet={}, hosts={})
+    assert store.placement_rule_audit(router)['events'] == []
+
+
 def test_stale_duplicate_conflict_and_absent_delete_invalid(backend):
     store, router, _ = backend
     with pytest.raises(Refused, match='rules_invalid'):

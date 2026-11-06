@@ -74,8 +74,11 @@ class PlacementRulesMixin:
             if (type(request) is not dict or set(request) != {
                     "scope", "key", "value", "expected_revision", "rollback_of"}):
                 _invalid()
-            encoded = json.dumps(request, allow_nan=False, sort_keys=True, separators=(",", ":"))
-            request = json.loads(encoded)
+            try:
+                encoded = json.dumps(request, allow_nan=False, sort_keys=True, separators=(",", ":"))
+                request = json.loads(encoded)
+            except (ValueError, TypeError, RecursionError):
+                _invalid()
             call_rules({"op": "validate", "edit": request})
             scope = "fleet" if request["scope"] == "Fleet" else "host"
             host = "" if scope == "fleet" else request["scope"]["Host"]
