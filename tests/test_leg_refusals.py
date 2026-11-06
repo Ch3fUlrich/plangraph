@@ -142,6 +142,8 @@ def test_shaped_unavailable_keeps_legacy_diagnostic(stream):
 def test_legacy_unavailable_stderr():
     # Failed stderr retains legacy prefixed harness diagnostics.
     assert unavailable_reason(1, '', 'prefix model unavailable') == 'prefix model unavailable'
+    assert unavailable_reason(0, '', 'prefix model unavailable') is None
+    assert unavailable_reason(1, 'prefix model unavailable', '') is None
 
 
 def test_adapter_keeps_original_documentation():
