@@ -17,6 +17,11 @@ def check(principal, action, *, transport=False):
             raise Refused("forbidden", "phase worker scope excludes this verb")
 
 
+def check_lock_project(store, principal, repo):
+    if isinstance(repo, str) and ":" in repo:
+        check_project(store, principal, repo)
+
+
 def check_project(store, principal, key):
     if getattr(principal, "worker_scope", False):
         store._check_principal(principal)

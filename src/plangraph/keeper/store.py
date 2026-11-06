@@ -181,9 +181,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             projects = json.loads(row["projects"] or "[]")
         except (ValueError, TypeError):
             projects = []
-        expected_role = ("phase-worker" if isinstance(principal, auth.PhaseWorkerPrincipal)
-                         else getattr(principal, "role", None))
-        if row["role"] != expected_role \
+        if row["role"] != getattr(principal, "role", None) \
                 or projects != list(getattr(principal, "projects", None) or []):
             raise Refused("forbidden", "principal changed since authentication")
 

@@ -218,9 +218,6 @@ def _phase_plan(store, principal, body, need):
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
     from .worker_policy import check_project
     check_project(store, principal, key)
-    if getattr(principal, "worker_scope", False):
-        from dataclasses import replace
-        principal = replace(principal, role="system")  # planner compatibility, scope retained
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
     # repo_root is server-side only; plan_phase also re-checks the role first.
@@ -240,9 +237,6 @@ def _phase_finish(store, principal, body, need):
     key, branch, head = need(body, "key"), need(body, "branch"), need(body, "head")
     from .worker_policy import check_project
     check_project(store, principal, key)
-    if getattr(principal, "worker_scope", False):
-        from dataclasses import replace
-        principal = replace(principal, role="system")  # planner compatibility, scope retained
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
@@ -258,9 +252,6 @@ def _worker_claim(store, principal, body, need):
     store._require_role(principal, "worker", "system", "phase-worker")
     from .worker_policy import check_project
     check_project(store, principal, need(body, "card"))
-    if getattr(principal, "worker_scope", False):
-        from dataclasses import replace
-        principal = replace(principal, role="system")  # planner compatibility, scope retained
     key = need(body, "card")
     # body.worker is informational (a worker process id) and is ignored.
     # The calling principal from the token is the only identity.

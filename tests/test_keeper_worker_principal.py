@@ -101,6 +101,7 @@ def test_scoped_phase_routes(scoped, tmp_path, monkeypatch):
 
     def observed(who, action, key, callback):
         if who.name == principal.name:
+            assert who.role == "phase-worker"
             actions.append(action)
         return original_run(who, action, key, callback)
 

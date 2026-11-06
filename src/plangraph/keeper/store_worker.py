@@ -1,8 +1,7 @@
 """Worker verbs: the calls the Rust worker (rust/worker/src/keeper.rs) makes.
 
-A worker/spawner/l1 principal is scoped to the card's project via
-``self._may_act_in(principal, item["project"])`` (defined in ``CardsMixin``);
-router and system principals pass anywhere.
+A worker/spawner/l1 is project-scoped by ``CardsMixin._may_act_in``;
+router and system pass anywhere.
 
 ``worker_park`` is bound to the card's current claim: the caller must be the
 claim holder (or its delegate) and the lease must still be alive.  Merge-lock
@@ -502,8 +501,9 @@ class WorkerMixin:
     # name percent-escaped so the first ``:`` always ends the principal
     # segment.
     def lock_acquire(self, principal, repo, body):
-        """Acquire or renew the lease lock for *repo*; returns the owner string
-        (already principal-prefixed) and the advisory generation token."""
+        """Acquire/renew *repo*; return principal-prefixed owner and generation."""
+        from .worker_policy import check_lock_project
+        check_lock_project(self, principal, repo)
         return self._run(principal, "lock_acquire", None,
                          lambda now: self._lock_acquire(principal, repo, body,
                                                         now))
@@ -548,8 +548,9 @@ class WorkerMixin:
         return {"token": token, "owner": owner}
 
     def lock_release(self, principal, repo, body):
-        """Release the lease lock; *body* carries the owner string and the
-        advisory generation token that ``lock_acquire`` returned."""
+        """Release using the owner and generation returned by ``lock_acquire``."""
+        from .worker_policy import check_lock_project
+        check_lock_project(self, principal, repo)
         return self._run(principal, "lock_release", None,
                          lambda now: self._lock_release(principal, repo, body,
                                                         now))

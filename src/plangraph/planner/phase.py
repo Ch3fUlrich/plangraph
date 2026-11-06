@@ -78,8 +78,10 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
     """
     # Role first, before reading anything at all.
     role = getattr(principal, "role", None)
-    if role not in ("router", "system"):
+    if role not in ("router", "system") and not getattr(principal, "worker_scope", False):
         raise Refused("forbidden", "phase_plan requires router or system")
+    from plangraph.keeper.worker_policy import check_project
+    check_project(store, principal, key)
 
     row = store.conn.execute(
         "SELECT kind, state FROM items WHERE key = ?", (key,)).fetchone()
