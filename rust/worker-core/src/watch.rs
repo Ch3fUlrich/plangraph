@@ -11,7 +11,7 @@ use std::{io, process::ExitStatus};
 mod tests;
 #[path = "watch_unix.rs"]
 #[cfg(unix)]
-#[allow(dead_code)] // RL12 supervisor integration follows in a separate slice.
+#[cfg_attr(not(test), allow(dead_code))] // Owned backend awaits the RL12 supervisor slice.
 mod unix;
 
 pub struct Hooks<'a> {
@@ -25,6 +25,7 @@ pub struct Hooks<'a> {
 }
 
 pub struct Watched {
+    pub io_error: Option<io::Error>,
     pub run: stall::Supervised,
     pub decisions: Vec<Decision>,
     pub activity: Option<u64>,
@@ -54,42 +55,59 @@ pub trait Child {
     fn terminate(&mut self) -> io::Result<()>;
     fn kill(&mut self) -> io::Result<()>;
     fn empty(&mut self) -> io::Result<bool>;
-    fn reap(&mut self) -> io::Result<()>;
+    fn reap(&mut self) -> io::Result<Option<ExitStatus>>;
 }
 
 /// One clock-driven termination path, including cleanup after an I/O failure.
 /// Signal errors do not skip escalation or become evidence of emptiness.
 #[derive(Default)]
 pub struct Stop {
+    status: Option<ExitStatus>,
     term_ms: Option<u64>,
     kill_ms: Option<u64>,
     cause: Option<io::ErrorKind>,
 }
 impl Stop {
-    pub fn tick(&mut self, child: &mut dyn Child, now_ms: u64, grace_ms: u64) -> Option<KillProof> {
+    pub fn tick(
+        &mut self,
+        child: &mut dyn Child,
+        now_ms: u64,
+        grace_ms: u64,
+        prove_ms: u64,
+    ) -> Option<KillProof> {
+        match child.reap() {
+            Ok(status) => {
+                let exited = self.status.is_none() && status.is_some();
+                self.status = self.status.or(status);
+                if exited && self.term_ms.is_some() && self.empty(child) {
+                    return Some(KillProof::Empty);
+                }
+            }
+            Err(error) => self.record(Err(error)),
+        }
         if self.term_ms.is_none() {
             self.term_ms = Some(now_ms);
+            if self.empty(child) {
+                return Some(KillProof::Empty);
+            }
             self.record(child.terminate());
         }
-        self.record(child.reap());
-        let empty = child.empty();
-        self.record(
-            empty
-                .as_ref()
-                .map(|_| ())
-                .map_err(|e| io::Error::from(e.kind())),
-        );
-        if empty.unwrap_or(false) {
-            return Some(KillProof::Empty);
-        }
         if self.kill_ms.is_none() && now_ms.saturating_sub(self.term_ms?) >= grace_ms {
+            if self.empty(child) {
+                return Some(KillProof::Empty);
+            }
             self.kill_ms = Some(now_ms);
             self.record(child.kill());
         }
         if self
             .kill_ms
-            .is_some_and(|t| now_ms.saturating_sub(t) >= 2000)
+            .is_some_and(|t| now_ms.saturating_sub(t) >= prove_ms)
         {
+            match child.empty() {
+                Ok(true) => return Some(KillProof::Empty),
+                Ok(false) => (),
+                Err(error) => self.record(Err(error)),
+            }
             return Some(KillProof::Survivors { cause: self.cause });
         }
         None
@@ -97,6 +115,15 @@ impl Stop {
     fn record(&mut self, result: io::Result<()>) {
         if let Err(error) = result {
             self.cause.get_or_insert(error.kind());
+        }
+    }
+    fn empty(&mut self, child: &mut dyn Child) -> bool {
+        match child.empty() {
+            Ok(empty) => empty,
+            Err(error) => {
+                self.record(Err(error));
+                false
+            }
         }
     }
 }

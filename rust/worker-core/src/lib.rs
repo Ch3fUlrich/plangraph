@@ -38,6 +38,7 @@ pub mod lockfile;
 pub mod outcome;
 pub mod packet;
 pub mod pathjail;
+pub mod placement_rule_bridge;
 pub mod placement_rule_store;
 pub mod placement_rules;
 pub mod probe;
