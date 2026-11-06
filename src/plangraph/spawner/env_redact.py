@@ -122,7 +122,7 @@ def early_refusal(complete_text):
 
 def unavailable_reason(exit_code, stdout, stderr):
     """Failed harness evidence, in stderr-first order; never task prose on success."""
-    if exit_code in (None, 0):
+    if exit_code == 0:
         return None
     busy = busy_refusal(stderr) or busy_refusal(stdout)
     if busy:

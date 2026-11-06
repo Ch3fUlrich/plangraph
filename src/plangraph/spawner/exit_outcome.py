@@ -109,8 +109,7 @@ def _book_failure(service, chosen, line):
     target = _limit_target(service)
     target.record_harness_limit(key(chosen), line, 'spawner:harness', down_s=_booking_seconds())
     if isinstance(target, LegAdapter) and target.enabled:
-        target.leg_status(key(chosen))  # initialize/refresh before applying this observation
-        target._served.discard(target.identity(key(chosen)))
+        target.quarantine(key(chosen))
 
 
 def fallthrough_reason(service, chosen, job, record):

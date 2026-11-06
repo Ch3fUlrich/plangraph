@@ -90,3 +90,33 @@ def test_busy_envelope_evidence_is_flat(tmp_path, monkeypatch):
                                    NS(exit_code=1, stdout='', stderr=text), {})
     assert notices == ['harness_limit: ' + expected]
     assert '\x1b' not in str(store.leg_status('synthetic/model'))
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_missing_exit_code_keeps_unavailable_booking(tmp_path, enabled):
+    store = LegStateStore(tmp_path / 'state.sqlite')
+    reader = LegAdapter(store, NS(snapshot=lambda: {}), enabled=enabled)
+    line = 'Error: Model unavailable: synthetic/model'
+    reason = exit_outcome.fallthrough_reason(
+        NS(leg_reader=reader), NS(model='synthetic/model'),
+        NS(exit_code=None, stdout='', stderr=line), {})
+    assert reason == line
+    assert store.leg_status('synthetic/model')['state'] == 'limited'
+
+
+def test_booking_uses_adapter_quarantine_interface(tmp_path):
+    observations = []
+
+    class ObservedAdapter(LegAdapter):
+        def quarantine(self, leg):
+            observations.append(leg)
+            super().quarantine(leg)
+
+    reader = ObservedAdapter(
+        LegStateStore(tmp_path / 'state.sqlite'),
+        NS(snapshot=lambda: {'synthetic': NS(available=True, stale=False)}),
+        models=lambda: ['synthetic/model'], enabled=True)
+    exit_outcome._book_failure(NS(leg_reader=reader), NS(model='synthetic/model'),
+                               'Error: quota reached')
+    assert observations == ['synthetic/model']
+    assert reader('synthetic/model')['state'] == 'limited'
