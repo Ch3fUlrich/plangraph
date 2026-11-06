@@ -9,8 +9,8 @@
 - 11-06T09:40Z D-4158 - pid 1059285 no unit or cron, inferred opencode session in pane wE:p1
 - 11-06T09:40Z D-4150 - dell no unit, coding.vm has 88ccbc9c92ce, workstation and ci-vm unproven
 - 11-06T09:58Z D-4162 PR#520 CI 42197400614 green, delta seat run-f4e21e23 ACCEPT, GO-REQ sent
-- 11-06T10:05Z D-4185 watchdog uses spawner.token, watchdog.token absent, sent
-- 11-06T10:05Z D-4179(1) witness token BLOCKED sent, on workstation only
+- 11-06T10:05Z D-4185 - watchdog uses spawner.token, watchdog.token absent, sent
+- 11-06T10:05Z D-4179 - witness token BLOCKED sent, on workstation only
 - 11-06T10:07Z D-4179 - fleet keys 18-de-2053, workstation placed 0600, sha prefix match; inventory v2 on 3 hosts, backup inventory.json.bak-d4179
 ## In flight
 - D-4177 run-cbe5ed32 since 09:52Z next check 10:15Z, mimo-pro, plangraph-data lane/d4177-watchdog-seat
