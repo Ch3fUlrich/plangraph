@@ -2,12 +2,13 @@
 import asyncio
 import io
 import json
+import os
 import time
 from types import SimpleNamespace
 
 import pytest
 
-from plangraph.spawner import env_redact, runner as runner_mod
+from plangraph.spawner import env_redact, runner as runner_mod, service, run_watchdog
 from plangraph.spawner.run_watchdog import collect
 from plangraph.spawner.service import SpawnService
 
@@ -19,8 +20,9 @@ def sample():
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
-    # Replace, never inspect, the process environment. No config or live child.
-    monkeypatch.setattr(runner_mod.os, 'environ', {})
+    # Replace only module lookup sites; plugins keep the real os.environ.
+    for module in (runner_mod, service, run_watchdog):
+        monkeypatch.setattr(module, 'os', SimpleNamespace(environ={}))
 
 
 @pytest.mark.parametrize('key', ['PASSWORD', 'PG_DSN', 'TOKEN', 'API_KEY', 'SECRET', 'OTHER_KEY'])
@@ -49,9 +51,14 @@ def test_url_host_preserved():
 
 
 @pytest.mark.parametrize('split', [False, True])
-def test_real_output_boundaries(tmp_path, split):
+@pytest.mark.parametrize('failure', [False, True])
+def test_real_output_boundaries(tmp_path, monkeypatch, split, failure):
     password, dsn = sample()
     text = 'diagnostic ' + dsn + '\n'
+    if failure:
+        def broken(text):
+            raise RuntimeError('synthetic failure')
+        monkeypatch.setattr(runner_mod, 'redact', broken)
 
     async def run():
         job = SimpleNamespace(role='review', start_time=time.time(), cwd=str(tmp_path),
@@ -76,7 +83,11 @@ def test_real_output_boundaries(tmp_path, split):
         await task
         assert password not in job.stdout
         log = (tmp_path / 'live.log').read_text()
-        assert password not in log and '@example.invalid/db' in log
+        assert password not in log
+        if failure:
+            assert 'redaction failed; output withheld' in log
+            return
+        assert '@example.invalid/db' in log
 
         service = SpawnService(runner=runner, state=tmp_path)
         record = dict(run_id='run-test', host='synthetic', stdout_tail=text,
@@ -105,20 +116,27 @@ def test_real_output_boundaries(tmp_path, split):
     asyncio.run(run())
 
 
-def test_scrub_failure(tmp_path, monkeypatch):
-    from plangraph.spawner.run_watchdog import LiveLog
+def test_environment_lookup_is_local():
+    assert runner_mod.os is not os
+    assert service.os is not os
+    assert run_watchdog.os is not os
+    assert os.environ.get('PYTEST_CURRENT_TEST')
+
+
+@pytest.mark.parametrize('wake_variant', ['resume', 'retry'])
+def test_replayed_prompt_capture(tmp_path, wake_variant):
     password, dsn = sample()
+    path = tmp_path / 'prompt.txt'
+    runner = object.__new__(runner_mod.SpawnerRunner)
 
-    def broken(*args, **kwargs):
-        raise RuntimeError('synthetic failure')
+    def stop_after_capture(record):
+        raise RuntimeError('captured')
 
-    monkeypatch.setattr(env_redact.re, 'sub', broken)
-    log = LiveLog(SimpleNamespace(_live_log=tmp_path / 'live.log', events=[]))
-    log.feed(runner_mod.redact(dsn + '\n'))
-    log.flush()
-    stored = (tmp_path / 'live.log').read_text()
-    assert password not in stored
-    assert 'redaction failed; output withheld' in stored
+    with pytest.raises(RuntimeError, match='captured'):
+        asyncio.run(runner.spawn(prompt='earlier output:\n' + dsn, role='review',
+            wake_variant=wake_variant, prompt_record=(path, {}, stop_after_capture)))
+    assert password not in path.read_text()
+    assert '[REDACTED]' in path.read_text()
 
 
 @pytest.mark.parametrize('boundary', ['record', 'provider'])
