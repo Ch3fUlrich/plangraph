@@ -108,7 +108,8 @@ def test_false_reason_leads_fix_even_with_pass_text(tmp_path, capsys):
     assert body['reason'].startswith('FIX')
     evidence = json.loads((tmp_path / 'evidence.json').read_text())
     reason = sv.build_reason(evidence, False, job.stdout, 0)
-    assert reason.startswith('seat synthetic/gpt-5 FIX corr ')
+    assert reason.startswith('FIX seat synthetic/gpt-5 FIX corr ')
+    assert body['reason'] == reason + '\ncovers: meta'
 
 
 @pytest.mark.parametrize('dispatch', [False, True])
@@ -127,24 +128,35 @@ def test_both_completion_saves(tmp_path, monkeypatch, dispatch):
     assert dry(service._path(record['run_id']).parent) == 0
 
 
-def test_dispatch_hash_is_in_memory(tmp_path, monkeypatch):
+@pytest.mark.parametrize('dry_run', [True, False])
+def test_dispatch_hash_is_in_memory(tmp_path, monkeypatch, dry_run):
     import asyncio
     from plangraph.spawner import runner as module
     received = []
     monkeypatch.setattr(module, 'build_command', lambda **kw:
         (received.append(kw['prompt']), ['synthetic'])[1])
-    instance = module.SpawnerRunner()
-    # Dry dispatch uses the same command boundary without launching a process.
+    from plangraph.spawner import resolver
+    async def available(*args, **kwargs):
+        return None
+    async def process(*args, **kwargs):
+        assert args == ('synthetic',)
+        return SimpleNamespace()
+    async def monitor(*args):
+        pass
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', available)
+    monkeypatch.setattr(module, '_resolve_launch', lambda *a, **kw: ('synthetic', None))
+    instance = module.SpawnerRunner(process_factory=process)
+    monkeypatch.setattr(instance, '_monitor_process', monitor)
     job = asyncio.run(instance.spawn(prompt='synthetic é\n', role='review',
-        dry_run=True, cwd=str(tmp_path)))
+        dry_run=dry_run, cwd=str(tmp_path), wait_seconds=1))
     assert received == [job.task_prompt]
     assert job.prompt_sha256 == hashlib.sha256('synthetic é\n'.encode()).hexdigest()
 
 
-def test_authenticated_finish_not_inferred(monkeypatch):
+def test_authenticated_finish_not_inferred(tmp_path):
     from plangraph.spawner.runner import SpawnerRunner
     instance = SpawnerRunner()
-    _, job = completed()
+    record, job = completed()
     job.response_finish_reason = None
     instance.jobs[job.job_id] = job
     capability = object()
@@ -156,5 +168,10 @@ def test_authenticated_finish_not_inferred(monkeypatch):
     assert job.response_finish_reason is None
     instance.served_witness(job.job_id, 'synthetic/gpt-5',
         adapter_token=capability, finish_reason='stop')
+    sa.publish(tmp_path, record, job)
+    assert (tmp_path / 'evidence.json').exists()
     instance.served_witness(job.job_id, 'synthetic/gpt-5', adapter_token=capability)
-    assert job.response_finish_reason == 'stop'
+    assert job.response_finish_reason is None
+    sa.publish(tmp_path, record, job)
+    assert not (tmp_path / 'evidence.json').exists()
+    assert dry(tmp_path) != 0

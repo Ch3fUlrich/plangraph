@@ -272,8 +272,7 @@ class SpawnerRunner:
         job.served_model = model
         job.served_family = family
         job.served_witness_reason = 'authenticated gateway adapter telemetry'
-        if finish_reason is not None:
-            job.response_finish_reason = finish_reason  # verbatim response telemetry, never inferred
+        job.response_finish_reason = finish_reason  # final witness telemetry, never inherited
 
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
