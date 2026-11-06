@@ -1,4 +1,4 @@
-//! Join only incomplete prefixed tokens, stopping as soon as their floor is met.
+//! Join incomplete prefixed tokens, consuming full bodies before testing floors.
 use std::sync::OnceLock;
 
 pub(crate) fn redact_wrapped(text: &str) -> String {
@@ -71,10 +71,15 @@ fn prefix_regex() -> regex::Regex {
     regex::Regex::new(&format!(r"\b(?:{prefixes})")).unwrap()
 }
 
-#[test]
-fn prefix_capture_indices_identify_specs() {
-    assert_eq!(
-        prefix_regex().captures_len(),
-        super::redact_tokens::SPECS.len() + 1
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefix_capture_indices_identify_specs() {
+        assert_eq!(
+            prefix_regex().captures_len(),
+            crate::redact_tokens::SPECS.len() + 1
+        );
+    }
 }

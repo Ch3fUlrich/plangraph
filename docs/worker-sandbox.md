@@ -44,7 +44,10 @@ end-state invariant, not an S1 end-to-end guarantee.
 Auth staging excludes `.git-credentials`, `.gitconfig`, `.ssh`, `.netrc`,
 `.npmrc`, `.pypirc`, `.aws`, `.docker`, `.gnupg`, `hosts.yml`, `credentials`,
 and `.config` at both supported directory levels. Ordinary `agent-auth` and
-`sub/agent-auth` survive. Tests prove parent Git credential lookup succeeds
+`sub/agent-auth` survive.
+The nested `stage_auth_into` exclusion was introduced in commit `901b141f`;
+the dual-level staging assertions regress if either exclusion is removed.
+Tests prove parent Git credential lookup succeeds
 with a store helper, while confined harness/check lookup fails for missing
 authentication (Git cannot obtain a password), the positive
 control secret is absent from both output streams, and credential environment

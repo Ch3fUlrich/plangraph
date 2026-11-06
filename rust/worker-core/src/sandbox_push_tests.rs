@@ -75,6 +75,7 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         .env("PATH", std::env::var_os("PATH").unwrap())
         .env("HOME", &source)
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("LC_ALL", "C")
         .output()
         .unwrap();
     assert!(
@@ -126,13 +127,18 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         }
         let mut cmd = Command::new("sh");
         cmd.current_dir(&dir)
-            .args(["-c", &format!("env; {lookup}")]);
+            .args(["-c", &format!("env; {lookup}")])
+            .env("LC_ALL", "C")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
         confine(&mut cmd, home.path());
         let out = cmd.output().unwrap();
         assert!(!out.status.success());
-        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stderr = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
         assert!(
-            stderr.contains("fatal: unable to get password from user"),
+            stderr.contains("fatal:")
+                && stderr.contains("password")
+                && (stderr.contains("could not read") || stderr.contains("unable to get")),
             "{stderr}"
         );
         assert!(!String::from_utf8_lossy(&out.stdout).contains("fixture"));

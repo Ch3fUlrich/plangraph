@@ -6,7 +6,9 @@ fn redacted_tail_normalizes_crlf_before_line_and_byte_bounds() {
     for newline in ["\n", "\r\n"] {
         let input = format!("discard{newline}middle{newline}énd{newline}");
         assert_eq!(tail(&input, 2, 100), "middle\nénd");
-        assert_eq!(tail(&input, 2, 4), "énd");
+        // Three bytes cuts inside é; the tail must advance to the next
+        // UTF-8 boundary rather than retain a partial code point.
+        assert_eq!(tail(&input, 2, 3), "nd");
     }
 }
 
