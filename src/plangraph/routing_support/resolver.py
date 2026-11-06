@@ -440,7 +440,7 @@ def served_models(config, *, env=None, clock=time.monotonic):
         with _served_lock:
             if len(_served_cache) >= 8:
                 _served_cache.pop(next(iter(_served_cache)))
-            _served_cache[key] = (clock() + (30 if result is None else 300), result)
+            _served_cache[key] = (clock() + (30 if not result else 300), result)
         future.set_result(result)
         return result
     except BaseException as exc:

@@ -87,7 +87,8 @@ def test_cache_origin_and_age(listing, monkeypatch, case):
         r._served_cache.clear()
     else:
         cached = frozenset({'fake/different'}) if case == 'different' else models
-        r._served_cache[key] = (1300 - (10 if case in ('different', 'empty_old') else 5), cached)
+        ttl = 30 if not cached else 300
+        r._served_cache[key] = (1000 + ttl - (10 if case in ('different', 'empty_old') else 5), cached)
     result[0] = frozenset({'fake/model'})
     assert served_fresh('fake/model', models, '{}', env) == (case in ('different', 'empty_old'))
     assert len(calls) == (1 if case in ('different', 'empty_old') else 0)
@@ -115,5 +116,5 @@ def test_empty_listing_cache_ttl(listing, real_served_models):
     r._served_cache.clear()
     result[0] = frozenset()
     assert real_served_models('{}', env=env, clock=lambda: 1000) == frozenset()
-    assert next(iter(r._served_cache.values())) == (1300, frozenset())
+    assert next(iter(r._served_cache.values())) == (1030, frozenset())
     assert len(calls) == 1

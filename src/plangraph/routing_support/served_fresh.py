@@ -24,7 +24,7 @@ def served_fresh(model, models, config, env, *, probe=None):
     with r._served_lock:
         cached = r._served_cache.get(key)
     if (cached is None
-            or time.monotonic() - (cached[0] - (30 if cached[1] is None else 300)) <= 5):
+            or time.monotonic() - (cached[0] - (30 if not cached[1] else 300)) <= 5):
         return present(models)
     fresh = r._probe_served_models(config, env=env)
     if fresh is not None and present(fresh):
