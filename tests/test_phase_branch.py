@@ -5,6 +5,7 @@ from plangraph.planner.phase_finish import phase_branch
 from plangraph.planner.phase_finish import finish_phase, _legacy_phase_branch
 from plangraph.keeper.errors import Refused
 from types import SimpleNamespace
+from phase_finish_support import git, git_repo
 
 
 @pytest.mark.parametrize(("key", "expected"), [
@@ -26,7 +27,7 @@ def test_sanitiser_collisions_and_literal_suffix_are_distinct():
 
 
 @pytest.mark.parametrize("key", ["a/b", "a-b", "é", "😀", "e\u0301"])
-def test_finish_rejects_unversioned_legacy_branch_before_store_read(key):
+def test_finish_rejects_legacy_branch_when_repo_is_missing_before_store_read(key):
     class UnreadableStore:
         def __getattr__(self, name):
             raise AssertionError("legacy branch reached store")
@@ -35,3 +36,16 @@ def test_finish_rejects_unversioned_legacy_branch_before_store_read(key):
         finish_phase(UnreadableStore(), SimpleNamespace(role="router"), key,
                      _legacy_phase_branch(key), "a" * 40,
                      repo_root="unused", github=None)
+
+
+def test_finish_rejects_other_legacy_checkout_before_store_read(tmp_path):
+    root, head = git_repo(tmp_path)
+    git(root, "branch", "-M", "phase/other")
+
+    class UnreadableStore:
+        def __getattr__(self, name):
+            raise AssertionError("wrong legacy checkout reached store")
+
+    with pytest.raises(Refused, match="branch must be"):
+        finish_phase(UnreadableStore(), SimpleNamespace(role="router"), "a/b",
+                     _legacy_phase_branch("a/b"), head, repo_root=root, github=None)

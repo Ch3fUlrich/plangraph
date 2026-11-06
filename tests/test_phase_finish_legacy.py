@@ -4,7 +4,7 @@ import pytest
 
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase_finish
-from test_phase_finish import FakeGitHub, finish_cards, gate, git_repo, w
+from phase_finish_support import FakeGitHub, finish_cards, gate, git_repo
 
 
 @pytest.mark.parametrize("legacy", [False, True])

@@ -7,94 +7,13 @@ import pytest
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase_finish
-from test_phase_merge_trailers import git, merge_commit
+from phase_finish_support import FakeGitHub, finish_cards, gate, git_repo
 
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path / "keeper")
     yield world
     world.close()
-
-def gate(w):
-    w.store.create_items(
-        w.p("router"),
-        [
-            defn("C1"),
-            defn("C2"),
-            defn("PH-X", ["C1", "C2"], kind="gate"),
-            defn("GOAL", ["PH-X"], kind="goal"),
-        ],
-    )
-
-def finish_cards(w, *keys):
-    for key in keys:
-        w.store.conn.execute("UPDATE items SET state='in_review' WHERE key=?", (key,))
-    w.store.conn.commit()
-
-def git_repo(tmp_path):
-    root = tmp_path / "repo"
-    root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.invalid",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "x",
-        ],
-        cwd=root,
-        check=True,
-    )
-    subprocess.run(["git", "branch", "-M", phase_finish.phase_branch("demo:PH-X")], cwd=root, check=True)
-    git(root, "commit", "--allow-empty", "-m", "phase")
-    head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
-    return root, head
-
-class FakeGitHub:
-    def __init__(self, pr=None, ci=True, fail=None):
-        self.pr = pr
-        self.ci = ci
-        self.fail = fail
-        self.calls = []
-
-    def _pr(self, number, state, head):
-        return {
-            "number": number,
-            "url": f"https://example.invalid/pr/{number}",
-            "state": state,
-            "head": head,
-        }
-
-    def push_branch(self, repo_root, branch, head):
-        self.root = repo_root
-        self.calls.append(("push_branch", repo_root, branch, head))
-        if self.fail is not None:
-            raise self.fail
-
-    def find_pr(self, branch):
-        self.calls.append(("find_pr", branch))
-        return self.pr
-
-    def open_pr(self, branch, base, title, body):
-        self.calls.append(("open_pr", branch, base, title, body))
-        return self._pr(7, "open", "")
-
-    def ci_green(self, head):
-        self.calls.append(("ci_green", head))
-        return self.ci
-
-    def merge_pr(self, number, head, *, commit_message=None):
-        self.calls.append(("merge_pr", number, head))
-        self.merge_sha = merge_commit(self.root, head)
-        self.pr = {**self._pr(number, "merged", head), "merge_sha": self.merge_sha}
-        return self.pr
 
 class ExplodingStore:
     def __getattr__(self, name):

@@ -26,6 +26,14 @@ _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 
 @pytest.fixture
+def w(tmp_path):
+    from keeper_util import World
+    world = World(tmp_path / "keeper")
+    yield world
+    world.close()
+
+
+@pytest.fixture
 def tools_importable():
     """Put the repo's ``tools/`` dir on sys.path for one test only.
 

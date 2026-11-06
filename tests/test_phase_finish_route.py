@@ -6,7 +6,7 @@ from plangraph.keeper import api_routes
 from door_util import Doors
 from keeper_util import World
 
-from test_phase_finish import FakeGitHub, finish_cards, gate, git_repo
+from phase_finish_support import FakeGitHub, finish_cards, gate, git_repo
 
 @pytest.fixture
 def w(tmp_path):

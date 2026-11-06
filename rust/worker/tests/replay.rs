@@ -394,20 +394,10 @@ async fn drifted_code_fails_replay() {
     let res = r.replay_workflow(history("happy")).await;
     assert!(res.is_err(), "non-deterministic change must fail replay");
 }
+
 #[path = "replay_phase_legacy/mod.rs"]
 mod phase_legacy;
-#[tokio::test]
-async fn replays_phase_two_cards() {
-    replayer()
-        .replay_workflow(history("phase_two_cards"))
-        .await
-        .expect("phase_two_cards history replays");
-}
-#[tokio::test]
-async fn replays_phase_defer() {
-    replayer()
-        .replay_workflow(history("phase_defer"))
-        .await
-        .expect("phase_defer history replays");
-}
+
+#[path = "replay_phase/basic.rs"]
+mod phase_basic;
 mod phase_terminal;

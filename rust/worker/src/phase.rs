@@ -134,9 +134,14 @@ pub fn phase_branch(key: &str) -> Result<String, String> {
     let legacy = legacy_phase_branch(key)?;
     Ok(format!(
         "{legacy}-{}",
-        pg_worker_core::hash::hash_bytes(key.as_bytes())
+        // Branch identity is permanently FNV-1a-64, independent of content hashes.
+        phase_key_hash(key.as_bytes())
     ))
 }
+
+#[path = "phase_branch_hash.rs"]
+mod branch_hash;
+use branch_hash::phase_key_hash;
 
 // Kept only for replay of histories recorded before phase-branch-hash-v1.
 #[cfg(test)]
