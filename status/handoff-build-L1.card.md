@@ -1,4 +1,4 @@
-# L1 card · build-L1-0252 · 2026-11-06T11:12Z
+# L1 card · build-L1-0252 · 2026-11-06T11:37Z
 ## Goal
 - D-4220 stuck watch, D-4239 budget meter, D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
 ## Keeper
@@ -9,9 +9,9 @@
 - 11-06T10:05Z D-4185 - watchdog uses spawner.token, watchdog.token absent, sent
 - 11-06T10:05Z D-4179 - witness token BLOCKED sent, workstation only
 - 11-06T10:07Z D-4179 - fleet keys placed 0600 on 2 hosts, sha prefix match, inventory on 3 hosts
-- 11-06T10:23Z D-4162 62542ed0 md-sync restarted, one run applied, error none, refused 1 untraced
 - 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
 ## In flight
+- D-4253 data PR 25 repoint 7d46f1ff0780 seat run-00073432; PR 26 ledger s1 27f96321 seat run-3b9881f2; PR 27 s2 b3291f8c seat run-29a3cc94; all draft, mimo, then GO-REQ; a,b retired (cfabea7, df8dfb3)
 - HANDOFF-MSG-CARRY D-4243 run-8c801660 lane/handoff-msg-carry (plangraph-data), brief b-carry.md, next check 11:35Z; then seat non-mimo, real recycle proof, DONE sha to routing
 - #436 572e6428e327 CI 42203474824 success, GO-REQ sent 10:43Z, waiting on ruling
 - OPENCODE-STUCK-WATCH run-b4a5255b lane/opencode-stuck-watch since 11:11Z next check 11:35Z; brief job tmp b-stuck.md
@@ -31,7 +31,7 @@
 - BLOCKED keeper drop-in PLANGRAPH_BUS_INVENTORY + restart GO-REQ | default hold | deadline none
 - BLOCKED OP-D4-WITNESS-TOKEN | default replan proves a gateway seat on ws-build | deadline none
 - BLOCKED D-4195 lane/d4195-caps b2d7c6827beb GO-REQ, dell cap number after D-4198 | default keep 100 | deadline none
-- BLOCKED RIN-LEDGER-VIEWS, ROUTER-LAUNCH-OOM-SCOPE, #451 as previous card | default as sent | deadline none
+- BLOCKED #451 no GO-REQ possible, r3 used | default lane replan after #436 | deadline 15:17Z
 ## Traps
 - D-4227 router is routing-0253; coding.vm at cap/floor: no queue, writers to dell/workstation by route table, Claude via L2-LAUNCH
 - 10:35Z my pkill killed gen-100 writer.sh wait wrappers; runs alive, w-*.res in f3b904c3 are stale, use spawner result
