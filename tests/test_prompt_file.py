@@ -64,7 +64,7 @@ def test_large_prompt_stdin_not_argv(tmp_path, service, monkeypatch):
     monkeypatch.setattr(cli.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=0))
     assert cli.main(spawn_args('--prompt-file', str(path))) == 0
     assert captured['payload']['prompt'] == text
-    assert all(text not in arg for arg in captured['argv'])
+    assert all(len(arg) < 4096 for arg in captured['argv'])
     assert path.read_text() == text
 
 
