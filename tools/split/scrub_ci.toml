@@ -1770,58 +1770,64 @@ why = "Public model identifier, source path or branch name; not a credential"
 path = "deploy/omniroute/README.md"
 rule = "credential-shape"
 value_sha256 = "e7b3cf31df13add075d093cf6e4046121a487ec3c657b8e9bfd129b079649778"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "69fbc3c575354ff8034ce11c3e79be99d944c22b8ed4bd208312561e546fa999"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "a217c4a97b57f32417e004a74fff72fc446fb2f294d7d04a0b906e6dd54b46c4"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "64d68d63f5f98ad37ce0d2b04166417afba0f6c2156dcf687520ad08f5d9f220"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "c5da95d85182f9284c697832b69b6df133e980df49b69b654afda18c94f7ee85"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "439123324b53afc19c5b4b2caec75acad05905f6627b05a078465f1b361ec169"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "47bffcf77fbc0f0526d67b5351aac9856763fa5584f22a8ad082b3b04e71bcbe"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "6083ef8907eba69db9ab191716694855a1ca0d06e096fab6c54fff3c5efd2001"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
 value_sha256 = "598d8b14e80b3243e03a6279b8bd52e9a3ee85f5ec9ca28099f43cac38448eeb"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 
 [[scrub.allow_value]]
 path = "deploy/omniroute/combo-set/combos.json"
 rule = "high-entropy"
 value_sha256 = "6083ef8907eba69db9ab191716694855a1ca0d06e096fab6c54fff3c5efd2001"
-why = "Public model identifier or repository-relative source path/branch quoted in the audit; not a credential or site value"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "credential-shape"
+value_sha256 = "ffcc82384f460741a3a5a31cd6330c0240a63318fc05b387df830391eaca456c"
+why = "Relative evidence directory fragment, not a credential"
