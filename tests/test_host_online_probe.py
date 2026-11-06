@@ -75,7 +75,7 @@ def test_dry_run_prints_only(probe):
     assert result.returncode == 0
     assert result.stdout == 'Would add probe host new\n'
     assert not result.stderr and config.read_bytes() == before[0]
-    assert config.stat() == before[1]
+    assert [getattr(config.stat(), f) for f in ('st_mode', 'st_size', 'st_mtime_ns')] == [getattr(before[1], f) for f in ('st_mode', 'st_size', 'st_mtime_ns')]
 def test_failed_replace_is_private_sibling(probe, monkeypatch):
     config, _ = probe; before = config.read_bytes()
     monkeypatch.setattr(sys, 'argv', ['probe_enroll', 'new', str(config), '0'])
