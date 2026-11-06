@@ -1,17 +1,14 @@
-# L1 card · build-L1-0252 · 2026-11-06T11:33Z
+# L1 card · build-L1-0252 · 2026-11-06T11:35Z
 ## Goal
 - D-4220 stuck watch, D-4239 budget meter, D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
 ## Keeper
 - claimed: plangraph:AUTOOS-HOOKS-INTERIM-S06, plangraph:SPAWNER-ORPHAN-REAP, plangraph:RIN-PATH-REPOINT, plangraph:ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z)
 - ready next: plangraph:AUTOOS-HOOKS-INTERIM-S09, plangraph:AUTOOS-HOOKS-INTERIM-S14 after #446 #447
 ## Done
-- 11-06T10:32Z D-4099 - GO-REQ #446 #447 resent, incident mcp-proxy PG_TOKEN sent
-- 11-06T10:05Z D-4185 - watchdog uses spawner.token, watchdog.token absent, sent
-- 11-06T10:05Z D-4179 - witness token BLOCKED sent, workstation only
-- 11-06T10:07Z D-4179 - fleet keys placed 0600 on 2 hosts, sha prefix match, inventory on 3 hosts
-- 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
+- 11-06T11:26Z D-4253 7d46f1ff0780 PR 25 26 27 opened, a b retired, GO-REQ lines sent
+- 11-06T11:34Z D-4238 - terra parked run-b0b563b1 cancelled, no edits
 ## In flight
-- D-4253 r1 fixers, seats mimo REQUEST_CHANGES on data PR 25 26 27: run-8f6e0f65 repoint, run-f9505536 s1, run-38f9e635 s2 since 11:34Z; next: push, delta seat mimo or deepseek (not openai), GO-REQ
+- D-4253 r1 fixers, seats mimo REQUEST_CHANGES on data PR 25 26 27: repoint 0127b4a pushed needs delta seat, run-f9505536 s1, run-38f9e635 s2 since 11:34Z; next: push, delta seat mimo or deepseek (not openai), GO-REQ
 - HANDOFF-MSG-CARRY D-4243 run-76d85b02 lane/handoff-msg-carry (plangraph-data), brief b-carry.md, next check 11:35Z; then seat non-mimo, real recycle proof, DONE sha to routing
 - #436 572e6428e327 CI 42203474824 success, GO-REQ sent 10:43Z, waiting on ruling
 - OPENCODE-STUCK-WATCH run-6d1237b7 lane/opencode-stuck-watch since 11:33Z next check 11:55Z
@@ -37,4 +34,4 @@
 - 10:35Z my pkill killed gen-100 writer.sh wait wrappers; runs alive, w-*.res in f3b904c3 are stale, use spawner result
 - git push control build-L1 ONLY, never origin (D-1751)
 ## Drill-down
-- handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools ~/.local/share/plangraph/handoffs/build-L1-0245
+- handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools ~/.local/share/plangraph/handoffs/build-L1-0252
