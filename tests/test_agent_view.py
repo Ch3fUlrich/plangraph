@@ -44,9 +44,9 @@ def test_malformed_and_finished(home):
     path = put(home, '.claude/jobs/bad/state.json', {})
     path.write_text('{')
     data = av.local(home)
-    assert data['readable'] is False
-    assert data['reason'] == 'source_unreadable'
-    assert not data['agents']
+    assert data['readable'] is True
+    assert len(data['agents']) == 1
+    assert all(v is None for k, v in data['agents'][0].items() if k != 'host')
 
 
 @pytest.mark.parametrize('mode,reason', [('timeout', 'timeout'), ('exit', 'ssh_failed'), ('bad', 'invalid_response')])
@@ -143,3 +143,31 @@ assert.equal(box.children[1].children[1].children.length, 1);
     subprocess.run(['node', '-e', script], check=True)
     assert 'tab-agents' in Path('src/plangraph/web/page_template.html').read_text()
     assert 'agents: "panel-agents"' in Path('src/plangraph/web/page_pages.js').read_text()
+
+
+@pytest.mark.parametrize('entry', ['x', {'readable': True, 'agents': ['x']}])
+def test_remote_non_objects(entry):
+    def run(*args, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'hosts': [entry]}))
+    assert av.remote('remote', {'ssh': 'alias', 'spawner_src': '/source'}, run)['reason'] == 'invalid_response'
+
+
+def test_snapshot_non_object_row(home):
+    av.write({'hosts': [dict(host='local', readable=True, agents=['x'])]}, home)
+    assert av.load_view(home) is None
+
+
+def test_bad_source_preserves_valid(home):
+    put(home, '.local/state/plangraph/runs/run-one/record.json', {'name': 'live', 'state': 'running'})
+    bad = put(home, '.claude/jobs/one/state.json', {})
+    bad.write_text('{')
+    data = av.local(home, 'local')
+    assert data['readable']
+    assert [r['name'] for r in data['agents']] == ['live', None]
+
+
+def test_session_store_sidecars_are_not_agents(home):
+    put(home, '.local/state/plangraph/sessions/one.json', {'name': 'one', 'state': 'running'})
+    put(home, '.local/state/plangraph/sessions/one.ready.json', {'ready': True})
+    put(home, '.local/state/plangraph/sessions/_counters.json', {'one': 1})
+    assert [r['name'] for r in av.local(home)['agents']] == ['one']

@@ -58,10 +58,8 @@ def local(home=None, host=None, now=None):
     state = Path(os.environ.get('PLANGRAPH_SPAWN_STATE') or
                  Path(os.environ.get('XDG_STATE_HOME', home / '.local/state')) / 'plangraph')
     agents = []
-    broken = False
 
     def ingest(path, runtime):
-        nonlocal broken
         try:
             source = read(path)
             row = project(source, host, runtime, now)
@@ -70,13 +68,14 @@ def local(home=None, host=None, now=None):
             if row['state'] not in FINISHED:
                 agents.append(row)
         except (OSError, ValueError, TypeError):
-            broken = True
+            agents.append(project({}, host))
 
     try:
         for pattern, runtime in [('runs/*/record.json', 'spawner-run'),
                                  ('sessions/*.json', 'claude')]:
             for path in state.glob(pattern):
-                ingest(path, runtime)
+                if path.name != '_counters.json' and not path.name.endswith('.ready.json'):
+                    ingest(path, runtime)
         for path in (home / '.claude/jobs').glob('*/state.json'):
             ingest(path, 'claude')
         config = home / '.config/autoos/oc-l1.json'
@@ -91,9 +90,8 @@ def local(home=None, host=None, now=None):
                     if path.exists():
                         ingest(path, 'opencode')
     except (OSError, ValueError, TypeError):
-        broken = True
-    return dict(host=host, readable=not broken,
-                reason='source_unreadable' if broken else None, agents=agents)
+        agents.append(project({}, host))
+    return dict(host=host, readable=True, reason=None, agents=agents)
 
 
 def remote(host, config, run=subprocess.run, timeout=20):
@@ -106,7 +104,7 @@ def remote(host, config, run=subprocess.run, timeout=20):
             command += 'set -a && . ' + shlex.quote(config['env_file']) + ' && set +a && '
         command += 'PYTHONPATH=src python3 -m plangraph.spawner.agent_view --json --local'
         result = run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-                      '--', config['ssh'], command], capture_output=True, text=True, timeout=timeout)
+                      '--', config['ssh'], command], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
         if result.returncode:
             return unavailable(host, 'ssh_failed')
         data = json.loads(result.stdout)['hosts'][0]
@@ -116,7 +114,7 @@ def remote(host, config, run=subprocess.run, timeout=20):
                     agents=[project(row, host) for row in data['agents']])
     except subprocess.TimeoutExpired:
         return unavailable(host, 'timeout')
-    except (OSError, ValueError, KeyError, TypeError, IndexError):
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
         return unavailable(host, 'invalid_response')
 
 
@@ -156,7 +154,7 @@ def load_view(home=None):
                                   agents=[project(r, host) for r in entry['agents']]))
         return dict(generated_at=data.get('generated_at') if isinstance(
             data.get('generated_at'), str) else None, hosts=hosts)
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 

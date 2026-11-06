@@ -255,6 +255,33 @@ def build_sha(pkg_dir: Path | None = None) -> str:
     return sha if _SHA_SAFE.fullmatch(sha) else "unknown"
 
 
+def _load_agents_view():
+    """Read the private inventory without importing the spawner runtime."""
+    fields = ('host', 'name', 'runtime', 'model', 'state', 'item', 'age_s')
+    try:
+        path = Path.home() / '.local/state/plangraph/agents-view.json'
+        data = json.loads(path.read_text(encoding='utf-8'))
+        hosts = []
+        for entry in data['hosts']:
+            host = entry['host'] if isinstance(entry['host'], str) else 'unknown'
+            rows = []
+            if entry.get('readable') is True:
+                for source in entry['agents']:
+                    row = {k: v if isinstance(v, (str, int, float)) and not
+                           isinstance(v, bool) else None
+                           for k in fields for v in [source.get(k)]}
+                    row['host'] = host
+                    if row['runtime'] not in ('claude', 'opencode', 'spawner-run'):
+                        row['runtime'] = None
+                    rows.append(row)
+            hosts.append(dict(host=host, readable=entry.get('readable') is True,
+                              agents=rows))
+        stamp = data.get('generated_at')
+        return dict(generated_at=stamp if isinstance(stamp, str) else None, hosts=hosts)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def render(
     snapshot: dict,
     vendor_dir: Path,
@@ -276,9 +303,8 @@ def render(
         items = []
     # Always give the page JS an `items` array, even for a malformed/empty snapshot.
     safe_snapshot = dict(snapshot)
-    from plangraph.spawner.agent_view import load_view
     safe_snapshot.pop('agents_view', None)
-    agents_view = load_view()
+    agents_view = _load_agents_view()
     if agents_view is not None:
         safe_snapshot['agents_view'] = agents_view
     safe_snapshot["items"] = items
