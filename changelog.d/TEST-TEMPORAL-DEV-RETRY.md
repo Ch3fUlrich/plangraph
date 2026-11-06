@@ -1,0 +1,1 @@
+- **TEST-TEMPORAL-DEV-RETRY:** Retry dev-server startup at most three times with fresh ports and databases, preserving bounded logs and reporting mid-test server death.
