@@ -103,7 +103,7 @@ loaded at runtime:
 
 ```powershell
 # From the AutoOS repository root:
-pwsh -File configuration/omniroute/reason-fix-reapply.ps1
+pwsh -File ./reason-fix-reapply.ps1
 ```
 
 The script:
@@ -115,7 +115,7 @@ The script:
 Override the package directory for a local/dev install:
 
 ```powershell
-pwsh -File configuration/omniroute/reason-fix-reapply.ps1 -PackageDir C:\dev\omniroute
+pwsh -File ./reason-fix-reapply.ps1 -PackageDir C:\dev\omniroute
 ```
 
 ## After `npm update omniroute`

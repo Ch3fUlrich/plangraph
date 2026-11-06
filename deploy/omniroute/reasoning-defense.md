@@ -1,7 +1,7 @@
 # DeepSeek Reasoning Defense — Configuration Note
 
 **Date:** 2026-09-30  
-**Scope:** `configuration/omniroute/` — documents the gateway's reasoning replay
+**Scope:** `./` — documents the gateway's reasoning replay
 defense for DeepSeek thinking-mode models, the root cause of the 400 error, and
 the config-level mitigations available to operators.
 

@@ -93,13 +93,13 @@ reproduced exactly.
 
 ```powershell
 # From the AutoOS repository root:
-pwsh -File configuration/omniroute/qwen-clamp-reapply.ps1
+pwsh -File ./qwen-clamp-reapply.ps1
 
 # Preview without writing:
-pwsh -File configuration/omniroute/qwen-clamp-reapply.ps1 -DryRun
+pwsh -File ./qwen-clamp-reapply.ps1 -DryRun
 
 # Override the package directory:
-pwsh -File configuration/omniroute/qwen-clamp-reapply.ps1 -PackageDir C:\dev\omniroute
+pwsh -File ./qwen-clamp-reapply.ps1 -PackageDir C:\dev\omniroute
 ```
 
 The script backs each changed file up to `<file>.autoos-backup-<timestamp>`, is

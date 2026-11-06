@@ -7,11 +7,11 @@
 #      alone has nothing to attach to)
 #   2. refreshes the gateway's model catalog for what it just registered
 #      (omniroute models <provider>), so one run is enough on a fresh machine
-#   3. declares the custom (manual) models of configuration/omniroute/
+#   3. declares the custom (manual) models of ./
 #      custom-models.json through apply-custom-models.sh, before the catalog is
 #      read for combo validation — a provider whose model list the gateway image
 #      bakes has no live discovery, so its new ids exist only once declared
-#   4. (re)creates the tier combos from configuration/omniroute/combos.json
+#   4. (re)creates the tier combos from ./combos.json
 #   5. prunes the combos listed there as "retired" from the store (only those)
 #
 # B2-VERTEX 2026-10-01: vertex authenticates from the GCP service-account JSON
@@ -35,7 +35,7 @@
 # whole, reported lost rather than restored short — never reported as untouched
 # (see the Combos loop).
 #
-#   ./configuration/omniroute/apply.sh [--dry-run] [--probe] [--drift [--drift-against registry]] \
+#   ./apply.sh [--dry-run] [--probe] [--drift [--drift-against registry]] \
 #                                      [--allow-drift <name>] [--go <ref> --go-sha <sha>] [--go-offline]
 #
 # --probe sends one tiny request per combo and reports what answered
@@ -67,7 +67,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
+ROOT="$(cd "${PLANGRAPH_AUTOOS_ROOT:?set PLANGRAPH_AUTOOS_ROOT to the read-only AutoOS checkout}" && pwd)"
 # AUTOOS_OMNIROUTE_URL points the run (and the CLI) at another gateway; the
 # tests aim it at a closed port so a dry run never reads the live one.
 GATEWAY="${AUTOOS_OMNIROUTE_URL:-http://127.0.0.1:20128}"

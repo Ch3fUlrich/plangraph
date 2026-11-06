@@ -171,7 +171,7 @@ return (
   $findComment = ' * isInternalReasoningPlaceholder(), so it never re-poisons cache or history.'
   $replaceComment = @'
  * isInternalReasoningPlaceholder(), so it never re-poisons cache or history.
- * AutoOS patch 2026-09-30: added deepseek (see configuration/omniroute/reason-fix-README.md).
+ * AutoOS patch 2026-09-30: added deepseek (see ./reason-fix-README.md).
 '@
   if ($c.IndexOf($replaceComment) -ge 0) {
     $results.Add("SKIP  index.ts patch marker (already present)")
@@ -243,7 +243,7 @@ const reasoning = getReadableReasoningValue(msg).trim();
         // miss the replay layer injects a placeholder into reasoning_content,
         // but the check above skips it as internal. Re-inject it here so the
         // Responses API input carries a reasoning item before function_call.
-        // (AutoOS patch 2026-09-30: see configuration/omniroute/reason-fix-README.md)
+        // (AutoOS patch 2026-09-30: see ./reason-fix-README.md)
         (reasoningIsPlaceholder || !reasoning) &&
         responsesProviderRequiresReasoningPresence(credentialRecord._provider, model) &&
         Array.isArray(msg.tool_calls) &&

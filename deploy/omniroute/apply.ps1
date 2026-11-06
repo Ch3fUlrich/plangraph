@@ -6,11 +6,11 @@
   1. Registers every provider key found in configuration/api-keys.yml.
   2. Refreshes the gateway's model catalog for what it just registered
      (omniroute models <provider>), so one run is enough for a fresh machine.
-  3. Declares the custom (manual) models of configuration/omniroute/
+  3. Declares the custom (manual) models of ./
      custom-models.json through POST /api/provider-models, before the catalog is
      read for combo validation — a provider whose model list the gateway image
      bakes has no live discovery, so its new ids exist only once declared.
-  4. (Re)creates the tier combos from configuration/omniroute/combos.json.
+  4. (Re)creates the tier combos from ./combos.json.
   5. Prunes the combos listed there as "retired" or "omitted" from the store
      (only those).
 
@@ -28,16 +28,16 @@
   renamed upstream model degrades one tier leg instead of breaking the run.
 
 .EXAMPLE
-  .\configuration\omniroute\apply.ps1
+  .\apply.ps1
 .EXAMPLE
-  .\configuration\omniroute\apply.ps1 -DryRun
+  .\apply.ps1 -DryRun
 .EXAMPLE
-  .\configuration\omniroute\apply.ps1 -Probe   # one tiny request per combo
+  .\apply.ps1 -Probe   # one tiny request per combo
 .EXAMPLE
   # A live (non -DryRun) run needs a judge GO naming this checkout's HEAD (fleet rule D-825):
-  .\configuration\omniroute\apply.ps1 -Go D-825 -GoSha (git rev-parse HEAD)
+  .\apply.ps1 -Go D-825 -GoSha (git rev-parse HEAD)
   # The GO must name an artefact that exists; from a machine that cannot read it:
-  .\configuration\omniroute\apply.ps1 -Go D-825 -GoSha (git rev-parse HEAD) -GoOffline
+  .\apply.ps1 -Go D-825 -GoSha (git rev-parse HEAD) -GoOffline
 #>
 [CmdletBinding()]
 param(
@@ -56,7 +56,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
 
 $Here      = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Root      = Split-Path -Parent (Split-Path -Parent $Here)
+if (-not $env:PLANGRAPH_AUTOOS_ROOT) { throw 'Set PLANGRAPH_AUTOOS_ROOT to the read-only AutoOS checkout' }
+$Root = $env:PLANGRAPH_AUTOOS_ROOT
 
 # --- Fleet rule D-825: a live gateway change runs only on an explicit GO ---
 # 2026-10-09 06:27Z an apply real run began before any judge GO existed and
@@ -610,7 +611,7 @@ foreach ($keyName in $ProviderMap.Keys) {
 # to validate against, so its leg was dropped as "catalog does not know" and
 # only appeared on the SECOND apply run (L0 2026-09-27T19:07:39Z, free-ai/qwen7b
 # on a fresh machine). Order is therefore register -> refresh -> read -> combos,
-# the same order configuration/omniroute/apply.sh uses.
+# the same order ./apply.sh uses.
 Write-Host 'Catalog:'
 if ($DryRun) {
     foreach ($providerId in $RegisteredNow) {
@@ -634,7 +635,7 @@ if ($DryRun) {
 # the operator's declared override, registered through
 # POST /api/provider-models {provider, modelId, modelName, source: "manual",
 # max_input_tokens, max_output_tokens, supportsVision} - the one body shape
-# configuration/omniroute/apply-custom-models.sh (Linux) sends. Idempotent: an
+# ./apply-custom-models.sh (Linux) sends. Idempotent: an
 # id the gateway already holds is reported, not rewritten. Runs BEFORE the live
 # catalog read below, or a combo leg naming a custom id the store does not hold
 # yet is dropped as "catalog does not know" until the second run.

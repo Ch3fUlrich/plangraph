@@ -1,4 +1,4 @@
-// Unit proof for configuration/omniroute/patches/0001-clamp-max-tokens.patch.
+// Unit proof for ./patches/0001-clamp-max-tokens.patch.
 //
 //   node verify-clamp.mjs [path-to-server.js]
 //

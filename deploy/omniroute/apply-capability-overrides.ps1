@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Apply configuration/omniroute/capability-overrides.json to a running local OmniRoute gateway.
+  Apply ./capability-overrides.json to a running local OmniRoute gateway.
 
 .DESCRIPTION
   Companion to context-overrides.json / apply.ps1. Both write the same management route
@@ -46,7 +46,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Root = Split-Path -Parent (Split-Path -Parent $Here)
+if (-not $env:PLANGRAPH_AUTOOS_ROOT) { throw 'Set PLANGRAPH_AUTOOS_ROOT to the read-only AutoOS checkout' }
+$Root = $env:PLANGRAPH_AUTOOS_ROOT
 $OverridesFile = Join-Path $Here 'capability-overrides.json'
 
 # --- Fleet rule D-825: a live gateway change runs only on an explicit GO ---
@@ -97,7 +98,7 @@ if (-not $DryRun) {
 # The management API accepts the machine loopback token the local CLI sends
 # (omniroute docs/security/CLI_TOKEN.md): HMAC-SHA256 of the machine id, keyed by that
 # id, over the salt "omniroute-cli-auth-v1", sent as the x-omniroute-cli-token header.
-# Same derivation as configuration/omniroute/apply.ps1 Get-AutoOSManageToken.
+# Same derivation as ./apply.ps1 Get-AutoOSManageToken.
 function Get-AutoOSManageToken {
     try {
         $guid = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -ErrorAction Stop).MachineGuid

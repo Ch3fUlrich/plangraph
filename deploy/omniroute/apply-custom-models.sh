@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Declare custom (manual) gateway models from configuration/omniroute/custom-models.json.
+# Declare custom (manual) gateway models from ./custom-models.json.
 #
-#   ./configuration/omniroute/apply-custom-models.sh [--dry-run] \
+#   ./apply-custom-models.sh [--dry-run] \
 #                                      [--go <ref> --go-sha <sha>] [--go-offline]
 #
 # For each row it reads GET /api/provider-models?provider=<provider> and POSTs
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
+ROOT="$(cd "${PLANGRAPH_AUTOOS_ROOT:?set PLANGRAPH_AUTOOS_ROOT to the read-only AutoOS checkout}" && pwd)"
 GATEWAY="${AUTOOS_OMNIROUTE_URL:-http://127.0.0.1:20128}"
 MODELS_FILE="${AUTOOS_CUSTOM_MODELS_FILE:-$HERE/custom-models.json}"
 DRY=0
