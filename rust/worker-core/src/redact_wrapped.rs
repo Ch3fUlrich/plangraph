@@ -4,30 +4,34 @@ use std::sync::OnceLock;
 pub(crate) fn redact_wrapped(text: &str) -> String {
     static PREFIX: OnceLock<regex::Regex> = OnceLock::new();
     let re = PREFIX.get_or_init(|| {
-        regex::Regex::new(r"\b(?:x?sk-|gh[pousr]_|github_pat_|xox[abprs]-|AKIA|AIza)").unwrap()
+        let prefixes = super::redact_tokens::SPECS
+            .iter()
+            .map(|s| format!("({})", s.prefix))
+            .collect::<Vec<_>>()
+            .join("|");
+        regex::Regex::new(&format!(r"\b(?:{prefixes})")).unwrap()
+    });
+    static BODIES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    let bodies = BODIES.get_or_init(|| {
+        super::redact_tokens::SPECS
+            .iter()
+            .map(|s| regex::Regex::new(&format!("^{}$", s.body)).unwrap())
+            .collect()
     });
     let mut out = String::new();
     let mut copied = 0;
-    for m in re.find_iter(text) {
+    for captures in re.captures_iter(text) {
+        let m = captures.get(0).unwrap();
         if m.start() < copied {
             continue;
         }
-        let prefix = m.as_str();
-        let floor = if prefix.starts_with("gh") {
-            20
-        } else if prefix.starts_with("xox") {
-            10
-        } else if prefix == "AKIA" {
-            16
-        } else if prefix == "AIza" {
-            30
-        } else {
-            20
-        };
-        let allowed = |b: u8| {
-            b.is_ascii_alphanumeric()
-                || (prefix != "AKIA" && !prefix.starts_with("ghp") && (b == b'_' || b == b'-'))
-        };
+        let index = (1..captures.len())
+            .find(|&i| captures.get(i).is_some())
+            .unwrap()
+            - 1;
+        let floor = super::redact_tokens::SPECS[index].floor;
+        let allowed =
+            |b: u8| b.is_ascii() && bodies[index].is_match(std::str::from_utf8(&[b]).unwrap());
         let bytes = text.as_bytes();
         let mut end = m.end();
         let mut count = 0;
@@ -53,6 +57,8 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
             end = next;
             wrapped = true;
         }
+        // Deliberately preserve joined bodies below the family floor: short
+        // prefix-like prose is not classified as a secret by either path.
         if wrapped && count >= floor {
             out.push_str(&text[copied..m.start()]);
             out.push_str(crate::redact::REDACTED);

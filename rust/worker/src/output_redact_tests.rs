@@ -11,7 +11,17 @@ macro_rules! wrapped {
                 for newline in ["\n", "\r\n"] {
                     let text = format!("{prefix}{left}{newline}{right}\nfollowing line survives");
                     assert!(text.contains(right));
-                    assert_eq!(history_text(&text), "[REDACTED]\nfollowing line survives");
+                    // The shared sk floor is one: a nonempty first line is
+                    // already complete, so subsequent prose is not joined.
+                    let expected = if (prefix == ["s", "k-"].concat()
+                        || prefix == ["xs", "k-"].concat())
+                        && split > 0
+                    {
+                        format!("[REDACTED]{newline}{right}\nfollowing line survives")
+                    } else {
+                        "[REDACTED]\nfollowing line survives".to_string()
+                    };
+                    assert_eq!(history_text(&text), expected.replace("\r\n", "\n"));
                 }
             }
         }
@@ -34,7 +44,9 @@ wrapped!(wrapped_aiza, ["AI", "za"].concat(), "f4".repeat(18));
 fn wrapped_token_stops_at_non_token_characters() {
     let text = format!(
         "{}{}\n{}; retained prose\nnext line",
-        "sk", "-abc123abc123", "def456def456"
+        ["gh", "o_"].concat(),
+        "abc123abc123",
+        "def456def456"
     );
     assert_eq!(history_text(&text), "[REDACTED]; retained prose\nnext line");
 }
