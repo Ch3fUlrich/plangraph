@@ -199,11 +199,37 @@ fn unchanged_gitlink_preserved() {
 
 #[test]
 fn mode_lookup_is_cached_before_candidate_loop() {
-    let source = include_str!("writer_salvage.rs");
-    let scan = source.split("fn snapshot(").nth(1).unwrap();
-    let lookup = scan.find("entries(root, tip)?").unwrap();
-    assert_eq!(scan.matches("entries(root, tip)?").count(), 1);
-    assert!(lookup < scan.find("for name in listed.split").unwrap());
+    let (_dir, repo, base, _) = fixture();
+    let root = Path::new(&repo.root);
+    command(
+        root,
+        &["commit", "--allow-empty", "-m", "distinct tip"],
+        &[],
+        None,
+    )
+    .unwrap();
+    let tip = String::from_utf8(command(root, &["rev-parse", "HEAD"], &[], None).unwrap()).unwrap();
+    for name in ["safe", "new-a", "new-b"] {
+        std::fs::write(root.join(name), "dirty candidate").unwrap();
+    }
+    crate::writer_secret::LS_TREE_CALLS.with(|calls| calls.borrow_mut().clear());
+    let (snapshot, dropped) = super::snapshot(root, &base, tip.trim()).unwrap();
+    crate::writer_secret::LS_TREE_CALLS.with(|calls| {
+        let calls = calls.borrow();
+        assert_eq!(calls.len(), 2, "one tip lookup and one base lookup");
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|args| args.iter().any(|arg| arg == tip.trim()))
+                .count(),
+            1
+        );
+    });
+    assert!(dropped.is_empty());
+    let names = entries(root, &snapshot).unwrap();
+    for name in ["safe", "new-a", "new-b"] {
+        assert!(names.iter().any(|entry| entry.2 == name.as_bytes()));
+    }
 }
 
 #[cfg(unix)]

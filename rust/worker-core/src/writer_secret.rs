@@ -11,6 +11,12 @@ use std::{
     process::Stdio,
 };
 pub struct SecretGate;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LS_TREE_CALLS: std::cell::RefCell<Vec<Vec<String>>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
 #[derive(Debug, PartialEq, Eq)]
 pub struct SecretFinding {
     pub commit: String,
@@ -47,6 +53,14 @@ pub(crate) fn command(
     input: &[u8],
     index: Option<&Path>,
 ) -> Result<Vec<u8>, WriterError> {
+    #[cfg(test)]
+    if args.first() == Some(&"ls-tree") {
+        LS_TREE_CALLS.with(|calls| {
+            calls
+                .borrow_mut()
+                .push(args.iter().map(|arg| (*arg).to_owned()).collect());
+        });
+    }
     let mut file = tempfile::tempfile()?;
     file.write_all(input)?;
     file.seek(SeekFrom::Start(0))?;
