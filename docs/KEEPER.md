@@ -576,22 +576,11 @@ line. `--json` carries the same data, byte-for-byte equivalent.
 
 ### `pg audit-meta --skeleton DIR`
 
-The verb only returns data; the CLI writes the files. One `<project>.BATCH.yaml` per project **that has findings**
-(silent projects write nothing), plus its sibling note, and the directory is created if missing; the written paths go to
-stderr so stdout stays the text (or `--json`, which still writes the files). The YAML is `docs/BATCH.md` shape
-(`batch: audit-meta-<project>`, `principal: router`, `source: <project>.BATCH.md`, `source_sha256`, `ops:`), and
-`source_sha256` is computed over the note's bytes as they are written, so `python3 tools/apply_batch.py DIR/P.BATCH.yaml
+The verb only returns data; the CLI writes the files. One `<project>.BATCH.yaml` per project **that has findings** (silent projects write nothing), plus its sibling note, and the directory is created if missing; the written paths go to stderr so stdout stays the text (or `--json`, which still writes the files). The YAML is `docs/BATCH.md` shape (`batch: audit-meta-<project>`, `principal: router`, `source: <project>.BATCH.md`, `source_sha256`, `ops:`), and `source_sha256` is computed over the note's bytes as they are written, so `python3 tools/apply_batch.py DIR/P.BATCH.yaml
 --dry-run` (validation and digest check, no HTTP) accepts it — which the tests prove by importing `tools/apply_batch.py`.
 Project names are made filesystem-safe (`[^A-Za-z0-9._-]` → `_`).
 
-Exactly one `op: edit` per item, listing only the missing fields, each value an empty string: `apply_batch`'s validator
-accepts `""` (checked), so the stub parses as-is and the emptiness is the point — nothing here proposes a value. Two YAML
-comments precede each op: the item's `key | title | state` + the missing fields, and its current `description=… |
-estimate_h=… | done_criteria=… | owner=…`. The note file explains all of that and two caveats: `principal: router` is a
-placeholder (an applier needs a router token of that name; an l1 has no batch door and edits with `pg define --edit`),
-and an item listed as `state claimed` cannot be edited until it is released, because `edit_definition` only accepts
-`open` items.
-
+Exactly one `op: edit` per item, listing only the missing fields, each value an empty string: `apply_batch`'s validator accepts `""` (checked), so the stub parses as-is and the emptiness is the point — nothing here proposes a value. Two YAML comments precede each op: the item's `key | title | state` + the missing fields, and its current `description=… | estimate_h=… | done_criteria=… | owner=…`. The note file explains all of that and two caveats: `principal: router` is a placeholder (an applier needs a router token of that name; an l1 has no batch door and edits with `pg define --edit`), and an item listed as `state claimed` cannot be edited until it is released, because `edit_definition` only accepts `open` items.
 
 ## Backup retention (PG-BACKUP-RETENTION)
 
@@ -604,3 +593,14 @@ The keeper writes no backups itself; operators leave ad-hoc copies (`backup-pre-
 - Never touched, whatever the name: `keeper.db`, `keeper.json` (and `keeper.json.*`), `*.token`, `*-wal`, `*-shm`, `*.lock`, `*.pid`, `*.alive`, `*.log`, `plan.snapshot*`, `md-sync*`, symlinks, sub-directories (not entered; no recursion) and any name outside the explicit allow-list in `backup_retention.py`.
 - Opt-in keeper hook (default off), in `keeper.json`: `"backup_prune": {"enabled": false, "dir": "<path>", "keep": 10, "daily_days": 7, "interval_s": 21600}`. When `enabled`, the daemon prunes (apply) once after startup and then every `interval_s` on a daemon thread that stops on shutdown; errors go to stderr and never stop the keeper. `enabled` without `dir` is a config error.
 - Alternative to the hook: run `pg admin prune-backups --dir DIR --apply` from a Semaphore playbook or cron job.
+
+## Placement rules migration-gates
+Migration 11 requires operator GO naming the reviewed SHA and scope, verified
+backup and disposable-schema rehearsal before application through the migrate role.
+Verify runtime DML-only grants, approve API restart, and rehearse rollback first.
+Writers have no live authority; tests use only fixture-owned temporary schemas.
+Keep application writers stopped during rollback and restore: fixed tables and
+indexes become `*_retired_v11` under migration and exclusive table locks.
+Preserve audit rows; reapplication requires an explicit restore plan.
+SQLite rollback retains tables; C4 owns forward audit events, not item events.
+Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure.
