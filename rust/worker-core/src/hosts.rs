@@ -74,11 +74,22 @@ pub struct RepoEntry {
     pub cache_env: BTreeMap<String, String>,
 }
 
+/// Policy label; admission still uses the host's existing caps.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostClass {
+    #[default]
+    Worker,
+    Restricted,
+}
+
 /// One host in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostEntry {
     pub id: String,
+    #[serde(default)]
+    pub class: HostClass,
     pub aliases: Vec<String>,
     pub transport: Transport,
     pub os: Os,

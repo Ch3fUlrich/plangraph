@@ -99,13 +99,20 @@ class DecisionsAdapter:
     def __init__(self, path: str | Path | None) -> None:
         self._path = Path(path) if path else None
 
-    def _rows(self) -> dict[str, list[str]]:
+    def _rows_strict(self) -> dict[str, list[str]]:
+        return self._rows(_strict=True)
+
+    def _rows(self, *, _strict=False) -> dict[str, list[str]]:
         """Prose table rows keyed by normalised id (empty when unreadable)."""
         if self._path is None or not self._path.is_file():
+            if _strict and self._path is not None:
+                raise OSError("decisions path is not a regular file")
             return {}
         try:
             text = self._path.read_text(encoding="utf-8")
         except OSError:
+            if _strict:
+                raise
             return {}
         rows: dict[str, list[str]] = {}
         for line in _prose_lines(text):

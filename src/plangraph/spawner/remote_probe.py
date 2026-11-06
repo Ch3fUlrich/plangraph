@@ -1,11 +1,14 @@
-"""Pull durable host findings with at-least-once notification delivery."""
+"""Pull durable host findings with at-least-once notification delivery.
+
+PLANGRAPH_PROBE_ROOT is one shared repository root for all configured hosts.
+"""
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import uuid
 
 from .private_io import atomic_write_private
@@ -34,22 +37,39 @@ def poll(hosts, command, state):
             raise TypeError('invalid probe state')
     except (FileNotFoundError, ValueError, TypeError):
         saved = {}
+    protected = set()
     def save():
         atomic_write_private(path, json.dumps(saved))
-    def notify(key, event, entry):
-        if key not in entry['seen']:
+    def notify(key, event, entry, *, durable=False):
+        if durable or key not in entry['seen']:
+            argv = shlex.split(command)
+            if not argv:
+                raise ValueError('empty notification command')
+            old = None
+            if not durable and len(entry['seen']) >= 10000:
+                old = next((k for k in entry['seen'] if k not in protected), None)
+                if old is None:
+                    raise ValueError('delivery window full; awaiting remote acknowledgements')
             event = dict(event, event_id=event.get('event_id') or key)
-            subprocess.run(shlex.split(command), input=json.dumps(event, sort_keys=True) + '\n',
+            subprocess.run(argv, input=json.dumps(event, sort_keys=True) + '\n',
                            text=True, encoding="utf-8", errors="replace", check=True, timeout=20)
-            entry['seen'].append(key)
+            if old is not None:
+                entry['seen'].remove(old)
+            if not durable:
+                entry['seen'].append(key)
             save()
-    def flush(entry):
+    def flush(entry, remote=None):
+        nonlocal protected
+        protected = set(entry.setdefault('pending', {})) | set(
+            entry['seen'] if remote is None else remote)
         for key, event in list(entry.setdefault('pending', {}).items()):
             try:
-                notify(key, event, entry)
+                # Durable pending records need no bounded remote dedup slot.
+                notify(key, event, entry, durable=True)
                 del entry['pending'][key]
                 save()
-            except (OSError, subprocess.SubprocessError):
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                print('probe notification failed: ' + type(exc).__name__, file=sys.stderr)
                 continue
     for host in hosts:
         entry = saved.setdefault(host, dict(failures=0, outage=0, down=False, seen=[], acks=[]))
@@ -89,14 +109,15 @@ def poll(hosts, command, state):
             pending['up-' + entry.get('episode', str(entry['outage']))] = dict(rule='host-recovered', host=host)
         entry.update(failures=0, down=False)
         save()
-        flush(entry)
+        flush(entry, events)
         entry['acks'] = []
         for key, event in events.items():
             try:
                 notify(key, event, entry)
                 entry['acks'].append(key)
                 save()
-            except (OSError, subprocess.SubprocessError):
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                print('probe notification failed: ' + type(exc).__name__, file=sys.stderr)
                 continue
         save()
 

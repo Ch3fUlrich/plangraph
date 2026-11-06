@@ -56,6 +56,7 @@ class Leg:
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
     expires: str = ""
+    disabled: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -85,7 +86,8 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
 from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
-    _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
+    _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",),
+             disabled="D-3950 credits out; re-enable after one passing probe seat, one try per day"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
         roles=("review", "implement")),
@@ -100,14 +102,8 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
-    Leg("opencode-console-sonnet-5.5", "subscription", "opencode",
-        "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
-        180000, False, claude_family=True,
-        note="console sonnet credits; listed by opencode models --standalone, not by the "
-             "background service list; writer only, never a seat",
-        roles=("implement",), expires="2026-11-30"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
+    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
@@ -115,10 +111,10 @@ DEFAULT_LEGS = (
     # D-3552: opencode-go review seats, placed before the paid deepseek
     # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
-        "opencode-go/gemini-4-argon-contributor", "gemini", ("128k",), 100000,
+        "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
     Leg("opencode-go-glm-5.2", "subscription", "opencode",
-        "opencode-go/glm-5.2-max", "glm", ("128k",), 100000, False,
+        "opencode-go/glm-5.2", "glm", ("128k",), 100000, False,
         roles=("review",)),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
@@ -127,7 +123,7 @@ DEFAULT_LEGS = (
         "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         False, roles=("review",)),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
-        "opencode-go/deepseek-v4-flash-max", "deepseek", ("128k",), 100000,
+        "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
@@ -137,18 +133,17 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-2683 operator writer order (free-first): the free tier leads, then
-# subscription.  agy-sonnet-5.5 is orchestrate-only and never a writer here.
+# D-3745: the lead writer precedes every tier; others retain D-2683 tier/order.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol",   # D-3666/D-3667: tuple head; tier-first sort (D-2683) keeps it behind the free tier
+    "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
     "opencode-deepseek-v4.1-flash-free",
     "opencode-glm-5.3-flash-free",
     "openrouter-free",
     "agy-gemini-3.8-flash",
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
-    "opencode-console-sonnet-5.5",
 )
+LEAD_WRITER = "cx-gpt-6.1-sol"
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
@@ -158,7 +153,9 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def leg_active(leg: Leg, today: date | datetime | None = None) -> bool:
-    """True while ``leg`` may be routed: no ``expires``, or not past its UTC end of day."""
+    """True unless explicitly disabled or past ``expires`` at UTC end of day."""
+    if leg.disabled is not None:
+        return False
     if not leg.expires:
         return True
     current = today if today is not None else datetime.now(timezone.utc)
@@ -209,11 +206,15 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if isinstance(raw.get("tool_mode"), str) and raw["tool_mode"] not in TOOL_MODES:
         problems.append(f"{where}.tool_mode: {raw['tool_mode']!r} not in {TOOL_MODES}")
     windows = raw.get("windows")
+    disabled = raw.get("disabled")
+    if disabled is not None and (not isinstance(disabled, str) or not disabled.strip()):
+        problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
-    if (not isinstance(roles, (list, tuple)) or not roles
+    if (not isinstance(roles, (list, tuple))
+            or (not roles and not (isinstance(disabled, str) and disabled.strip()))
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
-        problems.append(f"{where}.roles: must be a non-empty subset of implement|review|orchestrate")
+        problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES

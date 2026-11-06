@@ -32,7 +32,7 @@ def close_config_layers(child_env):
 
 
 def tree_state(work_dir):
-    """Hash of HEAD plus the full porcelain status; None outside a git work tree.
+    """Hash HEAD and status; None outside a git work tree.
 
     An unborn HEAD (fresh repo) hashes as ``unborn``: the status still counts.
     """
@@ -42,7 +42,8 @@ def tree_state(work_dir):
     try:
         status = git('status', '--porcelain=v1', '-uall').stdout
         head = git('rev-parse', '--verify', '-q', 'HEAD', check=False)
-        return hashlib.sha256((head.stdout if head.returncode == 0 else b'unborn') + b'\0' + status).hexdigest()
+        return hashlib.sha256((head.stdout if head.returncode == 0 else b'unborn')
+                              + b'\0' + status).hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -52,6 +53,18 @@ WRITER_NO_CHANGES_EXIT = 5
 
 
 UNCHECKED = {'event': 'writer_change_unchecked', 'reason': 'cwd shared with a live writer'}
+
+
+def writer_commits(work_dir, email):
+    """Include linked-worktree refs and reflogs, independent of commit dates."""
+    commits = set()
+    for identity in ('author', 'committer'):
+        result = subprocess.run(
+            ['git', '-C', str(work_dir), 'log', '--all', '--reflog',
+             '--format=%H', '--fixed-strings', '--' + identity + '=<' + email + '>'],
+            capture_output=True, timeout=30, check=True)
+        commits.update(result.stdout.decode('ascii').split())
+    return commits
 
 
 def record_baseline(job, work_dir, live_jobs=()):
@@ -68,7 +81,15 @@ def record_baseline(job, work_dir, live_jobs=()):
         return
     state = tree_state(work_dir) if work_dir else None
     if state:
-        job.events.append({'event': 'writer_baseline', 'state': state})
+        baseline = {'event': 'writer_baseline', 'state': state}
+        job.events.append(baseline)
+        email = getattr(job, 'writer_email', None)
+        if email:
+            try:
+                baseline['commits'] = sorted(writer_commits(work_dir, email))
+            except (OSError, subprocess.SubprocessError):
+                job.events.append({'event': 'writer_change_unchecked',
+                                   'reason': 'writer commit lookup failed'})
 
 
 def fail_unchanged_writer(job, work_dir):
@@ -76,6 +97,23 @@ def fail_unchanged_writer(job, work_dir):
     base = next((e['state'] for e in job.events if e.get('event') == 'writer_baseline'), None)
     if (job.role not in WRITER_ROLES or base is None or job.status != 'completed'
             or UNCHECKED in job.events or tree_state(work_dir) != base):
+        return
+    email = getattr(job, 'writer_email', None)
+    if not email:
+        job.events.append({'event': 'writer_change_unchecked',
+                           'reason': 'writer identity missing'})
+        return
+    baseline = next(e for e in job.events if e.get('event') == 'writer_baseline')
+    if 'commits' not in baseline:
+        job.events.append({'event': 'writer_change_unchecked',
+                           'reason': 'writer commit lookup failed'})
+        return
+    try:
+        if writer_commits(work_dir, email) - set(baseline['commits']):
+            return
+    except (OSError, subprocess.SubprocessError):
+        job.events.append({'event': 'writer_change_unchecked',
+                           'reason': 'writer commit lookup failed'})
         return
     job.status = 'failed'
     job.exit_code = WRITER_NO_CHANGES_EXIT

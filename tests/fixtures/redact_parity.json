@@ -1,0 +1,18 @@
+[
+  {"input": "sk-a", "expected": "[REDACTED]"},
+  {"input": "sk-plantedsecret", "expected": "[REDACTED]"},
+  {"input": "sk-fake0123456789", "expected": "[REDACTED]"},
+  {"input": "xsk-a", "expected": "[REDACTED]"},
+  {"input": "xsk-abcdefghijklmnopqrst", "expected": "[REDACTED]"},
+  {"input": "key:sk-abc", "expected": "key:[REDACTED]"},
+  {"input": "risk-free", "expected": "risk-free"},
+  {"input": "task-1", "expected": "task-1"},
+  {"input": "desk-lamp", "expected": "desk-lamp"},
+  {"input": "plain text", "expected": "plain text"},
+  {"input": "sk-learn", "expected": "[REDACTED]"},
+  {"input": "sk-a_B-9", "expected": "[REDACTED]"},
+  {"input": "sk- xsk-", "expected": "sk- xsk-"},
+  {"input": "ask-abc axsk-abc", "expected": "ask-abc axsk-abc"},
+  {"input": "Bearer fake.value.123", "expected": "Bearer [REDACTED]"},
+  {"input": "API_KEY=fake123", "expected": "API_KEY=[REDACTED]"}
+]

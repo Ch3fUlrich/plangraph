@@ -37,7 +37,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .. import inbox, views
-from . import outage
+from . import outage, timing
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from .snapshot_writer import SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
@@ -148,7 +148,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 return  # 413 already sent
 
         server = self.server
-        with server.lock:
+        with timing.RequestTimer(server.lock, "read" if method == "GET" else "write"):
             try:
                 try:
                     principal = auth.authenticate(server.store.conn, self._token())

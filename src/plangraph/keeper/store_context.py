@@ -79,9 +79,9 @@ class ContextMixin:
     """Task-context reads and the stale-claim guard."""
 
     # ------------------------------------------------------------ inputs
-    def _inputs(self, index):
+    def _inputs(self, index, *, fresh=False):
         """Per-request shared inputs: decision rows, retirements, graph, clock."""
-        return {"book": src.decision_book(self._adapter("decisions")),
+        return {"book": src.decision_book(self._adapter("decisions"), fresh=fresh),
                 "graph": _graph(index), "clock": self._decision_clock()}
 
     def _last_activity_map(self):
@@ -289,10 +289,17 @@ class ContextMixin:
         """Refuse a stale claim with the facts, or return the override record."""
         reason = self._force_stale_reason(reason)
         index = {it["key"]: it for it in self._all_items()}
-        ctx = self._task_context(item, index, fetch=True)
+        try:
+            inputs = self._inputs(index, fresh=True)
+        except src.DecisionsUnreadable:
+            path = getattr(self._adapter("decisions"), "_path", None)
+            raise Refused("bad_state", f"cannot read decisions file: {path}") from None
+        ctx = self._task_context(item, index, inputs=inputs,
+                                 fetch=True)
         facts = []
         commits = ctx["work_exists"]["commits"]
-        if commits:
+        lanes = ctx["work_exists"]["lanes"]
+        if commits and not (isinstance(lanes, list) and lanes):
             head = commits[0]
             merge = head.get("merge") or {}
             facts.append(

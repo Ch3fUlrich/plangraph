@@ -16,7 +16,7 @@ async def cancel_recorded(service, run_id):
         await service.runner.cancel(record['job_id'])
         survivors = list(service.runner.jobs[record['job_id']].survivors) or survivors
     elif record['status'] == 'running' and record.get('pid'):
-        survivors = await service.runner.kill_recorded(record['pid'], record.get('pid_start'))
+        survivors = await service.runner.kill_recorded(record['pid'], record.get('pid_start'), record.get('job_name'), record.get('escapees', ()))
     task = service.tasks.get(run_id)
     if task and not task.done():
         task.cancel()

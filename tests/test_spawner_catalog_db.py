@@ -96,8 +96,8 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert opus["verified_tok_per_s"] == 98.0
     assert opus["cost_per_task_usd"] == 1.82
 
-    # 4. opencode-go/gemini-4-argon-contributor: rank 2, active smart model under OpenCode Go subscription
-    argon_oc = memory_db.get_model("opencode-go/gemini-4-argon-contributor")
+    # 4. opencode-go/gemini-4-argon: rank 2, active smart model under OpenCode Go subscription
+    argon_oc = memory_db.get_model("opencode-go/gemini-4-argon")
     assert argon_oc is not None
     assert argon_oc["master_rank"] == 2
     assert argon_oc["aa_intelligence"] == 53.0
@@ -138,8 +138,8 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert muse["agentic_index"] == 55.5
     assert muse["verified_tok_per_s"] == 287.0
 
-    # 8. opencode-go/glm-5.2-max: coding 71.5, scicode 52.0
-    glm = memory_db.get_model("opencode-go/glm-5.2-max")
+    # 8. opencode-go/glm-5.2: coding 71.5, scicode 52.0
+    glm = memory_db.get_model("opencode-go/glm-5.2")
     assert glm is not None
     assert glm["coding_index"] == 71.5
     assert glm["scicode"] == 52.0
