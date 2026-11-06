@@ -12,6 +12,23 @@ ORPHAN_GRACE_S = 10.0
 CONTAINMENT_MARKER = 'plangraph: containment_unavailable'
 
 
+def _drained_exit(code, forwarded):
+    """Return ``code`` only once no child remains unreaped.
+
+    os.waitpid(-1, WNOHANG) proves the state directly - no /proc read needed:
+    ChildProcessError means no child remains; (0, 0) means one is still
+    unreaped and success is never reported for it; a reaped pid is looped on
+    once.  Bounded, then fail closed."""
+    for _ in range(64):
+        try:
+            wpid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return code
+        if wpid == 0:
+            break
+    return 128 + (forwarded or signal.SIGKILL)
+
+
 async def create_subprocess_exec(*argv, **kwargs):
     return await asyncio.create_subprocess_exec(*command(list(argv)), **kwargs)
 
@@ -107,9 +124,10 @@ def main(grace=ORPHAN_GRACE_S):
                         pid = 0
                     if pid == child.pid:
                         code = os.waitstatus_to_exitcode(status)
-                        return code if code >= 0 else 128 - code
+                        code = code if code >= 0 else 128 - code
+                        return _drained_exit(code, forwarded)
                     return 128 + (forwarded or signal.SIGKILL)
-                return code
+                return _drained_exit(code, forwarded)
         time.sleep(0.01)
 
 

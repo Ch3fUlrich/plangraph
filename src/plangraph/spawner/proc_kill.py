@@ -190,30 +190,27 @@ def _winpid(pid, proc_root):
 
 
 def signal_recorded(pid, start, proc_root='/proc'):
-    """Pin Linux identity before checking procfs; read/reuse races fail closed."""
+    """Pin Linux identity before signalling; read/reuse races fail closed.
+
+    Without a pidfd the identity cannot be pinned: no signal is sent, the
+    survivor stays recorded, and the kill ends in KillIncomplete - never a
+    signal to a pid that might have been reused."""
     import signal
     if start is None:
         return
-    if hasattr(os, 'pidfd_open') and hasattr(signal, 'pidfd_send_signal'):
-        try:
-            fd = os.pidfd_open(pid)
-        except OSError:
-            return
-        try:
-            if alive(pid, start, proc_root=proc_root):
-                signal.pidfd_send_signal(fd, signal.SIGKILL)
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
-    else:
-        try:
-            if alive(pid, start, proc_root=proc_root):
-                # No pidfd (e.g. macOS): recheck immediately; a reuse window remains.
-                if alive(pid, start, proc_root=proc_root):
-                    os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+    if not (hasattr(os, 'pidfd_open') and hasattr(signal, 'pidfd_send_signal')):
+        return   # no pidfd proof: no signal
+    try:
+        fd = os.pidfd_open(pid)
+    except OSError:
+        return
+    try:
+        if alive(pid, start, proc_root=proc_root):
+            signal.pidfd_send_signal(fd, signal.SIGKILL)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 async def kill_process_tree(pid, *, platform=None, command_factory=None, members=None,
@@ -260,7 +257,11 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None, members
         await asyncio.sleep(0.02)
     left = {p for p, s in recorded.items() if alive(p, s, proc_root=proc_root)}
     if await asyncio.to_thread(group_alive, pid):
-        left.update(group_members(pid, proc_root=proc_root))
+        listed = group_members(pid, proc_root=proc_root)
+        if not listed:
+            # A live group with no listable member is a failed proof: never success.
+            raise KillIncomplete(left or {pid})
+        left.update(listed)
     if left:
         raise KillIncomplete(left)
 

@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -13,11 +14,17 @@ from plangraph.spawner.exit_outcome import terminal_reason
 
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux containment')
 
+# Children spawned with ``python -c`` get no conftest sys.path: bootstrap the
+# checkout's src so they run this worktree's modules.
+_SRC = str(Path(proc_kill.__file__).resolve().parents[2])
+
 
 def test_unreaped_deadline_without_proc_children(tmp_path):
     pidfile = tmp_path / 'pid'
     # Hide wait status and proc children, not the actual child or direct kill.
     launch = f"""
+import sys
+sys.path.insert(0, {_SRC!r})
 import os, signal, threading, time
 from unittest.mock import patch
 from plangraph.spawner.contained_exec import main
@@ -80,21 +87,103 @@ def test_recorded_setsid_survivor_after_group_death(monkeypatch):
             proc.wait(timeout=3)
 
 
-def test_fallback_rechecks_identity_before_kill(monkeypatch):
-    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+def test_wrapper_does_not_exit_zero_with_live_adopted_child(tmp_path):
+    pidfile = tmp_path / 'pid'
+    # Hide only the /proc children read: the adopted setsid child stays live and
+    # unreaped, so exit status must come from waitpid state alone.
+    launch = f"""
+import sys
+sys.path.insert(0, {_SRC!r})
+from unittest.mock import patch
+from plangraph.spawner.contained_exec import main
+with patch('pathlib.Path.glob', return_value=[]):
+    raise SystemExit(main(.02))
+"""
+    root = (f"import subprocess,sys; open({str(pidfile)!r},'w')"
+            f".write(str(subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+            f" start_new_session=True).pid))")
+    proc = subprocess.Popen([sys.executable, '-c', launch, sys.executable, '-c', root])
+    kid = None
     try:
-        start = proc_kill._stat(child.pid)[4]
-        real_alive = proc_kill.alive
-        checks = []
-        def changing_identity(pid, token, **kwargs):
-            checks.append(pid)
-            return real_alive(pid, token if len(checks) == 1 else token + 1, **kwargs)
-        monkeypatch.delattr(os, 'pidfd_open')
-        monkeypatch.setattr(proc_kill, 'alive', changing_identity)
-        proc_kill.signal_recorded(child.pid, start)
-        assert len(checks) == 2
-        assert child.poll() is None
+        assert proc.wait(timeout=6) == 128 + signal.SIGKILL
+        kid = int(pidfile.read_text())
+        assert proc_kill.alive(kid, None)   # survivor: never reported as success
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=3)
+        if kid is None and pidfile.exists():
+            kid = int(pidfile.read_text())
+        if kid and proc_kill.alive(kid, None):
+            os.kill(kid, signal.SIGKILL)
+
+
+def test_anchored_kill_finishes_and_wrapper_is_gone(tmp_path):
+    pidfile = tmp_path / 'pid'
+    wrapper = subprocess.Popen(
+        contained_exec.command([sys.executable, '-c',
+                                f"import os,time; open({str(pidfile)!r},'w')"
+                                f".write(str(os.getpid())); time.sleep(30)"]),
+        start_new_session=True)
+    try:
+        ident = proc_kill.root_identity(wrapper.pid)
+        assert ident is not None
+        asyncio.run(asyncio.wait_for(
+            proc_kill.kill_process_tree(wrapper.pid, ident=ident), 15))
+        assert wrapper.wait(timeout=5) is not None   # the anchor left by itself
+        assert not proc_kill.alive(wrapper.pid, ident)
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+        wrapper.wait(timeout=5)
+        if pidfile.exists():
+            kid = int(pidfile.read_text())
+            if proc_kill.alive(kid, None):
+                os.kill(kid, signal.SIGKILL)
+
+
+def test_no_pidfd_means_no_signal_and_survivor_reported(monkeypatch):
+    """Without a pidfd there is no identity proof: nothing is signalled and the
+    survivor stays recorded so the kill ends in KillIncomplete."""
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                             start_new_session=True)
+    try:
+        start = proc_kill.root_identity(child.pid)
+        with monkeypatch.context() as m:
+            m.delattr(os, 'pidfd_open')
+            m.setattr(os, 'kill', lambda *args: pytest.fail('signal without pidfd proof'))
+            proc_kill.signal_recorded(child.pid, start)
+            assert child.poll() is None
+        with pytest.raises(proc_kill.KillIncomplete) as error:
+            asyncio.run(asyncio.wait_for(
+                proc_kill.verify(child.pid, start, {child.pid: start}, wait_s=0), 10))
+        assert error.value.survivors == [child.pid]
     finally:
         if child.poll() is None:
             child.kill()
-        child.wait(timeout=3)
+        child.wait(timeout=5)
+
+
+def test_live_group_without_listed_member_fails_closed(tmp_path, monkeypatch):
+    pidfile = tmp_path / 'pid'
+    root = subprocess.Popen(
+        [sys.executable, '-c',
+         f"import os,subprocess,sys; open({str(pidfile)!r},'w')"
+         f".write(str(subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']).pid))"],
+        start_new_session=True)
+    try:
+        ident = proc_kill.root_identity(root.pid)
+        assert ident is not None
+        root.wait(timeout=3)
+        # The orphaned child keeps the group alive while tmp_path lists no member.
+        monkeypatch.setattr(proc_kill, 'WAIT_S', .05)
+        with pytest.raises(proc_kill.KillIncomplete) as error:
+            asyncio.run(asyncio.wait_for(
+                proc_kill.kill_process_tree(root.pid, ident=ident, proc_root=str(tmp_path)), 10))
+        assert error.value.survivors == [root.pid]
+    finally:
+        root.wait(timeout=3)
+        if pidfile.exists():
+            kid = int(pidfile.read_text())
+            if proc_kill.alive(kid, None):
+                os.kill(kid, signal.SIGKILL)

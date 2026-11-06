@@ -7,3 +7,7 @@ group/session membership; the anchor normally stays alive to reap adopted childr
 Fix round 2: fail closed on unreaped wrapper children, forward HUP/QUIT without
 signalling reaped groups, validate containment markers after terminal events,
 recheck fallback identities, and reject surviving recorded setsid members.
+Fix round 3: the wrapper drains os.waitpid before reporting success so a live
+unreaped adopted child never yields exit 0, an alive group without a listable
+member fails closed as KillIncomplete, and without a pidfd nothing is signalled -
+the survivor stays recorded and is reported instead of risking a reused pid.
