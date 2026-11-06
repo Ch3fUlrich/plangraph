@@ -196,7 +196,10 @@ def test_http_refusal_without_error_field(fake, raw):
     (504, b"<html>gateway timeout</html>", True),
     (409, b"conflict", False),
     (408, b"request timeout", True),
-    (500, b'{"error":"conflict"}', False),
+    (500, b'{"error":"conflict"}', True),
+    (504, b'{"error":"gateway timeout"}', True),
+    (408, b'{"error":"timeout"}', True),
+    (409, b'{"error":"conflict"}', False),
 ])
 def test_mutation_http_error_classification(fake, status, raw, unknown):
     original = fake[0].open
