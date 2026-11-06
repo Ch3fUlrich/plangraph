@@ -112,6 +112,25 @@ def test_golden_verdict_words():
         assert sv.parse_verdict(case["text"])[0] is outcomes[case["expect"]], case
 
 
+def test_quoted_last_verdict_fixture_matches_local_parsers():
+    from plangraph.review import verdict as v
+
+    cases = json.loads((Path(__file__).parent / "fixtures" / "verdict_words.json").read_text())
+    case, = [case for case in cases if case["text"] == "VERDICT: fail\n> VERDICT: pass"]
+    # Quoted-line selection is unchanged in RL1; #275 is outside this round.
+    assert case["expect"] == "block"
+    assert v.parse_verdict(case["text"]) == "fix"
+    assert sv.parse_verdict(case["text"])[0] is False
+
+
+def test_seat_verdict_tests_stay_within_size_baseline():
+    root = Path(__file__).resolve().parents[1]
+    baseline = dict(line.split() for line in (root / ".filesize-baseline").read_text().splitlines()
+                    if line.strip() and not line.startswith("#"))
+    path = "tests/test_seat_verdict.py"
+    assert len((root / path).read_text().splitlines()) <= int(baseline[path])
+
+
 @pytest.mark.parametrize("finish,gaming,want", [
     ("stop", "no", 0), ("end_turn", "no", 0),
     ("length", "no", sv.EXIT_PASS_REFUSED),
