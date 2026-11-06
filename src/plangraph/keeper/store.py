@@ -163,11 +163,8 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
 
     def _check_principal(self, principal):
         """Refuse a principal whose stored row was revoked or changed.
-
-        Re-read at the top of every verb so a token that was valid at
-        authentication cannot keep acting after a revoke or a role/project edit.
-        A principal with no row is refused too, so a stale or forged identity
-        cannot act; the sole exception is the API reaper's synthetic
+        Re-read each verb to reject revoked or changed identities.
+        The sole exception is the API reaper's synthetic
         ``system``/``system`` identity, which has no row of its own.
         """
         row = self.conn.execute(
@@ -184,7 +181,9 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             projects = json.loads(row["projects"] or "[]")
         except (ValueError, TypeError):
             projects = []
-        if row["role"] != getattr(principal, "role", None) \
+        expected_role = ("phase-worker" if isinstance(principal, auth.PhaseWorkerPrincipal)
+                         else getattr(principal, "role", None))
+        if row["role"] != expected_role \
                 or projects != list(getattr(principal, "projects", None) or []):
             raise Refused("forbidden", "principal changed since authentication")
 
@@ -202,6 +201,9 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                 self._record_oversight_refusal(principal, action, key, exc, now)
 
         try:
+            from .worker_policy import check, check_project
+            check(principal, action)
+            check_project(self, principal, key)
             if isinstance(principal, auth.RunPrincipal):
                 self._check_run_principal(principal, action, key, now)
             elif isinstance(principal, auth.OversightPrincipal):

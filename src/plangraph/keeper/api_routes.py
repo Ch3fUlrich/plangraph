@@ -60,6 +60,8 @@ RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay
 
 def run_gate(principal, name):
     """A run token is refused (403) before any body parsing outside its verbs."""
+    from .worker_policy import check
+    check(principal, name, transport=True)
     if getattr(principal, "token_id", None) is not None and name not in RUN_VERBS:
         raise Refused("forbidden", "a run token may not call this verb")
 
@@ -212,6 +214,8 @@ def _phase_plan(store, principal, body, need):
     from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
     key = need(body, "key")
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    from .worker_policy import check_project
+    check_project(store, principal, key)
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
     # repo_root is server-side only; plan_phase also re-checks the role first.
@@ -227,6 +231,8 @@ def _phase_finish(store, principal, body, need):
     store._require_role(principal, "router", "system")
     from ..planner.phase_finish import finish_phase
     key, branch, head = need(body, "key"), need(body, "branch"), need(body, "head")
+    from .worker_policy import check_project
+    check_project(store, principal, key)
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")

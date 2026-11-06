@@ -1,0 +1,24 @@
+"""Opt-in phase worker scope; provisioning and token selection are operator-only."""
+from .errors import Refused
+
+# Every HTTP call in rust/worker/src/keeper.rs, no administrative/read extras.
+VERBS = frozenset({"claim", "worker_claim", "show", "phase_plan", "phase_finish",
+                   "attempts", "park", "complete", "alarms", "locks",
+                   "ask_question", "answer_question"})
+ACTIONS = frozenset({"claim", "show", "worker_attempt", "worker_park",
+                     "worker_complete", "worker_alarm", "lock_acquire",
+                     "lock_release", "ask_question", "answer_question"})
+
+
+def check(principal, action, *, transport=False):
+    if getattr(principal, "worker_scope", False):
+        if action not in (VERBS if transport else ACTIONS):
+            raise Refused("forbidden", "phase worker scope excludes this verb")
+
+
+def check_project(store, principal, key):
+    if getattr(principal, "worker_scope", False):
+        store._check_principal(principal)
+        item = store._item(key) if key else None
+        if item is not None:
+            store._require_project(principal, item["project"])

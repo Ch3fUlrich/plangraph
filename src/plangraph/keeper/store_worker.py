@@ -123,7 +123,7 @@ class WorkerMixin:
     def _system_phase_holder(self, principal, item):
         """Recognize only the system phase-worker claim door, not plain claims."""
         if not (principal is not None and principal.role == "system"
-                and principal.name == "system" and item["kind"] == "lane"
+                and (principal.name == "system" or getattr(principal, "worker_scope", False)) and item["kind"] == "lane"
                 and item["state"] == "claimed"
                 and item["claimed_by"] == principal.name):
             return False

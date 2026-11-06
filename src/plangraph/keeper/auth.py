@@ -32,6 +32,13 @@ class Principal:
     family: str | None = None
 
 
+@dataclass
+class PhaseWorkerPrincipal(Principal):
+    """System-compatible implementation identity, constrained at both doors."""
+
+    worker_scope: bool = field(default=True, init=False)
+
+
 #: Synthetic run-token principals are named ``run:<run_id>``; no stored
 #: principal may use that prefix, so the name proves the token path.
 RUN_PREFIX = "run:"
@@ -123,6 +130,9 @@ def _as_principal(row) -> Principal:
         projects = json.loads(row["projects"] or "[]")
     except (ValueError, TypeError):
         projects = []
+    if row["role"] == "phase-worker":
+        return PhaseWorkerPrincipal(row["name"], "system", projects,
+                                    norm_family(row["family"]))
     return Principal(row["name"], row["role"], projects,
                      norm_family(row["family"]))
 
