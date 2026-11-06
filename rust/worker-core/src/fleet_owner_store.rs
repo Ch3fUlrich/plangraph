@@ -177,13 +177,7 @@ fn store(
     };
     file.write_all(&serde_json::to_vec(&record).map_err(io::Error::other)?)?;
     file.sync_all()?;
-    crash(1)?;
-    #[cfg(test)]
-    BEFORE_PUBLISH.with(|hook| {
-        if let Some(hook) = hook.borrow_mut().take() {
-            hook(&dir.join(name));
-        }
-    });
+    crash(1, &dir.join(name))?;
     match publish {
         Publish::Create => {
             let result = std::fs::hard_link(&temp, dir.join(name));
@@ -193,7 +187,7 @@ fn store(
         }
         Publish::Replace => std::fs::rename(&temp, dir.join(name))?,
     }
-    crash(2)?;
+    crash(2, &dir.join(name))?;
     parent.sync_all()?;
     Ok(record)
 }
@@ -209,7 +203,15 @@ fn store(
 }
 
 #[cfg(unix)]
-fn crash(_point: u8) -> io::Result<()> {
+fn crash(_point: u8, _slot: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if _point == 1 {
+        BEFORE_PUBLISH.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(_slot);
+            }
+        });
+    }
     #[cfg(test)]
     if FAIL.with(|f| f.get() == _point) {
         return Err(io::Error::other("injected crash"));

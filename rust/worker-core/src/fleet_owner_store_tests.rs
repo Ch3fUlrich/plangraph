@@ -331,7 +331,14 @@ fn check_degenerate_slots(replace: bool) {
 fn create_loses_to_outside_writer_without_replacing_or_leaking() {
     let d = tempfile::tempdir().unwrap();
     BEFORE_PUBLISH.with(|hook| {
-        *hook.borrow_mut() = Some(Box::new(|path| fs::write(path, b"outside writer").unwrap()));
+        *hook.borrow_mut() = Some(Box::new(|path| {
+            assert!(
+                crate::lockfile::try_lock(&path.parent().unwrap().join(".owner-locks/slot"))
+                    .unwrap()
+                    .is_none()
+            );
+            fs::write(path, b"outside writer").unwrap();
+        }));
     });
     assert!(matches!(
         create(d.path(), Path::new("slot"), "session", "run", 0),
