@@ -74,7 +74,7 @@ Byte-difference inventory (all other copied bytes remain unchanged):
 | `reason-fix-reapply.ps1` | Two patch comments refer to the local README; example package directory becomes `<omniroute-package-dir>`. |
 | `reasoning-defense.md` | Scope becomes `./`. |
 | `verify-clamp.mjs` | Patch documentation path becomes local. |
-| `custom-models.json` | Vendor documentation domain becomes `<vendor-model-documentation>`; “the AMS token-plan host” becomes “the vendor's token-plan host”. |
+| `custom-models.json` | Vendor documentation domain becomes `<vendor-model-documentation>`; old wording named a site-specific host; new wording is “the vendor's token-plan host”. |
 
 
 ## Scrub false-positive audit
