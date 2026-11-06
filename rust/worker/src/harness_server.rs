@@ -206,20 +206,22 @@ mod tests {
             "#!/bin/sh\necho 'API_KEY=sentinel-startup-secret' >&2\nexit 1\n",
         );
         let home = tempfile::tempdir().unwrap();
-        let r = run_harness(
-            &Opencode {
-                bin: bin.to_string_lossy().into_owned(),
-            },
-            &HarnessRun {
-                workdir: dir.path(),
-                model: "some/model",
-                prompt: "p",
-            },
-            home.path(),
-            &Opts::default(),
-            &|| false,
-            None,
-        )
+        let r = retry_fake_server_spawn(|| {
+            run_harness(
+                &Opencode {
+                    bin: bin.to_string_lossy().into_owned(),
+                },
+                &HarnessRun {
+                    workdir: dir.path(),
+                    model: "some/model",
+                    prompt: "p",
+                },
+                home.path(),
+                &Opts::default(),
+                &|| false,
+                None,
+            )
+        })
         .unwrap();
         let output = String::from_utf8_lossy(&r.output);
         assert!(output.starts_with("opencode server startup failed:"));
@@ -240,20 +242,22 @@ mod tests {
             real, real
         );
         let bin = crate::testutil::write_script(dir.path(), "oc-probe", &script);
-        let r = run_harness(
-            &Opencode {
-                bin: bin.to_string_lossy().into_owned(),
-            },
-            &HarnessRun {
-                workdir: dir.path(),
-                model: "some/model",
-                prompt: "p",
-            },
-            home.path(),
-            &Opts::default(),
-            &|| false,
-            None,
-        )
+        let r = retry_fake_server_spawn(|| {
+            run_harness(
+                &Opencode {
+                    bin: bin.to_string_lossy().into_owned(),
+                },
+                &HarnessRun {
+                    workdir: dir.path(),
+                    model: "some/model",
+                    prompt: "p",
+                },
+                home.path(),
+                &Opts::default(),
+                &|| false,
+                None,
+            )
+        })
         .unwrap();
         assert_eq!(r.code, Some(0), "{}", String::from_utf8_lossy(&r.output));
         assert_run_help(&String::from_utf8_lossy(&r.output));
