@@ -33,7 +33,7 @@ def load_watchdog_env():
         key, value = (part.strip() for part in line.split('=', 1))
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        if key and '\0' not in key and '\0' not in value:
+        if key and '\0' not in key and '\0' not in value and key not in os.environ:
             os.environ.setdefault(key, value)
             if value:
                 _watchdog_values.add(value)

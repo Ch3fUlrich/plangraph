@@ -72,6 +72,15 @@ def test_watchdog_env_missing(host):
     assert dict(os.environ) == before
 
 
+def test_watchdog_env_discarded_value_not_redacted(host, monkeypatch):
+    monkeypatch.setattr(d, '_watchdog_values', set())
+    monkeypatch.setenv('DOCTOR_SETTING', 'shell-choice')
+    watchdog_env(host, 'DOCTOR_SETTING=/usr/bin\n')
+    d.load_watchdog_env()
+    assert os.environ['DOCTOR_SETTING'] == 'shell-choice'
+    assert d.clean('executable in /usr/bin') == 'executable in /usr/bin'
+
+
 @pytest.mark.parametrize('failure', [PermissionError, UnicodeError])
 def test_watchdog_env_unreadable(host, monkeypatch, failure):
     def unreadable(*args, **kwargs):
@@ -97,6 +106,7 @@ def test_watchdog_env_parsing(host, monkeypatch, capsys, caplog):
 
 
 def test_watchdog_env_json_no_values(isolated, monkeypatch, capsys, caplog):
+    assert Path.home() == isolated
     monkeypatch.delenv('DOCTOR_SETTING', raising=False)
     watchdog_env(isolated, 'DOCTOR_SETTING=synthetic-private-setting\n')
     async def mcp(module):
