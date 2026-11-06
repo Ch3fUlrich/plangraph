@@ -298,7 +298,8 @@ class ContextMixin:
                                  fetch=True)
         facts = []
         commits = ctx["work_exists"]["commits"]
-        if commits:
+        lanes = ctx["work_exists"]["lanes"]
+        if commits and not (isinstance(lanes, list) and lanes):
             head = commits[0]
             merge = head.get("merge") or {}
             facts.append(
