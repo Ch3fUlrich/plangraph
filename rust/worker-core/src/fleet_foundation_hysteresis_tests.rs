@@ -3,29 +3,8 @@ use serde_json::json;
 
 #[test]
 fn fleet_slots_retry_restore_and_unknown() {
-    let d = tempfile::tempdir().unwrap();
-    let sources = ["events", "asks", "claims"].map(|n| d.path().join(n));
-    let units = [
-        "tokens",
-        "events",
-        "asks",
-        "IDs/second",
-        "claims",
-        "seconds",
-    ];
-    let rules = router::NAMES
-        .iter()
-        .zip(units)
-        .map(|(name, unit)| {
-            json!({"name":name,"unit":unit,"cadence":10,"high":2,"low":1,
-            "enter":3,"exit":2,"freshness":10})
-        })
-        .collect::<Vec<_>>();
-    let c: Config = serde_json::from_value(json!({"tick_seconds":10,
-        "rules":{"schema_version":1,"signals":rules},"sources":sources,
-        "retry_delay":1,"maximum_attempts":3,"silence_after":1000}))
-    .unwrap();
-    c.validate().unwrap();
+    let (_d, c) = setup();
+    let sources = c.sources.clone();
     let mut mixed: Config = serde_json::from_value(json!({"tick_seconds":9,
         "rules":c.rules,"sources":sources,"retry_delay":1,
         "maximum_attempts":3,"silence_after":1000}))
@@ -33,12 +12,13 @@ fn fleet_slots_retry_restore_and_unknown() {
     assert!(mixed.validate().is_err());
     mixed.tick_seconds = 10;
     mixed.rules.signals[0].high = 4.;
-    for jitter in [0, 1, 9] {
+    for jittered in [false, true] {
         let mut saved = None;
         let mut sent = Vec::new();
         let mut opened = Vec::new();
         let mut diagnostics = Vec::new();
         for (i, slot) in [10, 20, 30, 30, 40].into_iter().enumerate() {
+            let jitter = if jittered { [1, 9, 1, 2, 9][i] } else { 0 };
             for path in &sources {
                 fs::write(
                     path,
@@ -58,7 +38,7 @@ fn fleet_slots_retry_restore_and_unknown() {
                 &c,
                 &mut saved,
                 slot + jitter,
-                i as u64,
+                (slot + jitter + i64::from(i == 3 && !jittered)) as u64,
                 false,
                 &acks,
                 None,
@@ -110,5 +90,73 @@ fn fleet_slots_retry_restore_and_unknown() {
         assert!(findings
             .iter()
             .all(|f| matches!(f.observation, router::Observation::Unknown(_))));
+    }
+}
+
+fn setup() -> (tempfile::TempDir, Config) {
+    let d = tempfile::tempdir().unwrap();
+    let sources = ["events", "asks", "claims"].map(|n| d.path().join(n));
+    let units = [
+        "tokens",
+        "events",
+        "asks",
+        "IDs/second",
+        "claims",
+        "seconds",
+    ];
+    let rules = router::NAMES
+        .iter()
+        .zip(units)
+        .map(|(name, unit)| {
+            json!({"name":name,"unit":unit,"cadence":10,"high":2,"low":1,
+            "enter":3,"exit":2,"freshness":10})
+        })
+        .collect::<Vec<_>>();
+    let c: Config = serde_json::from_value(json!({"tick_seconds":10,
+        "rules":{"schema_version":1,"signals":rules},"sources":sources,
+        "retry_delay":1,"maximum_attempts":3,"silence_after":1000}))
+    .unwrap();
+    c.validate().unwrap();
+    (d, c)
+}
+
+#[test]
+fn fleet_hysteresis_noisy_and_gap() {
+    let (_d, c) = setup();
+    for samples in [
+        vec![(10, 3), (20, 0), (30, 3), (40, 0), (50, 3)],
+        vec![(10, 3), (20, 3), (40, 3), (50, 3), (60, 3)],
+    ] {
+        let mut saved = None;
+        let mut opened = Vec::new();
+        for (wall, tokens) in &samples {
+            for path in &c.sources {
+                fs::write(
+                    path,
+                    json!({"schema_version":1,"observed_at":wall,
+                    "complete":true,"events":[{"kind":"ctx","tokens":tokens,
+                    "source":"sample","event_id":"sample","timestamp":wall}]})
+                    .to_string(),
+                )
+                .unwrap();
+            }
+            tick(
+                &c,
+                &mut saved,
+                *wall,
+                *wall as u64,
+                false,
+                &BTreeSet::new(),
+                None,
+                &mut |_| Ok(()),
+                &mut opened,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            if *wall < 60 {
+                assert!(opened.is_empty(), "premature alarm at {wall}");
+            }
+        }
+        assert_eq!(opened.len(), usize::from(samples.last().unwrap().0 == 60));
     }
 }

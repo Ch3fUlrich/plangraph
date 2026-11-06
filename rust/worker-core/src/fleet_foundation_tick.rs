@@ -233,7 +233,12 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
                     },
                 );
             }
-            let state = s.pairs.get_mut(&g.group).ok_or("missing group state")?;
+        }
+    }
+    if let Some(p) = pairs {
+        for g in &p.groups {
+            let namespace = format!("stale-pair:{}", g.group);
+            let state = s.pairs.get_mut(&g.group).expect("prepared group state");
             let finding = state.detector.observe(
                 &p.config,
                 &fs::read(&g.snapshot_path).unwrap_or_default(),
@@ -269,7 +274,11 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             &mut |id| send("alarm", id, None),
             &mut opened,
             &mut diagnostics,
-        )?
+        )
+        .unwrap_or_else(|error| {
+            diagnostics.push(error);
+            Vec::new()
+        })
     } else {
         Vec::new()
     };
