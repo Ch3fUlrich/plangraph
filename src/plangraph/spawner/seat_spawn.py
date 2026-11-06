@@ -12,6 +12,16 @@ import os
 import uuid
 
 
+def annotate_review_warning(record):
+    from plangraph.planner.legs import REVIEW_UNFIT_SEATS
+    model = (record.get('chosen_leg') or {}).get('model')
+    if (record.get('role') == 'review' and (record.get('plan') or {}).get('p_source') == 'override'
+            and model in REVIEW_UNFIT_SEATS):
+        warning = 'review_unfit: ' + model
+        if warning not in record.setdefault('warnings', []):
+            record['warnings'].append(warning)
+
+
 def _refuse_oversized_diff(exc, leg):
     from .context_pack import PromptBoundError
     if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1' and exc.chars is not None:
@@ -22,6 +32,14 @@ def _refuse_oversized_diff(exc, leg):
 
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
+
+    def _annotate_spawn(self, record, prompt, card, cwd, plan, explicit):
+        """Surface explicit-leg advisories before the first save or launch."""
+        from .context_pack import annotate
+        pack = annotate(record, prompt, card, cwd)
+        if record.get('chosen_leg'):
+            annotate_review_warning(record)
+        return pack
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
         """Assemble one leg's payload, then apply opt-in whole-prompt admission."""

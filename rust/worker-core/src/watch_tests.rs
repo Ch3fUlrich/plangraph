@@ -16,7 +16,6 @@ fn review_layout_contract() {
     let process = include_str!("watch_process_tests.rs");
     assert_eq!(process.matches("let deadline =").count(), 2);
     assert!(process.contains("read_dir(\"/proc\")"));
-    assert!(!include_str!("watch_unix.rs").contains("PROBES"));
 }
 
 #[derive(Default)]

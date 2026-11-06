@@ -98,29 +98,35 @@ the reference switch defaults to off.
 No external STD ACCEPT or historical live gate is claimed. Synthetic tests do
 not satisfy either gate; independent acceptance remains required.
 
-## RL12: backend/API foundation (partial)
+## RL12: Unix event supervisor (P-R6)
 
-The Unix-only `watch` module defines metadata-only hooks and results, an owned
-child backend, and a clock-driven termination state machine. It is not called
-by the harness. Commands are passed intact to the backend, which adds a fresh
-process group and reuses the stall supervisor's spawn and signalling policy.
-The stop path sends TERM once, escalates once after grace, reaps the root
-without blocking, and requires ESRCH for emptiness. Permission errors cannot
-prove a kill. Two seconds after escalation, unproven emptiness is `Survivors`.
-
-This foundation does **not** complete SPAWNER-RL12-WATCH-SUPERVISE. Pending work:
-bounded separate pipe draining and stdin delivery, the event loop and channel
-aggregation, Blind shadow evaluation, source-priority selection, tree/CPU
-sampling, calibration, EOF handling, and the required real-process matrix.
-Owned groups remain signallable after leader reaping: Linux cannot reuse the
-pgid while the group exists. Every signal first probes the guarded group;
-the first ESRCH permanently latches emptiness, preventing later signalling.
-EPERM is an error, not proof. Adopted children (RL29) retain identity checks.
-`Survivors` carries the first signal, reap, or probe error kind, if any.
-No production caller is enabled.
+`watch::supervise_events` takes the confined, jail-wrapped `Command` intact;
+no harness caller is enabled before RL14. Rollback is `git revert`.
+Separate bounded stdout/stderr readers and a nonblocking stdin writer run
+concurrently; only stdout is parsed. Both streams refresh the byte clock and
+feed the capped private tail. No payload enters metadata. Cancellation joins
+only the writer (10 ms polling); escaped readers cannot block teardown.
+Every call requires `Opts.timeout = Some(...)`, validated before spawn.
+The bounded queue drains before monitor decisions, with 10 ms monitor ticks.
+Cancellation wins over wall timeout, Blind byte stall, then event decisions.
+Provider and I/O errors share Stop; the chosen reason is never replaced.
+Teardown signals are calibration only (`late_signal_ms`). Tree hooks run at
+start and every 30 seconds; CPU hooks supply signals, not a liveness bypass.
+Parser counter deltas mirror Known and Unknown exactly once. First Blind is
+sticky, emits `blind_events = 1` for RL14's `CHANNEL_BLIND`, and records only
+would-warn/would-kill. Only Blind arms `Opts.stall`; parsing silence never does.
+RL14 supplies the 600-second default; `Opts::default` remains unchanged.
+The Unix-only backend owns a fresh pgid, probes before every signal, and
+permanently latches ESRCH. Root reaping preserves descendant ownership;
+adopted identity validation belongs RL29. Stop sends TERM once, waits grace,
+sends KILL once, then bounds proof at 2000 ms. `Survivors` is kill-incomplete.
+Root exit triggers an empty-group probe; natural exits also clean descendants.
+Natural output drain is bounded at two seconds; terminal Stop drain at 100 ms.
+Timeout, stall and cancellation require a live root. Blind suppresses provider
+enforcement before and after each batch, including pinned-version mismatch.
 
 The RL12 B1 foundation retains `Watched.io_error` for the first drain or
-stdin-writer failure. The follow-up supervisor returns `Ok(Watched)` after
+stdin-writer failure. The supervisor returns `Ok(Watched)` after
 teardown, preserving exit status, decisions, channel summary, and kill proof;
 RL14 reads the error field. Existing part A callers remain unchanged.
 
@@ -131,6 +137,8 @@ Only a freshly spawned owned group enters the watch signal path. A reaped
 leader does not relinquish surviving descendants; an unrelated sentinel
 group remains alive when the owned descendant group is killed.
 
-The remaining behavior and tests require a follow-up size allocation, rather
-than removal of tests to meet the 400-production-line limit. Rollback is
-`git revert`; RL14 must not call this partial API.
+The remaining behavior and tests from the B1 foundation are implemented here.
+Tests use real local children, synthetic parsers, integer-second event limits
+and scheduler slack; they cover bounded I/O, Blind, escalation and escaped pipes.
+Notifications/persistence, CPU sampling and safe fall-through remain RL14/RL17,
+RL13 and RL15 respectively; no daemon or harness integration is enabled.
