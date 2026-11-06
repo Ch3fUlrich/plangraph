@@ -18,7 +18,7 @@ def emit(check, good, detail):
 
 
 def command(argv, cwd=None, timeout=10):
-    # Never forward subprocess output: tools/scripts can echo credentials.
+    # Never forward subprocess output: child processes can echo sensitive values.
     return subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout,
                           check=False)
 

@@ -12,7 +12,7 @@ SPEC = importlib.util.spec_from_file_location("pilot", ROOT / "tools/pilot_prefl
 pilot = importlib.util.module_from_spec(SPEC)
 if SPEC.loader and Path(SPEC.origin).exists():
     SPEC.loader.exec_module(pilot)
-SECRET = "SECRET_KEEPER_SENTINEL_83921"
+SECRET = "pilotsentinel83921"
 
 
 @pytest.fixture
