@@ -14,6 +14,54 @@ from plangraph.keeper.store import Store
 KEY = 'PG_RULE_HOST_WORKER_CAP_COUNT'
 
 
+def test_placement_modules_are_auth_doors():
+    import fnmatch
+    from tools.ci_commit_gate import AUTH_DOOR_PATHS
+    for name in ('store_placement_rules.py', 'placement_rules_bridge.py'):
+        path = 'src/plangraph/keeper/' + name
+        assert any(fnmatch.fnmatchcase(path, pattern) for pattern in AUTH_DOOR_PATHS)
+
+
+def test_pg_rollback_composes_migration_guard():
+    from contextlib import nullcontext
+    from psycopg import sql
+    from plangraph.keeper import placement_rules_schema as rules
+
+    class Connection:
+        def transaction(self):
+            return nullcontext()
+
+        def execute(self, query, params=()):
+            if isinstance(query, sql.Composed):
+                assert query.as_string() == (
+                    'SELECT 1 FROM "fixture".schema_migrations WHERE version=11')
+                raise RuntimeError('composed migration guard reached')
+            self.query = query
+            return self
+
+        def fetchone(self):
+            return (None,) if 'to_regclass' in self.query else ('fixture',)
+
+        def fetchall(self):
+            return []
+
+    with pytest.raises(RuntimeError, match='composed migration guard reached'):
+        rules.rollback_pg(Connection())
+
+
+def test_mutation_and_audit_match_c1_serde_fields(backend):
+    import re
+    store, router, _ = backend
+    source = (Path(__file__).resolve().parents[1] /
+              'rust/worker-core/src/placement_rule_store.rs').read_text()
+    body = source.split('pub struct RuleAudit {', 1)[1].split('}', 1)[0]
+    fields = set(re.findall(r'pub (\w+):', body))
+    result = store.edit_placement_rule(router, edit())
+    event = store.placement_rule_audit(router)['events'][0]
+    assert set(result) == set(event) == fields
+    assert result == event
+
+
 def edit(revision=0, value='4', scope='Fleet', **extra):
     return dict(key=KEY, value=value, scope=scope, expected_revision=revision,
                 rollback_of=None) | extra
