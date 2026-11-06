@@ -1,5 +1,39 @@
 # Placement rule loader (R8B A)
 
+## C5 keeper specs and report projection (rulings 1–3)
+
+`placement_rules_report` and `placement_rule_specs` use C4's persistent read
+identity policy. The report materializes one coherent snapshot under one write
+transaction, then calls C1 outside that transaction. The internal
+`_placement_rules_projection` hook runs inside its caller's transaction for C6's
+snapshot.fleet integration. Specs and every resolved value come from Rust.
+
+The shape is `{snapshot,specs,fleet,classes,hosts,context,source,revision}` with
+`context="keeper_only"` and `source="keeper"`. Fleet has no class or host layer;
+classes `dispatch_vm` and `prox` have no host layer. Each stored host ID uses an
+empty class: its worker seed is fleet default 6 unless overridden, even if its
+ID happens to equal a class label. Class labels are not machines. C1 currently
+requires a nonblank transport host ID, so fleet/class calls use a fixed sentinel
+with an empty host map; it can never select a stored host override.
+Memory floor is 6144 MiB, alarm metadata 3000 MiB; worker seeds are fleet 6,
+dispatch VM 4 (D-081), live L2 Proxmox class 5 (D-1485).
+
+Process and env-file layers are always empty. This is not the executing host's
+effective admission report and never guesses registry class from an ID. C7 owns
+current caller environment and cached source; C6 transports this keeper-only
+shape; C8/C9 display context. A tests cover invalid higher-layer fallback with
+diagnostics; corrupt stored keeper overrides instead fail closed as rules_invalid.
+B covers LKG; C9 ties done acceptance together.
+
+C5 limits raw serialized snapshots to 1 MiB and 128 distinct hosts. C4 edits
+check prospective bounds before audit/commit, rolling back revision and values
+on refusal, reserving space for C1's bounded request envelope as well.
+Host IDs must be nonblank, control-free, at most 64 UTF-8 bytes.
+They are opaque keys, never filesystem paths, refs or shell input. All keeper
+paths here remain AUTH_DOOR_PATHS doors. D-4337/#539 fixture fixes reuse the
+up-to-date helper and use a bridge-local test clock without global mutation.
+No live host inputs, deployment, migration or admission cutover is implied.
+
 ## C4 keeper transaction adapter (ruling 5)
 
 Persistent authenticated principals read coherent RuleSnapshot values; only a

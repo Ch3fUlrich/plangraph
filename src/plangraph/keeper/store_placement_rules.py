@@ -4,6 +4,7 @@ import json
 from . import auth
 from .errors import Refused
 from .placement_rules_bridge import call_rules
+from .placement_rules_report import bounded_snapshot, build_report
 
 
 def _invalid():
@@ -11,6 +12,27 @@ def _invalid():
 
 
 class PlacementRulesMixin:
+    def placement_rules_report(self, principal):
+        def read(now):
+            self._rules_authorize(principal)
+            with self._write():
+                self._rules_authorize(principal)
+                snapshot = bounded_snapshot(self._placement_rules_snapshot())
+            return build_report(snapshot)
+        return self._run(principal, "placement_rules_report", None, read)
+
+    def placement_rule_specs(self, principal):
+        def read(now):
+            self._rules_authorize(principal)
+            with self._write():
+                self._rules_authorize(principal)
+            return call_rules({"op": "specs"})["specs"]
+        return self._run(principal, "placement_rule_specs", None, read)
+
+    def _placement_rules_projection(self):
+        """Internal snapshot.fleet hook: caller owns transaction and auth."""
+        return build_report(bounded_snapshot(self._placement_rules_snapshot()))
+
     def _rules_authorize(self, principal, router=False):
         if (isinstance(principal, (auth.RunPrincipal, auth.OversightPrincipal))
                 or principal.role == "system"):
@@ -82,6 +104,8 @@ class PlacementRulesMixin:
             call_rules({"op": "validate", "edit": request})
             scope = "fleet" if request["scope"] == "Fleet" else "host"
             host = "" if scope == "fleet" else request["scope"]["Host"]
+            if scope == "host":
+                bounded_snapshot(dict(hosts={host: {}}))
             key, value = request["key"], request["value"]
             self.conn.execute("INSERT INTO placement_rule_revision(id,revision) VALUES(1,0) "
                               "ON CONFLICT(id) DO NOTHING")
@@ -117,6 +141,7 @@ class PlacementRulesMixin:
                     "ON CONFLICT(scope,host,key) DO UPDATE SET value=excluded.value",
                     (scope, host, key, value))
             revision = request["expected_revision"] + 1
+            bounded_snapshot(self._placement_rules_snapshot())
             self.conn.execute(
                 "INSERT INTO placement_rule_audit(revision,actor,edit,previous,ts) "
                 "VALUES(?,?,?,?,?)", (revision, principal.name, encoded, previous, self._iso(now)))
