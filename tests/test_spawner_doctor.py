@@ -84,13 +84,16 @@ def test_watchdog_env_missing(host):
     assert dict(os.environ) == before
 
 
-@pytest.mark.parametrize('value', ['1', 'info', '1234567'])
+@pytest.mark.parametrize('value', ['1', 'info', '1234567', 'a.b'])
 def test_watchdog_env_short_value_preserves_output(host, monkeypatch, value):
     monkeypatch.delenv('DOCTOR_SETTING', raising=False)
     watchdog_env(host, f'DOCTOR_SETTING={value}\n')
     d.load_watchdog_env()
-    text = 'python3.11 info version 1234567'
+    text = f'python3.11 x{value} {value}x _{value} {value}-'
     assert d.clean(text) == text
+    assert d.clean(f'({value})') == '([REDACTED])'
+    if value == 'a.b':
+        assert d.clean('aXb') == 'aXb'
 
 
 def test_watchdog_state_restores_loaded_values(host, monkeypatch):
@@ -142,18 +145,21 @@ def test_watchdog_env_parsing(host, monkeypatch, capsys, caplog):
     assert not caplog.records
 
 
-def test_watchdog_env_json_no_values(isolated, monkeypatch, capsys, caplog):
+@pytest.mark.parametrize('value', ['synthetic-private-setting', 'sh0rt'])
+@pytest.mark.parametrize('argv', [['--json'], []])
+def test_watchdog_env_json_no_values(isolated, monkeypatch, capsys, caplog, value, argv):
     assert Path.home() == isolated
     monkeypatch.delenv('DOCTOR_SETTING', raising=False)
-    watchdog_env(isolated, 'DOCTOR_SETTING=synthetic-private-setting\n')
+    watchdog_env(isolated, f'DOCTOR_SETTING={value}\n')
     async def mcp(module):
-        assert os.environ['DOCTOR_SETTING'] == 'synthetic-private-setting'
+        assert os.environ['DOCTOR_SETTING'] == value
         raise RuntimeError(os.environ['DOCTOR_SETTING'])
     monkeypatch.setattr(d, 'mcp', mcp)
-    assert d.main(['--json']) == 1
+    assert d.main(argv) == 1
     captured = capsys.readouterr()
-    assert 'synthetic-private-setting' not in captured.out + captured.err + caplog.text
-    assert json.loads(captured.out)['checks'][0]['detail'] == 'RuntimeError: [REDACTED]'
+    assert value not in captured.out + captured.err + caplog.text
+    if argv:
+        assert json.loads(captured.out)['checks'][0]['detail'] == 'RuntimeError: [REDACTED]'
 
 
 def run(coro):

@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -35,8 +36,7 @@ def load_watchdog_env():
             value = value[1:-1]
         if key and '\0' not in key and '\0' not in value and key not in os.environ:
             os.environ.setdefault(key, value)
-            if len(value) >= 8:
-                _watchdog_values.add(value)
+            _watchdog_values.add(value)
 
 
 def clean(value):
@@ -44,14 +44,16 @@ def clean(value):
     from .env_redact import redact_env_values
     text = redact_env_values(str(value), os.environ)
     # Also scrub unstructured subprocess/HTTP errors, including opaque tokens.
-    secrets = list(_watchdog_values)
+    for secret in sorted(_watchdog_values, key=len, reverse=True):
+        if secret:
+            text = re.sub(r'(?<![A-Za-z0-9_-])' + re.escape(secret)
+                          + r'(?![A-Za-z0-9_-])', '[REDACTED]', text)
     try:
-        secrets.append(Path(os.environ['PG_TOKEN_FILE']).read_text().strip())
-    except (KeyError, OSError, UnicodeError):
-        pass
-    for secret in sorted(set(secrets), key=len, reverse=True):
+        secret = Path(os.environ['PG_TOKEN_FILE']).read_text().strip()
         if secret:
             text = text.replace(secret, '[REDACTED]')
+    except (KeyError, OSError, UnicodeError):
+        pass
     return ' '.join(redact(text).split())[:600]
 
 
