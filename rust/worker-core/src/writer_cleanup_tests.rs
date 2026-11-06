@@ -223,30 +223,45 @@ fn foreign_marker_main_symlink_refuse_each_destructive_step() {
 #[cfg(unix)]
 #[test]
 fn real_child_keeps_slot_until_group_empty() {
-    use std::io::{BufRead, Write as _};
+    use std::io::BufRead;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let mut f = Fixture::new();
     let mut child = Command::new("sh")
-        .args(["-c", "sh -c 'echo ready; read x' <&0 & wait"])
+        .args(["-c", "echo ready; read x || exit 0"])
+        .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    // The parent shell and its child remain alive until their inherited input closes.
+    // The shell remains a live group member until its input closes.
     let mut line = String::new();
     std::io::BufReader::new(child.stdout.take().unwrap())
         .read_line(&mut line)
         .unwrap();
     assert_eq!(line.trim(), "ready");
+    let pgid = child.id() as i32;
+    // Match the real Unix group probe: only ESRCH proves that the group is gone.
+    let group_empty = || match crate::stall::killpg(pgid, 0) {
+        Ok(()) => false,
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => true,
+        Err(e) => panic!("group liveness probe failed: {e}"),
+    };
     let proof = crate::seat_pool::tests::seat(&mut f);
-    f.record.group_empty = false;
+    assert!(child.try_wait().unwrap().is_none());
+    f.record.group_empty = group_empty();
+    assert!(!f.record.group_empty);
     save_lifecycle(&f.state, &f.record).unwrap();
     assert!(crate::seat_pool::finish_seat(&f.repo, &proof).is_err());
     assert!(!janitor(&f.repo, &f.state, 90000, true).unwrap()[0].eligible);
-    let _ = child.stdin.take().unwrap().write_all(b"done\n");
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(!group_empty());
+    drop(child.stdin.take().unwrap());
     assert!(child.wait().unwrap().success());
+    assert!(child.try_wait().unwrap().is_some());
     f.record = load(&f.state, "run").unwrap();
-    f.record.group_empty = true;
+    f.record.group_empty = group_empty();
+    assert!(f.record.group_empty);
     save_lifecycle(&f.state, &f.record).unwrap();
     assert!(crate::seat_pool::finish_seat(&f.repo, &proof).is_ok());
 }
