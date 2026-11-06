@@ -77,14 +77,14 @@ pub fn export_salvage(
         &[],
         None,
     );
-    let cleanup = command(
-        root,
-        &["update-ref", "-d", &reference, &clean.tip],
-        &[],
-        None,
-    );
-    result?;
-    cleanup?;
+    finish_bundle(result, || {
+        command(
+            root,
+            &["update-ref", "-d", &reference, &clean.tip],
+            &[],
+            None,
+        )
+    })?;
     if std::fs::metadata(&bundle)?.len() > crate::writer_blob::MAX_BYTES {
         return Err(WriterError::BundleTooLarge);
     }
@@ -95,6 +95,18 @@ pub fn export_salvage(
         sha_map: clean.sha_map,
         dropped_paths: clean.dropped_paths,
     })
+}
+// Always run cleanup, and report its failure even when bundle creation also failed.
+fn finish_bundle(
+    result: Result<Vec<u8>, WriterError>,
+    cleanup: impl FnOnce() -> Result<Vec<u8>, WriterError>,
+) -> Result<(), WriterError> {
+    if cleanup().is_err() {
+        return Err(WriterError::SalvageCleanup {
+            bundle_failed: result.is_err(),
+        });
+    }
+    result.map(|_| ())
 }
 fn validate_paths(paths: &[u8]) -> Result<(), WriterError> {
     if !paths.is_empty() && !paths.ends_with(&[0]) {

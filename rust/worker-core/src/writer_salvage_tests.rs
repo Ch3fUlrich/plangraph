@@ -105,6 +105,43 @@ fn rejects_argument_injection() {
     assert!(export_salvage(&repo, &base, "../run").is_err());
 }
 #[test]
+fn bundle_failure_runs_cleanup_and_reports_cleanup_failure() {
+    let (_dir, repo, _, tip) = fixture();
+    let root = Path::new(&repo.root);
+    let reference = "refs/plangraph-salvage/failure";
+    for locked in [false, true] {
+        command(root, &["update-ref", reference, &tip], &[], None).unwrap();
+        let path = command(root, &["rev-parse", "--git-path", reference], &[], None).unwrap();
+        let lock = format!("{}.lock", std::str::from_utf8(&path).unwrap().trim());
+        if locked {
+            std::fs::write(&lock, "locked").unwrap();
+        }
+        let result = command(
+            root,
+            &["bundle", "create", "/dev/null/missing", reference],
+            &[],
+            None,
+        );
+        assert!(result.is_err());
+        let outcome = finish_bundle(result, || {
+            command(root, &["update-ref", "-d", reference, &tip], &[], None)
+        });
+        if locked {
+            assert!(matches!(
+                outcome,
+                Err(WriterError::SalvageCleanup {
+                    bundle_failed: true
+                })
+            ));
+            std::fs::remove_file(&lock).unwrap();
+            command(root, &["update-ref", "-d", reference, &tip], &[], None).unwrap();
+        } else {
+            assert!(matches!(outcome, Err(WriterError::Git)));
+        }
+        assert!(command(root, &["show-ref", "--verify", reference], &[], None).is_err());
+    }
+}
+#[test]
 fn bundle_roundtrip_and_ref_cleanup() {
     let (_dir, repo, base, _) = fixture();
     let dir = Path::new(&repo.root);

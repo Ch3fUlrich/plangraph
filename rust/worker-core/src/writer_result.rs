@@ -19,6 +19,8 @@ pub enum WriterError {
     Verify,
     #[error("git")]
     Git,
+    #[error("salvage cleanup failed (bundle failure: {bundle_failed})")]
+    SalvageCleanup { bundle_failed: bool },
     #[error("io")]
     Io,
     #[error("secret_in_history")]
