@@ -34,9 +34,14 @@ def test_build_claim_preserves_gate_inputs():
 @pytest.mark.parametrize("metadata", [False, True, "typo", ""])
 def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo, metadata):
     sqlite = _metadata_claim(tmp_path, repo, "sqlite", metadata)
+    backend = "sqlite"
     if os.environ.get("PG_KEEPER_BACKEND") == "postgres" or os.environ.get("PG_DSN"):
         assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
-        assert sqlite == _metadata_claim(tmp_path, repo, "postgres", metadata)
+        backend = "postgres"
+    compared = _metadata_claim(tmp_path / "comparison", repo, backend, metadata)
+    assert sqlite == compared
+    assert backend == ("postgres" if os.environ.get("PG_DSN") or
+                       os.environ.get("PG_KEEPER_BACKEND") == "postgres" else "sqlite")
 
 
 @pytest.mark.parametrize("metadata", [False, True, "typo", ""])
@@ -46,6 +51,7 @@ def test_claim_metadata_sqlite(tmp_path, repo, metadata):
 
 def _metadata_claim(tmp_path, repo, backend, metadata):
     world = World(tmp_path / backend, backend=backend, dsn=os.environ.get("PG_DSN"))
+    placeholder = "%s" if backend == "postgres" else "?"
     try:
         world.store.create_items(world.p("router"), [
             defn("C", []), defn("GOAL", ["C"], kind="goal")])
@@ -67,14 +73,14 @@ def _metadata_claim(tmp_path, repo, backend, metadata):
                 worker_claim(world.store, world.p("workerA"), "demo:C", repo_root=str(repo[0]))
             assert exc.value.code == "validation"
             row = world.store.conn.execute(
-                "SELECT state, claimed_by FROM items WHERE key = ?", ("demo:C",)).fetchone()
+                f"SELECT state, claimed_by FROM items WHERE key = {placeholder}", ("demo:C",)).fetchone()
             assert tuple(row) == ("open", None)
             return exc.value.code
         payload = worker_claim(world.store, world.p("workerA"), "demo:C",
                                repo_root=str(repo[0]))
         assert payload == build_claim("demo:C", card, repo=str(repo[0]), base_sha=repo[1])
         row = world.store.conn.execute(
-            "SELECT state, claimed_by FROM items WHERE key = ?", ("demo:C",)).fetchone()
+            f"SELECT state, claimed_by FROM items WHERE key = {placeholder}", ("demo:C",)).fetchone()
         assert tuple(row) == ("claimed", "workerA")
         with pytest.raises(Refused) as exc:
             worker_claim(world.store, world.p("workerB"), "demo:C", repo_root=str(repo[0]))

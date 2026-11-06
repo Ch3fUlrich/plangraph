@@ -1239,9 +1239,9 @@ mod tests {
     fn unknown_check_kind_is_a_contract_defect() {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
-        let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], "false");
-        c.check_kind = "typo".into();
-        let inp = input(c, 1, root.path());
+        let mut recorded = serde_json::to_value(claim(&r.path().to_string_lossy(), &base, &["out.txt"], "false")).unwrap();
+        recorded["check_kind"] = "typo".into();
+        let inp = input(serde_json::from_value(recorded).unwrap(), 1, root.path());
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::ContractDefect);
