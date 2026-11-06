@@ -1,1 +1,1 @@
-Added shared reachable-content secret gating and sanitized writer salvage.
+Added shared reachable-content secret gating and sanitized history rebuild.

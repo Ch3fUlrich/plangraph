@@ -3,7 +3,7 @@ pub(crate) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     command(root, &["init"], &[], None).unwrap();
-    std::fs::write(root.join("é.txt"), ["gh", "p_", &"a".repeat(25)].concat()).unwrap();
+    std::fs::write(root.join("initial"), "safe").unwrap();
     command(root, &["add", "."], &[], None).unwrap();
     command(root, &["commit", "-m", "base"], &[], None).unwrap();
     let base = String::from_utf8(command(root, &["rev-parse", "HEAD"], &[], None).unwrap())
@@ -11,6 +11,8 @@ pub(crate) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
         .trim()
         .to_owned();
     std::fs::write(root.join("safe"), "safe").unwrap();
+    command(root, &["rm", "initial"], &[], None).unwrap();
+    std::fs::write(root.join("é.txt"), ["gh", "p_", &"a".repeat(25)].concat()).unwrap();
     command(root, &["add", "."], &[], None).unwrap();
     command(root, &["commit", "-m", "export"], &[], None).unwrap();
     let tip = String::from_utf8(command(root, &["rev-parse", "HEAD"], &[], None).unwrap())
@@ -46,10 +48,16 @@ fn utf8_path_and_introducing_commit() {
         String::from_utf8(command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap()).unwrap();
     assert_eq!(
         findings(&repo, &base, later.trim()).unwrap(),
-        vec![SecretFinding {
-            commit: tip,
-            path: Some("é.txt".into())
-        }]
+        vec![
+            SecretFinding {
+                commit: tip,
+                path: Some("é.txt".into())
+            },
+            SecretFinding {
+                commit: later.trim().into(),
+                path: Some("é.txt".into())
+            }
+        ]
     );
 }
 #[test]
@@ -76,4 +84,32 @@ fn binary_and_multiline_secret_detected() {
     .concat();
     assert!(scan_bytes(pem.as_bytes()));
     assert!(!scan_bytes(b"safe text"));
+}
+#[test]
+fn reintroduced_secret_reports_each_commit_path_without_bytes() {
+    let (dir, repo, base, tip) = fixture();
+    let bytes = std::fs::read(dir.path().join("é.txt")).unwrap();
+    command(dir.path(), &["rm", "é.txt"], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "remove"], &[], None).unwrap();
+    std::fs::write(dir.path().join("é.txt"), &bytes).unwrap();
+    command(dir.path(), &["add", "."], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "reintroduce"], &[], None).unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let head = std::str::from_utf8(&head).unwrap().trim();
+    let found = findings(&repo, &base, head).unwrap();
+    assert_eq!(
+        found,
+        vec![
+            SecretFinding {
+                commit: tip,
+                path: Some("é.txt".into())
+            },
+            SecretFinding {
+                commit: head.into(),
+                path: Some("é.txt".into())
+            }
+        ]
+    );
+    assert!(!format!("{found:?}").contains(std::str::from_utf8(&bytes).unwrap()));
+    assert!(crate::writer_result::ContentGate::check(&SecretGate, &repo, &base, head).is_err());
 }

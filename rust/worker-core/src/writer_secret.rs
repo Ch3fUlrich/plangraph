@@ -94,7 +94,7 @@ pub fn findings(
     let root = Path::new(&repo.root);
     let list = command(
         root,
-        &["rev-list", "--reverse", &format!("{prerequisite}..{tip}")],
+        &["rev-list", "--reverse", tip, "--not", prerequisite],
         &[],
         None,
     )?;
@@ -115,9 +115,7 @@ pub fn findings(
             if mode == "160000" {
                 continue;
             }
-            if scan_bytes(&object(root, &blob)?.1)
-                && !found.iter().any(|f| f.path.as_ref() == Some(&path))
-            {
+            if scan_bytes(&object(root, &blob)?.1) {
                 found.push(SecretFinding {
                     commit: sha.into(),
                     path: Some(path),

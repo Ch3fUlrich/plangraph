@@ -3,7 +3,7 @@ use crate::writer_secret::{findings, tests::fixture};
 #[test]
 fn rebuild_excludes_original_objects() {
     let (dir, repo, base, tip) = fixture();
-    let clean = sanitize_history(&repo, &base, &tip).unwrap();
+    let clean = sanitize_history(&repo, &base, &tip).unwrap().tip;
     assert_ne!(clean, tip);
     assert!(findings(&repo, &base, &clean).unwrap().is_empty());
     let tree = entries(dir.path(), &clean).unwrap();
@@ -35,6 +35,95 @@ fn historical_message_and_blob_removed() {
     let tip = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
     let tip = std::str::from_utf8(&tip).unwrap().trim();
     assert!(findings(&repo, &base, tip).unwrap().len() >= 3);
-    let clean = sanitize_history(&repo, &base, tip).unwrap();
+    let clean = sanitize_history(&repo, &base, tip).unwrap().tip;
     assert!(findings(&repo, &base, &clean).unwrap().is_empty());
+}
+#[test]
+fn safe_messages_preserved_secret_messages_replaced_with_trailer() {
+    let (dir, repo, base, tip) = fixture();
+    let token = ["gh", "p_", &"c".repeat(25)].concat();
+    command(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", &token],
+        &[],
+        None,
+    )
+    .unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let head = std::str::from_utf8(&head).unwrap().trim();
+    let clean = sanitize_history(&repo, &base, head).unwrap();
+    let safe = object(dir.path(), &clean.sha_map[&tip]).unwrap().1;
+    assert_eq!(
+        message(&safe).unwrap(),
+        b"export\n\n\nSanitized: secret-gate\n"
+    );
+    let removed = object(dir.path(), &clean.tip).unwrap().1;
+    assert_eq!(
+        message(&removed).unwrap(),
+        b"Message removed by secret gate\n\n\nSanitized: secret-gate\n"
+    );
+    assert!(clean.dropped_paths.contains("é.txt"));
+}
+#[test]
+fn merge_parent_graph_and_prerequisite_preserved() {
+    let (dir, repo, base, tip) = fixture();
+    command(dir.path(), &["checkout", "-b", "side", &base], &[], None).unwrap();
+    command(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "side"],
+        &[],
+        None,
+    )
+    .unwrap();
+    let side = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let side = std::str::from_utf8(&side).unwrap().trim();
+    command(dir.path(), &["checkout", "--detach", &tip], &[], None).unwrap();
+    command(
+        dir.path(),
+        &["merge", "--no-ff", "side", "-m", "merge"],
+        &[],
+        None,
+    )
+    .unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let clean = sanitize_history(&repo, &base, std::str::from_utf8(&head).unwrap().trim()).unwrap();
+    for (old, new) in &clean.sha_map {
+        let parents = |sha: &str| {
+            String::from_utf8(
+                command(dir.path(), &["show", "-s", "--format=%P", sha], &[], None).unwrap(),
+            )
+            .unwrap()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+        };
+        let expected: Vec<_> = parents(old)
+            .into_iter()
+            .map(|p| clean.sha_map.get(&p).cloned().unwrap_or(p))
+            .collect();
+        assert_eq!(parents(new), expected);
+    }
+    assert!(clean.sha_map.contains_key(side));
+    assert_eq!(clean.sha_map.len(), 3);
+    let reachable = command(
+        dir.path(),
+        &["rev-list", "--objects", &format!("{base}..{}", clean.tip)],
+        &[],
+        None,
+    )
+    .unwrap();
+    let reachable = String::from_utf8(reachable).unwrap();
+    for original in clean.sha_map.keys() {
+        assert!(!reachable.contains(original));
+    }
+    assert!(findings(&repo, &base, &clean.tip).unwrap().is_empty());
+}
+#[test]
+fn dirty_prerequisite_refused_even_when_tip_removes_secret() {
+    let (dir, repo, base, tip) = fixture();
+    command(dir.path(), &["rm", "é.txt"], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "remove"], &[], None).unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    assert!(sanitize_history(&repo, &tip, std::str::from_utf8(&head).unwrap().trim()).is_err());
+    assert!(sanitize_history(&repo, &base, &tip).is_ok());
 }
