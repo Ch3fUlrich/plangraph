@@ -169,11 +169,12 @@ fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
     #[cfg(unix)]
     cmd.args([
         "-c",
-        "printf '%s\\n' \"$PWD\" \"$PYTHONPATH\" \"$CARGO_TARGET_DIR\"; pwd",
+        "printf '%s\\n' \"$PWD\" \"$PYTHONPATH\" \"$CARGO_TARGET_DIR\" \"$PYTHONDONTWRITEBYTECODE\"; pwd",
     ]);
     #[cfg(windows)]
-    cmd.args(["-c", "import os; print(os.environ['PWD']); print(os.environ['PYTHONPATH']); print(os.environ['CARGO_TARGET_DIR']); print(os.getcwd())"]);
+    cmd.args(["-c", "import os; print(os.environ['PWD']); print(os.environ['PYTHONPATH']); print(os.environ['CARGO_TARGET_DIR']); print(os.environ['PYTHONDONTWRITEBYTECODE']); print(os.getcwd())"]);
     crate::sandbox_env::confine_check(&mut cmd, f.tmp.path());
+    cmd.env("PYTHONDONTWRITEBYTECODE", "0");
     apply_child_env(&mut cmd, &f.repo, &tree, "seat-one", f.tmp.path()).unwrap();
     assert_eq!(cmd.get_current_dir(), Some(tree.as_path()));
     let out = cmd.output().unwrap();
@@ -194,6 +195,7 @@ fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
                 .join("seat-one")
                 .display()
                 .to_string(),
+            "1".into(),
             tree.display().to_string()
         ]
     );

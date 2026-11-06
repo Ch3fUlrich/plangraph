@@ -63,7 +63,9 @@ sandbox/trust-model limitation, not a claimed isolation boundary.
 `apply_child_env` overlays harness sandbox confinement without restoring removed
 variables. All inherited/explicit GIT_* overrides are removed; cwd/PWD and
 canonical import-root-only PYTHONPATH are pinned using platform path joining.
-Bytecode and pytest caches are disabled, TMPDIR/TEMP pinned, and safe seat slots
+The shared `configure_import_environment` helper pins `PYTHONDONTWRITEBYTECODE=1`
+even over explicit command overrides. Bytecode and pytest caches are disabled,
+TMPDIR/TEMP pinned, and safe seat slots
 expand cache templates outside worktrees. Canonical ancestors prevent symlink
 escape. `prepare_launch` re-verifies immediately; none mode requires no checkout
 and invents no cwd or PYTHONPATH. The standalone canary uses the same builder
