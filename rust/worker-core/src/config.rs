@@ -27,6 +27,7 @@ impl Tier {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    pub card_allowlist: Option<std::collections::BTreeSet<String>>,
     pub heartbeat: Duration,
     pub heartbeat_timeout: Duration,
     pub start_to_close: Duration,
@@ -51,6 +52,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            card_allowlist: None,
             heartbeat: Duration::from_secs(30),
             heartbeat_timeout: Duration::from_secs(120),
             start_to_close: Duration::from_secs(90 * 60),
@@ -67,9 +69,14 @@ impl Default for Config {
     }
 }
 
+#[path = "card_allowlist.rs"]
+mod card_allowlist;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    include!("config_allowlist_tests.rs");
 
     #[test]
     fn defaults_match_spec() {

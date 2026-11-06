@@ -28,6 +28,13 @@ standalone agent mode.
 | `PG_ATTEMPT_MEMORY_MAX` | Value for the scope's `MemoryMax` property. |
 | `PG_ATTEMPT_TASKS_MAX` | Value for the scope's `TasksMax` property. |
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
+| `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset preserves unrestricted selection. Unlisted keys are refused before claim and attempt setup. |
+
+Cross-worker exclusivity uses keeper claim arbitration, with the worker owner id
+sent on each claim; an empty claim is a non-retryable refusal. A process-global
+drop guard prevents overlapping activity attempts for the same card key and
+releases ownership on return or unwind. Only admission errors are non-retryable;
+filesystem permission errors retain the ordinary retryable attempt failure.
 
 Each attempt creates its own private temporary directory under the system temp
 directory, removed on drop alongside its private HOME. Only that temporary
