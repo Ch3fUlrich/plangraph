@@ -6,7 +6,7 @@ decisions file is optional (an unreadable file just leaves the ids bare).
 """
 from __future__ import annotations
 
-from . import changelog, context_sources, events
+from . import changelog, context_sources, events, timing
 
 __all__ = ["ChangelogMixin"]
 
@@ -18,6 +18,7 @@ class ChangelogMixin:
         return self._run(principal, "changelog", None,
                          lambda now: self._changelog(since))
 
+    @timing.measured("changelog_timing")
     def _changelog(self, since):
         changelog.parse_since(since)                       # refuse a bad `since` before any read
         log = events.read_events(self.conn)

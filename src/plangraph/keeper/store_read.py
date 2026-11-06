@@ -10,7 +10,7 @@ import json
 
 from .. import views
 from ..views_progress import progress
-from . import auth, jev_report
+from . import auth, jev_report, timing
 from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
@@ -213,6 +213,7 @@ class ReadMixin:
             " ('commit+ci','commit') GROUP BY key")}
         return created, done, reviewed, merged
 
+    @timing.measured("snapshot_timing")
     def _snapshot(self, now):
         items = self._all_items()
         corrected, fixed = {}, {}

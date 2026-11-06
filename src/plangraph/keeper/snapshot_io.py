@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import snapshot_sign
+from . import snapshot_sign, timing
 
 __all__ = ["write_snapshot", "read_snapshot", "SignError"]
 
@@ -27,14 +27,16 @@ def write_snapshot(server, principal) -> None:
     # role-agnostic, so it is built as the system principal, as the reaper does.
     from .auth import RunPrincipal
     who = server.system if isinstance(principal, RunPrincipal) else principal
-    body = json.dumps(server.store.snapshot(who)).encode("utf-8")
+    snapshot = timing.measured(part="build_ms")(server.store.snapshot)(who)
+    body = timing.measured(part="encode_ms")(lambda: json.dumps(snapshot).encode("utf-8"))()
     path.parent.mkdir(parents=True, exist_ok=True)
     key = getattr(server.config, "signing_key", None)
     if key:   # M2B: signature then snapshot; a reader in the gap retries once. A crash between the
               # two writes leaves a mismatch that FAILS CLOSED until the next write (the reaper
               # rewrites the snapshot every reap_interval), never an unsigned accept.
-        _atomic_write(snapshot_sign.sig_path(path), snapshot_sign.sign(body, key).encode())
-    _atomic_write(path, body)
+        signature = timing.measured(part="sign_ms")(snapshot_sign.sign)(body, key).encode()
+        timing.measured(part="write_ms")(_atomic_write)(snapshot_sign.sig_path(path), signature)
+    timing.measured(part="write_ms")(_atomic_write)(path, body)
 
 
 def _atomic_write(path, data: bytes) -> None:
