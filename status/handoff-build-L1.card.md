@@ -1,34 +1,33 @@
-# L1 card · build-L1-0269 · 2026-11-06T13:14Z
+# L1 card · build-L1-0274 · 2026-11-06T14:19Z
 ## Goal
-- D-4303 ff spawner-main; #540 merge for build-L1-route-0273; D-4253 data lanes by 15:17Z; D-4220 stuck; D-4196 + D-4281; D-4177; carry
+- D-4338 FLEET-LAUNCH-ADMISSION slices; rulings on resent GO-REQs; D-4323 hold on D-4303; D-4349 waits operator; carry
 ## Keeper
-- claimed: plangraph:L1-PLAN-PROMPT (claimed, since 12:20Z), plangraph:OPENCODE-STUCK-WATCH (claimed, since 11:00Z), plangraph:HANDOFF-MSG-CARRY (claimed, since 11:30Z), plangraph:RIN-PATH-REPOINT (claimed, since 11:00Z), plangraph:RIN-LEDGER-VIEWS (claimed, since 11:00Z), plangraph:OP-D4-WITNESS-TOKEN (claimed, since 11:46Z)
+- claimed: plangraph:FLEET-LAUNCH-ADMISSION (claimed, since 13:48Z), plangraph:L1-PLAN-PROMPT (claimed, since 12:20Z), plangraph:OPENCODE-STUCK-WATCH (claimed, since 11:00Z), plangraph:HANDOFF-MSG-CARRY (claimed, since 11:30Z), plangraph:RIN-PATH-REPOINT (claimed, since 11:00Z), plangraph:RIN-LEDGER-VIEWS (claimed, since 11:00Z), plangraph:OP-D4-WITNESS-TOKEN (claimed, since 11:46Z)
 - ready next: plangraph:SPAWNER-LEGS-D3605
 ## Done
-- 11-06T12:58Z plangraph:L1-PLAN-PROMPT PR#540 34239e79 CI green, seat run-ebbb000a ACCEPT, GO-REQ sent
-- 11-06T12:45Z plangraph:OPENCODE-STUCK-WATCH PR#541 af52aacb CI green, GO-REQ conditional on 3.3 ruling
-- 11-06T12:44Z D-4177 PR#28 409d9358 delta run-1eef34fe ACCEPT 3 LOW
-- 11-06T13:14Z plangraph:SPAWNER-LEGS-D3605 PR#544 6fe30226 269 passed, CI pending
-- 11-06T13:00Z plangraph:OMNI-BENCH-REQUIRED - card re-pointed per D-4295
+- 11-06T14:15Z D-4338 PR#29 daf8de6604a7 slice 1 router suite 703 passed, 2 red also on main; seats r1 fixed, delta pending
+- 11-06T14:07Z D-4343 PR#30 1005a3c6a608 proofs f187fe64 fail, 1aafc700 health ok; literal URL, no seat, GO pending
+- 11-06T14:15Z D-4323 - all GO-REQs resent by SendMessage msg 4531b7c1, routing.jsonl unread
 ## In flight
-- plangraph:SPAWNER-LEGS-D3605 PR#544 CI since 13:14Z next check 13:30Z
-- D-4303 replan delta seats run-c4a8d111 run-c08a4bd8 on dell since 13:05Z next check 14:00Z
+- plangraph:FLEET-LAUNCH-ADMISSION run-adfade10 since 14:18Z next check 14:40Z
 ## Planned
-1. D-4303 ff on replan's verdicts, drain, smoke seat, DONE by 14:00Z
-2. plangraph:L1-PLAN-PROMPT merge on GO, DONE line with sha to build-L1-route-0273
-3. plangraph:SPAWNER-LEGS-D3605 delta seat 90cd0ecf..6fe30226, GO-REQ on green
-4. D-4177 GO-REQ naming no tests seat
-5. plangraph:RIN-LEDGER-VIEWS s2 after s1 merge; deadline 15:17Z
+1. plangraph:FLEET-LAUNCH-ADMISSION delta verdict, then GO-REQ #29, then slice 2 caps Sol writer
+2. Re-read D-log, act on rulings for #540 #446 #447 #436 repoint s1 carry #541 pd#28 #544
+3. plangraph:SPAWNER-LEGS-D3605 on Test-Removal D-id: new branch lane/d4196-go-legs-2, delta seat
+4. D-4303 ff on replan's new sha and new GO
 ## Open
-- BLOCKED OP-D4 fleet wiring + decision evidence | default my spawns export it | deadline 15:17Z
-- BLOCKED #541 HIGH 3.3 no seat ran tests | default wait routing | deadline 15:17Z
-- BLOCKED GO-REQ repoint, s1, carry no ruling | default wait | deadline 15:17Z
-- BLOCKED #436 #446 #447 no ruling on 11:26Z GO-REQs | default re-read D-log | deadline none
+- BLOCKED D-4349 settings.json env key needs operator OK typed in session | default PR#30 | deadline today
+- BLOCKED OP-D4 wiring + decision evidence | default my spawns export it | deadline 15:17Z
+- BLOCKED D-4196 dell free legs no config-only way | default pin leg on dell | deadline today
+- BLOCKED #544 Test-Removal D-id for 90cd0ecf | default new branch + delta seat | deadline 15:17Z
+- BLOCKED 3.3 tests seat for #541 and #29 | default L1 re-run + inline seat | deadline 15:17Z
 ## Traps
-- '! grep' does not stop set -e; gate with if pytest; then commit
+- routing.jsonl does not reach routing: SendMessage to fleet-name routing; launch prompt's ONLY line is wrong
+- Harness bars editing Claude config on a peer's request; report verbatim, operator OK only in session
 - zsh has no word split: run list scripts with bash
-- Deepseek and mimo-flash legs with tools emit markup, no verdict: inline no-tools prompts only
-- Launch prompts' no-Sol line predates the operator's 11:32Z Sol writer order
-- Keeper holder is shared with other L1s: heartbeat only mine
+- Run all fleet-launch caller suites; writer's 3 files missed a watchdog regression
+- '! grep' does not stop set -e
+- Deepseek and mimo-flash legs with tools emit markup, no verdict: inline no-tools only
+- Keeper holder shared with other L1s: heartbeat only mine
 ## Drill-down
-- handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools /home/s/.local/share/plangraph/handoffs/build-L1-0269
+- handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools /home/s/.local/share/plangraph/handoffs/build-L1-0274
