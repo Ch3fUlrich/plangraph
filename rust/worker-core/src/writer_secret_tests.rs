@@ -1,4 +1,49 @@
 use super::*;
+#[test]
+fn scan_bytes_high_byte_before_token() {
+    let mut bytes = vec![0xd0, 0xba];
+    bytes.extend(["gh", "p_", &"a".repeat(25)].concat().bytes());
+    assert!(scan_bytes(&bytes));
+}
+
+#[test]
+fn token_in_author_refused() {
+    let (dir, repo, base, _) = fixture();
+    let tree = command(
+        dir.path(),
+        &["rev-parse", &format!("{base}^{{tree}}")],
+        &[],
+        None,
+    )
+    .unwrap();
+    let tree = std::str::from_utf8(&tree).unwrap().trim();
+    let token = ["gh", "p_", &"a".repeat(25)].concat();
+    for header in ["author", "committer"] {
+        let raw = format!("tree {tree}\nparent {base}\nauthor Safe <gate@example.invalid> 0 +0000\ncommitter Safe <gate@example.invalid> 0 +0000\n\nsafe\n");
+        let raw = raw.replace(&format!("{header} Safe"), &format!("{header} {token}"));
+        let tip = command(
+            dir.path(),
+            &["hash-object", "-t", "commit", "-w", "--stdin"],
+            raw.as_bytes(),
+            None,
+        )
+        .unwrap();
+        let tip = std::str::from_utf8(&tip).unwrap().trim();
+        assert_eq!(
+            findings(&repo, &base, tip).unwrap(),
+            vec![SecretFinding {
+                commit: tip.into(),
+                path: None
+            }]
+        );
+        assert!(matches!(
+            SecretGate.check(&repo, &base, tip),
+            Err(WriterError::SecretInHistory)
+        ));
+        let clean = crate::writer_sanitize::sanitize_history(&repo, &base, tip).unwrap();
+        assert!(findings(&repo, &base, &clean.tip).unwrap().is_empty());
+    }
+}
 pub(crate) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

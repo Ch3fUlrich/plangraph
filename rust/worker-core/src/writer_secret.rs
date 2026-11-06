@@ -16,7 +16,10 @@ pub struct SecretFinding {
     pub path: Option<String>,
 }
 pub fn scan_bytes(bytes: &[u8]) -> bool {
-    let text: String = bytes.iter().map(|b| char::from(*b)).collect();
+    let text: String = bytes
+        .iter()
+        .map(|b| char::from(if *b < 128 { *b } else { b' ' }))
+        .collect();
     crate::redact::redact(&text) != text
 }
 pub(crate) fn command(
@@ -105,13 +108,25 @@ pub fn findings(
         if kind != "commit" {
             return Err(WriterError::Git);
         }
-        if scan_bytes(message(&bytes)?) {
+        let identity_secret = bytes
+            .split(|b| *b == b'\n')
+            .take_while(|l| !l.is_empty())
+            .filter(|l| l.starts_with(b"author ") || l.starts_with(b"committer "))
+            .any(scan_bytes);
+        if identity_secret || scan_bytes(message(&bytes)?) {
             found.push(SecretFinding {
                 commit: sha.into(),
                 path: None,
             });
         }
         for (mode, blob, path) in entries(root, sha)? {
+            if scan_bytes(path.as_bytes()) {
+                found.push(SecretFinding {
+                    commit: sha.into(),
+                    path: Some("<path removed by secret gate>".into()),
+                });
+                continue;
+            }
             if mode == "160000" {
                 continue;
             }

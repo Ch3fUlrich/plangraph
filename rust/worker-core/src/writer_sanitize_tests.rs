@@ -1,6 +1,82 @@
 use super::*;
 use crate::writer_secret::{findings, tests::fixture};
 #[test]
+fn token_in_path_found_and_dropped() {
+    let (dir, repo, base, tip) = fixture();
+    let base = sanitize_history(&repo, &base, &tip).unwrap().tip;
+    command(dir.path(), &["read-tree", &base], &[], None).unwrap();
+    let token = ["gh", "p_", &"p".repeat(25)].concat();
+    let blob = command(dir.path(), &["hash-object", "-w", "--stdin"], &[], None).unwrap();
+    let blob = std::str::from_utf8(&blob).unwrap().trim();
+    command(
+        dir.path(),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},{token}"),
+        ],
+        &[],
+        None,
+    )
+    .unwrap();
+    let tree = command(dir.path(), &["write-tree"], &[], None).unwrap();
+    let tip = command(
+        dir.path(),
+        &[
+            "commit-tree",
+            std::str::from_utf8(&tree).unwrap().trim(),
+            "-p",
+            &base,
+        ],
+        b"safe",
+        None,
+    )
+    .unwrap();
+    let tip = std::str::from_utf8(&tip).unwrap().trim();
+    let found = findings(&repo, &base, tip).unwrap();
+    assert_eq!(
+        found,
+        vec![crate::writer_secret::SecretFinding {
+            commit: tip.into(),
+            path: Some("<path removed by secret gate>".into())
+        }]
+    );
+    let clean = sanitize_history(&repo, &base, tip).unwrap();
+    assert_eq!(clean.dropped_paths, vec!["<path removed by secret gate>"]);
+    assert!(!entries(dir.path(), &clean.tip)
+        .unwrap()
+        .iter()
+        .any(|e| e.2 == token));
+    assert!(!format!("{found:?}{:?}", clean.dropped_paths).contains(&token));
+}
+
+#[test]
+fn gitlink_survives_rebuild() {
+    let (dir, repo, base, _) = fixture();
+    command(
+        dir.path(),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{base},submodule"),
+        ],
+        &[],
+        None,
+    )
+    .unwrap();
+    command(dir.path(), &["commit", "-m", "gitlink"], &[], None).unwrap();
+    let tip = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let clean = sanitize_history(&repo, &base, std::str::from_utf8(&tip).unwrap().trim()).unwrap();
+    assert!(entries(dir.path(), &clean.tip).unwrap().contains(&(
+        "160000".into(),
+        base,
+        "submodule".into()
+    )));
+    assert!(!clean.dropped_paths.contains(&"submodule".into()));
+}
+#[test]
 fn sanitized_objects_no_original_secret() {
     let (dir, repo, base, tip) = fixture();
     let clean = sanitize_history(&repo, &base, &tip).unwrap().tip;

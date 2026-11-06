@@ -53,8 +53,13 @@ pub fn sanitize_history(
         command(root, &["read-tree", "--empty"], &[], Some(&index))?;
         let mut records = Vec::new();
         for (mode, blob, path) in entries(root, commit)? {
-            if mode == "160000" || scan_bytes(&object(root, &blob)?.1) {
-                result.dropped_paths.push(path);
+            let path_secret = scan_bytes(path.as_bytes());
+            if path_secret || (mode != "160000" && scan_bytes(&object(root, &blob)?.1)) {
+                result.dropped_paths.push(if path_secret {
+                    "<path removed by secret gate>".into()
+                } else {
+                    path
+                });
                 continue;
             }
             records.extend_from_slice(format!("{mode} {blob}\t{path}\0").as_bytes());
