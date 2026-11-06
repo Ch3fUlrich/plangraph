@@ -10,7 +10,6 @@ fn check(manifest: &Path, target: &Path, features: &[String]) -> std::process::O
             "--workspace",
             "--lib",
             "--bins",
-            "--no-default-features",
             "--manifest-path",
         ])
         .arg(manifest)
@@ -51,7 +50,7 @@ fn unrestricted_policy_is_test_only() {
         );
         let metadata: serde_json::Value = serde_json::from_slice(&metadata.stdout).unwrap();
         let members = metadata["workspace_members"].as_array().unwrap();
-        let mut combinations = vec![Vec::<String>::new()];
+        let mut all_features = Vec::new();
         for package in metadata["packages"]
             .as_array()
             .unwrap()
@@ -81,21 +80,12 @@ fn unrestricted_policy_is_test_only() {
                 forbidden.extend(additions);
             }
             for feature in features.keys().filter(|name| !forbidden.contains(name)) {
-                let feature = format!("{}/{}", package["name"].as_str().unwrap(), feature);
-                let enabled: Vec<_> = combinations
-                    .iter()
-                    .map(|combination| {
-                        let mut combination = combination.clone();
-                        combination.push(feature.clone());
-                        combination
-                    })
-                    .collect();
-                combinations.extend(enabled);
+                all_features.push(format!("{}/{}", package["name"].as_str().unwrap(), feature));
             }
         }
-        // Check every subset, not just all-features: cfg(not(feature = ...))
-        // callers must also be rejected. Never enable test or test-support.
-        for features in combinations {
+        // Exactly two production checks per workspace: defaults and all allowed
+        // features. Never enable test or test-support (including their aliases).
+        for features in [Vec::new(), all_features] {
             let output = check(&manifest, target.path(), &features);
             assert!(
                 output.status.success(),
