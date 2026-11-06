@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 import difflib
 import json
@@ -127,6 +128,27 @@ def drive(args, directory, policy, manifest, rows, yields, status, spawn):
     failed = 0
     productive = False
     remaining = policy
+    def build(leg):
+        config = next(item for item in policy.leg if item.id == leg.id)
+        built = bundle.build(kind, bundle.Leg(leg.max_request_tokens, config.training), bs)
+        ledger.atomic_json(target / f'{leg.id}.scrub.json', built.scrub_record)
+        return built
+
+    parallel = None
+    if len(selected) > 1:
+        # Build and launch the blind first seats before ingesting either reply.
+        with ThreadPoolExecutor(max_workers=len(selected)) as pool:
+            parallel = [pool.submit(spawning.run_seat, kind, replace(state, tier='standard'),
+                                    replace(policy, leg=tuple(l for l in policy.leg if l.id == leg.id),
+                                            max_failed_attempts=1), target, build,
+                                    seat_id=f'initial-{index}', spawn=spawn)
+                        for index, leg in enumerate(selected)]
+            parallel = [future.result() for future in parallel]
+        failed = sum(result['failed_attempts'] for result in parallel)
+        excluded = {spawning._leg_family(row['leg']) for result in parallel for row in result['seats']
+                    if row.get('attempt_used') or row['status'] == 'completed'}
+        remaining = replace(policy, leg=tuple(l for l in policy.leg
+                            if spawning._leg_family(l.id) not in excluded))
     for index in range(len(selected)):
         started = time.monotonic()
         def build(leg):
@@ -140,8 +162,17 @@ def drive(args, directory, policy, manifest, rows, yields, status, spawn):
                     built = parts[0]
             ledger.atomic_json(target / f'{leg.id}.scrub.json', built.scrub_record)
             return built
-        result = spawning.run_seat(kind, replace(state, tier='standard'), replace(remaining, max_failed_attempts=policy.max_failed_attempts - failed), target, build, spawn=spawn, seat_id=f's{index}')
-        failed += result['failed_attempts']
+        if parallel is not None:
+            result = parallel[index]
+            if result['status'] != 'completed' and failed < policy.max_failed_attempts:
+                retry = spawning.run_seat(kind, replace(state, tier='standard'),
+                    replace(remaining, max_failed_attempts=policy.max_failed_attempts - failed),
+                    target, build, spawn=spawn, seat_id=f'retry-{index}')
+                failed += retry['failed_attempts']
+                result = dict(retry, seats=result['seats'] + retry['seats'])
+        else:
+            result = spawning.run_seat(kind, replace(state, tier='standard'), replace(remaining, max_failed_attempts=policy.max_failed_attempts - failed), target, build, spawn=spawn, seat_id=f's{index}')
+            failed += result['failed_attempts']
         for seat in result['seats']:
             seat_id = f's{len(yields) + 1}'
             parsed = {k: seat.get(k) for k in ('status', 'findings')}
