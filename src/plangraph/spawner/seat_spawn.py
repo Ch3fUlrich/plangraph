@@ -16,6 +16,14 @@ class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
+        """Assemble one leg's payload, then apply opt-in whole-prompt admission."""
+        from . import context_pack
+        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review)
+        if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
+            return context_pack.bound_prompt(prompt, leg.max_request_tokens)
+        return prompt
+
+    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
@@ -29,8 +37,6 @@ class SeatSpawnMixin:
             from .inline_diff import inline_diff_prompt
             prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
                                         allow_document=document_review)
-        if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
-            return context_pack.bound_prompt(prompt, leg.max_request_tokens)
         return prompt
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,

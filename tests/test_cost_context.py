@@ -92,11 +92,12 @@ def test_inline_bound_disabled_preserves_prompt_and_warning(sandbox, monkeypatch
         'big_file_unsliced: large.py 1000 lines; name one function per slice in card.context']
 
 
-def test_launch_maps_strict_prompt_bound_before_runner(sandbox, monkeypatch):
+@pytest.mark.parametrize('tool_mode', ['inline-only', 'tools'])
+def test_launch_maps_strict_prompt_bound_before_runner(sandbox, monkeypatch, tool_mode):
     from plangraph.spawner import launch_spec
     root, seat, _ = sandbox
     monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
-    leg = SimpleNamespace(id='synthetic', roles=('implement',), tool_mode='inline-only',
+    leg = SimpleNamespace(id='synthetic', roles=('implement',), tool_mode=tool_mode,
                           max_request_tokens=200, model='synthetic', harness='synthetic')
     monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
     monkeypatch.setattr(launch_spec, 'leg_active', lambda leg: True)
@@ -162,3 +163,57 @@ def test_synthetic_replay_exact_reductions(sandbox, monkeypatch):
     assert (len(before.encode()), len(after.encode())) == (9022, 372)
     assert len(before) - len(after) == 8650
     assert ((len(before) + 2) // 3, (len(after) + 2) // 3) == (3008, 124)
+
+
+@pytest.fixture
+def review_payload(sandbox, monkeypatch):
+    from plangraph.spawner import inline_diff
+    root, seat, _ = sandbox
+    diff = '+review change\n'
+    monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, stdout=diff, stderr=''))
+    card = {'diff_ref': {'repo': str(root), 'base': 'base', 'head': 'head'}}
+    framing = inline_diff.HEADER.format(base='base', head='head') + diff + inline_diff.FOOTER
+    return root, seat, card, framing
+
+
+@pytest.mark.parametrize('tool_mode', ['inline-only', 'tools'])
+def test_strict_real_review_whole_prompt_refused(review_payload, monkeypatch, tool_mode):
+    root, seat, card, framing = review_payload
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
+    leg = SimpleNamespace(tool_mode=tool_mode, max_request_tokens=200)
+    prompt = 'private brief ' + 'x' * 601
+    size = len(prompt) + (len(framing) if tool_mode == 'inline-only' else 0)
+    calls = []
+    with pytest.raises(cp.PromptBoundError) as exc:
+        dispatch(seat, root, prompt, card, leg, calls, role='review')
+    assert calls == []
+    assert str(exc.value) == (f'inline_prompt_oversized: chars {size} '
+                              f'estimated_tokens {(size + 2) // 3} max_request_tokens 200')
+
+
+@pytest.mark.parametrize('tool_mode', ['inline-only', 'tools'])
+def test_strict_real_review_at_bound_dispatched(review_payload, monkeypatch, tool_mode):
+    root, seat, card, framing = review_payload
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
+    leg = SimpleNamespace(tool_mode=tool_mode, max_request_tokens=200)
+    suffix = framing if tool_mode == 'inline-only' else ''
+    prompt = 'x' * (600 - len(suffix))
+    calls = []
+    dispatch(seat, root, prompt, card, leg, calls, role='review')
+    assert calls == [prompt + suffix]
+    assert len(calls[0]) == 600
+
+
+@pytest.mark.parametrize('enabled', [None, '0'])
+def test_disabled_real_oversized_review_matches_main(review_payload, monkeypatch, enabled):
+    from plangraph.spawner.inline_diff import inline_diff_prompt
+    root, seat, card, framing = review_payload
+    if enabled is not None:
+        monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
+    prompt = 'x' * 1000
+    leg = SimpleNamespace(tool_mode='inline-only', max_request_tokens=200)
+    expected = inline_diff_prompt(prompt, card['diff_ref'], max_chars=600)
+    calls = []
+    dispatch(seat, root, prompt, card, leg, calls, role='review')
+    assert calls == [expected] == [prompt + framing]
