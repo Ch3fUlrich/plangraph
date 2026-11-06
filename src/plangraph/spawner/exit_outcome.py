@@ -16,6 +16,17 @@ def without_progress(text):
                      if not normalize(line).lstrip().startswith(('✱', '→', '>', '$')))
 
 
+def is_opencode(job):
+    from pathlib import Path
+    command = getattr(job, 'command', ())
+    return bool(command and Path(command[0]).name == 'opencode')
+
+
+def failure_reason(job, stop=None):
+    text = without_progress(job.stderr) if is_opencode(job) else job.stderr
+    return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+
+
 def _booking_seconds():
     """H1: the booked-down window is clamped to [60, 86400] seconds.
 
@@ -122,7 +133,10 @@ def _book_failure(service, chosen, line):
 def fallthrough_reason(service, chosen, job, record):
     if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
-    line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
+    stdout, stderr = job.stdout, job.stderr
+    if is_opencode(job):
+        stdout, stderr = map(without_progress, (stdout, stderr))
+    line = harness_limit_line(job.exit_code, stdout, stderr)
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
         # not in the captured output) books and notifies like any harness limit.
@@ -143,7 +157,7 @@ def fallthrough_reason(service, chosen, job, record):
         reason = 'harness_limit: ' + line
         notify_leg_refused(service, record, chosen, reason)
         return reason
-    reason = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+    reason = unavailable_reason(job.exit_code, stdout, stderr)
     if reason is not None:
         _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
@@ -202,8 +216,11 @@ def terminal_reason(record):
         record['reason'] = reason
         return
     if record.get('exit_code') not in (None, 0):
+        stderr = record.get('stderr_tail', '')
+        if (record.get('chosen_leg') or {}).get('harness') == 'opencode':
+            stderr = without_progress(stderr)
         record['reason'] = (reason or record.get('error')
-                            or first_reason(record.get('stderr_tail', ''))
+                            or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
 
 
