@@ -11,11 +11,9 @@
 //! and the card's check command ([`confine_check`]) get [`PASS`] only: harness
 //! auth never travels by environment — [`HomeGuard::stage_harness_auth`]
 //! copies it into the harness's private HOME as files.
-
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
 /// Names copied from the worker's environment, when set. Exact names only:
 /// a prefix would forward whatever secret the CLI happens to store under it
 /// (`CLAUDE_CODE_OAUTH_TOKEN`, `OPENCODE_API_KEY`, ...).
@@ -24,18 +22,15 @@ use std::process::Command;
 /// `CARGO_HOME` and `RUSTUP_HOME` are toolchain *locations* (not secrets): with
 /// `HOME` private, a Rust check could not find its toolchain without them.
 pub const PASS: &[&str] = &["PATH", "LANG", "TERM", "CARGO_HOME", "RUSTUP_HOME"];
-
 /// True when `name` may reach the harness from the worker's environment:
 /// [`PASS`] only, exact names, no prefixes.
 pub fn is_passed(name: &str) -> bool {
     PASS.contains(&name)
 }
-
 /// True when `name` may reach a check child: [`PASS`] only.
 pub fn is_passed_check(name: &str) -> bool {
     PASS.contains(&name)
 }
-
 /// Confine a harness child (and its `--version` probe): [`PASS`], a private
 /// `HOME`, and what the caller set on `cmd`. Harness auth is staged into
 /// `home` as files ([`HomeGuard::stage_harness_auth`]), never passed by
@@ -43,13 +38,11 @@ pub fn is_passed_check(name: &str) -> bool {
 pub fn confine_harness(cmd: &mut Command, home: &Path) {
     confine_with(cmd, home, is_passed);
 }
-
 /// Confine a card check child: [`PASS`] only, a private `HOME`, and what the
 /// caller set on `cmd`. Agent credentials never reach it.
 pub fn confine_check(cmd: &mut Command, home: &Path) {
     confine_with(cmd, home, is_passed_check);
 }
-
 /// Replace `cmd`'s environment with the names `pass` accepts, a private `HOME`,
 /// and the variables the caller set on `cmd` explicitly (the caller's own by
 /// construction, for example `OPENCODE_DISABLE_AUTOUPDATE` or a test's marker).
@@ -69,20 +62,17 @@ fn confine_with(cmd: &mut Command, home: &Path, pass: fn(&str) -> bool) {
     }
     cmd.env("HOME", home);
 }
-
 /// The private `HOME` of the attempt slot `dir`: a sibling named `<dir>.home`,
 /// next to the worktree rather than in it so it never shows up as an
 /// untracked change in the attempt's diff.
 pub fn home_for(dir: &Path) -> PathBuf {
     home_with_suffix(dir, ".home")
 }
-
 /// The private `HOME` of the card check child of slot `dir`: `<dir>.home-check`.
 /// Never the harness HOME: a harness may persist a login there.
 pub fn check_home_for(dir: &Path) -> PathBuf {
     home_with_suffix(dir, ".home-check")
 }
-
 fn home_with_suffix(dir: &Path, suffix: &str) -> PathBuf {
     let mut name = dir
         .file_name()
@@ -91,7 +81,6 @@ fn home_with_suffix(dir: &Path, suffix: &str) -> PathBuf {
     name.push(suffix);
     dir.with_file_name(name)
 }
-
 /// Creates a private `HOME` and removes it on drop, unless it already existed
 /// (an enclosing attempt owns it then). Files staged into the home via
 /// [`HomeGuard::stage_harness_auth`] are removed on drop either way.
@@ -100,7 +89,6 @@ pub struct HomeGuard {
     owned: bool,
     staged: Vec<PathBuf>,
 }
-
 impl HomeGuard {
     pub fn for_dir(dir: &Path) -> std::io::Result<HomeGuard> {
         Self::at(home_for(dir))
@@ -172,6 +160,9 @@ fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()
     }
     for entry in std::fs::read_dir(&src)? {
         let entry = entry?;
+        if crate::sandbox_push::excluded(&entry.file_name()) {
+            continue;
+        }
         // file_type comes from symlink_metadata: it never follows the link.
         let ft = entry.file_type()?;
         if ft.is_symlink() {
@@ -186,6 +177,9 @@ fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()
             create_staged_dir(&dest)?;
             for sub in std::fs::read_dir(entry.path())? {
                 let sub = sub?;
+                if crate::sandbox_push::excluded(&sub.file_name()) {
+                    continue;
+                }
                 let sft = sub.file_type()?;
                 if sft.is_symlink() {
                     return Err(symlink_refused(&sub.path()));
@@ -300,7 +294,6 @@ mod tests {
             assert!(!is_passed_check(n), "{n} must not reach a check child");
         }
     }
-
     #[test]
     fn allowlist_never_names_a_secret() {
         // The allowlist is an env-forwarding policy: one TOKEN/KEY/... name in
@@ -568,3 +561,7 @@ mod tests {
         assert!(home.is_dir());
     }
 }
+
+#[cfg(test)]
+#[path = "sandbox_push_tests.rs"]
+mod push_tests;
