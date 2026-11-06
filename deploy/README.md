@@ -51,7 +51,7 @@ or copied into a unit or into `render.env`.
 ## Host Bootstrap & Spawner Setup
 
 `bootstrap.sh` (Linux) and `bootstrap.ps1` (Windows) are the one plangraph-owned worker-online procedure.
-Preconditions: install Python/plangraph and required runtime/agent packages, arrange login and SSH trust yourself.
+Preconditions: install Python and plangraph, install required runtime and agent packages, sign in and set up trust for SSH yourself.
 AutoOS is optional, only with `--autoos-root` / `-AutoOSRoot`; no discovery or environment dependency.
 `--skip-autoos` / `-SkipAutoOS` remain compatible; `requirements-host.json` lists optional AutoOS components.
 
@@ -83,7 +83,7 @@ timer is not auto-enabled. Until part B adds probe host/config arguments, a huma
 explicitly runs `systemctl --user enable --now plangraph-remote-probe.timer` after approval.
 See [remote probes](../docs/operations/spawner-remote-probes.md) for config semantics.
 This supersedes HOST3's AutoOS requirement only for these steps, not hardware readiness, private CI or real-run evidence.
-HOST-AGENT still owns sampling and its service/Run key, WSL2/GPU/privacy/idempotence/drift/CPU budget;
+HOST-AGENT still owns sampling and its service or Run key, WSL2, GPU support, privacy, idempotence, drift, CPU budget;
 this watchdog task is not that service. HOST-SAMPLES-API owns token ingest, server clock/staleness,
 rollups/retention/migrations. Bootstrap depends on neither and adds no sampler.
 For catalog/routing/MCP details see [`docs/SPAWNER.md`](../docs/SPAWNER.md).
