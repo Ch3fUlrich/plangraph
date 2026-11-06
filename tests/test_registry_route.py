@@ -217,7 +217,8 @@ def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
 def test_default_policy_seats_deepseek_for_review():
     # D-3552: with the live policy a deepseek leg may be a review seat.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
-    assert "deepseek" in _families(plan)
+    assert "deepseek" in {leg.family for leg in plan.legs}
+    assert _families(plan)[0] == "mimo"
 
 
 def test_seat_never_shares_family_with_a_single_writer():
@@ -226,16 +227,16 @@ def test_seat_never_shares_family_with_a_single_writer():
     assert any(s["leg"] == "cx-gpt-6-luna" and s["reason"] == "excluded_family" for s in plan.skipped)
 
 
-def test_seat_may_share_family_with_another_writer_part(pre_d3552_policy):
+def test_seat_excludes_every_writer_family(pre_d3552_policy):
     # D-3084 coverage survives D-3901 review-route seat ordering.
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"qwen", "mimo"}
+    assert set(_families(plan)) == {"gemini", "mimo"}
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
     # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "qodercli-qwen3.8-flash", "covers": ["openai"]},
-                                  {"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]})
+    assert plan.seat_coverage == ({"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]},
+                                  {"leg": "opencode-go-gemini-4-argon", "covers": ["alibaba", "openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():
@@ -244,7 +245,8 @@ def test_high_needs_two_families_per_part_incl_non_claude():
     assert plan.error is None
     seats = [("anthropic" if f == "claude" else f) for f in _families(plan)]
     assert uncovered(["gpt", "qwen"], seats, need=2, sensitive=True) == []
-    assert len(set(seats)) >= 3
+    assert len(set(seats)) >= 2
+    assert not set(seats) & {"gpt", "qwen"}
 
 
 def test_uncoverable_parts_are_an_error():

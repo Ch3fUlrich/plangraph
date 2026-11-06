@@ -1,4 +1,6 @@
 """Verdict parse in parity with the keeper tool, plus fixtures."""
+import json
+import inspect
 import sys
 from pathlib import Path
 
@@ -22,6 +24,67 @@ def to_bool(word):
     if word is None:
         return None
     return word == "pass"
+
+
+def test_golden_verdict_words():
+    cases = json.loads((FIX.parent / "verdict_words.json").read_text())
+    outcomes = {"pass": True, "block": False, "none": None}
+    for case in cases:
+        assert case["expect"] == case["new_door"]
+        assert sv.parse_verdict(case["text"])[0] is outcomes[case["new_door"]], case
+        assert to_bool(v.parse_verdict(case["text"])) is outcomes[case["new_twin"]], case
+
+
+def test_golden_old_outcomes_and_changed_sets():
+    # Copied from origin/main tools/seat_verdict.py:54-55 and
+    # src/plangraph/review/verdict.py:27-28, not the design vocabulary.
+    old_sets = {
+        "door": ({"pass", "approve", "accept"},
+                 {"fix", "halt", "change", "changes", "reject"}),
+        "twin": ({"pass", "approve", "accept"},
+                 {"fix", "halt", "change", "changes", "reject"}),
+    }
+    cases = json.loads((FIX.parent / "verdict_words.json").read_text())
+    for parser, (passes, blocks) in old_sets.items():
+        changed = set()
+        for case in cases:
+            assert set(case) == {"text", "word", "expect", "old_door",
+                                 "new_door", "old_twin", "new_twin"}
+            for field in ("old_door", "new_door", "old_twin", "new_twin"):
+                assert case[field] in {"pass", "block", "none"}
+            word = case["word"]
+            if word is None:
+                continue
+            # Old first-word matcher reads both NO GO and NO-GO as 'no'.
+            first = "no" if word == "no-go" else word
+            old = ("block" if word == "request_changes" or first in blocks
+                   else "pass" if first in passes else "none")
+            assert case["old_" + parser] == old, case
+            if old != case["new_" + parser]:
+                changed.add(word)
+        assert changed == {"fail", "no", "no-go", "blocked", "go"}
+
+
+def test_no_go_without_whitespace_substitution():
+    for module in (sv, v):
+        assert 're.sub(r"\\s+", "-", word)' not in inspect.getsource(module)
+    cases = json.loads((FIX.parent / "verdict_words.json").read_text())
+    case = next(case for case in cases if case["text"] == "VERDICT: NO GO")
+    assert case["new_door"] == case["new_twin"] == "block"
+    assert sv.parse_verdict(case["text"])[0] is False
+    assert v.parse_verdict(case["text"]) == "fix"
+
+
+@pytest.mark.parametrize("finish,gaming,want", [
+    ("stop", "no", 0), ("end_turn", "no", 0),
+    ("length", "no", 4), ("stop", "yes", 4),
+    ("stop", "unsure", 4), ("stop", None, 4),
+])
+def test_go_keeps_pass_safety_gates(tmp_path, finish, gaming, want):
+    from test_seat_verdict import run
+
+    assert run(tmp_path, "go", "VERDICT: go", finish_reason=finish,
+               test_gaming=gaming, extra=("--dry-run",)) == want
 
 
 _FIXTURE_NAMES = [
@@ -54,6 +117,9 @@ _INLINE_CORPUS = [
     "VERDICT: fix\nVERDICT: pass",
     "VERDICT: pass\nVERDICT: fix",
     "VERDICT: halt",
+    "VERDICT: GO",
+    "VERDICT: FAIL - 2 findings",
+    "VERDICT: NO GO",
     "VERDICT: approve",
     "VERDICT: reject.",
     "VERDICT: Changes requested",
@@ -266,4 +332,3 @@ def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
     assert v.parse_test_gaming(
         'TEST-GAMING: no - searched the "batch in" stamp: 3 hits'
     )[0] != "no"
-

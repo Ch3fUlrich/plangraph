@@ -902,7 +902,7 @@ def spawn_service(*args, **kwargs):
         def _save(self, record, *, retry=False):
             import socket
             record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
-            from .notify import completion_event, CommandSink, KeeperNotConfigured
+            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperSink
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
@@ -930,7 +930,10 @@ def spawn_service(*args, **kwargs):
                     if marker.exists():
                         continue
                     try:
-                        sink.deliver(recipient, record['completion'])
+                        no_keeper_item = (recipient == 'keeper' and isinstance(sink, KeeperSink)
+                                          and sink.url and sink.token_file and not record['completion'].get('item'))
+                        if not no_keeper_item:
+                            sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'delivered\n')
                     except KeeperNotConfigured:

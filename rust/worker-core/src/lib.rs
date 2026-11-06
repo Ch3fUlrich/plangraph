@@ -9,12 +9,16 @@ pub mod budget;
 pub mod check;
 pub mod config;
 pub mod confine;
+pub mod cpu;
+#[cfg(target_os = "linux")]
+pub mod cpu_linux;
 pub mod diffscan;
 pub mod events;
 pub mod exit_class;
 pub mod exports;
 pub mod fleet_alarm_delivery;
 pub mod fleet_cap_resolver;
+pub mod fleet_foundation_tick;
 pub mod fleet_owner_lease;
 pub mod fleet_owner_store;
 pub mod fleet_owner_transition;
@@ -61,6 +65,8 @@ pub mod workspace_verify;
 pub mod worktree;
 pub mod writer_blob;
 pub mod writer_result;
+pub mod writer_sanitize;
+pub mod writer_secret;
 pub mod wsl;
 
 #[cfg(test)]

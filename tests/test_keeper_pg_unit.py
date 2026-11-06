@@ -7,7 +7,6 @@ import pytest
 
 from plangraph.keeper import config as config_mod, db as kdb, db_pg, schema, schema_pg
 from plangraph.keeper import schema_pg_spawner
-from plangraph.keeper.placement_rules_schema import SQLITE_ONLY_TABLES
 from plangraph.projector import ddl as projector_ddl
 
 
@@ -150,14 +149,10 @@ def _sqlite_tables():
     out = {}
     for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"
                                 " AND name NOT LIKE 'sqlite_%'"):
-        if name in SQLITE_ONLY_TABLES:
-            continue
         out[name] = [(r[1], r[3]) for r in conn.execute(f"PRAGMA table_info({name})")]
     idx = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='index'"
-                                      " AND name NOT LIKE 'sqlite_%'")
-           if r[1] not in SQLITE_ONLY_TABLES}
-    trg = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='trigger'")
-           if r[1] not in SQLITE_ONLY_TABLES}
+                                      " AND name NOT LIKE 'sqlite_%'")}
+    trg = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='trigger'")}
     return out, idx, trg
 
 
