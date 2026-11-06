@@ -206,17 +206,21 @@ def test_strict_real_review_at_bound_dispatched(review_payload, monkeypatch, too
 
 
 @pytest.mark.parametrize('enabled', [None, '0'])
-def test_disabled_real_oversized_review_matches_main(review_payload, monkeypatch, enabled):
+@pytest.mark.parametrize('tool_mode', ['inline-only', 'tools'])
+def test_disabled_real_oversized_review_matches_main(review_payload, monkeypatch, enabled, tool_mode):
     from plangraph.spawner.inline_diff import inline_diff_prompt
     root, seat, card, framing = review_payload
     if enabled is not None:
         monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
     prompt = 'x' * 1000
-    leg = SimpleNamespace(tool_mode='inline-only', max_request_tokens=200)
-    expected = inline_diff_prompt(prompt, card['diff_ref'], max_chars=600)
+    leg = SimpleNamespace(tool_mode=tool_mode, max_request_tokens=200)
+    suffix = framing if tool_mode == 'inline-only' else ''
+    expected = (inline_diff_prompt(prompt, card['diff_ref'], max_chars=600)
+                if tool_mode == 'inline-only' else prompt)
     calls = []
     dispatch(seat, root, prompt, card, leg, calls, role='review')
-    assert calls == [expected] == [prompt + framing]
+    assert calls == [expected] == [prompt + suffix]
+    assert len(calls[0]) > leg.max_request_tokens * 3
 
 
 @pytest.mark.parametrize('enabled', [None, '0', '1'])
@@ -271,9 +275,11 @@ def test_strict_assembled_boundary(review_payload, monkeypatch, tool_mode, extra
     prompt = 'x' * (600 - (len(framing) if tool_mode == 'inline-only' else 0) + extra)
     calls = []
     if extra:
-        with pytest.raises(cp.PromptBoundError, match='^inline_prompt_oversized: chars 601 '):
+        with pytest.raises(cp.PromptBoundError) as exc:
             dispatch(seat, root, prompt, card, leg, calls, role='review')
         assert calls == []
+        assert str(exc.value) == (
+            'inline_prompt_oversized: chars 601 estimated_tokens 201 max_request_tokens 200')
     else:
         dispatch(seat, root, prompt, card, leg, calls, role='review')
         assert calls == [prompt + (framing if tool_mode == 'inline-only' else '')]
