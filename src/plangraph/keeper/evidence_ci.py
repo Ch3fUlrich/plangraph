@@ -88,6 +88,11 @@ class CIAdapter:
             return None
         return "none" if value.lower() == "none" else value
 
+    def merged_pr_for(self, project: str, merge_sha: str, target_ref: str):
+        from .evidence_pr import merged_pr_for
+
+        return merged_pr_for(self, project, merge_sha, target_ref)
+
     def check_runs(self, repo_slug_or_path: str, sha: str) -> list[dict]:
         """Return the normalised list of check-runs for *sha*.
 

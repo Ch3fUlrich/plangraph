@@ -40,9 +40,14 @@ def live(tmp_path_factory):
         yield rig, TemporalSource(address=server.address)
     finally:
         try:
-            rig.stop()
+            if server.proc is not None and server.proc.poll() is not None:
+                pytest.fail("Temporal dev server died; log tail:\n"
+                            + server.log.read_text(errors="replace")[-1500:])
         finally:
-            server.stop()
+            try:
+                rig.stop()
+            finally:
+                server.stop()
 
 
 @pytest.fixture

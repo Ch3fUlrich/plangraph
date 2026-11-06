@@ -148,7 +148,7 @@ def test_priority_op_rolls_back_in_default_mode(world, srv, token_file,
 def test_unparseable_2xx_reply_exits_non_zero(world, srv, token_file, tmp_path,
                                               monkeypatch, extra):
     monkeypatch.setattr(apply_batch.Session, "post",
-                        lambda self, verb, body: b"<html>ok</html>")
+                        lambda self, verb, body, timeout=None: b"<html>ok</html>")
     rc, out, err = run(write_batch(tmp_path), srv.base_url, token_file,
                        extra=extra)
     assert rc != 0 and "applied 6 of 6" not in out
@@ -157,7 +157,7 @@ def test_unparseable_2xx_reply_exits_non_zero(world, srv, token_file, tmp_path,
 def test_short_reply_exits_non_zero(world, srv, token_file, tmp_path,
                                     monkeypatch):
     monkeypatch.setattr(apply_batch.Session, "post",
-                        lambda self, verb, body: b'{"applied": 2}')
+                        lambda self, verb, body, timeout=None: b'{"applied": 2}')
     rc, out, err = run(write_batch(tmp_path), srv.base_url, token_file)
     assert rc != 0 and "applied 6 of 6" not in out
 
