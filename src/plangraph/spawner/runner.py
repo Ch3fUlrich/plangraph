@@ -900,6 +900,8 @@ def spawn_service(*args, **kwargs):
             return await super().cancel(run_id)
 
         def _save(self, record, *, retry=False):
+            import socket
+            record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
             from .notify import completion_event, CommandSink, KeeperNotConfigured
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
