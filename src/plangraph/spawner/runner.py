@@ -719,7 +719,14 @@ class SpawnerRunner:
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
-                job.status = "completed" if exit_code == 0 else "failed"
+                # No-tools review seats can emit a complete verdict before rc 1 termination.
+                lines = stdout_text.rstrip('\r\n').splitlines()
+                review_verdict = (
+                    exit_code == 1 and is_opencode(job) and job.role == 'review'
+                    and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
+                    and bool(lines) and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES')
+                )
+                job.status = "completed" if exit_code == 0 or review_verdict else "failed"
             if job.status == 'failed' and is_opencode(job):
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
