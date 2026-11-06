@@ -98,7 +98,7 @@ def render_gateway_providers(
 
     prov_block = providers.get(provider_prefix)
     has_gw_key = isinstance(prov_block, dict) and GATEWAY_KEY_NAME in _env_names(prov_block)
-    if provider_prefix not in ("mimo", "omniroute", "console-meta") and not has_gw_key:
+    if provider_prefix not in ("mimo", "omniroute") and not has_gw_key:
         return None
 
     if "mimo" not in providers and model_clean in ACCEPTED_MIMO_IDS:
@@ -119,7 +119,7 @@ def render_gateway_providers(
     # Step 5: Fill missing env on gateway providers
     for p_name, p_val in providers.items():
         if isinstance(p_val, dict):
-            if p_name in ("mimo", "omniroute", "console-meta") or GATEWAY_KEY_NAME in _env_names(p_val):
+            if p_name in ("mimo", "omniroute") or GATEWAY_KEY_NAME in _env_names(p_val):
                 if not isinstance(p_val.get("env"), list):
                     p_val["env"] = [GATEWAY_KEY_NAME]
 

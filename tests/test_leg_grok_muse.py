@@ -55,7 +55,8 @@ def test_console_muse_render_and_probe(monkeypatch, hermetic_spawner_host):
     from plangraph.routing_support import resolver
     monkeypatch.setattr(resolver, "host_probe_env", lambda env: dict(env))
     model = "console-meta/muse-spark-1.3-contributor"
-    env = {"PLANGRAPH_GATEWAY_URL": os.environ["PLANGRAPH_GATEWAY_URL"]}
+    env = {"PLANGRAPH_GATEWAY_URL": os.environ["PLANGRAPH_GATEWAY_URL"],
+           "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {}})}
     assert render_gateway_providers(env, model) is None
     providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
     assert "console-meta" not in providers
@@ -63,7 +64,9 @@ def test_console_muse_render_and_probe(monkeypatch, hermetic_spawner_host):
     row = dict(harness="opencode", model=model)
     assert host_skip_reason(row, env=env, probe=lambda _: {model}) is None
     assert host_skip_reason(row, env=env, probe=lambda _: set()).startswith("not_served_on_host")
-    assert host_skip_reason(row, env={}, probe=lambda _: {model}).startswith("not_served_on_host")
+    assert host_skip_reason(row, env={"OPENCODE_CONFIG_CONTENT": json.dumps({
+        "providers": {"console-meta": {"env": ["AUTOOS_OMNIROUTE_KEY"]}}})},
+        probe=lambda _: {model}).startswith("not_served_on_host")
     other = dict(harness="opencode", model="console-meta/unregistered-model")
     assert host_skip_reason(other, env=env, probe=lambda _: {model}).startswith("not_served_on_host")
     untouched = {"PLANGRAPH_GATEWAY_URL": os.environ["PLANGRAPH_GATEWAY_URL"]}
@@ -132,6 +135,7 @@ def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch, hermetic
     env = {"PLANGRAPH_GATEWAY_URL": gateway}
     assert render_gateway_providers(env, BY_ID[GROK].model) is None
     assert "omniroute" not in json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
+
     row = dict(harness="opencode", model=BY_ID[GROK].model)
     assert host_skip_reason(row, env=env, probe=lambda _: {row["model"]}) is None
     assert host_skip_reason(row, env=env, probe=lambda _: set()).startswith("not_served_on_host")
@@ -141,6 +145,24 @@ def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch, hermetic
     untouched = {"PLANGRAPH_GATEWAY_URL": gateway}
     assert render_gateway_providers(untouched, BY_ID["cx-gpt-6.1-sol"].model) is None
     assert "omniroute" not in json.loads(untouched["OPENCODE_CONFIG_CONTENT"])["providers"]
+
+
+def test_console_without_gateway_key_is_not_rendered():
+    # No gateway URL or pre-render is required for this non-gateway provider.
+    env = {}
+    assert render_gateway_providers(env, BY_ID[MUSE[1]].model) is None
+    assert env == {}
+
+
+def test_gateway_render_does_not_enroll_console_provider():
+    original = {"models": {"muse-spark-1.3-contributor": {"name": "custom"}}}
+    env = {"PLANGRAPH_GATEWAY_URL": "https://gateway.example/v1",
+           "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
+               "omniroute": {}, "console-meta": original}})}
+    assert render_gateway_providers(env, BY_ID[GROK].model) is None
+    providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
+    assert providers["console-meta"] == original
+    assert providers["omniroute"]["settings"]["baseURL"] == "https://gateway.example/v1"
 
 
 @pytest.mark.parametrize("mid", (GROK, MUSE[1]))
