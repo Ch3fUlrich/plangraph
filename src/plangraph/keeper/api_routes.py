@@ -209,6 +209,8 @@ def _replay(store, principal, body, need):
 
 
 def _phase_plan(store, principal, body, need):
+    from .worker_policy import check
+    check(principal, "phase_plan", transport=True)
     # Role first: a non-router/system principal gets 403 before env or key checks.
     store._require_role(principal, "router", "system")
     from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
@@ -227,6 +229,8 @@ def _github_from_env():
     return RestGitHub.from_env()
 
 def _phase_finish(store, principal, body, need):
+    from .worker_policy import check
+    check(principal, "phase_finish", transport=True)
     # Role first: a non-router/system principal gets 403 before env, key or GitHub access checks.
     store._require_role(principal, "router", "system")
     from ..planner.phase_finish import finish_phase
