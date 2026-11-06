@@ -34,6 +34,27 @@ def final_answer(stdout):
     return complete
 
 
+def answer_text(stdout):
+    """Decode display text without treating unframed/unfinished text as completion."""
+    complete = final_answer(stdout)
+    if complete is not None:
+        return complete
+    texts = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return stdout
+        if not isinstance(event, dict):
+            return stdout
+        part = event.get('part')
+        if event.get('type') == 'text' and isinstance(part, dict):
+            text = part.get('text')
+            if isinstance(text, str):
+                texts.append(text)
+    return '\n'.join(texts) if texts else stdout
+
+
 def terminated_after_answer(job, stdout, stderr, exit_code):
     from .exit_outcome import is_opencode
     return (is_opencode(job) and exit_code == 1

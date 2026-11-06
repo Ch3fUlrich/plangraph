@@ -717,27 +717,24 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            job.stdout = redact(redact_env_values(stdout_text, env))
+            from .opencode_answer import answer_text, terminated_after_answer
+            decoded = answer_text(stdout_text) if is_opencode(job) else stdout_text
+            job.stdout = redact(redact_env_values(decoded, env))
             job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
-                from .opencode_answer import final_answer, terminated_after_answer
                 # Preserve the existing denied-review terminal verdict contract.
-                lines = stdout_text.rstrip('\r\n').splitlines()
+                tails = [text.rstrip('\r\n').splitlines() for text in (stdout_text, decoded)]
                 review_verdict = (
                     exit_code == 1 and is_opencode(job) and job.role == 'review'
                     and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
-                    and bool(lines) and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES')
+                    and any(lines and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES') for lines in tails)
                 )
                 job.status = 'completed' if exit_code == 0 or review_verdict else 'failed'
-                if terminated_after_answer(job, stdout_text, stderr_text, exit_code):
+                if not review_verdict and terminated_after_answer(job, stdout_text, stderr_text, exit_code):
                     job.status = 'terminated_after_answer'
                     job.events.append({'event': 'terminated_after_answer'})
-                if is_opencode(job) and job.status in ('completed', 'terminated_after_answer'):
-                    answer = final_answer(stdout_text)
-                    if answer is not None:
-                        job.stdout = redact(redact_env_values(answer, env))
             if job.status == 'failed' and is_opencode(job):
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
