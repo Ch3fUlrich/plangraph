@@ -1,5 +1,26 @@
 # Spawner reliability
 
+## RL19: read-only research reports
+
+`pg-spawnd health --state PATH --json` reads available history. `health report`
+requires explicit RFC3339 `--since` and `--until`, selecting [since, until).
+`--json` suppresses the human summary. `--baseline` atomically stores a private
+`reports/baseline-<since>-<until>.json` under the resolved state directory.
+It never writes the private historical baseline or enables routing. Rollback:
+`git revert`. Outcome corrections precede window filtering; observations use
+complete history, including prior-start holds and cleared no-time episodes.
+MAX_TIME is neutral for strikes. Unknown legacy evidence remains unknown.
+
+The immutable operator baseline lives in private plangraph-data at
+`research/2026-11-02-legs`. Before RL14 on, compare the pinned window
+2026-10-30 10:30Z through 2026-11-02 10:30Z: 641 runs, 155 run-hours,
+77.3 unusable hours, 71 hangs, 43.8 hang hours, and every other stored metric.
+Require relative error at most 5% for every nonzero metric and exact zero
+otherwise. Store a local copy; never overwrite the historical measurement.
+Seed timed and no-time parked observations for the operator check. No network
+is used by the verb. Synthetic public fixtures are not historical measurements
+and do not satisfy this live gate or independent ACCEPT.
+
 ## RL17: derived evidence and review seats
 
 Evidence defaults off. `reliability.json` accepts `evidence` values off/shadow/on,

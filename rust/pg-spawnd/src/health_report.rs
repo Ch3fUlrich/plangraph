@@ -1,0 +1,164 @@
+//! Deterministic research aggregation; no routing or health mutation.
+use pg_worker_core::{health, hosts::Role, outcome::Class};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+#[derive(Debug, PartialEq)]
+pub(crate) enum ReportError {
+    InvalidWindow,
+    InvalidRow,
+    Io,
+}
+impl From<std::io::Error> for ReportError {
+    fn from(_: std::io::Error) -> Self {
+        Self::Io
+    }
+}
+impl std::fmt::Display for ReportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "health report: {self:?}")
+    }
+}
+fn distribution(mut values: Vec<f64>) -> Value {
+    values.sort_by(f64::total_cmp);
+    let rank = |p: f64| {
+        values
+            .get(((values.len() as f64 * p).ceil() as usize).saturating_sub(1))
+            .copied()
+    };
+    json!({"samples":values.len(),"p50":rank(0.5),"p95":rank(0.95)})
+}
+pub(crate) fn build_report(
+    records: &[Value],
+    evidence: &[Value],
+    since: i64,
+    until: i64,
+) -> Result<Value, ReportError> {
+    if since >= until {
+        return Err(ReportError::InvalidWindow);
+    }
+    let all = crate::health_report_rows::corrected(records, evidence);
+    let rows: Vec<_> = all
+        .iter()
+        .filter(|r| r["ts"].as_i64().is_some_and(|t| t >= since && t < until))
+        .collect();
+    let (parked, episodes, stale, invalid) =
+        crate::health_report_rows::observations(evidence, since, until);
+    let (mut hours, mut unusable, mut hang_hours) = (0.0, 0.0, 0.0);
+    let (mut max_time, mut missing, mut overrides, mut gated, mut seats) = (0, 0, 0, 0, 0);
+    let mut populations = [0usize; 5];
+    let mut legs: BTreeMap<String, Vec<health::Row>> = BTreeMap::new();
+    for r in &rows {
+        let ts = r["ts"].as_i64().ok_or(ReportError::InvalidRow)?;
+        let duration = r["duration_s"].as_i64().unwrap_or(0).max(0);
+        let h = (ts - ts.saturating_sub(duration).max(since)).max(0) as f64 / 3600.0;
+        hours += h;
+        let class = r["outcome"].as_str();
+        if class != Some("OK") {
+            unusable += h;
+        }
+        if class.is_some_and(|c| c.starts_with("HANG_")) {
+            hang_hours += h;
+        }
+        if class == Some("MAX_TIME") {
+            max_time += 1;
+        }
+        if class.is_none() {
+            missing += 1;
+            if r["role"] == "review" {
+                seats += 1;
+            }
+        }
+        if r["override"]
+            .as_bool()
+            .unwrap_or(r["plan"]["p_source"] == "override")
+        {
+            overrides += 1;
+            if r["gate"] == true {
+                gated += 1;
+            }
+        }
+        if class == Some("HANG_SILENT") {
+            let bucket = match r["open_tools_at_kill"].as_u64() {
+                Some(0) => 1,
+                Some(_) => 0,
+                None if r["blind"] == true || r["s_eff_s"] == 600 => 2,
+                None => 3,
+            };
+            populations[bucket] += 1;
+        }
+        if class == Some("HANG_NO_ACTIVITY") {
+            populations[4] += 1;
+        }
+        let Some(class) = parse_class(class.unwrap_or("")) else {
+            continue;
+        };
+        let leg = r["leg_key"].as_str().unwrap_or("unknown");
+        let role = serde_json::from_value::<Role>(r["role"].clone()).unwrap_or(Role::Research);
+        legs.entry(leg.into()).or_default().push(health::Row {
+            leg_key: leg.into(),
+            route_key: r["route_key"].as_str().unwrap_or("unknown").into(),
+            ts,
+            role,
+            outcome: class,
+            run_id: r["run_id"].as_str().unwrap_or("").into(),
+            attempt: r["attempt"].as_u64().unwrap_or(0) as u32,
+            duration_s: Some(duration),
+            reset_at: r["reset_at"].as_i64(),
+            reset_assumed: false,
+            reset_clamped: false,
+            kind: None,
+        });
+    }
+    let mut per_leg = BTreeMap::new();
+    for (leg, rs) in legs {
+        let h = health::fold(&leg, &rs[0].route_key, rs[0].role, &rs, until - 1);
+        per_leg.insert(leg, json!({"strikes":h.strikes,"state":format!("{:?}",h.state),"until":h.until_s,"raw_reset_at":rs.iter().map(|r|r.reset_at).collect::<Vec<_>>()}));
+    }
+    let metric = |name: &str| {
+        distribution(
+            rows.iter()
+                .filter_map(|r| r[name].as_f64())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .collect(),
+        )
+    };
+    let known = populations[0] + populations[1];
+    let fraction = |n: usize, d: usize| {
+        if d == 0 {
+            Value::Null
+        } else {
+            json!(n as f64 / d as f64)
+        }
+    };
+    Ok(json!({"version":1,"window":{"since":since,"until":until},
+        "totals":{"launches":rows.len(),"run_hours":hours,"unusable_run_hours":unusable,"hang_hours":hang_hours,"max_time":max_time,"seat_deaths_without_class":seats,
+        "overrides":{"total":overrides,"with_gate":gated,"without_gate":overrides-gated,"skip_fraction":fraction(overrides-gated,rows.len())}},
+        "per_leg":per_leg,"silent_populations":{"tool_open":populations[0],"tools0":populations[1],"blind":populations[2],"unknown_tools":populations[3],"no_first":populations[4],
+        "k_count":populations[0],"k_fraction":fraction(populations[0],known),"unknown_lower_hours":populations[3] as f64*615.01/3600.0,"unknown_upper_hours":populations[3] as f64*1815.01/3600.0,
+        "tool_open_savings_hours":populations[0] as f64*(1815.01-615.01)/3600.0,"blind_bound_hours":populations[2] as f64*612.01/3600.0,"no_first_bound_hours":populations[4] as f64*195.01/3600.0},
+        "first_activity_s":metric("first_activity_s"),"time_to_first_strong_s":metric("time_to_first_strong_s"),"s_eff_s":metric("s_eff_s"),
+        "parked":parked,"no_time_episodes":episodes,"stale_alarms":stale,"baseline":null,"target":null,"missing_fields":{"outcome":missing,"observations":invalid}}))
+}
+fn parse_class(text: &str) -> Option<Class> {
+    Some(match text {
+        "OK" => Class::Ok,
+        "MAX_TIME" => Class::MaxTime,
+        "HANG_SILENT" => Class::HangSilent,
+        "HANG_NO_ACTIVITY" => Class::HangNoActivity,
+        "CRASH" => Class::Crash,
+        "EMPTY" => Class::Empty,
+        "NO_PROGRESS" => Class::NoProgress,
+        "KILLED_EXTERNAL" => Class::KilledExternal,
+        "TOOL_CALL_ONLY" => Class::ToolCallOnly,
+        "NO_VERDICT" => Class::NoVerdict,
+        "QUOTA" => Class::Quota,
+        "RATE_LIMIT" => Class::RateLimit,
+        "AUTH" => Class::Auth,
+        "MODEL_UNAVAILABLE" => Class::ModelUnavailable,
+        "PROVIDER_UNAVAILABLE" => Class::ProviderUnavailable,
+        _ => return None,
+    })
+}
+#[cfg(test)]
+#[path = "health_report_tests.rs"]
+mod tests;
