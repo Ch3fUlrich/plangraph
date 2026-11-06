@@ -17,6 +17,14 @@ pub fn sanitize_history(
     base: &str,
     tip: &str,
 ) -> Result<SanitizedHistory, WriterError> {
+    sanitize_history_with_drops(repo, base, tip, Vec::new())
+}
+pub(crate) fn sanitize_history_with_drops(
+    repo: &RepoEntry,
+    base: &str,
+    tip: &str,
+    snapshot_drops: Vec<Vec<u8>>,
+) -> Result<SanitizedHistory, WriterError> {
     if !oid(base) || !oid(tip) {
         return Err(WriterError::Invalid);
     }
@@ -49,7 +57,7 @@ pub fn sanitize_history(
     {
         return Err(WriterError::Verify);
     }
-    let mut dropped = BTreeSet::new();
+    let mut dropped: BTreeSet<_> = snapshot_drops.into_iter().collect();
     let mut result = SanitizedHistory {
         tip: base.into(),
         sha_map: BTreeMap::new(),

@@ -1,5 +1,6 @@
 use super::*;
 use crate::writer_blob::LocalBlobStore;
+use crate::writer_sanitize::sanitize_history;
 pub(super) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
     let (dir, mut repo, _, _) = crate::writer_secret::tests::fixture();
     command(
@@ -61,11 +62,41 @@ pub(super) fn export_salvage(
     let store = tempfile::tempdir()?;
     let mut store = LocalBlobStore::open(&store.path().join("blobs"))?;
     let result = super::export_salvage(&registry, Path::new(&repo.root), &ws, run, &mut store)?;
-    assert_eq!(
-        result.dropped_paths.len(),
-        result.dropped_paths.iter().collect::<BTreeSet<_>>().len()
-    );
+    assert!(result.dropped_paths.windows(2).all(|p| p[0] <= p[1]));
     store.read(&result.blob)
+}
+#[test]
+fn distinct_secret_names_survive_export_merge() {
+    let (_dir, repo, base, _) = fixture();
+    let root = Path::new(&repo.root);
+    let names: Vec<_> = ['a', 'b', 'c']
+        .into_iter()
+        .map(|c| ["gh", "p_", &c.to_string().repeat(25)].concat())
+        .collect();
+    for name in &names[..2] {
+        std::fs::write(root.join(name), "safe bytes").unwrap();
+    }
+    command(root, &["add", "."], &[], None).unwrap();
+    command(root, &["commit", "-m", "secret names"], &[], None).unwrap();
+    for name in &names {
+        std::fs::write(root.join(name), "dirty bytes").unwrap();
+    }
+    let ws = Workspace {
+        repo_id: "test".into(),
+        mode: Mode::Writer,
+        base_sha: Some(base.clone()),
+        revision_sha: Some(base),
+        branch: Some("lane/test".into()),
+    };
+    let mut registry = repo.clone();
+    registry.root = repo.remote.clone();
+    let store = tempfile::tempdir().unwrap();
+    let mut store = LocalBlobStore::open(&store.path().join("blobs")).unwrap();
+    let result = super::export_salvage(&registry, root, &ws, "names", &mut store).unwrap();
+    assert_eq!(
+        result.dropped_paths,
+        vec!["<path removed by secret gate>"; 3]
+    );
 }
 #[test]
 fn rejects_argument_injection() {

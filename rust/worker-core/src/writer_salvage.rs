@@ -4,10 +4,10 @@ use crate::{
     workspace::{Mode, Workspace},
     writer_blob::{BlobStore, SealedBlob},
     writer_result::{oid, safe_id, ContentGate, WriterError},
-    writer_sanitize::sanitize_history,
+    writer_sanitize::sanitize_history_with_drops,
     writer_secret::{command, entries, scan_bytes, SecretGate},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
 pub struct SalvageResult {
@@ -51,10 +51,7 @@ pub fn export_salvage(
         ..repo.clone()
     };
     let (snapshot, dropped) = snapshot(checkout, base, tip)?;
-    let mut clean = sanitize_history(&local, base, &snapshot)?;
-    let mut dropped: BTreeSet<_> = dropped.into_iter().collect();
-    dropped.extend(clean.dropped_paths);
-    clean.dropped_paths = dropped.into_iter().collect();
+    let clean = sanitize_history_with_drops(&local, base, &snapshot, dropped)?;
 
     SecretGate.check(&local, base, &clean.tip)?;
     let root = checkout;
@@ -117,7 +114,7 @@ fn validate_paths(paths: &[u8]) -> Result<(), WriterError> {
     }
     Ok(())
 }
-fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<String>), WriterError> {
+fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<Vec<u8>>), WriterError> {
     let mut listed = command(
         root,
         &["diff", "--name-only", "-z", "--no-renames", tip, "--"],
@@ -150,7 +147,7 @@ fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<String>),
             Ok(meta) if meta.is_file() => {
                 let bytes = std::fs::read(&full)?;
                 if scan_bytes(name.as_bytes()) || scan_bytes(&bytes) {
-                    dropped.push(crate::writer_secret::record_path(name.as_bytes()));
+                    dropped.push(name.as_bytes().to_vec());
                 } else {
                     #[cfg(unix)]
                     let executable = {
