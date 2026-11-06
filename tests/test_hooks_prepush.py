@@ -77,7 +77,7 @@ def commit_symlink(repo, rel, target):
     return git(repo, "rev-parse", "HEAD").strip()
 
 
-def run_hook(repo, lines, env_extra=None, wrapper=None):
+def run_hook(repo, lines, env_extra=None):
     env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
     env["HOME"] = str(Path(repo).parent / "home")
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
@@ -85,8 +85,6 @@ def run_hook(repo, lines, env_extra=None, wrapper=None):
     env.update(env_extra or {})
     stdin = "".join(l + "\n" for l in lines)
     command = [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"]
-    if wrapper:
-        command = ["bash", str(wrapper), *command]
     return subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
@@ -109,28 +107,27 @@ def push_line(ref, sha, remote_sha):
 
 @pytest.mark.parametrize("remote_ref", ["refs/heads/main", "refs/tags/release",
                                         "refs/custom/review"])
-@pytest.mark.parametrize("case", ["non-ff", "delete", "missing", "wrapper"])
-def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case):
+@pytest.mark.parametrize("case", ["non-ff", "delete", "missing"])
+@pytest.mark.parametrize("unsafe_first", [False, True])
+def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsafe_first):
     r, base = repo
     remote = commit_file(r, "app/other.py", "y = 2\n")
     local = base
-    wrapper = None
     if case == "delete":
         local = ZERO
     elif case == "missing":
         remote = "1" * 40
-    elif case == "wrapper":
-        wrapper = tmp_path / "script.sh"
-        wrapper.write_text('#!/bin/bash\nexec "$@"\n')
-    # A clean record first ensures every record is checked, before any scans.
     lines = [push_line("safe", base, ZERO),
              f"refs/heads/main {local} {remote_ref} {remote}"]
-    res = run_hook(r, lines, {"PLANGRAPH_SCRUB_WORDS": str(tmp_path / "missing")},
-                   wrapper=wrapper)
+    if unsafe_first:
+        lines.reverse()
+    res = run_hook(r, lines, {"PLANGRAPH_SCRUB_WORDS": str(tmp_path / "missing")})
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
     action = "delete" if case == "delete" else "non-fast-forward update"
-    assert f"pre-push: refused {action} of {remote_ref}" in out
+    expected = (f"pre-push: remote object unavailable for {remote_ref}" if case == "missing"
+                else f"pre-push: refused {action} of {remote_ref}")
+    assert expected in out
     assert "scrub" not in out and "file-size" not in out
 
 
@@ -140,6 +137,76 @@ def test_hook_passes_safe_ref_updates(repo, new_branch):
     head = commit_file(r, "app/other.py", "y = 2\n")
     res = run_hook(r, [push_line("feature", head, ZERO if new_branch else base)])
     assert res.returncode == 0, res.stdout + res.stderr
+
+
+@pytest.mark.parametrize("target", ["tag", "commit", "blob", "tree"])
+@pytest.mark.parametrize("source", ["tag", "blob", "tree"])
+def test_hook_refuses_noncommit_moves(repo, source, target):
+    r, base = repo
+    git(r, "tag", "-a", "release", "-m", "release")
+    old_tag = git(r, "rev-parse", "release").strip()
+    head = commit_file(r, "app/next.py", "next = 2\n")
+    git(r, "tag", "-a", "next", "-m", "next")
+    old = {"tag": old_tag, "blob": git(r, "rev-parse", f"{base}:app/clean.py").strip(),
+           "tree": git(r, "rev-parse", f"{base}^{{tree}}").strip()}[source]
+    new = {"tag": git(r, "rev-parse", "next").strip(), "commit": head,
+           "blob": git(r, "rev-parse", f"{head}:app/next.py").strip(),
+           "tree": git(r, "rev-parse", f"{head}^{{tree}}").strip()}[target]
+    ref = "refs/tags/release" if source == "tag" else "refs/custom/object"
+    res = run_hook(r, [f"refs/heads/main {new} {ref} {old}"])
+    assert res.returncode == 1
+    assert f"refused non-fast-forward update of {ref}" in res.stderr
+
+
+@pytest.mark.parametrize("line", ["", "one two three", "a b c d extra",
+                                      "refs/heads/main xyz refs/heads/main xyz",
+                                      "refs/heads/main {oid} bad..ref {oid}",
+                                      "bad..ref {oid} refs/heads/main {oid}"])
+def test_hook_refuses_malformed_records(repo, line):
+    r, base = repo
+    res = run_hook(r, [line.format(oid=base)])
+    assert res.returncode == 1
+    assert "pre-push: malformed push record" in res.stderr
+
+
+def test_hook_ignores_replace_objects(repo):
+    r, base = repo
+    remote = commit_file(r, "app/remote.py", "remote = 1\n")
+    tree = git(r, "rev-parse", f"{base}^{{tree}}").strip()
+    replacement = git(r, "commit-tree", tree, "-p", remote, "-m", "replacement").strip()
+    git(r, "replace", base, replacement)
+    assert git(r, "merge-base", "--is-ancestor", remote, base) == ""
+    res = run_hook(r, [push_line("main", base, remote)])
+    assert res.returncode == 1
+    assert "refused non-fast-forward update" in res.stderr
+
+
+def test_script_push_uses_installed_hook(repo, tmp_path):
+    r, base = repo
+    remote = tmp_path / "remote.git"
+    git(r, "init", "--bare", str(remote))
+    head = commit_file(r, "app/remote.py", "remote = 1\n")
+    git(r, "push", str(remote), f"{head}:refs/heads/main")
+    git(r, "config", "core.hooksPath", str(HOOK.parent))
+    script = tmp_path / "push.sh"
+    script.write_text('#!/bin/sh\nexec git push --force "$1" "$2:refs/heads/main"\n')
+    res = subprocess.run(["sh", str(script), str(remote), base], cwd=r,
+                         capture_output=True, text=True, timeout=120)
+    assert res.returncode != 0
+    assert "pre-push: refused non-fast-forward update of refs/heads/main" in res.stderr
+    assert git(remote, "rev-parse", "refs/heads/main").strip() == head
+
+
+def test_sha256_new_branch_and_delete(tmp_path):
+    r = tmp_path / "sha256"
+    git(tmp_path, "init", "--object-format=sha256", str(r))
+    head = commit_file(r, "clean.txt", "clean\n")
+    zero = "0" * len(head)
+    res = run_hook(r, [push_line("feature", head, zero)])
+    assert res.returncode == 0, res.stderr
+    res = run_hook(r, [push_line("feature", zero, head)])
+    assert res.returncode == 1
+    assert "refused delete" in res.stderr
 
 
 def test_hook_refuses_pushed_public_pattern_hit(repo):

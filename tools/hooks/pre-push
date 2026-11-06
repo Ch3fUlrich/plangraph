@@ -13,6 +13,7 @@ path.  Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,15 +25,17 @@ CHANGELOG_DOCS = TOOLS / "check_changelog_docs.py"
 sys.path.insert(0, str(SPLIT))
 import scrub_check as sc  # noqa: E402
 
-ZERO = "0" * 40
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # Public allow-lists reviewed into the repo; loaded always so pushes of already
 # vetted files behave like the CI tree scan.  Never a place for private words.
 BASE_RULES = ("manifest.toml", "scrub_ci.toml")
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True)
+    return subprocess.run(["git", "--no-replace-objects", *args], capture_output=True)
+
+
+def is_zero(oid):
+    return bool(oid) and set(oid) == {"0"}
 
 
 def git_out(*args):
@@ -44,7 +47,7 @@ def base_commit(remote_sha, local_sha):
     """What the pushed commits add: the remote sha when the push fast-forwards,
     else a merge-base; a new branch diffs against origin/main's merge-base, and
     with no usable base at all, everything in the pushed commits is checked."""
-    if remote_sha != ZERO and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
+    if not is_zero(remote_sha) and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
         if git("merge-base", "--is-ancestor", remote_sha, local_sha).returncode == 0:
             return remote_sha
         mb = git_out("merge-base", remote_sha, local_sha)
@@ -55,7 +58,7 @@ def base_commit(remote_sha, local_sha):
             mb = git_out("merge-base", "origin/main", local_sha)
             if mb:
                 return mb
-    return EMPTY_TREE
+    return git_out("hash-object", "-t", "tree", "--stdin")
 
 
 def scan_blob(rel, local_sha, cfg, find_shapes, hits):
@@ -109,19 +112,30 @@ def changelog_docs_warn(base, head):
 
 
 def main():
-    refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
+    refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
     for rec in refs:
-        if len(rec) != 4:
-            continue
+        if (len(rec) != 4 or
+                not all(re.fullmatch(r"[0-9a-fA-F]+", rec[i]) for i in (1, 3)) or
+                len(rec[1]) != len(rec[3]) or
+                git("check-ref-format", rec[2]).returncode != 0 or
+                (rec[0] != "(delete)" and
+                 git("check-ref-format", "--allow-onelevel", rec[0]).returncode != 0)):
+            print("pre-push: malformed push record: push refused", file=sys.stderr)
+            return 1
         _, local_sha, remote_ref, remote_sha = rec
-        if local_sha == ZERO:
+        if is_zero(local_sha):
             print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
             return 1
-        if remote_sha == ZERO:
+        if is_zero(remote_sha):
             continue
-        missing = git("cat-file", "-e", remote_sha).returncode != 0
+        if git("cat-file", "-e", remote_sha).returncode != 0:
+            print(f"pre-push: remote object unavailable for {remote_ref}: push refused",
+                  file=sys.stderr)
+            return 1
+        if local_sha == remote_sha:
+            continue
         is_commit = git_out("cat-file", "-t", remote_sha) == "commit"
-        if missing or (is_commit and git(
+        if (remote_ref.startswith("refs/tags/") or not is_commit or git(
                 "merge-base", "--is-ancestor", remote_sha, local_sha).returncode != 0):
             print(f"pre-push: refused non-fast-forward update of {remote_ref}",
                   file=sys.stderr)
@@ -168,8 +182,6 @@ def main():
     find_shapes = sc._shape_finder()
     hits = []
     for rec in refs:
-        if len(rec) != 4:
-            continue
         _, local_sha, _, remote_sha = rec
         base = base_commit(remote_sha, local_sha)
         changelog_docs_warn(base, local_sha)
