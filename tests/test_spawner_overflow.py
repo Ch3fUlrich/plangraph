@@ -34,6 +34,30 @@ def test_refused(field, value, reason):
     assert result.host is None and reason in result.reason
 
 
+@pytest.mark.parametrize('field', ['live_runs', 'mem_available_mb'])
+def test_negative_readiness_is_malformed(field):
+    row = healthy()
+    row[field] = -5
+    result = o.decide(4, 6000, 4, 3000, {'first': row}, True)
+    assert result.host is None and 'malformed readiness' in result.reason
+    assert o.decide(4, 6000, 4, 3000, {'first': row, 'second': healthy()}, True).host == 'second'
+
+
+@pytest.mark.parametrize('stdout,expected', [
+    ('{"status":"running","card":{"a":1}}', {'status': 'running', 'card': {'a': 1}}),
+    ('{"env":"secret"}\n{"status":"running","card":{"a":1}}\nnoise',
+     {'status': 'running', 'card': {'a': 1}}),
+    ('{"env":"secret"}\nunreadable receipt',
+     {'warning': 'remote spawn succeeded; receipt unavailable'}),
+])
+def test_remote_outer_receipt(monkeypatch, stdout, expected):
+    def run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout='/invented-stage' if argv[-1] == 'mktemp -d' else stdout)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src', env_file='/invented/env')
+    assert o.remote_spawn('invented', host, {}, 'prompt', []) == expected
+
+
 @pytest.fixture
 def inputs(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))

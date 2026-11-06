@@ -36,7 +36,8 @@ def decide(local_live, local_mem_mb, run_cap, floor_mb, ready_records, public):
                 reason = 'failed readiness'
             elif row.get('fresh') is not True:
                 reason = 'stale readiness'
-            elif type(row.get('live_runs')) is not int or type(row.get('mem_available_mb')) is not int:
+            elif any(type(row.get(key)) is not int or row[key] < 0
+                     for key in ('live_runs', 'mem_available_mb')):
                 reason = 'malformed readiness'
             elif row['live_runs'] >= row.get('run_cap', 4):
                 reason = 'run cap'
@@ -128,13 +129,17 @@ def remote_spawn(name, host, card, prompt, options):
         # Decode objects amid shell noise, including pretty-printed JSON. Never
         # retry an acknowledged spawn merely because its receipt is unreadable.
         decoder = json.JSONDecoder()
-        for index in reversed([i for i, char in enumerate(result.stdout) if char == '{']):
+        receipt, furthest = None, -1
+        for index in [i for i, char in enumerate(result.stdout) if char == '{']:
             try:
-                payload, _ = decoder.raw_decode(result.stdout[index:])
-                if isinstance(payload, dict):
-                    return payload
+                payload, end = decoder.raw_decode(result.stdout[index:])
+                if isinstance(payload, dict) and index + end > furthest:
+                    receipt, furthest = payload, index + end
             except ValueError:
                 pass
+        # Shell initialization may echo JSON; only expose a spawn receipt.
+        if receipt is not None and ('status' in receipt or receipt == {}):
+            return receipt
         return {'warning': 'remote spawn succeeded; receipt unavailable'}
     finally:
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
