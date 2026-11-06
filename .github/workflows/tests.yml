@@ -107,7 +107,7 @@ jobs:
       - name: Install Temporal CLI 1.9.1
         run: |
           dir=$(mktemp -d)
-          curl -fsSL --retry 5 --retry-all-errors -o "$dir/temporal.tar.gz" \
+          curl -fsSL -o "$dir/temporal.tar.gz" --retry 5 --retry-all-errors \
             https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
           echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
           tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
@@ -124,8 +124,8 @@ jobs:
         run: |
           set -euo pipefail
           dir=$(mktemp -d)
-          curl -fsSL --retry 5 --retry-all-errors -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          curl -fsSL --retry 5 --retry-all-errors -o "$dir/gitleaks_8.30.1_checksums.txt" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
+          curl -fsSL -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" --retry 5 --retry-all-errors https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          curl -fsSL -o "$dir/gitleaks_8.30.1_checksums.txt" --retry 5 --retry-all-errors https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
           # Only the asset's own line is checked: grep exits 1 when it is absent,
           # so a missing line fails the step just like a checksum mismatch does.
           grep -E "^[0-9a-f]{64}  gitleaks_8\.30\.1_linux_x64\.tar\.gz$" "$dir/gitleaks_8.30.1_checksums.txt" > "$dir/checks.sha256"
@@ -219,7 +219,7 @@ jobs:
       - name: Install Temporal CLI 1.9.1
         run: |
           dir=$(mktemp -d)
-          curl -fsSL --retry 5 --retry-all-errors -o "$dir/temporal.tar.gz" \
+          curl -fsSL -o "$dir/temporal.tar.gz" --retry 5 --retry-all-errors \
             https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
           echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
           tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
@@ -304,7 +304,7 @@ jobs:
       - name: Install Temporal CLI 1.9.1
         run: |
           dir=$(mktemp -d)
-          curl -fsSL --retry 5 --retry-all-errors -o "$dir/temporal.tar.gz" \
+          curl -fsSL -o "$dir/temporal.tar.gz" --retry 5 --retry-all-errors \
             https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
           echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
           tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
