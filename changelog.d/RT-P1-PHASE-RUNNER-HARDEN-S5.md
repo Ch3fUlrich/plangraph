@@ -1,0 +1,1 @@
+- Phase finish now gives a named refusal for malformed repository configuration and uses lstat to refuse token-file symlinks before reading credentials.

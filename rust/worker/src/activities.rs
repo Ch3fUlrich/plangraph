@@ -724,26 +724,23 @@ pub(crate) fn do_ensure_phase_branch(
     }
     check_rev(&input.base_branch).map_err(|e| e.to_string())?;
     check_rev(&input.branch).map_err(|e| e.to_string())?;
-
     if !input.branch.starts_with("phase/") {
         return Err("not a phase/ branch".to_string());
     }
     if input.branch == input.base_branch {
         return Err("phase branch must not be the base branch".to_string());
     }
-
     let repo = Path::new(&input.repo);
     let base_ref = format!("refs/heads/{}", input.base_branch);
     let branch_ref = format!("refs/heads/{}", input.branch);
     let base_head = git(repo, &["rev-parse", base_ref.as_str()]).map_err(|e| e.to_string())?;
-
     if let Ok(head) = git(repo, &["rev-parse", "--verify", "-q", branch_ref.as_str()]) {
+        crate::phase_ancestry::ensure(repo, &base_head, &head)?;
         return Ok(PhaseBranchResult {
             head,
             created: false,
         });
     }
-
     let zero = "0000000000000000000000000000000000000000";
     match git(
         repo,
@@ -755,6 +752,7 @@ pub(crate) fn do_ensure_phase_branch(
         }),
         Err(_) => {
             let head = git(repo, &["rev-parse", branch_ref.as_str()]).map_err(|e| e.to_string())?;
+            crate::phase_ancestry::ensure(repo, &base_head, &head)?;
             Ok(PhaseBranchResult {
                 head,
                 created: false,
@@ -3428,23 +3426,27 @@ mod tests {
             base_branch: "main".to_string(),
             branch: "phase/p1".to_string(),
         };
-
         let first = do_ensure_phase_branch(&input).unwrap();
         assert!(first.created);
         assert_eq!(first.head, base);
         assert_eq!(git(dir.path(), &["rev-parse", "refs/heads/phase/p1"]), base);
-
-        git(dir.path(), &["commit", "--allow-empty", "-m", "advance"]);
         let second = do_ensure_phase_branch(&input).unwrap();
         assert!(!second.created);
         assert_eq!(second.head, base);
+        git(dir.path(), &["checkout", "phase/p1"]);
+        git(dir.path(), &["commit", "--allow-empty", "-m", "phase"]);
+        assert!(!do_ensure_phase_branch(&input).unwrap().created);
+        git(dir.path(), &["checkout", "main"]);
+        git(dir.path(), &["commit", "--allow-empty", "-m", "base"]);
+        assert_eq!(
+            do_ensure_phase_branch(&input).unwrap_err(),
+            "phase branch does not contain the base head"
+        );
     }
-
     #[test]
     fn ensure_phase_branch_refuses_bad_input() {
         let (dir, _) = repo();
         let path = dir.path().to_str().unwrap();
-
         let same = PhaseBranchInput {
             repo: path.to_string(),
             base_branch: "phase/x".to_string(),
@@ -3454,7 +3456,6 @@ mod tests {
             do_ensure_phase_branch(&same).unwrap_err(),
             "phase branch must not be the base branch"
         );
-
         let not_phase = PhaseBranchInput {
             repo: path.to_string(),
             base_branch: "main".to_string(),
@@ -3464,14 +3465,12 @@ mod tests {
             do_ensure_phase_branch(&not_phase).unwrap_err(),
             "not a phase/ branch"
         );
-
         let evil = PhaseBranchInput {
             repo: path.to_string(),
             base_branch: "-evil".to_string(),
             branch: "phase/p1".to_string(),
         };
         assert!(do_ensure_phase_branch(&evil).is_err());
-
         let missing = PhaseBranchInput {
             repo: path.to_string(),
             base_branch: "nope".to_string(),
@@ -3479,7 +3478,6 @@ mod tests {
         };
         assert!(do_ensure_phase_branch(&missing).is_err());
     }
-
     #[test]
     fn phase_plan_pure_body_uses_keeper() {
         let keeper = StubKeeper::default();
