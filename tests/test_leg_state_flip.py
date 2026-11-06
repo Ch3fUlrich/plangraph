@@ -47,10 +47,10 @@ def test_off_byte_identical(monkeypatch, tmp_path):
     from test_leg_adapter import MAIN_ORDER
     monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
     s = service(monkeypatch, tmp_path, lambda: pytest.fail('disabled reader called'))
-    assert s.leg_reader is None
-    assert not hasattr(s.runner, 'leg_reader')
+    assert s.leg_reader.enabled is False
     card = dict(estimate_tokens=1000)
-    assert json.dumps(asdict(s._route(card))) == json.dumps(asdict(plan_spawn(card, role='implement', leg_reader=None)))
+    s.hung.waiting.update(m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS)
+    assert json.dumps(asdict(s._route(card))) == json.dumps(asdict(plan_spawn(card, role='implement', leg_reader=s.leg_reader.store)))
     assert [m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS if resolver.is_model_available(m, s.leg_reader)] == MAIN_ORDER
 
 
@@ -94,8 +94,7 @@ def test_hung_routing_stable(monkeypatch, tmp_path, on):
     card = dict(estimate_tokens=1000)
     before = s._route(card).legs
     assert len(before) > 2
-    if on:
-        s.hung.waiting.add(key(before[0]))
+    s.hung.waiting.add(key(before[0]))
     after = s._route(card).legs
     assert after == (before[1:] + before[:1] if on else before)
 
@@ -107,3 +106,24 @@ def test_standalone_argv(monkeypatch):
         return SimpleNamespace(stdout='provider/sample\n')
     monkeypatch.setattr(subprocess, 'run', run)
     assert leg_state.LegAdapter.standalone_models() == ['provider/sample']
+
+
+def test_flip_disabled_store_equivalence(monkeypatch, tmp_path):
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
+    s = service(monkeypatch, tmp_path, lambda: pytest.fail('disabled reader called'))
+    for model in resolver.DEFAULT_FALLBACK_MODELS:
+        assert resolver.is_model_available(model, None) == resolver.is_model_available(model, s.leg_reader.store.leg_status)
+
+
+@pytest.mark.parametrize('on', [False, True])
+def test_flip_explicit_plan_reader(monkeypatch, tmp_path, on):
+    from plangraph.planner import routing
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '1' if on else '0')
+    s = service(monkeypatch, tmp_path)
+    reader = leg_state.LegStateStore(tmp_path / 'override')
+    original = routing.plan_spawn
+    def plan_spawn(**kwargs):
+        assert kwargs['leg_reader'] is reader
+        return original(dict(estimate_tokens=1000), role='implement', **kwargs)
+    monkeypatch.setattr(routing, 'plan_spawn', plan_spawn)
+    assert flag.service_plan(s, leg_reader=reader).legs
