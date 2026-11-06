@@ -29,6 +29,7 @@ class WakeTests(unittest.TestCase):
         self.posts = []
         self.status = 200
         self.truncated = False
+        self.disconnect = False
         self.messages = [{"info": {"id": "msg_one", "role": "assistant",
                                   "time": {"created": time.time() - 900,
                                            "completed": time.time() - 800}}}]
@@ -39,6 +40,9 @@ class WakeTests(unittest.TestCase):
                 pass
 
             def do_GET(self):
+                if owner.disconnect:
+                    self.close_connection = True
+                    return
                 owner.assertEqual(self.path, "/api/session/ses_test/message?order=desc&limit=5")
                 expected = base64.b64encode(("opencode:" + owner.secret).encode()).decode()
                 owner.assertEqual(self.headers["Authorization"], "Basic " + expected)
@@ -148,6 +152,21 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(self.run_wake(), 2)
         self.assertFalse(self.posts)
         self.assertEqual(json.loads((self.root / "log").read_text())["result"], "error")
+
+    def test_remote_disconnect_returns_server_down(self):
+        self.disconnect = True
+        self.assertEqual(self.run_wake(), 3)
+        self.assertFalse(self.posts)
+
+    def test_http_failure_classification(self):
+        for exception, code in ((wake.http.client.BadStatusLine("bad"), 2),
+                                (ConnectionResetError(), 3),
+                                (wake.http.client.RemoteDisconnected(), 3)):
+            with self.subTest(exception=type(exception).__name__):
+                with patch.object(wake.urllib.request.OpenerDirector, "open",
+                                  side_effect=exception):
+                    self.assertEqual(self.run_wake(), code)
+        self.assertFalse(self.posts)
 
     def test_server_down(self):
         # A bound but non-listening socket cannot accept a request.

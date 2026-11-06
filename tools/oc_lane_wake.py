@@ -68,6 +68,8 @@ def request(args, password, method, suffix, body=None):
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError:
         raise ValueError("HTTP request rejected") from None
+    except http.client.RemoteDisconnected:
+        raise ServerDown() from None
     except http.client.HTTPException:
         raise ValueError("invalid HTTP response") from None
     except (urllib.error.URLError, OSError):
