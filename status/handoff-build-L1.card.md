@@ -1,4 +1,4 @@
-# L1 card · build-L1-0221 · 2026-11-06T06:48Z
+# L1 card · build-L1-0221 · 2026-11-06T07:20Z
 ## Goal
 - D-3893 phase 0 first; D-4012 relaunch: re-check keeper, GO-REQs with seats for #446 #447 #436; #451 to its round cap; RIN and ROUTER lanes
 ## Keeper
@@ -26,6 +26,7 @@
 - BLOCKED D-3959 live migration number needs a DSN secret | default no live read | deadline none
 - BLOCKED spawner-main past #465 needs its own GO-REQ (D-4016, D-3975) | default read-only review next | deadline none
 ## Traps
+- D-3900: ROUTER-INBOX-MOVE, ROUTING-REPOINT-AUTOOS, LE-READY-S6 S7A S7B, SEAT-TOOLS-LEG-SANDBOX are replan's although owner reads build-L1; do not start
 - D-4027 PG-HOST-ONLINE-INSTALL is placement's, do not start
 - #445 stays with placement-0211, keeper owner replan; not taken here, D-4010 split is theirs
 - Rule 4.0 no Sol: route still lists cx-gpt-6.1-sol, pin --leg with --no-fallthrough
