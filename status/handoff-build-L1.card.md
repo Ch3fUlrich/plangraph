@@ -1,6 +1,6 @@
-# L1 card · build-L1-0252 · 2026-11-06T10:33Z
+# L1 card · build-L1-0252 · 2026-11-06T11:12Z
 ## Goal
-- D-4207 terra leg first, then D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
+- D-4220 stuck watch, D-4239 budget meter, D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
 ## Keeper
 - claimed: plangraph:AUTOOS-HOOKS-INTERIM-S06, plangraph:SPAWNER-ORPHAN-REAP, plangraph:RIN-PATH-REPOINT, plangraph:ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z)
 - ready next: plangraph:AUTOOS-HOOKS-INTERIM-S09, plangraph:AUTOOS-HOOKS-INTERIM-S14 after #446 #447
@@ -13,14 +13,14 @@
 - 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
 ## In flight
 - #436 572e6428e327 CI 42203474824 success, GO-REQ sent 10:43Z, waiting on ruling
-- D-4207 lane/terra-review-leg writer job biwkrk6bm since 10:27Z next check 10:45Z
+- OPENCODE-STUCK-WATCH run-b4a5255b lane/opencode-stuck-watch since 11:11Z next check 11:35Z; brief job tmp b-stuck.md
 - D-4196 run-baea999e lane/d4196-go-legs since 10:19Z next check 10:45Z
 - D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
 - #528 run-34a2095f since 10:16Z next check 10:40Z, replan-0251 takes over after commit
 ## Planned
-0a. D-4220 OPENCODE-STUCK-WATCH right after terra: dell cause from run records, plangraph check + timer on all spawner hosts, kill only proven dead plangraph-job trees; TTY/services report only; dell pid 18035 is the operator session, excluded (D-4227); D-4221 run tree no CPU + no outbound socket 5 min = cancel + report, must-not-kill test run-9f9cead shape (526 s); router files item
+0a. D-4220 STUCK-WATCH after writer: 2 non-writer seats, GO-REQ, per-host timer proof; cause: 4 dell reviews banner-only until 1500 s; then CLAUDE-DAILY-BUDGET D-4239 (router files item)
 0b. D-4214 GW-QUEUE-WAIT-VISIBLE in Ch3fUlrich/OmniRoute after terra: fill call-log addedWaitMs/addedWaitCause (empty on 15.7k rows), merged, CI green, 1 non-writer seat, prox deploys; router files the item
-1. D-4207 terra: seats, probe, send plangraph-improve-0249 the leg id, DONE to routing
+1. D-4207 terra PARKED D-4238, restart only on request
 2. D-4196 + D-4193: seats, GO-REQ, DONE with leg ids, tell plangraph-improve-0246
 3. D-4177: tests seat, delta seat, GO-REQ, live proof
 4. D-4195 DONE line after ruling; D-4180 after phase 0 order
