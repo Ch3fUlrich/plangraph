@@ -60,12 +60,12 @@ A checkout-local marker never counts. R5 must repeat this proof immediately
 before every reset, clean or removal. Same-user malicious races remain a
 sandbox/trust-model limitation, not a claimed isolation boundary.
 
-`apply_child_env` overlays harness sandbox confinement without restoring removed
+`apply_child_env` applies sandbox confinement even to a plain command, preserving removed
 variables. All git location variables are removed; cwd/PWD and
 canonical import-root-only PYTHONPATH are pinned using platform path joining.
 The shared `configure_import_environment` helper pins `PYTHONDONTWRITEBYTECODE=1`
 even over explicit command overrides. Bytecode and pytest caches are disabled,
-TMPDIR/TEMP pinned, and safe seat slots
+TMPDIR/TEMP pinned outside the worktrees root, and safe seat slots
 expand cache templates outside worktrees. Canonical ancestors prevent symlink
 escape. `prepare_launch` re-verifies immediately; none mode requires no checkout
 and invents no cwd or PYTHONPATH. The standalone canary uses the same builder

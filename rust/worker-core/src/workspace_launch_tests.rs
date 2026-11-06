@@ -1,6 +1,5 @@
 use super::*;
 use tempfile::{tempdir, TempDir};
-
 struct Fixture {
     tmp: TempDir,
     repo: RepoEntry,
@@ -50,7 +49,6 @@ impl Fixture {
             .join("spawner-owned")
     }
 }
-
 #[test]
 fn two_writers_have_distinct_fresh_lane_trees() {
     let mut f = Fixture::new();
@@ -70,7 +68,6 @@ fn two_writers_have_distinct_fresh_lane_trees() {
         f.ws.base_sha.unwrap()
     );
 }
-
 #[test]
 fn existing_branch_or_destination_refuses() {
     let mut f = Fixture::new();
@@ -80,7 +77,6 @@ fn existing_branch_or_destination_refuses() {
     assert!(create_writer(&f.repo, &f.ws, "first").is_err());
     assert!(!Path::new(&f.repo.worktrees_root).join("other").exists());
 }
-
 #[test]
 fn run_id_traversal_refuses() {
     let f = Fixture::new();
@@ -88,21 +84,72 @@ fn run_id_traversal_refuses() {
         assert!(create_writer(&f.repo, &f.ws, id).is_err());
     }
 }
-
 #[test]
 fn worktree_local_config_does_not_mutate_main() {
     let f = Fixture::new();
     let root = Path::new(&f.repo.root);
+    git(root, &["config", "core.repositoryformatversion", "0"]).unwrap();
     git(root, &["config", "core.autocrlf", "true"]).unwrap();
     git(root, &["config", "core.longpaths", "false"]).unwrap();
     let tree = f.writer();
+    let format = git(root, &["config", "core.repositoryformatversion"]).unwrap();
+    assert_eq!(format, "0");
     assert_eq!(git(root, &["config", "core.autocrlf"]).unwrap(), "true");
     assert_eq!(git(root, &["config", "core.longpaths"]).unwrap(), "false");
     assert_eq!(git(&tree, &["config", "core.autocrlf"]).unwrap(), "false");
     #[cfg(windows)]
     assert_eq!(git(&tree, &["config", "core.longpaths"]).unwrap(), "true");
 }
-
+#[test]
+fn destination_created_while_waiting_for_lock_refuses() {
+    let f = Fixture::new();
+    let common = git_path(Path::new(&f.repo.root), "--git-common-dir").unwrap();
+    let lock = common.join("spawner-config.lock");
+    let guard = lockfile::try_lock(&lock).unwrap().unwrap();
+    std::thread::scope(|scope| {
+        let pending = scope.spawn(|| create_writer(&f.repo, &f.ws, "first"));
+        std::thread::sleep(Duration::from_millis(500));
+        fs::create_dir(Path::new(&f.repo.worktrees_root).join("first")).unwrap();
+        drop(guard);
+        let result = pending.join().unwrap();
+        let expected: Result<PathBuf, _> = Err(ResolveError::Verify("destination_exists"));
+        assert_eq!(format!("{result:?}"), format!("{expected:?}"));
+    });
+}
+#[test]
+fn temp_inside_worktrees_refuses() {
+    let f = Fixture::new();
+    let tree = f.writer();
+    for temp in [Path::new(&f.repo.worktrees_root), tree.as_path()] {
+        let result = apply_child_env(&mut Command::new("unused"), &f.repo, &tree, "seat", temp);
+        assert!(result.is_err());
+    }
+}
+#[test]
+#[cfg(unix)]
+fn plain_command_confines_secret() {
+    let secret = ["KEEPER", "_DATABASE", "_TOKEN"].concat();
+    if std::env::var_os("WORKSPACE_ENV_PROBE").is_none() {
+        let out = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("workspace_launch::tests::plain_command_confines_secret")
+            .env("WORKSPACE_ENV_PROBE", "1")
+            .env(&secret, "fake-canary")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        return;
+    }
+    let f = Fixture::new();
+    let tree = f.writer();
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", &format!("test -z \"${secret}\"")]);
+    cmd.env_remove("PATH");
+    apply_child_env(&mut cmd, &f.repo, &tree, "seat", f.tmp.path()).unwrap();
+    let path_set = cmd.get_envs().any(|(k, v)| k == "PATH" && v.is_some());
+    assert!(!path_set);
+    assert!(cmd.output().unwrap().status.success());
+}
 #[test]
 fn marker_survives_clean() {
     let f = Fixture::new();
@@ -113,7 +160,6 @@ fn marker_survives_clean() {
     assert!(!tree.join("junk").exists());
     verify_owned(&f.repo, &tree).unwrap();
 }
-
 #[test]
 fn marker_in_checkout_missing_symlink_wrong_binding_refuses() {
     let f = Fixture::new();
@@ -132,7 +178,6 @@ fn marker_in_checkout_missing_symlink_wrong_binding_refuses() {
         assert!(verify_owned(&f.repo, &tree).is_err());
     }
 }
-
 #[test]
 fn outside_root_foreign_common_dir_main_refuses() {
     let mut f = Fixture::new();
@@ -145,7 +190,6 @@ fn outside_root_foreign_common_dir_main_refuses() {
     assert!(verify_owned(&f.repo, &tree).is_err());
     assert!(verify_owned(&f.repo, &foreign).is_err());
 }
-
 #[test]
 fn dirty_owned_tree_can_be_proven_without_reset() {
     let f = Fixture::new();
@@ -154,7 +198,6 @@ fn dirty_owned_tree_can_be_proven_without_reset() {
     verify_owned(&f.repo, &tree).unwrap();
     assert_eq!(fs::read_to_string(tree.join("tracked")).unwrap(), "dirty");
 }
-
 #[test]
 fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
     let mut f = Fixture::new();
@@ -200,7 +243,6 @@ fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
         ]
     );
 }
-
 #[test]
 fn all_inherited_and_explicit_git_vars_removed() {
     let f = Fixture::new();
@@ -230,11 +272,10 @@ fn all_inherited_and_explicit_git_vars_removed() {
             .to_ascii_uppercase()
             .starts_with("GIT_")
         {
-            assert!(cmd.get_envs().any(|(k, v)| k == key && v.is_none()));
+            assert!(!cmd.get_envs().any(|(k, v)| k == key && v.is_some()));
         }
     }
 }
-
 #[test]
 fn slot_cache_symlink_escape_and_reserved_env_refused() {
     let mut f = Fixture::new();
@@ -282,7 +323,6 @@ fn slot_cache_symlink_escape_and_reserved_env_refused() {
     )
     .is_err());
 }
-
 #[test]
 fn workspace_launch_docs_avoid_credential_shaped_git_wording() {
     let docs = include_str!("../../../docs/workspace-resolver.md");
@@ -290,7 +330,6 @@ fn workspace_launch_docs_avoid_credential_shaped_git_wording() {
         .lines()
         .any(|line| line.contains("explicit") && line.contains("GIT_*")));
 }
-
 #[test]
 fn none_has_no_checkout_and_no_cwd_fallback() {
     let mut f = Fixture::new();
@@ -318,7 +357,6 @@ fn none_has_no_checkout_and_no_cwd_fallback() {
     )
     .is_err());
 }
-
 #[test]
 fn launch_reverifies_head_after_prior_token() {
     let f = Fixture::new();

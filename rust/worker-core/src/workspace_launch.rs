@@ -132,6 +132,10 @@ pub fn create_writer(
         &mut rand::rng(),
     )
     .map_err(|_| ResolveError::Lock)?;
+    require(
+        fs::symlink_metadata(&dest).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound),
+        "destination_exists",
+    )?;
     require(git_path(root, "--git-common-dir")? == common, "common_dir")?;
     git(
         root,
@@ -222,6 +226,17 @@ pub fn apply_child_env(
     let checkout = checkout.canonicalize()?;
     let trees = Path::new(&repo.worktrees_root).canonicalize()?;
     let temp = temp.canonicalize()?;
+    require(!temp.starts_with(&trees), "temp_escape")?;
+    // Preserve explicit removals even for allowlisted names when reconfining.
+    let removed: Vec<_> = cmd
+        .get_envs()
+        .filter(|(_, value)| value.is_none())
+        .map(|(key, _)| key.to_os_string())
+        .collect();
+    crate::sandbox_env::confine_check(cmd, &temp);
+    for key in removed {
+        cmd.env_remove(key);
+    }
     configure_import_environment(cmd, repo, &checkout)?;
     strip_git(cmd);
     cmd.env("TMPDIR", &temp)
