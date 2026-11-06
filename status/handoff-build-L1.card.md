@@ -18,7 +18,7 @@
 - D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
 - #528 run-34a2095f since 10:16Z next check 10:40Z, replan-0251 takes over after commit
 ## Planned
-0a. D-4220 OPENCODE-STUCK-WATCH right after terra: dell cause from run records, plangraph check + timer on all spawner hosts, kill only proven dead plangraph-job trees; TTY/services report only; D-4221 run tree no CPU + no outbound socket 5 min = cancel + report, must-not-kill test run-9f9cead shape (526 s); router files item
+0a. D-4220 OPENCODE-STUCK-WATCH right after terra: dell cause from run records, plangraph check + timer on all spawner hosts, kill only proven dead plangraph-job trees; TTY/services report only; dell pid 18035 is the operator session, excluded (D-4227); D-4221 run tree no CPU + no outbound socket 5 min = cancel + report, must-not-kill test run-9f9cead shape (526 s); router files item
 0b. D-4214 GW-QUEUE-WAIT-VISIBLE in Ch3fUlrich/OmniRoute after terra: fill call-log addedWaitMs/addedWaitCause (empty on 15.7k rows), merged, CI green, 1 non-writer seat, prox deploys; router files the item
 1. D-4207 terra: seats, probe, send plangraph-improve-0249 the leg id, DONE to routing
 2. D-4196 + D-4193: seats, GO-REQ, DONE with leg ids, tell plangraph-improve-0246
@@ -31,9 +31,9 @@
 - BLOCKED D-4195 lane/d4195-caps b2d7c6827beb GO-REQ, dell cap number after D-4198 | default keep 100 | deadline none
 - BLOCKED RIN-LEDGER-VIEWS, ROUTER-LAUNCH-OOM-SCOPE, #451 as previous card | default as sent | deadline none
 ## Traps
+- D-4227 router is routing-0253; coding.vm at cap/floor: no queue, writers to dell/workstation by route table, Claude via L2-LAUNCH
 - 10:35Z my pkill killed gen-100 writer.sh wait wrappers; runs alive, w-*.res in f3b904c3 are stale, use spawner result
 - git push control build-L1 ONLY, never origin (D-1751)
-- Review card without diff_ref fails inline_diff_failed
 - Key bytes never in env, logs, git, messages; WSL holds workstation keys
 - Workstation mcp-proxy shows PG_TOKEN inline in its cmdline, not yet reported
 ## Drill-down
