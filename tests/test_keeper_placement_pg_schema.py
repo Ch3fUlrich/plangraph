@@ -1,5 +1,6 @@
 """C3 disposable-schema integration; never accepts a separate live DSN."""
 import os
+import hashlib
 import sqlite3
 import uuid
 
@@ -7,7 +8,6 @@ import pytest
 
 from plangraph.keeper import db_pg, schema_pg
 from plangraph.keeper import placement_rules_schema as rules
-from plangraph.keeper.schema_pg_baseline import BASELINE
 
 pytestmark = pytest.mark.skipif(not os.environ.get('PG_DSN'), reason='PG_DSN not set')
 
@@ -42,7 +42,9 @@ def seed(raw):
 
 def test_migration_appends_without_rewriting_prior_steps():
     assert schema_pg.MIGRATIONS[-1] == schema_pg.Migration(11, 'placement rules', rules.PG)
-    assert schema_pg.MIGRATIONS[0].sql == BASELINE
+    # Shipped _V1 from git blob d9942f65, independently pinned, not an alias.
+    assert hashlib.sha256(schema_pg.MIGRATIONS[0].sql.encode()).hexdigest() == (
+        'd5b853cc2d7780f2c4305f276db14713aa8fd77d3fc76d6bb20aa6ae2c96e7b0')
     assert [m.version for m in schema_pg.MIGRATIONS] == list(range(1, 12))
 
 
@@ -140,9 +142,11 @@ def test_rollback_preserves_rows_and_indexes(pg):
     raw, name = pg
     upgrade(pg)
     seed(raw)
+    raw.execute('CREATE INDEX extra_rules_value ON placement_rule_values(value)')
     before = {t: raw.execute(f'SELECT * FROM {t}').fetchall() for t in rules.TABLES}
     versions = raw.execute('SELECT version FROM schema_migrations ORDER BY version').fetchall()
     rules.rollback_pg(raw)
+    assert raw.execute("SELECT to_regclass('extra_rules_value_retired_v11')").fetchone()[0]
     for table in rules.TABLES:
         assert raw.execute(f'SELECT * FROM {table}_retired_v11').fetchall() == before[table]
         assert raw.execute('SELECT to_regclass(%s)',
@@ -171,3 +175,21 @@ def test_failed_migration_atomic(pg, monkeypatch):
     assert raw.execute('SELECT max(version) FROM schema_migrations').fetchone() == (10,)
     for table in rules.TABLES:
         assert raw.execute('SELECT to_regclass(%s)', (table,)).fetchone() == (None,)
+
+
+def test_rollback_wrong_schema_refused(pg):
+    raw, name = pg
+    upgrade(pg)
+    from psycopg import sql
+    wrong = name + '_wrong'
+    raw.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(wrong)))
+    try:
+        raw.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(wrong)))
+        for table in rules.TABLES:
+            raw.execute(sql.SQL('CREATE TABLE {} (id integer)').format(sql.Identifier(table)))
+        with pytest.raises(ValueError, match='keeper_schema_required'):
+            rules.rollback_pg(raw)
+        assert raw.execute("SELECT to_regclass('placement_rule_values')").fetchone()[0]
+    finally:
+        raw.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(name)))
+        raw.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(wrong)))
