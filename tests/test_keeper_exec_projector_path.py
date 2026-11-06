@@ -170,7 +170,6 @@ def test_projector_waiting_refuses_delayed_same_run_park_without_expected_state(
 
 
 @pytest.mark.parametrize("owned", [False, True], ids=["unowned", "seeded-no-audit"])
-@pytest.mark.xfail(strict=True, reason="No audited owner start or observed state: delayed and normal parks are indistinguishable")
 def test_delayed_blind_park_without_owner_start(w, owned):
     key, = seed(w, [("A", [])])
     projector = Projector(w.store, w.p("system"), now=w.clock)
@@ -184,7 +183,7 @@ def test_delayed_blind_park_without_owner_start(w, owned):
     waiting = project_history(full, workflow_id="card:" + key, run_id="run")
     projector.apply_run(waiting, run_ord=0)
     assert snapshot(w, key)[0] == "waiting"
-    assert not w.store._exec_state_after_owner(w.conn, key)
+    assert w.store._exec_state_after_owner(w.conn, key)
     before = snapshot(w, key)
     with pytest.raises(Refused):
         w.store.worker_park(w.p("workerA"), {

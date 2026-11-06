@@ -323,7 +323,6 @@ class WorkerMixin:
                 return
             # A claim release is not permission to roll back a newer state.
             if (body.get("expected_state") is None
-                    and item["exec_run_id"] is not None
                     and self._exec_state_after_owner(self.conn, item["key"])):
                 raise Refused("exec_stale", f"{key}: state changed after exec owner")
             # 3. Observed-state CAS (park: the live set is a fallback, never

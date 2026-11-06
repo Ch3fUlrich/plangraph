@@ -226,3 +226,17 @@ The shared seed helper no longer fabricates delegation. Tests needing a
 delegate use claim then the real delegate verb; acquisition tests use real
 worker claims. Tests of already-owned projected states explicitly seed the
 prior execution owner rather than pretending an unclaimed delegate can acquire.
+
+## sq12 blind park ordering
+
+Exec ownership helpers live in `keeper/store_exec.py`. For unowned cards (and
+seeded owners without an audit start), the existing durable `state_set` reason
+`exit_class=...` or `timer started` signals a projected waiting/needs-input
+write. A blind park must supply `expected_state` after that signal; refusal
+leaves both the state and claim intact. Plain administrative writes keep their
+legacy semantics. No event fields or replay folds change.
+
+The retired-run fence in `store_exec.py:_exec_clear` is per item and uncapped.
+Closing an item does not truncate it; there is no item-fence pruning policy.
+Its growth is bounded only by the number of distinct retired runs for that item,
+not by a fixed retention limit (a deferred growth concern).

@@ -156,19 +156,28 @@ class ExecMixin:
         """Whether a state write followed the current attempt record/advance.
 
         No new event fields: historical replay stays unchanged on both backends.
-        Seeded owners without an audit event have no observable start.
+        Without an audited start, projector away-state reasons fence blind parks.
         """
         from .store_cards import STATE_EVENT_TYPES
 
         owner = conn.execute(
             "SELECT seq, payload FROM events WHERE key=? AND type='exec_owner_changed'"
             " ORDER BY seq DESC LIMIT 1", (item_id,)).fetchone()
-        if owner is None or json.loads(owner["payload"] or "{}").get("action") == "clear":
+        if owner is not None and json.loads(owner["payload"] or "{}").get("action") == "clear":
             return False
         kinds = tuple(sorted(STATE_EVENT_TYPES))
         state = conn.execute(
-            "SELECT seq FROM events WHERE key=? AND type IN ("
+            "SELECT seq, payload FROM events WHERE key=? AND type IN ("
             + ",".join("?" for _ in kinds) + ") ORDER BY seq DESC LIMIT 1",
             (item_id, *kinds)).fetchone()
+        # Without an audited owner start, a state event is still an ordering
+        # signal: a blind caller cannot prove it observed that write. Require
+        # expected_state rather than silently treating the card as unordered.
+        if owner is None:
+            payload = json.loads(state["payload"] or "{}") if state else {}
+            # Projector history already emits these durable ordering signals;
+            # a plain administrative state write retains its legacy semantics.
+            reason = payload.get("reason", "")
+            return (payload.get("state") in ("waiting", "needs_input")
+                    and (reason.startswith("exit_class=") or reason == "timer started"))
         return state is not None and state["seq"] > owner["seq"]
-
