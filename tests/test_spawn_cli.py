@@ -3,7 +3,6 @@ import json
 import subprocess
 import time
 import uuid
-
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
 from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo
