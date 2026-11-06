@@ -83,7 +83,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.50,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 1,
         "context_window": 1000000,
         "combos": ["l1-orchestrator", "l2-worker", "l2-reviewer", "l3-driver"],
     },
@@ -95,7 +94,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.13,
         "pool_burn_weight": 0.5,
         "tier": "subscription",
-        "available": 1,
         "context_window": 1000000,
         "combos": ["l1-orchestrator", "l2-worker", "l2-reviewer"],
     },
@@ -107,7 +105,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.45,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 1,
         "context_window": 1000000,
         "combos": ["l1-orchestrator", "l2-worker"],
     },
@@ -119,7 +116,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.07,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 1,
         "context_window": 872000,
         "combos": ["l1-orchestrator", "l2-worker", "l2-reviewer", "l3-driver"],
     },
@@ -131,7 +127,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 3.26,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 0,  # Rejected per Codex ACP luna-only
         "context_window": 400000,
         "combos": [],
     },
@@ -143,7 +138,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.72,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 0,  # Rejected per Codex ACP luna-only
         "context_window": 400000,
         "combos": [],
     },
@@ -155,7 +149,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 1.12,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 1,
         "context_window": 1000000,
         "combos": ["l1-orchestrator", "l2-worker", "l2-reviewer"],
     },
@@ -167,7 +160,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.21,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 1,
         "context_window": 200000,
         "price_cliff_tokens": 100000,  # Price cliff at 100k
         "combos": ["l2-worker"],
@@ -180,7 +172,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 1.37,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 1,
         "context_window": 200000,
         "combos": ["l2-worker"],
     },
@@ -192,7 +183,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.26,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
-        "available": 1,
         "context_window": 128000,
         "combos": ["l2-worker", "l3-driver"],
     },
@@ -204,7 +194,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 0.26,
         "pool_burn_weight": 1.0,
         "tier": "paid",
-        "available": 1,
         "context_window": 128000,
         "combos": ["l2-worker", "l3-driver"],
     },
@@ -216,7 +205,6 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "cost_per_task_usd": 1.24,
         "pool_burn_weight": 1.0,
         "tier": "free",
-        "available": 1,
         "context_window": 1048576,
         "combos": ["l1-orchestrator", "l2-worker"],
     },
@@ -244,6 +232,7 @@ def admission_models() -> set[str]:
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
 from plangraph.registry_columns import INLINE_ONLY_MODELS as _INLINE_ONLY
 for _row in DEFAULT_FALLBACK_MODELS:
+    _row['available'] = int(not _row['id'].startswith('cxa/') or _row['id'].startswith('cxa/gpt-6-luna'))
     _row['active'] = _row['id'] in _fallback_legs
     _row.setdefault('tool_mode', 'inline-only' if _row['id'] in _INLINE_ONLY else 'tools')
     if not _row['active']:
@@ -579,7 +568,10 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
     # Ranking historical catalog seats is not a new-spawn admission decision.
-    if not catalog_row_admitted(model):
+    if (os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') == '1'
+            and model.get('active') is True and not model.get('disabled')):
+        pass  # Runtime availability is read below, never from the catalog.
+    elif not catalog_row_admitted(model):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -588,7 +580,7 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
         return False
     reader = leg_state_reader or leg_status
-    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
+    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] not in {"limited", "unavailable", "unreachable", "stale", "unknown", "not_listed"}
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.

@@ -1,0 +1,1 @@
+- **SPAWNER-LEG-STATE-FROM-OMNIROUTE:** Add default-off shared-reader admission with explicit unknown, stale and unreachable state and bounded cached standalone model checks; synthetic tests are not live acceptance.

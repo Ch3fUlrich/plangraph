@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import time
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -135,8 +136,43 @@ def _reset(headers, body, now):
 
 
 class LegStateStore:
-    def __init__(self, path):
+    def __init__(self, path, *, omni=None, enabled=None, run=None, clock=time.monotonic):
         self.path = Path(path).absolute()
+        self.enabled = (os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') == '1'
+                        if enabled is None else enabled)
+        self._omni, self._run, self._clock = omni, run or subprocess.run, clock
+        self._models, self._models_at = None, None
+
+    def authoritative_status(self, leg):
+        """Only exact served identities are credited; provider health is insufficient."""
+        from .omniroute_state import from_env, OmniRouteUnreachable
+        if leg.startswith('opencode-go/'):
+            if self._models_at is None or self._clock() - self._models_at >= 60:
+                self._models = None
+                self._models_at = self._clock()
+                try:
+                    result = self._run(['opencode', 'models', 'opencode-go'],
+                                       capture_output=True, text=True, timeout=8)
+                    if result.returncode == 0:
+                        self._models = set(result.stdout.splitlines())
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            if self._models is None:
+                return dict(state='unknown', evidence=None)
+            if leg not in self._models:
+                return dict(state='not_listed', evidence=None)
+        if self._omni is None:
+            self._omni = from_env()
+        identity = leg.removeprefix('omniroute/')
+        if 'sonnet-5-5' in identity:
+            identity = identity.split('sonnet-5-5')[0] + 'sonnet-5-5'
+        try:
+            state = self._omni.provider_state(identity)
+        except OmniRouteUnreachable:
+            return dict(state='unreachable', evidence=None)
+        status = ('unavailable' if state is None else 'stale' if state.stale
+                  else 'ok' if state.available else 'unavailable')
+        return dict(state=status, evidence=None if state is None else dict(until=state.until))
 
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -225,6 +261,8 @@ class LegStateStore:
                         None if reset is None else reset - now, reset, now, caller, 'harness-stderr'))
 
     def leg_status(self, leg, now=None, account=None, combo=None):
+        if self.enabled:
+            return self.authoritative_status(leg)
         now = time.time() if now is None else now
         if not self.path.exists():
             return {"state": "ok", "evidence": None}
@@ -288,7 +326,13 @@ class LegStateStore:
 
 
 def _default_store():
-    return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
+    global _shared_store
+    if _shared_store is None:
+        _shared_store = LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
+    return _shared_store
+
+
+_shared_store = None
 
 
 def record_provider_response(leg, status, body, headers, caller, now=None, account=None, combo=None):
