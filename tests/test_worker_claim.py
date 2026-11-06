@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import os
 import types
 from pathlib import Path
 
@@ -27,6 +28,29 @@ def test_build_claim_preserves_gate_inputs():
     assert got["exports"] == ["api"]
     assert got["heldout_cmd"] == "heldout"
     assert got["risk_tagged"] is True
+
+
+@pytest.mark.skipif(not os.environ.get("PG_DSN"), reason="PG_DSN not set")
+def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo):
+    payloads = []
+    for backend in ("sqlite", "postgres"):
+        world = World(tmp_path / backend, backend=backend, dsn=os.environ["PG_DSN"])
+        try:
+            world.store.create_items(world.p("router"), [
+                defn("C", []), defn("GOAL", ["C"], kind="goal")])
+            world.store.put_card(world.p("router"), "demo:C", {
+                "outcome": "fix", "check_cmd": "false", "write_set": [],
+                "check_kind": "regression", "check_reads": ["fixtures/input.json"],
+                "smoke_checks": ["true"], "exports": ["api"],
+                "heldout_check": "heldout", "risk_tags": ["migration"],
+            })
+            payloads.append(worker_claim(world.store, world.p("workerA"), "demo:C",
+                                         repo_root=str(repo[0])))
+        finally:
+            world.close()
+    assert payloads[0] == payloads[1]
+    assert payloads[0]["check_reads"] == ["fixtures/input.json"]
+    assert payloads[0]["forbid"] == ["fixtures/input.json"]
 
 def _code(exc: Refused):
     return getattr(exc, "code", exc.args[0] if exc.args else None)
