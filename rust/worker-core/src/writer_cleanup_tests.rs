@@ -162,11 +162,54 @@ fn unknown_or_live_group_preserved() {
 }
 
 #[test]
+fn recorded_candidate_dry_run_preserves_filesystem() {
+    fn snapshot(root: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+        fn visit(
+            root: &Path,
+            path: &Path,
+            files: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+        ) {
+            for entry in fs::read_dir(path).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                let directory = entry.file_type().unwrap().is_dir();
+                files.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    if directory {
+                        None
+                    } else {
+                        Some(fs::read(&path).unwrap())
+                    },
+                );
+                if directory {
+                    visit(root, &path, files);
+                }
+            }
+        }
+        let mut files = std::collections::BTreeMap::new();
+        visit(root, root, &mut files);
+        files
+    }
+
+    let f = Fixture::new();
+    record_result(&f.state, "run", &f.blob).unwrap();
+    let before = snapshot(f._dir.path());
+    let candidates = janitor(&f.repo, &f.state, 90000, false).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert!(candidates[0].eligible);
+    assert_eq!(candidates[0].run_id, "run");
+    assert_eq!(candidates[0].checkout, f.record.checkout);
+    assert!(f.record.checkout.exists());
+    assert_eq!(snapshot(f._dir.path()), before);
+}
+
+#[test]
 fn daily_apply_owned_only() {
     let mut f = Fixture::new();
     f.record.failed_at_s = Some(0);
     save_lifecycle(&f.state, &f.record).unwrap();
     assert!(janitor(&f.repo, &f.state, 90000, false).unwrap()[0].eligible);
+    assert!(f.record.checkout.exists());
     let stamp = common(&f.repo).unwrap().join("spawner-prune-day");
     assert!(!stamp.exists());
     janitor(&f.repo, &f.state, 90000, true).unwrap();
