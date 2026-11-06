@@ -342,20 +342,20 @@ class LegAdapter:
     def __init__(self, store, provider, models=None, *, enabled=False,
                  clock=time.monotonic, ttl_s=60):
         self.store, self.provider = store, provider
-        self.models = models or self.standalone_models
+        self.models = models or self.standalone_models()
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
-
     def __getattr__(self, name):
         return getattr(self.store, name)
-
     @staticmethod
     def standalone_models():
         import subprocess
-        result = subprocess.run(['opencode', 'models'], capture_output=True,
-                                text=True, timeout=8, shell=False, check=True)
+        try:
+            result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
+                                    text=True, timeout=8, shell=False, check=True)
+        except (OSError, subprocess.SubprocessError):
+            return []
         return result.stdout.splitlines()
-
     @staticmethod
     def identity(model):
         return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
@@ -377,7 +377,7 @@ class LegAdapter:
         if self._at is None or now - self._at >= self.ttl_s:
             try:
                 states = self.provider.snapshot()
-                served = {self.identity(mid) for mid in self.models()}
+                served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
                 self._states, self._served = states, served
                 self._error = None if states else 'unreachable'
             except Exception:

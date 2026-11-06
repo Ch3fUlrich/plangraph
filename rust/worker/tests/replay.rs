@@ -411,3 +411,4 @@ async fn replays_phase_defer() {
         .await
         .expect("phase_defer history replays");
 }
+mod phase_terminal;

@@ -96,7 +96,7 @@ def test_busy_envelope_evidence_is_flat(tmp_path, monkeypatch):
 @pytest.mark.parametrize('enabled', [False, True])
 def test_missing_exit_code_keeps_unavailable_booking(tmp_path, enabled):
     store = LegStateStore(tmp_path / 'state.sqlite')
-    reader = LegAdapter(store, NS(snapshot=lambda: {}), enabled=enabled)
+    reader = LegAdapter(store, NS(snapshot=lambda: {}), models=lambda: [], enabled=enabled)
     line = 'Error: Model unavailable: synthetic/model'
     reason = exit_outcome.fallthrough_reason(
         NS(leg_reader=reader), NS(model='synthetic/model'),

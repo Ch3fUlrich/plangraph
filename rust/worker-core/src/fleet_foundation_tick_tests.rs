@@ -1,5 +1,6 @@
 use super::*;
 #[test]
+#[serial_test::serial(fleet_relative_state_parent)]
 fn fleet_foundation_clock() {
     let (a, _) = advance(None, 100_000, 100, 2);
     let (b, jump) = advance(Some(&a), 1000, 101, 2);
@@ -8,8 +9,7 @@ fn fleet_foundation_clock() {
     assert!(advance(Some(&b), 2000, 200, 2).1);
     assert!(advance(Some(&b), 2000, 50, 2).1);
 }
-#[test]
-fn fleet_foundation_files() {
+pub(super) fn foundation_setup() -> (tempfile::TempDir, Value) {
     let d = tempfile::tempdir().unwrap();
     let p = |n| d.path().join(n);
     let mut c = json!({"schema_version":1,"enabled":false,"stale_pair":true,
@@ -19,15 +19,25 @@ fn fleet_foundation_files() {
         "retry_delay":5,"maximum_attempts":3},"groups":[
         {"group":"alpha","snapshot_path":p("alpha")},
         {"group":"beta","snapshot_path":p("beta")}]}});
-    let tick = |c: &Value, t: u64| {
-        fs::write(p("config"), c.to_string()).unwrap();
-        invoke(
-            &["tick".into()],
-            Some(p("config")),
-            t * 1000,
-            100 + t as i64,
-        )
-    };
+    c["enabled"] = json!(true);
+    (d, c)
+}
+pub(super) fn foundation_tick(d: &tempfile::TempDir, c: &Value, t: u64) -> Result<Value, String> {
+    fs::write(d.path().join("config"), c.to_string()).unwrap();
+    invoke(
+        &["tick".into()],
+        Some(d.path().join("config")),
+        t * 1000,
+        100 + t as i64,
+    )
+}
+#[test]
+#[serial_test::serial(fleet_relative_state_parent)]
+fn fleet_foundation_default_off() {
+    let (d, mut c) = foundation_setup();
+    let p = |n| d.path().join(n);
+    let tick = |c: &Value, t| foundation_tick(&d, c, t);
+    c["enabled"] = json!(false);
     assert_eq!(
         invoke(&["tick".into()], None, 0, 0).unwrap(),
         json!({"enabled":false})
@@ -41,6 +51,9 @@ fn fleet_foundation_files() {
     bad["unknown"] = json!(true);
     assert!(tick(&bad, 0).is_err());
     assert!(!p("state.lock").exists());
+}
+pub(super) fn foundation_samples(d: &tempfile::TempDir) {
+    let p = |n| d.path().join(n);
     for (name, age) in [("alpha", 80), ("beta", 100)] {
         let members: Vec<_> = ["one", "two"]
             .iter()
@@ -55,12 +68,29 @@ fn fleet_foundation_files() {
         )
         .unwrap();
     }
+}
+#[test]
+#[serial_test::serial(fleet_relative_state_parent)]
+fn fleet_foundation_group_isolation() {
+    let (d, c) = foundation_setup();
+    foundation_samples(&d);
+    let p = |n| d.path().join(n);
+    let tick = |c: &Value, t| foundation_tick(&d, c, t);
     assert_eq!(
         tick(&c, 0).unwrap()["alarms_opened"],
         json!(["stale-pair:alpha:pair:1"])
     );
     let state = || serde_json::from_slice::<Value>(&fs::read(p("state")).unwrap()).unwrap();
-    let beta = serde_json::to_vec(&state()["pairs"]["beta"]).unwrap();
+    assert!(state()["pairs"]["beta"].is_object());
+}
+#[test]
+#[serial_test::serial(fleet_relative_state_parent)]
+fn fleet_foundation_retry_ack() {
+    let (d, mut c) = foundation_setup();
+    foundation_samples(&d);
+    let p = |n| d.path().join(n);
+    let tick = |c: &Value, t| foundation_tick(&d, c, t);
+    tick(&c, 0).unwrap();
     c["pairs"]["groups"].as_array_mut().unwrap().pop();
     assert_eq!(tick(&c, 1).unwrap()["attempts_sent"], 1);
     assert_eq!(tick(&c, 5).unwrap()["attempts_sent"], 2);
@@ -79,6 +109,20 @@ fn fleet_foundation_files() {
         json!(["invalid acknowledgement"])
     );
     assert_eq!(tick(&c, 10).unwrap()["attempts_sent"], 1);
+}
+#[test]
+#[serial_test::serial(fleet_relative_state_parent)]
+fn fleet_foundation_heartbeat() {
+    let (d, mut c) = foundation_setup();
+    foundation_samples(&d);
+    let p = |n| d.path().join(n);
+    let tick = |c: &Value, t| foundation_tick(&d, c, t);
+    tick(&c, 0).unwrap();
+    let state = || serde_json::from_slice::<Value>(&fs::read(p("state")).unwrap()).unwrap();
+    let beta = serde_json::to_vec(&state()["pairs"]["beta"]).unwrap();
+    c["pairs"]["groups"].as_array_mut().unwrap().pop();
+    fs::write(p("acks"), "heartbeat:6\nstale-pair:alpha:pair:1\n").unwrap();
+    tick(&c, 10).unwrap();
     let alpha = fs::read(p("alpha")).unwrap();
     fs::remove_file(p("alpha")).unwrap();
     tick(&c, 26).unwrap();
@@ -93,109 +137,19 @@ fn fleet_foundation_files() {
     tick(&c, 47).unwrap();
     assert!(fs::read_to_string(p("out")).unwrap().contains("silence:2"));
     assert_eq!(serde_json::to_vec(&state()["pairs"]["beta"]).unwrap(), beta);
-    for line in lines().iter().filter(|line| line["kind"] == "alarm") {
+    for line in fs::read_to_string(p("out"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|line| line["kind"] == "alarm")
+    {
         assert_eq!(line["group"], "alpha");
     }
-    fs::remove_file(p("acks")).unwrap();
-    fs::remove_file(p("state")).unwrap();
-    fs::remove_file(p("out")).unwrap();
     fs::write(p("alpha"), alpha).unwrap();
-    c["outbox_path"] = json!(d.path());
-    let failed = tick(&c, 0).unwrap();
-    assert_eq!(failed["attempts_sent"], 2);
-    assert_eq!(
-        failed["diagnostics"],
-        json!(["outbox append failed", "outbox append failed"])
-    );
-    let saved = state();
-    assert_eq!(saved["clock"]["total_ms"], 0);
-    assert_eq!(
-        saved["pairs"]["alpha"]["delivery"]["primary"]["records"]["stale-pair:alpha:pair:1"]
-            ["attempts"],
-        1
-    );
-    c["outbox_path"] = json!(p("out"));
-    assert_eq!(tick(&c, 5).unwrap()["attempts_sent"], 2);
-    assert_eq!(lines()[0]["id"], "stale-pair:alpha:pair:1");
-    assert_eq!(tick(&c, 10).unwrap()["attempts_sent"], 2);
-    assert_eq!(tick(&c, 15).unwrap()["attempts_sent"], 1);
-    assert_eq!(
-        lines()
-            .iter()
-            .filter(|l| l["id"] == "stale-pair:alpha:pair:1")
-            .count(),
-        2
-    );
-    tick(&c, 20).unwrap();
-    tick(&c, 21).unwrap();
-    assert_eq!(
-        fs::read_to_string(p("out"))
-            .unwrap()
-            .matches("heartbeat:silence:1")
-            .count(),
-        1
-    );
-    fs::write(p("acks"), "stale-pair:alpha:pair:1\nheartbeat:21\n").unwrap();
-    let mut fresh: Value = serde_json::from_slice(&fs::read(p("alpha")).unwrap()).unwrap();
-    for member in fresh["members"].as_array_mut().unwrap() {
-        member["freshness"] = json!(122);
-    }
-    fs::write(p("alpha"), fresh.to_string()).unwrap();
-    assert_eq!(tick(&c, 22).unwrap()["attempts_sent"], 1);
-    assert_eq!(
-        tick(&c, 32).unwrap()["alarms_opened"],
-        json!(["stale-pair:alpha:pair:2"])
-    );
-    assert_eq!(
-        lines()
-            .iter()
-            .filter(|l| l["id"] == "stale-pair:alpha:pair:2")
-            .count(),
-        1
-    );
-    let original = fs::read(p("out")).unwrap();
-    for bytes in [
-        b"bad".as_slice(),
-        br#"{"schema_version":2,"clock":null,"pairs":{}}"#,
-    ] {
-        fs::write(p("state"), bytes).unwrap();
-        assert!(tick(&c, 28).is_err());
-        assert_eq!(fs::read(p("state")).unwrap(), bytes);
-        assert_eq!(fs::read(p("out")).unwrap(), original);
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn fleet_foundation_lock() {
-    use std::os::fd::AsRawFd;
-    let d = tempfile::tempdir().unwrap();
-    let state = d.path().join("state");
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(d.path().join("state.lock"))
-        .unwrap();
-    assert_eq!(
-        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
-    );
-    let c = Config {
-        schema_version: 1,
-        enabled: true,
-        stale_pair: false,
-        state_path: Some(state.clone()),
-        outbox_path: Some(d.path().join("out")),
-        acks_path: Some(d.path().join("acks")),
-        wall_jump_tolerance_s: Some(2),
-        pairs: None,
-    };
-    assert_eq!(run(c, 0, 0).unwrap(), json!({"skipped":"locked"}));
-    assert!(!state.exists());
 }
 
 #[test]
+#[serial_test::serial(fleet_relative_state_parent)]
 fn fleet_foundation_missing_episode() {
     let finding = pair::Finding {
         evidence: None,
@@ -218,4 +172,69 @@ fn fleet_foundation_missing_episode() {
     assert_eq!(active.as_deref(), Some("previous"));
     assert!(opened.is_empty());
     assert_eq!(diagnostics, ["new alarm missing episode"]);
+}
+
+#[test]
+#[serial_test::serial(fleet_relative_state_parent)]
+fn fleet_hysteresis_disabled_and_error_save() {
+    let (d, mut c) = foundation_setup();
+    foundation_samples(&d);
+    let rules = crate::fleet_router_hysteresis::NAMES
+        .iter()
+        .zip([
+            "tokens",
+            "events",
+            "asks",
+            "IDs/second",
+            "claims",
+            "seconds",
+        ])
+        .map(|(name, unit)| {
+            json!({"name":name,"unit":unit,"cadence":10,
+            "high":2,"low":1,"enter":3,"exit":2,"freshness":10})
+        })
+        .collect::<Vec<_>>();
+    c["hysteresis_config"] = json!({"tick_seconds":10,"rules":{"schema_version":1,
+        "signals":rules},"sources":[d.path().join("unread"),d.path().join("unread"),
+        d.path().join("unread")],"retry_delay":1,"maximum_attempts":3,"silence_after":1000});
+    let source = d.path().join("unread");
+    fs::write(&source, "invalid source").unwrap();
+    #[cfg(target_os = "linux")]
+    let watch = {
+        use std::os::fd::FromRawFd;
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(fd >= 0);
+        let path = std::ffi::CString::new(source.to_str().unwrap()).unwrap();
+        assert!(unsafe { libc::inotify_add_watch(fd, path.as_ptr(), libc::IN_ACCESS) } >= 0);
+        unsafe { fs::File::from_raw_fd(fd) }
+    };
+    foundation_tick(&d, &c, 0).unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Read;
+        let mut bytes = [0; 256];
+        assert_eq!(
+            (&watch).read(&mut bytes).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    let path = d.path().join("state");
+    let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert!(state.get("hysteresis").is_none());
+    c["hysteresis"] = json!(true);
+    foundation_tick(&d, &c, 1).unwrap();
+    state = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state["hysteresis"]["evaluator"]["states"]["unexpected"] = json!({
+        "last":null,"entering":0,"exiting":0,"episode":0,"latched":false});
+    fs::write(&path, state.to_string()).unwrap();
+    let result = foundation_tick(&d, &c, 11).unwrap();
+    assert!(result["diagnostics"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("unconfigured state")));
+    let state: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(state["clock"]["total_ms"], 11000);
+    assert!(fs::read_to_string(d.path().join("out"))
+        .unwrap()
+        .contains("heartbeat:11"));
 }

@@ -70,7 +70,7 @@ def test_router_requeue(tmp_path):
         w.close()
 
 
-def test_owner_changes_are_chained_and_retirement_is_bounded(tmp_path):
+def test_owner_changes_are_chained_and_the_fence_never_forgets(tmp_path):
     import json
     from plangraph.keeper import events
 
@@ -88,8 +88,8 @@ def test_owner_changes_are_chained_and_retirement_is_bounded(tmp_path):
         row = w.conn.execute("SELECT exec_retired_runs FROM items WHERE key=?",
                              (key,)).fetchone()
         retired = json.loads(row[0])
-        assert len(retired) == 16
-        assert retired[0]["run_id"] == "run-2"
+        assert len(retired) == 18
+        assert retired[0]["run_id"] == "run-0"
         assert all(entry["attempt"] == 2 for entry in retired)
         count = w.conn.execute("SELECT COUNT(*) FROM events WHERE type=?",
                                ("exec_owner_changed",)).fetchone()[0]
@@ -104,3 +104,39 @@ def test_requeue_is_on_router_transport_surface():
 
     assert "requeue" in api_routes.WRITE_VERBS
     assert any(tool["name"] == "requeue" for tool in mcp.TOOLS)
+
+
+def test_park_forward_refusal_preserves_claim_and_bad_state(tmp_path, monkeypatch):
+    from plangraph.keeper import store_worker
+
+    w = World(tmp_path)
+    try:
+        key, = seed(w, [("A", [])])
+        w.store.claim(w.p("workerA"), key)
+        w.conn.execute("UPDATE items SET state='running' WHERE key=?", (key,))
+        w.conn.commit()
+        before = dict(w.store._item(key))
+        monkeypatch.setattr(store_worker, "_forward", lambda source, target: False)
+        with pytest.raises(Refused) as exc:
+            w.store.worker_park(w.p("workerA"), {
+                "card": key, "exit_class": "needs_input", "expected_state": "running"})
+        assert exc.value.code == "bad_state"
+        assert dict(w.store._item(key)) == before
+        w.conn.execute("UPDATE items SET state='claimed' WHERE key=?", (key,))
+        w.conn.commit()
+        monkeypatch.setattr(store_worker, "_forward", lambda source, target: True)
+        w.store.worker_park(w.p("workerA"), {
+            "card": key, "exit_class": "needs_input"})
+        assert w.store._item(key)["state"] == "parked"
+        assert w.store._item(key)["claimed_by"] is None
+    finally:
+        w.close()
+
+
+def test_clear_payload_contract_documents_implementation():
+    from pathlib import Path
+
+    adr = Path("docs/adr-exec-ownership.md").read_text()
+    assert "`ExecMixin._exec_clear` in `src/plangraph/keeper/store_exec.py`" in adr
+    assert "new rows carry only the cleared run's entry" in adr
+    assert "authoritative full fence is `items.exec_retired_runs`" in adr

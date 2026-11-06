@@ -1,5 +1,45 @@
 # Spawner reliability
 
+## RL13: weak CPU activity (P-R6)
+
+`cpu::Sampler` is a pure thirty-second sampler with no daemon caller or switch.
+RL14 binds its closure to the owned spawn identity in RL12 `Hooks.cpu`; no
+child-id hook is assumed. Rollback is `git revert`.
+The first read establishes a baseline. Errors, regressing clocks/counters and
+Linux source transitions discard comparison evidence. Zero thresholds mean
+one millisecond; large time jumps produce at most one weak signal.
+
+Linux prefers a watchdog-validated run-scope cgroup `usage_usec`, otherwise
+enumerates the owned process group under `/proc`. Per-(pid,starttime) deltas
+exclude child cumulative times and baseline new members, preserving exited
+members' accumulated CPU without counting PID reuse. Paths and group identity
+are trusted supervisor inputs, never card authority. Empty groups add no CPU.
+Unsupported platforms expose no Linux source; Windows Job Object accounting
+remains the Windows supervisor's responsibility.
+
+CPU refreshes only ACTIVE last_signal, not last_strong, first activity or
+milestones; repeated CPU never satisfies F. Fixtures and owned local shell
+children exercise real accounting with scaled scheduling, not thirty-second
+sleeps. Historical harness-version fixtures/oracle parity, green CI and an
+ACCEPT outside writer families remain external acceptance requirements; these
+local tests do not claim them.
+
+## RL27: inline review diff transport
+
+Tools-mode injection defaults off; rollback is off. The operator environment
+`PLANGRAPH_RELIABILITY_INLINE_REVIEW_DIFF` overrides `inline_review_diff` in
+the operator config `plangraph/reliability.json`; `roles.review` overrides the
+global setting. Shadow computes a boolean count without changing the prompt.
+Inline-only review requires diff_ref and the NO-tools header even when off.
+Repositories resolve through the self host in operator-owned hosts.json, never
+adapter cwd. Raw diffs are capped at 262144 bytes before lossy UTF-8 decoding.
+Only exact stdin carriers are injected; multiline .cmd/.bat launchers refuse.
+Prompt persistence and hashing remain the final redaction step. No workspace
+cleanup or verdict classification changes are included.
+
+External ACCEPT and the live tools-mode seat gate remain operator-only checks;
+local synthetic tests do not constitute either gate. Keep the switch off at merge.
+
 ## RL19: read-only research reports
 
 Reports include TOOL_CALL_ONLY floor counts per launch, sibling-OK within 30 minutes
@@ -173,6 +213,21 @@ Tests use real local children, synthetic parsers, integer-second event limits
 and scheduler slack; they cover bounded I/O, Blind, escalation and escaped pipes.
 Notifications/persistence, CPU sampling and safe fall-through remain RL14/RL17,
 RL13 and RL15 respectively; no daemon or harness integration is enabled.
+
+Inline review regression checks cover marker replacement, native stdin bytes,
+unknown carriers, redaction and final-prompt hashes before dispatch, disabled Git
+extensions, and cleanup restricted to live owned children. Batch launchers are
+inspected case-insensitively; multiline native launchers remain supported.
+
+Inline review refuses missing mandatory `diff_ref` before carrier validation.
+Multiline prompts reject `.cmd`/`.bat` at any argv position; inline payload
+marker/fence sequences are escaped. Timeout cleanup never waits for escaped
+stdout holders outside the invocation-owned process group.
+
+Exact-diff regression checks compare raw text and binary patch bytes with
+`git diff --binary base head`. Tools-mode reviews without a prompt stay unchanged
+when no diff is injected; mandatory inline reviews still require a safe carrier.
+Prompt persistence ordering checks ignore source indentation.
 
 Health research reports retain all recognized neutral outcomes in chronological
 health replay and preserve their raw reset timestamps separately from effective

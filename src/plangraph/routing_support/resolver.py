@@ -722,6 +722,8 @@ def select_top_candidate(
 
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     d = dict(row)
+    # Legacy/off-mode reader catalog_row_admitted still needs explicit admission
+    # defaults. Enabled LegAdapter admission ignores these availability fields.
     d.setdefault('available', 0)
     d.setdefault('active', False)
     if "id" not in d and "model_id" in d:

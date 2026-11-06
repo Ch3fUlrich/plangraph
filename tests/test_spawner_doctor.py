@@ -15,10 +15,23 @@ from plangraph.spawner import doctor as d
 from plangraph.spawner.service import SpawnService as RealService
 
 
+@pytest.fixture(autouse=True)
+def watchdog_state():
+    environment, values = dict(os.environ), set(d._watchdog_values)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(environment)
+        d._watchdog_values.clear()
+        d._watchdog_values.update(values)
+
+
 @pytest.fixture
 def host(tmp_path, monkeypatch):
     from plangraph.planner import legs
     from plangraph.spawner import service, leg_probe
+    monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('PATH', str(tmp_path))
     token = tmp_path / 'credential'
     token.write_text('planted-credential-value')
@@ -46,6 +59,107 @@ def host(tmp_path, monkeypatch):
         pytest.fail('default must not call probe')
     monkeypatch.setattr(leg_probe, 'probe_many', no_probe)
     return tmp_path
+
+
+def watchdog_env(host, text):
+    path = host / '.config/plangraph/watchdog.env'
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+    return path
+
+
+@pytest.mark.parametrize('existing', [None, '', 'shell-choice'])
+def test_watchdog_env_precedence(host, monkeypatch, existing):
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    if existing is not None:
+        monkeypatch.setenv('DOCTOR_SETTING', existing)
+    watchdog_env(host, 'DOCTOR_SETTING=file-choice\n')
+    d.load_watchdog_env()
+    assert os.environ['DOCTOR_SETTING'] == ('file-choice' if existing is None else existing)
+
+
+def test_watchdog_env_missing(host):
+    before = dict(os.environ)
+    d.load_watchdog_env()
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize('value', ['1', 'info', '1234567', 'a.b'])
+def test_watchdog_env_short_value_preserves_output(host, monkeypatch, value):
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    watchdog_env(host, f'DOCTOR_SETTING={value}\n')
+    d.load_watchdog_env()
+    text = f'python3.11 x{value} {value}x _{value} {value}-'
+    assert d.clean(text) == text
+    assert d.clean(f'({value})') == '([REDACTED])'
+    if value == 'a.b':
+        assert d.clean('aXb') == 'aXb'
+
+
+def test_watchdog_state_restores_loaded_values(host, monkeypatch):
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    environment, values = dict(os.environ), set(d._watchdog_values)
+    state = watchdog_state.__wrapped__()
+    next(state)
+    try:
+        watchdog_env(host, 'DOCTOR_SETTING=isolation-private-value\n')
+        d.load_watchdog_env()
+        assert os.environ['DOCTOR_SETTING'] == 'isolation-private-value'
+        assert 'isolation-private-value' in d._watchdog_values
+    finally:
+        state.close()
+    assert dict(os.environ) == environment
+    assert d._watchdog_values == values
+
+
+def test_watchdog_env_discarded_value_not_redacted(host, monkeypatch):
+    monkeypatch.setattr(d, '_watchdog_values', set())
+    monkeypatch.setenv('DOCTOR_SETTING', 'shell-choice')
+    watchdog_env(host, 'DOCTOR_SETTING=/usr/bin\n')
+    d.load_watchdog_env()
+    assert os.environ['DOCTOR_SETTING'] == 'shell-choice'
+    assert d.clean('executable in /usr/bin') == 'executable in /usr/bin'
+
+
+@pytest.mark.parametrize('failure', [PermissionError, UnicodeError])
+def test_watchdog_env_unreadable(host, monkeypatch, failure):
+    def unreadable(*args, **kwargs):
+        raise failure()
+    monkeypatch.setattr(Path, 'read_text', unreadable)
+    before = dict(os.environ)
+    d.load_watchdog_env()
+    assert dict(os.environ) == before
+
+
+def test_watchdog_env_parsing(host, monkeypatch, capsys, caplog):
+    for key in ('DOCTOR_DOUBLE', 'DOCTOR_SINGLE', 'DOCTOR_BARE'):
+        monkeypatch.delenv(key, raising=False)
+    watchdog_env(host, '\n  # ignored=yes\nnot an assignment\n'
+                 ' DOCTOR_DOUBLE = "double=quoted" \n'
+                 "DOCTOR_SINGLE = 'single quoted'\nDOCTOR_BARE = bare=value\n")
+    d.load_watchdog_env()
+    assert os.environ['DOCTOR_DOUBLE'] == 'double=quoted'
+    assert os.environ['DOCTOR_SINGLE'] == 'single quoted'
+    assert os.environ['DOCTOR_BARE'] == 'bare=value'
+    assert capsys.readouterr() == ('', '')
+    assert not caplog.records
+
+
+@pytest.mark.parametrize('value', ['synthetic-private-setting', 'sh0rt'])
+@pytest.mark.parametrize('argv', [['--json'], []])
+def test_watchdog_env_json_no_values(isolated, monkeypatch, capsys, caplog, value, argv):
+    assert Path.home() == isolated
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    watchdog_env(isolated, f'DOCTOR_SETTING={value}\n')
+    async def mcp(module):
+        assert os.environ['DOCTOR_SETTING'] == value
+        raise RuntimeError(os.environ['DOCTOR_SETTING'])
+    monkeypatch.setattr(d, 'mcp', mcp)
+    assert d.main(argv) == 1
+    captured = capsys.readouterr()
+    assert value not in captured.out + captured.err + caplog.text
+    if argv:
+        assert json.loads(captured.out)['checks'][0]['detail'] == 'RuntimeError: [REDACTED]'
 
 
 def run(coro):

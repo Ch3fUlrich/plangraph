@@ -242,7 +242,8 @@ class _ConfigMixin:
         # Dash guard runs on the raw prompt text, before any handoff prefix.
         if text.startswith("-"):
             raise _refuse("prompt must not start with '-'")
-        return text
+        from .prompt_guard import admit_prompt
+        return admit_prompt(text, _refuse)
 
     def _style_text(self, cfg):
         style = cfg.get("style_text")

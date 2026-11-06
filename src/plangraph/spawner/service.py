@@ -29,12 +29,10 @@ class SpawnService(SeatSpawnMixin):
         if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):  # probes write where the planner reads
             self.runner.leg_reader = leg_reader
         self.tasks, self._running_records = {}, {}   # run tasks; job id -> record (Q13/M8)
-
     def _path(self, run_id):
         if not isinstance(run_id, str) or not run_id.startswith('run-') or not run_id[4:].isalnum():
             raise ValueError('unknown run id')
         return self.state / 'runs' / run_id / 'record.json'
-
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
@@ -144,32 +142,6 @@ class SpawnService(SeatSpawnMixin):
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
 
-    async def spawn(self, *args, **kwargs):
-        try:
-            import inspect
-            bound = inspect.signature(self._spawn).bind(*args, **kwargs)
-            options = dict(bound.arguments)
-            card = options.get('card')
-            if card and card.get('findings') and options.get('role', 'implement') == 'implement':
-                from .fixer import split_findings, render_fixer_brief
-                from plangraph.settings import admit_fixer_threshold
-                # No keeper item is held here: the trusted layers are global
-                # and the card's project/phase layers may only tighten (R3).
-                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card=card))
-                if len(groups) > 1:
-                    async def dispatch(group):
-                        child = dict(card, findings=list(group))
-                        child_options = dict(options, card=child, prompt=render_fixer_brief(group))
-                        return await self._spawn(**child_options)
-                    return {'writers': await asyncio.gather(*(dispatch(g) for g in groups))}
-                options['prompt'] = render_fixer_brief(groups[0])
-                return await self._spawn(**options)
-            return await self._spawn(*args, **kwargs)
-        except Exception as exc:
-            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'),
-                              card=kwargs.get('card', args[0] if args else None))
-            raise
-
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
@@ -261,6 +233,7 @@ class SpawnService(SeatSpawnMixin):
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
             from plangraph.planner.legs import NO_VERDICT_SEATS, leg_active
+            from plangraph.routing_support.liveness import require_available
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
@@ -291,6 +264,7 @@ class SpawnService(SeatSpawnMixin):
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
+            require_available(chosen, self.leg_reader, card)
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
