@@ -1,1 +1,1 @@
-Test pilot attempt redaction across exit modes and keeper payloads, including the below-floor second-line policy, typed admission refusals, explicit test allowlists, and counter-unique test card keys.
+Test pilot attempt redaction across exit modes and keeper payloads, including the S1-family-floor-bound second-line policy and suffix leak checks, typed admission refusals, and counter-unique test card keys.

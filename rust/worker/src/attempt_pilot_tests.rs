@@ -60,10 +60,17 @@ fn pilot_activity_owner_and_empty_claim() {
 }
 
 #[test]
-fn pilot_history_excludes_secrets_and_preserves_below_floor_second_line() {
+fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_second_line() {
     use crate::keeper::AttemptReport;
     use pg_worker_core::packet::ParkPacket;
-    let secret = ["sk-", "pilotseed0123456789abcdef"].concat();
+    // Import the crate-private S1 policy as source, without compiling its core-only tests.
+    let policy = include_str!("../../worker-core/src/redact_tokens.rs");
+    let family = policy.split("prefix: \"gh[pousr]_\"").nth(1).unwrap();
+    let floor: usize = family.split("floor:").nth(1).unwrap()
+        .split(',').next().unwrap().trim().parse().unwrap();
+    let fragment = "0123456789abcdef";
+    assert!(fragment.len() < floor, "second-line fragment must stay below the S1 family floor");
+    let secret = ["ghp_", "pilotseed0123456789abcdef"].concat();
     for (mode, ending, expected) in [
         ("clean", "echo hi > out.txt", ExitClass::Ok),
         ("failed", "exit 1", ExitClass::WorkerCrash),
@@ -80,7 +87,7 @@ fn pilot_history_excludes_secrets_and_preserves_below_floor_second_line() {
             root.path(),
         );
         let script = match mode {
-            "split" => format!("printf '{secret}\\n0123456789abcdef\\n'; {ending}"),
+            "split" => format!("printf '{secret}\\n{fragment}\\n'; {ending}"),
             "question" => format!(
                 "echo 'PG_QUESTION: {{\"text\":\"{secret}\",\"default\":\"{secret}\",\"risk_tags\":[\"{secret}\"]}}'"
             ),
@@ -103,12 +110,14 @@ fn pilot_history_excludes_secrets_and_preserves_below_floor_second_line() {
         assert_eq!(result.exit_class, expected, "{mode}");
         let safe = |body: &str| {
             assert!(!body.contains(&secret), "{mode}: {body}");
-            assert!(!body.contains("sk-pilotseed"), "{mode}: {body}");
+            for start in 1..=secret.len() - floor {
+                assert!(!body.contains(&secret[start..]), "{mode}: leaked suffix: {body}");
+            }
         };
         if mode == "split" {
             // S1's floor policy never joins the next line after reaching the floor.
-            // This standalone 16-hex second line is below the floor, not a secret.
-            assert_eq!(result.output_tail, "[REDACTED]\n0123456789abcdef");
+            // The standalone second line is below the imported family floor.
+            assert_eq!(result.output_tail, format!("[REDACTED]\n{fragment}"));
         }
         safe(&serde_json::to_string(&result).unwrap());
         safe(
