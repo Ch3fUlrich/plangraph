@@ -1,0 +1,1 @@
+- **PG-CI-DOWNLOAD-RETRY:** CI curl downloads retry transient failures; a test reads the workflows and names a download without the flags.
