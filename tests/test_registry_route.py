@@ -31,8 +31,8 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 @pytest.fixture(autouse=True)
 def fixed_route_table(monkeypatch):
-    # Registry/coverage behavior is independent of current provider credits.
-    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
+    # Historical registry/policy behavior is independent of credits and D-4196.
+    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash" or leg.model.startswith("opencode/")
                  else leg for leg in DEFAULT_LEGS)
     monkeypatch.setitem(plan_spawn.__kwdefaults__, "legs", legs)
 

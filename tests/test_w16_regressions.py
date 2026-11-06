@@ -86,7 +86,7 @@ def test_unknown_variants_refused_by_route_spawn_override(tmp_path, model):
     with pytest.raises(SpawnRefused):
         validate_model(model)
     with pytest.raises(SpawnRefused):
-        plan_spawn({'estimate_tokens': 100}, role='implement', legs=(replace(DEFAULT_LEGS[0], model=model),))
+        plan_spawn({'estimate_tokens': 100}, role='implement', legs=(replace(DEFAULT_LEGS[0], model=model, disabled=None),))
     with pytest.raises(SpawnRefused):
         asyncio.run(SpawnerRunner().spawn('p', model_or_combo=model, dry_run=True))
     with pytest.raises(SpawnRefused):
@@ -280,7 +280,7 @@ def test_selection_skip_keeps_window_evidence():
     from dataclasses import replace
     from plangraph.planner.routing import plan_spawn
     from plangraph.planner.legs import DEFAULT_LEGS
-    leg = replace(next(l for l in DEFAULT_LEGS if 'implement' in l.roles), max_request_tokens=1)
+    leg = replace(next(l for l in DEFAULT_LEGS if 'implement' in l.roles and not l.disabled), max_request_tokens=1)
     plan = plan_spawn({'estimate_tokens': 100}, role='implement', legs=(leg,))
     assert plan.skipped[0]['evidence']['error']
 

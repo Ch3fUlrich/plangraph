@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+from dataclasses import replace
 
 from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
 from plangraph.planner.routing import plan_spawn
@@ -8,7 +9,7 @@ from plangraph.spawner.cli import main
 from plangraph.spawner.mcp import MCPSpawnerServer
 
 CARD = {'estimate_tokens': 1000}
-WRITERS = tuple(l for l in DEFAULT_LEGS if 'implement' in l.roles)
+WRITERS = tuple(replace(l, disabled=None) for l in DEFAULT_LEGS if 'implement' in l.roles)
 LEAD = next(l for l in WRITERS if l.id == LEAD_WRITER)
 
 
@@ -34,7 +35,7 @@ def test_candidate_json_and_limit():
                 'evidence': evidence if model == WRITERS[6].model else None}
     data = rows()
     del data[WRITERS[0].model]
-    plan = plan_spawn(CARD, role='implement', benchmark=data, leg_reader=reader)
+    plan = plan_spawn(CARD, role='implement', benchmark=data, leg_reader=reader, legs=WRITERS)
     assert plan.first_leg == LEAD
     assert WRITERS[6] not in plan.legs
     candidates = {c['leg']: c for c in plan.to_dict()['candidates']}
