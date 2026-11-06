@@ -1,0 +1,1 @@
+- Add the Rust placement-rule validation and report bridge for keeper integration.

@@ -9,6 +9,24 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
 
 
+def without_progress(text):
+    """OpenCode tool diagnostics are not failure evidence (including ANSI output)."""
+    from .env_redact import normalize
+    return '\n'.join(line for line in text.splitlines()
+                     if not normalize(line).lstrip().startswith(('✱', '→', '>', '$')))
+
+
+def is_opencode(job):
+    from pathlib import Path
+    command = getattr(job, 'command', ()) if job is not None else ()
+    return bool(command and Path(command[0]).name == 'opencode')
+
+
+def failure_reason(job, stop=None):
+    text = without_progress(job.stderr) if is_opencode(job) else job.stderr
+    return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+
+
 def _booking_seconds():
     """H1: the booked-down window is clamped to [60, 86400] seconds.
 
@@ -112,10 +130,49 @@ def _book_failure(service, chosen, line):
         target.quarantine(key(chosen))
 
 
+def tool_call_only(job, record):
+    """Recognize a whole text-call response, never a mention in real prose."""
+    import re
+    import subprocess
+    from .env_redact import normalize
+    events = getattr(job, 'events', ())
+    protected = ('git_config_mutated', 'cancelled')
+    if (record.get('reason') in protected or record.get('reason') == 'kill_incomplete'
+            or any(e.get('event') in protected for e in [*events, *record.get('events', ())])
+            or getattr(job, 'status', None) not in ('completed', 'failed')):
+        return False
+    text = '\n'.join(line for line in normalize(job.stdout).splitlines()
+                     if not re.fullmatch(r'\s*>\s+\S+\s+·\s+\S+\s*', line))
+    if not re.fullmatch(r'\s*(?:<tool_call>\s*<function=[^<>]+>(?:(?!</?tool_call>|</function>).)*'
+                        r'</function>\s*</tool_call>\s*)+', text, re.S):
+        return False
+    if getattr(job, 'role', None) == 'implement':
+        baseline = next((e for e in events if e.get('event') == 'writer_baseline'), {})
+        if 'commits' in baseline and getattr(job, 'writer_email', None):
+            from .opencode_isolation import writer_commits
+            try:
+                if writer_commits(job.cwd, job.writer_email) - set(baseline['commits']):
+                    return False
+            except (OSError, subprocess.SubprocessError):
+                return False  # do not override uncertain commit evidence
+    return True
+
+
 def fallthrough_reason(service, chosen, job, record):
     if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
-    line = harness_limit_line(job.exit_code, job.stdout, job.stderr)
+    # Before the terminal check: text-call output replaces writer_no_changes; tool_call_only keeps the other terminals.
+    if tool_call_only(job, record):
+        job.events = [e for e in getattr(job, 'events', ()) if e.get('event') != 'writer_no_changes']
+        record['events'] = [e for e in record.get('events', ()) if e.get('event') != 'writer_no_changes']
+        record['reason'] = 'tool_call_only'
+        return 'tool_call_only'
+    if record.get('reason') in (*TERMINAL_REASONS, 'kill_incomplete') or any(
+            e.get('event') in TERMINAL_REASONS
+            for e in (*record.get('events', ()), *getattr(job, 'events', ()))):
+        return None   # terminal verdicts must stop dispatch, not merely keep their name
+    streams = (job.stdout, job.stderr)
+    line = harness_limit_line(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
         # not in the captured output) books and notifies like any harness limit.
@@ -136,7 +193,8 @@ def fallthrough_reason(service, chosen, job, record):
         reason = 'harness_limit: ' + line
         notify_leg_refused(service, record, chosen, reason)
         return reason
-    reason = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+    streams = (job.stdout, job.stderr)
+    reason = unavailable_reason(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if reason is not None:
         _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
@@ -159,7 +217,7 @@ def release_attempts(service, record):
         tasks.pop(job_id, None)
 
 
-def terminal_reason(record):
+def terminal_reason(record, job=None):
     """Q8/M15: the run's reason describes how the run ENDED.
 
     A 'harness_limit' stamped by an earlier fallthrough leg never survives a
@@ -174,11 +232,16 @@ def terminal_reason(record):
     if special is not None:
         record['reason'] = special
         return
+    opencode = is_opencode(job) or (record.get('chosen_leg') or {}).get('harness') == 'opencode'
+    if opencode:
+        for field in ('reason', 'error'):
+            if record.get(field):
+                record[field] = without_progress(record[field])
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
-    if reason == 'harness_limit':
+    if reason in ('harness_limit', 'tool_call_only'):
         if ended_ok:
             record.pop('reason', None)   # the fallthrough stamp is stale
             return
@@ -195,8 +258,11 @@ def terminal_reason(record):
         record['reason'] = reason
         return
     if record.get('exit_code') not in (None, 0):
+        stderr = record.get('stderr_tail', '')
+        if opencode:
+            stderr = without_progress(stderr)
         record['reason'] = (reason or record.get('error')
-                            or first_reason(record.get('stderr_tail', ''))
+                            or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
 
 

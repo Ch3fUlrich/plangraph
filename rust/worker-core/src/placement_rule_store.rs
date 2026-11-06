@@ -59,8 +59,13 @@ pub trait RuleStore {
     fn commit(&mut self, actor: &str, edit: &RuleEdit) -> Result<RuleAudit, StoreError>;
 }
 
-fn validate(scope: &RuleScope, key: &str, value: Option<&str>) -> Result<(), StoreError> {
-    if matches!(scope, RuleScope::Host(host) if host.trim().is_empty()) {
+pub fn validate_override(
+    scope: &RuleScope,
+    key: &str,
+    value: Option<&str>,
+) -> Result<(), StoreError> {
+    if matches!(scope, RuleScope::Host(host) if host.trim().is_empty() || host.len() > 64 || host.chars().any(char::is_control))
+    {
         return Err(StoreError::Invalid);
     }
     let specs = schema().map_err(|_| StoreError::Invalid)?;
@@ -91,19 +96,22 @@ pub fn edit(
     if actor.trim().is_empty() {
         return Err(StoreError::Unauthorized);
     }
-    validate(&request.scope, &request.key, request.value.as_deref())?;
+    validate_override(&request.scope, &request.key, request.value.as_deref())?;
     store.commit(actor, &request)
 }
-fn validate_snapshot(snapshot: &RuleSnapshot) -> Result<(), StoreError> {
+pub(crate) fn validate_snapshot(snapshot: &RuleSnapshot) -> Result<(), StoreError> {
+    if snapshot.revision > i64::MAX as u64 {
+        return Err(StoreError::Invalid);
+    }
     for (key, value) in &snapshot.fleet {
-        validate(&RuleScope::Fleet, key, Some(value))?;
+        validate_override(&RuleScope::Fleet, key, Some(value))?;
     }
     for (host, rules) in &snapshot.hosts {
-        if host.trim().is_empty() {
+        if host.trim().is_empty() || host.len() > 64 || host.chars().any(char::is_control) {
             return Err(StoreError::Invalid);
         }
         for (key, value) in rules {
-            validate(&RuleScope::Host(host.clone()), key, Some(value))?;
+            validate_override(&RuleScope::Host(host.clone()), key, Some(value))?;
         }
     }
     Ok(())

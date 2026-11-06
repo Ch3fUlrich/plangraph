@@ -31,6 +31,7 @@ from typing import Any
 from .evidence_ci import CIAdapter
 from .evidence_decisions import DecisionsAdapter
 from .evidence_floor import check_floor
+from .evidence_pr import validate_merge
 from .evidence_forgejo import ForgejoStatusAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_repo import repo_key
@@ -378,15 +379,9 @@ class CommitCiVerifier:
                 f"commit {commit} is not reachable from {target_ref} through a merged PR (direct push or unmerged)",
                 ref,
             )
-        _merge_sha, email = merge_info
-        principals = getattr(ctx, "merge_principals", ())
-        if principals:
-            allowed = {p.lower() for p in principals if isinstance(p, str)}
-            if email.lower() not in allowed:
-                return _fail(
-                    f"merge commit committer {email!r} is not an allowed merge principal",
-                    ref,
-                )
+        refusal = validate_merge(ctx, project, merge_info, target_ref, ref)
+        if refusal is not None:
+            return refusal
 
         # The ancestry floor for the repo the commit resolved to: bind_floor_sha
         # for the primary key, bases[track_key] for a track repo (D-3335).
@@ -680,10 +675,10 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file")),
+        spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
         merge_principals=_principals(_cfg(config, "merge_principals")),
         skew=float(_cfg(config, "skew", DEFAULT_SKEW_S)),
     )
-    context.spawner_records = SpawnerRecordAdapter(_cfg(config, "spawner_records_dir"))
     return context

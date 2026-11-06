@@ -1,5 +1,22 @@
 # Placement rule loader (R8B A)
 
+## C2 existing-keeper SQLite storage (D5)
+
+Schema v17 installs revision, override and immutable audit tables in the existing
+keeper; no new store or database file is introduced. Missing singleton means
+logical revision zero; C4's first edit transaction inserts it. Installation is
+presence-based and DML-free, with no seed overrides: A owns defaults/seeds.
+`edit` holds exact canonical RuleEdit JSON including `expected_revision` and
+`rollback_of`; `previous` is nullable. Audit UPDATE/DELETE abort. Rollback is a
+new forward audit event, never an item event or a fabricated item key. No secrets
+or host metrics belong in these tables. C4 owns transaction/audit behavior;
+C2 alone does not satisfy item done criteria or claim closure. PG parity and
+row-preserving rollback belong to C3. See the migration-gates section below for GO.
+
+### Migration-gates: placement rules C2 (D5 / GO)
+
+Schema application is a GATED STEP: operator GO must name the reviewed SHA and scope, with a backup and offline rehearsal before application. Only the operator may approve keeper restart/SQLite upgrade; C3 owns the migrate-role PostgreSQL step and row-preserving rollback. Writers run only temporary fixture databases, never open live config/DB, print secret DSNs, or clean up outside fixture ownership. All touched keeper modules are auth-door paths, not a Hand-Edit exemption. Downgrade disables rules endpoints first and preserves the ledger: never drop audit rows. C4 owns transactions, including rollback as a new forward audit event; this is not the item events ledger. C2 installs storage only, not item closure.
+
 `setup/placement-rules.schema.toml` is the sole metadata authority, embedded at
 compile time. `schema()` fails closed with `rules_schema`; it never substitutes
 defaults after a parse failure. The parser accepts only version 1, rule records,
@@ -39,7 +56,7 @@ Only Unavailable permits validated version-1 LKG fallback, without offline expir
 The private adapter-owned cache is bounded to 1 MiB, excludes process/env-file
 layers, rejects symlinks/nonregular files and uses a sibling lock/temp plus sync
 and rename. The adapter must display revision and online/offline source and
-resolve current process/env-file inputs afresh. No unauthenticated CLI is added.
+resolve current process/env-file inputs afresh. No unauthenticated edit CLI is added.
 
 Dependencies before item closure: authenticated keeper endpoints, durable
 transaction adapter and event mapping, UI transport using A specs/report,
@@ -52,6 +69,34 @@ Role rollout remains off/shadow/on and gated on R7. HOST-AGENT and
 HOST-SAMPLES-API retain independent services/stores and all sampler, ingest,
 staleness and retention ownership; they supply no rule inputs.
 
-The 400-line budget counts production lines only: this boundary has 202 production
-lines. Each file independently stays within 400 lines; sibling tests do not count
-against the production budget. No size-driven split is needed.
+## C1 pure Rust bridge
+
+`placement_rule_bridge::handle` accepts strict JSON requests: `{op:"specs"}`,
+`{op:"validate",edit:RuleEdit}`, or `{op:"report",snapshot:RuleSnapshot,
+host_class:String,host_id:String,process:Map,env_file:Map}`. Results are respectively
+`{specs}`, `{}`, and `{specs,report}`. Scope retains Rust's wire format: `"Fleet"`
+or `{"Host":"id"}`. Validation delegates to `validate_override`; reports validate
+every stored override before using the selected host and fleet layers with A's
+resolver. Unknown fields, operations and stored keys are refused. Host IDs are
+opaque data keys, nonblank, without control characters, at most 64 UTF-8 bytes;
+revisions must fit a nonnegative signed 64-bit database integer.
+
+`pg-placement-rules` takes no arguments and reads one JSON document (at most
+1 MiB) from stdin, emitting one `{ok:result}` document (exit 0) or
+`{error:stable StoreError code}` (exit 2), without echoing input. It does not read
+environment values, authenticate, edit, cache, access the network or run commands.
+An actor string does not authenticate anyone, including at the Rust edit boundary.
+Report process/env-file maps and host class are trusted adapter inputs, never
+keeper HTTP request-body fields. Later slices own authenticated transactions
+and HTTP RuleStore integration; this bridge alone does not close the item.
+
+Rule values retain RuleReport's u64 JSON representation. Browser consumers must
+reject integers outside their safe integer range rather than silently round.
+No auth-door paths, admission policies or host-registry defaults change here.
+
+The 400-line budget counts production lines only; sibling tests do not count
+against that budget, and every file independently remains at most 400 lines.
+Cargo builds the executable for the integration tests; no separate pre-build
+or nested Cargo invocation is needed. Run `cargo test -p pg-worker-core
+placement_rule`: the integration tests execute and reap Cargo's binary with
+a cleared child environment.

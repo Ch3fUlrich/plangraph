@@ -284,7 +284,7 @@ def test_relative_source_resolved_against_batch_dir(world, srv, token_file,
     monkeypatch.chdir(elsewhere)
     calls = []
     orig_post = apply_batch.Session.post
-    def spy(self, verb, body):
+    def spy(self, verb, body, timeout=None):
         calls.append((verb, body))
         return orig_post(self, verb, body)
     apply_batch.Session.post = spy

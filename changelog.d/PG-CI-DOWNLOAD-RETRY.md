@@ -1,0 +1,1 @@
+- **PG-CI-DOWNLOAD-RETRY:** Retry transient workflow downloads five times and guard retry flags with offline workflow tests, preserving checksum verification.

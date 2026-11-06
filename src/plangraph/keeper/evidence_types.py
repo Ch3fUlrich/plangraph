@@ -69,6 +69,7 @@ class Context:
     bind_floor_shas: dict | None = None
     bind_floor_required: bool = True
     skew: float = DEFAULT_SKEW_S
+    spawner_records: Any = None
 
 
 def as_epoch(value: Any) -> float | None:
