@@ -106,11 +106,10 @@ fn review_tool_only_peer_and_last_leg() {
     assert!(out[0].1.review_unfit);
     let mut r = row(Class::ToolCallOnly, 1);
     r.role = Role::Implement;
-    let h = fold("a", "served", Role::Implement, &[r], 2);
-    assert_eq!(h.strikes, 1);
-    assert_eq!(h.reason, Some(Class::ToolCallOnly));
-    assert_eq!(h.state, State::Open);
-    assert!(!h.review_unfit);
+    assert_eq!(
+        fold("a", "served", Role::Implement, &[r], 2),
+        Health::default()
+    );
 }
 
 #[test]
