@@ -1,4 +1,6 @@
 use super::*;
+// not-applicable: auth staging already excludes .gitconfig; extend the fixture
+// to the operator's GitHub helper and query git inside real confinement.
 #[test]
 #[serial_test::serial(env)]
 fn pilot_no_push_credentials() {
@@ -10,6 +12,11 @@ fn pilot_no_push_credentials() {
     std::fs::write(source.join(".config/gh/hosts.yml"), "credential").unwrap();
     std::fs::write(source.join("agent-auth"), "staged").unwrap();
     std::fs::write(source.join(".git-credentials"), "credential").unwrap();
+    std::fs::write(
+        source.join(".gitconfig"),
+        "[credential \"https://github.com\"]\n helper = !gh auth git-credential\n",
+    )
+    .unwrap();
     let names = [
         "GIT_ASKPASS",
         "GIT_SSH_COMMAND",
@@ -46,6 +53,8 @@ fn pilot_no_push_credentials() {
         let script = [
             "env",
             "test ! -e \"$HOME/.git-credentials\"",
+            "test ! -e \"$HOME/.gitconfig\"",
+            "test -z \"$(git config --get-regexp '^credential')\"",
             "test ! -e \"$HOME/.ssh/id_test\"",
             "test ! -e \"$HOME/.config/gh/hosts.yml\"",
             "git init -q",

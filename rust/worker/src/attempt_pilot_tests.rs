@@ -1,4 +1,52 @@
 use super::*;
+
+// not-applicable: admission already exists; regression exercises the blocking
+// entry called by the Temporal activity, including its error conversion.
+#[test]
+fn pilot_overlapping_activity_attempts() {
+    struct Held(std::sync::Barrier, std::sync::Barrier);
+    impl Harness for Held {
+        fn name(&self) -> &str {
+            "held"
+        }
+        fn command(&self, run: &HarnessRun) -> Command {
+            self.0.wait();
+            self.1.wait();
+            Fake::new("echo hi > out.txt").command(run)
+        }
+    }
+    let (r, base) = repo();
+    let root = tempfile::tempdir().unwrap();
+    let mut inp = input(
+        claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"),
+        1,
+        root.path(),
+    );
+    inp.claim.card = "pilot-overlapping-activity".into();
+    let cfg = tiny();
+    let patterns = Patterns::default();
+    let held = Held(std::sync::Barrier::new(2), std::sync::Barrier::new(2));
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| run_attempt_with(Some(&held), &cfg, &patterns, &inp, &|| false));
+        held.0.wait();
+        let second = run_attempt_with(Some(&held), &cfg, &patterns, &inp, &|| false);
+        held.1.wait();
+        let text = format!("{:?}", crate::card_admit::attempt_error(second.unwrap_err()));
+        assert!(text.contains("card_admission_refused"), "{text}");
+        assert!(text.contains(&inp.claim.card), "{text}");
+        assert!(text.contains("non_retryable: true"), "{text}");
+        first.join().unwrap().unwrap();
+    });
+    inp.n += 1;
+    assert!(run_attempt_with(
+        Some(&Fake::new("echo hi > out.txt")),
+        &cfg,
+        &patterns,
+        &inp,
+        &|| false,
+    )
+    .is_ok());
+}
 fn secret_attempt(script: &str, timeout: bool, cancel: bool) {
     let (r, base) = repo();
     let root = tempfile::tempdir().unwrap();
