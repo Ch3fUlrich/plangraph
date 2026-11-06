@@ -74,6 +74,18 @@ def test_hung_stable_next_tick(boundary, tmp_path):
     assert s._route(CARD).legs == expected
 
 
+def test_adapter_default_off(boundary, tmp_path):
+    def unexpected(*args, **kwargs):
+        pytest.fail('default-off adapter must not read provider or discovery')
+
+    store = leg_state.LegStateStore(tmp_path / 'state')
+    reader = leg_state.LegAdapter(store, SimpleNamespace(snapshot=unexpected),
+                                  models=unexpected)
+    assert reader.enabled is False
+    assert reader('opencode-go/sample') == store.leg_status('opencode-go/sample')
+    assert reader._at is None
+
+
 def test_standalone_exact(monkeypatch):
     def run(argv, **kw):
         assert argv == ['opencode', 'models', '--standalone']

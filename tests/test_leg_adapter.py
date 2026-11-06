@@ -100,7 +100,7 @@ def test_catalog_policy_is_not_mutated(tmp_path):
 
 def test_bounded_discovery(monkeypatch):
     def run(argv, **kwargs):
-        assert argv == ['opencode', 'models', '--standalone']
+        assert argv == ['opencode', 'models']
         assert kwargs['timeout'] == 8 and kwargs['shell'] is False
         return SimpleNamespace(stdout='opencode-go/sample\n')
     monkeypatch.setattr(subprocess, 'run', run)
