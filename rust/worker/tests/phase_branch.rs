@@ -40,11 +40,7 @@ fn phase_branch_sanitizes_and_rejects_invalid_keys() {
     );
     assert_eq!(
         phase_branch(&"a".repeat(120)).unwrap(),
-        format!(
-            "phase/{}-{}",
-            "a".repeat(120),
-            pg_worker_core::hash::hash_bytes("a".repeat(120).as_bytes())
-        )
+        format!("phase/{}-a7533435cc9828fd", "a".repeat(120))
     );
 
     assert!(phase_branch("").is_err());

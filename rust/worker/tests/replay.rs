@@ -396,18 +396,5 @@ async fn drifted_code_fails_replay() {
     assert!(res.is_err(), "non-deterministic change must fail replay");
 }
 
-#[tokio::test]
-async fn replays_phase_two_cards() {
-    replayer()
-        .replay_workflow(history("phase_two_cards"))
-        .await
-        .expect("phase_two_cards history replays");
-}
-
-#[tokio::test]
-async fn replays_phase_defer() {
-    replayer()
-        .replay_workflow(history("phase_defer"))
-        .await
-        .expect("phase_defer history replays");
-}
+#[path = "replay_phase_legacy/mod.rs"]
+mod phase_legacy;

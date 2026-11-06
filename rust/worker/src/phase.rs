@@ -139,6 +139,10 @@ pub fn phase_branch(key: &str) -> Result<String, String> {
 }
 
 // Kept only for replay of histories recorded before phase-branch-hash-v1.
+#[cfg(test)]
+#[path = "phase_legacy_tests.rs"]
+mod legacy_tests;
+
 pub(crate) fn legacy_phase_branch(key: &str) -> Result<String, String> {
     if key.is_empty() {
         return Err("phase key is empty".to_string());

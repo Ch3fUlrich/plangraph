@@ -45,6 +45,15 @@ def merge_message(gate: str, cards: list[str]) -> str:
 
 def phase_branch(key: str) -> str:
     """Return the worker-compatible branch name for phase ``key``."""
+    legacy = _legacy_phase_branch(key)
+    # FNV-1a 64 over original UTF-8 bytes, exactly as on the Rust worker.
+    digest = 0xcbf29ce484222325
+    for byte in key.encode("utf-8"):
+        digest = ((digest ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+    return f"{legacy}-{digest:016x}"
+
+def _legacy_phase_branch(key: str) -> str:
+    """Validate the pre-patch name using the same rules as the worker."""
     clean = _BRANCH_BAD_RE.sub("-", key)
     if not clean:
         raise Refused("validation", "phase key is empty")
@@ -54,11 +63,7 @@ def phase_branch(key: str) -> str:
         raise Refused("validation", "invalid phase branch name")
     if ".." in clean:
         raise Refused("validation", "invalid phase branch name")
-    # FNV-1a 64 over original UTF-8 bytes, exactly as on the Rust worker.
-    digest = 0xcbf29ce484222325
-    for byte in key.encode("utf-8"):
-        digest = ((digest ^ byte) * 0x100000001b3) & 0xffffffffffffffff
-    return f"phase/{clean}-{digest:016x}"
+    return f"phase/{clean}"
 
 def _check_local_tip(root: Path, branch: str, head: str) -> None:
     tip = gitenv.rev_parse(root, f"refs/heads/{branch}")
@@ -215,7 +220,7 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
         raise Refused("forbidden", "phase_finish requires router or system")
 
     expected_branch = phase_branch(key)
-    if branch != expected_branch:
+    if branch not in (expected_branch, _legacy_phase_branch(key)):
         raise Refused("validation", f"branch must be {expected_branch}")
     if _SHA_RE.fullmatch(head) is None:
         raise Refused("validation", "head must be a 40-character lowercase hex sha")
