@@ -148,7 +148,7 @@ def evaluate(ledger, manifest, seats, policy):
     if not reason:
         failures = {}
         for s in seats:
-            if s.get("status") in {"failed", "no_verdict", "timed_out"}:
+            if s.get("attempt_used", True) and s.get("status") in {"failed", "no_verdict", "timed_out"}:
                 failures[s.get("round")] = failures.get(s.get("round"), 0) + 1
         stalled = manifest.get("stalled") or (seats and failures.get(seats[-1].get("round"), 0) >= policy.get("max_failed_attempts", 3))
         if stalled:
