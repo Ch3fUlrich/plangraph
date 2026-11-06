@@ -4,7 +4,7 @@ from plangraph.keeper.errors import Refused
 from plangraph.planner.worker_claim import build_claim
 
 
-@pytest.mark.parametrize("kind", ["typo", None, 1])
+@pytest.mark.parametrize("kind", ["typo", "CHANGE", " change", "change ", " ", False, True, None, 1])
 def test_build_claim_refuses_unknown_check_kind(kind):
     card = {"check_cmd": "true", "write_set": [], "outcome": "o", "check_kind": kind}
     with pytest.raises(Refused) as exc:

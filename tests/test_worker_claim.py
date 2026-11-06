@@ -31,7 +31,7 @@ def test_build_claim_preserves_gate_inputs():
     assert got["risk_tagged"] is True
 
 
-@pytest.mark.parametrize("metadata", [False, True, "typo", ""])
+@pytest.mark.parametrize("metadata", [False, True, "typo", "", "change", None, 1, [], {}])
 def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo, metadata):
     sqlite = _metadata_claim(tmp_path, repo, "sqlite", metadata)
     backend = "sqlite"
@@ -40,11 +40,9 @@ def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo, metadata):
         backend = "postgres"
     compared = _metadata_claim(tmp_path / "comparison", repo, backend, metadata)
     assert sqlite == compared
-    assert backend == ("postgres" if os.environ.get("PG_DSN") or
-                       os.environ.get("PG_KEEPER_BACKEND") == "postgres" else "sqlite")
 
 
-@pytest.mark.parametrize("metadata", [False, True, "typo", ""])
+@pytest.mark.parametrize("metadata", [False, True, "typo", "", "change", None, 1, [], {}])
 def test_claim_metadata_sqlite(tmp_path, repo, metadata):
     _metadata_claim(tmp_path, repo, "sqlite", metadata)
 
@@ -61,14 +59,12 @@ def _metadata_claim(tmp_path, repo, backend, metadata):
                         smoke_checks=["true"], exports=["api"],
                         heldout_check="heldout", risk_tags=["migration"])
         world.store.put_card(world.p("router"), "demo:C", card)
-        if metadata == "":
-            card["check_kind"] = ""
-            original = world.store.get_card
-            world.store.get_card = lambda *args: dict(original(*args), check_kind="")
-        if metadata == "typo":
-            # Model a legacy/hand-written stored card, bypassing card-write validation.
+        if metadata is not False and metadata is not True:
+            card["check_kind"] = metadata
             original = world.store.get_card
             world.store.get_card = lambda *args: dict(original(*args), check_kind=metadata)
+        if metadata is not False and metadata is not True and metadata not in ("", "change"):
+            # Model a legacy/hand-written stored card, bypassing card-write validation.
             with pytest.raises(Refused) as exc:
                 worker_claim(world.store, world.p("workerA"), "demo:C", repo_root=str(repo[0]))
             assert exc.value.code == "validation"
