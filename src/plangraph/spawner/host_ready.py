@@ -104,8 +104,11 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 if not record['keeper_ok']:
                     fail('keeper', 'whoami_failed')
             if config.get('session_unit'):
-                record['spawner_session'] = command('session', 'systemctl --user is-active --quiet -- ' +
-                                                   shlex.quote(config['session_unit'])) is not None
+                session = config['session_unit']
+                probe = ('systemctl --user is-active --quiet -- ' if session.endswith(
+                    ('.service', '.scope', '.socket', '.target', '.timer', '.path',
+                     '.mount', '.automount', '.swap', '.slice', '.device')) else 'pgrep -f -- ')
+                record['spawner_session'] = command('session', probe + shlex.quote(session)) is not None
             runs = measure('runs', prefix + 'cli ps', lambda s: json.loads(s)['runs'])
             if runs is not None:
                 record['live_runs'] = sum(r['status'] == 'running' for r in runs)
@@ -119,7 +122,11 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
         fail('config', 'invalid_response_or_config')
     record['checked_at'] = datetime.now(timezone.utc).isoformat()
     record['ok'] = not record['failures']
-    atomic_write_private(Path(state) / (name + '.json'), json.dumps(record))
+    try:
+        atomic_write_private(Path(state) / (name + '.json'), json.dumps(record))
+    except OSError:
+        fail('state', 'write_failed')
+        record['ok'] = False
     return record
 
 
@@ -136,6 +143,10 @@ def main(argv=None):
     if any(not re.fullmatch(r'[A-Za-z0-9_-]+', name) for name in hosts):
         parser.error('invalid host name')
     state = Path.home() / '.local/state/plangraph/host-ready'
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # Each host reports its own guarded write failure below.
     with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
         futures = [pool.submit(check_host, name, cfg, state) for name, cfg in hosts.items()]
         records = [future.result() for future in futures]

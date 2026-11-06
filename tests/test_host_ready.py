@@ -92,3 +92,60 @@ def test_parallel_deadlines(tmp_path):
         finally:
             finished.set()
         assert not hung.result()['ok']
+
+
+@pytest.mark.parametrize('session,probe', [
+    ('myworker', 'pgrep -f -- myworker'),
+    ('worker; secret-value', "pgrep -f -- 'worker; secret-value'"),
+    ('fiction.service', 'systemctl --user is-active --quiet -- fiction.service'),
+    ('fiction.scope', 'systemctl --user is-active --quiet -- fiction.scope'),
+])
+@pytest.mark.parametrize('live', [True, False])
+def test_session_probe(tmp_path, session, probe, live):
+    seen = []
+    def fake(argv, **kwargs):
+        if 'pgrep' in argv[-1] or 'systemctl' in argv[-1]:
+            seen.append(argv[-1])
+            return SimpleNamespace(returncode=0 if live and argv[-1] == probe else 1,
+                                   stdout='secret-value')
+        return runner(argv, **kwargs)
+    result = h.check_host('fiction', dict(CONFIG, session_unit=session), tmp_path, fake)
+    assert seen == [probe]
+    assert result['spawner_session'] is live
+    assert result['ok'] is live
+    assert ('session: command_failed' in result['failures']) is not live
+    assert 'secret-value' not in (tmp_path / 'fiction.json').read_text()
+
+
+def test_state_write_failure(tmp_path, monkeypatch):
+    def broken(*args):
+        raise OSError('secret-value')
+    monkeypatch.setattr(h, 'atomic_write_private', broken)
+    result = h.check_host('fiction', CONFIG, tmp_path, runner)
+    assert not result['ok']
+    assert result['checked_at']
+    assert result['failures'] == ['state: write_failed']
+    assert 'secret-value' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('unwritable', [False, True])
+def test_main_state_directory(tmp_path, monkeypatch, capsys, unwritable):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'hosts': {'fiction': CONFIG, 'other': CONFIG}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
+    state = tmp_path / '.local/state/plangraph/host-ready'
+    original = h.check_host
+    def check(name, cfg, directory):
+        assert directory == state
+        assert state.is_dir() or unwritable
+        return original(name, cfg, directory, runner)
+    monkeypatch.setattr(h, 'check_host', check)
+    if unwritable:
+        (tmp_path / '.local').write_text('blocked')
+    assert h.main(['--json']) == int(unwritable)
+    records = json.loads(capsys.readouterr().out)
+    assert len(records) == 2
+    assert all(r['ok'] is not unwritable for r in records)
+    if unwritable:
+        assert all(r['failures'] == ['state: write_failed'] for r in records)
