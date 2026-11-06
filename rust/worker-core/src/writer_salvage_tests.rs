@@ -64,6 +64,10 @@ fn export_salvage(
     let store = tempfile::tempdir()?;
     let mut store = LocalBlobStore::open(&store.path().join("blobs"))?;
     let result = super::export_salvage(&registry, Path::new(&repo.root), &ws, run, &mut store)?;
+    assert_eq!(
+        result.dropped_paths.len(),
+        result.dropped_paths.iter().collect::<BTreeSet<_>>().len()
+    );
     store.read(&result.blob)
 }
 #[test]
@@ -227,7 +231,11 @@ fn failed_writer_returns_blob_without_host_access() {
     command(root, &["add", "."], &[], None).unwrap();
     command(root, &["commit", "-m", "failed without trailer"], &[], None).unwrap();
     let old = command(root, &["rev-parse", "HEAD"], &[], None).unwrap();
-    // Unchanged committed secrets must reach history sanitization, not the dirty scan.
+    std::fs::write(
+        root.join("committed-secret"),
+        ["gh", "p_", &"u".repeat(25)].concat(),
+    )
+    .unwrap();
     let bytes = export_salvage(&repo, &base, "", "run", b"").unwrap();
     let (dest, receiver, head) = imported(&repo, &bytes);
     assert!(crate::writer_secret::findings(&receiver, &base, &head)
@@ -309,12 +317,55 @@ fn gate_before_any_snapshot_object() {
     #[cfg(unix)]
     std::os::unix::fs::symlink("safe", root.join("z-unsafe")).unwrap();
     #[cfg(not(unix))]
-    std::fs::create_dir(root.join("z-unsafe")).unwrap();
-    #[cfg(unix)]
+    {
+        std::fs::remove_file(root.join("safe")).unwrap();
+        std::fs::create_dir(root.join("safe")).unwrap();
+    }
     assert!(export_salvage(&repo, &base, &tip, "run", b"").is_err());
-    #[cfg(unix)]
     {
         let sha = command(root, &["hash-object", "--stdin"], safe, None).unwrap();
         assert!(object(root, std::str::from_utf8(&sha).unwrap().trim()).is_err());
+    }
+}
+
+#[test]
+fn unchanged_gitlink_preserved() {
+    let (_dir, repo, base, _) = fixture();
+    let root = Path::new(&repo.root);
+    command(
+        root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{base},sub"),
+        ],
+        &[],
+        None,
+    )
+    .unwrap();
+    command(root, &["commit", "-m", "base gitlink"], &[], None).unwrap();
+    std::fs::create_dir(root.join("sub")).unwrap();
+    let base =
+        String::from_utf8(command(root, &["rev-parse", "HEAD"], &[], None).unwrap()).unwrap();
+    std::fs::write(root.join("safe"), "dirty").unwrap();
+    export_salvage(&repo, base.trim(), "", "run", b"").unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn dirty_executable_modes_preserved() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, repo, base, tip) = fixture();
+    let root = Path::new(&repo.root);
+    std::fs::write(root.join("new"), "executable").unwrap();
+    for name in ["safe", "new"] {
+        std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let bytes = export_salvage(&repo, &base, &tip, "run", b"").unwrap();
+    let (dest, _, head) = imported(&repo, &bytes);
+    let names = entries(dest.path(), &head).unwrap();
+    for name in [b"safe".as_slice(), b"new".as_slice()] {
+        assert_eq!(names.iter().find(|e| e.2 == name).unwrap().0, "100755");
     }
 }

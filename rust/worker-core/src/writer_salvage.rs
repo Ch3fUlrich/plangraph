@@ -7,7 +7,7 @@ use crate::{
     writer_sanitize::sanitize_history,
     writer_secret::{command, entries, scan_bytes, SecretGate},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 pub struct SalvageResult {
@@ -43,10 +43,11 @@ pub fn export_salvage(
         root: checkout.to_str().ok_or(WriterError::Invalid)?.into(),
         ..repo.clone()
     };
-    let (snapshot, dropped) = snapshot(checkout, tip)?;
+    let (snapshot, dropped) = snapshot(checkout, base, tip)?;
     let mut clean = sanitize_history(&local, base, &snapshot)?;
-    clean.dropped_paths.extend(dropped);
-    clean.dropped_paths.sort();
+    let mut dropped: BTreeSet<_> = dropped.into_iter().collect();
+    dropped.extend(clean.dropped_paths);
+    clean.dropped_paths = dropped.into_iter().collect();
 
     SecretGate.check(&local, base, &clean.tip)?;
     let root = checkout;
@@ -108,7 +109,7 @@ fn validate_paths(paths: &[u8]) -> Result<(), WriterError> {
     }
     Ok(())
 }
-fn snapshot(root: &Path, tip: &str) -> Result<(String, Vec<String>), WriterError> {
+fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<String>), WriterError> {
     let mut listed = command(
         root,
         &["diff", "--name-only", "-z", "--no-renames", tip, "--"],
@@ -141,7 +142,19 @@ fn snapshot(root: &Path, tip: &str) -> Result<(String, Vec<String>), WriterError
                 if scan_bytes(name.as_bytes()) || scan_bytes(&bytes) {
                     dropped.push(crate::writer_secret::record_path(name.as_bytes()));
                 } else {
-                    files.insert(name.to_owned(), bytes);
+                    #[cfg(unix)]
+                    let executable = {
+                        use std::os::unix::fs::PermissionsExt;
+                        meta.permissions().mode() & 0o111 != 0
+                    };
+                    #[cfg(not(unix))]
+                    let executable = entries(root, tip)?
+                        .iter()
+                        .any(|e| e.2 == name.as_bytes() && e.0 == "100755");
+                    files.insert(
+                        name.to_owned(),
+                        (bytes, if executable { "100755" } else { "100644" }),
+                    );
                 }
             }
             Ok(_) => return Err(WriterError::Verify),
@@ -150,8 +163,12 @@ fn snapshot(root: &Path, tip: &str) -> Result<(String, Vec<String>), WriterError
         }
     }
     let original = entries(root, tip)?;
-    for (mode, _, path) in &original {
-        if mode == "160000" || (mode == "120000" && listed.split(|b| *b == 0).any(|p| p == path)) {
+    let base_entries = entries(root, base)?;
+    for entry @ (mode, _, path) in &original {
+        if (mode == "160000" && !base_entries.contains(entry))
+            || ((mode == "160000" || mode == "120000")
+                && listed.split(|b| *b == 0).any(|p| p == path))
+        {
             return Err(WriterError::Verify);
         }
     }
@@ -162,15 +179,11 @@ fn snapshot(root: &Path, tip: &str) -> Result<(String, Vec<String>), WriterError
     let mut records = Vec::new();
     for name in listed.split(|b| *b == 0).filter(|p| !p.is_empty()) {
         let name = std::str::from_utf8(name).map_err(|_| WriterError::Invalid)?;
-        if let Some(bytes) = files.get(name) {
+        if let Some((bytes, mode)) = files.get(name) {
             let sha = command(root, &["hash-object", "-w", "--stdin"], bytes, None)?;
             let sha = std::str::from_utf8(&sha)
                 .map_err(|_| WriterError::Git)?
                 .trim();
-            let mode = original
-                .iter()
-                .find(|e| e.2 == name.as_bytes())
-                .map_or("100644".to_owned(), |e| e.0.clone());
             records.extend_from_slice(format!("{mode} {sha}\t{name}\0").as_bytes());
         } else {
             records.extend_from_slice(format!("0 {}\t{name}\0", "0".repeat(40)).as_bytes());
