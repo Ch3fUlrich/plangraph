@@ -222,9 +222,10 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
 
     expected_branch = phase_branch(key)
     if branch != expected_branch:
-        # Authenticated worker requests bind the unpatched path to the original
-        # key, never its lossy branch spelling. Missing provenance fails closed.
-        if pre_patch_phase != key:
+        # Old scheduled activities have no provenance field. Infer the v0 path
+        # from its exact spelling and checked-out ref, then verify ancestry below.
+        # A supplied field is only a consistency check, never authorization.
+        if pre_patch_phase not in (None, key):
             raise Refused("validation", f"branch must be {expected_branch}")
         current = None
         if branch == _legacy_phase_branch(key) and Path(repo_root).is_dir():
@@ -269,6 +270,13 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
 
     root = Path(repo_root)
     _check_local_tip(root, branch, head)
+    if branch != expected_branch:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor",
+             f"refs/heads/{base}", head], capture_output=True, text=True,
+            timeout=30, check=False, env=gitenv.git_env())
+        if proc.returncode != 0:
+            raise Refused("conflict", "legacy phase head does not descend from base")
 
     # Serialise keeper-side merges per repository; the lock is advisory only.
     lock_file = _acquire_lock(root, lock_path)

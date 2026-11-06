@@ -37,6 +37,7 @@ def git_repo(tmp_path):
     git(root, "init", "-q")
     git(root, "commit", "--allow-empty", "-m", "base")
     git(root, "branch", "-M", phase_finish.phase_branch("demo:PH-X"))
+    git(root, "branch", "-f", "main", "HEAD")
     git(root, "commit", "--allow-empty", "-m", "phase")
     return root, git(root, "rev-parse", "HEAD")
 
