@@ -64,6 +64,7 @@ class SpawnService(SeatSpawnMixin):
                 leg = candidate.get('leg')
                 if leg not in attempted:
                     record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
+                        down_reason='not_served_on_host' if candidate.get('reason') == 'not_served_on_host' else None,
                         skip_reason=candidate.get('skip_reason') or candidate.get('reason'),
                         served_model='unwitnessed', served_family='unwitnessed',
                         served_witness_reason='leg skipped before launch'))
@@ -272,16 +273,17 @@ class SpawnService(SeatSpawnMixin):
             if role == 'implement' and chosen.id != 'cx-gpt-6.1-sol':
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
             if chosen.tier == 'paid':
-                available = plan_spawn(card, role=role, legs=DEFAULT_LEGS,
-                    writer_families=[*writer_families, *reviewed], leg_reader=self.leg_reader)
+                available = self._route(card, role, writer_families, review_of,
+                    benchmark=benchmark, require_bench=require_bench)
                 from plangraph.planner.measured_down import measured_down
                 down = measured_down(self.state)
                 free = [candidate.id for candidate in available.legs if candidate.tier == 'free' and candidate.id not in down]
-                if free and (not isinstance(override_reason, str) or len(override_reason.strip()) < 10):
+                if override_reason is None and not free:
+                    override_reason = 'No eligible free leg is up on this host'
+                if not isinstance(override_reason, str) or len(override_reason.strip()) < 10:
                     raise SpawnRefused('paid pin refused; free legs up: ' + ', '.join(free) +
                         '; --override-reason required (D-4382: no free leg witnesses is a valid reason)')
-                if not free and not override_reason:
-                    override_reason = 'No eligible free leg is up on this host'
+                override_reason = override_reason.strip()
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
@@ -341,6 +343,8 @@ class SpawnService(SeatSpawnMixin):
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                        down_reason=('credit_limit' if stop.get('status') == 402 else
+                                     'usage_limit' if stop.get('status') == 429 else None) if isinstance(stop, dict) else None,
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,
