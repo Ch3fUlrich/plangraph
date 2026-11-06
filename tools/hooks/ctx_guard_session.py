@@ -76,7 +76,7 @@ def human_provenance(record, sources):
     origin = record.get("origin")
     return (not record.get("isMeta") and not record.get("isSidechain") and
             record.get("promptSource") in sources and record.get("turnOrigin") == "human" and
-            ("origin" not in record or isinstance(origin, dict) and origin.get("kind") == "human"))
+            isinstance(origin, dict) and origin.get("kind") == "human")
 
 
 def attended_until(payload, doc):

@@ -52,13 +52,13 @@ class Attended(WrapperCase):
                 self.transcript_records(self.user(**extra), self.user(), self.user())
                 self.assertIn("HARD-CAP", self.line(self.guard()))
 
-    def test_origin_metadata_and_optional_origin(self):
-        for origin in ({"kind": "human", "source": "terminal", "id": "synthetic"}, None):
-            record = self.user(origin=origin)
-            if origin is None:
-                del record["origin"]
-            self.transcript_records(self.user(), record)
-            self.assert_silent(self.guard())
+    def test_origin_metadata_allowed_missing_origin_refused(self):
+        self.transcript_records(self.user(), self.user(origin={"kind": "human", "source": "terminal"}))
+        self.assert_silent(self.guard())
+        record = self.user()
+        del record["origin"]
+        self.transcript_records(self.user(), self.user(age=4000), record)
+        self.assertIn("HARD-CAP", self.line(self.guard()))
 
     def test_lease_publication_failure_runs_guard(self):
         module = load_module("ctx_guard_session")
