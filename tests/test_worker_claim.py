@@ -10,6 +10,7 @@ import pytest
 
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.db_pg import PgConnection
 from plangraph.planner import gitenv
 from plangraph.planner.worker_claim import build_claim, worker_claim
 
@@ -47,9 +48,38 @@ def test_claim_metadata_sqlite(tmp_path, repo, metadata):
     _metadata_claim(tmp_path, repo, "sqlite", metadata)
 
 
+_CLAIM_STATE_QUERY = "SELECT state, claimed_by FROM items WHERE key = ?"
+
+
+def test_claim_state_query_backend_binding(tmp_path):
+    import sqlite3
+    from unittest.mock import MagicMock
+
+    import psycopg
+    from psycopg._queries import PostgresQuery
+
+    params = ("demo:C",)
+    with sqlite3.connect(tmp_path / "binding.db") as conn:
+        conn.execute("CREATE TABLE items (key TEXT, state TEXT, claimed_by TEXT)")
+        conn.execute("INSERT INTO items VALUES (?, ?, ?)", ("demo:C", "open", None))
+        assert conn.execute(_CLAIM_STATE_QUERY, params).fetchone() == ("open", None)
+
+    raw = MagicMock()
+    cursor = raw.cursor.return_value.__enter__.return_value
+    cursor.description = None
+    PgConnection(raw, "test").execute(_CLAIM_STATE_QUERY, params)
+    sql, bound = cursor.execute.call_args.args
+    assert psycopg.paramstyle == "pyformat"
+    assert sql == "SELECT state, claimed_by FROM items WHERE key = %s"
+    assert bound == params
+    query = PostgresQuery(psycopg.adapt.Transformer())
+    query.convert(sql, bound)
+    assert query.query == b"SELECT state, claimed_by FROM items WHERE key = $1"
+    assert len(query.params) == 1
+
+
 def _metadata_claim(tmp_path, repo, backend, metadata):
     world = World(tmp_path / backend, backend=backend, dsn=os.environ.get("PG_DSN"))
-    placeholder = "%s" if backend == "postgres" else "?"
     try:
         world.store.create_items(world.p("router"), [
             defn("C", []), defn("GOAL", ["C"], kind="goal")])
@@ -69,14 +99,14 @@ def _metadata_claim(tmp_path, repo, backend, metadata):
                 worker_claim(world.store, world.p("workerA"), "demo:C", repo_root=str(repo[0]))
             assert exc.value.code == "validation"
             row = world.store.conn.execute(
-                f"SELECT state, claimed_by FROM items WHERE key = {placeholder}", ("demo:C",)).fetchone()
+                _CLAIM_STATE_QUERY, ("demo:C",)).fetchone()
             assert tuple(row) == ("open", None)
             return exc.value.code
         payload = worker_claim(world.store, world.p("workerA"), "demo:C",
                                repo_root=str(repo[0]))
         assert payload == build_claim("demo:C", card, repo=str(repo[0]), base_sha=repo[1])
         row = world.store.conn.execute(
-            f"SELECT state, claimed_by FROM items WHERE key = {placeholder}", ("demo:C",)).fetchone()
+            _CLAIM_STATE_QUERY, ("demo:C",)).fetchone()
         assert tuple(row) == ("claimed", "workerA")
         with pytest.raises(Refused) as exc:
             worker_claim(world.store, world.p("workerB"), "demo:C", repo_root=str(repo[0]))

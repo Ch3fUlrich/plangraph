@@ -105,8 +105,14 @@ fn constructed_default_matches_wire_default() {
 fn non_string_check_kinds_are_not_legacy_strings() {
     let payloads: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/keeper_claim_payload.json")).unwrap();
-    for kind in [serde_json::Value::Null, serde_json::json!(true), serde_json::json!(false),
-                 serde_json::json!(1), serde_json::json!([]), serde_json::json!({})] {
+    for kind in [
+        serde_json::Value::Null,
+        serde_json::json!(true),
+        serde_json::json!(false),
+        serde_json::json!(1),
+        serde_json::json!([]),
+        serde_json::json!({}),
+    ] {
         let mut payload = payloads[0].clone();
         payload["check_kind"] = kind;
         assert!(serde_json::from_value::<Claim>(payload).is_err());

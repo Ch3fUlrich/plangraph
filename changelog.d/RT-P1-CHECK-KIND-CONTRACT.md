@@ -6,3 +6,5 @@ Bind backend-specific metadata query placeholders, compare SQLite results even
 without local Postgres, and test recorded unknown-kind execution refusal.
 Remove a redundant backend assertion and extend check-kind coverage to malformed
 stored cards, case/whitespace variants, and non-string recorded JSON values.
+Fix parity queries to use the store's portable binding seam; exercise SQLite and
+psycopg query conversion without a DSN, and format Rust contract tests for CI.
