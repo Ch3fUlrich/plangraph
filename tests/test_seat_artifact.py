@@ -106,6 +106,9 @@ def test_false_reason_leads_fix_even_with_pass_text(tmp_path, capsys):
     body = json.loads(capsys.readouterr().out)['body']
     assert body['ok'] is False
     assert body['reason'].startswith('FIX')
+    evidence = json.loads((tmp_path / 'evidence.json').read_text())
+    reason = sv.build_reason(evidence, False, job.stdout, 0)
+    assert reason.startswith('seat synthetic/gpt-5 FIX corr ')
 
 
 @pytest.mark.parametrize('dispatch', [False, True])
@@ -135,16 +138,14 @@ def test_dispatch_hash_is_in_memory(tmp_path, monkeypatch):
     job = asyncio.run(instance.spawn(prompt='synthetic é\n', role='review',
         dry_run=True, cwd=str(tmp_path)))
     assert received == [job.task_prompt]
-    # Live job construction must hash this exact boundary value, not prompt.txt.
-    import inspect
-    source = inspect.getsource(module.SpawnerRunner.spawn)
-    assert 'job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()' in source
+    assert job.prompt_sha256 == hashlib.sha256('synthetic é\n'.encode()).hexdigest()
 
 
 def test_authenticated_finish_not_inferred(monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
     instance = SpawnerRunner()
     _, job = completed()
+    job.response_finish_reason = None
     instance.jobs[job.job_id] = job
     capability = object()
     instance._adapter_tokens[job.job_id] = capability
@@ -153,3 +154,7 @@ def test_authenticated_finish_not_inferred(monkeypatch):
             adapter_token=object(), finish_reason='stop')
     instance.served_witness(job.job_id, 'synthetic/gpt-5', adapter_token=capability)
     assert job.response_finish_reason is None
+    instance.served_witness(job.job_id, 'synthetic/gpt-5',
+        adapter_token=capability, finish_reason='stop')
+    instance.served_witness(job.job_id, 'synthetic/gpt-5', adapter_token=capability)
+    assert job.response_finish_reason == 'stop'

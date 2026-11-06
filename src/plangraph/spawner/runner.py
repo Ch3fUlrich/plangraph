@@ -272,7 +272,8 @@ class SpawnerRunner:
         job.served_model = model
         job.served_family = family
         job.served_witness_reason = 'authenticated gateway adapter telemetry'
-        job.response_finish_reason = finish_reason  # verbatim response telemetry, never inferred
+        if finish_reason is not None:
+            job.response_finish_reason = finish_reason  # verbatim response telemetry, never inferred
 
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
@@ -498,6 +499,7 @@ class SpawnerRunner:
                 if tools_event:
                     job.events.append(tools_event)
                 self.jobs[job_id] = job
+                job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
                 return job
 
             job = JobInfo(
