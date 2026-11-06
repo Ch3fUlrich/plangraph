@@ -1017,7 +1017,7 @@ impl Keeper for StubKeeper {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #[test]
     fn live_states_include_waiting_and_exclude_agent_lease_and_terminal_states() {
         assert_eq!(
@@ -1502,11 +1502,11 @@ mod tests {
     }
 
     /// A request as the one-shot test server observed it.
-    struct Captured {
+    pub(crate) struct Captured {
         head: String,
         method: String,
-        path: String,
-        body: String,
+        pub(crate) path: String,
+        pub(crate) body: String,
     }
 
     /// Bind a one-shot HTTP server on 127.0.0.1:0. It accepts a single
@@ -1539,7 +1539,7 @@ mod tests {
     /// A server that answers `n` requests by routing each one through `route`,
     /// and yields every request it saw, in order (G3-2: an outage on one verb
     /// while another still works).
-    fn serve_n(
+    pub(crate) fn serve_n(
         n: usize,
         route: impl Fn(&Captured) -> (u16, String) + Send + 'static,
     ) -> (String, JoinHandle<Vec<Captured>>) {

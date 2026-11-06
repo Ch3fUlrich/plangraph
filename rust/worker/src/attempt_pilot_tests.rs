@@ -1,5 +1,137 @@
 use super::*;
 
+// not-applicable: output and parsed-question redaction already exist on this lane.
+#[test]
+fn exception_keeper_payloads_and_question_exclude_harness_secret() {
+    use crate::keeper::{AttemptReport, ExecId, HttpKeeper, Keeper};
+    use pg_worker_core::packet::ParkPacket;
+    let secret = ["sk-", "exceptionseed0123456789abcdef"].concat();
+    assert!(!pg_worker_core::redact::redact(&secret).contains(&secret));
+    for mode in ["clean", "failed", "cancelled", "timeout", "question"] {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let inp = input(
+            claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"),
+            1,
+            root.path(),
+        );
+        let ending = match mode {
+            "clean" => "echo hi > out.txt".to_owned(),
+            "failed" => "exit 1".to_owned(),
+            "question" => format!(
+                "echo 'PG_QUESTION: {{\"text\":\"{secret}\",\"default\":\"{secret}\",\"risk_tags\":[\"{secret}\"]}}'"
+            ),
+            _ => "sleep 5".to_owned(),
+        };
+        let script = format!("echo '{secret}'; echo '{secret}' >&2; {ending}");
+        let harness = Fake::new(Box::leak(script.into_boxed_str()));
+        let mut cfg = tiny();
+        if mode == "timeout" {
+            cfg.start_to_close = Duration::from_millis(300);
+        }
+        let started = std::time::Instant::now();
+        let result = run_attempt_with(Some(&harness), &cfg, &Patterns::default(), &inp, &|| {
+            mode == "cancelled" && started.elapsed() > Duration::from_millis(300)
+        }).unwrap();
+        assert_eq!(result.exit_class, match mode {
+            "clean" => ExitClass::Ok,
+            "failed" => ExitClass::WorkerCrash,
+            "cancelled" => ExitClass::Cancelled,
+            "timeout" => ExitClass::Timeout,
+            _ => ExitClass::NeedsInput,
+        });
+        assert!(!serde_json::to_string(&result).unwrap().contains(&secret));
+        let (url, server) = crate::keeper::tests::serve_n(
+            if mode == "question" { 3 } else { 2 },
+            |req| {
+                if req.path == "/v1/ask_question" {
+                    (200, "{\"id\":1}".into())
+                } else {
+                    (204, String::new())
+                }
+            },
+        );
+        let keeper = HttpKeeper::new(&url);
+        let exec = ExecId::default();
+        keeper.report_attempt(&AttemptReport {
+            card: inp.claim.card.clone(), n: 1, leg: inp.leg.id.clone(),
+            exit_class: result.exit_class, diff_hash: result.diff_hash.clone(),
+            check_tail: result.check_tail.clone(),
+        }, &exec).unwrap();
+        if mode == "clean" {
+            keeper.complete(&inp.claim.card, &result.head, &exec).unwrap();
+        } else {
+            keeper.park(&ParkPacket {
+                card: inp.claim.card.clone(), tier: inp.leg.tier,
+                exit_class: result.exit_class, check_tail: result.output_tail.clone(),
+            }, &exec).unwrap();
+        }
+        if mode == "question" {
+            keeper.ask_question(&inp.claim.card, result.question.as_ref().unwrap(), &exec).unwrap();
+        }
+        for request in server.join().unwrap() {
+            assert!(!request.body.contains(&secret), "{mode}: {}", request.body);
+        }
+    }
+}
+
+// not-applicable: ownership, allowlisting and empty-claim refusal already exist.
+#[test]
+fn exception_activity_entry_owner_and_empty_claim_do_not_start_work() {
+    use crate::keeper::StubKeeper;
+    struct Held(std::sync::Barrier, std::sync::Barrier, Fake);
+    impl Harness for Held {
+        fn name(&self) -> &str { "held" }
+        fn command(&self, run: &HarnessRun) -> Command {
+            self.0.wait();
+            self.1.wait();
+            self.2.command(run)
+        }
+    }
+    fn refused(error: temporalio_sdk::activities::ActivityError, kind: &str, key: &str) {
+        let temporalio_sdk::activities::ActivityError::Application(failure) = error else {
+            panic!("expected application failure")
+        };
+        assert!(failure.is_non_retryable());
+        assert_eq!(failure.type_name(), Some(kind));
+        assert!(format!("{failure:?}").contains(key));
+    }
+    let (r, base) = repo();
+    let root = tempfile::tempdir().unwrap();
+    let mut inp = input(claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"), 1, root.path());
+    inp.claim.card = "exception-owner".into();
+    let cfg = Config { card_allowlist: Some([inp.claim.card.clone()].into()), ..tiny() };
+    let patterns = Patterns::default();
+    let held = Held(std::sync::Barrier::new(2), std::sync::Barrier::new(2), Fake::new("echo hi > out.txt"));
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| run_attempt_with(Some(&held), &cfg, &patterns, &inp, &|| false));
+        held.0.wait();
+        let second = run_attempt_with(Some(&held), &cfg, &patterns, &inp, &|| false);
+        held.1.wait();
+        refused(crate::card_admit::attempt_error(second.unwrap_err()), "card_admission_refused", &inp.claim.card);
+        first.join().unwrap().unwrap();
+    });
+    inp.n += 1;
+    let harness = Fake::new("echo hi > out.txt");
+    assert!(run_attempt_with(Some(&harness), &cfg, &patterns, &inp, &|| false).is_ok());
+    let empty = StubKeeper::default();
+    let unstarted = Fake::new("exit 99");
+    let check = root.path().join("check-started");
+    inp.claim.check_cmd = format!("touch '{}'", check.display());
+    let result = crate::activities::admitted_claim(&empty, &cfg, &inp.claim.card)
+        .and_then(|claim| {
+            inp.claim = claim.unwrap();
+            run_attempt_with(Some(&unstarted), &cfg, &patterns, &inp, &|| false)
+                .map_err(crate::card_admit::attempt_error)
+        });
+    refused(result.unwrap_err(), "card_not_claimable", &inp.claim.card);
+    assert_eq!(unstarted.runs(), 0);
+    assert!(!check.exists());
+    let unlisted = "exception-unlisted";
+    refused(crate::activities::admitted_claim(&empty, &cfg, unlisted).unwrap_err(), "card_not_allowlisted", unlisted);
+    assert_eq!(empty.claim_card_calls().len(), 1);
+}
+
 // not-applicable: admission already exists; regression exercises the blocking
 // entry called by the Temporal activity, including its error conversion.
 #[test]

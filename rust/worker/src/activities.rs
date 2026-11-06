@@ -716,7 +716,7 @@ pub(crate) fn do_claim_card(
     })
 }
 
-fn admitted_claim(
+pub(crate) fn admitted_claim(
     keeper: &dyn Keeper,
     cfg: &Config,
     key: &str,
