@@ -42,6 +42,9 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         }
         (i64::MIN, now.saturating_add(1))
     };
+    if since >= until {
+        return Err(crate::health_report::ReportError::InvalidWindow.to_string());
+    }
     let state = crate::state::resolve_state(flags.get("--state").map(String::as_str), |k| {
         std::env::var_os(k)
     })?;

@@ -1,5 +1,9 @@
 //! Deterministic research aggregation; no routing or health mutation.
-use pg_worker_core::{health, hosts::Role, outcome::Class};
+use pg_worker_core::{
+    health,
+    hosts::Role,
+    outcome::{Class, Terminal},
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 #[derive(Debug, PartialEq)]
@@ -63,9 +67,10 @@ pub(crate) fn build_report(
         if class == Some("MAX_TIME") {
             max_time += 1;
         }
-        if class.is_none() {
+        let parsed_class = class.and_then(parse_class);
+        if parsed_class.is_none() {
             missing += 1;
-            if r["role"] == "review" {
+            if class.is_none() && r["role"] == "review" {
                 seats += 1;
             }
         }
@@ -83,7 +88,8 @@ pub(crate) fn build_report(
         if class == Some("HANG_SILENT") {
             let bucket = match r["open_tools_at_kill"].as_u64() {
                 Some(0) => 1,
-                Some(_) => 0,
+                Some(_) if r["s_eff_s"].as_f64().is_some() => 0,
+                Some(_) => 3,
                 None if r["blind"] == true || r["s_eff_s"] == 600 => 2,
                 None => 3,
             };
@@ -92,7 +98,7 @@ pub(crate) fn build_report(
         if class == Some("HANG_NO_ACTIVITY") {
             populations[4] += 1;
         }
-        let Some(class) = parse_class(class.unwrap_or("")) else {
+        let Some(class) = parsed_class else {
             continue;
         };
         let leg = r["leg_key"].as_str().unwrap_or("unknown");
@@ -206,6 +212,13 @@ fn parse_class(text: &str) -> Option<Class> {
         "AUTH" => Class::Auth,
         "MODEL_UNAVAILABLE" => Class::ModelUnavailable,
         "PROVIDER_UNAVAILABLE" => Class::ProviderUnavailable,
+        "caller_fault" => Class::Neutral(Terminal::CallerFault),
+        "cancelled" => Class::Neutral(Terminal::Cancelled),
+        "orphaned" => Class::Neutral(Terminal::Orphaned),
+        "git_config_mutated" => Class::Neutral(Terminal::GitConfigMutated),
+        "writer_no_changes" => Class::Neutral(Terminal::WriterNoChanges),
+        "kill_incomplete" => Class::Neutral(Terminal::KillIncomplete),
+        "proof_failure" => Class::Neutral(Terminal::ProofFailure),
         _ => return None,
     })
 }

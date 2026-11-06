@@ -62,10 +62,16 @@ fn baseline_stored_private_not_symlink() {
 
 #[test]
 fn equal_and_inverted_cli_windows() {
+    let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    std::fs::create_dir_all(dir.join("evidence")).unwrap();
+    let file = std::fs::File::create(dir.join("evidence/outcomes-2026-01.jsonl")).unwrap();
+    file.set_len(16 * 1024 * 1024 + 1).unwrap();
     for until in ["2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z"] {
         let error = execute(
             [
                 "report",
+                "--state",
+                dir.to_str().unwrap(),
                 "--since",
                 "2026-01-02T00:00:00Z",
                 "--until",
@@ -79,4 +85,5 @@ fn equal_and_inverted_cli_windows() {
         .unwrap_err();
         assert_eq!(error, "health report: InvalidWindow");
     }
+    std::fs::remove_dir_all(dir).unwrap();
 }

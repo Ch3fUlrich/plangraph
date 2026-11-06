@@ -1,5 +1,53 @@
 use super::*;
 #[test]
+fn neutral_classes_reach_fold_and_unknowns_are_counted() {
+    use pg_worker_core::outcome::Terminal;
+    for terminal in [
+        Terminal::CallerFault,
+        Terminal::Cancelled,
+        Terminal::Orphaned,
+        Terminal::GitConfigMutated,
+        Terminal::WriterNoChanges,
+        Terminal::KillIncomplete,
+        Terminal::ProofFailure,
+    ] {
+        let class = Class::Neutral(terminal);
+        assert_eq!(parse_class(class.as_str()), Some(class));
+    }
+    let mut cancelled = row("cancelled", "cancelled", 30, 1);
+    cancelled["reset_at"] = json!(900);
+    let r = build_report(
+        &[],
+        &[
+            row("crash", "CRASH", 10, 1),
+            cancelled,
+            row("unknown", "future_class", 40, 1),
+        ],
+        0,
+        100,
+    )
+    .unwrap();
+    assert_eq!(r["per_leg"]["leg"]["raw_reset_at"], json!([null, 900]));
+    assert_eq!(r["per_leg"]["leg"]["strikes"], 1);
+    assert_eq!(r["per_leg"]["leg"]["state"], "Closed");
+    assert!(r["per_leg"]["leg"]["until"].is_null());
+    assert_eq!(r["missing_fields"]["outcome"], 1);
+}
+#[test]
+fn tool_open_without_s_eff_has_only_unknown_bounds() {
+    let mut a = row("run-a", "HANG_SILENT", 1000, 1000);
+    a["open_tools_at_kill"] = json!(1);
+    let r = build_report(&[], &[a], 0, 2000).unwrap();
+    let p = &r["silent_populations"];
+    assert_eq!(p["tool_open"], 0);
+    assert_eq!(p["k_count"], 0);
+    assert!(p["k_fraction"].is_null());
+    assert_eq!(p["tool_open_savings_hours"], 0.0);
+    assert_eq!(p["unknown_tools"], 1);
+    assert_eq!(p["unknown_lower_hours"], json!(615.01 / 3600.0));
+    assert_eq!(p["unknown_upper_hours"], json!(1815.01 / 3600.0));
+}
+#[test]
 fn classless_seats_false_kill_recovery() {
     let mut seat = row("seat", "", 20, 1);
     seat["outcome"] = Value::Null;

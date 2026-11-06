@@ -138,6 +138,13 @@ Only a freshly spawned owned group enters the watch signal path. A reaped
 leader does not relinquish surviving descendants; an unrelated sentinel
 group remains alive when the owned descendant group is killed.
 
+Health research reports retain all recognized neutral outcomes in chronological
+health replay and preserve their raw reset timestamps separately from effective
+fold state. Unknown outcome strings count as missing classification evidence.
+The tool-open savings population requires both open tools and a recorded
+`s_eff_s`; open-tool rows without that timing evidence receive unknown bounds.
+Invalid report windows are rejected before resolving or reading the state store.
+
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
