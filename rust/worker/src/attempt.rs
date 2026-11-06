@@ -276,17 +276,18 @@ fn run_attempt_inner(
     home.stage_harness_auth()?;
     let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
-    let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
-
+    let output_tail = pg_worker_core::redact::redacted_tail(
+        &output,
+        cfg.check_tail_lines,
+        pg_worker_core::redact::MAX_TAIL_BYTES,
+    );
     // A cancel that arrived while the harness ran kills the agent, so nothing
     // it wrote is committed and the commit/confinement/check stages are
     // skipped: the caller only needs to know the attempt was cancelled.
     if sup.cancelled {
         return Ok(cancelled_result(&branch, &wt.head, output_tail));
     }
-
     let clean = sup.code == Some(0) && !sup.stalled && !sup.timed_out;
-
     // A JSON-emitting harness says more than its exit code can: a provider
     // error is the provider's fault whatever the code says, and an empty
     // stream means the run never got going.
@@ -305,7 +306,6 @@ fn run_attempt_inner(
     // Anything the provider got wrong skips the check: the check would judge
     // work the run never did.
     let provider_failed = provider_rate_limited || provider_error || empty_output;
-
     // A question packet on a run that was not killed is a request for input; an
     // unusable packet is a defect of the harness contract, not something to retry.
     let (question, malformed) = if sup.stalled || sup.timed_out {

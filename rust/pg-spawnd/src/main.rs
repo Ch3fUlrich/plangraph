@@ -12,6 +12,8 @@ mod jobs;
 mod launch;
 mod leg_ref;
 mod placement;
+mod prompt;
+mod prompt_git;
 mod pyjson;
 mod records;
 mod review_artifacts;
