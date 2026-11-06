@@ -321,7 +321,7 @@ pub fn prepare_launch(
         .map_err(|_| ResolveError::Invalid("workspace"))?;
     if workspace.mode == Mode::None {
         require(checkout.is_none(), "none_checkout")?;
-        let trees = Path::new(&repo.worktrees_root).canonicalize()?;
+        let trees = resolved(Path::new(&repo.worktrees_root))?;
         require(temp.is_absolute() && !temp.starts_with(&trees), "temp")?;
         require(!temp.canonicalize()?.starts_with(&trees), "temp_escape")?;
         crate::sandbox_env::confine_check(cmd, temp);
