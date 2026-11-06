@@ -276,6 +276,15 @@ fn decisions_run_only_under_slot_lock() {
 
 #[test]
 fn degenerate_slots_do_not_escape_or_panic() {
+    check_degenerate_slots(false);
+}
+
+#[test]
+fn cas_degenerate_slots_do_not_escape_or_panic() {
+    check_degenerate_slots(true);
+}
+
+fn check_degenerate_slots(replace: bool) {
     for slot in [
         "",
         ".",
@@ -289,15 +298,27 @@ fn degenerate_slots_do_not_escape_or_panic() {
         let sandbox = tempfile::tempdir().unwrap();
         let root = sandbox.path().join("root");
         fs::create_dir(&root).unwrap();
-        for result in [
-            create(&root, Path::new(slot), "session", "run", 0),
-            acquire(&root, slot, 0, &State::Free),
-        ] {
+        let result = if replace {
             if slot == "a/." {
-                assert!(result.is_ok());
-            } else {
-                assert!(matches!(result, Err(StoreError::Refused(Refusal::Invalid))));
+                create(&root, Path::new(slot), "session", "run", 0).unwrap();
             }
+            cas(
+                &root,
+                Path::new(slot),
+                "session",
+                "run",
+                0,
+                &State::Free,
+                Transition::Acquire(owner()),
+                0,
+            )
+        } else {
+            create(&root, Path::new(slot), "session", "run", 0)
+        };
+        if slot == "a/." {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(StoreError::Refused(Refusal::Invalid))));
         }
         assert_eq!(fs::read_dir(sandbox.path()).unwrap().count(), 1);
         if slot != "a/." {

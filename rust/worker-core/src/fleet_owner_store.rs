@@ -107,6 +107,7 @@ fn store(
         slot.file_name()
             .ok_or(StoreError::Refused(Refusal::Invalid))?,
     );
+    CString::new(name.as_os_str().as_bytes()).map_err(|_| StoreError::Refused(Refusal::Invalid))?;
     for part in slot_parent.components() {
         let name = CString::new(part.as_os_str().as_bytes())
             .map_err(|_| StoreError::Refused(Refusal::Invalid))?;
