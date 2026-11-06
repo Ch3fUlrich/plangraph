@@ -131,7 +131,12 @@ fn result_never_becomes_salvage_publication() {
     let mut registry = repo.clone();
     registry.root = repo.remote.clone();
     assert!(crate::writer_result::check_result(&registry, root, &ws).is_err());
+    let refs_before = command(root, &["show-ref"], &[], None).unwrap();
     export_salvage(&repo, &base, "run").unwrap();
+    assert_eq!(
+        command(root, &["show-ref"], &[], None).unwrap(),
+        refs_before
+    );
     assert!(crate::writer_result::check_result(&registry, root, &ws).is_err());
 }
 
