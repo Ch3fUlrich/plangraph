@@ -12,6 +12,8 @@ def admit_leg(leg):
 
 def resolve_target(target, *, chosen=None):
     """Resolve and admit a target; override cannot enable a disabled leg."""
+    if chosen is not None and target != chosen.model:
+        raise SpawnRefused('model and leg disagree')
     admit_leg(chosen)
     # Bare Mimo spellings are explicitly refused, even when also a leg id.
     if target.startswith('mimo-'):
