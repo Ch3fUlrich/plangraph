@@ -69,5 +69,6 @@ pub mod writer_sanitize;
 pub mod writer_secret;
 pub mod wsl;
 
+pub mod fleet_foundation_hysteresis;
 #[cfg(test)]
 pub(crate) mod testutil;

@@ -1,0 +1,1 @@
+- Track the project Omnigraph bridge: `.mcp.json` pins omnigraph-mcp 0.13.0 with graph plangraph, URL and token by env reference; `.claude/settings.json` enables that one server (operator OK, OS-OMNIGRAPH-SETTINGS).
