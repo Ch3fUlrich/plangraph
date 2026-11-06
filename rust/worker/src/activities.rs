@@ -735,8 +735,7 @@ pub(crate) fn do_ensure_phase_branch(
     let branch_ref = format!("refs/heads/{}", input.branch);
     let base_head = git(repo, &["rev-parse", base_ref.as_str()]).map_err(|e| e.to_string())?;
     if let Ok(head) = git(repo, &["rev-parse", "--verify", "-q", branch_ref.as_str()]) {
-        git(repo, &["merge-base", "--is-ancestor", &base_head, &head])
-            .map_err(|_| "phase branch does not contain the base head".to_string())?;
+        crate::phase_ancestry::ensure(repo, &base_head, &head)?;
         return Ok(PhaseBranchResult {
             head,
             created: false,
@@ -753,8 +752,7 @@ pub(crate) fn do_ensure_phase_branch(
         }),
         Err(_) => {
             let head = git(repo, &["rev-parse", branch_ref.as_str()]).map_err(|e| e.to_string())?;
-            git(repo, &["merge-base", "--is-ancestor", &base_head, &head])
-                .map_err(|_| "phase branch does not contain the base head".to_string())?;
+            crate::phase_ancestry::ensure(repo, &base_head, &head)?;
             Ok(PhaseBranchResult {
                 head,
                 created: false,
