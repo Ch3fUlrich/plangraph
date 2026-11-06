@@ -89,7 +89,7 @@ def test_tools(request_data, role, tmp_path):
 
 
 def test_opencode(request_data):
-    request_data.update(role='review', leg={'id': 'mimo-v2.6-flash'})
+    request_data.update(role='review', leg={'id': 'opencode-glm-5.3-flash-free'})
     code, out, err = invoke(request_data)
     assert (code, err) == (0, '')
     result = json.loads(out)
@@ -109,12 +109,21 @@ def test_dry(request_data, monkeypatch):
     assert json.loads(out)['argv'][0] == 'qodercli'
 
 
+def test_inline_only_review_without_diff_refused(request_data):
+    # A placement request names the routed leg, never a document review: fail closed
+    # (only SpawnService.spawn with an explicit --leg sets document_review).
+    request_data.update(role='review', leg={'id': 'mimo-v2.6-flash'})
+    code, out, err = invoke(request_data)
+    assert code == 2 and out == ''
+    assert 'inline_diff_failed' in err
+
+
 @pytest.mark.parametrize('kind', ['render_refused', 'unavailable', 'launch', 'inline_diff_failed', 'context', 'refused'])
 def test_refusals(request_data, monkeypatch, kind):
     from plangraph.routing_support import opencode_render
     from plangraph.spawner.inline_diff import InlineDiffError
     if kind == 'render_refused':
-        request_data['leg'] = {'id': 'mimo-v2.6-flash'}
+        request_data['leg'] = {'id': 'opencode-glm-5.3-flash-free'}
         monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: 'blocked')
     elif kind == 'unavailable':
         async def unavailable(*a, **kw):
@@ -251,7 +260,7 @@ def test_secret(request_data, monkeypatch, tmp_path):
     secret = 'sk-' + 'private' * 8
     original = spec.runner.build_child_env
     monkeypatch.setattr(spec.runner, 'build_child_env', lambda *a, **kw: dict(original(*a, **kw), TEST_KEY=secret))
-    request_data['leg'] = {'id': 'mimo-v2.6-flash'}
+    request_data['leg'] = {'id': 'opencode-glm-5.3-flash-free'}
     code, out, err = invoke(request_data)
     assert code == 0 and json.loads(out)['env']['TEST_KEY'] == secret and secret not in err
     assert all(secret.encode() not in p.read_bytes() for p in tmp_path.rglob('*') if p.is_file())

@@ -379,10 +379,11 @@ def test_no_implement_plan_leg_has_claude_family():
         plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
         assert plan.legs
         assert {leg.id for leg in plan.legs if leg.claude_family} == set()
-        review = plan_spawn({"estimate_tokens": estimate}, role="review", writer_families=("gpt",))
-        assert not any(leg.claude_family for leg in review.review_seats)
-
-
+        from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
+        for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
+            review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review", writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH))
+            if estimate == 100000: assert [leg.id for leg in review.review_seats] == (["mimo-v2.6-flash", "claude-haiku-5.5"] if diff else ["claude-haiku-5.5"])
+            assert not any(leg.claude_family for leg in (review.review_seats[:-1] if estimate == 100000 else review.review_seats))
 def test_alternate_limit_lookup_restricted_to_agy_harness():
     from plangraph.planner.routing import next_leg_after_provider_stop, SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
