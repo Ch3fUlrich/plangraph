@@ -288,7 +288,7 @@ class LegStateStore:
 
 
 def _default_store():
-    return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
+    return LegStateStore(Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "plangraph" / "leg-state.sqlite")
 
 
 def record_provider_response(leg, status, body, headers, caller, now=None, account=None, combo=None):
@@ -352,7 +352,7 @@ class LegAdapter:
     @staticmethod
     def standalone_models():
         import subprocess
-        result = subprocess.run(['opencode', 'models'], capture_output=True,
+        result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
                                 text=True, timeout=8, shell=False, check=True)
         return result.stdout.splitlines()
 
