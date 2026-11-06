@@ -10,8 +10,13 @@ from plangraph.spawner import launch_spec as spec
 
 @pytest.fixture
 def request_data(tmp_path, monkeypatch):
+    from dataclasses import replace
     from plangraph.spawner import runner, opencode_overlay
     from plangraph.routing_support import host_keys, opencode_render
+    # Exercise launch mechanics with an enabled qodercli review leg.
+    monkeypatch.setattr(spec, 'DEFAULT_LEGS', tuple(
+        replace(leg, disabled=None) if leg.id == 'qodercli-qwen3.8-flash' else leg
+        for leg in spec.DEFAULT_LEGS))
     monkeypatch.setattr(opencode_overlay, 'overlay_env', lambda env: env)
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: None)
     monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
@@ -182,6 +187,7 @@ def test_leg_eligibility(request_data, monkeypatch, kind):
         monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, expires='2000-01-01'),))
         reason = 'leg expired'
     else:
+        monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled=None),))
         request_data['role'] = 'implement'
         reason = 'role implement not in leg roles'
     assert invoke(request_data) == (2, '', f'{kind}: {reason}\n')

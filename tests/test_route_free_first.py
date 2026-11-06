@@ -13,6 +13,27 @@ FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "ope
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
 
 
+def test_default_qwen_disabled_and_gpt_review_families():
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == "qodercli-qwen3.8-flash")
+    assert leg.disabled == "D-3950 credits out; re-enable after one passing probe seat, one try per day"
+    assert leg.roles == ("review",)
+    plan = plan_spawn(CARD, role="review", writer_families=("gpt",))
+    assert leg.id not in {candidate.id for candidate in plan.legs}
+    assert len({seat.family for seat in plan.review_seats} - {"gpt"}) >= 2
+    assert all(seat.family != "gpt" for seat in plan.review_seats)
+
+
+def test_explicit_disabled_qwen_refused(tmp_path):
+    import asyncio
+    import pytest
+    from plangraph.spawner.service import SpawnService
+    from plangraph.planner.routing import SpawnRefused
+    with pytest.raises(SpawnRefused, match=r"^leg expired: qodercli-qwen3\.8-flash$"):
+        asyncio.run(SpawnService(state=tmp_path).spawn(
+            card=CARD, leg="qodercli-qwen3.8-flash",
+            override_reason="test disabled leg", dry_run=True))
+
+
 def test_writer_order_sol_family_excluded():
     plan = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
                       role="implement", exclude_families=("gpt",))
@@ -61,7 +82,7 @@ def test_route_and_refusal(tmp_path, capsys):
 def test_review_free_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]] and ids[3] == "mimo-v2.6-flash"
+    assert ids[:3] == [*FREE[:2], "mimo-v2.6-flash"]
 
 
 def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
@@ -74,7 +95,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
     assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
-    assert [leg.id for leg in rev.legs][:2] == ["qodercli-qwen3.8-flash", "mimo-v2.6-flash"]
+    assert [leg.id for leg in rev.legs][:2] == ["mimo-v2.6-flash", "agy-gemini-3.8-flash"]
 
 
 def test_agy_skipped_while_out_of_quota():
@@ -94,7 +115,7 @@ def test_cli_route_review_free_first(tmp_path, capsys):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:3] == ["qodercli-qwen3.8-flash", *FREE[:2]]
+    assert ids[:3] == [*FREE[:2], "mimo-v2.6-flash"]
     assert ids.index("agy-gemini-3.8-flash") > 2
 
 
@@ -115,7 +136,7 @@ def test_fixed_review_order():
     ids = ["claude-haiku-5.5", "deepseek", "agy-gemini-3.8-flash",
            "mimo-v2.6-flash", "qodercli-qwen3.8-flash", *FREE]
     table = {leg.id: leg for leg in DEFAULT_LEGS}
-    legs = tuple(replace(table[id], roles=("review",)) for id in ids)
+    legs = tuple(replace(table[id], roles=("review",), disabled=None) for id in ids)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs,
                       policy=RoutePolicy(), leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
     assert [leg.id for leg in plan.legs] == ["qodercli-qwen3.8-flash", *FREE,

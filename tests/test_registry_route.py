@@ -29,6 +29,13 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 # --- 1. harness/tool_mode are catalog data -----------------------------------
 
+@pytest.fixture(autouse=True)
+def fixed_route_table(monkeypatch):
+    # Registry/coverage behavior is independent of current provider credits.
+    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
+                 else leg for leg in DEFAULT_LEGS)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "legs", legs)
+
 def test_schema_has_harness_and_tool_mode_columns():
     db = _seeded()
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(catalog_models)")}

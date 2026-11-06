@@ -86,7 +86,8 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
 from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
-    _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
+    _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",),
+             disabled="D-3950 credits out; re-enable after one passing probe seat, one try per day"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
         roles=("review", "implement")),

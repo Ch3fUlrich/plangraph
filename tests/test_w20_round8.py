@@ -82,7 +82,7 @@ def test_refusal_record_code(tmp_path, exc, code):
 
 def test_override_writer_family_excluded(tmp_path):
     from plangraph.planner.legs import DEFAULT_LEGS
-    leg = DEFAULT_LEGS[0]
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-flash')
     service = spawn_service(state=tmp_path)
     with pytest.raises(SpawnRefused, match='excluded writer family'):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x', role='review',
