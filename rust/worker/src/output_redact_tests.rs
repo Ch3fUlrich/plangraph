@@ -1,5 +1,15 @@
 use super::*;
 
+#[test]
+fn redacted_tail_normalizes_crlf_before_line_and_byte_bounds() {
+    let tail = pg_worker_core::redact::redacted_tail;
+    for newline in ["\n", "\r\n"] {
+        let input = format!("discard{newline}middle{newline}énd{newline}");
+        assert_eq!(tail(&input, 2, 100), "middle\nénd");
+        assert_eq!(tail(&input, 2, 4), "énd");
+    }
+}
+
 macro_rules! wrapped {
     ($name:ident, $prefix:expr, $body:expr) => {
         #[test]
@@ -17,11 +27,11 @@ macro_rules! wrapped {
                         || prefix == ["xs", "k-"].concat())
                         && split > 0
                     {
-                        format!("[REDACTED]{newline}{right}\nfollowing line survives")
+                        format!("[REDACTED]\n{right}\nfollowing line survives")
                     } else {
                         "[REDACTED]\nfollowing line survives".to_string()
                     };
-                    assert_eq!(history_text(&text), expected.replace("\r\n", "\n"));
+                    assert_eq!(history_text(&text), expected);
                 }
             }
         }

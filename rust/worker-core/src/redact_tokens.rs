@@ -1,4 +1,12 @@
 //! One token-body policy for ordinary and wrapped prefixed secrets.
+//!
+//! Deltas from origin/main: gh* bodies also accept `_` and `-`, github_pat
+//! bodies also accept `-`, and plain xox bodies also accept `_` (as wrapped
+//! xox bodies did before unification). Other plain floors/alphabets are unchanged.
+//! Wrapped joining is new: LF/CRLF continuations of incomplete bodies are
+//! consumed only until the family floor is met; below-floor bodies and prose
+//! after a complete first line are preserved. AKIA retains its exact plain
+//! length and word boundary; wrapped joining uses its 16-character floor.
 pub(crate) struct TokenSpec {
     pub prefix: &'static str,
     pub body: &'static str,
@@ -27,7 +35,7 @@ pub(crate) const SPECS: &[TokenSpec] = &[
     },
     TokenSpec {
         prefix: "xox[abprs]-",
-        body: "[A-Za-z0-9-]",
+        body: "[A-Za-z0-9_-]",
         floor: 10,
         exact: false,
     },
@@ -59,6 +67,15 @@ pub(crate) fn pattern() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrapped_xox_underscore_is_redacted() {
+        let prefix = ["xo", "xb-"].concat();
+        for newline in ["\n", "\r\n"] {
+            let input = format!("{prefix}ab_{newline}cd_ef_gh; retained");
+            assert_eq!(crate::redact::redact(&input), "[REDACTED]; retained");
+        }
+    }
 
     #[test]
     fn every_family_floor_and_allowed_body_match_wrapped_and_plain() {
