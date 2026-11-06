@@ -250,7 +250,7 @@ class SpawnerRunner:
         self._git_guards = {}
         self._stdin_payloads = {}
 
-    def served_witness(self, job_id, model, *, adapter_token):
+    def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
         """Record transport telemetry authenticated by an in-process adapter.
 
         Do not expose this capability to the child: even a child that knows its
@@ -272,6 +272,7 @@ class SpawnerRunner:
         job.served_model = model
         job.served_family = family
         job.served_witness_reason = 'authenticated gateway adapter telemetry'
+        job.response_finish_reason = finish_reason  # verbatim response telemetry, never inferred
 
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
@@ -512,6 +513,7 @@ class SpawnerRunner:
                 writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
             self.jobs[job_id] = job
+            job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log

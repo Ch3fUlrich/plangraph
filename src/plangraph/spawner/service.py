@@ -109,6 +109,9 @@ class SpawnService(SeatSpawnMixin):
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
         atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
+        from .seat_artifact import publish
+        publish(self._path(record['run_id']).parent, record,
+                getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
