@@ -69,6 +69,13 @@ class Session:
             try:
                 raw = exc.read()
                 code, msg = self._parse_error(raw, exc.code)
+                if body is not None and not (400 <= exc.code < 500 and exc.code != 408):
+                    try:
+                        payload = json.loads(raw)
+                    except (ValueError, UnicodeError):
+                        payload = None
+                    if not isinstance(payload, dict) or "error" not in payload:
+                        code = "unknown outcome"
             except Exception:
                 raise self.ApiError("unknown outcome" if body is not None else "unreachable", "unreadable refusal") from None
             raise self.ApiError(code, msg) from None

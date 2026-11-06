@@ -192,6 +192,30 @@ def test_http_refusal_without_error_field(fake, raw):
     assert "unknown outcome" not in out
 
 
+@pytest.mark.parametrize("status,raw,unknown", [
+    (504, b"<html>gateway timeout</html>", True),
+    (409, b"conflict", False),
+    (408, b"request timeout", True),
+    (500, b'{"error":"conflict"}', False),
+])
+def test_mutation_http_error_classification(fake, status, raw, unknown):
+    original = fake[0].open
+    def fail(req, timeout):
+        if req.method == "GET":
+            return original(req, timeout)
+        fake[0].calls.append((req, timeout))
+        raise urllib.error.HTTPError(req.full_url, status, "", {}, io.BytesIO(raw))
+    fake[0].open = fail
+    rc, out, err = invoke(fake)
+    assert rc != 0
+    assert ("unknown outcome" in out) == unknown
+    assert ("nothing applied (the whole batch was rolled back)" in out) == (not unknown)
+    if unknown:
+        assert "nothing applied" not in out
+        assert "reconcile this exact operation" in out
+    assert len([r for r, t in fake[0].calls if r.method == "POST"]) == 1
+
+
 def test_per_op_apply_ops_without_applied(fake, monkeypatch):
     original = fake[0].open
     def without_count(req, timeout):
