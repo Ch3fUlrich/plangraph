@@ -2075,7 +2075,7 @@ async fn phase_runs_two_cards_into_the_phase_branch() {
         let k = |s: &str| format!("e2e-{s}-{}", unique());
         let a = k("phase-a");
         let b = k("phase-b");
-        let phase_key = format!("phase-{}", unique());
+        let phase_key = "demo:PH-X".to_string();
         env.keeper.push_plan(plan_json(
             &phase_key,
             &[(a.as_str(), false), (b.as_str(), false)],
@@ -2112,10 +2112,7 @@ async fn phase_runs_two_cards_into_the_phase_branch() {
         assert_eq!(merged, expected, "{out:?}");
         assert!(out.not_merged.is_empty(), "{out:?}");
         assert_eq!(out.waves, 1, "{out:?}");
-        assert_eq!(
-            out.branch,
-            pg_worker::phase::phase_branch(&phase_key).unwrap()
-        );
+        assert_eq!(out.branch, "phase/h/4095fd20aa975021");
         let bytes = handle
             .fetch_history(WorkflowFetchHistoryOptions::default())
             .to_json()

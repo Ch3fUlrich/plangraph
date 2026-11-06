@@ -30,7 +30,7 @@ def test_registered():
 
 def test_role_first_even_without_env(doors, monkeypatch):
     monkeypatch.delenv("PG_PHASE_REPO_ROOT", raising=False)
-    body = {"key": "demo:PH-X", "branch": phase_branch("demo:PH-X"), "head": "a" * 40}
+    body = {"key": "demo:PH-X", "branch": "phase/h/4095fd20aa975021", "head": "a" * 40}
     for principal in ("workerA", "l1main"):
         status, response = _post(doors, principal, body)
         assert status == 403
@@ -38,7 +38,7 @@ def test_role_first_even_without_env(doors, monkeypatch):
 
 def test_unavailable_without_repo_root_or_credential(doors, monkeypatch, tmp_path):
     monkeypatch.delenv("PG_PHASE_REPO_ROOT", raising=False)
-    body = {"key": "demo:PH-X", "branch": phase_branch("demo:PH-X"), "head": "a" * 40}
+    body = {"key": "demo:PH-X", "branch": "phase/h/4095fd20aa975021", "head": "a" * 40}
     status, response = _post(doors, "router", body)
     assert status == 503
     assert response["error"] == "unavailable"
@@ -59,7 +59,7 @@ def test_router_lands_phase_through_the_door(doors, w, tmp_path, monkeypatch):
     fake = FakeGitHub()
     monkeypatch.setattr(api_routes, "_github_from_env", lambda: fake)
 
-    body = {"key": "demo:PH-X", "branch": phase_branch("demo:PH-X"), "head": head}
+    body = {"key": "demo:PH-X", "branch": "phase/h/4095fd20aa975021", "head": head}
     status, response = _post(doors, "router", body)
     assert status == 200
     assert response["state"] == "merged"
@@ -86,7 +86,7 @@ def test_body_cannot_redirect_repo_or_credential(doors, w, tmp_path, monkeypatch
 
     body = {
         "key": "demo:PH-X",
-        "branch": phase_branch("demo:PH-X"),
+        "branch": "phase/h/4095fd20aa975021",
         "head": head,
         "repo_root": str(tmp_path / "elsewhere"),
         "token_file": str(tmp_path / "token"),
@@ -108,7 +108,7 @@ def test_not_done_cards_is_409_or_validation_mapped(doors, w, tmp_path, monkeypa
     fake = FakeGitHub()
     monkeypatch.setattr(api_routes, "_github_from_env", lambda: fake)
 
-    body = {"key": "demo:PH-X", "branch": phase_branch("demo:PH-X"), "head": head}
+    body = {"key": "demo:PH-X", "branch": "phase/h/4095fd20aa975021", "head": head}
     status, response = _post(doors, "router", body)
     assert response["error"] == "bad_state"
     assert status in (409, 422, 400)

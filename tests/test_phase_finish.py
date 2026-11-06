@@ -317,7 +317,7 @@ def test_busy_lock_is_conflict(w, tmp_path):
     assert result["state"] == "merged"
 
 def test_phase_branch_rules():
-    assert phase_finish.phase_branch("demo:PH-X") == "phase/demo-PH-X-" + "4095fd20aa975021"
+    assert phase_finish.phase_branch("demo:PH-X") == "phase/h/4095fd20aa975021"
     for key in ("", ".x", "x.", "a.lock", "a..b", "x" * 121):
         with pytest.raises(Refused) as ei:
             phase_finish.phase_branch(key)

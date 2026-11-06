@@ -45,12 +45,12 @@ def merge_message(gate: str, cards: list[str]) -> str:
 
 def phase_branch(key: str) -> str:
     """Return the worker-compatible branch name for phase ``key``."""
-    legacy = _legacy_phase_branch(key)
+    _legacy_phase_branch(key)
     # FNV-1a 64 over original UTF-8 bytes, exactly as on the Rust worker.
     digest = 0xcbf29ce484222325
     for byte in key.encode("utf-8"):
         digest = ((digest ^ byte) * 0x100000001b3) & 0xffffffffffffffff
-    return f"{legacy}-{digest:016x}"
+    return f"phase/h/{digest:016x}"
 
 def _legacy_phase_branch(key: str) -> str:
     """Validate the pre-patch name using the same rules as the worker."""

@@ -131,9 +131,9 @@ pub const OUTCOME_DONE: &str = "done";
 pub const OUTCOME_PARTIAL: &str = "partial";
 
 pub fn phase_branch(key: &str) -> Result<String, String> {
-    let legacy = legacy_phase_branch(key)?;
+    legacy_phase_branch(key)?;
     Ok(format!(
-        "{legacy}-{}",
+        "phase/h/{}",
         // Branch identity is permanently FNV-1a-64, independent of content hashes.
         phase_key_hash(key.as_bytes())
     ))

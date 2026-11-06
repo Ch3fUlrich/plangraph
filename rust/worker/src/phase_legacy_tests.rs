@@ -1,6 +1,15 @@
 use super::legacy_phase_branch;
 
 #[test]
+fn hashed_namespace_is_disjoint_from_legacy() {
+    let hashed = super::phase_branch("a/b").unwrap();
+    assert_eq!(hashed, "phase/h/e620c3190468cf61");
+    assert_ne!(hashed, legacy_phase_branch("a-b-e620c3190468cf61").unwrap());
+    // Legacy sanitisation cannot retain any slash after the phase/ prefix.
+    assert!(!legacy_phase_branch("h/e620c3190468cf61").unwrap()[6..].contains('/'));
+}
+
+#[test]
 fn legacy_names_are_pinned() {
     for (key, expected) in [
         ("demo:PH-X", "phase/demo-PH-X"),
