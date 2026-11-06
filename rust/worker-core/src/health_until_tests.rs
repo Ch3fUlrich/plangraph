@@ -138,13 +138,27 @@ fn cleared_provider_only_closed_own_rows_remain() {
 }
 #[test]
 fn kind_rows_skipped() {
-    for kind in ["canary", "omniroute_until", "arbitrary"] {
+    for kind in ["canary", "omniroute_until", "omniroute_status"] {
         let mut r = row(Class::Ok, 300);
         r.kind = Some(kind.into());
         let rows = [row(Class::HangSilent, 0), r];
         let h = fold(&rows, 300, None);
         assert_eq!((h.state, h.non_verdict_count), (State::HalfOpen, 0));
     }
+}
+#[test]
+fn named_observations_only_preserve_neutral_outcomes() {
+    let p = provider(Some(100), 0);
+    let mut neutral = row(Class::MaxTime, 100);
+    neutral.kind = Some("observation".into());
+    let h = fold(&[neutral], 100, Some(&p));
+    assert_eq!(
+        (h.state, h.non_verdict_count, h.until_s),
+        (State::HalfOpen, 1, Some(160))
+    );
+    let mut success = row(Class::Ok, 100);
+    success.kind = Some("arbitrary".into());
+    assert_eq!(fold(&[success], 100, Some(&p)).non_verdict_count, 1);
 }
 #[test]
 fn far_reset_probe_24_48_72() {

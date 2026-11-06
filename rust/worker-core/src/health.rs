@@ -19,7 +19,7 @@ pub struct Row {
     pub reset_at: Option<i64>,
     pub reset_assumed: bool,
     pub reset_clamped: bool,
-    /// Any kind marks an observation, not an attempt outcome.
+    /// Only canary and omniroute_* kinds mark non-outcome observations.
     pub kind: Option<String>,
 }
 
@@ -190,7 +190,7 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
 /// Duplicate attempts keep the greatest (timestamp, class, duration) tuple;
 /// Observations and future rows are excluded before attempt dedupe.
 pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64) -> Health {
-    replay(leg_key, route_key, role, rows, now_s, None)
+    replay_inner(leg_key, route_key, role, rows, now_s, None, false)
 }
 
 pub(crate) fn replay(
@@ -201,12 +201,34 @@ pub(crate) fn replay(
     now_s: i64,
     provider: Option<&crate::health_until::ProviderState>,
 ) -> Health {
+    replay_inner(leg_key, route_key, role, rows, now_s, provider, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replay_inner(
+    leg_key: &str,
+    route_key: &str,
+    role: Role,
+    rows: &[Row],
+    now_s: i64,
+    provider: Option<&crate::health_until::ProviderState>,
+    response_resets: bool,
+) -> Health {
     use crate::health_until::ReplayReset;
     let mut attempts: Vec<Row> = Vec::new();
+    let mut neutral_rows = Vec::new();
     for row in rows.iter().filter(|r| {
         r.leg_key == leg_key && r.route_key == route_key && r.role == role && r.ts <= now_s
     }) {
+        if row
+            .kind
+            .as_deref()
+            .is_some_and(|kind| kind == "canary" || kind.starts_with("omniroute_"))
+        {
+            continue;
+        }
         if row.kind.is_some() {
+            neutral_rows.push(row.clone());
             continue;
         }
         if let Some(old) = attempts
@@ -223,6 +245,7 @@ pub(crate) fn replay(
         }
     }
     let evidence = attempts.clone();
+    attempts.extend(neutral_rows);
     let rows = incidents(attempts);
     let mut health = Health::default();
     let mut resets = ReplayReset::new(provider.filter(|p| p.observed_s <= now_s));
@@ -232,14 +255,14 @@ pub(crate) fn replay(
         resets.before(&mut health, row.ts);
         health.advance(row.ts);
         let class = row.outcome;
-        if class == Class::Ok {
+        if class == Class::Ok && row.kind.is_none() {
             resets.success();
             health = Health::default();
             success = Some(row.ts);
             killed.clear();
             continue;
         }
-        if class.is_neutral() {
+        if class.is_neutral() || row.kind.is_some() {
             if health.state == State::HalfOpen {
                 health.non_verdict_count += 1;
                 if health.non_verdict_count == 3 {
@@ -277,7 +300,9 @@ pub(crate) fn replay(
                         && start(r) <= row.ts
                 })
                 .max_by_key(|r| (r.ts, &r.run_id, r.attempt, r.reset_at));
-            resets.open(&mut health, &row, reset, probe);
+            if response_resets {
+                resets.open(&mut health, &row, reset, probe);
+            }
         }
     }
     resets.finish(&mut health, now_s);
