@@ -4,7 +4,6 @@ import argparse
 import errno
 import fcntl
 from collections import Counter
-import io
 import json
 import os
 from pathlib import Path
@@ -29,15 +28,31 @@ def sources(args):
                 with path.open('rb') as stream:
                     yield directory.name, stream.read(LIMIT + 1)
     else:
-        result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '--', args.ssh,
-                                 shlex.join(['tar', '-C', args.remote_runs, '-cf', '-', '--wildcards',
-                                             '*/record.json'])], capture_output=True, check=True)
-        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r:*') as archive:
-            for member in archive:
-                parts = member.name.split('/')
-                if member.isfile() and len(parts) == 2 and safe_name(parts[0]) and parts[1] == 'record.json':
-                    with archive.extractfile(member) as stream:
-                        yield parts[0], stream.read(LIMIT + 1)
+        command = (f'cd {shlex.quote(args.remote_runs)} && '
+                   'find . -mindepth 2 -maxdepth 2 -type f -name record.json -print0 | '
+                   'tar --null -T - -cf -')
+        with tempfile.TemporaryFile() as errors:
+            with subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '--', args.ssh, command],
+                                  stdout=subprocess.PIPE, stderr=errors) as proc:
+                try:
+                    with tarfile.open(fileobj=proc.stdout, mode='r|*') as archive:
+                        for member in archive:
+                            name = member.name.removeprefix('./')
+                            parts = name.split('/')
+                            if member.isfile() and len(parts) == 2 and safe_name(parts[0]) and parts[1] == 'record.json':
+                                with archive.extractfile(member) as stream:
+                                    yield parts[0], stream.read(LIMIT + 1)
+                    # Drain tar padding without retaining the remaining stream.
+                    while proc.stdout.read(64 * 1024):
+                        pass
+                    code = proc.wait()
+                    if code not in (0, 1):
+                        errors.seek(max(0, errors.seek(0, os.SEEK_END) - 200))
+                        raise subprocess.CalledProcessError(code, 'ssh', stderr=errors.read(200))
+                finally:
+                    proc.stdout.close()
+                    if proc.poll() is None:
+                        proc.kill()
 
 
 def reduce_record(run_id, raw, host):
@@ -144,12 +159,17 @@ def main(argv=None):
     counts, skipped, failed = Counter(), Counter(), False
     try:
         # Finish source acquisition before any writes (notably failed SSH).
-        records = list(sources(args))
-        for run_id, raw in records:
-            data, reason = reduce_record(run_id, raw, args.host)
-            if reason:
-                skipped[reason] += 1
-            else:
+        with tempfile.TemporaryFile(mode='w+b') as records:
+            for run_id, raw in sources(args):
+                data, reason = reduce_record(run_id, raw, args.host)
+                if reason:
+                    skipped[reason] += 1
+                else:
+                    records.write(data)
+                del raw
+            records.seek(0)
+            for data in records:
+                run_id = json.loads(data)['run_id']
                 counts[write_record(args.dest, args.host, run_id, data, args.dry_run)] += 1
     except (OSError, subprocess.CalledProcessError, tarfile.TarError):
         failed = True
