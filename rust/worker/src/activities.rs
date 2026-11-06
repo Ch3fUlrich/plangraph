@@ -718,7 +718,7 @@ pub(crate) fn do_claim_card(
 
 pub(crate) fn do_ensure_phase_branch(
     input: &PhaseBranchInput,
-) -> Result<PhaseBranchResult, String> {
+) -> Result<PhaseBranchResult, phase_branch_io::BranchError> {
     ensure_phase_branch_with(input, git)
 }
 #[path = "phase_branch_io.rs"]
@@ -3404,11 +3404,16 @@ mod tests {
                 result
             });
             assert!(injected);
+            let error = result.unwrap_err();
             assert_eq!(
-                result.unwrap_err(),
+                error.to_string(),
                 "phase branch does not contain the base head",
                 "race={race}"
             );
+            let ActivityError::Application(failure) = phase_branch_error(error) else {
+                panic!("expected application failure");
+            };
+            assert!(!failure.is_non_retryable(), "race={race}");
         }
     }
 
@@ -3434,7 +3439,7 @@ mod tests {
         git(dir.path(), &["checkout", "main"]);
         git(dir.path(), &["commit", "--allow-empty", "-m", "base"]);
         assert_eq!(
-            do_ensure_phase_branch(&input).unwrap_err(),
+            do_ensure_phase_branch(&input).unwrap_err().to_string(),
             "phase branch does not contain the base head"
         );
     }
@@ -3448,7 +3453,7 @@ mod tests {
             branch: "phase/x".to_string(),
         };
         assert_eq!(
-            do_ensure_phase_branch(&same).unwrap_err(),
+            do_ensure_phase_branch(&same).unwrap_err().to_string(),
             "phase branch must not be the base branch"
         );
         let not_phase = PhaseBranchInput {
@@ -3457,7 +3462,7 @@ mod tests {
             branch: "main".to_string(),
         };
         assert_eq!(
-            do_ensure_phase_branch(&not_phase).unwrap_err(),
+            do_ensure_phase_branch(&not_phase).unwrap_err().to_string(),
             "not a phase/ branch"
         );
         let evil = PhaseBranchInput {

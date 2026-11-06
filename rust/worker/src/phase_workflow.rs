@@ -1,11 +1,13 @@
-use std::collections::HashSet;
-use std::time::Duration;
+//! Phase workflow: plans a keeper gate, claims startable cards, and runs them
+//! against a phase branch.
 
+use std::collections::HashSet;
+
+use crate::phase_options::activity_options;
 use futures::future::join_all;
 use pg_worker_core::config::Config;
-use temporalio_common::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
-use temporalio_sdk::{ActivityOptions, ChildWorkflowOptions, WorkflowContext, WorkflowResult};
+use temporalio_sdk::{ChildWorkflowOptions, WorkflowContext, WorkflowResult};
 
 use crate::activities::{
     CardActivities, ClaimCardInput, PhaseBranchInput, PhaseBranchResult, PhasePlanInput,
@@ -177,6 +179,7 @@ impl Phase {
             };
 
             let mut started_children = Vec::new();
+            let mut branch_failed = false;
             for card in wave {
                 attempted.insert(card.key.clone());
 
@@ -228,8 +231,9 @@ impl Phase {
                     {
                         Ok(value) => head = Some(value),
                         Err(err) => {
-                            last_blocked = vec![format!("ensure_phase_branch failed: {err}")];
+                            last_blocked.push(format!("ensure_phase_branch failed: {err}"));
                             not_merged.push(card.key.clone());
+                            branch_failed = true;
                             break;
                         }
                     }
@@ -278,6 +282,9 @@ impl Phase {
                 }
             }
             waves += 1;
+            if branch_failed {
+                break;
+            }
         }
 
         let mut finish = None;
@@ -373,16 +380,6 @@ impl Phase {
             finish,
         })
     }
-}
-
-fn activity_options(cfg: &Config) -> ActivityOptions {
-    let retry = RetryPolicy::builder()
-        .initial_interval(Duration::from_secs(2))
-        .maximum_attempts(5)
-        .build();
-    ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
-        .retry_policy(retry)
-        .build()
 }
 
 fn sorted_unique(mut keys: Vec<String>) -> Vec<String> {

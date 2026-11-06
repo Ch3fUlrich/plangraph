@@ -1,6 +1,5 @@
 //! Offline workflow replay tests: no Temporal server, no network. The histories
-//! in `tests/fixtures` were recorded from a real run by `e2e.rs` (writing to
-//! `PG_RECORD_DIR`), with host identity scrubbed. Replay only re-executes the
+//! in `tests/fixtures` were recorded by `e2e.rs` (`PG_RECORD_DIR`), host identity scrubbed. Replay re-executes the
 //! workflow code against the recorded event stream, so it catches any
 //! non-deterministic edit before it reaches a live worker.
 
@@ -403,7 +402,6 @@ async fn replays_phase_two_cards() {
         .await
         .expect("phase_two_cards history replays");
 }
-
 #[tokio::test]
 async fn replays_phase_defer() {
     replayer()
@@ -411,3 +409,5 @@ async fn replays_phase_defer() {
         .await
         .expect("phase_defer history replays");
 }
+#[path = "support/s4_replay.rs"]
+mod s4_replay;
