@@ -45,6 +45,9 @@ pub struct Config {
     enabled: bool,
     #[serde(default)]
     stale_pair: bool,
+    #[serde(default)]
+    hysteresis: bool,
+    hysteresis_config: Option<crate::fleet_foundation_hysteresis::Config>,
     state_path: Option<PathBuf>,
     outbox_path: Option<PathBuf>,
     acks_path: Option<PathBuf>,
@@ -74,6 +77,8 @@ struct State {
     schema_version: u8,
     clock: Option<Clock>,
     pairs: BTreeMap<String, PairState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hysteresis: Option<crate::fleet_foundation_hysteresis::State>,
 }
 fn append(path: &Path, value: Value) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(&value).map_err(|_| "outbox encoding")?;
@@ -111,6 +116,25 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
         None
     };
     let state_path = c.state_path.as_ref().ok_or("state path required")?;
+    let parent = state_path.parent().ok_or("state directory required")?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    if !parent.is_dir() {
+        return Err("state directory required".into());
+    }
+    let hysteresis = if c.hysteresis {
+        let h = c
+            .hysteresis_config
+            .as_ref()
+            .ok_or("missing control section")?;
+        h.validate()?;
+        Some(h)
+    } else {
+        None
+    };
     let outbox = c.outbox_path.as_ref().ok_or("outbox path required")?;
     let ack_path = c.acks_path.as_ref().ok_or("acks path required")?;
     let tolerance = c.wall_jump_tolerance_s.ok_or("clock tolerance required")?;
@@ -151,6 +175,7 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             schema_version: 1,
             clock: None,
             pairs: BTreeMap::new(),
+            hysteresis: None,
         },
         Err(_) => return Err("state read failed".into()),
     };
@@ -180,6 +205,8 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
         .iter()
         .filter_map(|a| a.strip_prefix("heartbeat:")?.parse::<u64>().ok())
         .max();
+    // Reserve the save file before any externally visible delivery.
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state temporary file")?;
     let mut opened = Vec::new();
     let mut attempts = 0;
     let mut send_errors = Vec::new();
@@ -208,6 +235,11 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
                     },
                 );
             }
+        }
+    }
+    if let Some(p) = pairs {
+        for g in &p.groups {
+            let namespace = format!("stale-pair:{}", g.group);
             let state = s.pairs.get_mut(&g.group).ok_or("missing group state")?;
             let finding = state.detector.observe(
                 &p.config,
@@ -232,19 +264,34 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             state.delivery.silence.tick(heartbeat, now, &mut sink);
         }
     }
+    let observations = if let Some(h) = hysteresis {
+        crate::fleet_foundation_hysteresis::tick(
+            h,
+            &mut s.hysteresis,
+            wall,
+            now,
+            jump,
+            &acks,
+            heartbeat,
+            &mut |id| send("alarm", id, None),
+            &mut opened,
+            &mut diagnostics,
+        )
+        .unwrap_or_else(|error| {
+            diagnostics.push(error);
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
     let _ = send("heartbeat", &format!("heartbeat:{now}"), None);
     s.clock = Some(clock);
     diagnostics.extend(send_errors);
-    let parent = state_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or("state directory required")?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state temporary file")?;
     serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
     temp.as_file().sync_all().map_err(|_| "state sync")?;
     temp.persist(state_path).map_err(|_| "state rename")?;
     Ok(
-        json!({"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
+        json!({"observations":observations,"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
     )
 }
 fn record_alarm(
@@ -264,6 +311,9 @@ fn record_alarm(
         }
     }
 }
+#[cfg(test)]
+#[path = "fleet_foundation_tick_state_tests.rs"]
+mod state_tests;
 #[cfg(test)]
 #[path = "fleet_foundation_tick_tests.rs"]
 mod tests;

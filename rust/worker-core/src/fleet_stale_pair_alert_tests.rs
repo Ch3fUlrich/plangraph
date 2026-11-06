@@ -1,4 +1,22 @@
 use super::*;
+#[test]
+fn fleet_first_valid_pair_preserves_compactions() {
+    let mut state = State::default();
+    run(&mut state, pair(200, 200, 0), 0);
+    let finding = run(&mut state, pair(101, 101, 3), 1);
+    assert_eq!(finding.elapsed_compactions, Some(3));
+    assert_eq!(finding.reasons, ["compaction cap"]);
+}
+#[test]
+fn fleet_one_sided_refresh_preserves_compactions() {
+    let mut state = State::default();
+    let mut first = pair(100, 100, 0);
+    first.members[0].revision = "other".into();
+    run(&mut state, first, 0);
+    let finding = run(&mut state, pair(101, 100, 3), 1);
+    assert_eq!(finding.elapsed_compactions, Some(3));
+    assert_eq!(finding.reasons, ["compaction cap"]);
+}
 fn config() -> Config {
     Config {
         maximum_age: 10,
