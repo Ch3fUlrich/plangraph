@@ -29,6 +29,7 @@ pub mod fleet_window_catalog;
 pub mod git;
 pub mod hash;
 pub mod health;
+pub mod host_metrics;
 pub mod host_probe;
 pub mod hosts;
 pub mod janitor;
