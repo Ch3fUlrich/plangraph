@@ -1,0 +1,1 @@
+- Add a read-only, UTC Claude transcript usage reader with daily pace, role accounting, baseline context weights and key-arm attribution; estimates do not expose the Claude meter, billed money or other hosts' transcripts.

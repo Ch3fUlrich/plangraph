@@ -10,7 +10,7 @@ import json
 
 from .. import views
 from ..views_progress import progress
-from . import auth, jev_report, timing
+from . import auth, jev_report, timing, snapshot_filter
 from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
@@ -190,9 +190,9 @@ class ReadMixin:
         return self._brief_context(_build_brief(item, deps), item, index)
 
     # ---------------------------------------------------------- snapshot
-    def snapshot(self, principal):
+    def snapshot(self, principal, **filters):
         return self._run(principal, "snapshot", None,
-                         lambda now: self._snapshot(now))
+                         lambda now: self._snapshot(now, **filters))
 
     def _snapshot_run_meta(self):
         """One grouped query for done/reviewed/created timestamps + merged."""
@@ -214,72 +214,8 @@ class ReadMixin:
         return created, done, reviewed, merged
 
     @timing.measured("snapshot_timing")
-    def _snapshot(self, now):
-        items = self._all_items()
-        corrected, fixed = {}, {}
-        for item in items:
-            if item["corrects"]:
-                corrected.setdefault(item["corrects"], []).append(item["key"])
-            if item.get("fixes"):
-                fixed.setdefault(item["fixes"], []).append(item["key"])
-        created_ts, done_ts, reviewed_keys, merged_keys = self._snapshot_run_meta()
-        answers = self.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
-        evidence = self._evidence_by_key()      # set-based: one query each, not one per item
-        verdicts = self._verdicts_by_key()
-        out = []
-        for item in items:
-            reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
-                       for v in self._current_round(item, verdicts.get(item["key"], []))]
-            out.append({
-                "project": item["project"], "id": item["id"], "key": item["key"],
-                "title": item["title"], "description": item["description"],
-                "host": item["host"], "wait": item.get("wait"),
-                **{name: item.get(name) for name in MODEL_FIELDS},
-                "choices": parse_choices(item.get("choices")),
-                "kg_refs": parse_kg_refs(item.get("kg_refs")),
-                "waits_on_operator": bool(item.get("operator"))
-                and item.get("state") not in ("done", "cancelled"),
-                "kind": item["kind"], "track": item["track"],
-                "owner": item["owner"], "state": item["state"],
-                "estimate_h": item["estimate_h"], "estimate_src": item["estimate_src"],
-                "depends_on": item["depends_on"], "corrects": item["corrects"],
-                "done_criteria": item["done_criteria"],
-                "evidence_kinds": item["evidence_kinds"],
-                "operator": item["operator"], "priority": item["priority"],
-                "review_tier": item["review_tier"],
-                "source": item["source"], "note": item["note"],
-                "epoch": item["epoch"], "claimed_by": item["claimed_by"],
-                "worker_run": None, "reviewer_run": None,
-                "lease_until": item["lease_until"], "model": item["model"],
-                "review_waiver": item.get("review_waiver"), "reviews": reviews,
-                "evidence": [{"kind": r["kind"], "ref": r["ref"], "epoch": r["epoch"],
-                              "verified": r["verified"], "at": r["at"]}
-                             for r in evidence.get(item["key"], [])],
-                "updated_at": item["updated_at"],
-                "corrected_by": sorted(corrected.get(item["key"], [])),
-                "fixes": item.get("fixes"),
-                "fixed_by": sorted(fixed.get(item["key"], [])),
-                "writer_model": item.get("writer_model"),
-                "seat_models": _decode_models(item.get("seat_models")),
-                "run_ids": _decode_run_ids(item.get("run_ids")),
-                "created_at": item.get("created_at")
-                or created_ts.get(item["key"]),
-                "done_at": done_ts.get(item["key"]),
-                "reviewed": item["key"] in reviewed_keys,
-                "merged": item["key"] in merged_keys,
-                "answer": ({"text": answers[item["key"]]["text"],
-                            "decision_id": answers[item["key"]]["decision_id"]}
-                           if item["key"] in answers else None),
-            })
-        head = self.conn.execute(
-            "SELECT hash, seq FROM events ORDER BY seq DESC LIMIT 1").fetchone()
-        return {"generated": self._iso(now), "head": head[0] if head else None,
-                "head_seq": head[1] if head else 0,   # PG-LOCAL-COPY: readers refuse an older copy
-                "items": out,
-                "aliases": {a["old"]: a["new"] for a in self._aliases()},
-                "activity": self._activity(now),
-                "decision_text": self._decision_text(items, now, evidence),
-                "progress": progress(out)}   # PROGRESS-PANEL: the page's static panel
+    def _snapshot(self, now, **filters):
+        return snapshot_filter.build(self, now, **filters)
 
     def _activity(self, now):
         """Compact ``events`` feed for the last 31 days, oldest first."""

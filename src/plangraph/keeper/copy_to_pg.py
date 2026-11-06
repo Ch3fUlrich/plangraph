@@ -17,7 +17,6 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import db as kdb, db_errors, events
-from .placement_rules_schema import SQLITE_ONLY_TABLES
 
 __all__ = ["run", "TABLES", "CopyError"]
 
@@ -31,7 +30,7 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           "messages", "message_nonces", "message_envelopes",
           # BUS-REGISTRY-PERSIST: the host registry; absent in an older source,
           # which skips it like every other table the source does not have.
-          "bus_hosts")
+          "bus_hosts", "placement_rule_revision", "placement_rule_values", "placement_rule_audit")
 _BATCH = 500
 
 
@@ -55,14 +54,10 @@ def _open_source(src):
     if "events" not in names or "items" not in names:
         conn.close()
         raise CopyError("source is not a keeper database")
-    unknown = sorted(set(names) - set(TABLES) - SQLITE_ONLY_TABLES)
+    unknown = sorted(set(names) - set(TABLES))
     if unknown:
         conn.close()
         raise CopyError("source has tables this tool does not know: " + ", ".join(unknown))
-    for table in sorted(set(names) & SQLITE_ONLY_TABLES):
-        if conn.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone():
-            conn.close()
-            raise CopyError(f"source SQLite-only table {table} is not empty; wait for C3")
     return conn, [t for t in TABLES if t in names]
 
 
@@ -147,6 +142,21 @@ def _verify_messages_chain(conn) -> list[dict]:
     return problems
 
 
+def _verify_table(src, conn, table):
+    """Compare every copied value, not just counts (including the rule ledger)."""
+    cols, order = _columns(src, table)
+    columns = ','.join(f'"{c}"' for c in cols)
+    ordering = ','.join(f'"{c}"' for c in order)
+    sql = f'SELECT {columns} FROM "{table}" ORDER BY {ordering}'
+    source, target = src.execute(sql), conn.execute(sql)
+    while True:
+        want, have = source.fetchmany(_BATCH), target.fetchmany(_BATCH)
+        if [tuple(r) for r in want] != [tuple(r) for r in have]:
+            raise CopyError(f'copied table {table} differs between source and target')
+        if not want:
+            return
+
+
 def _triggers(conn, tables, enable):
     """User triggers (the key-lock guards) would refuse the copy: events are loaded before
     the items/evidence they lock.  Toggled inside the copy transaction only (DDL is
@@ -196,6 +206,8 @@ def _apply(src, tables, source_counts, source_head, cfg_db, opts):
                 raise CopyError("row counts differ between source and target: "
                                 + ", ".join(t for t in tables
                                             if target_counts[t] != source_counts[t]))
+            for table in tables:
+                _verify_table(src, conn, table)
             if _head(conn) != source_head:
                 raise CopyError("events chain head differs between source and target")
             if events.verify_chain(conn):

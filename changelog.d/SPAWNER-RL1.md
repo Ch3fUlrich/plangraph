@@ -1,0 +1,1 @@
+- **RL1 VERDICT VOCABULARY (D-3685):** Align both Python verdict parsers on blocking and passing words, including GO with unchanged pass gates; pin shared golden cases and preserve low-only relaxation boundaries.

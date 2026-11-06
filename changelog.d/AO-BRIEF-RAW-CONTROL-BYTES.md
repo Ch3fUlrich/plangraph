@@ -1,0 +1,1 @@
+- **AO-BRIEF-RAW-CONTROL-BYTES:** Refuse caller writer briefs and session prompts containing Unicode control characters except TAB, LF and CR before launch, including dry runs and rendered fixer briefs; report only the first code point and line. Review diffs and repository context remain unchecked (D-4188, D-4206).

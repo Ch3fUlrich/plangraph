@@ -159,6 +159,9 @@ def tool_call_only(job, record):
 
 
 def fallthrough_reason(service, chosen, job, record):
+    from .question_bridge import question_exit
+    if question_exit(job, record):
+        return None
     if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
     # Before the terminal check: text-call output replaces writer_no_changes; tool_call_only keeps the other terminals.
@@ -224,6 +227,8 @@ def terminal_reason(record, job=None):
     later attempt's outcome.  Guard evidence names the run (M9), and guard and
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
     """
+    if record.get('status') == 'needs_input':
+        return
     if record.get('reason') == 'kill_incomplete':
         return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()

@@ -55,7 +55,7 @@ def test_seats_and_impossible_fence():
     # and a deepseek seat covers the qwen part.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
-    assert [l.family for l in p.review_seats] == ["qwen", "deepseek"] and not p.error
+    assert [l.family for l in p.review_seats] == ["muse", "claude"] and not p.error
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
                    exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude"))  # D-3605 Haiku leg

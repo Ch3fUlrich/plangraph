@@ -3,7 +3,6 @@
 //! `PG_RECORD_DIR`), with host identity scrubbed. Replay only re-executes the
 //! workflow code against the recorded event stream, so it catches any
 //! non-deterministic edit before it reaches a live worker.
-
 use pg_worker::activities::{CardActivities, CardInput, CardOutput, Tick};
 use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::Card;
@@ -411,3 +410,4 @@ async fn replays_phase_defer() {
         .await
         .expect("phase_defer history replays");
 }
+mod phase_terminal;

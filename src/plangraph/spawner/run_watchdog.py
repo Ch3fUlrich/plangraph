@@ -201,7 +201,7 @@ class LiveLog:
 async def collect(runner, job_id, proc):
     from .runner import redact
     from .reap import cancel_and_close
-    from .env_redact import early_refusal, redact_env_values
+    from .env_redact import early_refusal, redact_env_values, OutputLines
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
@@ -216,6 +216,7 @@ async def collect(runner, job_id, proc):
     async def reader(stream, name):
         pending, tail = '', ''
         log = LiveLog(job)
+        output_lines = OutputLines(scrub)
         decoder = codecs.getincrementaldecoder('utf-8')('replace')
         def consume(text):
             nonlocal pending, tail
@@ -246,7 +247,7 @@ async def collect(runner, job_id, proc):
             gate.scan_late(lines, time.time())   # REMOVE-AT-R10 (D-3769)
             if active:
                 job.last_activity_ts = time.time()
-            scrubbed = scrub(text)      # once per chunk: linear (Q4/M3)
+            scrubbed = output_lines.feed(text)
             tail = (tail + scrubbed)[-4096:]
             setattr(job, name, tail)
             log.feed(scrubbed)
@@ -260,6 +261,9 @@ async def collect(runner, job_id, proc):
             if pending and is_activity(pending):
                 job.last_activity_ts = time.time()
         finally:
+            remainder = output_lines.feed('', final=True)
+            setattr(job, name, (tail + remainder)[-4096:])
+            log.feed(remainder)
             log.flush()   # also on drain-grace cancellation: batched bytes land
     async def output():
         payload = runner._stdin_payloads.get(job_id)

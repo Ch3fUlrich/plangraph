@@ -45,27 +45,13 @@ IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed 
 _keeper_unconfigured_last_warned = None
 
 
-from .env_redact import first_reason
+from .env_redact import first_reason, redact
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
 from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry  # re-export: tests import and patch these on runner
-
-
-def redact(value):
-    """Scrub credential-shaped strings recursively before persistence or display."""
-    if isinstance(value, dict):
-        return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(r'(?i)(key|authorization|token|secret)', k)
-                    else redact(v)) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [redact(v) for v in value]
-    if isinstance(value, str):
-        value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
-        value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
-        return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
-    return value
 
 
 def _is_nt() -> bool:
@@ -109,7 +95,7 @@ def _resolve_launch(
 class JobInfo:
     """Execution state of a spawned agent task."""
     job_id: str
-    status: str  # "running" | "completed" | "failed" | "cancelled" | "dry_run"
+    status: str  # "running" | "completed" | "failed" | "cancelled" | "dry_run" | "needs_input"
     task_prompt: str
     model_or_combo: str
     role: str = "implement"
@@ -513,7 +499,8 @@ class SpawnerRunner:
                 cwd=work_dir,
                 writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
-            self.jobs[job_id] = job
+            from .probe_cleanup import register
+            self.jobs[job_id] = job; register(job_id)
             job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
             from .run_watchdog import thresholds, edit_signature
             job._watchdog_limits = watchdog or thresholds(role=role)
@@ -685,7 +672,6 @@ class SpawnerRunner:
         if job_id in reaped:
             return
         reaped.add(job_id)
-        job = self.jobs.get(job_id)
         await reap(self, job_id, proc)
 
     async def _monitor_process(
@@ -733,11 +719,20 @@ class SpawnerRunner:
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
-                job.status = "completed" if exit_code == 0 else "failed"
+                # No-tools review seats can emit a complete verdict before rc 1 termination.
+                lines = stdout_text.rstrip('\r\n').splitlines()
+                review_verdict = (
+                    exit_code == 1 and is_opencode(job) and job.role == 'review'
+                    and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
+                    and bool(lines) and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES')
+                )
+                job.status = "completed" if exit_code == 0 or review_verdict else "failed"
             if job.status == 'failed' and is_opencode(job):
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
-            await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
+            from .question_bridge import question_exit
+            if not question_exit(job, {}):
+                await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
             # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',
             # never 'served'); read only for a review leg's own store, all tools denied, exit 0 (D-2905 (1)).
@@ -778,10 +773,9 @@ class SpawnerRunner:
             job.served_model = job.served_model or 'unwitnessed'
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
+            await self._reap_process(job_id, proc)
             if job_id in self.jobs:
-                if self.jobs[job_id].status not in ('failed', 'stalled', 'timeout'):
-                    self.jobs[job_id].status = "cancelled"
-                    self.jobs[job_id].exit_code = 1
+                from .cancel_job import publish_cancel; publish_cancel(self.jobs[job_id])
                 self.jobs[job_id].end_time = time.time()
         except Exception as exc:
             job = self.jobs[job_id]
@@ -841,6 +835,7 @@ class SpawnerRunner:
             return {'ok': False, 'steered': False, 'error': 'unknown job'}
         job = self.jobs[job_id]
         # Audit attempted instructions; success is reported separately.
+        message = redact(message)
         job.steer_messages.append(message)
 
         proc = self._processes.get(job_id)
@@ -863,26 +858,8 @@ class SpawnerRunner:
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a running job."""
-        if not isinstance(job_id, str):
-            from plangraph.routing_errors import ParameterRefused
-            raise ParameterRefused('job_id must be a string')
-        if job_id not in self.jobs:
-            raise KeyError(f"Job {job_id} not found")
-        job = self.jobs[job_id]
-        job.status, job.exit_code = "cancelled", 1   # Q14: before the reap, so the monitor keeps it
-
-        proc = self._processes.get(job_id)
-        if proc:
-            await self._reap_process(job_id, proc)
-
-        task = self._tasks.get(job_id)
-        if task and not task.done():
-            task.cancel()
-
-        self._nonces.pop(job_id, None)
-        job.end_time = time.time()
-        self._check_git_config_guard(job_id)   # only a dangerous config mutation turns it 'failed'
-        return {"job_id": job_id, "status": job.status}
+        from .cancel_job import cancel_job
+        return await cancel_job(self, job_id)
 
 
 def spawn_service(*args, **kwargs):
@@ -892,6 +869,10 @@ def spawn_service(*args, **kwargs):
     from pathlib import Path
 
     class DispatchService(SpawnService):
+        async def _continue_writer(self, record, output):
+            if record.get('status') != 'needs_input':
+                return await super()._continue_writer(record, output)
+
         def __init__(self, *args, completion_sink=None, keeper_sink=None, **kwargs):
             super().__init__(*args, **kwargs)
             from .notify import FileInbox
@@ -907,7 +888,9 @@ def spawn_service(*args, **kwargs):
             return await super().cancel(run_id)
 
         def _save(self, record, *, retry=False):
-            from .notify import completion_event, CommandSink, KeeperNotConfigured
+            import socket
+            record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
+            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperSink
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
@@ -924,6 +907,8 @@ def spawn_service(*args, **kwargs):
             if terminal:
                 if 'completion' not in record:
                     record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
+                    if record.get('status') == 'needs_input':
+                        record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                     changed = True
             if changed:
                 super()._save(record)
@@ -933,7 +918,10 @@ def spawn_service(*args, **kwargs):
                     if marker.exists():
                         continue
                     try:
-                        sink.deliver(recipient, record['completion'])
+                        no_keeper_item = (recipient == 'keeper' and isinstance(sink, KeeperSink)
+                                          and sink.url and sink.token_file and not record['completion'].get('item'))
+                        if not no_keeper_item:
+                            sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'delivered\n')
                     except KeeperNotConfigured:
@@ -1007,6 +995,9 @@ def spawn_service(*args, **kwargs):
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
             from .run_watchdog import terminal_status, thresholds
+            from .question_bridge import rounds_exhausted
+            if rounds_exhausted(self, card, role):
+                return dict(status='refused', reason='question_rounds_exhausted', exit_code=2)
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1097,8 +1088,8 @@ def spawn_service(*args, **kwargs):
                         task = self.runner._tasks.get(job.job_id)
                         if task:
                             await asyncio.wait([task])   # a monitor cancelled by runner.cancel ends the leg, not this loop
-                            if task.cancelled() and job.status not in ('stalled', 'timeout', 'cancelled'):
-                                job.status = 'cancelled'
+                            if task.cancelled():
+                                from .cancel_job import publish_cancel; publish_cancel(job)
                             elif not task.cancelled() and task.exception() is not None:
                                 raise task.exception()
                         if job.survivors:   # kill_incomplete: terminal, no fall-through leg, no second writer
@@ -1150,8 +1141,8 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=record.get('stdout_tail', '') + job.stdout,
                             stderr_tail=record.get('stderr_tail', '') + job.stderr,
                             events=record.get('events', []) + getattr(job, 'events', []))
-                        if (not stop and not unavailable) or no_fallthrough or dry_run:
-                            if not dry_run:
+                        if job.status == 'needs_input' or (not stop and not unavailable) or no_fallthrough or dry_run:
+                            if not dry_run and job.status != 'needs_input':
                                 await self._continue_writer(record, job.stdout)
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
@@ -1187,7 +1178,9 @@ def spawn_service(*args, **kwargs):
                         return
                     record.update(status='failed', exit_code=1, error=redact(str(exc)))
                 finally:
-                    if record['status'] == 'running':
+                    if record['status'] == 'running' and record.get('job_id') in self.runner.jobs and self.runner.jobs[record['job_id']].survivors:
+                        record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=self.runner.jobs[record['job_id']].survivors)
+                    elif record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
                     terminal_reason(record, job if record.get('job_id') else None)

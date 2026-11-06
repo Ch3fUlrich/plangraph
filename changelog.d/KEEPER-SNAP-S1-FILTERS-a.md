@@ -1,0 +1,1 @@
+- **KEEPER-SNAP-S1-FILTERS S1a:** Add read-only Store snapshot selection, item fields, blocks, activity cutoff and filter echo; preserve unfiltered bytes and full signed snapshots, with no HTTP API change.

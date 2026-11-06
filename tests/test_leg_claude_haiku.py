@@ -28,7 +28,7 @@ def test_leg_present_review_only_and_last():
     leg = _leg()
     assert leg is DEFAULT_LEGS[-1]
     assert leg.roles == ("review",) and leg.harness == "claude" and leg.claude_family
-    assert leg.model == "claude-haiku-5-5" and not leg.expires
+    assert leg.model == "claude-haiku-5-5" and not hasattr(leg, "expires")
     assert "claude" in HARNESSES
 
 

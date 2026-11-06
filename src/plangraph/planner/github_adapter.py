@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import re
+import stat
 import subprocess
 import urllib.error
 import urllib.parse
@@ -111,7 +112,8 @@ class RestGitHub:
 
     def _token(self) -> str:
         try:
-            if self.token_file.stat().st_mode & 0o077:
+            mode = self.token_file.lstat().st_mode
+            if stat.S_ISLNK(mode) or mode & 0o077:
                 raise GitHubError("github token file unavailable")
             token = self.token_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError):
@@ -264,4 +266,6 @@ class RestGitHub:
         token_file = environ.get("PG_PHASE_GITHUB_TOKEN_FILE", "").strip()
         if not repo or not token_file:
             return None
+        if not _REPO_RE.fullmatch(repo):
+            raise GitHubError("github repository configuration invalid")
         return cls(repo, token_file)

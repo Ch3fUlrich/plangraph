@@ -118,3 +118,22 @@ def test_open_alarm_on_an_owned_card_advances_the_attempt(tmp_path):
         assert owner(w, key) == ("wf", "run", 2)
     finally:
         w.close()
+
+
+@needs_pg
+def test_retired_fence_remembers_every_run_after_twenty_clears_pg(tmp_path):
+    """RT-P1 sq12 fix 1 on Postgres: the retired-run fence never forgets.
+
+    Same body as the SQLite test (``check_retired_fence_remembers_every_run``):
+    20 clear cycles later the FIRST retired run is still refused, through
+    ``_exec_check`` and end to end through a worker park.
+    """
+    from test_keeper_exec_ownership import check_retired_fence_remembers_every_run
+
+    d = tmp_path / "pgfence"
+    d.mkdir()
+    w = World(d, backend="postgres", dsn=DSN)
+    try:
+        check_retired_fence_remembers_every_run(w)
+    finally:
+        w.close()

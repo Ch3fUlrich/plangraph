@@ -1,11 +1,6 @@
-"""D-3901 review groups; measured order breaks ties within a group."""
+"""D-4147: mimo first, table order next, Haiku last (independent of cost)."""
 
 
 def review_key(leg, tier_idx, pos):
-    if leg.tier == "free":
-        return (0, leg.id != "qodercli-qwen3.8-flash", tier_idx, pos)
-    priority = (0 if leg.id == "qodercli-qwen3.8-flash" else
-                1 if leg.family == "mimo" else
-                2 if leg.family == "deepseek" else
-                4 if "haiku" in leg.model.lower() else 3)
-    return (1, priority, tier_idx, pos)
+    from .route_policy import review_priority
+    return (review_priority(leg), pos)
