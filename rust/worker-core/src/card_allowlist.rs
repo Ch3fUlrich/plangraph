@@ -1,5 +1,12 @@
 use super::*;
 impl Config {
+    /// Explicit unrestricted policy for test harnesses, never worker startup.
+    pub fn allow_all_for_tests() -> Self {
+        Self {
+            test_allow_all_cards: true,
+            ..Self::default()
+        }
+    }
     /// Snapshot the environment allowlist once at startup, before sharing Config.
     /// Programmatically supplied admission policy takes precedence.
     pub fn with_card_allowlist_env(self) -> std::io::Result<Self> {
@@ -42,6 +49,6 @@ impl Config {
     pub fn card_allowed(&self, key: &str) -> bool {
         self.card_allowlist
             .as_ref()
-            .is_none_or(|keys| keys.contains(key))
+            .map_or(self.test_allow_all_cards, |keys| keys.contains(key))
     }
 }

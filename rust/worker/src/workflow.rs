@@ -1939,7 +1939,7 @@ mod tests {
 
     #[test]
     fn auxiliary_activities_get_bounded_retries() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let retry = activity_options(&cfg)
             .retry_policy
             .expect("auxiliary options carry a retry policy");
@@ -2141,7 +2141,7 @@ mod tests {
 
     #[test]
     fn gate_options_are_bounded() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let opts = gate_options(&cfg);
         assert_eq!(
             opts.close_timeouts.start_to_close(),
@@ -2258,7 +2258,7 @@ mod tests {
 
     #[test]
     fn merge_activity_is_single_attempt() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let retry = once_options(&cfg)
             .retry_policy
             .expect("merge options carry a retry policy");
@@ -2267,7 +2267,7 @@ mod tests {
 
     #[test]
     fn janitor_is_detached_from_workflow_cancellation() {
-        let cfg = Config::default();
+        let cfg = Config::allow_all_for_tests();
         let token = janitor_options(&cfg)
             .cancellation_token
             .expect("the janitor names its own cancellation token");
