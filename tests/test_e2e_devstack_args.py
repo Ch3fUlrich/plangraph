@@ -224,13 +224,12 @@ def test_keeper_config_refuses_foreign_or_implicit_dsn(e2e, tmp_path, dsn):
     with pytest.raises(e2e.Fail, match="loopback|explicit port"):
         e2e.check_keeper_config(cfg)
 def test_stop_worker_does_not_discover_or_guess_group(e2e, monkeypatch):
-    support = sys.modules["e2e_devstack_support"]
-    monkeypatch.setattr(os, "getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(os, "getpgid", lambda pid: pytest.fail("group discovery"))
     monkeypatch.setattr(os, "killpg", lambda *a: pytest.fail("unowned group"))
     proc = SimpleNamespace(pid=FAKE_PID, poll=lambda: None, send_signal=lambda sig: None,
                            wait=lambda **kw: None)
     with open(os.devnull, "wb") as out:
-        support.stop_worker(SimpleNamespace(proc=proc, out=out))
+        e2e.stop_worker(SimpleNamespace(proc=proc, out=out))
 def test_foreign_keeper_refused_before_any_contact(e2e, tmp_path, monkeypatch):
     args = e2e.parse_args(["--state", str(tmp_path), "--temporal", "127.0.0.1:17252",
                           "--keeper", "http://127.0.0.1:18787", "--temporal-http",
@@ -365,26 +364,27 @@ def test_stop_worker_grace_failure_still_kills_and_reaps(e2e, tmp_path, monkeypa
 @pytest.mark.parametrize("window", ["kill", "reap"])
 def test_final_worker_cleanup_defers_first_signal(e2e, monkeypatch, sig, window):
     import threading  # pthread_sigmask protects this thread, not CI/plugin peers.
-    target, idle = threading.get_ident(), threading.Event()
+    idle = threading.Event(); events = []
     peer = threading.Thread(target=idle.wait); peer.start()  # exercise an unblocked peer
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
-    killpg, wait = os.killpg, proc.wait
+    killpg, wait, out = os.killpg, proc.wait, open(os.devnull, "wb")
     old = {s: signal.signal(s, e2e.interrupted) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)}
-    out = open(os.devnull, "wb")
+    def deliver():  # allow peer delivery and main-thread handler execution before proceeding
+        signal.pthread_kill(peer.ident, sig); time.sleep(0.02)
     def send(pgid, sent):
         if sent == signal.SIGTERM: return
-        if window == "kill": signal.pthread_kill(target, sig)
-        killpg(pgid, sent)
+        if window == "kill": deliver()
+        killpg(pgid, sent); events.append("killed")
     def reap(**kwargs):
-        if window == "reap": signal.pthread_kill(target, sig)
-        return wait(**kwargs)
+        if window == "reap": deliver()
+        result = wait(**kwargs); events.append("reaped"); return result
     try:
         with monkeypatch.context() as patch:
             patch.setattr(os, "killpg", send); patch.setattr(os, "waitid", lambda *a: True)
             patch.setattr(proc, "wait", reap)
             with pytest.raises(e2e.Fail, match="run time box expired" if sig == signal.SIGALRM else "run interrupted"):
                 e2e.stop_worker(SimpleNamespace(proc=proc, out=out, owned_pgid=proc.pid))
-        assert proc.returncode is not None and out.closed
+        assert events == ["killed", "reaped"] and proc.returncode == -signal.SIGKILL and out.closed
     finally:
         idle.set(); peer.join(timeout=5)
         for s, handler in old.items(): signal.signal(s, handler)

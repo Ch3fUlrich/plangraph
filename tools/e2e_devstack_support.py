@@ -135,13 +135,25 @@ def stop_worker(worker) -> None:
                 except subprocess.TimeoutExpired:
                     pass
         finally:
-            blocked = signal.pthread_sigmask(
-                signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGALRM})
+            previous, pending = {}, []
+            def defer(signum, frame):
+                pending.append((signum, frame))
             try:
+                # Handlers cover delivery to any thread; pthread_sigmask does not.
+                for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM):
+                    previous[sig] = signal.signal(sig, defer)
                 send(signal.SIGKILL)  # also kill descendants after the parent has exited
                 worker.proc.wait(timeout=10)
             finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
+                if pending:
+                    sig, frame = pending[0]
+                    handler = previous[sig]
+                    if callable(handler):
+                        handler(sig, frame)
+                    elif handler == signal.SIG_DFL:
+                        signal.raise_signal(sig)
     finally:
         worker.out.close()
 
