@@ -136,11 +136,12 @@ def test_listing_failure_stays_advisory_without_slices(sandbox, monkeypatch, ena
 def test_cost_context_changelog_is_one_line():
     from pathlib import Path
     fragment = Path(__file__).resolve().parents[1] / 'changelog.d' / (
-        'SPAWNER-COST-TIME-D3605-cost-context.md')
+        'SPAWNER-COST-TIME-D3605-' + 'cost-context.md')
     lines = fragment.read_text().splitlines()
     assert len(lines) == 1
     assert lines[0].startswith('- **SPAWNER-COST-TIME-D3605:**')
     assert 'Whole-inline-prompt bounds' in lines[0]
+    assert 'refused dispatch (unsliced and oversized)' in lines[0]
 
 
 def test_synthetic_replay_exact_reductions(sandbox, monkeypatch):
@@ -151,7 +152,7 @@ def test_synthetic_replay_exact_reductions(sandbox, monkeypatch):
     calls = []
     with pytest.raises(cp.ContextError, match='big_file_unsliced'):
         dispatch(seat, root, before, {}, leg, calls)
-    assert calls == []  # one refused oversized synthetic dispatch
+    assert calls == []  # one refused dispatch (unsliced and oversized)
     dispatch(seat, root, 'edit large.py', {'context': ['large.py:101-130']}, leg, calls)
     assert len(calls) == 1  # zero refusals with the explicit function range
     after = calls[0]
