@@ -131,3 +131,8 @@ Inline review regression checks cover marker replacement, native stdin bytes,
 unknown carriers, redaction and final-prompt hashes before dispatch, disabled Git
 extensions, and cleanup restricted to live owned children. Batch launchers are
 inspected case-insensitively; multiline native launchers remain supported.
+
+Inline review refuses missing mandatory `diff_ref` before carrier validation.
+Multiline prompts reject `.cmd`/`.bat` at any argv position; inline payload
+marker/fence sequences are escaped. Timeout cleanup never waits for escaped
+stdout holders outside the invocation-owned process group.

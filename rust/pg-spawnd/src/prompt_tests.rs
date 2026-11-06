@@ -13,10 +13,12 @@ fn launch(prompt: &str) -> LaunchSpec {
 }
 #[test]
 fn inline_only_missing_names_diff_ref_before_record_child() {
+    let mut carrier = launch("one\ntwo");
+    carrier.argv[0] = "runner.cmd".into();
     let error = prepare_review(
         &json!({"role":"review"}),
         &json!({"review_mode":"inline_only"}),
-        &mut launch("original"),
+        &mut carrier,
         &BTreeMap::new(),
         false,
     )
@@ -54,7 +56,7 @@ fn tools_off_shadow_unchanged() {
 fn windows_cmd_multiline_refused_case_insensitive() {
     for exe in ["runner.CmD", "runner.BAT"] {
         let mut l = launch("one\ntwo");
-        l.argv[0] = exe.into();
+        l.argv = vec!["cmd.exe".into(), "/c".into(), exe.into()];
         assert_eq!(
             prepare_review(
                 &json!({"role":"review"}),

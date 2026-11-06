@@ -83,7 +83,11 @@ fn collect_diff(
         let _ = child.kill();
     }
     let status = child.wait().map_err(|_| InlineDiffError::Git)?;
-    let _ = reader.join();
+    // A descendant outside our owned group may still hold stdout. Never wait
+    // for its EOF on failure; the detached reader exits when that holder closes.
+    if result.is_ok() {
+        let _ = reader.join();
+    }
     let bytes = result
         .map_err(|_| InlineDiffError::Git)?
         .map_err(|_| InlineDiffError::Git)?;
