@@ -51,11 +51,37 @@ def test_pg_sqlite_columns_match(pg):
     with sqlite3.connect(':memory:') as lite:
         lite.executescript(rules.SQLITE)
         for table in rules.TABLES:
-            want = [r[1] for r in lite.execute(f'PRAGMA table_info({table})')]
-            got = raw.execute('SELECT column_name FROM information_schema.columns '
+            want = [(r[1], 'bigint' if r[2] == 'INTEGER' else 'text',
+                     'NO' if r[3] or r[5] else 'YES',
+                     'C' if r[2] == 'TEXT' else None)
+                    for r in lite.execute(f'PRAGMA table_info({table})')]
+            got = raw.execute('SELECT column_name,data_type,is_nullable,collation_name '
+                              'FROM information_schema.columns '
                               'WHERE table_schema=current_schema() AND table_name=%s '
                               'ORDER BY ordinal_position', (table,)).fetchall()
-            assert [r[0] for r in got] == want
+            assert got == want
+        for statement in [
+            'INSERT INTO placement_rule_revision VALUES (2,0)',
+            'INSERT INTO placement_rule_revision VALUES (1,-1)',
+            "INSERT INTO placement_rule_values VALUES ('invalid','','k','1')",
+            "INSERT INTO placement_rule_values VALUES ('fleet','host','k','1')",
+            "INSERT INTO placement_rule_values VALUES ('host','','k','1')",
+            "INSERT INTO placement_rule_audit VALUES (0,'a','{}',NULL,'t')",
+        ]:
+            import psycopg
+            with pytest.raises(sqlite3.IntegrityError):
+                lite.execute(statement)
+            with pytest.raises(psycopg.errors.CheckViolation):
+                raw.execute(statement)
+
+
+def test_keeper_migration_gates_documented():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / 'docs/KEEPER.md').read_text()
+    section = text.split('## Placement rules migration-gates', 1)[1]
+    for required in ('GO', 'reviewed SHA', 'backup', 'rehearsal', 'migrate role',
+                     'runtime', 'restart', 'writers stopped', 'retired_v11'):
+        assert required in section
 
 
 def test_upgrade_idempotent(pg):
