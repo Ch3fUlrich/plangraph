@@ -56,9 +56,14 @@ def test_real_output_boundaries(tmp_path, monkeypatch, split, failure):
     password, dsn = sample()
     text = 'diagnostic ' + dsn + '\n'
     if failure:
-        def broken(text):
-            raise RuntimeError('synthetic failure')
-        monkeypatch.setattr(runner_mod, 'redact', broken)
+        original_sub = env_redact.re.sub
+        def broken(pattern, *args, **kwargs):
+            if pattern.startswith(r'\b(?:x?sk)'):
+                raise RuntimeError('synthetic failure')
+            return original_sub(pattern, *args, **kwargs)
+        monkeypatch.setattr(env_redact, 're', SimpleNamespace(
+            **{name: getattr(env_redact.re, name) for name in dir(env_redact.re)
+               if name != 'sub'}, sub=broken))
 
     async def run():
         job = SimpleNamespace(role='review', start_time=time.time(), cwd=str(tmp_path),
@@ -86,8 +91,8 @@ def test_real_output_boundaries(tmp_path, monkeypatch, split, failure):
         assert password not in log
         if failure:
             assert 'redaction failed; output withheld' in log
-            return
-        assert '@example.invalid/db' in log
+        else:
+            assert '@example.invalid/db' in log
 
         service = SpawnService(runner=runner, state=tmp_path)
         record = dict(run_id='run-test', host='synthetic', stdout_tail=text,
@@ -95,7 +100,17 @@ def test_real_output_boundaries(tmp_path, monkeypatch, split, failure):
         service._save(record)
         stored = service._path('run-test').read_text()
         assert password not in stored
-        assert '[REDACTED]' in json.loads(stored)['stdout_tail']
+        marker = 'redaction failed; output withheld' if failure else '[REDACTED]'
+        assert marker in json.loads(stored)['stdout_tail']
+
+        path = tmp_path / 'prompt.txt'
+        def stop_after_capture(record):
+            raise RuntimeError('captured')
+        with pytest.raises(RuntimeError, match='captured'):
+            await object.__new__(runner_mod.SpawnerRunner).spawn(prompt=text,
+                role='review', prompt_record=(path, {}, stop_after_capture))
+        assert password not in path.read_text()
+        assert marker in path.read_text()
 
         # Steer uses the actual stdin write path, including earlier output.
         class Stdin(io.BytesIO):
@@ -111,7 +126,7 @@ def test_real_output_boundaries(tmp_path, monkeypatch, split, failure):
         outbound._processes = {'j': SimpleNamespace(stdin=stdin)}
         await outbound.steer('j', 'retry with earlier output:\n' + text)
         assert password.encode() not in stdin.getvalue()
-        assert b'[REDACTED]' in stdin.getvalue()
+        assert marker.encode() in stdin.getvalue()
 
     asyncio.run(run())
 
@@ -120,10 +135,13 @@ def test_environment_lookup_is_local():
     assert runner_mod.os is not os
     assert service.os is not os
     assert run_watchdog.os is not os
-    assert os.environ.get('PYTEST_CURRENT_TEST')
 
 
-@pytest.mark.parametrize('wake_variant', ['resume', 'retry'])
+def test_single_scrub_implementation():
+    assert runner_mod.redact is env_redact.redact
+
+
+@pytest.mark.parametrize('wake_variant', ['resume', 'retry', 'steer'])
 def test_replayed_prompt_capture(tmp_path, wake_variant):
     password, dsn = sample()
     path = tmp_path / 'prompt.txt'
