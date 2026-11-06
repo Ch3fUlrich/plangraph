@@ -78,8 +78,12 @@ units and enables `plangraph-stall-watchdog.timer`. Windows calls
 `python -m plangraph.spawner.stall_watchdog install --host windows`: it creates the recurring **Plangraph Stall Watchdog** scheduled task, not a systemd timer.
 These persistent steps require human action or explicit pre-authorization; no sudo or linger workaround.
 On the orchestrator, separately run the same dry-run/review/authorized bootstrap to create units; the remote
-timer is not auto-enabled. Until part B adds probe host/config arguments, a human adds the host to
-`PLANGRAPH_PROBE_HOSTS` in its `watchdog.env` (and sets `PLANGRAPH_PROBE_NOTIFY_CMD`), reviews config, then
+timer stays disabled: enrollment never enables it. On the orchestrator, run `bootstrap.sh --probe-host NAME --probe-config FILE`
+(PowerShell: `bootstrap.ps1 -ProbeHost NAME -ProbeConfig FILE`), first with `--dry-run` / `-DryRun`.
+Probe enrollment requires POSIX (including `pwsh`); native Windows is rejected before config access because POSIX private modes are required.
+Probe arguments run enrollment only, even with install flags: no unit creation or watchdog tick occurs.
+FILE must be an existing private operator-managed `watchdog.env` with one `PLANGRAPH_PROBE_HOSTS` assignment.
+Enrollment only adds the host once; it does not run worker setup or SSH. A human sets root/notify config, reviews it, then
 explicitly runs `systemctl --user enable --now plangraph-remote-probe.timer` after approval.
 See [remote probes](../docs/operations/spawner-remote-probes.md) for config semantics.
 This supersedes HOST3's AutoOS requirement only for these steps, not hardware readiness, private CI or real-run evidence.

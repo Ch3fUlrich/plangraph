@@ -159,17 +159,18 @@ def tool_call_only(job, record):
 
 
 def fallthrough_reason(service, chosen, job, record):
-    if record.get('reason') in (*TERMINAL_REASONS, 'kill_incomplete') or any(
-            e.get('event') in TERMINAL_REASONS
-            for e in (*record.get('events', ()), *getattr(job, 'events', ()))):
-        return None   # terminal verdicts must stop dispatch, not merely keep their name
     if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
+    # Before the terminal check: text-call output replaces writer_no_changes; tool_call_only keeps the other terminals.
     if tool_call_only(job, record):
         job.events = [e for e in getattr(job, 'events', ()) if e.get('event') != 'writer_no_changes']
         record['events'] = [e for e in record.get('events', ()) if e.get('event') != 'writer_no_changes']
         record['reason'] = 'tool_call_only'
         return 'tool_call_only'
+    if record.get('reason') in (*TERMINAL_REASONS, 'kill_incomplete') or any(
+            e.get('event') in TERMINAL_REASONS
+            for e in (*record.get('events', ()), *getattr(job, 'events', ()))):
+        return None   # terminal verdicts must stop dispatch, not merely keep their name
     streams = (job.stdout, job.stderr)
     line = harness_limit_line(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
@@ -239,6 +240,16 @@ def terminal_reason(record, job=None):
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
+    if (record.get('role') == 'review' and record.get('status') == 'completed'
+            and record.get('exit_code') in (None, 0)):
+        from plangraph.review.verdict import judge
+        # Base dispatch has no job here: use only the final attempt, never the
+        # combined stdout tail (an earlier leg's verdict cannot bless this one).
+        attempts = record.get('attempts') or ()
+        text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
+        if judge(text, getattr(job, 'response_finish_reason', None)).verdict is None:
+            record.update(status='failed', reason='no_verdict')
+            return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
     if reason in ('harness_limit', 'tool_call_only'):
         if ended_ok:
