@@ -215,9 +215,13 @@ def run(args) -> int:
         if args.leg in ("stub", "stub-fail"):              # isolated HOME: the stubs need no config
             env["PATH"] = f"{scratch / 'stub-bin'}:{env['PATH']}"
             env["HOME"] = str(scratch)
-        worker = u.WorkerProc(worker_bin, env, Path(os.devnull))
-        worker.owned_pgid = worker.proc.pid  # WorkerProc creates a new session; do not reap early.
-        cleanup.append(("worker", lambda: stop_worker(worker)))
+        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM, signal.SIGTERM, signal.SIGINT})
+        try:
+            worker = u.WorkerProc(worker_bin, env, Path(os.devnull))
+            worker.owned_pgid = worker.proc.pid  # WorkerProc creates a new session; do not reap early.
+            cleanup.append(("worker", lambda: stop_worker(worker)))
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
         try:
             u.set_current_version(cli, args.temporal, build_id)  # deployment pg-worker, unique build
             step(f"worker up, build {build_id} current")
@@ -257,8 +261,8 @@ def run(args) -> int:
                                               token=tokens["router"],
                                               body={"question_id": question["id"],
                                                     "text": f"use {u.ANSWER_TOKEN}"})
-                    signal = (answered or {}).get("signal") or {}
-                    if status != 200 or signal.get("status") != "sent":
+                    answer_signal = (answered or {}).get("signal") or {}
+                    if status != 200 or answer_signal.get("status") != "sent":
                         raise Fail(f"answer_question: status {status}, signal not sent")
                     step("router answered; keeper signalled the workflow")
 
