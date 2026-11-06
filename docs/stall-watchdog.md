@@ -34,3 +34,28 @@ with no parent activity after completion. The claim rule requires over thirty
 minutes idle and no live run. The next two-minute tick detects an eligible stall;
 this means an exit can be nearly seven minutes old at detection, not a strict
 five-minute wall-clock SLA from exit.
+# Stuck OpenCode process trees (D-4220 / D-4221)
+
+The existing two-minute watchdog tick also samples job trees; no additional timer
+or installation is required. `watchdog/stuck-samples.json` stores process start
+identities, summed CPU ticks and the beginning of the idle interval. CPU changes,
+tree changes, PID reuse and established non-loopback TCP connections reset that
+interval. After 300 seconds a proven running job is cancelled through the normal
+spawner cancellation path with reason `stuck_watch_idle_tree`. Log silence alone
+does not authorize this cancellation: a buffered seat with an outbound connection
+is not idle. The legacy log probe remains diagnostic in the production tick.
+
+The motivating dell reviews on 11-06 (run-713f07d9, run-511c0ebc, run-576c669b,
+run-9aeb4877) wrote 55–80 byte banners and then waited until the 1500-second review
+limit. Process evidence detects this without relying on additional log bytes.
+
+Terminal or missing-record job trees and proven orphan stdio trees use the existing
+`reap.kill_proven` path. Ownership requires the job title and recorded start time
+or a matching earlier watchdog sample. Corrupt records, unreadable process/socket
+evidence and initial idle samples do not authorize actions. TTY trees, service
+trees and unproven processes are report-only. Unclaimed servers are reported
+after five minutes; orphan stdio and protected interactive/service shapes are
+reported immediately. Alerts use the existing routing outbox and re-alert limits.
+Dry-run reports without writing samples or cancelling/reaping anything. Platforms
+without Linux process/socket evidence report that limitation, without signalling.
+Check failures are isolated from completion and claim processing.
