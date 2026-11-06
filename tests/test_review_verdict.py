@@ -1,4 +1,5 @@
 """Verdict parse in parity with the keeper tool, plus fixtures."""
+import json
 import sys
 from pathlib import Path
 
@@ -22,6 +23,13 @@ def to_bool(word):
     if word is None:
         return None
     return word == "pass"
+
+
+def test_golden_verdict_words():
+    cases = json.loads((FIX.parent / "verdict_words.json").read_text())
+    outcomes = {"pass": True, "block": False, "none": None}
+    for case in cases:
+        assert to_bool(v.parse_verdict(case["text"])) is outcomes[case["expect"]], case
 
 
 _FIXTURE_NAMES = [
@@ -54,6 +62,9 @@ _INLINE_CORPUS = [
     "VERDICT: fix\nVERDICT: pass",
     "VERDICT: pass\nVERDICT: fix",
     "VERDICT: halt",
+    "VERDICT: GO",
+    "VERDICT: FAIL - 2 findings",
+    "VERDICT: NO GO",
     "VERDICT: approve",
     "VERDICT: reject.",
     "VERDICT: Changes requested",
@@ -266,4 +277,3 @@ def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
     assert v.parse_test_gaming(
         'TEST-GAMING: no - searched the "batch in" stamp: 3 hits'
     )[0] != "no"
-
