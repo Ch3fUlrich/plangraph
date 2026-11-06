@@ -6,18 +6,13 @@ import subprocess
 import tempfile
 import shutil
 import sys
-
 import pytest
-
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("pilot", ROOT / "tools/pilot_preflight.py")
 pilot = importlib.util.module_from_spec(SPEC)
 if SPEC.loader and Path(SPEC.origin).exists():
     SPEC.loader.exec_module(pilot)
 SECRET = "".join(("pilot", "sentinel", "private"))
-
-
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     # Helper executables need an executable mount, independent of --basetemp.
@@ -46,8 +41,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     yield tmp_path
     shutil.rmtree(tmp_path, ignore_errors=True)
-
-
 def run(capsys, *args):
     code = pilot.main(list(args))
     output = capsys.readouterr()
@@ -56,8 +49,6 @@ def run(capsys, *args):
     assert not output.err
     assert all(line.startswith(("OK ", "REFUSE ", "SKIP ")) for line in output.out.splitlines())
     return code, output.out
-
-
 @pytest.mark.parametrize("name", pilot.REQUIRED_ENV)
 @pytest.mark.parametrize("kind", ("missing", "empty", "malformed"))
 def test_env_refusal(env, monkeypatch, capsys, name, kind):
@@ -69,8 +60,6 @@ def test_env_refusal(env, monkeypatch, capsys, name, kind):
     assert code == 2
     assert f"REFUSE {name} " in output
     assert len(output.splitlines()) == len(pilot.REQUIRED_ENV)
-
-
 @pytest.mark.parametrize("name,value", [
     ("PLANGRAPH_TEMPORAL_HTTP", "ftp://localhost"),
     ("PG_KEEPER_URL", "http://localhost:invalid"),
@@ -83,13 +72,9 @@ def test_env_refusal(env, monkeypatch, capsys, name, kind):
 def test_malformed_values(env, monkeypatch, capsys, name, value):
     monkeypatch.setenv(name, value)
     assert f"REFUSE {name} " in run(capsys, "preflight")[1]
-
-
 def test_non_utf8_allowlist(env, capsys):
     Path(os.environ["PG_CARD_ALLOWLIST"]).write_bytes(bytes([255]))
     assert "REFUSE PG_CARD_ALLOWLIST" in run(capsys, "preflight")[1]
-
-
 def test_name_parity():
     sources = [ROOT / "rust/worker/src/bin/worker.rs",
                ROOT / "rust/worker-core/src/config.rs"]
@@ -106,17 +91,11 @@ def test_name_parity():
     for name in pilot.REQUIRED_ENV:
         text = (ROOT / delegated[name]).read_text() if name in delegated else worker
         assert name in text, name
-
-
 def test_nonempty_repo(env, capsys):
     assert run(capsys, "setup-repo", str(env))[0] == 2
-
-
 def test_inside_checkout(env, capsys):
     assert run(capsys, "setup-repo", str(ROOT / "pilot-forbidden"))[0] == 2
     assert not (ROOT / "pilot-forbidden").exists()
-
-
 def test_no_remote_push_fails(env, capsys):
     repo = env / "repo"
     assert run(capsys, "setup-repo", str(repo))[0] == 0
@@ -124,8 +103,6 @@ def test_no_remote_push_fails(env, capsys):
     assert subprocess.run(["git", "-C", str(repo), "push"], capture_output=True).returncode != 0
     assert (env / "repo.cards.allow").read_text().splitlines() == ["pilot:PILOT-1", "pilot:PILOT-2"]
     assert subprocess.check_output(["git", "-C", str(repo), "ls-files"]).splitlines() == [b"check.sh"]
-
-
 def verify(env, capsys):
     repo = env / "repo"
     assert run(capsys, "setup-repo", str(repo))[0] == 0
@@ -133,8 +110,6 @@ def verify(env, capsys):
     db.touch()
     return run(capsys, "verify", "--temporal-db", str(db), "--jail-bin",
                os.environ["PG_JAIL_BIN"], "--repo", str(repo))
-
-
 def test_tmp_db_refused(env, capsys):
     with tempfile.NamedTemporaryFile(dir="/tmp") as db:
         repo = env / "repo"
@@ -144,8 +119,6 @@ def test_tmp_db_refused(env, capsys):
     assert code == 2
     assert "REFUSE persistence" in output
     assert_checks(output)
-
-
 def test_token_mode_refused(env, monkeypatch, capsys):
     monkeypatch.setattr(pilot, "persistent", lambda p: True)
     token = env / "token"
@@ -153,24 +126,17 @@ def test_token_mode_refused(env, monkeypatch, capsys):
     token.chmod(0o644)
     monkeypatch.setenv("PG_TOKEN_FILE", str(token))
     assert "REFUSE auth" in verify(env, capsys)[1]
-
-
 def test_pin_drift(env, monkeypatch, capsys):
     monkeypatch.setattr(pilot, "persistent", lambda p: True)
     monkeypatch.setenv("PG_HARNESS_VERSIONS", "helper=2.0")
     assert "REFUSE pins" in verify(env, capsys)[1]
-
-
-def test_secret_absent_every_subcommand(env, capsys):
+def test_secret_absent_every_subcommand(env, monkeypatch, capsys):
+    monkeypatch.setattr(pilot, "persistent", lambda p: True)
     assert run(capsys, "preflight")[0] == 0
-    verify(env, capsys)
-
-
+    assert verify(env, capsys)[0] == 0
 def assert_checks(output):
     assert [line.split()[1] for line in output.splitlines()] == [
         "persistence", "auth", "jail", "pins", "checks"]
-
-
 @pytest.mark.parametrize("failure", ["persistence", "auth", "jail", "pins", "checks",
                                     "missing-pin", "missing-check", "remote", "helper",
                                     "missing-token", "empty-token", "not-repo"])
@@ -211,8 +177,6 @@ def test_verify_failures(env, monkeypatch, capsys, failure):
     assert code == 2
     assert f"REFUSE {expected} " in output
     assert_checks(output)
-
-
 @pytest.mark.parametrize("kind", ["symlink", "dotdot", "file", "allow", "dangling-allow"])
 def test_setup_refusals(env, capsys, kind):
     repo = env / "isolated"
@@ -229,17 +193,15 @@ def test_setup_refusals(env, capsys, kind):
         else:
             allow.symlink_to(env / "absent")
     assert run(capsys, "setup-repo", str(repo))[0] == 2
-
-
+@pytest.mark.parametrize("error", [OSError, RuntimeError])
 @pytest.mark.parametrize("action", ["preflight", "setup-repo", "verify"])
-def test_redacted_exceptions(env, monkeypatch, capsys, action):
+def test_redacted_exceptions(env, monkeypatch, capsys, action, error):
     def fail(*args):
-        raise OSError(SECRET)
+        raise error(SECRET)
     monkeypatch.setattr(pilot, action.replace("-", "_"), fail)
     args = {"preflight": [], "setup-repo": [str(env / "repo")],
             "verify": ["--temporal-db", "db", "--jail-bin", "jail", "--repo", "repo"]}
     assert run(capsys, action, *args[action])[0] == 2
-
 
 def test_verify_success(env, monkeypatch, capsys):
     monkeypatch.setattr(pilot, "persistent", lambda p: True)
@@ -248,18 +210,26 @@ def test_verify_success(env, monkeypatch, capsys):
     assert_checks(output)
     assert "REFUSE" not in output
 
-
 @pytest.mark.parametrize("operation", ["persistent", "command", "absolute_file", "pins"])
-def test_verify_exception_continues(env, monkeypatch, capsys, operation):
+@pytest.mark.parametrize("error", [OSError, RuntimeError])
+def test_verify_exception_continues(env, monkeypatch, capsys, operation, error):
+    calls = []
     def fail(*args, **kwargs):
-        raise OSError(SECRET)
+        calls.append(True)
+        raise error(SECRET)
     assert run(capsys, "setup-repo", str(env / "repo"))[0] == 0
+    (env / "db").touch()
+    monkeypatch.setattr(pilot, "persistent", lambda p: True)
     monkeypatch.setattr(pilot, operation, fail)
     code, output = run(capsys, "verify", "--temporal-db", str(env / "db"),
                        "--jail-bin", os.environ["PG_JAIL_BIN"], "--repo", str(env / "repo"))
     assert code == 2
+    assert calls == [True]
+    expected = {"persistent": "persistence", "command": "auth",
+                "absolute_file": "auth", "pins": "pins"}[operation]
+    assert f"REFUSE {expected} " in output
+    assert f"SKIP checks not run: {expected} failed" in output
     assert_checks(output)
-
 
 @pytest.mark.parametrize('text', ['', '# comment\n', 'production:OTHER\n',
                                       'pilot:PILOT-x\n', 'pilot:PILOT-1\n' * 21])
@@ -268,7 +238,6 @@ def test_allowlist_content(env, monkeypatch, capsys, text):
     assert run(capsys, 'preflight')[0] == 2
     monkeypatch.setattr(pilot, 'persistent', lambda p: True)
     assert verify(env, capsys)[0] == 2
-
 
 @pytest.mark.parametrize('credential', ['empty-file', 'empty-env'])
 def test_empty_credentials_stop_checks(env, monkeypatch, capsys, credential):
@@ -289,7 +258,6 @@ def test_empty_credentials_stop_checks(env, monkeypatch, capsys, credential):
     assert code == 2
     assert not marker.exists()
     assert 'SKIP checks not run: auth failed' in output
-
 
 def test_children_sanitized(env, monkeypatch, capsys):
     repo = env / 'repo'
@@ -314,12 +282,11 @@ def test_children_sanitized(env, monkeypatch, capsys):
                       (env / (name + '.env')).read_text().splitlines())
         names = set(values)
         assert not names & {'PG_KEEPER_TOKEN', 'PG_TOKEN_FILE'}
-        assert names <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD'}
+        assert names <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD', '_', 'SHLVL'}
         assert values['HOME'] != real_home
         assert not Path(values['HOME']).exists()
         homes.append(values['HOME'])
     assert len(set(homes)) == 2
-
 
 @pytest.mark.parametrize('helper', [False, True])
 def test_auth_real_home(env, monkeypatch, capsys, helper):
@@ -352,7 +319,6 @@ def test_auth_real_home(env, monkeypatch, capsys, helper):
         assert values['GIT_CONFIG_GLOBAL'] == str(home / '.gitconfig')
         assert set(values) <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD',
                                'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL'}
-
 
 @pytest.mark.parametrize('source', ['global', 'system', 'count', 'xdg'])
 @pytest.mark.parametrize('setting', ['credential.helper', 'remote.origin.url'])
@@ -396,5 +362,39 @@ def test_child_home_cleanup(env, mutation):
 def test_mount_types(tmp_path, monkeypatch, fs, expected):
     db = tmp_path / 'db'
     db.touch()
+    # Model /tmp elsewhere: the mount parser must not depend on pytest's location.
+    original = Path.resolve
+    monkeypatch.setattr(Path, 'resolve', lambda p, *a, **kw:
+                        tmp_path / 'other-tmp' if p == Path('/tmp') else original(p, *a, **kw))
     text = f'1 0 8:1 / {tmp_path} rw - {fs} /dev/example rw\n'
     assert pilot.persistent(db, mountinfo=text) is expected
+
+def test_resolved_tmp_refused(tmp_path, monkeypatch):
+    db = tmp_path / 'db'
+    db.touch()
+    original = Path.resolve
+    monkeypatch.setattr(Path, 'resolve', lambda p, *a, **kw:
+                        tmp_path if p == Path('/tmp') else original(p, *a, **kw))
+    assert not pilot.persistent(db, mountinfo='1 0 8:1 / / rw - ext4 device rw\n')
+
+@pytest.mark.parametrize('kind', ['valid', 'missing', 'mode', 'empty', 'malformed'])
+def test_file_only_credentials(env, monkeypatch, capsys, kind):
+    token = env / 'token'
+    if kind != 'missing':
+        token.write_text('' if kind == 'empty' else 'bad value' if kind == 'malformed' else SECRET)
+        token.chmod(0o644 if kind == 'mode' else 0o600)
+    monkeypatch.delenv('PG_KEEPER_TOKEN')
+    monkeypatch.setenv('PG_TOKEN_FILE', str(token))
+    monkeypatch.setattr(pilot, 'persistent', lambda p: True)
+    expected = 0 if kind == 'valid' else 2
+    assert run(capsys, 'preflight')[0] == expected
+    assert verify(env, capsys)[0] == expected
+
+def test_operator_bound_allowlist(env, monkeypatch, capsys):
+    other = env / 'other.cards.allow'
+    other.write_text('pilot:PILOT-1\n')
+    monkeypatch.setenv('PG_CARD_ALLOWLIST', str(other))
+    monkeypatch.setattr(pilot, 'persistent', lambda p: True)
+    code, output = verify(env, capsys)
+    assert code == 0
+    assert 'OK auth' in output

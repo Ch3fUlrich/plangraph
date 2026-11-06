@@ -86,9 +86,15 @@ Run `python3 tools/pilot_preflight.py verify --temporal-db /persistent/temporal.
 --jail-bin /absolute/pg-jail --repo /persistent/pilot-a` (one shell command).
 If `PG_TOKEN_FILE` is set, it must name an absolute regular UTF-8 file with mode
 0600 and a nonempty credential; otherwise `PG_KEEPER_TOKEN` must be nonempty.
+Preflight accepts this same file-only credential mode. Binding the allowlist to
+the documented repository sibling is operator-enforced: verify validates its
+absolute path and pilot-key content, not its filename or repository association.
 Persistence permits only ext2/3/4, xfs, btrfs, zfs and f2fs mounts, never `/tmp`.
 After a failed check, all later checks print `SKIP` and do not execute.
-Children receive only PATH, LANG, HOME and TERM, with timeouts and no credentials.
+Non-auth children receive only PATH, LANG, HOME and TERM, with a private writable
+HOME, timeouts and no credentials. Auth Git probes use the operator's real HOME
+and preserve GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM,
+GIT_CONFIG_COUNT/KEY_*/VALUE_* and XDG_CONFIG_HOME to inspect active configuration.
 Pins accept exact version output or `name version`; subprocess output is never
 printed. `rust/pg-jail/src/main.rs:19–33` has no `--help` branch, so the jail
 check asserts a regular executable only; it does not prove sandbox enforcement.
