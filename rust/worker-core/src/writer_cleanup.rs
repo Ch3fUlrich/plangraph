@@ -170,6 +170,8 @@ pub fn janitor(
     now_s: i64,
     apply: bool,
 ) -> Result<Vec<CleanupCandidate>, WriterError> {
+    let state = state.canonicalize()?;
+    let state = state.as_path();
     let dir = state.join("writer-lifecycle");
     let mut candidates = Vec::new();
     if dir.try_exists()? {
@@ -184,7 +186,7 @@ pub fn janitor(
                 serde_json::from_slice::<LifecycleRecord>(bytes).is_ok_and(|r| r.run_id == run && r.repo_id == record.repo_id && r.checkout == record.checkout && r.result_blob == record.result_blob)
             }) && record.result_blob.as_ref().is_some_and(|b| checked(state, &record, b).is_ok());
             let expired = |r: &LifecycleRecord| r.group_empty && r.failed_at_s.is_some_and(|s| now_s.saturating_sub(s) >= 86400);
-            let eligible = record.group_empty && (expired(&record) || recorded);
+            let eligible = record.group_empty && (record.failed_at_s.is_none() || expired(&record)) && (expired(&record) || recorded);
             if apply && eligible {
                 if recorded {
                     let receipt = RecordedResult { state: state.into(), run_id: run.into(), bytes: receipt.ok_or(WriterError::Unrecorded)? };
@@ -215,4 +217,4 @@ pub fn janitor(
 }
 #[cfg(test)]
 #[path = "writer_cleanup_tests.rs"]
-mod tests;
+pub(crate) mod tests;

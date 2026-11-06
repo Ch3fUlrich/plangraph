@@ -49,7 +49,7 @@ fn owned(repo: &RepoEntry, path: &Path) -> Result<(), WriterError> {
     }
     verify_owned(repo, path).map_err(|_| WriterError::Verify)
 }
-fn reset(repo: &RepoEntry, path: &Path, sha: &str) -> Result<(), WriterError> {
+pub(crate) fn reset(repo: &RepoEntry, path: &Path, sha: &str) -> Result<(), WriterError> {
     owned(repo, path)?;
     git(path, &["checkout", "-f", "--detach", sha])?;
     owned(repo, path)?;
@@ -120,6 +120,7 @@ pub fn prepare_seat(repo: &RepoEntry, workspace: &Workspace, state: &Path, run_i
         .revision_sha
         .as_deref()
         .ok_or(WriterError::Invalid)?;
+    if !crate::writer_result::oid(sha) { return Err(WriterError::Invalid); }
     slots::with_table(state, Duration::from_secs(30), |table| {
         let grants: Vec<_> = table
             .active
@@ -176,4 +177,4 @@ pub fn finish_seat(repo: &RepoEntry, proof: &SeatProof) -> Result<WorkspaceRecor
 }
 #[cfg(test)]
 #[path = "seat_pool_tests.rs"]
-mod tests;
+pub(crate) mod tests;
