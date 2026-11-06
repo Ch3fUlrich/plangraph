@@ -21,7 +21,8 @@ pub fn sanitize_history(
         return Err(WriterError::Invalid);
     }
     let root = Path::new(&repo.root);
-    command(root, &["merge-base", "--is-ancestor", base, tip], &[], None)?;
+    command(root, &["merge-base", "--is-ancestor", base, tip], &[], None)
+        .map_err(|_| WriterError::Verify)?;
     // Check every prerequisite ancestor, including root commits, through the shared gate.
     let empty_tree = command(root, &["mktree"], &[], None)?;
     let empty_tree = std::str::from_utf8(&empty_tree)

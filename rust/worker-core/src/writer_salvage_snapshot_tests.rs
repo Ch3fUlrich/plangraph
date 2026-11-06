@@ -4,7 +4,7 @@ use crate::writer_secret::object;
 
 #[test]
 fn dirty_untracked_snapshot_ignored_excluded() {
-    let (_dir, repo, base, tip) = fixture();
+    let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
     std::fs::write(root.join(".gitignore"), "ignored\n").unwrap();
     std::fs::write(root.join("ignored"), "not exported").unwrap();
@@ -12,7 +12,7 @@ fn dirty_untracked_snapshot_ignored_excluded() {
     std::fs::write(root.join("safe"), "dirty bytes").unwrap();
     let token = ["gh", "p_", &"s".repeat(25)].concat();
     std::fs::write(root.join("bad"), &token).unwrap();
-    let bytes = export_salvage(&repo, &base, &tip, "run", b"").unwrap();
+    let bytes = export_salvage(&repo, &base, "run").unwrap();
     let (dest, receiver, head) = imported(&repo, &bytes);
     let names = entries(dest.path(), &head).unwrap();
     assert!(!names.iter().any(|e| e.2 == b"ignored" || e.2 == b"bad"));
@@ -63,7 +63,7 @@ fn committed_secret_roundtrip(dirty: bool) {
             .iter()
             .any(|e| e.2 == b"committed-secret"));
     }
-    let bytes = export_salvage(&repo, &base, "", "run", b"").unwrap();
+    let bytes = export_salvage(&repo, &base, "run").unwrap();
     let (dest, receiver, head) = imported(&repo, &bytes);
     assert!(crate::writer_secret::findings(&receiver, &base, &head)
         .unwrap()
@@ -87,10 +87,10 @@ fn committed_secret_roundtrip(dirty: bool) {
 #[cfg(unix)]
 #[test]
 fn unsafe_symlink_and_submodule_refused() {
-    let (_dir, repo, base, tip) = fixture();
+    let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
     std::os::unix::fs::symlink("safe", root.join("link")).unwrap();
-    assert!(export_salvage(&repo, &base, &tip, "run", b"").is_err());
+    assert!(export_salvage(&repo, &base, "run").is_err());
     std::fs::remove_file(root.join("link")).unwrap();
     command(
         root,
@@ -107,12 +107,12 @@ fn unsafe_symlink_and_submodule_refused() {
     command(root, &["commit", "-m", "submodule"], &[], None).unwrap();
     std::fs::create_dir(root.join("sub")).unwrap();
     std::fs::write(root.join("sub/file"), "dirty").unwrap();
-    assert!(export_salvage(&repo, &base, &tip, "run", b"").is_err());
+    assert!(export_salvage(&repo, &base, "run").is_err());
 }
 
 #[test]
 fn result_never_becomes_salvage_publication() {
-    let (_dir, repo, base, tip) = fixture();
+    let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
     command(
         root,
@@ -131,13 +131,13 @@ fn result_never_becomes_salvage_publication() {
     let mut registry = repo.clone();
     registry.root = repo.remote.clone();
     assert!(crate::writer_result::check_result(&registry, root, &ws).is_err());
-    export_salvage(&repo, &base, &tip, "run", b"").unwrap();
+    export_salvage(&repo, &base, "run").unwrap();
     assert!(crate::writer_result::check_result(&registry, root, &ws).is_err());
 }
 
 #[test]
 fn gate_before_any_snapshot_object() {
-    let (_dir, repo, base, tip) = fixture();
+    let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
     let safe = b"safe candidate not yet stored";
     std::fs::write(root.join("a-safe"), safe).unwrap();
@@ -148,7 +148,7 @@ fn gate_before_any_snapshot_object() {
         std::fs::remove_file(root.join("safe")).unwrap();
         std::fs::create_dir(root.join("safe")).unwrap();
     }
-    assert!(export_salvage(&repo, &base, &tip, "run", b"").is_err());
+    assert!(export_salvage(&repo, &base, "run").is_err());
     {
         let sha = command(root, &["hash-object", "--stdin"], safe, None).unwrap();
         assert!(object(root, std::str::from_utf8(&sha).unwrap().trim()).is_err());
@@ -184,7 +184,7 @@ fn unchanged_gitlink_preserved() {
         None,
     )
     .unwrap();
-    let bytes = export_salvage(&repo, base.trim(), "", "run", b"").unwrap();
+    let bytes = export_salvage(&repo, base.trim(), "run").unwrap();
     let (dest, _, head) = imported(&repo, &bytes);
     let names = entries(dest.path(), &head).unwrap();
     let gitlink = names.iter().find(|e| e.2 == b"sub").unwrap();
@@ -205,13 +205,13 @@ fn mode_lookup_is_cached_before_candidate_loop() {
 #[test]
 fn dirty_executable_modes_preserved() {
     use std::os::unix::fs::PermissionsExt;
-    let (_dir, repo, base, tip) = fixture();
+    let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
     std::fs::write(root.join("new"), "executable").unwrap();
     for name in ["safe", "new"] {
         std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let bytes = export_salvage(&repo, &base, &tip, "run", b"").unwrap();
+    let bytes = export_salvage(&repo, &base, "run").unwrap();
     let (dest, _, head) = imported(&repo, &bytes);
     let names = entries(dest.path(), &head).unwrap();
     for name in [b"safe".as_slice(), b"new".as_slice()] {

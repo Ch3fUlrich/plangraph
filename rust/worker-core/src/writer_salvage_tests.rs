@@ -47,9 +47,7 @@ pub(super) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
 pub(super) fn export_salvage(
     repo: &RepoEntry,
     base: &str,
-    _tip: &str,
     run: &str,
-    _paths: &[u8],
 ) -> Result<Vec<u8>, WriterError> {
     let ws = Workspace {
         repo_id: "test".into(),
@@ -71,15 +69,15 @@ pub(super) fn export_salvage(
 }
 #[test]
 fn rejects_argument_injection() {
-    let (_dir, repo, base, tip) = fixture();
-    assert!(export_salvage(&repo, "--help", &tip, "run", b"").is_err());
-    assert!(export_salvage(&repo, &base, &tip, "../run", b"").is_err());
+    let (_dir, repo, base, _) = fixture();
+    assert!(export_salvage(&repo, "--help", "run").is_err());
+    assert!(export_salvage(&repo, &base, "../run").is_err());
 }
 #[test]
 fn bundle_roundtrip_and_ref_cleanup() {
-    let (_dir, repo, base, tip) = fixture();
+    let (_dir, repo, base, _) = fixture();
     let dir = Path::new(&repo.root);
-    let bytes = export_salvage(&repo, &base, &tip, "roundtrip", b"").unwrap();
+    let bytes = export_salvage(&repo, &base, "roundtrip").unwrap();
     let bundle = dir.join("result.bundle");
     std::fs::write(&bundle, bytes).unwrap();
     command(
@@ -127,7 +125,7 @@ fn existing_ref_is_not_overwritten() {
         None,
     )
     .unwrap();
-    assert!(export_salvage(&repo, &base, &tip, "busy", b"").is_err());
+    assert!(export_salvage(&repo, &base, "busy").is_err());
     assert_eq!(
         command(
             dir,
@@ -149,7 +147,7 @@ fn real_index_and_lane_unchanged() {
     let index_path = command(dir, &["rev-parse", "--git-path", "index"], &[], None).unwrap();
     let index_path = Path::new(std::str::from_utf8(&index_path).unwrap().trim());
     let index = std::fs::read(index_path).unwrap();
-    let bundle = export_salvage(&repo, &base, &tip, "run", b"safe\0").unwrap();
+    let bundle = export_salvage(&repo, &base, "run").unwrap();
     assert!(bundle.starts_with(b"# v2 git bundle"));
     assert_eq!(std::fs::read(index_path).unwrap(), index);
     assert_eq!(std::fs::read(dir.join("safe")).unwrap(), b"unstaged");
@@ -191,4 +189,40 @@ pub(super) fn imported(repo: &RepoEntry, bytes: &[u8]) -> (tempfile::TempDir, Re
         receiver,
         String::from_utf8(tip).unwrap().trim().into(),
     )
+}
+
+#[test]
+fn validate_paths_refuses_unsafe_names_and_missing_nul() {
+    for paths in [
+        &b"safe\\name\0"[..],
+        &b"-option\0"[..],
+        &b"./safe\0"[..],
+        &b"nested/./safe\0"[..],
+        &b"nested/../safe\0"[..],
+        &b"safe"[..],
+    ] {
+        assert!(matches!(validate_paths(paths), Err(WriterError::Invalid)));
+    }
+    assert!(validate_paths(b"safe\0nested/file\0").is_ok());
+    assert!(validate_paths(b"").is_ok());
+}
+
+#[test]
+fn unrelated_head_refused_before_snapshot() {
+    let (_dir, repo, base, _) = fixture();
+    let root = Path::new(&repo.root);
+    command(root, &["checkout", "--orphan", "foreign"], &[], None).unwrap();
+    command(root, &["commit", "-m", "foreign"], &[], None).unwrap();
+    let tip = command(root, &["rev-parse", "HEAD"], &[], None).unwrap();
+    let tip = std::str::from_utf8(&tip).unwrap().trim();
+    assert!(matches!(
+        sanitize_history(&repo, &base, tip),
+        Err(WriterError::Verify)
+    ));
+    // An unsafe dirty path would fail snapshot with Invalid if it were reached.
+    std::fs::write(root.join("-unsafe"), "safe").unwrap();
+    assert!(matches!(
+        export_salvage(&repo, &base, "run"),
+        Err(WriterError::Verify)
+    ));
 }

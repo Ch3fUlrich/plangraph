@@ -309,7 +309,8 @@ fn bounded_real_repository_probe() {
     )
     .unwrap();
     let tree = std::str::from_utf8(&tree).unwrap().trim();
-    let mut parent = base;
+    let root_base = base;
+    let mut parent = root_base.clone();
     for _ in 0..257 {
         parent = String::from_utf8(
             command(
@@ -325,7 +326,7 @@ fn bounded_real_repository_probe() {
         .into();
     }
     assert!(matches!(
-        sanitize_history(&repo, &parent, &parent),
+        sanitize_history(&repo, &root_base, &parent),
         Err(WriterError::Verify)
     ));
 }

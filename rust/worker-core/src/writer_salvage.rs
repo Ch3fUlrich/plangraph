@@ -39,6 +39,13 @@ pub fn export_salvage(
     if !oid(tip) {
         return Err(WriterError::Invalid);
     }
+    command(
+        checkout,
+        &["merge-base", "--is-ancestor", base, tip],
+        &[],
+        None,
+    )
+    .map_err(|_| WriterError::Verify)?;
     let local = RepoEntry {
         root: checkout.to_str().ok_or(WriterError::Invalid)?.into(),
         ..repo.clone()
@@ -100,6 +107,7 @@ fn validate_paths(paths: &[u8]) -> Result<(), WriterError> {
         let path = std::str::from_utf8(path).map_err(|_| WriterError::Invalid)?;
         if path.starts_with('-')
             || path.contains('\\')
+            || path.split('/').any(|part| part == "." || part == "..")
             || !Path::new(path)
                 .components()
                 .all(|c| matches!(c, Component::Normal(_)))
