@@ -29,6 +29,8 @@ pub mod fleet_window_catalog;
 pub mod git;
 pub mod hash;
 pub mod health;
+pub mod health_family;
+pub mod health_rates;
 pub mod health_until;
 pub mod host_metrics;
 pub mod host_probe;
