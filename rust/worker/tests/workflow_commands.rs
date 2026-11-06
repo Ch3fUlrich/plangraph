@@ -209,7 +209,13 @@ fn failed_lazy_ensure_is_bounded_and_preserves_blocked_reason() {
             .unwrap()
             .contains("ensure_phase_branch failed")
     );
-    assert_eq!(output["not_merged"].as_array().unwrap().len(), 1);
+    let expected: Vec<_> = plan["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|card| card["key"].clone())
+        .collect();
+    assert_eq!(output["not_merged"].as_array().unwrap(), &expected);
     // An infrastructure failure ends this wave; do not plan/claim another wave.
     let names: Vec<_> = host
         .0

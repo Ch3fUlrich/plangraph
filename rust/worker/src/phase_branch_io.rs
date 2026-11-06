@@ -83,8 +83,11 @@ pub(super) fn ensure_phase_branch_with(
     }
 }
 
-pub(super) fn branch_git_error(_: pg_worker_core::git::GitError) -> BranchError {
-    BranchError::Io
+pub(super) fn branch_git_error(error: pg_worker_core::git::GitError) -> BranchError {
+    match error {
+        pg_worker_core::git::GitError::Io(_) => BranchError::Io,
+        _ => BranchError::Refusal("phase branch git command refused".into()),
+    }
 }
 
 pub(super) fn phase_branch_error(error: BranchError) -> ActivityError {
@@ -99,6 +102,39 @@ pub(super) fn phase_branch_error(error: BranchError) -> ActivityError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_base_ref_is_a_non_retryable_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        pg_worker_core::git::git(dir.path(), &["init", "-q"]).unwrap();
+        let input = PhaseBranchInput {
+            repo: dir.path().to_str().unwrap().into(),
+            base_branch: "nope".into(),
+            branch: "phase/test".into(),
+        };
+        let error = do_ensure_phase_branch(&input).unwrap_err();
+        assert_eq!(error.to_string(), "phase branch git command refused");
+        let ActivityError::Application(failure) = phase_branch_error(error) else {
+            panic!("expected application failure");
+        };
+        assert!(failure.is_non_retryable());
+    }
+
+    #[test]
+    fn failed_git_commands_are_sanitized_non_retryable_refusals() {
+        for code in [Some(1), Some(128), None] {
+            let error = branch_git_error(pg_worker_core::git::GitError::Failed {
+                args: "private args".into(),
+                code,
+                stderr: "private diagnostic".into(),
+            });
+            assert_eq!(error.to_string(), "phase branch git command refused");
+            let ActivityError::Application(failure) = phase_branch_error(error) else {
+                panic!("expected application failure");
+            };
+            assert!(failure.is_non_retryable());
+        }
+    }
 
     #[test]
     fn phase_branch_io_retries_but_refusal_does_not() {

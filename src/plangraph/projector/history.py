@@ -141,8 +141,9 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
     for _, name, ev in events:
         if name == "WORKFLOW_PROPERTIES_MODIFIED":
             memo = _dict(_attrs(ev, name).get("upsertedMemo"))
-            if "plan_key" in _dict(memo.get("fields")):
-                started = {**started, "memo": memo}
+            fields = {**_dict(_dict(started.get("memo")).get("fields")),
+                      **_dict(memo.get("fields"))}
+            started = {**started, "memo": {**_dict(started.get("memo")), "fields": fields}}
     plan_key = _plan_key(started, workflow_id)
     card = _is_card(started)       # an unrelated workflow in the namespace never raises shape alarms
 

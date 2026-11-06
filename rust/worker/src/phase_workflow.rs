@@ -180,7 +180,8 @@ impl Phase {
 
             let mut started_children = Vec::new();
             let mut branch_failed = false;
-            for card in wave {
+            let mut remaining = wave.into_iter();
+            while let Some(card) = remaining.next() {
                 attempted.insert(card.key.clone());
 
                 let claim = match ctx
@@ -233,6 +234,7 @@ impl Phase {
                         Err(err) => {
                             last_blocked.push(format!("ensure_phase_branch failed: {err}"));
                             not_merged.push(card.key.clone());
+                            not_merged.extend(remaining.by_ref().map(|card| card.key.clone()));
                             branch_failed = true;
                             break;
                         }
