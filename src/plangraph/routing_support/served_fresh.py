@@ -23,8 +23,8 @@ def served_fresh(model, models, config, env, *, probe=None):
     key = (r.provider_config_digest(config), hashlib.sha256(json.dumps(names).encode()).hexdigest())
     with r._served_lock:
         cached = r._served_cache.get(key)
-    if (cached is None or cached[1] != models
-            or time.monotonic() - (cached[0] - (300 if cached[1] else 30)) <= 5):
+    if (cached is None
+            or time.monotonic() - (cached[0] - (30 if cached[1] is None else 300)) <= 5):
         return present(models)
     fresh = r._probe_served_models(config, env=env)
     if fresh is not None and present(fresh):
