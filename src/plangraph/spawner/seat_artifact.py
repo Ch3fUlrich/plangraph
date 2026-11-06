@@ -37,6 +37,7 @@ def publish(directory, record, job):
     doc = dict(served_model=model, prompt_sha256=digest,
                correlation_id=job.job_id, run_id=record['run_id'],
                witness_kind='response-side', **verdict.to_evidence())
+    doc.update(finish_reason=finish)
     try:
         atomic_write_private(review, job.stdout)
         atomic_write_private(evidence, json.dumps(doc, indent=2))

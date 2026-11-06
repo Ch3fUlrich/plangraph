@@ -148,7 +148,7 @@ def build_reason(evidence, ok, text, idx, covers=None, witness=None):
     if witness:
         # D-2905 (2): keep the request-side witness kind auditable in the keeper record.
         head += f" witness=request-side-opencode-store {witness}"
-    reason = head if ok else f"FIX {head}\n{findings(text, idx)}".rstrip()
+    reason = head if ok else f"{head}\n{findings(text, idx)}".rstrip()
     if covers is not None:
         reason = f"{reason}\ncovers: {', '.join(covers)}"
     return reason

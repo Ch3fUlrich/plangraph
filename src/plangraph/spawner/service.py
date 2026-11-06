@@ -20,8 +20,6 @@ from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
-
-
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -47,6 +45,7 @@ class SpawnService(SeatSpawnMixin):
     def _save(self, record):
         from .private_io import atomic_write_private
         from .runner import redact
+        from .seat_artifact import publish
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
         # Host identity of the writing machine (C1): only PLANGRAPH_HOST may
         # override it; setdefault keeps a re-saved record's original host.
@@ -111,9 +110,7 @@ class SpawnService(SeatSpawnMixin):
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
         atomic_write_private(self._path(record['run_id']), json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2))
-        from .seat_artifact import publish
-        publish(self._path(record['run_id']).parent, record,
-                getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
+        publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 

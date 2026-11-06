@@ -47,6 +47,7 @@ def test_witnessed_pair(tmp_path, capsys, model):
     assert evidence['prompt_sha256'] == hashlib.sha256(b'exact dispatched synthetic prompt\n').hexdigest()
     assert evidence['correlation_id'] == job.job_id
     assert evidence['run_id'] == record['run_id']
+    assert evidence['finish_reason'] == 'stop'
     assert evidence['verdict'] == 'pass' and evidence['test_gaming'] == 'no'
     assert (tmp_path / 'review.txt').read_text() == job.stdout
     assert all((tmp_path / name).stat().st_mode & 0o777 == 0o600
@@ -98,18 +99,31 @@ def test_non_review_unchanged(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_false_reason_leads_fix_even_with_pass_text(tmp_path, capsys):
+def test_false_reason_labels_fix_even_with_pass_text(tmp_path, capsys):
     record, job = completed()
     job.stdout = 'VERDICT: FIX\nPASS is only echoed\nTEST-GAMING: no - searched diff: 0 hits'
     sa.publish(tmp_path, record, job)
     assert dry(tmp_path) == 0
     body = json.loads(capsys.readouterr().out)['body']
     assert body['ok'] is False
-    assert body['reason'].startswith('FIX')
+    assert body['reason'].startswith('seat synthetic/gpt-5 FIX corr ')
     evidence = json.loads((tmp_path / 'evidence.json').read_text())
     reason = sv.build_reason(evidence, False, job.stdout, 0)
-    assert reason.startswith('FIX seat synthetic/gpt-5 FIX corr ')
+    assert reason.startswith('seat synthetic/gpt-5 FIX corr ')
     assert body['reason'] == reason + '\ncovers: meta'
+
+
+def test_finish_reason_is_response_side(tmp_path, monkeypatch):
+    record, job = completed()
+    verdict = sa.judge(job.stdout, job.response_finish_reason)
+    fields = verdict.to_evidence()
+    fields.pop('finish_reason')
+    monkeypatch.setattr(sa, 'judge', lambda *args: SimpleNamespace(
+        verdict=verdict.verdict, test_gaming=verdict.test_gaming,
+        to_evidence=lambda: fields))
+    sa.publish(tmp_path, record, job)
+    evidence = json.loads((tmp_path / 'evidence.json').read_text())
+    assert evidence['finish_reason'] == 'stop'
 
 
 @pytest.mark.parametrize('dispatch', [False, True])
