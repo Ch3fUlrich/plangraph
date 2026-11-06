@@ -1098,7 +1098,7 @@ def test_schema_is_v14_and_carries_the_oversight_ddl():
     # v13 -> v14 step the oversight tables add is named separately and installed
     # presence-based by ``db._upgrade`` -- main's upgrade tests stay green.
     # Fence: RT-P1-BUS renumbers after oversight (v15 messages, v16 envelopes).
-    assert schema.SCHEMA_VERSION == 16
+    assert schema.SCHEMA_VERSION == 17
     assert schema.OVERSIGHT_SCHEMA_VERSION == 14
     assert "oversight_tokens" in schema.OVERSIGHT_DDL
     assert "oversight_ops" in schema.OVERSIGHT_DDL
@@ -1205,7 +1205,7 @@ def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
     # the exec columns live in the SQLite items DDL at main's v13 shape, and
     # the SQLite version step (v14) stays the oversight tables alone
     assert schema.OVERSIGHT_SCHEMA_VERSION == 14
-    assert schema.SCHEMA_VERSION == 16
+    assert schema.SCHEMA_VERSION == 17
     for column in exec_cols:
         assert f"    {column}" in schema.TABLES, column
     assert "exec_workflow_id" not in schema.OVERSIGHT_DDL

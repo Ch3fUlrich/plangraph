@@ -126,7 +126,7 @@ def test_from_skip_writes_nothing(world, srv, token_file, tmp_path):
 def test_short_reply_writes_nothing(world, srv, token_file, tmp_path,
                                     monkeypatch):
     monkeypatch.setattr(apply_batch.Session, "post",
-                        lambda self, verb, body: b'{"applied": 2}')
+                        lambda self, verb, body, timeout=None: b'{"applied": 2}')
     batch = write_batch(tmp_path, name="qshort")
     qp = tmp_path / "qshort.txt"
     rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE x")
@@ -138,7 +138,7 @@ def test_short_reply_writes_nothing(world, srv, token_file, tmp_path,
 def test_unreadable_reply_writes_nothing(world, srv, token_file, tmp_path,
                                          monkeypatch):
     monkeypatch.setattr(apply_batch.Session, "post",
-                        lambda self, verb, body: b"<html>ok</html>")
+                        lambda self, verb, body, timeout=None: b"<html>ok</html>")
     batch = write_batch(tmp_path, name="qbad")
     qp = tmp_path / "qbad.txt"
     rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE x")
@@ -429,7 +429,7 @@ def test_argparse_failure_without_queue_flags_stdout_empty():
 
 def test_unexpected_exception_in_apply_queue_mode_first_line(
         world, srv, token_file, tmp_path, monkeypatch):
-    def boom(self, verb, body):
+    def boom(self, verb, body, timeout=None):
         raise RuntimeError("boom")
     monkeypatch.setattr(apply_batch.Session, "post", boom)
     batch = write_batch(tmp_path, name="qboom")
@@ -443,7 +443,7 @@ def test_unexpected_exception_in_apply_queue_mode_first_line(
 def test_unexpected_exception_without_queue_flags_still_propagates(
         world, srv, token_file, tmp_path, monkeypatch):
     import pytest
-    def boom(self, verb, body):
+    def boom(self, verb, body, timeout=None):
         raise RuntimeError("boom")
     monkeypatch.setattr(apply_batch.Session, "post", boom)
     batch = write_batch(tmp_path, name="qboom2")
@@ -457,7 +457,7 @@ def test_per_op_unexpected_exception_queue_mode_first_line(
         world, srv, token_file, tmp_path, monkeypatch):
     real = apply_batch.Session.post
 
-    def boom(self, verb, body):
+    def boom(self, verb, body, timeout=None):
         raise RuntimeError("boom")
     monkeypatch.setattr(apply_batch.Session, "post", boom)
     batch = write_batch(tmp_path, name="qboom3")

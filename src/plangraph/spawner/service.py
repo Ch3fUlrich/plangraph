@@ -135,10 +135,10 @@ class SpawnService(SeatSpawnMixin):
         families = list(writer_families)
         if review_of:
             record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
-            family = record.get('writer_family')
-            if not family:
+            family = record.get('given_writer_families') or [record.get('writer_family')]
+            if not any(family):
                 raise SpawnRefused('writer family unavailable')
-            families.append(family)
+            families.extend(family)
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
@@ -247,8 +247,8 @@ class SpawnService(SeatSpawnMixin):
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
             from plangraph.planner.seats import seat_family, writer_parts
-            reviewed = self.result(review_of, attempts=SAVE_READ_ATTEMPTS).get('writer_family') if review_of else None
-            plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *([reviewed] if reviewed else [])])
+            reviewed = ((source.get('given_writer_families') or [f for f in [source.get('writer_family')] if f]) if (source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)) else []) if review_of else []
+            plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *reviewed])
             chosen = next((l for l in DEFAULT_LEGS if l.id == leg), None) if leg else None
             if leg and chosen is None: raise SpawnRefused('unknown leg')
             if model and chosen and model != chosen.model:
@@ -286,7 +286,7 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
-            if reviewed and seat_family(chosen.family) == seat_family(reviewed):
+            if reviewed and {seat_family(f) for f in reviewed} <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             if writers and writers <= {seat_family(chosen.family)}:
@@ -303,7 +303,7 @@ class SpawnService(SeatSpawnMixin):
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
-            served_family=None, writer_family=plan.first_leg.family, status='running',
+            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop

@@ -1,0 +1,1 @@
+- **SEAT-WAIT-RECORD-RETRY:** Retry record read permission collisions, report safe CLI failures, and preserve given writer families for review exclusion.

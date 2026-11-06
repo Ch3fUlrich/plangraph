@@ -93,7 +93,7 @@ def test_fake_systemctl_enables_watchdog_only(host, monkeypatch):
 def test_powershell_same_order_and_failure(host, monkeypatch):
     result, commands = host[0]('-DryRun', ps=True)
     assert result.returncode == 0, result.stderr
-    assert commands == ['python -m plangraph.spawner.stall_watchdog tick --dry-run']
+    assert commands == ['python3 -m plangraph.spawner.stall_watchdog tick --dry-run']
     (host[1] / 'commands').unlink()
     result, commands = host[0](ps=True)
     assert result.returncode == 0, result.stderr

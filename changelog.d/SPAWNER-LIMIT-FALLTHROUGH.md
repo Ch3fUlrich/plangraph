@@ -1,0 +1,1 @@
+- **SPAWNER-LIMIT-FALLTHROUGH:** Book the explicit credit-usage refusal on either stream and try the next leg without overriding terminal verdicts.
