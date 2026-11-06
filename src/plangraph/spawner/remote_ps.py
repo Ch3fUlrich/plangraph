@@ -81,6 +81,10 @@ def _fetch(host, transport):
             raise ValueError()
         clean = []
         for row in rows:
+            if isinstance(row, dict) and row.get('status') in (
+                    'completed', 'failed', 'cancelled', 'killed', 'dry_run',
+                    'succeeded', 'needs_input', 'stalled', 'timeout'):
+                continue
             if (not isinstance(row, dict)
                     or not all(k in row for k in ('run_id', 'host', 'status'))
                     or any(type(row[k]) not in FIELD_TYPES[k]
@@ -119,7 +123,8 @@ def list_runs(local, *, transport=query_host):
 def collect_local(state):
     # Local-only protocol endpoint: never invoke ps (which would fan out again).
     from .stall_watchdog import read_runs
-    return {'runs': [{k: r[k] for k in FIELDS if k in r} for r in read_runs(state)]}
+    return {'runs': [{k: r[k] for k in FIELDS if k in r} for r in read_runs(state)
+                     if r.get('status') in ('running', 'queued')]}
 
 
 if __name__ == '__main__':

@@ -1,0 +1,1 @@
+- Keep remote ps live runs visible despite oversized or malformed terminal history, and make transport failure tests distinguish overflow, exit and timeout.

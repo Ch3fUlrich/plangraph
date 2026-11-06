@@ -264,6 +264,26 @@ def test_collect_local_protocol(monkeypatch):
     assert remote_ps.collect_local(state) == {'runs': [dict(run_id='r', host='h', status='running')]}
 
 
+@pytest.mark.parametrize('terminal', [
+    dict(status='completed', run_id=['malformed'], host=None),
+    dict(status='failed', run_id='x' * remote_ps.MAX_OUTPUT),
+])
+def test_terminal_history_never_hides_live_runs(monkeypatch, terminal):
+    from plangraph.spawner import stall_watchdog
+    live = dict(run_id='live', host='node-a', status='running')
+    monkeypatch.setattr(stall_watchdog, 'read_runs', lambda state: [terminal, live])
+    payload = json.dumps(remote_ps.collect_local(object()))
+    assert len(payload.encode()) < remote_ps.MAX_OUTPUT
+    assert json.loads(payload) == {'runs': [live]}
+    assert remote_ps._fetch(dict(name='node-a'), lambda *a: payload) == [live]
+
+
+def test_malformed_terminal_reply_does_not_hide_live_run():
+    live = dict(run_id='live', host='node-a', status='queued')
+    payload = json.dumps({'runs': [dict(status='completed', host=None, pid=[]), live]})
+    assert remote_ps._fetch(dict(name='node-a'), lambda *a: payload) == [live]
+
+
 def test_protocol_main(monkeypatch, capsys):
     import runpy
     from plangraph.spawner import service, stall_watchdog

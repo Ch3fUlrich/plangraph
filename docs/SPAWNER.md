@@ -391,3 +391,9 @@ The served-model probe cache has a five-minute freshness bound,
 not a five-minute completion or delivery SLA; see the operations guide for details.
 
 Cross-host ps: see [site configuration and transport](spawner-ps.md).
+# Remote ps protocol
+
+The SSH ps endpoint serializes only running and queued records. Terminal history
+does not consume the 1 MiB transport budget; malformed terminal fields do not
+hide live runs. Malformed live replies and oversized replies name the queried
+host as unknown rather than silently omitting it.
