@@ -5,7 +5,7 @@
 - claimed: plangraph:AUTOOS-HOOKS-INTERIM-S06, plangraph:SPAWNER-ORPHAN-REAP, plangraph:RIN-PATH-REPOINT, plangraph:ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z)
 - ready next: plangraph:AUTOOS-HOOKS-INTERIM-S09, plangraph:AUTOOS-HOOKS-INTERIM-S14 after #446 #447
 ## Done
-- 11-06T10:37Z resend - GO-REQ #446 #447, incident mcp-proxy PG_TOKEN sent
+- 11-06T10:37Z D-4099 - GO-REQ #446 #447 resent, incident mcp-proxy PG_TOKEN sent
 - 11-06T10:05Z D-4185 - watchdog uses spawner.token, watchdog.token absent, sent
 - 11-06T10:05Z D-4179 - witness token BLOCKED sent, workstation only
 - 11-06T10:07Z D-4179 - fleet keys placed 0600 on 2 hosts, sha prefix match, inventory on 3 hosts
