@@ -128,7 +128,7 @@ update the find/replace strings.
 ## Verification
 
 The fix was verified with `tools/probe-reasoning-repro.py` against an
-isolated gateway instance (port 20130, separate `DATA_DIR`), without
+isolated gateway instance (port <port>, separate `DATA_DIR`), without
 restarting the shared gateway (port <port>):
 
 | Model | Scenario | Before | After |

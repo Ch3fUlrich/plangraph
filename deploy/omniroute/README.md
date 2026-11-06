@@ -69,7 +69,7 @@ Byte-difference inventory (all other copied bytes remain unchanged):
 | `live/server-combos.json` | Replace source metadata with “read-only export of 2026-10-17”. |
 | `vertex-failover-knobs.json` | Replace site restart port with `<port>`. |
 | `qwen-clamp-reapply-README.md` | Three invocation paths use local sibling scripts. |
-| `reason-fix-README.md` | Two invocation paths use local sibling scripts; restart port becomes `<port>`. |
+| `reason-fix-README.md` | Two invocation paths use local sibling scripts; isolated-instance and shared-gateway verification ports both become `<port>`. |
 | `reason-fix-reapply.ps1` | Two patch comments refer to the local README. |
 | `reasoning-defense.md` | Scope becomes `./`. |
 | `verify-clamp.mjs` | Patch documentation path becomes local. |
