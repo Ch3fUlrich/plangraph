@@ -41,3 +41,23 @@ No production caller is enabled.
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
+# Review artifact fix-round verification
+
+Only exact `VERDICT: PASS` lines authorize passing evidence; noncanonical,
+hyphenated, or later unknown verdicts fail closed. Raw review text is retained
+(with secret redaction), including incomplete-evidence diagnostics and empty text.
+The artifact regression test dry-runs `tools/seat_verdict.py` on canonical PASS,
+HALT, and the quoted-HALT/markdown-ACCEPT pair. The external tool accepts that
+last pair; the stricter artifact producer deliberately records HALT instead.
+Temporarily restoring the old parser reproduced failures for the markdown pair
+and `verdict: pass-through`; restoring the old body replacement failed the
+missing-witness test. Dry runs keep the existing record schema without a new
+unclassified-attempt counter; the existing placement-tools schema test covers it.
+
+The reported HIGH CI excerpts are successful negative-path checks:
+`pg-jail/src/lib.rs:229` (`missing_allow_path_is_rejected`),
+`pg-jail/tests/escape.rs:332` (`fail_closed_missing_path`, including the expected
+`pg-jail/src/main.rs:36` missing-command diagnostic),
+`pg-spawnd/src/launch_tests.rs:152` (`lookup_rules_and_missing_program`),
+`pg-spawnd/src/review_artifacts_tests.rs:75` (`missing_witness_or_finish_never_pass`),
+and `pg-spawnd/src/runs_tests.rs:179` (`env_prompt_and_missing_carrier`).

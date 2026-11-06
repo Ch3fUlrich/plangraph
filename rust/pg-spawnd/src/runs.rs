@@ -262,7 +262,9 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     {
         let value = record.to_value();
         let (rows, skipped) = crate::evidence_row::adapted(&value);
-        record.set("evidence_unclassified_attempts", json!(skipped));
+        if !dry {
+            record.set("evidence_unclassified_attempts", json!(skipped));
+        }
         if value["role"] == "review" {
             let text = crate::review_artifacts::review_text(&state, &value)
                 .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());

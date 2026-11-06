@@ -2,8 +2,8 @@ use super::*;
 #[test]
 fn review_artifacts_preserve_body_and_parse_verdict() {
     let state = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
-    let base = json!({"run_id":"run-test","served_model":"model","witness_kind":"response",
-        "finish_reason":"stop","test_gaming":false,"verdict":"PASS"});
+    let base = json!({"run_id":"run-test","served_model":"gpt-5","witness_kind":"response",
+        "finish_reason":"stop","test_gaming":"no","verdict":"PASS"});
     for (body, pass) in [
         ("analysis\nVERDICT: HALT", false),
         ("analysis\nverdict: halt", false),
@@ -11,7 +11,13 @@ fn review_artifacts_preserve_body_and_parse_verdict() {
         ("  \n", false),
         ("analysis only", false),
         ("VERDICT: pass | fix", false),
-        ("quoted \"VERDICT: HALT\"\n**Verdict**: ACCEPT", true),
+        ("quoted \"VERDICT: HALT\"\n**Verdict**: ACCEPT", false),
+        ("analysis\nVERDICT: PASS", true),
+        ("approve", false),
+        ("VERDICT: pass - fix", false),
+        ("verdict: pass-through", false),
+        ("verdict: accept-all", false),
+        ("VERDICT: PASS\nVERDICT: unknown", false),
         ("VERDICT: ACCEPT\nVERDICT: unknown", false),
     ] {
         write_review_artifacts(&state, &base, body).unwrap();
@@ -23,8 +29,37 @@ fn review_artifacts_preserve_body_and_parse_verdict() {
             if pass { "PASS" } else { "HALT" },
             "{body}"
         );
-        if !body.trim().is_empty() {
-            assert_eq!(fs::read_to_string(seat.join("review.txt")).unwrap(), body);
+        assert_eq!(fs::read_to_string(seat.join("review.txt")).unwrap(), body);
+        if pass || body.contains("quoted") || body == "analysis\nVERDICT: HALT" {
+            let output = std::process::Command::new("python3")
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../tools/seat_verdict.py"
+                ))
+                .args([
+                    "--dry-run",
+                    "--key",
+                    "test",
+                    "--writer-family",
+                    "meta",
+                    "--token-dir",
+                ])
+                .arg(&state)
+                .arg("--seat-dir")
+                .arg(&seat)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                payload["body"]["ok"],
+                pass || body.contains("quoted"),
+                "{body}"
+            );
         }
     }
     let mut incomplete = base;
@@ -50,16 +85,24 @@ fn missing_witness_or_finish_never_pass() {
         for missing in [Value::Null, json!("unsure")] {
             let mut record = base.clone();
             record[key] = missing;
-            write_review_artifacts(&state, &record, "VERDICT: ACCEPT").unwrap();
+            write_review_artifacts(&state, &record, "VERDICT: PASS\nnotes").unwrap();
             let seat = state.join("runs/run-test/seat");
-            assert!(fs::read_to_string(seat.join("review.txt"))
-                .unwrap()
-                .contains("VERDICT: HALT"));
+            assert_eq!(
+                fs::read_to_string(seat.join("review.txt")).unwrap(),
+                "VERDICT: PASS\nnotes"
+            );
             let evidence: Value =
                 serde_json::from_slice(&fs::read(seat.join("evidence.json")).unwrap()).unwrap();
             assert_eq!(evidence["verdict"], "HALT");
         }
     }
+    let mut incomplete = base.clone();
+    incomplete["finish_reason"] = Value::Null;
+    write_review_artifacts(&state, &incomplete, "VERDICT: ACCEPT\nnotes").unwrap();
+    assert_eq!(
+        fs::read_to_string(state.join("runs/run-test/seat/review.txt")).unwrap(),
+        "VERDICT: ACCEPT\nnotes"
+    );
     write_review_artifacts(&state, &base, "VERDICT: ACCEPT").unwrap();
     assert_eq!(
         fs::read_to_string(state.join("runs/run-test/seat/review.txt")).unwrap(),
