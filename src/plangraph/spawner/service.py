@@ -229,19 +229,17 @@ class SpawnService(SeatSpawnMixin):
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
             from .target import resolve_target
-            target, resolved_leg = resolve_target(target)
+            target, resolved_leg = resolve_target(target, chosen=chosen)
             chosen = resolved_leg or chosen
             # Every refusal runs before hand_picked: a refused override leaves no audit line.
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-            from plangraph.planner.legs import NO_VERDICT_SEATS, leg_active
+            from plangraph.planner.legs import NO_VERDICT_SEATS
             from plangraph.routing_support.liveness import require_available
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
-            if chosen is not None and not leg_active(chosen):
-                raise SpawnRefused('leg disabled: ' + chosen.id + ': ' + (chosen.disabled or 'expired'))
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg

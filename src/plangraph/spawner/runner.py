@@ -313,6 +313,9 @@ class SpawnerRunner:
         from .target import resolve_target
         model_or_combo, leg = resolve_target(model_or_combo)
         if leg is not None:
+            if client is not None and client != leg.harness:
+                from plangraph.routing_errors import SpawnRefused
+                raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
             client = leg.harness
 
         validate_model(model_or_combo)

@@ -86,7 +86,7 @@ def test_unknown_variants_refused_by_route_spawn_override(tmp_path, model):
     with pytest.raises(SpawnRefused):
         validate_model(model)
     with pytest.raises(SpawnRefused):
-        plan_spawn({'estimate_tokens': 100}, role='implement', legs=(replace(DEFAULT_LEGS[0], model=model, disabled=None),))
+        plan_spawn({'estimate_tokens': 100}, role='implement', legs=(replace(DEFAULT_LEGS[0], model=model),))
     with pytest.raises(SpawnRefused):
         asyncio.run(SpawnerRunner().spawn('p', model_or_combo=model, dry_run=True))
     with pytest.raises(SpawnRefused):

@@ -245,7 +245,7 @@ def test_leg_eligibility(request_data, monkeypatch, kind):
     leg = next(leg for leg in spec.DEFAULT_LEGS if leg.id == request_data['leg']['id'])
     if kind == 'leg_inactive':
         monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled='policy'),))
-        reason = 'leg expired'
+        reason = f'leg disabled: {leg.id}: policy; override cannot enable a disabled leg'
     else:
         monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled=None),))
         request_data['role'] = 'implement'

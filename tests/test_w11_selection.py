@@ -1,7 +1,7 @@
 import asyncio
 import json
 import sqlite3
-from dataclasses import replace
+from historical_legs import without_d4196
 
 from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
 from plangraph.planner.routing import plan_spawn
@@ -9,8 +9,14 @@ from plangraph.spawner.cli import main
 from plangraph.spawner.mcp import MCPSpawnerServer
 
 CARD = {'estimate_tokens': 1000}
-WRITERS = tuple(replace(l, disabled=None) for l in DEFAULT_LEGS if 'implement' in l.roles)
+WRITERS = tuple(l for l in without_d4196() if 'implement' in l.roles)
 LEAD = next(l for l in WRITERS if l.id == LEAD_WRITER)
+
+
+def test_historical_writers_keep_other_disables():
+    assert next(l for l in without_d4196() if l.id == 'qodercli-qwen3.8-flash').disabled
+    assert not any(l.disabled is None and 'D-3950' in (original.disabled or '')
+                   for l in WRITERS for original in DEFAULT_LEGS if original.id == l.id)
 
 
 def rows():
