@@ -49,12 +49,42 @@ def owner_principal(w, key):
     return row[0]
 
 
+def test_state_event_types_stay_in_store_gate():
+    import ast
+    import inspect
+    from plangraph.keeper import events, store_cards
+    assert not hasattr(events, "STATE_EVENT_TYPES")
+    tree = ast.parse(inspect.getsource(events.fold))
+    types = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+            continue
+        if not isinstance(node.test.left, ast.Name) or node.test.left.id != "kind":
+            continue
+        body = ast.Module(body=node.body, type_ignores=[])
+        if any(isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store)
+               and isinstance(n.value, ast.Name) and n.value.id == "item"
+               and isinstance(n.slice, ast.Constant) and n.slice.value == "state"
+               for n in ast.walk(body)):
+            types.update(n.value for n in ast.walk(node.test.comparators[0])
+                         if isinstance(n, ast.Constant) and isinstance(n.value, str))
+    assert store_cards.STATE_EVENT_TYPES == types
+
+
 def retired_runs(w, key):
     """The retired-run fence kept across owner clears (RT-P1 V1-1)."""
     row = w.conn.execute("SELECT exec_retired_runs FROM items WHERE key=?",
                          (key,)).fetchone()
     return [(entry["workflow_id"], entry["run_id"], entry["attempt"])
             for entry in json.loads(row[0] or "[]")]
+
+
+def test_old_retired_payload_is_a_replay_noop():
+    from plangraph.keeper.events import fold
+    created = {"key": "A", "type": "item_created", "payload": {}}
+    clear = {"key": "A", "type": "exec_owner_changed", "payload": {
+        "action": "clear", "retired": [{"run_id": str(n)} for n in range(20)]}}
+    assert fold([created, clear]) == fold([created])
 
 
 def seed_owner(w, key, run, who="workerA"):
@@ -287,3 +317,42 @@ def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door):
                      now=w.store._parse_iso(lease).timestamp() + 1)
     assert calls == [(w.conn, key)]
     assert owner(w, key) == (None, None, None)
+
+
+# ------------------------------------------------- the fence never forgets
+def check_retired_fence_remembers_every_run(w):
+    """RT-P1 sq12 fix 1: the retired-run fence has no bound (V1-1/V5-1).
+
+    ``_exec_clear`` used to keep only ``retired[-16:]``, so after 17 clears a
+    run retired earliest was accepted again and could reacquire the card as a
+    first writer.  20 clear cycles later the FIRST retired run must still be
+    refused -- through ``_exec_check`` and end to end through a worker park.
+    Backend-agnostic body: ``tests/test_keeper_pg_exec_fence.py`` runs the same
+    checks against Postgres (the sq10/sq11 ``check_*`` pattern).
+    """
+    key, = seed(w, [("A", [])])
+    w.store.claim(w.p("workerA"), key)
+    for n in range(20):
+        with w.store._write():
+            w.store._exec_check(w.conn, key, "wf", f"run-{n}", 1,
+                                w.p("workerA"), now=w.clock())
+            w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
+    assert len(retired_runs(w, key)) == 20        # the fence keeps every run
+    clears = w.conn.execute("SELECT payload FROM events WHERE key=?"
+                            " AND type='exec_owner_changed' ORDER BY seq", (key,))
+    assert [json.loads(e[0])["retired"] for e in clears
+            if json.loads(e[0])["action"] == "clear"] == [
+                [{"workflow_id": "wf", "run_id": f"run-{n}", "attempt": 1}]
+                for n in range(20)]
+    with w.store._write():
+        refused("exec_stale", w.store._exec_check, w.conn, key, "wf", "run-0",
+                1, w.p("workerA"))
+    refused("exec_stale", w.store.worker_park, w.p("workerA"),
+            park(key, workflow_id="wf", run_id="run-0", attempt=2))
+
+
+def test_retired_fence_remembers_every_run_after_twenty_clears(w):
+    # Portable: runs on the default backend (``World`` follows
+    # ``PG_KEEPER_BACKEND``); the PG variant lives in
+    # ``tests/test_keeper_pg_exec_fence.py`` and calls the same helper.
+    check_retired_fence_remembers_every_run(w)

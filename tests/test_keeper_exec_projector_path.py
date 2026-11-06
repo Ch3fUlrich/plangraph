@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from keeper_util import World, seed, seed_exec_owner
+from keeper_util import World, seed, seed_exec_owner, to_claimed
 from plangraph.keeper.errors import Refused
 from plangraph.projector.apply import Projector
 from plangraph.projector.history import project_history
@@ -132,3 +132,124 @@ def test_projector_waiting_refuses_delayed_same_run_park(w, expected):
     # parks there: the cap-park after usage_limit/outage still lands.
     worker_call(w, key, "park", "waiting")
     assert snapshot(w, key)[:4] == ("parked", "card:" + key, "run", 1)
+
+
+def test_projector_waiting_refuses_delayed_same_run_park_without_expected_state(w):
+    """RT-P1 sq12 fix 2: a delayed park must not roll back a projector state.
+
+    Same shape as the test above, but the delayed park presents the SAME
+    ``(workflow_id, run_id, attempt)`` as the recorded owner and NO
+    ``expected_state`` -- the observed-state CAS cannot protect the card, so
+    today this park overwrote the projector's ``waiting``.  The alarm's attempt
+    advance is the observable moment the attempt began (its
+    ``exec_owner_changed`` record/advance event); the park is refused (stale,
+    audited) and the state must stay ``waiting``.
+    """
+    key, = seed(w, [("A", [])])
+    projector = Projector(w.store, w.p("system"), now=w.clock)
+    full = history("usage_limit")
+    running = project_history({"events": full["events"][:3]},
+                              workflow_id="card:" + key, run_id="run")
+    assert projector.apply_run(running, run_ord=0).states_written == 1
+    assert snapshot(w, key)[0] == "running"
+    seed_exec_owner(w, key, ("card:" + key, "run", 1))
+    w.store.worker_alarm(w.p("workerA"), {
+        "card": key, "reason": "retry", "workflow_id": "card:" + key,
+        "run_id": "run", "attempt": 2})
+    waiting = project_history(full, workflow_id="card:" + key, run_id="run")
+    assert projector.apply_run(waiting, run_ord=0).states_written == 1
+    before = snapshot(w, key)
+    assert before[:4] == ("waiting", "card:" + key, "run", 2)
+
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"), {
+            "card": key, "tier": "free", "exit_class": "needs_input",
+            "workflow_id": "card:" + key, "run_id": "run", "attempt": 2})
+    assert exc.value.code == "exec_stale"
+    assert snapshot(w, key) == before
+
+
+@pytest.mark.parametrize("owned", [False, True, "cleared"],
+                         ids=["unowned", "seeded-no-audit", "post-clear"])
+@pytest.mark.parametrize("exit_class", ["usage_limit", "needs_input"])
+def test_delayed_blind_park_without_owner_start(w, owned, exit_class):
+    key, = seed(w, [("A", [])])
+    projector = Projector(w.store, w.p("system"), now=w.clock)
+    full = history(exit_class)
+    running = project_history({"events": full["events"][:3]},
+                              workflow_id="card:" + key, run_id="run")
+    projector.apply_run(running, run_ord=0)
+    identity = {"workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
+    if owned:
+        seed_exec_owner(w, key, ("card:" + key, "run", 1))
+    if owned == "cleared":
+        with w.store._write():
+            w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
+    waiting = project_history(full, workflow_id="card:" + key, run_id="run")
+    projector.apply_run(waiting, run_ord=0)
+    assert snapshot(w, key)[0] == ("waiting" if exit_class == "usage_limit" else "needs_input")
+    assert w.store._exec_state_after_owner(w.conn, key)
+    before = snapshot(w, key)
+    with pytest.raises(Refused):
+        w.store.worker_park(w.p("workerA"), {
+            "card": key, "tier": "free", "exit_class": "needs_input",
+            **(identity if owned is True else {})})
+    assert snapshot(w, key) == before
+
+
+def test_delayed_park_cannot_overwrite_a_projector_move_made_after_park(w):
+    """RT-P1 sq12 fix 2 on the production ordering branch.
+
+    The worker's own park RECORDS the owner (with its audit event) and writes
+    ``parked``; the projector's bare run-less write (the V1-B write path) then
+    moves the card on.  A delayed re-park with the same triple and no
+    ``expected_state`` must not roll that back.
+    """
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    identity = {"workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
+    assert w.store.worker_park(w.p("workerA"), {
+        "card": key, "tier": "free", "exit_class": "check_fail",
+        **identity})["state"] == "parked"
+    assert snapshot(w, key)[:4] == ("parked", "card:" + key, "run", 1)
+    w.store.set_state(w.p("system"), key, "failed")
+    before = snapshot(w, key)
+    assert before[0] == "failed"
+
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"), {
+            "card": key, "tier": "free", "exit_class": "check_fail",
+            **identity})
+    assert exc.value.code == "exec_stale"
+    assert snapshot(w, key) == before
+
+
+def test_reclaim_then_blind_park_releases_claim(w):
+    key, = seed(w, [("A", [])])
+    body = {"card": key, "tier": "free", "exit_class": "check_fail",
+            "workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
+    for _ in range(2):
+        to_claimed(w, key, "workerA")
+        assert w.store.worker_park(w.p("workerA"), body)["changed"]
+        item = w.store._item(key)
+        assert item["state"] == "parked"
+        assert item["claimed_by"] is None and item["lease_until"] is None
+        # Isolate claim bookkeeping from a separate explicit hand-back event.
+        w.conn.execute("UPDATE items SET state='open' WHERE key=?", (key,))
+        w.conn.commit()
+
+
+def test_retired_run_park_from_failed_is_stale_before_forward_check(w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    body = {"card": key, "tier": "free", "exit_class": "check_fail",
+            "workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
+    w.store.worker_park(w.p("workerA"), body)
+    with w.store._write():
+        w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
+    w.store.set_state(w.p("system"), key, "failed")
+    before = snapshot(w, key)
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"), body)
+    assert exc.value.code == "exec_stale"
+    assert snapshot(w, key) == before
