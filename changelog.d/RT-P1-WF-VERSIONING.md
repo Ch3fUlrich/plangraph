@@ -1,0 +1,1 @@
+- **RT-P1-WF-VERSIONING:** Record the main-branch durability/versioning audit, existing patch and promotion coverage, remaining acceptance gaps, and the unauthorized CI door hunks blocking implementation; no runtime behavior changed.
