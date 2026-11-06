@@ -49,12 +49,12 @@ def test_paid_pin(tmp_path, monkeypatch, harness, pin, free_up, reason):
             asyncio.run(service.spawn(**options))
         assert not (tmp_path / 'spawn-overrides.jsonl').exists()
     else:
-        # Pin auditing still requires a reason even if no free leg serves.
-        options['override_reason'] = reason or 'No eligible free leg is up'
         record = asyncio.run(service.spawn(**options))
         assert runner.calls[0]['client'] == harness
         assert not runner.calls[0]['dry_run']
-        assert service.result(record['run_id'])['override_reason'] == options['override_reason']
+        assert options['override_reason'] == reason
+        assert service.result(record['run_id'])['override_reason'] == (
+            reason or 'No eligible free leg is up on this host')
 
 
 def test_only_sol_writes():
@@ -90,6 +90,8 @@ def test_recorded_down_route(tmp_path, monkeypatch, reason):
 @pytest.mark.parametrize('mode', ['expired', 'test failure', 'timeout', 'other-host', 'missing', 'corrupt'])
 def test_no_cooldown(tmp_path, monkeypatch, mode):
     import json
+    import os
+    from pathlib import Path
     from plangraph.planner.measured_down import measured_down, LEG_DOWN_WINDOW_S
     monkeypatch.setenv('PLANGRAPH_HOST', 'here')
     path = tmp_path / 'runs/run-one/record.json'
@@ -99,7 +101,24 @@ def test_no_cooldown(tmp_path, monkeypatch, mode):
         skip_reason=mode if mode in ('test failure', 'timeout') else 'credit usage limit')])
     if mode != 'missing':
         path.write_text('broken' if mode == 'corrupt' else json.dumps(record))
+        os.utime(path, (100, 100))
+    considered = []
+    original = Path.read_text
+    def counted(candidate, *args, **kwargs):
+        considered.append(candidate)
+        return original(candidate, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_text', counted)
     assert measured_down(tmp_path, now=100 + LEG_DOWN_WINDOW_S if mode == 'expired' else 101) == {}
+    assert considered == ([] if mode in ('expired', 'missing') else [path])
+    # The same record must cool down a leg when its host/reason/window are valid.
+    record['host'] = 'here'
+    record['attempts'][0]['down_reason'] = 'credit_limit'
+    path.write_text(json.dumps(record))
+    os.utime(path, (100, 100))
+    considered.clear()
+    assert measured_down(tmp_path, now=101) == {
+        'free': {'reason': 'credit_limit', 'time': 100}}
+    assert considered == [path]
 
 
 @pytest.mark.parametrize('one_up', [False, True])
