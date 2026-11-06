@@ -99,17 +99,13 @@ def test_powershell_same_failure(probe):
     assert config.read_text().count('old new') == 1
 
 
-@pytest.mark.parametrize('wrapper', ['bootstrap.sh', 'bootstrap.ps1'])
-def test_export_duplicate_rejected(probe, wrapper):
-    config, _ = probe
+def test_export_duplicate_rejected(probe):
+    config, run = probe
     config.write_text(config.read_text() + 'export PLANGRAPH_PROBE_HOSTS=other\n')
     before = config.read_bytes()
-    source = (ROOT / 'deploy' / wrapper).read_text()
-    code = source.split('import os, pathlib, re, shlex, stat, sys, tempfile\n', 1)[1]
-    code = 'import os, pathlib, re, shlex, stat, sys, tempfile\n' + code.split("'@" if wrapper.endswith('ps1') else "' \"$PROBE_HOST\"")[0]
-    result = subprocess.run([sys.executable, '-c', code, 'new', str(config), '0'], capture_output=True)
+    result = run()
     assert result.returncode != 0
-    assert b'exactly one hosts assignment required' in result.stderr
+    assert 'exactly one hosts assignment required' in result.stderr
     assert config.read_bytes() == before
 
 
@@ -126,8 +122,38 @@ def test_powershell_interpreter_detection():
     source = (ROOT / 'deploy/bootstrap.ps1').read_text()
     assert "@('python3', 'python', 'py')" in source
     assert 'WindowsApps' in source
-    assert '& python ' not in source
+    assert '& python -m plangraph.spawner.stall_watchdog tick --dry-run' in source
     assert '& $pythonCommand -c $probeCode' in source
+
+
+@pytest.mark.parametrize('ending', ['\r\n', '\n', ''])
+@pytest.mark.parametrize('quote', ["'", '"'])
+def test_assignment_format_preserved(probe, ending, quote):
+    config, run = probe
+    original = 'export PLANGRAPH_PROBE_HOSTS=' + quote + 'old' + quote + ' # note' + ending
+    config.write_bytes(original.encode())
+    assert run().returncode == 0
+    assert config.read_bytes() == original.replace('old', 'old new').encode()
+
+
+def test_optimized_validation(probe, monkeypatch):
+    config, run = probe
+    monkeypatch.setenv('PYTHONOPTIMIZE', '1')
+    before = config.read_bytes()
+    assert run('bad host').returncode != 0
+    assert config.read_bytes() == before
+    config.chmod(0o644)
+    assert run().returncode != 0
+    assert config.read_bytes() == before
+    config.chmod(0o600)
+    config.write_bytes(before + b'PLANGRAPH_PROBE_HOSTS=other\n')
+    before = config.read_bytes()
+    assert run().returncode != 0
+    assert config.read_bytes() == before
+
+
+def test_enrollment_only_documented():
+    assert 'Probe arguments run enrollment only, even with install flags' in (ROOT / 'deploy/README.md').read_text()
 
 
 @pytest.mark.skipif(not shutil.which('pwsh') or os.name != 'posix', reason='requires POSIX pwsh')
