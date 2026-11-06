@@ -310,7 +310,7 @@ class SpawnerRunner:
         from plangraph.planner.routing import validate_model
         # Resolve local leg IDs and admitted combos before rendering providers
         # or deciding which isolated credential the child requires.
-        if client == 'opencode' and '/' not in model_or_combo:
+        if client == 'opencode':
             leg = next((leg for leg in DEFAULT_LEGS if leg.id == model_or_combo), None)
             if leg is not None:
                 model_or_combo = leg.model

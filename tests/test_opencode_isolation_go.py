@@ -26,7 +26,8 @@ def source_store(path):
 
 @pytest.mark.usefixtures('fake_ownership')
 @pytest.mark.parametrize('present', [True, False])
-@pytest.mark.parametrize('model', ['opencode-go/glm-5.2', 'opencode-go-glm-5.2', 'go-test-combo'])
+@pytest.mark.parametrize('model', ['opencode-go/glm-5.2', 'opencode-go-glm-5.2',
+                                   'go-test-combo', 'aliases/go-test-combo'])
 def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
     source = tmp_path / 'source.db'
     if present:
@@ -35,9 +36,9 @@ def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
     async def probe(*args, **kwargs):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
-    if model == 'go-test-combo':
+    if model in ('go-test-combo', 'aliases/go-test-combo'):
         monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-            {'id': 'opencode-go/glm-5.2', 'combos': ['go-test-combo']}])
+            {'id': 'opencode-go/glm-5.2', 'combos': [model]}])
         monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     seen = []
     async def factory(*args, **kwargs):
@@ -116,6 +117,7 @@ def test_failed_write_leaves_no_database(tmp_path, monkeypatch):
     assert list((job / 'opencode').iterdir()) == []
 
 
+@pytest.mark.integration
 def test_real_models_probe(tmp_path):
     """Real CLI discovery with only selected auth, no host config or registry rows."""
     import os
@@ -126,14 +128,17 @@ def test_real_models_probe(tmp_path):
     executable = shutil.which('opencode')
     source = go_source_db()
     if executable is None or source is None or not source.is_file():
+        if os.environ.get('PLANGRAPH_REQUIRE_GO_INTEGRATION') == '1':
+            pytest.fail('required OpenCode integration prerequisites unavailable')
         pytest.skip('real OpenCode binary and credential store required')
     job = tmp_path / 'isolated-job'
     job.mkdir()
-    assert install_go_credential(job, source)
-    env = {'PATH': os.environ['PATH'], 'HOME': str(job),
-           'XDG_DATA_HOME': str(job), 'XDG_CONFIG_HOME': str(job / 'config')}
-    config = close_config_layers(env)
+    config = None
     try:
+        assert install_go_credential(job, source)
+        env = {'PATH': os.environ['PATH'], 'HOME': str(job),
+               'XDG_DATA_HOME': str(job), 'XDG_CONFIG_HOME': str(job / 'config')}
+        config = close_config_layers(env)
         env['OPENCODE_CONFIG_CONTENT'] = json.dumps(
             {'permission': {'*': 'deny'}, 'mcp': {}, 'plugin': []})
         result = subprocess.run([executable, 'models', '--standalone'], cwd=job,
@@ -147,4 +152,9 @@ def test_real_models_probe(tmp_path):
             values = db.execute('SELECT value FROM credential').fetchall()
         assert all(value not in result.stdout + result.stderr for (value,) in values if value)
     finally:
-        shutil.rmtree(config)
+        try:
+            if config:
+                shutil.rmtree(config)
+        finally:
+            shutil.rmtree(job)
+    assert not job.exists()

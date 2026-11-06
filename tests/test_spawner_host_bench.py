@@ -116,18 +116,20 @@ def test_unmapped_leg_no_p(tmp_path, capsys, monkeypatch):
     rows = benchmark_options(False, str(db))["benchmark"]
     for leg_id, model_id in LEG_BENCHMARK_MODEL.items():
         assert rows[leg_id]["model_id"] == model_id
-    # Explicitly omit these rows: the production catalog now measures Go legs.
-    from plangraph.spawner import bench_entry
-    original = bench_entry.benchmark_options
-    def without_go(*args, **kwargs):
-        options = original(*args, **kwargs)
-        options['benchmark'] = {key: row for key, row in options['benchmark'].items()
-                                if not key.startswith('opencode-go/')}
-        return options
-    monkeypatch.setattr(bench_entry, 'benchmark_options', without_go)
-    plan = route_json(tmp_path, capsys, "--bench-db", str(db))
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import plan_spawn
+    control = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
+    synthetic = replace(control, id='synthetic-unmapped-review', model='synthetic/no-row')
+    from plangraph.routing_support import resolver
+    catalog_models = resolver.get_catalog_models
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        *catalog_models(), {'id': synthetic.model, 'available': 1, 'active': True}])
+    assert synthetic.id not in rows and synthetic.model not in rows
+    plan = plan_spawn(CARD, role='review', writer_families=('claude',),
+                      legs=(synthetic, control), benchmark=rows).to_dict()
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("opencode-go-glm-5.2", "opencode-go-deepseek-v4-flash"):
+    for leg in (synthetic.id,):
         assert leg not in LEG_BENCHMARK_MODEL
         assert by_leg[leg]["u_core"] is None and by_leg[leg]["p_source"] == "prior"
     assert by_leg["agy-gemini-3.8-flash"]["p_source"] == "measured"
