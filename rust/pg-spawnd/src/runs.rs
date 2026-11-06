@@ -180,7 +180,7 @@ impl Runs {
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 }
-fn store_prompt(
+pub(crate) fn store_prompt(
     state: &Path,
     id: &str,
     launch: &mut crate::launch::LaunchSpec,

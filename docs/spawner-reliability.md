@@ -126,3 +126,8 @@ group remains alive when the owned descendant group is killed.
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
+
+Inline review regression checks cover marker replacement, native stdin bytes,
+unknown carriers, redaction and final-prompt hashes before dispatch, disabled Git
+extensions, and cleanup restricted to live owned children. Batch launchers are
+inspected case-insensitively; multiline native launchers remain supported.

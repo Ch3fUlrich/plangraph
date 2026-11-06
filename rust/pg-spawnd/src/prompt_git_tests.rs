@@ -37,7 +37,9 @@ fn real_temp_git_commits_exact_diff() {
         base_sha: base,
         head_sha: head,
     };
+    check_external_diff_textconv_hooks_not_run(&root);
     let bytes = read_diff(&repo, &diff, 262144).unwrap();
+    assert!(!root.join("hook-ran").exists());
     assert!(bytes.contains(&0x9d));
     assert!(String::from_utf8_lossy(&bytes).contains('\u{fffd}'));
     assert_eq!(read_diff(&repo, &diff, 1), Err(InlineDiffError::TooLarge));
@@ -53,10 +55,12 @@ fn real_temp_git_commits_exact_diff() {
         events: None,
     };
     let args = serde_json::json!({"role":"review", "card":{"diff_ref":diff}});
+    check_unknown_carrier_refused(&args, &mut launch, &repos);
     crate::prompt::prepare_review(&args, &serde_json::json!({}), &mut launch, &repos, true)
         .unwrap();
     assert!(launch.prompt.as_ref().unwrap().contains("after"));
     assert_eq!(launch.prompt, launch.stdin);
+    check_multiline_native_stdin_roundtrip(&launch);
     crate::prompt::prepare_review(
         &args,
         &serde_json::json!({"review_mode":"inline_only"}),
@@ -66,6 +70,8 @@ fn real_temp_git_commits_exact_diff() {
     )
     .unwrap();
     assert!(launch.prompt.as_ref().unwrap().starts_with("NO-tools:"));
+    check_existing_marker_single_replacement(&launch);
+    check_redaction_before_persist(&root, &mut launch);
     assert_eq!(
         launch
             .prompt
@@ -76,6 +82,74 @@ fn real_temp_git_commits_exact_diff() {
         1
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+fn check_unknown_carrier_refused(
+    args: &serde_json::Value,
+    launch: &mut crate::launch::LaunchSpec,
+    repos: &std::collections::BTreeMap<String, RepoEntry>,
+) {
+    launch.stdin = None;
+    assert_eq!(
+        crate::prompt::prepare_review(args, &serde_json::json!({}), launch, repos, true),
+        Err(InlineDiffError::UnsafeCarrier)
+    );
+    launch.stdin = launch.prompt.clone();
+}
+fn check_existing_marker_single_replacement(launch: &crate::launch::LaunchSpec) {
+    let text = launch.prompt.as_ref().unwrap();
+    assert_eq!(text.matches("Untrusted diff data follows").count(), 1);
+    assert_eq!(
+        text.matches("<!-- PLANGRAPH INLINE DIFF END -->").count(),
+        1
+    );
+}
+fn check_multiline_native_stdin_roundtrip(launch: &crate::launch::LaunchSpec) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        let mut child = std::process::Command::new("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(launch.stdin.as_ref().unwrap().as_bytes())
+            .unwrap();
+        assert_eq!(
+            child.wait_with_output().unwrap().stdout,
+            launch.prompt.as_ref().unwrap().as_bytes()
+        );
+    }
+}
+fn check_redaction_before_persist(root: &Path, launch: &mut crate::launch::LaunchSpec) {
+    use sha2::{Digest, Sha256};
+    let source = include_str!("runs.rs");
+    assert!(
+        source
+            .find("crate::prompt::prepare_review(&review_args, &leg, &mut launch")
+            .unwrap()
+            < source.find("        store_prompt(state,").unwrap()
+    );
+    let id = pg_worker_core::run::record::new_run_id();
+    let mut base = serde_json::json!({});
+    let raw = format!("{}\nPASSWORD=fixture\n", launch.prompt.as_ref().unwrap());
+    launch.prompt = Some(raw.clone());
+    launch.stdin = Some(raw.clone());
+    assert!(crate::runs::store_prompt(root, &id, launch, &mut base, false).is_ok());
+    let path = pg_worker_core::run::record::run_dir(root, &id)
+        .unwrap()
+        .join("prompt.txt");
+    let persisted = std::fs::read_to_string(path).unwrap();
+    assert_eq!(persisted, pg_worker_core::redact::redact(&raw));
+    assert!(persisted.contains("Untrusted diff data follows"));
+    assert_eq!(launch.stdin.as_ref().unwrap(), &persisted);
+    assert_eq!(
+        base["prompt_sha256"],
+        format!("{:x}", Sha256::digest(persisted.as_bytes()))
+    );
 }
 #[test]
 fn ref_option_path_traversal_refused() {
@@ -98,4 +172,88 @@ fn ref_option_path_traversal_refused() {
             Err(InlineDiffError::InvalidDiffRef)
         );
     }
+}
+
+fn check_external_diff_textconv_hooks_not_run(root: &Path) {
+    for key in [
+        "diff.external",
+        "diff.fixture.command",
+        "diff.fixture.textconv",
+        "core.fsmonitor",
+    ] {
+        git(root, &["config", key, "touch hook-ran"]);
+    }
+    std::fs::write(root.join(".git/info/attributes"), "file diff=fixture\n").unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn timeout_owned_git_reaped() {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", "sleep 60 & wait"])
+        .stdout(Stdio::piped())
+        .process_group(0);
+    let child = command.spawn().unwrap();
+    let pid = child.id() as i32;
+    let started = std::time::Instant::now();
+    assert_eq!(
+        collect_diff(child, 1024, Duration::from_millis(30)),
+        Err(InlineDiffError::Git)
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(
+        unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+        -1
+    );
+}
+#[cfg(unix)]
+#[test]
+fn oversized_exited_child_does_not_kill_group() {
+    use std::os::unix::process::CommandExt;
+    let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    std::fs::create_dir_all(&root).unwrap();
+    let mut command = std::process::Command::new("sh");
+    command
+        .args([
+            "-c",
+            "(sleep 0.3; touch survived) >/dev/null & printf oversized",
+        ])
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .process_group(0);
+    let mut child = command.spawn().unwrap();
+    child.wait().unwrap();
+    assert_eq!(
+        collect_diff(child, 1, Duration::from_secs(1)),
+        Err(InlineDiffError::TooLarge)
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(root.join("survived").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn existing_marker_single_replacement() {
+    real_temp_git_commits_exact_diff();
+}
+
+#[test]
+fn multiline_native_stdin_roundtrip() {
+    real_temp_git_commits_exact_diff();
+}
+
+#[test]
+fn unknown_carrier_refused() {
+    real_temp_git_commits_exact_diff();
+}
+
+#[test]
+fn redaction_before_persist() {
+    real_temp_git_commits_exact_diff();
+}
+
+#[test]
+fn external_diff_textconv_hooks_not_run() {
+    real_temp_git_commits_exact_diff();
 }

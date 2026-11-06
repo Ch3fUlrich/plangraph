@@ -76,3 +76,26 @@ fn switch_precedence_and_role() {
     assert_eq!(mode(Some("off"), &config, "review"), "off");
     assert_eq!(mode(Some("invalid"), &config, "review"), "off");
 }
+#[test]
+fn non_review_without_prompt_unchanged() {
+    let mut l = launch("one\ntwo");
+    l.prompt = None;
+    l.argv[0] = "runner.cmd".into();
+    prepare_review(
+        &json!({"role":"implement"}),
+        &json!({}),
+        &mut l,
+        &BTreeMap::new(),
+        true,
+    )
+    .unwrap();
+    assert!(l.prompt.is_none());
+}
+#[test]
+fn windows_launcher_inspection_native_child() {
+    for exe in ["native.exe", "native"] {
+        let mut l = launch("λ\r\nsecond\n");
+        l.argv[0] = exe.into();
+        assert_eq!(windows_guard(&l, l.prompt.as_ref().unwrap()), Ok(()));
+    }
+}

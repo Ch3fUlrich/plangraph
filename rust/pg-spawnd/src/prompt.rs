@@ -102,14 +102,14 @@ pub(crate) fn prepare_review(
     repos: &BTreeMap<String, RepoEntry>,
     enabled: bool,
 ) -> Result<(), InlineDiffError> {
+    if args["role"] != "review" {
+        return Ok(());
+    }
     let original = launch
         .prompt
         .as_deref()
         .ok_or(InlineDiffError::UnsafeCarrier)?;
     windows_guard(launch, original)?;
-    if args["role"] != "review" {
-        return Ok(());
-    }
     let mandatory = leg["review_mode"] == "inline_only";
     let reference = &args["card"]["diff_ref"];
     if reference.is_null() {

@@ -34,7 +34,18 @@ pub(crate) fn read_diff(
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let mut child = cmd.spawn().map_err(|_| InlineDiffError::Git)?;
+    collect_diff(
+        cmd.spawn().map_err(|_| InlineDiffError::Git)?,
+        cap,
+        Duration::from_secs(10),
+    )
+}
+
+fn collect_diff(
+    mut child: std::process::Child,
+    cap: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, InlineDiffError> {
     let stdout = child.stdout.take().ok_or(InlineDiffError::Git)?;
     let (tx, rx) = mpsc::sync_channel(1);
     let reader = std::thread::spawn(move || {
@@ -44,10 +55,10 @@ pub(crate) fn read_diff(
             .read_to_end(&mut bytes);
         let _ = tx.send(result.map(|_| bytes));
     });
-    let result = rx.recv_timeout(Duration::from_secs(10));
+    let result = rx.recv_timeout(timeout);
     let oversized = matches!(&result, Ok(Ok(bytes)) if bytes.len() > cap);
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
-    let mut exited = None;
+    let mut exited = child.try_wait().map_err(|_| InlineDiffError::Git)?;
     while result.is_ok()
         && !oversized
         && {
@@ -59,7 +70,12 @@ pub(crate) fn read_diff(
         std::thread::sleep(Duration::from_millis(5));
     }
     // This group was created by this invocation; never signal a registry process.
-    if exited.is_none() {
+    if exited.is_none()
+        && child
+            .try_wait()
+            .map_err(|_| InlineDiffError::Git)?
+            .is_none()
+    {
         #[cfg(unix)]
         unsafe {
             libc::kill(-(child.id() as i32), libc::SIGKILL);
