@@ -213,6 +213,9 @@ impl EvidenceStore {
         let mut episodes = BTreeMap::new();
         for row in self.read()?.0 {
             if let EvidenceRow::Observation(o) = row {
+                if o.kind != evidence_row::ObservationKind::OmniRouteSeen {
+                    continue;
+                }
                 if let Some(phase) = &o.phase {
                     let key = (o.leg_key.clone(), o.state.clone(), o.first_seen);
                     if *phase == Phase::First {
@@ -239,6 +242,9 @@ pub(crate) fn enabled(state: &Path, role: &str) -> bool {
         Some("on" | "shadow")
     )
 }
+#[cfg(test)]
+#[path = "evidence_phase_tests.rs"]
+mod phase_tests;
 #[cfg(test)]
 #[path = "evidence_tests.rs"]
 mod tests;

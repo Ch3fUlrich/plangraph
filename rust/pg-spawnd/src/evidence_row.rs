@@ -27,11 +27,12 @@ pub(crate) struct OutcomeRow {
     #[serde(serialize_with = "serialize_line")]
     pub line: String,
 }
+const LINE_CAP: usize = 300;
 fn serialize_line<S: serde::Serializer>(line: &str, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(
         &pg_worker_core::redact::redact(line)
             .chars()
-            .take(300)
+            .take(LINE_CAP)
             .collect::<String>(),
     )
 }
@@ -94,6 +95,9 @@ impl ObservationRow {
 pub(crate) fn validate(row: &EvidenceRow) -> Result<(), EvidenceError> {
     match row {
         EvidenceRow::Observation(o) => {
+            if o.phase.is_some() && o.kind != ObservationKind::OmniRouteSeen {
+                return Err(EvidenceError::Invalid);
+            }
             o.key()?;
         }
         EvidenceRow::Outcome(o) => {
@@ -125,6 +129,7 @@ pub(crate) fn validate(row: &EvidenceRow) -> Result<(), EvidenceError> {
                 || !pg_worker_core::run::record::valid_run_id(&o.run_id)
                 || o.leg_key.is_empty()
                 || o.route_key.is_empty()
+                || o.line.chars().count() > LINE_CAP
             {
                 return Err(EvidenceError::Invalid);
             }
