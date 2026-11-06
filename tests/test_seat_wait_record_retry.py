@@ -77,8 +77,8 @@ async def _identity(plan, **kwargs):
 
 @pytest.mark.parametrize('verb', ['wait', 'result', 'status'])
 @pytest.mark.parametrize('failures', [2, 100])
-def test_record_collision_winerror33(tmp_path, monkeypatch, capsys, verb, failures):
-    test_record_collision(tmp_path, monkeypatch, capsys, verb, failures, 33)
+def test_record_collision_winerror33(tmp_path, monkeypatch, capsys, verb, failures, winerror=33):
+    test_record_collision(tmp_path, monkeypatch, capsys, verb, failures, winerror)
 
 
 @pytest.mark.parametrize('dispatch', [False, True])
@@ -99,6 +99,16 @@ def test_review_family_overlap_and_empty_fallback(tmp_path, monkeypatch, dispatc
     service._save(source)
     record = asyncio.run(service.spawn(card=CARD, role='review', review_of=source['run_id'], dry_run=True))
     assert record['given_writer_families'] == (families or ['gpt'])
+    from plangraph.planner import routing
+    seen = []
+    monkeypatch.setattr(routing, 'plan_spawn', lambda *a, **kw: seen.append(kw['writer_families']) or plan)
+    SpawnService._route(service, CARD, role='review', review_of=record['run_id'])
+    assert seen.pop() == (families or ['gpt'])
     gpt = next(l for l in DEFAULT_LEGS if l.family == 'gpt' and l.tool_mode == 'tools')
-    with pytest.raises(SpawnRefused, match='excluded writer family'):
-        asyncio.run(service._spawn(card=CARD, role='review', review_of=source['run_id'], leg=gpt.id, dry_run=True))
+    if families:
+        allowed = asyncio.run(service._spawn(card=CARD, role='review', review_of=source['run_id'], leg=gpt.id, dry_run=True, override_reason='verify subset family exclusion'))
+        assert allowed['given_writer_families'] == families
+    else:
+        with pytest.raises(SpawnRefused, match='excluded writer family'):
+            asyncio.run(service._spawn(card=CARD, role='review', review_of=source['run_id'], leg=gpt.id, dry_run=True))
+    assert seen.pop() == (families or ['gpt'])
