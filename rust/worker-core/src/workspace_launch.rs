@@ -189,10 +189,18 @@ fn strip_git(cmd: &mut Command) {
         .chain(cmd.get_envs().map(|(k, _)| k.to_os_string()))
         .collect();
     for key in keys {
-        if key
-            .to_string_lossy()
-            .to_ascii_uppercase()
-            .starts_with("GIT_")
+        let upper = key.to_string_lossy().to_ascii_uppercase();
+        if upper.starts_with("GIT_")
+            || [
+                "TOKEN",
+                "SECRET",
+                "PASSWORD",
+                "CREDENTIAL",
+                "API_KEY",
+                "PRIVATE_KEY",
+            ]
+            .iter()
+            .any(|part| upper.contains(part))
         {
             cmd.env_remove(key);
         }
@@ -313,18 +321,27 @@ pub fn prepare_launch(
         .map_err(|_| ResolveError::Invalid("workspace"))?;
     if workspace.mode == Mode::None {
         require(checkout.is_none(), "none_checkout")?;
+        let trees = Path::new(&repo.worktrees_root).canonicalize()?;
+        require(temp.is_absolute() && !temp.starts_with(&trees), "temp")?;
+        require(!temp.canonicalize()?.starts_with(&trees), "temp_escape")?;
+        crate::sandbox_env::confine_check(cmd, temp);
         strip_git(cmd);
+        cmd.current_dir(temp).env("PWD", temp);
         return Ok(None);
     }
     let checkout = checkout.ok_or(ResolveError::Invalid("checkout"))?;
     if workspace.mode == Mode::Writer {
         verify_owned(repo, checkout)?;
     }
-    let verified = verify_workspace(repo, workspace, checkout, import_package)?;
     apply_child_env(cmd, repo, checkout, slot, temp)?;
+    let verified = verify_workspace(repo, workspace, checkout, import_package)?;
     Ok(Some(verified))
 }
 
 #[cfg(test)]
 #[path = "workspace_launch_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "workspace_launch_env_tests.rs"]
+mod env_tests;

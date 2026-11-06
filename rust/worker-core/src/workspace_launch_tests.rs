@@ -4,20 +4,20 @@ fn apply(f: &Fixture, tree: &Path) -> Result<(), ResolveError> {
     let mut cmd = Command::new("unused");
     apply_child_env(&mut cmd, &f.repo, tree, "seat", f.tmp.path())
 }
-fn launch(
+pub(super) fn launch(
     f: &Fixture,
     cmd: &mut Command,
     tree: Option<&Path>,
 ) -> Result<Option<VerifiedWorkspace>, ResolveError> {
     prepare_launch(cmd, &f.repo, &f.ws, tree, "seat", f.tmp.path(), None)
 }
-struct Fixture {
-    tmp: TempDir,
-    repo: RepoEntry,
-    ws: Workspace,
+pub(super) struct Fixture {
+    pub(super) tmp: TempDir,
+    pub(super) repo: RepoEntry,
+    pub(super) ws: Workspace,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let tmp = tempdir().unwrap();
         let root = tmp.path().join("repo");
         let trees = tmp.path().join("trees");
@@ -51,7 +51,7 @@ impl Fixture {
             },
         }
     }
-    fn writer(&self) -> PathBuf {
+    pub(super) fn writer(&self) -> PathBuf {
         create_writer(&self.repo, &self.ws, "first").unwrap()
     }
     fn marker(&self, tree: &Path) -> PathBuf {
@@ -354,44 +354,4 @@ fn workspace_launch_docs_avoid_credential_shaped_git_wording() {
     assert!(!docs
         .lines()
         .any(|line| line.contains("explicit") && line.contains("GIT_*")));
-}
-#[test]
-fn none_has_no_checkout_and_no_cwd_fallback() {
-    let mut f = Fixture::new();
-    let tree = f.writer();
-    f.ws.mode = Mode::None;
-    f.ws.base_sha = None;
-    f.ws.revision_sha = None;
-    f.ws.branch = None;
-    let mut cmd = Command::new("unused");
-    assert!(launch(&f, &mut cmd, None).unwrap().is_none());
-    assert!(cmd.get_current_dir().is_none());
-    assert!(!cmd.get_envs().any(|(k, _)| k == "PYTHONPATH"));
-    assert!(launch(&f, &mut cmd, Some(&tree)).is_err());
-}
-#[test]
-fn launch_reverifies_head_after_prior_token() {
-    let f = Fixture::new();
-    let tree = f.writer();
-    verify_workspace(&f.repo, &f.ws, &tree, None).unwrap();
-    git(
-        &tree,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.org",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "changed",
-        ],
-    )
-    .unwrap();
-    let mut cmd = Command::new("unused");
-    cmd.env("UNCHANGED", "yes");
-    assert!(launch(&f, &mut cmd, Some(&tree)).is_err());
-    assert!(cmd.get_current_dir().is_none());
-    assert_eq!(cmd.get_envs().count(), 1);
-    assert!(launch(&f, &mut Command::new("unused"), None).is_err());
 }
