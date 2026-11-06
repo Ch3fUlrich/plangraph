@@ -17,26 +17,16 @@ explicit = dict(card(), check_kind='regression', check_reads=['fixtures/input.js
 claims.append(build_claim('demo:C', explicit, repo='repo', base_sha='abc123'))
 print(json.dumps(claims))
 "#;
-    let output = Command::new("python3")
-        .args([
-            "-I",
-            "-S",
-            "-c",
-            &format!(
-                "import sys; sys.path.insert(0, {:?});\n{}",
-                root.join("src").to_str().unwrap(),
-                script
-            ),
-        ])
-        .output();
-    let output = match output {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("skipping keeper builder contract: python3 unavailable");
-            return;
-        }
-        Err(error) => panic!("cannot run keeper builder: {error}"),
-    };
+    // Worktrees can share the repository's provisioned test environment via an
+    // explicit path; never fall back to an ambient PATH interpreter.
+    let python = std::env::var_os("PLANGRAPH_TEST_PYTHON")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join(".venv/bin/python3"));
+    let output = Command::new(&python)
+        .args(["-E", "-s", "-c", script])
+        .current_dir(root.join("src"))
+        .output()
+        .expect("repository test Python required: provision .venv or set PLANGRAPH_TEST_PYTHON");
     assert!(
         output.status.success(),
         "{}",
@@ -85,4 +75,19 @@ fn readiness_only_builder_keys_do_not_change_claim_contract() {
     payload["readiness_only"] = serde_json::json!(true);
     let claim: Claim = serde_json::from_value(payload.clone()).unwrap();
     assert_claim_projection(&claim, &payload);
+}
+
+#[test]
+fn legacy_payload_missing_all_check_metadata_uses_defaults() {
+    let claim: Claim = serde_json::from_value(serde_json::json!({
+        "card": "c", "repo": "r", "base_sha": "abc", "check_cmd": "false",
+        "allow": [], "forbid": [], "prompt": "p"
+    }))
+    .unwrap();
+    assert_eq!(claim.check_kind, "change");
+    assert!(claim.check_reads.is_empty());
+    assert!(claim.heldout_cmd.is_empty());
+    assert!(claim.smoke_checks.is_empty());
+    assert!(claim.exports.is_empty());
+    assert!(!claim.risk_tagged);
 }

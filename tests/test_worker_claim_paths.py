@@ -40,3 +40,13 @@ def test_build_claim_keeps_good_check_reads_unchanged():
     claim = build_claim("demo:A", card, repo="repo", base_sha="abc")
     assert claim["check_reads"] == reads
     assert card["check_reads"] == reads
+
+
+def test_build_claim_does_not_forbid_check_reads_in_write_set():
+    card = {"outcome": "fix", "check_cmd": "false",
+            "write_set": ["fixtures/input.json"],
+            "check_reads": ["fixtures/input.json", "fixtures/readonly.json"]}
+    claim = build_claim("demo:A", card, repo="repo", base_sha="abc")
+    assert claim["allow"] == ["fixtures/input.json"]
+    assert claim["forbid"] == ["fixtures/readonly.json"]
+    assert claim["check_reads"] == card["check_reads"]

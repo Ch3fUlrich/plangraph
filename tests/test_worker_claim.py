@@ -30,27 +30,42 @@ def test_build_claim_preserves_gate_inputs():
     assert got["risk_tagged"] is True
 
 
-@pytest.mark.skipif(not os.environ.get("PG_DSN"), reason="PG_DSN not set")
+@pytest.mark.skipif(
+    not os.environ.get("PG_DSN") and os.environ.get("PG_KEEPER_BACKEND") != "postgres",
+    reason="Postgres parity runs in the pytest-postgres lane",
+)
 def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo):
-    payloads = []
-    for backend in ("sqlite", "postgres"):
-        world = World(tmp_path / backend, backend=backend, dsn=os.environ["PG_DSN"])
-        try:
-            world.store.create_items(world.p("router"), [
-                defn("C", []), defn("GOAL", ["C"], kind="goal")])
-            world.store.put_card(world.p("router"), "demo:C", {
-                "outcome": "fix", "check_cmd": "false", "write_set": [],
-                "check_kind": "regression", "check_reads": ["fixtures/input.json"],
-                "smoke_checks": ["true"], "exports": ["api"],
-                "heldout_check": "heldout", "risk_tags": ["migration"],
-            })
-            payloads.append(worker_claim(world.store, world.p("workerA"), "demo:C",
-                                         repo_root=str(repo[0])))
-        finally:
-            world.close()
-    assert payloads[0] == payloads[1]
-    assert payloads[0]["check_reads"] == ["fixtures/input.json"]
-    assert payloads[0]["forbid"] == ["fixtures/input.json"]
+    assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
+    assert _metadata_claim(tmp_path, repo, "sqlite") == _metadata_claim(tmp_path, repo, "postgres")
+
+
+def test_claim_metadata_sqlite(tmp_path, repo):
+    _metadata_claim(tmp_path, repo, "sqlite")
+
+
+def _metadata_claim(tmp_path, repo, backend):
+    world = World(tmp_path / backend, backend=backend, dsn=os.environ.get("PG_DSN"))
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("C", []), defn("GOAL", ["C"], kind="goal")])
+        world.store.put_card(world.p("router"), "demo:C", {
+            "outcome": "fix", "check_cmd": "false", "write_set": [],
+            "check_kind": "regression", "check_reads": ["fixtures/input.json"],
+            "smoke_checks": ["true"], "exports": ["api"],
+            "heldout_check": "heldout", "risk_tags": ["migration"],
+        })
+        payload = worker_claim(world.store, world.p("workerA"), "demo:C",
+                               repo_root=str(repo[0]))
+        assert payload == {
+            "card": "demo:C", "repo": str(repo[0]), "base_sha": repo[1],
+            "check_cmd": "false", "allow": [], "prompt": "fix",
+            "check_kind": "regression", "check_reads": ["fixtures/input.json"],
+            "forbid": ["fixtures/input.json"], "smoke_checks": ["true"],
+            "exports": ["api"], "heldout_cmd": "heldout", "risk_tagged": True,
+        }
+        return payload
+    finally:
+        world.close()
 
 def _code(exc: Refused):
     return getattr(exc, "code", exc.args[0] if exc.args else None)

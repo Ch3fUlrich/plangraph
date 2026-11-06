@@ -1212,7 +1212,7 @@ mod tests {
         } else {
             c.check_kind.clear();
         }
-        assert_eq!(c.check_kind, "");
+        assert_eq!(c.check_kind, if from_json { "change" } else { "" });
         let inp = input(c, 1, root.path());
         // The red base check creates scratch; cleanup proves that gate ran.
         let h = Fake::new("test ! -e marker && echo hi > out.txt");
