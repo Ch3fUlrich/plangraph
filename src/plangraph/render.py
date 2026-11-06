@@ -257,6 +257,8 @@ def build_sha(pkg_dir: Path | None = None) -> str:
 
 def _project_agents_view(data: dict) -> dict:
     """Enforce the public schema without depending on the spawner runtime."""
+    if not isinstance(data, dict) or not isinstance(data.get('hosts'), list):
+        return None
     fields = ('host', 'name', 'runtime', 'model', 'state', 'item', 'age_s')
     hosts = []
     for entry in data['hosts']:

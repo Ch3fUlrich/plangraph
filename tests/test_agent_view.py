@@ -275,3 +275,40 @@ def test_render_projection_matches_public_schema():
             'model': True, 'state': 'running', 'item': 'demo:A',
             'age_s': 2, 'secret': 'excluded'}]}]}
     assert _project_agents_view(data) == project_view(data)
+
+
+@pytest.mark.parametrize('data', [None, [], 'invalid', 1, {}, {'hosts': None}])
+def test_render_malformed_view_is_unknown(home, data):
+    from plangraph.render import render
+    document = render({'items': [], 'agents_view': data}, home, cdn=True)
+    assert '"agents_view":null' in document
+
+
+def test_snapshot_producer_reads_private_view(home, monkeypatch):
+    from keeper_util import World
+    from plangraph.keeper.snapshot_io import write_snapshot
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
+    put(home, '.local/state/plangraph/agents-view.json', {'hosts': [
+        {'host': 'local', 'readable': True, 'agents': [
+            {'name': 'live-agent', 'runtime': 'opencode', 'credential': 'excluded'}]},
+        av.unavailable('remote', 'timeout')]})
+    world = World(home / 'keeper', backend='sqlite')
+    try:
+        snapshot = world.store.snapshot(world.p('reader'))
+        server = SimpleNamespace(store=world.store, system=world.p('reader'),
+                                 config=SimpleNamespace(snapshot=home / 'snapshot.json'))
+        write_snapshot(server, server.system)
+        written = json.loads((home / 'snapshot.json').read_text())
+        assert written['agents_view'] == snapshot['agents_view']
+        row = snapshot['agents_view']['hosts'][0]['agents'][0]
+        assert set(row) == set(av.FIELDS)
+        assert row['name'] == 'live-agent'
+        assert snapshot['agents_view']['hosts'][1]['readable'] is False
+        document = render(written, home, cdn=True)
+        assert 'live-agent' in document and 'excluded' not in document
+        (home / '.local/state/plangraph/agents-view.json').write_text('null')
+        assert 'agents_view' not in world.store.snapshot(world.p('reader'))
+    finally:
+        world.close()
