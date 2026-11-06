@@ -86,7 +86,7 @@ def test_bounded_wait_and_private_record(tmp_path, wait):
                 'print("sk-plantedsecret API_KEY=hidden")', **kwargs)
         service = spawn_service(SpawnerRunner(process_factory=factory), tmp_path)
         started = asyncio.get_running_loop().time()
-        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait)
+        record = await asyncio.wait_for(service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait), 5)
         assert asyncio.get_running_loop().time() - started < 5
         assert record['status'] == 'running'
         release.set()
