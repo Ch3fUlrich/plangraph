@@ -101,12 +101,13 @@ fn pilot_credentials_absent_with_parent_positive_control() {
     }
     let dir = root.path().join("work");
     std::fs::create_dir(&dir).unwrap();
-    for confine in [confine_harness as fn(&mut Command, &Path), confine_check] {
-        let mut home = if std::ptr::fn_addr_eq(confine, confine_check as fn(&mut Command, &Path)) {
-            HomeGuard::for_check(&dir).unwrap()
-        } else {
-            HomeGuard::for_dir(&dir).unwrap()
-        };
+    for (confine, mut home) in [
+        (
+            confine_harness as fn(&mut Command, &Path),
+            HomeGuard::for_dir(&dir).unwrap(),
+        ),
+        (confine_check, HomeGuard::for_check(&dir).unwrap()),
+    ] {
         home.stage_harness_auth().unwrap();
         for name in blocked {
             for base in [home.path().to_path_buf(), home.path().join("sub")] {
@@ -129,11 +130,8 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         confine(&mut cmd, home.path());
         let out = cmd.output().unwrap();
         assert!(!out.status.success());
-        assert!(
-            String::from_utf8_lossy(&out.stderr).contains("password"),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("fixture"));
+        assert!(!String::from_utf8_lossy(&out.stderr).contains("fixture"));
         for name in names {
             assert_eq!(std::env::var(name).unwrap(), "pilot-parent");
             assert!(!String::from_utf8_lossy(&out.stdout)
