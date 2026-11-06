@@ -50,9 +50,25 @@ def owner_principal(w, key):
 
 
 def test_state_event_types_stay_in_store_gate():
+    import ast
+    import inspect
     from plangraph.keeper import events, store_cards
     assert not hasattr(events, "STATE_EVENT_TYPES")
-    assert "state_set" in store_cards.STATE_EVENT_TYPES
+    tree = ast.parse(inspect.getsource(events.fold))
+    types = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+            continue
+        if not isinstance(node.test.left, ast.Name) or node.test.left.id != "kind":
+            continue
+        body = ast.Module(body=node.body, type_ignores=[])
+        if any(isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store)
+               and isinstance(n.value, ast.Name) and n.value.id == "item"
+               and isinstance(n.slice, ast.Constant) and n.slice.value == "state"
+               for n in ast.walk(body)):
+            types.update(n.value for n in ast.walk(node.test.comparators[0])
+                         if isinstance(n, ast.Constant) and isinstance(n.value, str))
+    assert store_cards.STATE_EVENT_TYPES == types
 
 
 def retired_runs(w, key):
@@ -61,6 +77,14 @@ def retired_runs(w, key):
                          (key,)).fetchone()
     return [(entry["workflow_id"], entry["run_id"], entry["attempt"])
             for entry in json.loads(row[0] or "[]")]
+
+
+def test_old_retired_payload_is_a_replay_noop():
+    from plangraph.keeper.events import fold
+    created = {"key": "A", "type": "item_created", "payload": {}}
+    clear = {"key": "A", "type": "exec_owner_changed", "payload": {
+        "action": "clear", "retired": [{"run_id": str(n)} for n in range(20)]}}
+    assert fold([created, clear]) == fold([created])
 
 
 def seed_owner(w, key, run, who="workerA"):
@@ -314,6 +338,12 @@ def check_retired_fence_remembers_every_run(w):
                                 w.p("workerA"), now=w.clock())
             w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
     assert len(retired_runs(w, key)) == 20        # the fence keeps every run
+    clears = w.conn.execute("SELECT payload FROM events WHERE key=?"
+                            " AND type='exec_owner_changed' ORDER BY seq", (key,))
+    assert [json.loads(e[0])["retired"] for e in clears
+            if json.loads(e[0])["action"] == "clear"] == [
+                [{"workflow_id": "wf", "run_id": f"run-{n}", "attempt": 1}]
+                for n in range(20)]
     with w.store._write():
         refused("exec_stale", w.store._exec_check, w.conn, key, "wf", "run-0",
                 1, w.p("workerA"))

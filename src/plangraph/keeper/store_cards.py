@@ -564,7 +564,8 @@ class CardsMixin:
                      " exec_attempt=NULL, exec_principal=NULL, exec_retired_runs=? WHERE key=?",
                      (_dump(retired), key))
         self._append(principal, key, "exec_owner_changed",
-                     {"action": "clear", "retired": retired}, now)
+                     {"action": "clear", "retired": [retired[by_run.index(run_key)]
+                      if run_key in by_run else retired[-1]]}, now)
 
     def _exec_record(self, conn, item_id, wf, run, attempt, principal=None, now=None):
         """Record the exec owner of *item_id*: the first owner of an unowned card.
@@ -669,21 +670,17 @@ class CardsMixin:
         No new event fields: historical replay stays unchanged on both backends.
         Seeded owners without an audit event have no observable start.
         """
-        owner_seq = state_seq = None
-        for event in conn.execute(
-                "SELECT seq, type, payload FROM events WHERE key=?"
-                " ORDER BY seq DESC", (item_id,)):
-            kind = event["type"]
-            if state_seq is None and kind in STATE_EVENT_TYPES:
-                state_seq = event["seq"]
-            if owner_seq is None and kind == "exec_owner_changed":
-                payload = json.loads(event["payload"] or "{}")
-                if payload.get("action") in ("record", "advance"):
-                    owner_seq = event["seq"]
-            if owner_seq is not None and state_seq is not None:
-                break
-        return (owner_seq is not None and state_seq is not None
-                and state_seq > owner_seq)
+        owner = conn.execute(
+            "SELECT seq, payload FROM events WHERE key=? AND type='exec_owner_changed'"
+            " ORDER BY seq DESC LIMIT 1", (item_id,)).fetchone()
+        if owner is None or json.loads(owner["payload"] or "{}").get("action") == "clear":
+            return False
+        kinds = tuple(sorted(STATE_EVENT_TYPES))
+        state = conn.execute(
+            "SELECT seq FROM events WHERE key=? AND type IN ("
+            + ",".join("?" for _ in kinds) + ") ORDER BY seq DESC LIMIT 1",
+            (item_id, *kinds)).fetchone()
+        return state is not None and state["seq"] > owner["seq"]
 
     def _apply_state(self, principal, key, state, why, now, scope,
                      guard=None, release_claim=False, run=None, new_run=False,
