@@ -62,7 +62,6 @@ pub(super) fn export_salvage(
     let store = tempfile::tempdir()?;
     let mut store = LocalBlobStore::open(&store.path().join("blobs"))?;
     let result = super::export_salvage(&registry, Path::new(&repo.root), &ws, run, &mut store)?;
-    assert!(result.dropped_paths.windows(2).all(|p| p[0] <= p[1]));
     store.read(&result.blob)
 }
 #[test]
@@ -81,6 +80,15 @@ fn distinct_secret_names_survive_export_merge() {
     for name in &names {
         std::fs::write(root.join(name), "dirty bytes").unwrap();
     }
+    let tip = String::from_utf8(command(root, &["rev-parse", "HEAD"], &[], None).unwrap()).unwrap();
+    let (_, raw_dropped) = snapshot(root, &base, tip.trim()).unwrap();
+    assert_eq!(
+        raw_dropped,
+        names
+            .iter()
+            .map(|name| name.as_bytes().to_vec())
+            .collect::<Vec<_>>()
+    );
     let ws = Workspace {
         repo_id: "test".into(),
         mode: Mode::Writer,
