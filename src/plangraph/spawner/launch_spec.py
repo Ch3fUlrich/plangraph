@@ -47,7 +47,7 @@ def _validate(req):
     checks = dict(
         run_id=lambda v: isinstance(v, str) and re.fullmatch(r'run-[0-9a-f]{32}', v),
         job_id=lambda v: isinstance(v, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', v),
-        role=lambda v: isinstance(v, str) and v in ('implement', 'review', 'orchestrate'),
+        role=lambda v: isinstance(v, str) and v in ('implement', 'review', 'orchestrate', 'fact-check'),
         dry_run=lambda v: type(v) is bool,
         leg=lambda v: isinstance(v, dict) and isinstance(v.get('id'), str) and bool(v['id'])
             and ('explicit' not in v or type(v['explicit']) is bool),

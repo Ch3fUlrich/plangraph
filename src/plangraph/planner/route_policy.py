@@ -25,7 +25,7 @@ from pathlib import Path
 __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
-_ROLES = ("implement", "review", "orchestrate")
+_ROLES = ("implement", "review", "orchestrate", "fact-check")
 _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families")
 
 
@@ -64,7 +64,7 @@ class RoutePolicy:
         # family is banned/off.  Only those two checks are skipped: kimi is
         # never liftable (D-3084), and paused_harness / no_verdict_seat below
         # still apply.
-        lifted = (role == "review" and listed(self.review_allowed_families)
+        lifted = (role in ("review", "fact-check") and listed(self.review_allowed_families)
                   and not listed(("kimi",)))
         if not lifted:
             if listed(self.banned_families):

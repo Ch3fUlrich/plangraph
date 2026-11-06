@@ -407,7 +407,8 @@ class SpawnerRunner:
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
             from .opencode_isolation import close_config_layers
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
-            if role == 'review':
+            from . import fact_check
+            if role in ('review', fact_check.ROLE):
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
                 # child exit -- the shared store is child-writable and proves nothing.
                 child_env['XDG_DATA_HOME'] = oc_dir
@@ -428,7 +429,7 @@ class SpawnerRunner:
                     cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                     if not isinstance(cfg, dict):
                         raise ValueError('not an object')
-                    cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
+                    cfg['permission'] = fact_check.permission_map(_DENIED_TOOLS) if role == fact_check.ROLE else {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
                     cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
                     from .gateway_witness import tag_session
                     tag_session(cfg, job_id)   # D-3226: the gateway logs this run's sessionTag
@@ -436,7 +437,12 @@ class SpawnerRunner:
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
-                    child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
+                if role == fact_check.ROLE:
+                    proven = fact_check.read_only_tools_proven(child_env.get('OPENCODE_CONFIG_CONTENT'), child_env)
+                    tools_event = {'event': 'opencode_tools_read_only' if proven else 'opencode_tools_not_read_only'}
+                    if not proven:
+                        render_reason = 'opencode_tools_not_read_only'
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -724,7 +730,7 @@ class SpawnerRunner:
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
             from .question_bridge import question_exit
-            if not question_exit(job, {}):
+            if job.role != 'fact-check' and not question_exit(job, {}):
                 await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
             # D-2905 (2): the child-writable session store is request-side only ('request-side-opencode-store',

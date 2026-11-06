@@ -48,7 +48,7 @@ ROLE_ALPHA: dict[str, float] = {
     "l3-driver": 1.1,
     "orchestrate": 1.1,
     "l1-orchestrator": 1.1,
-    "review": 1.2,
+    "review": 1.2, "fact-check": 1.2,
     "reviewer": 1.2,
     "l2-reviewer": 1.2,
 }
@@ -63,7 +63,7 @@ ROLE_TRAJECTORY_FACTORS: dict[str, float] = {
     "l3-driver": 1.3,
     "orchestrate": 1.3,
     "l1-orchestrator": 1.3,
-    "review": 1.1,
+    "review": 1.1, "fact-check": 1.1,
     "reviewer": 1.1,
     "l2-reviewer": 1.1,
 }

@@ -114,16 +114,16 @@ DEFAULT_LEGS = (
         False, roles=("review",)),
     Leg("opencode-go-glm-5.2", "subscription", "opencode",
         "opencode-go/glm-5.2", "glm", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review", "fact-check")),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review", "fact-check")),
     Leg("opencode-go-muse-spark", "subscription", "opencode",
         "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         False, roles=("review",)),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
-        False, roles=("review",)),
+        False, roles=("review", "fact-check")),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
@@ -195,9 +195,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     roles = raw.get("roles", ("orchestrate",))
     if (not isinstance(roles, (list, tuple))
             or (not roles and not (isinstance(disabled, str) and disabled.strip()))
-            or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
+            or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate", "fact-check") for r in roles)
             or len(set(roles)) != len(roles)):
-        problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")
+        problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate|fact-check")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES

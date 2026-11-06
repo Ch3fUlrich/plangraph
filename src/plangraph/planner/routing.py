@@ -279,8 +279,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             policy = load_route_policy()
         except ValueError as exc:
             raise SpawnRefused(str(exc)) from None
-    if role not in ("implement", "review", "orchestrate"):
-        raise ValueError("role must be implement|review|orchestrate")
+    if role not in ("implement", "review", "orchestrate", "fact-check"):
+        raise ValueError("role must be implement|review|orchestrate|fact-check")
     from plangraph.routing_support.risk import evaluate_risk
     assessment = evaluate_risk(paths=card.get('paths', card.get('write_set', ())),
                                bucket=card.get('bucket', 'S1'),
@@ -338,6 +338,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        if role == 'fact-check' and (leg.trains_on_data or leg.model.endswith('-contributor')):
+            reason = 'training_leg'
         if reason:
             pass
         elif leg.family in excluded:
@@ -391,6 +393,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         table_order = {leg.id: i for i, leg in enumerate(legs)}
         ordered.sort(key=lambda leg: review_key(
             leg, TIERS.index(leg.tier), table_order[leg.id]))
+    if role == 'fact-check':
+        from plangraph.spawner.fact_check import ORDER
+        ordered.sort(key=lambda leg: ORDER.index(leg.id) if leg.id in ORDER else len(ORDER))
     seats, coverage, open_parts = [], (), []
     if role == "review":
         high = ranking_risk in ("high", "critical") or bool(card.get('risk_tags'))

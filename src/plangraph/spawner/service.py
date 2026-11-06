@@ -237,6 +237,8 @@ class SpawnService(SeatSpawnMixin):
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
+            from .fact_check import refuse_hand_pick
+            refuse_hand_pick(role, chosen, target)
             if chosen is not None and not leg_active(chosen): raise SpawnRefused('leg expired: ' + chosen.id)  # D-3505
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
