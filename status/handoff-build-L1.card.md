@@ -16,12 +16,14 @@
 ## In flight
 - plangraph:TEMPORAL-PILOT-B build-L2-temporal-pilot-0288 S3 Sol since 16:33Z next check on its DONE
 ## Planned
+1. D-4429 why deepseek seats end status failed with a verdict, one line to routing
 1. D-4424 read whether plangraph-prs merged dca2f07e569c
 2. TEMPORAL-PILOT-B S1 S2 delta seats on L2 DONE
 3. PR#562 read Haiku seat, GO-REQ with refutation
 4. PR#570 PR#571 PR#34 seats status failed: read why, then counting seats
 ## Open
-- D-4424 #32 dca2f07e569c at prs, 3 reds on main need an owner | default report only | deadline none
+- D-4424 #32 dca2f07e569c at prs | default read merge | deadline none
+- D-4429 data main 3 reds are mine | default one Sol writer | deadline none
 - D-4421 one batched message per 30 min, 3 reds on main go in the next batch | default follow it | deadline 11-12T11:00Z
 - D-4394 ROUTE-PLAN keys after seats | default take after seats | deadline none
 - BLOCKED OP-D4 Sol and mimo unwitnessed | default BLOCKED | deadline none
