@@ -47,15 +47,16 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
 
 
 def test_transport_is_bounded_and_noninteractive(monkeypatch):
+    original = subprocess.Popen
     def run(argv, **kwargs):
-        assert argv[:3] == ['ssh', '-o', 'BatchMode=yes']
-        assert kwargs['timeout'] == 2
+        assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
+                        '--', 'private-target', 'python3 -m plangraph.spawner.remote_ps']
+        assert kwargs['stdin'] == subprocess.DEVNULL
+        assert kwargs['stdout'] == subprocess.PIPE
         assert kwargs['stderr'] == subprocess.DEVNULL
-        assert kwargs['encoding'] == 'utf-8'
-        assert kwargs['errors'] == 'replace'
         assert kwargs.get('shell', False) is False
-        return subprocess.CompletedProcess(argv, 0, '{"runs": []}')
-    monkeypatch.setattr(subprocess, 'run', run)
+        return original(['python3', '-c', 'print(\'{"runs": []}\', end="")'], **kwargs)
+    monkeypatch.setattr(subprocess, 'Popen', run)
     assert remote_ps.query_host(dict(target='private-target'), 2) == '{"runs": []}'
 
 
@@ -103,7 +104,7 @@ def test_ps_surfaces_use_fanout(tmp_path, monkeypatch, capsys, surface):
     calls = []
     def fanout(rows):
         calls.append(rows)
-        return rows + [remote]
+        return rows + [remote, dict(host='node-b', status='unknown', reason='host query failed')]
     monkeypatch.setattr(remote_ps, 'list_runs', fanout)
     if surface == 'mcp':
         result = asyncio.run(MCPSpawnerServer(state=tmp_path).call_tool('plangraph_agent_ps', {}))
@@ -112,7 +113,8 @@ def test_ps_surfaces_use_fanout(tmp_path, monkeypatch, capsys, surface):
         cli.main(['ps'])
         result = json.loads(capsys.readouterr().out)
     assert calls == [[local]]
-    assert [row['run_id'] for row in result['runs']] == ['local', 'remote']
+    assert [row.get('run_id') for row in result['runs']] == ['local', 'remote', None]
+    assert result['runs'][-1] == dict(host='node-b', status='unknown', reason='host query failed')
 
 
 @pytest.mark.parametrize('contents', ['not json', '{}', 'null', '[]',
@@ -125,7 +127,10 @@ def test_invalid_config_preserves_local_listing(tmp_path, monkeypatch, caplog, c
     path = tmp_path / 'plangraph' / 'ps-hosts.json'
     path.write_bytes(contents.encode('utf-8', errors='surrogateescape'))
     local = [dict(run_id='local', status='running', started=1)]
-    assert remote_ps.list_runs(local) == local
+    rows = remote_ps.list_runs(local)
+    assert rows[:1] == local
+    assert all(r == dict(host='invalid-config', status='unknown', reason='host query failed')
+               for r in rows[1:])
     assert caplog.text == ''
 
 
@@ -139,7 +144,7 @@ def test_unreadable_config_preserves_local_listing(tmp_path, monkeypatch, caplog
     assert caplog.text == ''
 
 
-@pytest.mark.parametrize('field', ['host', 'run_id'])
+@pytest.mark.parametrize('field', ['host', 'run_id', 'role', 'status'])
 @pytest.mark.parametrize('value', ['a\nFAKE', 'a\rFAKE', 'a\tFAKE',
                                    'a\x1b[31mFAKE', 'a\x00FAKE', 'a\x7fFAKE',
                                    'a\x9b31mFAKE'])
@@ -171,3 +176,123 @@ def test_valid_remote_field_types(ended, exit_code, pid):
                started=1, ended=ended, pid=pid, exit_code=exit_code)
     assert remote_ps._fetch(dict(name='node-a'), lambda *args: json.dumps(
         {'runs': [row]})) == [row]
+
+
+def test_long_identifiers():
+    row = dict(run_id='r' * 256, host='h' * 253, status='running')
+    assert remote_ps._fetch(dict(name='node-a'), lambda *a: json.dumps({'runs': [row]})) == [row]
+
+
+def test_local_reason_is_private():
+    assert 'reason' not in ps_reply([dict(status='failed', reason='private')])['runs'][0]
+
+
+def test_mixed_config(tmp_path, monkeypatch):
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='target'),
+                                   dict(name='node-b', target='-invalid')])
+    calls = []
+    def transport(host, timeout):
+        calls.append(host['name'])
+        return '{"runs": []}'
+    rows = remote_ps.list_runs([], transport=transport)
+    assert calls == ['node-a']
+    assert rows == [dict(host='invalid-config', status='unknown', reason='host query failed')]
+
+
+@pytest.mark.parametrize('script', ['import sys; sys.stdout.write("x" * 2097152)',
+                                   'raise SystemExit(1)', 'import time; time.sleep(3)'])
+def test_transport_rejects_overflow_exit_and_timeout(monkeypatch, script):
+    original = subprocess.Popen
+    monkeypatch.setattr(subprocess, 'Popen',
+                        lambda argv, **kw: original(['python3', '-c', script], **kw))
+    with pytest.raises((ValueError, TimeoutError, subprocess.TimeoutExpired)):
+        remote_ps.query_host(dict(target='target'), .2)
+
+
+def test_worker_count_is_capped(monkeypatch):
+    hosts = [dict(name='node-a') for _ in range(100)]
+    monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: hosts)
+    original = remote_ps.ThreadPoolExecutor
+    def pool(**kwargs):
+        assert kwargs['max_workers'] <= 16
+        return original(**kwargs)
+    monkeypatch.setattr(remote_ps, 'ThreadPoolExecutor', pool)
+    assert remote_ps.list_runs([], transport=lambda *a: '{"runs": []}') == []
+
+
+def test_empty_xdg_uses_default(tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='target')])
+    monkeypatch.setenv('XDG_CONFIG_HOME', '')
+    assert remote_ps.configured_hosts() == []
+
+
+def test_collect_local_protocol(monkeypatch):
+    from plangraph.spawner import stall_watchdog
+    state = object()
+    def read_runs(actual):
+        assert actual is state
+        return [dict(run_id='r', host='h', status='running', private='omitted')]
+    monkeypatch.setattr(stall_watchdog, 'read_runs', read_runs)
+    assert remote_ps.collect_local(state) == {'runs': [dict(run_id='r', host='h', status='running')]}
+
+
+def test_protocol_main(monkeypatch, capsys):
+    import runpy
+    from plangraph.spawner import service, stall_watchdog
+    state = object()
+    monkeypatch.setattr(service, 'SpawnService', lambda: type('Service', (), {'state': state})())
+    def read_runs(actual):
+        assert actual is state
+        return [dict(run_id='r', status='queued', private='omitted')]
+    monkeypatch.setattr(stall_watchdog, 'read_runs', read_runs)
+    with pytest.warns(RuntimeWarning):
+        runpy.run_module(remote_ps.__name__, run_name='__main__')
+    assert json.loads(capsys.readouterr().out) == {'runs': [dict(run_id='r', status='queued')]}
+
+
+def test_cli_transport_failure(tmp_path, monkeypatch, capsys):
+    from plangraph.spawner import cli
+    from plangraph.spawner.service import SpawnService
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='target')])
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SpawnService(state=tmp_path))
+    real_list = remote_ps.list_runs
+    def fail(*a):
+        raise OSError('unavailable')
+    monkeypatch.setattr(remote_ps, 'list_runs', lambda rows: real_list(rows, transport=fail))
+    cli.main(['ps'])
+    assert json.loads(capsys.readouterr().out)['runs'] == [
+        dict(host='node-a', status='unknown', reason='host query failed')]
+
+
+def test_executor_failure_is_unknown(monkeypatch):
+    monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: [dict(name='node-a')])
+    def broken(**kwargs):
+        assert kwargs['max_workers'] <= 16
+        raise RuntimeError('unavailable')
+    monkeypatch.setattr(remote_ps, 'ThreadPoolExecutor', broken)
+    local = [dict(status='running')]
+    assert remote_ps.list_runs(local) == local + [dict(host='node-a', status='unknown', reason='host query failed')]
+
+
+def test_mcp_ps_does_not_block(tmp_path, monkeypatch):
+    import asyncio
+    from threading import Event
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    entered, release = Event(), Event()
+    def fanout(rows):
+        entered.set()
+        assert release.wait(1)
+        return rows
+    monkeypatch.setattr(remote_ps, 'list_runs', fanout)
+    async def check():
+        task = asyncio.create_task(MCPSpawnerServer(state=tmp_path).call_tool('plangraph_agent_ps', {}))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            await asyncio.sleep(0)
+        finally:
+            release.set()
+        await task
+    asyncio.run(check())

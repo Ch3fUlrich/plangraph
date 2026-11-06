@@ -6,7 +6,7 @@ PS_ENDED_LIMIT = 20
 PS_FIELDS = (
     'run_id', 'status', 'role', 'host', 'pid', 'started', 'ended',
     'last_activity_ts', 'exit_code', 'item_key', 'parent_session',
-    'served_model', 'cwd', 'reason',
+    'served_model', 'cwd',
 )
 
 
@@ -18,6 +18,8 @@ def ps_reply(runs):
     compact = []
     for run in selected:
         row = {key: run[key] for key in PS_FIELDS if key in run}
+        if run.get('status') == 'unknown':
+            row['reason'] = 'host query failed'
         leg = run.get('chosen_leg')
         if isinstance(leg, dict) and 'id' in leg:
             row['leg'] = leg['id']
