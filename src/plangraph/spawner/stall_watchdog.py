@@ -21,14 +21,14 @@ from .stall_probe import probe_run, probe_setting
 
 _budget = ContextVar('probe_budget', default=None)
 
-def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=False, budget=None):
+def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=False, budget=None, hung=None):
     now = time.time() if now is None else now
     deliver = None if dry_run else deliver
     findings = []
     runs = list(runs)
     for run in runs:
         if state is not None:
-            finding = probe_run(state, run, now, dry_run=dry_run or (budget is not None and budget[0] <= 0))
+            finding = probe_run(state, run, now, dry_run=dry_run or (budget is not None and budget[0] <= 0), hung=hung)
             if finding:
                 findings.append(finding)
                 if deliver:
