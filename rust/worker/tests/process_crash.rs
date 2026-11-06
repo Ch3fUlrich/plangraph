@@ -143,7 +143,10 @@ fn worker(addr: &str, queue: &str, build: &str, ready: &Path) -> Process {
 fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
     use std::os::unix::process::ExitStatusExt;
     let cli = std::env::var("PG_TEMPORAL_CLI")
-        .expect("SIGKILL acceptance requires PG_TEMPORAL_CLI; absence is not evidence");
+        .or_else(|_| std::env::var("TEMPORAL_CLI"))
+        .expect(
+            "SIGKILL acceptance requires PG_TEMPORAL_CLI or TEMPORAL_CLI; absence is not evidence",
+        );
     let temp = tempfile::tempdir().unwrap();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
