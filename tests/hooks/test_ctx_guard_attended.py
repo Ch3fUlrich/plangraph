@@ -1,10 +1,14 @@
 """Synthetic transcript fixtures; no operator transcript content."""
 import json
 import time
+import io
+import os
+from unittest import mock
 from datetime import datetime, timezone
 
 from test_ctx_guard_session import WrapperCase
-from hookkit import usage_line
+from hookkit import usage_line, load_module
+from test_ctx_guard_session import SCRIPT
 
 
 class Attended(WrapperCase):
@@ -25,9 +29,11 @@ class Attended(WrapperCase):
         return self.state_file().with_suffix(".attended.json")
 
     def test_recent_and_marker_removed_when_old(self):
-        self.transcript_records(self.user(), self.user())
+        operator = self.user()
+        self.transcript_records(self.user(), operator)
         self.assert_silent(self.guard())
-        self.assertAlmostEqual(json.loads(self.marker().read_text())["until"], time.time()+1790, delta=5)
+        self.assertEqual(json.loads(self.marker().read_text())["until"],
+                         datetime.fromisoformat(operator["timestamp"]).timestamp() + 1800)
         self.assertEqual(self.marker().stat().st_mode & 0o777, 0o600)
         self.transcript_records(self.user(), self.user(age=4000))
         self.assertIn("HARD-CAP", self.line(self.guard()))
@@ -37,6 +43,44 @@ class Attended(WrapperCase):
         for source in ("typed", "queued", "sdk"):
             self.transcript_records(self.user(promptSource=source))
             self.assertIn("HARD-CAP", self.line(self.guard()))
+
+    def test_first_user_must_be_plausible_launch(self):
+        for extra in ({"promptSource": "system", "turnOrigin": "peer"},
+                      {"turnOrigin": "task_notification"}, {"origin": {"kind": "peer"}},
+                      {"promptSource": None}, {"isMeta": True}, {"isSidechain": True}):
+            with self.subTest(extra=extra):
+                self.transcript_records(self.user(**extra), self.user(), self.user())
+                self.assertIn("HARD-CAP", self.line(self.guard()))
+
+    def test_origin_metadata_and_optional_origin(self):
+        for origin in ({"kind": "human", "source": "terminal", "id": "synthetic"}, None):
+            record = self.user(origin=origin)
+            if origin is None:
+                del record["origin"]
+            self.transcript_records(self.user(), record)
+            self.assert_silent(self.guard())
+
+    def test_lease_publication_failure_runs_guard(self):
+        module = load_module("ctx_guard_session")
+        self.transcript_records(self.user(), self.user())
+        for target in ("Path.mkdir", "tempfile.mkstemp", "os.replace"):
+            with self.subTest(target=target):
+                self.state_file().unlink(missing_ok=True)
+                output = io.StringIO()
+                with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.state),
+                                                  "AUTOOS_CTX_HARD": "300000"}), \
+                        mock.patch.object(module, "read_stdin_text", return_value=json.dumps(self.payload())), \
+                        mock.patch.object(module, "settings_thresholds", return_value={}), \
+                        mock.patch.object(module.sys, "argv", [str(SCRIPT)]), \
+                        mock.patch.object(module.sys, "stdout", output), \
+                        mock.patch.object(module.sys, "stdin", io.StringIO()), \
+                        mock.patch.object(module.Path if target == "Path.mkdir" else
+                                          module.tempfile if target == "tempfile.mkstemp" else module.os,
+                                          target.split(".")[1], side_effect=OSError("synthetic failure")):
+                    self.assertEqual(module.main(), 0)
+                self.assertIn("HARD-CAP", output.getvalue())
+                self.assertFalse(self.marker().exists())
+                self.assertEqual(list(self.marker().parent.glob(self.marker().name + ".*")), [])
 
     def large_transcript(self, *tail, first=None):
         padding = json.dumps({"type": "assistant", "padding": "x" * 8192}) + "\n"
@@ -73,9 +117,12 @@ class Attended(WrapperCase):
         records = [self.user(text=t) for t in (
             '<cross-session-message>synthetic</cross-session-message>',
             '<system-reminder>synthetic</system-reminder>',
+            '  <user-prompt-submit-hook>synthetic</user-prompt-submit-hook>',
+            '\n <arbitrary-wrapper key="value">synthetic</arbitrary-wrapper>',
             'SYSTEM NOTIFICATION: synthetic', '<task-notification>synthetic</task-notification>',
             '<command-output>synthetic</command-output>', '<local-command-stdout>synthetic</local-command-stdout>')]
         records += [self.user(isMeta=True), self.user(isSidechain=True), self.user(promptSource="sdk"),
+                    self.user(origin={"kind": "peer"}), self.user(origin={}), self.user(origin=None),
                     self.user(promptSource="system", turnOrigin="peer"),
                     self.user(promptSource="system", turnOrigin="task_notification"),
                     self.user(message={"role": "user", "content": [{"type": "tool_result", "content": "synthetic"}]})]

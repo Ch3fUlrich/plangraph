@@ -1,1 +1,0 @@
-- **FLEET-LAUNCH-ADMISSION (slice 2a):** Detect typed and queued operator attendance in bounded transcript head/tail windows even beyond 1 MiB, while excluding the launch brief and failing closed on missing launch identity or malformed records in the windows. Add synthetic large-transcript and provenance regressions.

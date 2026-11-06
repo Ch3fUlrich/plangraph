@@ -68,8 +68,15 @@ def overrides_dir() -> Path:
 
 ATTENDED_TAIL_MAX = 1024 * 1024
 _MACHINE_PREFIX = re.compile(
-    r"^(?:<\s*(?:cross-session-message|system-reminder|task-notification|"
-    r"command[^>]*|local-command[^>]*|hook[^>]*)\b|SYSTEM NOTIFICATION)", re.I)
+    r"^(?:<\s*/?[a-z_:][\w:.-]*|SYSTEM NOTIFICATION)", re.I)
+
+
+def human_provenance(record, sources):
+    """Unknown provenance cannot prove a launch or operator attendance."""
+    origin = record.get("origin")
+    return (not record.get("isMeta") and not record.get("isSidechain") and
+            record.get("promptSource") in sources and record.get("turnOrigin") == "human" and
+            ("origin" not in record or isinstance(origin, dict) and origin.get("kind") == "human"))
 
 
 def attended_until(payload, doc):
@@ -97,6 +104,8 @@ def attended_until(payload, doc):
             if not isinstance(record, dict):
                 return None
             if first is None and record.get("type") == "user":
+                if not human_provenance(record, ("typed", "queued", "sdk")):
+                    return None
                 first = offset
             offset += len(line)
         if first is None:
@@ -111,10 +120,7 @@ def attended_until(payload, doc):
                 continue
             if position == first:
                 continue  # launch brief never establishes attendance
-            if (record.get("isMeta") or record.get("isSidechain") or
-                    record.get("promptSource") not in ("typed", "queued") or
-                    record.get("turnOrigin") != "human" or
-                    record.get("origin", {"kind": "human"}) != {"kind": "human"}):
+            if not human_provenance(record, ("typed", "queued")):
                 continue
             message = record.get("message", {})
             content = message.get("content")
