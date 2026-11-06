@@ -700,6 +700,9 @@ class SpawnerRunner:
             stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+            if self.jobs[job_id].command and self.jobs[job_id].command[0] == 'opencode':
+                from .exit_outcome import without_progress
+                stdout_text, stderr_text = map(without_progress, (stdout_text, stderr_text))
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode

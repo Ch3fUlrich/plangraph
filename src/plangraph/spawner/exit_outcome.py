@@ -9,6 +9,13 @@ from .env_redact import first_reason, harness_limit_line, unavailable_reason
 TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled')
 
 
+def without_progress(text):
+    """OpenCode tool diagnostics are not failure evidence (including ANSI output)."""
+    from .env_redact import normalize
+    return '\n'.join(line for line in text.splitlines()
+                     if not normalize(line).lstrip().startswith(('✱', '→', '>', '$')))
+
+
 def _booking_seconds():
     """H1: the booked-down window is clamped to [60, 86400] seconds.
 
