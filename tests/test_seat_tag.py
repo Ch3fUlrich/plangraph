@@ -143,3 +143,11 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
     assert seat.served_model == 'mimo/mimo-v2.6-pro'
     assert seat.witness_kind == gw.WITNESS_KIND
     assert gw.TOKEN_ENV not in seen
+
+
+def test_mimo_without_baseurl_is_gateway_backed_and_alias_is_mapped():
+    cfg = json.dumps({'provider': {'mimo': {'options': {}}}})
+    assert gw._gateway_mimo({'OMNIROUTE_BASE_URL': '/gateway/v1', 'OPENCODE_CONFIG_CONTENT': cfg})
+    assert not gw._gateway_mimo({'OPENCODE_CONFIG_CONTENT': cfg})
+    rows = [{'sessionTag': 't', 'status': 200, 'provider': 'xiaomi-mimo', 'model': 'mimo-v2.6-pro'}]
+    assert gw.served_models(rows, 't') == {'mimo/mimo-v2.6-pro'}
