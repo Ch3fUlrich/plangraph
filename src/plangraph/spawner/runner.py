@@ -418,19 +418,16 @@ class SpawnerRunner:
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
-            from .opencode_isolation import close_config_layers
+            from .opencode_isolation import close_config_layers, review_credential_reason
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
                 # child exit -- the shared store is child-writable and proves nothing.
-                child_env['XDG_DATA_HOME'] = oc_dir
-                from .opencode_isolation import install_go_credential, GO_ABSENT_REASON
-                if model_or_combo.startswith('opencode-go/') and not install_go_credential(oc_dir):
-                    render_reason = GO_ABSENT_REASON
                 # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
                 # config layer at all -- HOME and XDG_CONFIG_HOME live in the
                 # per-job dir and every caller-set OPENCODE_* override outside
                 # _REVIEW_OPENCODE_ENV_ALLOW is dropped.
+                render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
                 child_env['HOME'] = oc_dir
                 xdg_config = os.path.join(oc_dir, 'config')
                 os.mkdir(xdg_config, 0o700)

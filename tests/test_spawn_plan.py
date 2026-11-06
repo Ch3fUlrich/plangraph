@@ -48,9 +48,10 @@ def test_seats_and_impossible_fence():
     legs = tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l
                  for l in DEFAULT_LEGS)
     p = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs)
-    assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
+    # No diff_ref: Go is inline-only; Zen is disabled; funded DeepSeek is writer-only.
+    assert [l.family for l in p.review_seats] == ["qwen", "gemini"]
     assert all(l.family != "claude" for l in p.legs if l.id != "claude-haiku-5.5")  # D-3605 Haiku leg
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
+    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
     # D-3084 per-part: with six writer parts a qwen seat covers the five others
     # and a deepseek seat covers the qwen part.
     p = plan_spawn(CARD, role="review",
