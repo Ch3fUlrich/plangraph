@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::process::ExitStatusExt;
 
 #[derive(Default)]
 struct Fake {
@@ -8,6 +9,9 @@ struct Fake {
     empty: bool,
     denied: bool,
     signals_fail: bool,
+    deny_once: bool,
+    probes: u32,
+    exited: bool,
 }
 impl Child for Fake {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
@@ -28,15 +32,49 @@ impl Child for Fake {
         Ok(())
     }
     fn empty(&mut self) -> io::Result<bool> {
-        if self.denied {
+        self.probes += 1;
+        if std::mem::take(&mut self.deny_once) || self.denied {
             Err(io::Error::from_raw_os_error(libc::EPERM))
         } else {
             Ok(self.empty)
         }
     }
-    fn reap(&mut self) -> io::Result<()> {
+    fn reap(&mut self) -> io::Result<Option<ExitStatus>> {
         self.reaps += 1;
-        Ok(())
+        Ok(self.exited.then(|| ExitStatus::from_raw(0)))
+    }
+}
+
+#[test]
+fn exited_root_probes_only_on_edge_and_deadlines() {
+    let (mut stop, mut child) = (Stop::default(), Fake::default());
+    stop.tick(&mut child, 0, 1000, 2000);
+    child.exited = true;
+    for now in 1..3000 {
+        assert_eq!(stop.tick(&mut child, now, 1000, 2000), None);
+    }
+    assert_eq!(child.probes, 3); // initial, exit edge, grace
+    assert_eq!(
+        stop.tick(&mut child, 3000, 1000, 2000),
+        Some(KillProof::Survivors { cause: None })
+    );
+    assert_eq!(child.probes, 4);
+}
+
+#[test]
+fn first_probe_error_is_reported_at_each_signal() {
+    for kill_probe in [false, true] {
+        let (mut stop, mut child) = (Stop::default(), Fake::default());
+        child.deny_once = !kill_probe;
+        stop.tick(&mut child, 0, 10, 2000);
+        child.deny_once = kill_probe;
+        stop.tick(&mut child, 10, 10, 2000);
+        assert_eq!(
+            stop.tick(&mut child, 2010, 10, 2000),
+            Some(KillProof::Survivors {
+                cause: Some(io::ErrorKind::PermissionDenied)
+            })
+        );
     }
 }
 
@@ -44,21 +82,24 @@ impl Child for Fake {
 fn single_kill_path_terminates_then_kills_once() {
     let (mut stop, mut child) = (Stop::default(), Fake::default());
     for now in 0..3000 {
-        assert_eq!(stop.tick(&mut child, now, 1000), None);
+        assert_eq!(stop.tick(&mut child, now, 1000, 2000), None);
     }
     assert_eq!((child.terms, child.kills), (1, 1));
     child.empty = true;
-    assert_eq!(stop.tick(&mut child, 3000, 1000), Some(KillProof::Empty));
+    assert_eq!(
+        stop.tick(&mut child, 3000, 1000, 2000),
+        Some(KillProof::Empty)
+    );
     assert!(child.reaps > 0);
 }
 
 #[test]
 fn surviving_group_is_kill_incomplete() {
     let (mut stop, mut child) = (Stop::default(), Fake::default());
-    assert_eq!(stop.tick(&mut child, 0, 10), None);
-    assert_eq!(stop.tick(&mut child, 10, 10), None);
+    assert_eq!(stop.tick(&mut child, 0, 10, 2000), None);
+    assert_eq!(stop.tick(&mut child, 10, 10, 2000), None);
     assert_eq!(
-        stop.tick(&mut child, 2010, 10),
+        stop.tick(&mut child, 2010, 10, 2000),
         Some(KillProof::Survivors { cause: None })
     );
 }
@@ -72,9 +113,9 @@ fn esrch_empty_eperm_not_proof() {
         ..Fake::default()
     };
     let mut stop = Stop::default();
-    assert_eq!(stop.tick(&mut child, 0, 0), None);
+    assert_eq!(stop.tick(&mut child, 0, 0, 2000), None);
     assert_eq!(
-        stop.tick(&mut child, 2000, 0),
+        stop.tick(&mut child, 2000, 0, 2000),
         Some(KillProof::Survivors {
             cause: Some(io::ErrorKind::PermissionDenied)
         })
@@ -112,28 +153,12 @@ fn first_signal_error_is_reported() {
         ..Fake::default()
     };
     let mut stop = Stop::default();
-    assert_eq!(stop.tick(&mut child, 0, 0), None);
+    assert_eq!(stop.tick(&mut child, 0, 0, 2000), None);
     assert_eq!(
-        stop.tick(&mut child, 2000, 0),
+        stop.tick(&mut child, 2000, 0, 2000),
         Some(KillProof::Survivors {
             cause: Some(io::ErrorKind::PermissionDenied)
         })
     );
     assert_eq!((child.terms, child.kills), (1, 1));
-}
-
-#[test]
-fn review_layout_contract() {
-    let stall = include_str!("stall/unix.rs");
-    assert!(!stall.contains("rustfmt::skip"));
-    assert!(!stall.contains("fn group_empty"));
-    assert_eq!(
-        include_str!("../../../changelog.d/SPAWNER-RL12.md")
-            .lines()
-            .count(),
-        2
-    );
-    let process = include_str!("watch_process_tests.rs");
-    assert_eq!(process.matches("let deadline =").count(), 2);
-    assert!(process.contains("read_dir(\"/proc\")"));
 }

@@ -78,6 +78,24 @@ EPERM is an error, not proof. Adopted children (RL29) retain identity checks.
 `Survivors` carries the first signal, reap, or probe error kind, if any.
 No production caller is enabled.
 
+The RL12 B1 foundation retains `Watched.io_error` for the first drain or
+stdin-writer failure. The follow-up supervisor returns `Ok(Watched)` after
+teardown, preserving exit status, decisions, channel summary, and kill proof;
+RL14 reads the error field. Existing part A callers remain unchanged.
+
+`killpg` rejects pgids at most one and the caller's own group. ESRCH from
+TERM/KILL is success; signal-zero still reports absence to the sticky
+group-empty probe. Other errors surface, and EPERM never proves emptiness.
+Only a freshly spawned owned group enters the watch signal path. A reaped
+leader does not relinquish surviving descendants; an unrelated sentinel
+group remains alive when the owned descendant group is killed.
+
+Stop retains the reaped root status and probes at the root-exit edge, signal
+points, and final proof deadline rather than every tick. TERM and KILL occur
+once each, with grace and a bounded proof interval supplied by the caller.
+An unproven group remains `Survivors`, carrying the first cleanup error.
+The nonblocking, cancellable stdin writer is retained for the next slice.
+
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.

@@ -45,7 +45,14 @@ pub(crate) fn killpg(pgid: i32, signal: i32) -> io::Result<()> {
     }
     match unsafe { libc::killpg(pgid, signal) } {
         0 => Ok(()),
-        _ => Err(io::Error::last_os_error()),
+        _ => {
+            let error = io::Error::last_os_error();
+            if signal != 0 && error.raw_os_error() == Some(libc::ESRCH) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
     }
 }
 
