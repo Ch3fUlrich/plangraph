@@ -102,8 +102,9 @@ def list_runs(local, *, transport=query_host):
     try:
         hosts = configured_hosts()
     except (OSError, ValueError, KeyError, TypeError):
-        # Optional site configuration must never suppress the local listing.
-        return local
+        # Keep local rows, but distinguish broken configuration from no hosts.
+        return list(local) + [dict(host='invalid-config', status='unknown',
+                                   reason='host query failed')]
     if not hosts:
         return local
     try:

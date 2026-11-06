@@ -20,6 +20,12 @@ def test_no_config_is_local_only(tmp_path, monkeypatch):
     assert remote_ps.list_runs(local) == local
 
 
+def test_empty_config_is_local_only(tmp_path, monkeypatch):
+    config(tmp_path, monkeypatch, [])
+    local = [dict(run_id='run-local', host='original')]
+    assert remote_ps.list_runs(local) == local
+
+
 def test_parallel_partial_and_private(tmp_path, monkeypatch):
     config(tmp_path, monkeypatch, [dict(name=f'node-{i}', target=f'private-{i}')
                                  for i in range(3)])
@@ -118,19 +124,30 @@ def test_ps_surfaces_use_fanout(tmp_path, monkeypatch, capsys, surface):
 
 
 @pytest.mark.parametrize('contents', ['not json', '{}', 'null', '[]',
-    '{"hosts": null}', '{"hosts": [null]}',
+    '{"hosts": null}', '\udcff',
+    '{"hosts": [{"name": "node-a", "target": "SECRET"}]}!'])
+def test_invalid_config_file_preserves_local_listing(tmp_path, monkeypatch, caplog, contents):
+    config(tmp_path, monkeypatch, [])
+    path = tmp_path / 'plangraph' / 'ps-hosts.json'
+    path.write_bytes(contents.encode('utf-8', errors='surrogateescape'))
+    local = [dict(run_id='local', status='running', started=1)]
+    assert remote_ps.list_runs(local) == local + [
+        dict(host='invalid-config', status='unknown', reason='host query failed')]
+    assert caplog.text == ''
+
+
+@pytest.mark.parametrize('contents', ['{"hosts": [null]}',
     '{"hosts": [{"name": 1, "target": "SECRET"}]}',
     '{"hosts": [{"name": "node-a", "target": []}]}',
-    '{"hosts": [{"name": "node-a", "target": "-SECRET"}]}', '\udcff'])
+    '{"hosts": [{"name": "node-a", "target": "-SECRET"}]}'])
 def test_invalid_config_preserves_local_listing(tmp_path, monkeypatch, caplog, contents):
     config(tmp_path, monkeypatch, [])
     path = tmp_path / 'plangraph' / 'ps-hosts.json'
     path.write_bytes(contents.encode('utf-8', errors='surrogateescape'))
     local = [dict(run_id='local', status='running', started=1)]
     rows = remote_ps.list_runs(local)
-    assert rows[:1] == local
-    assert all(r == dict(host='invalid-config', status='unknown', reason='host query failed')
-               for r in rows[1:])
+    assert rows == local + [
+        dict(host='invalid-config', status='unknown', reason='host query failed')]
     assert caplog.text == ''
 
 
@@ -140,7 +157,8 @@ def test_unreadable_config_preserves_local_listing(tmp_path, monkeypatch, caplog
         raise PermissionError('SECRET')
     monkeypatch.setattr(Path, 'read_text', denied)
     local = [dict(run_id='local', status='running')]
-    assert remote_ps.list_runs(local) == local
+    assert remote_ps.list_runs(local) == local + [
+        dict(host='invalid-config', status='unknown', reason='host query failed')]
     assert caplog.text == ''
 
 
