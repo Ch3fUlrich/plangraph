@@ -52,7 +52,9 @@ def _fetch(host, transport):
             if (not isinstance(row, dict)
                     or not all(k in row for k in ('run_id', 'host', 'status'))
                     or any(type(row[k]) not in FIELD_TYPES[k]
-                           for k in FIELDS if k in row)):
+                           for k in FIELDS if k in row)
+                    or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,62}', row[k])
+                           for k in ('host', 'run_id'))):
                 raise ValueError()
             if row['status'] in ('running', 'queued'):
                 clean.append({k: row[k] for k in FIELDS if k in row})

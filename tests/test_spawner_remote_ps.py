@@ -121,27 +121,34 @@ def test_ps_surfaces_use_fanout(tmp_path, monkeypatch, capsys, surface):
     '{"hosts": [{"name": "node-a", "target": []}]}',
     '{"hosts": [{"name": "node-a", "target": "-SECRET"}]}', '\udcff'])
 def test_invalid_config_preserves_local_listing(tmp_path, monkeypatch, caplog, contents):
-    from plangraph.spawner.service import SpawnService
-    from plangraph.spawner import stall_watchdog
     config(tmp_path, monkeypatch, [])
     path = tmp_path / 'plangraph' / 'ps-hosts.json'
     path.write_bytes(contents.encode('utf-8', errors='surrogateescape'))
     local = [dict(run_id='local', status='running', started=1)]
-    monkeypatch.setattr(stall_watchdog, 'read_runs', lambda state: local)
-    assert SpawnService(state=tmp_path).ps() == {'runs': local}
+    assert remote_ps.list_runs(local) == local
     assert caplog.text == ''
 
 
 def test_unreadable_config_preserves_local_listing(tmp_path, monkeypatch, caplog):
     from pathlib import Path
-    from plangraph.spawner.service import SpawnService
-    from plangraph.spawner import stall_watchdog
     def denied(*args, **kwargs):
         raise PermissionError('SECRET')
     monkeypatch.setattr(Path, 'read_text', denied)
     local = [dict(run_id='local', status='running')]
-    monkeypatch.setattr(stall_watchdog, 'read_runs', lambda state: local)
-    assert SpawnService(state=tmp_path).ps() == {'runs': local}
+    assert remote_ps.list_runs(local) == local
+    assert caplog.text == ''
+
+
+@pytest.mark.parametrize('field', ['host', 'run_id'])
+@pytest.mark.parametrize('value', ['a\nFAKE', 'a\rFAKE', 'a\tFAKE',
+                                   'a\x1b[31mFAKE', 'a\x00FAKE', 'a\x7fFAKE',
+                                   'a\x9b31mFAKE'])
+def test_remote_identifiers_reject_controls(field, value, caplog):
+    row = dict(run_id='run-a', host='node-a', status='running')
+    row[field] = value
+    rows = remote_ps._fetch(dict(name='node-a'), lambda *args: json.dumps({'runs': [row]}))
+    assert rows == [dict(host='node-a', status='unknown', reason='host query failed')]
+    assert ps_reply(rows)['runs'] == rows
     assert caplog.text == ''
 
 
