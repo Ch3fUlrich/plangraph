@@ -400,7 +400,7 @@ RECORDED = [
     ("ok_pass.txt", "stop", "pass", "no", True),
     ("fix_with_findings.txt", "stop", "fix", "no", False),
     ("halt.txt", "stop", "halt", "no", False),
-    ("length_partial.txt", "length", "pass", "no", False),
+    ("length_partial.txt", "length", None, "no", False),
     ("test_gaming_yes.txt", "stop", "fix", "yes_unverified_quote", False),
     ("prose_wrapped_json.txt", "stop", "fix", "no", False),
 ]
@@ -417,7 +417,7 @@ def test_recorded_reply_judgement(name, finish, word, gaming, allowed):
 def test_recorded_reply_matches_seat_verdict_parser(name, finish, word, gaming,
                                                     allowed):
     ok, _ = sv.parse_verdict(read(name))
-    assert ok is (word == "pass")
+    assert ok is (None if word is None else word == "pass")
 
 
 def test_gaming_yes_verified_against_material():

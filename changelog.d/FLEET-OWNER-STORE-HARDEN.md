@@ -1,0 +1,1 @@
+- **FLEET-OWNER-STORE-HARDEN:** Refuse invalid owner-store slots without panicking and publish new records without replacing racing writers, preserving CAS replacement and crash ordering.

@@ -25,12 +25,20 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 # --- 5. inline-only legs get the diff ----------------------------------------
 
+@pytest.fixture(autouse=True)
+def fixed_seat_table(monkeypatch):
+    # Exercise seat transport/failures independently of provider credits.
+    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
+                 else leg for leg in DEFAULT_LEGS)
+    monkeypatch.setitem(plan_spawn.__kwdefaults__, "legs", legs)
+
 @pytest.fixture
 def inline_seat_table(monkeypatch):
     # Test inline transport, not the production review preference order.
     from plangraph.planner import routing
     ids = ("qodercli-qwen3.8-flash", "cx-gpt-6-luna")
-    table = tuple(next(leg for leg in DEFAULT_LEGS if leg.id == id) for id in ids)
+    table = tuple(replace(next(leg for leg in DEFAULT_LEGS if leg.id == id), disabled=None)
+                  for id in ids)
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, "legs", table)
 
 def test_inline_only_leg_skipped_without_diff_ref():

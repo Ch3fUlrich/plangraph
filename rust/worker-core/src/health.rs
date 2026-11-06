@@ -1,4 +1,4 @@
-//! Pure row-derived health. Provider reset values and overlays belong to RL10b.
+//! Pure chronological health replay, with optional observation-anchored reset state.
 use crate::{hosts::Role, outcome::Class};
 
 #[cfg(test)]
@@ -19,7 +19,7 @@ pub struct Row {
     pub reset_at: Option<i64>,
     pub reset_assumed: bool,
     pub reset_clamped: bool,
-    /// Any kind marks an observation, not an attempt outcome.
+    /// Only canary and omniroute_* kinds mark non-outcome observations.
     pub kind: Option<String>,
 }
 
@@ -33,6 +33,7 @@ pub enum State {
 pub enum UntilSrc {
     Row,
     Default,
+    OmniRoute,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Health {
@@ -68,7 +69,7 @@ impl Health {
         self.state == State::Closed || self.until_s.is_none_or(|until| now_s >= until)
     }
 
-    fn advance(&mut self, ts: i64) {
+    pub(crate) fn advance(&mut self, ts: i64) {
         if self.state == State::Open && self.until_s.is_some_and(|until| ts >= until) {
             self.state = State::HalfOpen;
             self.non_verdict_count = 0;
@@ -81,6 +82,7 @@ impl Health {
         self.reason = Some(class);
         self.heuristic = !class.carries_reset();
         self.reset_assumed = class == Class::Quota;
+        self.reset_clamped = false;
         self.until_src = Some(UntilSrc::Default);
         self.until_s = Some(if class == Class::Quota {
             next_utc_midnight(ts)
@@ -148,6 +150,12 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
                     && start(&row) <= last.ts
                 {
                     let begin = start(last).min(start(&row));
+                    if row.reset_at.is_some()
+                        && (row.ts, &row.run_id, row.attempt, row.reset_at)
+                            >= (last.ts, &last.run_id, last.attempt, last.reset_at)
+                    {
+                        last.reset_at = row.reset_at;
+                    }
                     last.ts = last.ts.max(row.ts);
                     last.duration_s = Some(last.ts.saturating_sub(begin));
                     continue;
@@ -180,24 +188,55 @@ fn incidents(rows: Vec<Row>) -> Vec<Row> {
 /// Routes are fanned out by the caller; `fold` sees one route.
 /// Only the requested leg, route and role contribute, for successes and failures alike.
 /// Duplicate attempts keep the greatest (timestamp, class, duration) tuple;
-/// Observations bypass attempt dedupe and incident merging.
+/// Observations and future rows are excluded before attempt dedupe.
 pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64) -> Health {
+    replay_inner(leg_key, route_key, role, rows, now_s, None, false)
+}
+
+pub(crate) fn replay(
+    leg_key: &str,
+    route_key: &str,
+    role: Role,
+    rows: &[Row],
+    now_s: i64,
+    provider: Option<&crate::health_until::ProviderState>,
+) -> Health {
+    replay_inner(leg_key, route_key, role, rows, now_s, provider, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replay_inner(
+    leg_key: &str,
+    route_key: &str,
+    role: Role,
+    rows: &[Row],
+    now_s: i64,
+    provider: Option<&crate::health_until::ProviderState>,
+    response_resets: bool,
+) -> Health {
+    use crate::health_until::ReplayReset;
     let mut attempts: Vec<Row> = Vec::new();
-    let mut observations = Vec::new();
-    for row in rows
-        .iter()
-        .filter(|r| r.leg_key == leg_key && r.route_key == route_key && r.role == role)
-    {
+    let mut neutral_rows = Vec::new();
+    for row in rows.iter().filter(|r| {
+        r.leg_key == leg_key && r.route_key == route_key && r.role == role && r.ts <= now_s
+    }) {
+        if row
+            .kind
+            .as_deref()
+            .is_some_and(|kind| kind == "canary" || kind.starts_with("omniroute_"))
+        {
+            continue;
+        }
         if row.kind.is_some() {
-            observations.push(row.clone());
+            neutral_rows.push(row.clone());
             continue;
         }
         if let Some(old) = attempts
             .iter_mut()
             .find(|r| r.run_id == row.run_id && r.attempt == row.attempt)
         {
-            if (row.ts, row.outcome.as_str(), row.duration_s)
-                > (old.ts, old.outcome.as_str(), old.duration_s)
+            if (row.ts, row.outcome.as_str(), row.duration_s, row.reset_at)
+                > (old.ts, old.outcome.as_str(), old.duration_s, old.reset_at)
             {
                 *old = row.clone();
             }
@@ -205,33 +244,25 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
             attempts.push(row.clone());
         }
     }
-    attempts.extend(observations);
+    let evidence = attempts.clone();
+    attempts.extend(neutral_rows);
     let rows = incidents(attempts);
     let mut health = Health::default();
+    let mut resets = ReplayReset::new(provider.filter(|p| p.observed_s <= now_s));
     let mut success = None;
     let mut killed = Vec::new();
     for row in rows {
+        resets.before(&mut health, row.ts);
         health.advance(row.ts);
-        if row.kind.is_some() {
-            if health.state == State::HalfOpen {
-                health.non_verdict_count += 1;
-                if health.non_verdict_count == 3 {
-                    health.open(health.reason.unwrap(), row.ts);
-                    health.until_s = Some(row.ts.saturating_add(backoff_s(health.n)));
-                } else {
-                    health.until_s = Some(row.ts.saturating_add(reprobe_gap_s()));
-                }
-            }
-            continue;
-        }
         let class = row.outcome;
-        if class == Class::Ok {
+        if class == Class::Ok && row.kind.is_none() {
+            resets.success();
             health = Health::default();
             success = Some(row.ts);
             killed.clear();
             continue;
         }
-        if class.is_neutral() {
+        if class.is_neutral() || row.kind.is_some() {
             if health.state == State::HalfOpen {
                 health.non_verdict_count += 1;
                 if health.non_verdict_count == 3 {
@@ -259,8 +290,22 @@ pub fn fold(leg_key: &str, route_key: &str, role: Role, rows: &[Row], now_s: i64
         // Further incidents while OPEN intentionally escalate n and restart the deadline.
         if class.carries_reset() || ((probe || reached) && !(probe && recent_success)) {
             health.open(class, row.ts);
+            let reset = evidence
+                .iter()
+                .filter(|r| {
+                    r.outcome == class
+                        && r.reset_at.is_some()
+                        && r.ts >= start(&row)
+                        && r.ts <= row.ts
+                        && start(r) <= row.ts
+                })
+                .max_by_key(|r| (r.ts, &r.run_id, r.attempt, r.reset_at));
+            if response_resets {
+                resets.open(&mut health, &row, reset, probe);
+            }
         }
     }
+    resets.finish(&mut health, now_s);
     health.advance(now_s);
     health
 }

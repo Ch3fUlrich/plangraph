@@ -13,7 +13,10 @@ def test_review_same_family_measured_order():
     legs = (replace(base, id="first", roles=("review",)),
             replace(base, id="second", roles=("review",)))
     def plan(a, b):
-        return plan_spawn({"estimate_tokens": 1000}, role="review",
+        # MiMo is inline-only: provide its required diff metadata so this
+        # ranking probe compares eligible legs, not missing-diff exclusions.
+        return plan_spawn({"estimate_tokens": 1000,
+                           "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}, role="review",
                           writer_families=("gpt",), legs=legs,
                           benchmark={name: {"aa_intelligence": score,
                                      "cost_per_task_usd": 0, "pool_burn_weight": 0}

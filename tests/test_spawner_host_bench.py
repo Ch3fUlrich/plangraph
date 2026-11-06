@@ -94,17 +94,17 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     plan = route_json(tmp_path, capsys, "--bench-db", str(db))
     assert plan["p_source"] == "benchmark"
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("qodercli-qwen3.8-flash", "agy-gemini-3.8-flash", "mimo-v2.6-flash"):
+    for leg in ("agy-gemini-3.8-flash", "mimo-v2.6-flash"):
         assert by_leg[leg]["u_core"] is not None, leg
         assert by_leg[leg]["p_source"] == "measured", leg
     # Without a DB: no p anywhere and the order is today's operator order.
     bare = route_json(tmp_path, capsys)
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
-    # luna and mimo-pro are inline-only: skipped while the card has no diff_ref.
+    # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "mimo-v2.6-flash", "opencode-go-deepseek-v4-flash",
+        "opencode-deepseek-v4.1-flash-free",
+        "opencode-glm-5.3-flash-free", "opencode-go-deepseek-v4-flash",
         "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
         "opencode-go-qwen3.8-max", "opencode-go-muse-spark",
         ]

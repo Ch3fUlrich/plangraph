@@ -6,7 +6,7 @@ decisions file is optional (an unreadable file just leaves the ids bare).
 """
 from __future__ import annotations
 
-from . import changelog, events, timing
+from . import changelog, context_sources, events, timing
 
 __all__ = ["ChangelogMixin"]
 
@@ -24,15 +24,8 @@ class ChangelogMixin:
         log = events.read_events(self.conn)
         titles = {row["key"]: row["title"]
                   for row in self.conn.execute("SELECT key, title FROM items")}
-        texts = {}
         adapter = getattr(self.ctx, "decisions", None)
-        if adapter is not None and callable(getattr(adapter, "text", None)):
-            for decision_id in sorted(changelog.referenced_decisions(log)):
-                try:
-                    text = adapter.text(decision_id)
-                except Exception:  # noqa: BLE001 - an unreadable decisions file leaves ids bare
-                    text = None
-                if text:
-                    texts[decision_id] = text
+        texts = context_sources.decision_texts(
+            adapter, sorted(changelog.referenced_decisions(log)))
         head = log[-1]["seq"] if log else 0
         return changelog.build(log, since, titles, texts, head)

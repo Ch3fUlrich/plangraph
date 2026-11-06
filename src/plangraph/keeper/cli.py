@@ -132,6 +132,8 @@ def _add_writes(sub):
     evidence.add_argument("--kind", required=True)
     evidence.add_argument("--commit")
     evidence.add_argument("--run")
+    evidence.add_argument("--host")
+    evidence.add_argument("--writer")
     evidence.add_argument("--task")
     evidence.add_argument("--project", help="semaphore project id (semaphore-task)")
     evidence.add_argument("--template", help="semaphore template id (semaphore-task)")

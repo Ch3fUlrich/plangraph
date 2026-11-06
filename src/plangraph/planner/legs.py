@@ -86,7 +86,8 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
 from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
-    _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
+    _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",),
+             disabled="D-3950 credits out; re-enable after one passing probe seat, one try per day"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
         roles=("review", "implement")),
@@ -101,15 +102,8 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
-    Leg("opencode-console-sonnet-5.5", "subscription", "opencode",
-        "console-anthropic/claude-sonnet-5-5", "claude", ("128k", "256k", "1m"),
-        180000, False, claude_family=True,
-        note="console sonnet credits; listed by opencode models --standalone, not by the "
-              "background service list; D-3901: disabled, never a seat",
-        roles=(), expires="2026-11-30",
-        disabled="D-3893 no Sonnet writers, kept per D-3828"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
+    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
@@ -117,10 +111,10 @@ DEFAULT_LEGS = (
     # D-3552: opencode-go review seats, placed before the paid deepseek
     # leg so existing order is unchanged; deepseek/glm lifted for review only (route_policy).
     Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
-        "opencode-go/gemini-4-argon-contributor", "gemini", ("128k",), 100000,
+        "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
         False, roles=("review",)),
     Leg("opencode-go-glm-5.2", "subscription", "opencode",
-        "opencode-go/glm-5.2-max", "glm", ("128k",), 100000, False,
+        "opencode-go/glm-5.2", "glm", ("128k",), 100000, False,
         roles=("review",)),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
@@ -129,7 +123,7 @@ DEFAULT_LEGS = (
         "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         False, roles=("review",)),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
-        "opencode-go/deepseek-v4-flash-max", "deepseek", ("128k",), 100000,
+        "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
@@ -148,7 +142,6 @@ WRITER_ORDER: tuple[str, ...] = (
     "agy-gemini-3.8-flash",
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
-    "opencode-console-sonnet-5.5",
 )
 LEAD_WRITER = "cx-gpt-6.1-sol"
 

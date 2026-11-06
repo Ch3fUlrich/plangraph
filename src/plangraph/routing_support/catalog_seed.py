@@ -352,7 +352,7 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "updated_at": "2026-10-19T00:00:00Z",
     },
     {
-        "model_id": "opencode-go/gemini-4-argon-contributor",
+        "model_id": "opencode-go/gemini-4-argon",
         "master_rank": 2,
         "aa_intelligence": 53.0,
         "coding_index": 78.4,
@@ -572,7 +572,7 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "updated_at": "2026-10-19T00:00:00Z",
     },
     {
-        "model_id": "opencode-go/deepseek-v4-flash-max",
+        "model_id": "opencode-go/deepseek-v4.1-flash",
         "master_rank": 13,
         "aa_intelligence": 45.0,
         "coding_index": None,
@@ -612,7 +612,7 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "updated_at": "2026-10-19T00:00:00Z",
     },
     {
-        "model_id": "opencode-go/glm-5.2-max",
+        "model_id": "opencode-go/glm-5.2",
         "master_rank": 14,
         "aa_intelligence": 45.0,
         "coding_index": 71.5,
@@ -849,7 +849,7 @@ SEED_ROUTE_LEGS: list[dict[str, Any]] = [
     {
         "route_id": "l1-orchestrator",
         "position": 3,
-        "model_id": "opencode-go/gemini-4-argon-contributor",
+        "model_id": "opencode-go/gemini-4-argon",
         "min_risk_band": "low",
     },
     {
@@ -902,10 +902,10 @@ SEED_ROUTE_LEGS: list[dict[str, Any]] = [
     {"route_id": "l2-worker", "position": 3, "model_id": "agy/claude-sonnet-5-5-medium", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 4, "model_id": "mimo/mimo-v2.6-pro", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 5, "model_id": "agy/claude-sonnet-5-5-high", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 6, "model_id": "opencode-go/gemini-4-argon-contributor", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 6, "model_id": "opencode-go/gemini-4-argon", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 7, "model_id": "opencode-go/qwen3.8-max", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 8, "model_id": "opencode-go/deepseek-v4-flash-max", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 9, "model_id": "opencode-go/glm-5.2-max", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 8, "model_id": "opencode-go/deepseek-v4.1-flash", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 9, "model_id": "opencode-go/glm-5.2", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 10, "model_id": "opencode-go/muse-spark-1.3-contributor", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 11, "model_id": "claude/claude-haiku-4-5", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 12, "model_id": "cxa/gpt-6-luna-high", "min_risk_band": "low"},
@@ -916,10 +916,10 @@ SEED_ROUTE_LEGS: list[dict[str, Any]] = [
     {"route_id": "l2-reviewer", "position": 1, "model_id": "agy/claude-sonnet-5-5-xhigh", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 2, "model_id": "agy/claude-sonnet-5-5-medium", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 3, "model_id": "mimo/mimo-v2.6-pro", "min_risk_band": "low"},
-    {"route_id": "l2-reviewer", "position": 4, "model_id": "opencode-go/gemini-4-argon-contributor", "min_risk_band": "low"},
+    {"route_id": "l2-reviewer", "position": 4, "model_id": "opencode-go/gemini-4-argon", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 5, "model_id": "agy/claude-sonnet-5-5-high", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 6, "model_id": "cxa/gpt-6-luna-high", "min_risk_band": "low"},
-    {"route_id": "l2-reviewer", "position": 7, "model_id": "opencode-go/glm-5.2-max", "min_risk_band": "low"},
+    {"route_id": "l2-reviewer", "position": 7, "model_id": "opencode-go/glm-5.2", "min_risk_band": "low"},
     # l3-driver legs:
     # cxa/gpt-6-luna-high active, high token speed, paid deepseek last
     {
@@ -937,7 +937,7 @@ SEED_ROUTE_LEGS: list[dict[str, Any]] = [
     {
         "route_id": "l3-driver",
         "position": 3,
-        "model_id": "opencode-go/deepseek-v4-flash-max",
+        "model_id": "opencode-go/deepseek-v4.1-flash",
         "min_risk_band": "low",
     },
     {

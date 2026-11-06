@@ -1,0 +1,1 @@
+- **SPAWNER-LEG-STATE-FROM-OMNIROUTE:** Add an opt-in Python provider-state reader with bounded TTL/stale snapshots, controlled failures and hermetic regressions; no production caller activated.

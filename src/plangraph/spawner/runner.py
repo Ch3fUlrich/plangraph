@@ -116,6 +116,7 @@ class JobInfo:
     risk: str = "normal"
     command: list[str] = field(default_factory=list)
     start_time: float = field(default_factory=time.time)
+    writer_email: str | None = None
     end_time: float | None = None
     exit_code: int | None = None
     stdout: str = ""
@@ -508,10 +509,11 @@ class SpawnerRunner:
                 command=cmd,
                 dry_run=False,
                 cwd=work_dir,
+                writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
             self.jobs[job_id] = job
             from .run_watchdog import thresholds, edit_signature
-            job._watchdog_limits = watchdog or thresholds()
+            job._watchdog_limits = watchdog or thresholds(role=role)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir)
             if tools_event:
@@ -602,6 +604,7 @@ class SpawnerRunner:
                     self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
                     # Descendants made before assign() are not job members: record them now, kill+verify at reap.
                     self._escapees = {**getattr(self, '_escapees', {}), job_id: proc_kill.escapees(root_pid, self.win_job_api.pids(handle) if hasattr(type(self.win_job_api), 'pids') else [])}
+                    self._owned[job_id].update(job_name=getattr(self.win_job_api, 'name', None), escapees=list(self._escapees[job_id]))
                 except Exception:
                     stale = self._win_jobs.pop(job_id, None)
                     if stale is not None:   # assigned but unverifiable: release the handle, the run does not start
@@ -650,12 +653,15 @@ class SpawnerRunner:
     def _nt(self) -> bool:
         return self.platform == 'nt' or _is_nt()
 
-    async def kill_recorded(self, pid, pid_start=None):
+    async def kill_recorded(self, pid, pid_start=None, job_name=None, escapees=()):
         """Cancel after a service restart: prove the recorded root by its persisted start token,
         kill its tree, verify.  Returns survivors ([] = clean); unprovable and alive = survivors."""
         plat = 'nt' if self._nt() else None
-        if pid_start is None or plat == 'nt':   # nt: the job died with the old service
-            return unproven_survivors(pid, plat)
+        if plat == 'nt' and type(pid_start) is int:
+            from .win_recorded import kill
+            return await kill(pid, pid_start, job_name, escapees)
+        if pid_start is None or plat == 'nt':
+            return [pid] if plat == 'nt' else unproven_survivors(pid, plat)
         return await kill_proven(self, pid, pid_start, plat=plat) or []
 
     async def _own_kill(self, pid, ident=None):
@@ -996,7 +1002,7 @@ def spawn_service(*args, **kwargs):
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
                         seats=False, _plan=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import thresholds
+            from .run_watchdog import terminal_status, thresholds
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1024,7 +1030,9 @@ def spawn_service(*args, **kwargs):
                 writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             from .context_pack import annotate
+            from .item_key import annotate_item
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
+            annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
                 if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
@@ -1047,7 +1055,7 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
-                    limits = thresholds(card)
+                    limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
@@ -1065,7 +1073,7 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
+                            leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run)
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
@@ -1099,7 +1107,7 @@ def spawn_service(*args, **kwargs):
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
                             record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=job.status, exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
