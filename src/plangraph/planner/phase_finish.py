@@ -220,7 +220,7 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
         raise Refused("forbidden", "phase_finish requires router or system")
 
     expected_branch = phase_branch(key)
-    if branch not in (expected_branch, _legacy_phase_branch(key)):
+    if branch != expected_branch:
         raise Refused("validation", f"branch must be {expected_branch}")
     if _SHA_RE.fullmatch(head) is None:
         raise Refused("validation", "head must be a 40-character lowercase hex sha")

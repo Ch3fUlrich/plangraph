@@ -2,6 +2,9 @@
 import pytest
 
 from plangraph.planner.phase_finish import phase_branch
+from plangraph.planner.phase_finish import finish_phase, _legacy_phase_branch
+from plangraph.keeper.errors import Refused
+from types import SimpleNamespace
 
 
 @pytest.mark.parametrize(("key", "expected"), [
@@ -20,3 +23,15 @@ def test_original_utf8_hash_vectors(key, expected):
 def test_sanitiser_collisions_and_literal_suffix_are_distinct():
     keys = ["a/b", "a-b", "a:b", "a b", "a-b-e620c3190468cf61"]
     assert len({phase_branch(key) for key in keys}) == len(keys)
+
+
+@pytest.mark.parametrize("key", ["a/b", "a-b", "é", "😀", "e\u0301"])
+def test_finish_rejects_unversioned_legacy_branch_before_store_read(key):
+    class UnreadableStore:
+        def __getattr__(self, name):
+            raise AssertionError("legacy branch reached store")
+
+    with pytest.raises(Refused, match="branch must be"):
+        finish_phase(UnreadableStore(), SimpleNamespace(role="router"), key,
+                     _legacy_phase_branch(key), "a" * 40,
+                     repo_root="unused", github=None)

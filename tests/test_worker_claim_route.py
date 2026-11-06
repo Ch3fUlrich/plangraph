@@ -4,6 +4,8 @@ import subprocess
 
 import pytest
 
+from plangraph.planner.phase_finish import phase_branch
+
 from door_util import Doors
 from keeper_util import World, defn
 from plangraph.keeper import api_routes
@@ -28,11 +30,11 @@ def make_repo(tmp_path):
     _git(root, "add", ".")
     _git(root, "commit", "-m", "A")
     main_tip = gitenv.rev_parse(root, "refs/heads/main")
-    _git(root, "checkout", "-b", "phase/demo-PH-X")
+    _git(root, "checkout", "-b", phase_branch("demo:PH-X"))
     (root / "b.txt").write_text("B")
     _git(root, "add", ".")
     _git(root, "commit", "-m", "B")
-    phase_tip = gitenv.rev_parse(root, "refs/heads/phase/demo-PH-X")
+    phase_tip = gitenv.rev_parse(root, f"refs/heads/{phase_branch('demo:PH-X')}")
     _git(root, "checkout", "main")
     return root, main_tip, phase_tip
 
