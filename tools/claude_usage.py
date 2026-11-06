@@ -57,7 +57,7 @@ def matches(record, patterns):
     return {key for key, pattern in patterns.items() if pattern.search(text)}
 
 
-def read_projects(root, patterns, stats):
+def read_projects(root, patterns, stats, start):
     requests, sessions, seen_files = {}, {}, set()
     paths = sorted(root.glob("*/*.jsonl"))
     for parent in paths:
@@ -70,16 +70,24 @@ def read_projects(root, patterns, stats):
             if identity in seen_files:
                 continue
             seen_files.add(identity)
+            try:
+                # Transcripts only grow: older mtimes cannot contain window requests.
+                if path.stat().st_mtime < start.timestamp():
+                    continue
+                handle = path.open(encoding="utf-8")
+            except OSError:
+                stats["unreadable_files"] += 1
+                continue
             pending = set()
-            with path.open(encoding="utf-8") as handle:
+            with handle as handle:
                 nonempty = False
-                for index, raw in enumerate(handle):
+                for raw in handle:
                     nonempty = True
                     try:
                         record = json.loads(raw)
                         if not isinstance(record, dict):
                             raise ValueError()
-                        if path == parent and index == 0 and record.get("timestamp"):
+                        if path == parent and session["start"] is None and record.get("timestamp"):
                             session["start"] = instant(record["timestamp"])
                         kind = record.get("type")
                         if path == parent and kind in ("custom-title", "agent-name"):
@@ -110,7 +118,7 @@ def read_projects(root, patterns, stats):
                     except (ValueError, KeyError, TypeError, AttributeError):
                         stats["malformed_lines"] += 1
                 if not nonempty:
-                    raise ValueError("empty transcript")
+                    stats["empty_files"] += 1
     return list(requests.values()), sessions
 
 
@@ -123,6 +131,8 @@ def summarize(rows, sessions, policy):
     result = {}
     for role in sorted({s["role"] for s in sessions.values()}):
         selected = [r for r in rows if sessions[r["session"]]["role"] == role]
+        if not selected:
+            continue
         amount = sum(weighted(r, policy) for r in selected)
         result[role] = dict(requests=len(selected), sessions=len({r["session"] for r in selected}),
                             weighted=amount, share=amount / total if total else 0,
@@ -192,15 +202,13 @@ def key_report(args, arms, rows, sessions, policy):
             target["keys_named"] |= hits[name]
     for name, result in results.items():
         count = len(arms[name]["keys"] & accepted)
-        if not count or not result["turns"]:
-            results[name] = dict(status="no result", reason="zero accepted or attributed turns")
-            continue
-        result["status"] = "ok"
-        result.update(accepted=count, tokens_per_accepted_actual=result["actual"] / count,
-                      tokens_per_accepted_fixed=result["fixed"] / count)
-        result["keys_named"] = sorted(result["keys_named"])
-    if all(result["status"] == "no result" for result in results.values()):
-        raise ValueError("zero accepted or attributed turns")
+        result.update(accepted=count, keys_named=sorted(result["keys_named"]))
+        result["status"] = "ok" if count and result["turns"] else "no result"
+        if result["status"] == "no result":
+            result["reason"] = "zero accepted or attributed turns"
+        else:
+            result.update(tokens_per_accepted_actual=result["actual"] / count,
+                          tokens_per_accepted_fixed=result["fixed"] / count)
     return results
 
 
@@ -232,15 +240,12 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    stats = dict(malformed_lines=0)
+    stats = dict(malformed_lines=0, empty_files=0, unreadable_files=0)
     try:
         policy = load_json(Path(__file__).with_name("claude_usage_policy.json"))
         arms = arms_from(args) if args.command == "keys" else {}
         keys = set().union(*(a["keys"] for a in arms.values()))
         patterns = {k: re.compile(r"(?<![\w:.-])(?:[\w.-]+:)?" + re.escape(k) + r"(?![\w:-])") for k in keys}
-        rows, sessions = read_projects(args.projects, patterns, stats)
-        if not rows:
-            raise ValueError("no transcripts")
         if args.command == "pace":
             start = instant(args.day)
             end = start + timedelta(days=1)
@@ -251,18 +256,22 @@ def main(argv=None):
             end = instant(until) if until else datetime.max.replace(tzinfo=timezone.utc)
         if end <= start:
             raise ValueError("invalid window")
+        rows, sessions = read_projects(args.projects, patterns, stats, start)
+        if not rows:
+            raise ValueError("no transcripts")
         rows = [r for r in rows if start <= r["time"] < end]
+        diagnostics = "; ".join(f"{key}={value}" for key, value in stats.items())
         if args.command == "pace":
             total = sum(weighted(r, policy) for r in rows)
             budget = policy["weekly_budget_weighted"] / 7
             if args.json:
                 result = dict(day=start.date().isoformat(), weighted=total, budget_per_day=budget, over_pace=total > budget)
             elif total > budget:
-                print(f"over pace: {start.date()} weighted={total:g} budget_per_day={budget:g}; malformed_lines={stats['malformed_lines']}; {UNSEEN}")
+                print(f"over pace: {start.date()} weighted={total:g} budget_per_day={budget:g}; {diagnostics}; {UNSEEN}")
                 return 0
             else:
-                if stats["malformed_lines"]:
-                    print(f"malformed_lines={stats['malformed_lines']}; {UNSEEN}", file=sys.stderr)
+                if any(stats.values()):
+                    print(f"{diagnostics}; {UNSEEN}", file=sys.stderr)
                 return 0
         elif not rows:
             raise ValueError("empty window")
@@ -292,15 +301,21 @@ def main(argv=None):
         if args.json:
             print(json.dumps(envelope, sort_keys=True))
         else:
-            print(json.dumps(result, sort_keys=True))
-            print(f"malformed_lines={stats['malformed_lines']}; {UNSEEN}")
-        return 0
+            if args.command in ("roles", "daily"):
+                print(f"{'role' if args.command == 'roles' else 'day':<24} {'weighted (M)':>14} {'requests':>10} {'sessions':>10}")
+                for name, report in sorted(result.items(), key=lambda item: item[1]["weighted"], reverse=True):
+                    print(f"{name:<24} {report['weighted'] / 1e6:14.3f} {report['requests']:10d} {report['sessions']:10d}")
+            else:
+                print(json.dumps(result, sort_keys=True))
+            print(f"{diagnostics}; {UNSEEN}")
+        return 3 if args.command == "keys" and any(r["status"] == "no result" for r in result.values()) else 0
     except (OSError, ValueError, KeyError, TypeError) as error:
+        diagnostics = "; ".join(f"{key}={value}" for key, value in stats.items())
         reason = "unreadable, empty or invalid input; no usable attribution"
         if args.json:
             print(json.dumps(dict(status="no result", reason=reason, **stats, visibility=UNSEEN)))
         else:
-            print(f"no result: {reason}; malformed_lines={stats['malformed_lines']}; {UNSEEN}")
+            print(f"no result: {reason}; {diagnostics}; {UNSEEN}")
         return 3
 
 

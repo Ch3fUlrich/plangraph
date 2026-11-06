@@ -120,8 +120,8 @@ def test_v4_no_result(tree, tmp_path, capsys, failure):
         f["a"] = str(tmp_path / "absent")
     result = run(tree, capsys, "keys", "--arm", "A=" + f["a"],
                  "--weights", f["fixed"], code=3)
-    assert result["status"] == "no result"
-    assert "result" not in result
+    assert result.get("status", result.get("result", {}).get("A", {}).get("status")) == "no result"
+    assert "result" not in result or failure == "zero"
 
 
 def test_malformed_and_utc_boundary(tree, capsys):
@@ -232,7 +232,64 @@ def test_arm_no_result_preserves_other_arm(tree, tmp_path, capsys, failure):
         Path(f["landed"]).write_text("FLEET-LAUNCH\n")
         write(tree / "other.jsonl", [assistant(text="THIRD")])
     report = run(tree, capsys, "keys", "--arm", "A=" + f["a"],
-                 "--arm", "B=" + f["b"], "--landed", f["landed"])["result"]
+                 "--arm", "B=" + f["b"], "--landed", f["landed"], code=3)["result"]
     assert report["A"]["status"] == "ok"
     assert report["A"]["actual"] == report["A"]["tokens_per_accepted_actual"] == 70
-    assert report["B"] == dict(status="no result", reason="zero accepted or attributed turns")
+    assert report["B"]["status"] == "no result"
+    assert "tokens_per_accepted_actual" not in report["B"]
+    assert report["B"]["turns"] == (1 if failure == "zero-accepted" else 0)
+    assert report["B"]["actual"] == (70 if failure == "zero-accepted" else 0)
+
+
+def test_start_after_metadata(tree, capsys):
+    write(tree / "s.jsonl", [dict(type="agent-name", agentName="worker-12"), assistant()])
+    assert run(tree, capsys, "roles")["result"]["worker"]["starts"] == 1
+
+
+@pytest.mark.parametrize("bad", ["empty", "unreadable"])
+def test_bad_transcript_isolated(tree, capsys, monkeypatch, bad):
+    write(tree / "good.jsonl", [assistant()])
+    write(tree / "bad.jsonl", [])
+    original = Path.open
+    if bad == "unreadable":
+        def opened(path, *args, **kwargs):
+            if path.name == "bad.jsonl":
+                raise PermissionError()
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "open", opened)
+    report = run(tree, capsys, "roles")
+    assert report["result"]["unnamed"]["requests"] == 1
+    assert report[bad + "_files"] == 1
+    (tree / "good.jsonl").unlink()
+    assert run(tree, capsys, "roles", code=3)["status"] == "no result"
+
+
+def test_window_roles_and_aligned_text(tree, capsys):
+    for name, day, output in [("old", "05", 10), ("small", "06", 10), ("large", "06", 40)]:
+        write(tree / (name + ".jsonl"), [dict(type="agent-name", agentName=name),
+              assistant(output=output, timestamp=f"2026-11-{day}T00:00:00Z")])
+    report = run(tree, capsys, "roles", "--since", "2026-11-06")["result"]
+    assert set(report) == {"small", "large"}
+    daily = run(tree, capsys, "daily")["result"]
+    assert set(daily["2026-11-06"]["per_role"]) == {"small", "large"}
+    for command in ("roles", "daily"):
+        assert usage.main(["--projects", str(tree.parent), command, "--since", "2026-11-06"]) == 0
+        text = capsys.readouterr().out.splitlines()
+        assert "weighted (M)" in text[0]
+        assert text[1].startswith("large" if command == "roles" else "2026-11-06")
+        assert "0.000" in text[1]
+
+
+def test_mtime_skips_old_files_including_subagents(tree, capsys, monkeypatch):
+    import os
+    for path in [tree / "old.jsonl", tree / "s.jsonl", tree / "s/subagents/agent-a.jsonl"]:
+        write(path, [assistant()])
+        if path.name != "s.jsonl":
+            os.utime(path, (1, 1))
+    original = Path.open
+    def opened(path, *args, **kwargs):
+        assert path.suffix != ".jsonl" or path.name == "s.jsonl"
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", opened)
+    assert run(tree, capsys, "roles", "--since", "2026-11-06")["result"]["unnamed"]["requests"] == 1
+    assert run(tree, capsys, "pace", "--day", "2026-11-06")["result"]["weighted"] == 70
