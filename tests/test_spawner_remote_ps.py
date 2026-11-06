@@ -217,14 +217,27 @@ def test_mixed_config(tmp_path, monkeypatch):
     assert rows == [dict(host='invalid-config', status='unknown', reason='host query failed')]
 
 
-@pytest.mark.parametrize('script', ['import sys; sys.stdout.write("x" * 2097152)',
-                                   'raise SystemExit(1)', 'import time; time.sleep(3)'])
-def test_transport_rejects_overflow_exit_and_timeout(monkeypatch, script):
+@pytest.mark.parametrize('script, budget, error', [
+    ('import sys; sys.stdout.write("x" * 2097152)', 10, ValueError),
+    ('raise SystemExit(1)', 10, ValueError),
+    ('import time; time.sleep(60)', 1, TimeoutError),
+])
+def test_transport_rejects_overflow_exit_and_timeout(monkeypatch, script, budget, error):
     original = subprocess.Popen
     monkeypatch.setattr(subprocess, 'Popen',
                         lambda argv, **kw: original(['python3', '-c', script], **kw))
-    with pytest.raises((ValueError, TimeoutError, subprocess.TimeoutExpired)):
-        remote_ps.query_host(dict(target='target'), .2)
+    with pytest.raises(error):
+        remote_ps.query_host(dict(target='target'), budget)
+
+
+def test_transport_overflow_names_host(monkeypatch):
+    original = subprocess.Popen
+    monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: original(
+        ['python3', '-c', 'import json; print(json.dumps({"runs": ['
+         '{"run_id": "x" * 2097152, "host": "node-a", "status": "running"}]}))'], **kw))
+    rows = remote_ps._fetch(dict(name='node-a', target='target'),
+                           lambda host, _: remote_ps.query_host(host, 10))
+    assert rows == [dict(host='node-a', status='unknown', reason='host query failed')]
 
 
 def test_worker_count_is_capped(monkeypatch):
