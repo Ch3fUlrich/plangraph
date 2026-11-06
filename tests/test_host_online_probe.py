@@ -13,7 +13,7 @@ BASE = 'PLANGRAPH_PROBE_ROOT="/worker"\nPLANGRAPH_PROBE_NOTIFY_CMD="notify --fla
 @pytest.fixture(params=['bash', pytest.param('pwsh', marks=pytest.mark.skipif(
     not shutil.which('pwsh'), reason='requires POSIX pwsh'))])
 def probe(tmp_path, monkeypatch, request):
-    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('HOME', str(tmp_path)); monkeypatch.setenv('PYTHONPATH', str(ROOT / 'src'))
     log = tmp_path / 'commands'
     monkeypatch.setenv('COMMAND_LOG', str(log))
     for name in ('systemctl', 'ssh', 'schtasks'):
