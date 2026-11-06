@@ -356,42 +356,45 @@ fn workspace_launch_docs_avoid_credential_shaped_git_wording() {
         .any(|line| line.contains("explicit") && line.contains("GIT_*")));
 }
 #[test]
-fn none_has_no_checkout_and_no_cwd_fallback() {
+#[cfg(unix)]
+fn none_mode_child_runs_in_temp_not_process_cwd() {
     let mut f = Fixture::new();
     let tree = f.writer();
     f.ws.mode = Mode::None;
     f.ws.base_sha = None;
     f.ws.revision_sha = None;
     f.ws.branch = None;
-    let mut cmd = Command::new("unused");
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args([
+        "-c",
+        "pwd -P; printf '%s\\n' \"$PWD\"; test -z \"$GIT_DIR$KEEPER_DATABASE_TOKEN\"",
+    ]);
+    crate::sandbox_env::confine_check(&mut cmd, f.tmp.path());
+    cmd.env("GIT_DIR", "wrong").env("PWD", "wrong");
     assert!(launch(&f, &mut cmd, None).unwrap().is_none());
-    assert!(cmd.get_current_dir().is_none());
     assert!(!cmd.get_envs().any(|(k, _)| k == "PYTHONPATH"));
+    let out = cmd.output().unwrap();
+    assert!(out.status.success());
+    let expected = f.tmp.path().canonicalize().unwrap();
+    assert_ne!(expected, std::env::current_dir().unwrap());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![expected.to_str().unwrap(); 2]
+    );
     assert!(launch(&f, &mut cmd, Some(&tree)).is_err());
 }
 #[test]
-fn launch_reverifies_head_after_prior_token() {
+fn checkout_mode_applies_env_before_canary() {
     let f = Fixture::new();
     let tree = f.writer();
-    verify_workspace(&f.repo, &f.ws, &tree, None).unwrap();
-    git(
-        &tree,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.org",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "changed",
-        ],
-    )
-    .unwrap();
+    fs::write(tree.join("tracked"), "dirty").unwrap();
     let mut cmd = Command::new("unused");
-    cmd.env("UNCHANGED", "yes");
-    assert!(launch(&f, &mut cmd, Some(&tree)).is_err());
-    assert!(cmd.get_current_dir().is_none());
-    assert_eq!(cmd.get_envs().count(), 1);
-    assert!(launch(&f, &mut Command::new("unused"), None).is_err());
+    cmd.env("GIT_DIR", "wrong");
+    let result = launch(&f, &mut cmd, Some(&tree));
+    assert!(matches!(result, Err(ResolveError::Verify("dirty"))));
+    assert_eq!(cmd.get_current_dir(), Some(tree.as_path()));
+    let pwd = cmd.get_envs().find(|(k, _)| *k == "PWD").unwrap().1;
+    assert_eq!(pwd, Some(tree.as_os_str()));
+    assert!(!cmd.get_envs().any(|(k, v)| k == "GIT_DIR" && v.is_some()));
 }

@@ -314,14 +314,15 @@ pub fn prepare_launch(
     if workspace.mode == Mode::None {
         require(checkout.is_none(), "none_checkout")?;
         strip_git(cmd);
+        cmd.current_dir(temp).env("PWD", temp);
         return Ok(None);
     }
     let checkout = checkout.ok_or(ResolveError::Invalid("checkout"))?;
     if workspace.mode == Mode::Writer {
         verify_owned(repo, checkout)?;
     }
-    let verified = verify_workspace(repo, workspace, checkout, import_package)?;
     apply_child_env(cmd, repo, checkout, slot, temp)?;
+    let verified = verify_workspace(repo, workspace, checkout, import_package)?;
     Ok(Some(verified))
 }
 
