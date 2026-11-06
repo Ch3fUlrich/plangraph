@@ -4,7 +4,6 @@ import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 import time
@@ -135,15 +134,16 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     start = time.monotonic()
     deadline = start + timeout
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
-    caller_before = await asyncio.to_thread(caller_heads)
     job = None
     spawn_task = None
+    owned_ids = set()
 
     def git(*args):
         return subprocess.check_output(['git', '-C', root, *args], env=probe_env(),
                                        stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
 
     try:
+        caller_before = await asyncio.to_thread(caller_heads)
         ok = reason = None
         infra = False
         try:
@@ -162,6 +162,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             ok, reason, infra = False, 'probe infra: git', True
         if ok is None:
             async def launch():
+                from .probe_cleanup import OWNED
+                OWNED.set(owned_ids)
                 return await runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model,
                                          client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
                                          watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
@@ -200,21 +202,15 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 state.record_probe_fail(key(leg), reason, caller='leg-probe')
         return dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start)
     finally:
-        if spawn_task is not None and job is None:
-            # The budget may expire mid-spawn (M10): let spawn finish so the
-            # registered child is cancelled instead of orphaned on rmtree.
+        from .probe_cleanup import cleanup
+        cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))
+        # A second caller cancellation must not interrupt tree cleanup.
+        while not cleanup_task.done():
             try:
-                job = await asyncio.wait_for(asyncio.shield(spawn_task), timeout + 5)
-            except Exception:
-                job = None
-        if job is not None:
-            task = (getattr(runner, '_tasks', None) or {}).get(job.job_id)
-            if task is not None and not task.done():
-                await runner.cancel(job.job_id)
-                await asyncio.gather(task, return_exceptions=True)
-            elif getattr(job, 'status', 'running') == 'running':
-                await runner.cancel(job.job_id)
-        shutil.rmtree(root, ignore_errors=True)
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                continue
+        cleanup_task.result()
 
 
 _INFLIGHT = {}
