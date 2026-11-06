@@ -1,0 +1,1 @@
+- Give Rust and Python phase branches matching original-key UTF-8 hash suffixes to separate sanitiser collisions, while preserving pre-patch workflow replay.

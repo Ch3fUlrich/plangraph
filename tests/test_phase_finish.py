@@ -50,7 +50,7 @@ def git_repo(tmp_path):
         cwd=root,
         check=True,
     )
-    subprocess.run(["git", "branch", "-M", "phase/demo-PH-X"], cwd=root, check=True)
+    subprocess.run(["git", "branch", "-M", phase_finish.phase_branch("demo:PH-X")], cwd=root, check=True)
     git(root, "commit", "--allow-empty", "-m", "phase")
     head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
@@ -260,7 +260,7 @@ def test_non_router_refused_first(w):
                 ExplodingStore(),
                 principal,
                 "demo:PH-X",
-                "phase/demo-PH-X",
+                phase_finish.phase_branch("demo:PH-X"),
                 "a" * 40,
                 repo_root=".",
                 github=FakeGitHub(),
@@ -398,14 +398,14 @@ def test_busy_lock_is_conflict(w, tmp_path):
     assert result["state"] == "merged"
 
 def test_phase_branch_rules():
-    assert phase_finish.phase_branch("demo:PH-X") == "phase/demo-PH-X"
+    assert phase_finish.phase_branch("demo:PH-X") == "phase/demo-PH-X-4095fd20aa975021"
     for key in ("", ".x", "x.", "a.lock", "a..b", "x" * 121):
         with pytest.raises(Refused) as ei:
             phase_finish.phase_branch(key)
         assert ei.value.code == "validation"
 
 def test_finish_locked_rejects_merged_pr_with_different_head(tmp_path):
-    branch = "phase/demo-PH-X"
+    branch = phase_finish.phase_branch("demo:PH-X")
     head = "a" * 40
     other = "b" * 40
     gh = FakeGitHub(pr={"number": 7, "state": "merged", "head": other})
@@ -418,7 +418,7 @@ def test_finish_locked_rejects_merged_pr_with_different_head(tmp_path):
     assert gh.calls == [("find_pr", branch)]
 
 def test_finish_locked_opens_pr_for_closed_unmerged(tmp_path):
-    branch = "phase/demo-PH-X"
+    branch = phase_finish.phase_branch("demo:PH-X")
     head = "a" * 40
     gh = FakeGitHub(pr={"number": 7, "state": "closed", "head": "b" * 40})
     gh.push_branch = lambda *args, **kwargs: None

@@ -54,7 +54,11 @@ def phase_branch(key: str) -> str:
         raise Refused("validation", "invalid phase branch name")
     if ".." in clean:
         raise Refused("validation", "invalid phase branch name")
-    return f"phase/{clean}"
+    # FNV-1a 64 over original UTF-8 bytes, exactly as on the Rust worker.
+    digest = 0xcbf29ce484222325
+    for byte in key.encode("utf-8"):
+        digest = ((digest ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+    return f"phase/{clean}-{digest:016x}"
 
 def _check_local_tip(root: Path, branch: str, head: str) -> None:
     tip = gitenv.rev_parse(root, f"refs/heads/{branch}")

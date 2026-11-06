@@ -1,11 +1,10 @@
 //! Phase workflow: plans a keeper gate, claims startable cards, and runs them
 //! against a phase branch.
 
-use std::collections::HashSet;
-use std::time::Duration;
-
 use futures::future::join_all;
 use pg_worker_core::config::Config;
+use std::collections::HashSet;
+use std::time::Duration;
 use temporalio_common::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityOptions, ChildWorkflowOptions, WorkflowContext, WorkflowResult};
@@ -19,7 +18,6 @@ use crate::phase::{
     card_workflow_id, next_wave, phase_branch, replan_gate, select_legs,
 };
 use crate::workflow::{Card, CardInput};
-
 fn with_gate_inputs(legacy: crate::activities::CardInput) -> CardInput {
     CardInput {
         risk_tagged: legacy.claim.risk_tagged,
@@ -30,7 +28,6 @@ fn with_gate_inputs(legacy: crate::activities::CardInput) -> CardInput {
         legacy,
     }
 }
-
 #[cfg(test)]
 mod gate_input_tests {
     use super::*;
@@ -53,11 +50,9 @@ mod gate_input_tests {
         assert_eq!(input.base_sha.as_deref(), Some("abc"));
     }
 }
-
 #[workflow]
 #[derive(Default)]
 pub struct Phase {}
-
 #[workflow_methods]
 impl Phase {
     #[run]
@@ -65,7 +60,12 @@ impl Phase {
         ctx: &mut WorkflowContext<Self>,
         input: PhaseInput,
     ) -> WorkflowResult<PhaseOutput> {
-        let branch = match phase_branch(&input.key) {
+        let branch_name = if ctx.patched("phase-branch-hash-v1") {
+            phase_branch(&input.key)
+        } else {
+            crate::phase::legacy_phase_branch(&input.key)
+        };
+        let branch = match branch_name {
             Ok(branch) => branch,
             Err(msg) => {
                 return Ok(PhaseOutput {
