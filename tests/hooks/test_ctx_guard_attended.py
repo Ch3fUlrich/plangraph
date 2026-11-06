@@ -44,6 +44,38 @@ class Attended(WrapperCase):
             self.transcript_records(self.user(promptSource=source))
             self.assertIn("HARD-CAP", self.line(self.guard()))
 
+    def test_queued_and_sdk_launch_with_operator_is_attended(self):
+        for source in ("queued", "sdk"):
+            with self.subTest(source=source):
+                self.transcript_records(self.user(promptSource=source), self.user())
+                self.assert_silent(self.guard())
+
+    def test_machine_launch_with_human_metadata_is_rejected(self):
+        for content in ('<cross-session-message>relay</cross-session-message>',
+                        ' SYSTEM NOTIFICATION: synthetic',
+                        [{'type': 'text', 'text': '<system-reminder>synthetic</system-reminder>'}],
+                        [{'type': 'tool_result', 'content': 'synthetic'}]):
+            with self.subTest(content=content):
+                self.transcript_records(self.user(text=content), self.user())
+                self.assertIn("HARD-CAP", self.line(self.guard()))
+
+    def test_tail_boundary_keeps_complete_line_and_drops_partial(self):
+        module = load_module("ctx_guard_session")
+        launch = json.dumps(self.user()) + "\n"
+        operator = json.dumps(self.user()) + "\n"
+        usage = usage_line(read=301000)
+        padding = json.dumps({"type": "assistant", "padding": "x" * 4096}) + "\n"
+        for midline in (False, True):
+            with self.subTest(midline=midline):
+                self.write(launch + padding + operator + usage)
+                tail_size = len((operator + usage + "\n").encode()) - int(midline)
+                with mock.patch.object(module, "ATTENDED_TAIL_MAX", tail_size):
+                    until = module.attended_until(self.payload(), None)
+                if midline:
+                    self.assertIsNone(until)
+                else:
+                    self.assertIsNotNone(until)
+
     def test_first_user_must_be_plausible_launch(self):
         for extra in ({"promptSource": "system", "turnOrigin": "peer"},
                       {"turnOrigin": "task_notification"}, {"origin": {"kind": "peer"}},

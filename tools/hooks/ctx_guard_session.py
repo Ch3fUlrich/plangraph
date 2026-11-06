@@ -79,6 +79,20 @@ def human_provenance(record, sources):
             isinstance(origin, dict) and origin.get("kind") == "human")
 
 
+def human_content(record):
+    """Use the same non-machine user content check for launch and attendance."""
+    message = record.get("message", {})
+    content = message.get("content")
+    if isinstance(content, list):
+        if not content or any(not isinstance(b, dict) or b.get("type") != "text"
+                              or not isinstance(b.get("text"), str) for b in content):
+            return False
+        content = "\n".join(b["text"] for b in content)
+    if message.get("role") != "user" or not isinstance(content, str):
+        raise ValueError("invalid user content")
+    return bool(content.strip()) and not _MACHINE_PREFIX.match(content.lstrip())
+
+
 def attended_until(payload, doc):
     """Prove launch identity in a bounded head, then attendance in a bounded tail."""
     try:
@@ -90,10 +104,12 @@ def attended_until(payload, doc):
             fh.seek(0)
             head = fh.read(ATTENDED_TAIL_MAX)
             start = max(0, size - ATTENDED_TAIL_MAX)
-            fh.seek(start)
+            fh.seek(max(0, start - 1))
+            partial = bool(start and fh.read(1) != b"\n")
             tail = fh.read(ATTENDED_TAIL_MAX)
         if start:
             head = head[:head.rfind(b"\n") + 1]  # only complete head lines
+        if partial:
             cut = tail.find(b"\n") + 1
             if not cut:
                 return None
@@ -104,7 +120,8 @@ def attended_until(payload, doc):
             if not isinstance(record, dict):
                 return None
             if first is None and record.get("type") == "user":
-                if not human_provenance(record, ("typed", "queued", "sdk")):
+                if (not human_provenance(record, ("typed", "queued", "sdk")) or
+                        not human_content(record)):
                     return None
                 first = offset
             offset += len(line)
@@ -122,16 +139,7 @@ def attended_until(payload, doc):
                 continue  # launch brief never establishes attendance
             if not human_provenance(record, ("typed", "queued")):
                 continue
-            message = record.get("message", {})
-            content = message.get("content")
-            if isinstance(content, list):
-                if not content or any(not isinstance(b, dict) or b.get("type") != "text"
-                                      or not isinstance(b.get("text"), str) for b in content):
-                    continue
-                content = "\n".join(b["text"] for b in content)
-            if message.get("role") != "user" or not isinstance(content, str):
-                return None
-            if not content.strip() or _MACHINE_PREFIX.match(content.lstrip()):
+            if not human_content(record):
                 continue
             stamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
             if stamp.tzinfo is None:
