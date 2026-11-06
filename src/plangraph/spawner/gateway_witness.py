@@ -93,7 +93,7 @@ def _gateway_mimo(env):
     for key in ('provider', 'providers'):
         providers = cfg.get(key)
         block = providers.get('mimo') if isinstance(providers, dict) else None
-        if not isinstance(block, dict):
+        if not isinstance(block, dict) or block.get('disabled') is True:
             continue
         seen = True
         for name in ('options', 'settings'):
@@ -121,6 +121,9 @@ def served_models(rows, tag):
         if ok and model:
             provider = str(row.get('provider') or '').strip()
             provider = PROVIDER_ALIASES.get(provider, provider)
+            head, sep, rest = model.partition('/')
+            if sep and head in PROVIDER_ALIASES:
+                model = PROVIDER_ALIASES[head] + '/' + rest
             served.add(model if '/' in model or not provider else f'{provider}/{model}')
     return served
 
