@@ -97,9 +97,33 @@ def test_absolute_opencode_failure_evidence(monkeypatch):
     assert failure_reason(job) == 'harness exit code 5'
 
 
-def test_final_fallback_documents_missing_provenance():
-    assert 'No repository fixture proves exit 5' in (
-        test_nonzero_remains_failed_without_proven_final_protocol.__doc__)
+@pytest.mark.parametrize('ansi', [False, True])
+@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+def test_limit_words_in_progress_are_not_limits(monkeypatch, ansi, stream):
+    text = '→ Bash: retry after rate limit'
+    text = '\x1b[36m' + text + '\x1b[0m' if ansi else text
+    job = monitor(monkeypatch, '', **{stream: text}) if stream == 'stdout' else monitor(monkeypatch, text)
+    record = {}
+    assert fallthrough_reason(None, None, job, record) is None
+    assert record.get('reason') != 'harness_limit'
+
+
+@pytest.mark.parametrize('harness,line', [('opencode', 'Error: rate limit'),
+                                         ('claude', 'Error: rate limit'),
+                                         ('agy', 'Error: rate limit')])
+def test_real_limits_and_other_harnesses_unchanged(monkeypatch, harness, line):
+    monkeypatch.setattr('plangraph.spawner.exit_outcome._book_failure', lambda *args: None)
+    job = monitor(monkeypatch, line, harness=harness)
+    record = {}
+    assert fallthrough_reason(None, None, job, record) == 'harness_limit: ' + line
+    assert record['reason'] == 'harness_limit'
+
+
+def test_limit_progress_capture_stays_raw(monkeypatch):
+    text = '\x1b[36m→ Bash: retry after rate limit\x1b[0m'
+    job = monitor(monkeypatch, text, stdout=text)
+    assert fallthrough_reason(None, None, job, {}) is None
+    assert job.stdout == text and job.stderr == text
 
 
 @pytest.mark.parametrize('field', ['stderr_tail', 'error', 'reason'])
