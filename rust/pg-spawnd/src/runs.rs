@@ -1,7 +1,7 @@
 //! Local runs only. Not ported: served-model witnesses, harness-limit leg booking,
 //! writer no-change checks, git config guards, second-leg fall-through, writer
 //! continuation, completion events/delivery markers, dispatch-refusal gate, or
-//! SPAWNER-LIVENESS-D3622 watchdog. Context packs, inline diffs and writer env
+//! SPAWNER-LIVENESS-D3622 watchdog. Context packs and writer env
 //! belong to the Python launch adapter.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
@@ -66,6 +66,28 @@ impl Runs {
                 "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;
+
+        let mut review_args = serde_json::to_value(args).map_err(|_| internal("invalid args"))?;
+        review_args["role"] = role.clone();
+        let mode = crate::prompt::configured_mode(role.as_str().unwrap_or(""));
+        let repos = crate::prompt::repos();
+        if mode == "shadow" && leg["review_mode"] != "inline_only" {
+            let mut shadow: crate::launch::LaunchSpec = serde_json::from_value(json!({
+                "argv":launch.argv,"cwd":launch.cwd,"env":launch.env,"stdin":launch.stdin,
+                "prompt":launch.prompt,"warnings":null,"events":null
+            }))
+            .map_err(|_| internal("invalid shadow launch"))?;
+            let would_inline =
+                crate::prompt::prepare_review(&review_args, &leg, &mut shadow, &repos, true)
+                    .is_ok()
+                    && shadow.prompt != launch.prompt;
+            eprintln!(
+                "inline_review_diff would_inline={}",
+                usize::from(would_inline)
+            );
+        }
+        crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
+            .map_err(|e| internal(&e.to_string()))?;
 
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
@@ -158,7 +180,7 @@ impl Runs {
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 }
-fn store_prompt(
+pub(crate) fn store_prompt(
     state: &Path,
     id: &str,
     launch: &mut crate::launch::LaunchSpec,
