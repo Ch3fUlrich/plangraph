@@ -680,10 +680,10 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file")),
+        spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
         merge_principals=_principals(_cfg(config, "merge_principals")),
         skew=float(_cfg(config, "skew", DEFAULT_SKEW_S)),
     )
-    context.spawner_records = SpawnerRecordAdapter(_cfg(config, "spawner_records_dir"))
     return context

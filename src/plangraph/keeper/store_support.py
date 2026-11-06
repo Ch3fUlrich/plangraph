@@ -89,6 +89,7 @@ class SupportMixin:
             runs=self._adapter("runs"),
             semaphore=self._adapter("semaphore"),
             decisions=self._adapter("decisions"),
+            spawner_records=self._adapter("spawner_records"),
             now=now,
             claim_time=self._claim_time(item),
             bind_floor_sha=floor_sha,
