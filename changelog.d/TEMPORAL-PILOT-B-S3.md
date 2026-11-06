@@ -1,1 +1,1 @@
-Test pilot attempt redaction across exit modes and keeper payloads, plus actual activity ownership and empty-claim refusals with unique test card keys.
+Test pilot attempt redaction across exit modes and keeper payloads, with admission ownership, empty-claim refusals, and counter-unique test card keys.

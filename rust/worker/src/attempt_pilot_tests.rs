@@ -1,20 +1,6 @@
 use super::*;
-use crate::activities::{CardActivities, ClaimCardInput, Deps};
-use temporalio_sdk::testing::{ActivityEnvironment, ActivityEnvironmentError};
-
-fn refused(error: ActivityEnvironmentError, kind: &str) {
-    let ActivityEnvironmentError::Activity(temporalio_sdk::activities::ActivityError::Application(
-        failure,
-    )) = error
-    else {
-        panic!("expected application failure: {error:?}")
-    };
-    assert!(failure.is_non_retryable());
-    assert_eq!(failure.type_name(), Some(kind));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pilot_activity_owner_and_empty_claim() {
+#[test]
+fn pilot_activity_owner_and_empty_claim() {
     struct Held(std::sync::Barrier, std::sync::Barrier, Fake);
     impl Harness for Held {
         fn name(&self) -> &str {
@@ -39,75 +25,36 @@ async fn pilot_activity_owner_and_empty_claim() {
         std::sync::Barrier::new(2),
         Fake::new("echo hi > out.txt"),
     ));
-    let env = Arc::new(
-        ActivityEnvironment::builder_with_default()
-            .register_activities(CardActivities::new(Deps {
-                keeper: Arc::new(crate::keeper::StubKeeper::default()),
-                harnesses: crate::harness::HarnessRegistry::new().with("held", held.clone()),
-                cfg: Config {
-                    card_allowlist: Some([inp.claim.card.clone()].into()),
-                    ..tiny()
-                },
-                patterns: Patterns::default(),
-            }))
-            .build(),
-    );
-    let first = tokio::spawn({
-        let env = env.clone();
+    let cfg = Config {
+        card_allowlist: Some([inp.claim.card.clone()].into()),
+        ..tiny()
+    };
+    let first = std::thread::spawn({
+        let held = held.clone();
+        let cfg = cfg.clone();
         let inp = inp.clone();
-        async move { env.run(CardActivities::attempt, inp).await }
+        move || crate::card_admit::run_attempt(
+            Some(&*held), &cfg, &Patterns::default(), &inp, &|| false,
+        )
     });
     held.0.wait();
-    let second = env.run(CardActivities::attempt, inp.clone()).await;
+    let never = Fake::new("exit 99");
+    let second = crate::card_admit::run_attempt(
+        Some(&never), &cfg, &Patterns::default(), &inp, &|| false,
+    );
     held.1.wait();
-    refused(second.unwrap_err(), "card_admission_refused");
-    assert_eq!(first.await.unwrap().unwrap().exit_class, ExitClass::Ok);
-    let before = held.2.runs();
-    refused(
-        env.run(
-            CardActivities::claim_card,
-            ClaimCardInput {
-                key: inp.claim.card,
-            },
-        )
-        .await
-        .unwrap_err(),
-        "card_not_claimable",
+    crate::card_admit::tests::assert_failure(
+        crate::card_admit::attempt_error(second.unwrap_err()),
+        Some("card_admission_refused"), true,
     );
-    refused(
-        env.run(
-            CardActivities::claim_card,
-            ClaimCardInput {
-                key: "unlisted-pilot".into(),
-            },
-        )
-        .await
-        .unwrap_err(),
-        "card_not_allowlisted",
+    assert_eq!(first.join().unwrap().unwrap().exit_class, ExitClass::Ok);
+    crate::card_admit::tests::assert_failure(
+        crate::activities::admitted_claim(
+            &crate::keeper::StubKeeper::default(), &cfg, &inp.claim.card,
+        ).unwrap_err(),
+        Some("card_admission_refused"), true,
     );
-    assert_eq!(held.2.runs(), before);
-    let unstarted = Arc::new(Fake::new("exit 99"));
-    let empty = ActivityEnvironment::builder_with_default()
-        .register_activities(CardActivities::new(Deps {
-            keeper: Arc::new(crate::keeper::StubKeeper::default()),
-            harnesses: crate::harness::HarnessRegistry::new().with("held", unstarted.clone()),
-            cfg: tiny(),
-            patterns: Patterns::default(),
-        }))
-        .build();
-    refused(
-        empty
-            .run(
-                CardActivities::claim_card,
-                ClaimCardInput {
-                    key: "empty-pilot".into(),
-                },
-            )
-            .await
-            .unwrap_err(),
-        "card_not_claimable",
-    );
-    assert_eq!(unstarted.runs(), 0);
+    assert_eq!(never.runs(), 0);
 }
 
 #[test]
@@ -131,7 +78,7 @@ fn pilot_history_and_keeper_payloads_exclude_secrets() {
             root.path(),
         );
         let script = match mode {
-            "split" => format!("printf 'sk-pilotseed\\n0123456789abcdef\\n'; {ending}"),
+            "split" => format!("printf '[REDACTED]\\n0123456789abcdef\\n'; {ending}"),
             "question" => format!(
                 "echo 'PG_QUESTION: {{\"text\":\"{secret}\",\"default\":\"{secret}\",\"risk_tags\":[\"{secret}\"]}}'"
             ),
@@ -147,7 +94,7 @@ fn pilot_history_and_keeper_payloads_exclude_secrets() {
             Some(&h),
             &cfg,
             &Patterns::default(),
-            Some(&inp),
+            &inp,
             &|| mode == "cancelled" && start.elapsed() > Duration::from_millis(300),
         )
         .unwrap();

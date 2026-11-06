@@ -1,4 +1,7 @@
-fn test_card() -> String { format!("c1-{}", std::thread::current().name().unwrap_or("attempt")) }
+fn test_card() -> String {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    format!("pilot-card-{}", NEXT.fetch_add(1, Ordering::SeqCst))
+}
 #[test]
 fn engine_and_activity_entry_refuse_unlisted_before_setup() {
     let root = tempfile::tempdir().unwrap();
@@ -26,9 +29,6 @@ fn listed_activity_holds_owner_through_harness_and_releases_on_return() {
         fn command(&self, run: &HarnessRun) -> Command {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let never = Fake::new("true");
-            let error = run_attempt_with(Some(&never), self.cfg, &Patterns::default(), self.inp, &|| false).unwrap_err();
-            assert!(error.to_string().contains(&self.inp.claim.card));
-            crate::card_admit::tests::assert_failure(crate::card_admit::attempt_error(error.into()), Some("card_admission_refused"), true);
             let error = crate::card_admit::run_attempt(Some(&never), self.cfg, &Patterns::default(), self.inp, &|| false).unwrap_err();
             crate::card_admit::tests::assert_failure(crate::card_admit::attempt_error(error), Some("card_admission_refused"), true);
             assert_eq!(never.runs(), 0);

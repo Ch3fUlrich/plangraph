@@ -1307,10 +1307,7 @@ mod tests {
         }
     }
 
-    /// The `.git` rule is the only thing standing between a healthy worktree
-    /// and a redirected one below: git happily follows the planted link, and
-    /// every other check still passes — so a test that runs without the
-    /// symlink rule fails here.
+    /// The `.git` rule prevents redirecting a healthy worktree via a symlink.
     #[test]
     fn verify_refuses_a_worktree_whose_dot_git_is_a_symlink() {
         let (r, base) = repo();
@@ -1371,7 +1368,9 @@ mod tests {
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::Ok);
         assert_ne!(res.head, base, "the worker did commit");
-        let dest = root.path().join(AttemptId::new(test_card(), 1).dir_name());
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), 1).dir_name());
         assert!(
             !dest.join("HOOK_RAN").exists(),
             "the worker's commit ran a hook from the repository"
@@ -1476,7 +1475,9 @@ mod tests {
              && git -c user.name=harness -c user.email=harness@localhost \
              commit -q -m owned",
         );
-        let dest = root.path().join(AttemptId::new(test_card(), 1).dir_name());
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), 1).dir_name());
         let err = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap_err();
         assert!(
             matches!(&err, AttemptError::GitDir(m) if m.contains("worktree storage")),
@@ -1490,7 +1491,7 @@ mod tests {
         assert_ne!(own, base, "control: the harness committed in its own repo");
         // …and the attempt committed nothing: the claim's branch still sits at
         // the base, so no attacker-chosen head can be reported or merged.
-        let branch = AttemptId::new(test_card(), 1).branch();
+        let branch = AttemptId::new(inp.claim.card.clone(), 1).branch();
         assert_eq!(
             git(r.path(), &["rev-parse", &branch]),
             base,
@@ -1516,7 +1517,10 @@ mod tests {
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::Ok);
-        assert_eq!(res.branch, AttemptId::new(test_card(), 1).branch());
+        assert_eq!(
+            res.branch,
+            AttemptId::new(inp.claim.card.clone(), 1).branch()
+        );
         assert_ne!(res.head, base);
         assert!(!res.diff_hash.is_empty());
         assert_eq!(h.runs(), 1);
@@ -1722,17 +1726,18 @@ mod tests {
         let repo_s = r.path().to_string_lossy().into_owned();
         let h = Fake::new("echo hi > out.txt");
         let cfg = tiny();
+        let claim = claim(&repo_s, &base, &["out.txt"], "test -f out.txt");
         for n in [1u32, 2] {
-            let inp = input(
-                claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
-                n,
-                root.path(),
-            );
+            let inp = input(claim.clone(), n, root.path());
             let res = run_attempt(&h, &cfg, &Patterns::default(), &inp, &|| false).unwrap();
             assert_eq!(res.exit_class, ExitClass::Ok);
         }
-        let d1 = root.path().join(AttemptId::new(test_card(), 1).dir_name());
-        let d2 = root.path().join(AttemptId::new(test_card(), 2).dir_name());
+        let d1 = root
+            .path()
+            .join(AttemptId::new(claim.card.clone(), 1).dir_name());
+        let d2 = root
+            .path()
+            .join(AttemptId::new(claim.card.clone(), 2).dir_name());
         assert!(d1.exists() && d2.exists());
         assert_ne!(d1, d2);
     }
@@ -1905,7 +1910,7 @@ mod tests {
         assert_eq!(res.exit_class, ExitClass::Ok);
         let written = std::fs::read_to_string(
             root.path()
-                .join(AttemptId::new(test_card(), 2).dir_name())
+                .join(AttemptId::new(inp.claim.card.clone(), 2).dir_name())
                 .join("out.txt"),
         )
         .unwrap();
@@ -1928,7 +1933,7 @@ mod tests {
         // The worktree exists so the probe that follows has something to look at.
         assert!(
             root.path()
-                .join(AttemptId::new(test_card(), 3).dir_name())
+                .join(AttemptId::new(inp.claim.card.clone(), 3).dir_name())
                 .is_dir()
         );
     }
