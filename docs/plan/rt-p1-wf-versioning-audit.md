@@ -2,6 +2,40 @@
 
 ## Fix-round status (supersedes the original snapshot below)
 
+### PR #536 run-ec395ce01a4f431a95032283b832dca3
+
+- **V1 routing gap closed:** `process_crash.rs` now registers real
+  `WorkerDeploymentOptions` with distinct old/new build IDs and Pinned behavior.
+  At both activity and timer crash points the old worker is SIGKILLed, new is
+  promoted current, and a replacement old-build process completes the pinned
+  execution with result `old`. Live test: 2 passed, including child entry point.
+  Both processes deliberately use the same compiled executable: this proves
+  Temporal deployment pinning and process recovery, **not** cross-release
+  replay compatibility, independently compiled artifact identity, or Card-specific
+  SIGKILL behavior. Released-history replay remains separate evidence.
+- **V2 branch-coverage gap closed:** `card_resume_restore.rs` executes production
+  Card with persisted Resume, then starts a fresh poller. 2,010 real signals
+  cross the history cap before polling; the original run must Continue-As-New.
+  The resumed execution completes with attempt numbers 8/9, prior prompt answer
+  and queued question answer, with no question timeout. Wait count 100 does not
+  cause endless rollover because the per-run baseline is restored. Only fixture
+  helpers moved to `tests/support/mod.rs`; no existing test moved or grew e2e.
+  This is targeted behavioral coverage, not an assertion of every Resume field
+  or every possible signal ordering.
+- **Mutation evidence:** independently deleting the restore block, deleting the
+  answers splice, and replacing `ctx.history_length()` with zero each made the
+  live Card test red. Production source restored; final live test passed (1).
+  Extracted e2e target compiles; cargo fmt and tracked-file size check pass.
+- **CLI:** downloaded CI's Temporal CLI 1.9.1 under
+  `$HOME/.cache/pg-temporal-1.9.1`, verified CI's SHA256, and exported
+  `PG_TEMPORAL_CLI` for live commands; no sudo or system install.
+- **Routing-owned CI follow-up:** leave `reject_changes` unchanged. In
+  `.github/workflows/tests.yml`, the required `pytest` job needs the PR-only line
+  `python tests/test_workflow_archive.py "$BASE_SHA"` (with merge-base history
+  fetched), separate from pytest's unit-test invocation. No workflow edited.
+  `rust-worker` already supplies the live server address and `TEMPORAL_CLI`, and
+  its existing `cargo test` discovers both integration files without a new line.
+
 ### PR #536 run-3b6a01ae checkpoint
 
 - **V3 closed:** the mandatory-identity matrix now asserts the exact
