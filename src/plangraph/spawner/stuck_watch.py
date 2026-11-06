@@ -45,6 +45,13 @@ def outbound(proc, members):
                     inodes.add(target[8:-1])
         except OSError:
             return None
+    try:
+        return _net_active(proc, members, inodes)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _net_active(proc, members, inodes):
     active = False
     for pid in members:  # per-process network namespace, not the watchdog's
         for name in ('tcp', 'tcp6', 'udp', 'udp6'):

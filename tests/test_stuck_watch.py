@@ -325,6 +325,24 @@ def test_racing_fd_reports_unavailable_and_resets_interval(seat, monkeypatch):
     assert not calls
 
 
+@pytest.mark.parametrize('fault', [FileNotFoundError('gone'), ''])
+def test_unreadable_net_table_reports_unavailable(seat, monkeypatch, fault):
+    from pathlib import Path
+    _, _, _, calls, _, check = seat
+    check(0)
+    original = Path.read_text
+    def broken(path, *args, **kwargs):
+        if path.name == 'tcp':
+            if fault:
+                raise fault
+            return fault
+        return original(path, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'read_text', broken)
+        assert check(300)[0]['reason'] == 'process/socket evidence unavailable'
+    assert not calls
+
+
 def test_new_mismatched_record_overrides_previous_proof(seat):
     _, _, record, calls, _, check = seat
     check(0)
