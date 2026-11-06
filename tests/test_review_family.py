@@ -29,6 +29,8 @@ MODELS = [
     ("vendor/mimo-7b", "xiaomi"),
     ("llama-4", "meta"),
     ("muse-spark", "meta"),
+    ("grok", "xai"),
+    ("omniroute/gc/grok-4.7", "xai"),
     ("meta/llama-3-70b", "meta"),
     ("deepseek-r1", "deepseek"),
     ("deepseek-chat", "deepseek"),

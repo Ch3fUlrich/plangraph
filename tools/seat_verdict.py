@@ -48,6 +48,7 @@ FAMILIES = (
     (r"claude|sonnet|opus|haiku", "anthropic"),
     (r"glm|zhipu", "zhipu"),
     (r"nemotron", "nvidia"),
+    (r"grok", "xai"),
 )
 KNOWN_FAMILIES = frozenset(family for _, family in FAMILIES)
 # accept is pass (D-3544); whole words only, so "acceptable" stays unknown.

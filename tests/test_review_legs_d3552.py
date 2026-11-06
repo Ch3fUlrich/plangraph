@@ -105,7 +105,8 @@ def test_review_route_keeps_lifted_families():
     ids = {leg.id for leg in plan.legs}
     assert {"opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"} <= ids
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert not set(NEW_IDS) & set(reasons)
+    assert not (set(NEW_IDS) - {"opencode-go-muse-spark"}) & set(reasons)
+    assert reasons["opencode-go-muse-spark"] == "off_family"
 
 
 def test_review_xiaomi_writer_yields_two_new_leg_seat_families():
