@@ -206,8 +206,6 @@ def unavailable_reason(exit_code, stdout, stderr):
             if _ERROR_SHAPED.match(text) and _MODEL_UNAVAILABLE.fullmatch(text):
                 return text
             if not _ERROR_SHAPED.match(text):
-                if is_stderr and marked(text):
-                    return line
                 continue
         if not marked(text):
             continue
@@ -218,7 +216,7 @@ def unavailable_reason(exit_code, stdout, stderr):
                 return line
         except ValueError:
             # A diagnostic may be one line of a pretty-printed JSON error.
-            if is_stderr or (re.match(r'^[{\[,]?\s*"error"\s*:', text) and marked(text.split(':', 1)[1])):
+            if re.match(r'^[{\[,]?\s*"error"\s*:', text) and marked(text.split(':', 1)[1]):
                 return line
     return None
 
