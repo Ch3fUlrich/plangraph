@@ -3,9 +3,10 @@
 
 Runs the tools/split/scrub_check rules over the files changed in the commits being
 pushed (diff vs the remote sha; for a new branch, vs the merge-base with origin/main).
-The private word list path comes ONLY from the environment: PLANGRAPH_SCRUB_WORDS,
-with optional extra rules in PLANGRAPH_SCRUB_RULES.  Unset: the public patterns still
-run and a one-line notice is printed.  Any hit refuses the push (exit 1); the output
+PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
+unreadable list refuses every push. Public remotes use the default (chmod 600);
+if absent, warn once. remote.<name>.plangraph-private=true skips private matching.
+Public patterns always run; PLANGRAPH_SCRUB_RULES adds rules. Any hit refuses (exit 1); output
 is file:line and rule id only -- a matched value is never printed, nor the words-file
 path.  Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 """
@@ -111,14 +112,36 @@ def main():
     if file_size_gate():
         return 1
     refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
-    words = os.environ.get("PLANGRAPH_SCRUB_WORDS") or None
-    if not words:
-        print("pre-push: PLANGRAPH_SCRUB_WORDS unset: public patterns only, "
-              "the private-word rule is inactive", file=sys.stderr)
+    explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
+    words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
+    remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
+    private = git_out("config", "--local", "--bool", f"remote.{remote}.plangraph-private") == "true"
     rules_files = [str(SPLIT / name) for name in BASE_RULES if (SPLIT / name).is_file()]
     if os.environ.get("PLANGRAPH_SCRUB_RULES"):
         rules_files.append(os.environ["PLANGRAPH_SCRUB_RULES"])
     try:
+        if explicit:
+            path = Path(words)
+            if not words or not path.stat().st_mode & 0o444:
+                raise PermissionError
+            with path.open("rb"):
+                pass
+        elif not private:
+            path = Path.home() / ".config/plangraph/scrub-words.txt"
+            try:
+                mode = path.stat().st_mode
+            except FileNotFoundError:
+                print("pre-push: PLANGRAPH_SCRUB_WORDS unset: public patterns only, "
+                      "the private-word rule is inactive", file=sys.stderr)
+            else:
+                if mode & 0o077:
+                    print("pre-push: private list requires chmod 600: push refused", file=sys.stderr)
+                    return 1
+                if not mode & 0o444:
+                    raise PermissionError
+                words = str(path)
+        if private:
+            words = None
         cfg = sc.build_config(words_file=words, rules_files=rules_files)
     except Exception as exc:  # fail closed; never echo the paths
         print(f"pre-push: bad scrub config: {type(exc).__name__}: push refused",

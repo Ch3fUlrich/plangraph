@@ -1186,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_empty_check_kind_runs_red_first_then_writer() {
+    fn constructed_default_check_kind_runs_red_first_then_writer() {
         assert_legacy_change_path(false);
     }
 
@@ -1210,9 +1210,9 @@ mod tests {
             let json = serde_json::to_string(&value).unwrap();
             c = serde_json::from_str::<Claim>(&json).unwrap();
         } else {
-            c.check_kind.clear();
+            c.check_kind = Claim::default().check_kind;
         }
-        assert_eq!(c.check_kind, "");
+        assert_eq!(c.check_kind, "change");
         let inp = input(c, 1, root.path());
         // The red base check creates scratch; cleanup proves that gate ran.
         let h = Fake::new("test ! -e marker && echo hi > out.txt");

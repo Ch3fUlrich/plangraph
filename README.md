@@ -78,3 +78,20 @@ interface stops moving.
 ## Status
 
 Work in progress. Plans, batches, status and handoffs live in a separate private data repository (SPLIT-DATA-REPO).
+## OpenCode lane wake runner
+
+The local lane runner supports `once` or `loop --interval 30 --idle-min 5`.
+Pass `--port PORT --password-file FILE --state STATE --inbox INBOX --cursor CURSOR --log LOG`;
+use `--session-id ID` instead of `--state` for an explicit session.
+The password file must be mode 0600. Inbox lines are tasks; `STOP` terminates
+the runner. Keep one cursor per inbox, and retain it across restarts.
+Delivery is at-most-once: a locked, atomic, fsynced cursor reservation precedes
+POST, so crashes or ambiguous failures can lose a task but never replay it
+automatically. A persisted message snapshot prevents repeat wakes during the
+same observed idle period. Logs contain metadata only; exit codes are 0 success,
+2 usage/configuration/HTTP errors, and 3 server unavailable.
+Run the tool with Python:
+
+```sh
+python tools/oc_lane_wake.py --help
+```

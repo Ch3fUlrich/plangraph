@@ -18,7 +18,8 @@ pub const MAX_TAIL_BYTES: usize = 64 * 1024;
 fn patterns() -> &'static [regex::Regex] {
     static RS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     RS.get_or_init(|| {
-        let specs: [&'static str; 9] = [
+        let tokens = super::redact_tokens::pattern();
+        let specs: [&str; 9] = [
             // 1. PEM private-key blocks, complete: header through the matching
             //    footer, newlines included. Applied FIRST and to the whole
             //    text, because a multi-line secret cannot be redacted line by
@@ -52,9 +53,8 @@ fn patterns() -> &'static [regex::Regex] {
             //     CR/LF. The tail class is unchanged; 4a runs first and handles
             //     the `[REDACTED]` placeholder and any glued tail after it.
             r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
-            // 5. Prefixed tokens: one alternation; every prefix is distinctive
-            // enough to match on its own.
-            r"\b(?:x?sk)-[A-Za-z0-9_-]+|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
+            // 5. Prefixed tokens share their body policy with wrapped joins.
+            &tokens,
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
             // 7. Long hex — a 40-char git sha is caught too; acceptable, and shas
@@ -70,19 +70,19 @@ fn patterns() -> &'static [regex::Regex] {
     })
 }
 
-/// Replace token-shaped secrets in `text` with `REDACTED`.
+/// Replace token-shaped secrets in `text` with `[REDACTED]`.
 ///
 /// Patterns 1–2 handle multi-line PEM blocks and are applied first, to the
-/// whole text; the rest are line-local. Idempotent: running an already
-/// redacted text through again changes nothing.
+/// whole text, as are the remaining patterns; wrapped joins run before pattern 5.
+/// Idempotent: running already-redacted text through again changes nothing.
 pub fn redact(text: &str) -> String {
     let rs = patterns();
-    // 1–7 in order.
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
     let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
     let out = rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
+    let out = super::redact_wrapped::redact_wrapped(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
     let out = rs[7].replace_all(&out, REDACTED).into_owned();

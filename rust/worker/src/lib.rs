@@ -9,6 +9,7 @@ pub mod harness;
 pub mod keeper;
 pub mod mergelock;
 pub mod opencode_events;
+pub mod output_redact;
 pub mod phase;
 mod phase_ancestry;
 pub mod phase_workflow;

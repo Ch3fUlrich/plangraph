@@ -48,6 +48,9 @@ pub struct Config {
     #[serde(default)]
     hysteresis: bool,
     hysteresis_config: Option<crate::fleet_foundation_hysteresis::Config>,
+    #[serde(default)]
+    seat_supply: bool,
+    seat_supply_config: Option<crate::fleet_foundation_seats::Config>,
     state_path: Option<PathBuf>,
     outbox_path: Option<PathBuf>,
     acks_path: Option<PathBuf>,
@@ -79,6 +82,8 @@ struct State {
     pairs: BTreeMap<String, PairState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hysteresis: Option<crate::fleet_foundation_hysteresis::State>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    seat_supply: Option<crate::fleet_foundation_seats::State>,
 }
 fn append(path: &Path, value: Value) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(&value).map_err(|_| "outbox encoding")?;
@@ -110,6 +115,16 @@ pub fn invoke(args: &[String], env: Option<PathBuf>, raw: u64, wall: i64) -> Res
     run(config, raw, wall)
 }
 fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
+    let seats = if c.seat_supply {
+        let section = c
+            .seat_supply_config
+            .as_ref()
+            .ok_or("missing control section")?;
+        section.validate()?;
+        Some(section)
+    } else {
+        None
+    };
     let pairs = if c.stale_pair {
         Some(c.pairs.as_ref().ok_or("missing control section")?)
     } else {
@@ -176,6 +191,7 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
             clock: None,
             pairs: BTreeMap::new(),
             hysteresis: None,
+            seat_supply: None,
         },
         Err(_) => return Err("state read failed".into()),
     };
@@ -284,15 +300,55 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
     } else {
         Vec::new()
     };
+    let (seat_summary, requests) = if let Some(c) = seats {
+        crate::fleet_foundation_seats::tick(
+            c,
+            &mut s.seat_supply,
+            wall,
+            clock.total_ms,
+            &acks,
+            heartbeat,
+            &mut |id| send("alarm", id, None),
+            &mut opened,
+        )
+        .unwrap_or_else(|error| {
+            diagnostics.push(error);
+            (Value::Null, Vec::new())
+        })
+    } else {
+        (Value::Null, Vec::new())
+    };
     let _ = send("heartbeat", &format!("heartbeat:{now}"), None);
     s.clock = Some(clock);
     diagnostics.extend(send_errors);
-    serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
-    temp.as_file().sync_all().map_err(|_| "state sync")?;
-    temp.persist(state_path).map_err(|_| "state rename")?;
+    save_then_requests(
+        || {
+            serde_json::to_writer(&mut temp, &s).map_err(|_| "state encode")?;
+            temp.as_file().sync_all().map_err(|_| "state sync")?;
+            temp.persist(state_path).map_err(|_| "state rename")?;
+            Ok(())
+        },
+        outbox,
+        requests,
+        &mut diagnostics,
+    )?;
     Ok(
-        json!({"observations":observations,"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
+        json!({"seat_supply":seat_summary,"observations":observations,"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
     )
+}
+pub(super) fn save_then_requests(
+    save: impl FnOnce() -> Result<(), String>,
+    outbox: &Path,
+    requests: Vec<crate::fleet_seat_probe::Request>,
+    diagnostics: &mut Vec<String>,
+) -> Result<(), String> {
+    save()?;
+    for request in requests {
+        if let Err(error) = append(outbox, json!({"kind":"probe_request","request":request})) {
+            diagnostics.push(error);
+        }
+    }
+    Ok(())
 }
 fn record_alarm(
     finding: &pair::Finding,

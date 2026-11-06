@@ -172,6 +172,8 @@ fn fleet_foundation_lock() {
         stale_pair: false,
         hysteresis: false,
         hysteresis_config: None,
+        seat_supply: false,
+        seat_supply_config: None,
         state_path: Some(state.clone()),
         outbox_path: Some(d.path().join("out")),
         acks_path: Some(d.path().join("acks")),
