@@ -50,11 +50,16 @@ or copied into a unit or into `render.env`.
 
 ## Host Bootstrap & Spawner Setup
 
-Host runtime packages and agent CLI dependencies are defined declaratively and delegated to [AutoOS](https://github.com/mauls/AutoOS) without duplicating installation logic.
+`bootstrap.sh` (Linux) and `bootstrap.ps1` (Windows) are the one plangraph-owned worker-online procedure.
+Preconditions: install Python and plangraph, install required runtime and agent packages, sign in and set up trust for SSH yourself.
+AutoOS is optional, only with `--autoos-root` / `-AutoOSRoot`; no discovery or environment dependency.
+`--skip-autoos` / `-SkipAutoOS` remain compatible; `requirements-host.json` lists optional AutoOS components.
 
-- `requirements-host.json`: Inventory of required AutoOS components split into `core` (`git`, `python`, `nodejs`, `tailscale`, `omniroute`, `opencode-cli`) and `agents` (`claude-code`, `qwen-code`, `gemini-cli`, `qoder-cli`, `agent-skill-links`).
-- `bootstrap.ps1` (Windows): Resolves AutoOS root, invokes `setup.ps1 -Only <components> -Yes`, and initializes the local SQLite spawner catalog DB.
-- `bootstrap.sh` (Linux / macOS): Resolves AutoOS root, invokes `setup.sh --only <components> --yes`, and initializes the local SQLite spawner catalog DB.
+First a human runs the worker dry-run below and reviews per-rule counts from `stall_watchdog tick --dry-run`.
+The existing no-findings status means count zero. Bootstrap dry-run only runs that read-only tick and prints
+intended commands: no setup, catalog init, directories, config, units, tasks or systemctl changes.
+Then a human or explicitly pre-authorized agent runs normal bootstrap: count, optional AutoOS, catalog init,
+watchdog install, stopping on failure. Without authorization an agent stops after dry-run and reports the normal command.
 
 Usage:
 ```powershell
@@ -63,10 +68,22 @@ Usage:
 .\deploy\bootstrap.ps1
 ```
 ```bash
-# Linux / macOS
+# Linux
 ./deploy/bootstrap.sh --dry-run
 ./deploy/bootstrap.sh
 ```
 
-For complete spawner catalog, routing ladder, and MCP details, see [`docs/SPAWNER.md`](../docs/SPAWNER.md).
-
+Normal bootstrap calls `python3 -m plangraph.spawner.stall_watchdog install --host linux`, which creates user
+units and enables `plangraph-stall-watchdog.timer`. Windows calls
+`python -m plangraph.spawner.stall_watchdog install --host windows`: it creates the recurring **Plangraph Stall Watchdog** scheduled task, not a systemd timer.
+These persistent steps require human action or explicit pre-authorization; no sudo or linger workaround.
+On the orchestrator, separately run the same dry-run/review/authorized bootstrap to create units; the remote
+timer is not auto-enabled. Until part B adds probe host/config arguments, a human adds the host to
+`PLANGRAPH_PROBE_HOSTS` in its `watchdog.env` (and sets `PLANGRAPH_PROBE_NOTIFY_CMD`), reviews config, then
+explicitly runs `systemctl --user enable --now plangraph-remote-probe.timer` after approval.
+See [remote probes](../docs/operations/spawner-remote-probes.md) for config semantics.
+This supersedes HOST3's AutoOS requirement only for these steps, not hardware readiness, private CI or real-run evidence.
+HOST-AGENT still owns sampling and its service or Run key, WSL2, GPU support, privacy, idempotence, drift, CPU budget;
+this watchdog task is not that service. HOST-SAMPLES-API owns token ingest, server clock/staleness,
+rollups/retention/migrations. Bootstrap depends on neither and adds no sampler.
+For catalog/routing/MCP details see [`docs/SPAWNER.md`](../docs/SPAWNER.md).

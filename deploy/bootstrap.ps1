@@ -20,23 +20,6 @@ function Resolve-AutoOSRoot {
         return (Resolve-Path $ExplicitPath).Path
     }
 
-    if ($env:AUTOOS_ROOT -and (Test-Path -Path $env:AUTOOS_ROOT)) {
-        return (Resolve-Path $env:AUTOOS_ROOT).Path
-    }
-
-    $candidates = @(
-        (Join-Path $PSScriptRoot "..\..\AutoOS"),
-        (Join-Path $PSScriptRoot "..\..\..\AutoOS"),
-        (Join-Path $HOME "Documents\Code\AutoOS"),
-        (Join-Path $HOME ".cache\plangraph\AutoOS")
-    )
-
-    foreach ($cand in $candidates) {
-        if (Test-Path -Path (Join-Path $cand "setup.ps1")) {
-            return (Resolve-Path $cand).Path
-        }
-    }
-
     return $null
 }
 
@@ -57,11 +40,13 @@ function Invoke-PlangraphBootstrap {
 
     Write-Host "Resolved host components ($($allComponents.Count)): $($allComponents -join ', ')"
 
-    $resolvedAutoOS = Resolve-AutoOSRoot -ExplicitPath $AutoOSRoot
+    & python -m plangraph.spawner.stall_watchdog tick --dry-run
+    if ($LASTEXITCODE -ne 0) { throw "Watchdog count failed" }
 
-    if (-not $SkipAutoOS) {
+    if (-not $SkipAutoOS -and $AutoOSRoot) {
+        $resolvedAutoOS = Resolve-AutoOSRoot -ExplicitPath $AutoOSRoot
         if (-not $resolvedAutoOS) {
-            Write-Warning "AutoOS repository not found. Provide -AutoOSRoot or set AUTOOS_ROOT environment variable."
+            throw "AutoOS repository not found: $AutoOSRoot"
         } else {
             $setupPs1 = Join-Path $resolvedAutoOS "setup.ps1"
             Write-Host "Invoking AutoOS setup at: $setupPs1"
@@ -76,7 +61,7 @@ function Invoke-PlangraphBootstrap {
                 try {
                     & powershell.exe @setupArgs
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Error "AutoOS setup failed with exit code $LASTEXITCODE"
+                        throw "AutoOS setup failed with exit code $LASTEXITCODE"
                     }
                 } finally {
                     $ErrorActionPreference = $prevEap
@@ -99,7 +84,7 @@ function Invoke-PlangraphBootstrap {
         try {
             & python @pythonArgs
             if ($LASTEXITCODE -ne 0) {
-                Write-Error "Catalog DB init-and-seed failed with exit code $LASTEXITCODE"
+                throw "Catalog DB init-and-seed failed with exit code $LASTEXITCODE"
             }
         } finally {
             $ErrorActionPreference = $prevEap
@@ -107,9 +92,11 @@ function Invoke-PlangraphBootstrap {
     }
 
     $watchdogArgs = @("-m", "plangraph.spawner.stall_watchdog", "install", "--host", "windows")
-    if ($DryRun) { $watchdogArgs += "--dry-run" }
-    & python @watchdogArgs
-    if ($LASTEXITCODE -ne 0) { throw "Watchdog installation failed" }
+    if ($DryRun) { Write-Host "[DRY-RUN] Would execute: python $($watchdogArgs -join ' ')" }
+    else {
+        & python @watchdogArgs
+        if ($LASTEXITCODE -ne 0) { throw "Watchdog installation failed" }
+    }
 
     Write-Host "Plangraph bootstrap completed successfully."
 }

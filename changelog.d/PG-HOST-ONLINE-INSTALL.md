@@ -1,0 +1,1 @@
+- **PG-HOST-ONLINE-INSTALL:** Make host bootstrap AutoOS-optional, count findings before installation, and keep dry-run read-only; document human authorization (part A).
