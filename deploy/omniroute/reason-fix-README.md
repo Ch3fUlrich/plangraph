@@ -102,7 +102,7 @@ loaded at runtime:
 ## Applying the Patch
 
 ```powershell
-# From the plangraph repository root:
+# From this directory:
 pwsh -File ./reason-fix-reapply.ps1
 ```
 

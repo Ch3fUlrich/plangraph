@@ -48,8 +48,8 @@ explicit strategy. Account identifiers and per-site endpoints are not exported.
 The imported file list is the `COPIED` list in `tests/test_omniroute_home.py`.
 Relative to `configuration/omniroute` at `ff2f7f97`, dated probe records
 are omitted; `custom-models.json` replaces the vendor documentation domain
-before ` model table` with `<vendor-model-documentation>`. All other imported
-bytes initially matched the source. The complete byte-difference inventory follows
+before ` model table` with `<vendor-model-documentation>`. The complete
+byte-difference inventory follows
 (including the PowerShell BOM, preserved unchanged). New README, exporter and
 combo-set files are additions, not source replacements.
 
@@ -62,7 +62,7 @@ Byte-difference inventory (all other copied bytes remain unchanged):
 
 | File | Differences from the source |
 | --- | --- |
-| `apply.sh` | Local documentation paths; explicit read-only root; require gateway URL or port, export CLI URL, use configured launch port and neutral diagnostics; neutral provider-failure comment. |
+| `apply.sh` | Local documentation paths; explicit read-only root; require gateway URL or port, export CLI URL, use configured launch port and neutral diagnostics; placeholder glob changes from `REPLACE_WITH_*` to `"REPLACE_WITH_"*`; neutral provider-failure comment. |
 | `apply-custom-models.sh` | Local documentation paths; explicit read-only root; require gateway URL or port with no default. |
 | `apply.ps1` | Local documentation paths; explicit read-only root; require gateway URL or port, export CLI URL, use configured launch port and neutral diagnostics. |
 | `apply-capability-overrides.ps1` | Local documentation paths; explicit read-only root; replace Gateway parameter/default with required environment URL or port; preserve BOM. |
@@ -70,11 +70,11 @@ Byte-difference inventory (all other copied bytes remain unchanged):
 | `vertex-failover-knobs.json` | Replace site restart port with `<port>`. |
 | `qwen-clamp-reapply-README.md` | Three invocation paths use local sibling scripts, with usage from this directory; diagnostic origin becomes an untracked diagnostic script; example package directory becomes `<omniroute-package-dir>`. |
 | `qwen-clamp-reapply.ps1` | Diagnostic origin becomes an untracked diagnostic script; example package directory becomes `<omniroute-package-dir>`. |
-| `reason-fix-README.md` | Two invocation paths use local sibling scripts; isolated-instance and shared-gateway verification ports both become `<port>`; example package directory becomes `<omniroute-package-dir>`. |
+| `reason-fix-README.md` | Two invocation paths use local sibling scripts; repository-root wording changes from “From the AutoOS repository root” to “From this directory” (correcting the intermediate “From the plangraph repository root”); isolated-instance and shared-gateway verification ports both become `<port>`; example package directory becomes `<omniroute-package-dir>`. |
 | `reason-fix-reapply.ps1` | Two patch comments refer to the local README; example package directory becomes `<omniroute-package-dir>`. |
 | `reasoning-defense.md` | Scope becomes `./`. |
 | `verify-clamp.mjs` | Patch documentation path becomes local. |
-| `custom-models.json` | Vendor documentation domain becomes `<vendor-model-documentation>`. |
+| `custom-models.json` | Vendor documentation domain becomes `<vendor-model-documentation>`; “the AMS token-plan host” becomes “the vendor's token-plan host”. |
 
 
 ## Scrub false-positive audit
