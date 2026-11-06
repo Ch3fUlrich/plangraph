@@ -231,18 +231,19 @@ impl Card {
         ctx: &mut WorkflowContext<Self>,
         input: CardInput,
     ) -> WorkflowResult<CardOutput> {
-        // A constant: the policy and the activity options must not vary per run.
+        if ctx.patched("card-plan-key-memo-v1") {
+            ctx.upsert_memo([(
+                "plan_key",
+                Some(temporalio_common::MemoValue::new(input.claim.card.clone())),
+            )])?;
+        }
         let cfg = Config::default();
-        // A child of the workflow token, so native cancel and the signal both reach
-        // the activity.
         let op = ctx.cancellation_token().child_token();
         ctx.state_mut(|s| s.op = Some(op.clone()));
-        // A signal can be applied before this body runs, when `op` was still empty.
         if ctx.state(|s| s.cancel_requested) {
             op.cancel_with_reason("cancel before start".to_string());
         }
 
-        // Local state, rebuilt exactly on replay.
         let mut history: Vec<Attempt> = Vec::new();
         let mut base_sha = input.claim.base_sha.clone();
         let mut n: u32 = 0;
@@ -251,7 +252,6 @@ impl Card {
         let mut context = ContextClass::K128;
         let mut limited: Vec<String> = Vec::new();
         let mut leg: LegSpec = input.legs[0].clone();
-        // Answers to the agent's questions; each rides in the next prompt.
         let mut answers: Vec<String> = Vec::new();
         // Questions answered so far; at the limit the next one parks the card.
         let mut question_rounds: u32 = 0;

@@ -137,6 +137,12 @@ def _exit_class(name: str, attrs: dict, result: dict) -> str:
 def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProjection:
     events = _events(history)
     started = _attrs(events[0][2], events[0][1])
+    # Rust Card writes its memo before activities; child options lack a memo field.
+    for _, name, ev in events:
+        if name == "WORKFLOW_PROPERTIES_MODIFIED":
+            memo = _dict(_attrs(ev, name).get("upsertedMemo"))
+            if "plan_key" in _dict(memo.get("fields")):
+                started = {**started, "memo": memo}
     plan_key = _plan_key(started, workflow_id)
     card = _is_card(started)       # an unrelated workflow in the namespace never raises shape alarms
 

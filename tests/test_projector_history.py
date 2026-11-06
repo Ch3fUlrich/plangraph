@@ -22,6 +22,25 @@ def project(name):
     return project_history(history, workflow_id=wf, run_id=run)
 
 
+def test_phase_child_upserted_plan_key():
+    history, _, run = load("01_ok_single")
+    history = copy.deepcopy(history)
+    history["events"][0]["workflowExecutionStartedEventAttributes"].pop("memo", None)
+    history["events"].insert(1, {
+        "eventId": 2,
+        "eventType": "EVENT_TYPE_WORKFLOW_PROPERTIES_MODIFIED",
+        "workflowPropertiesModifiedEventAttributes": {"upsertedMemo": {"fields": {
+            "plan_key": {
+                "metadata": {"encoding": base64.b64encode(b"json/plain").decode()},
+                "data": base64.b64encode(b'"DEMO-1"').decode(),
+            }
+        }}},
+    })
+    p = project_history(history, workflow_id="card:phase:DEMO-1:1", run_id=run)
+    assert p.plan_key == "DEMO-1"
+    assert p.attempts and all(a.plan_key == "DEMO-1" for a in p.attempts)
+
+
 def attempts(p):
     """(activity_id, attempt, scheduled, closed, exit_class) per attempt."""
     return [(a.activity_id, a.attempt, a.scheduled_event_id, a.closed_event_id, a.exit_class)

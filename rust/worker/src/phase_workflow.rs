@@ -1,6 +1,3 @@
-//! Phase workflow: plans a keeper gate, claims startable cards, and runs them
-//! against a phase branch.
-
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -82,13 +79,13 @@ impl Phase {
         };
 
         let cfg = Config::default();
+        let claim_before_branch = ctx.patched("phase-claim-before-branch-v1");
         let mut attempted = HashSet::new();
         let mut merged = Vec::new();
         let mut not_merged = Vec::new();
         let mut waves = 0;
         let mut first_plan = true;
         let mut last_blocked: Vec<String> = Vec::new();
-
         loop {
             let plan: PhasePlan = ctx
                 .execute_activity(
@@ -142,35 +139,41 @@ impl Phase {
                 break;
             }
 
-            let head: PhaseBranchResult = match ctx
-                .execute_activity(
-                    CardActivities::ensure_phase_branch,
-                    PhaseBranchInput {
-                        repo: input.repo.clone(),
-                        base_branch: input.base_branch.clone(),
-                        branch: branch.clone(),
+            let mut head: Option<PhaseBranchResult> = if claim_before_branch {
+                None
+            } else {
+                Some(
+                    match ctx
+                        .execute_activity(
+                            CardActivities::ensure_phase_branch,
+                            PhaseBranchInput {
+                                repo: input.repo.clone(),
+                                base_branch: input.base_branch.clone(),
+                                branch: branch.clone(),
+                            },
+                            activity_options(&cfg),
+                        )
+                        .await
+                    {
+                        Ok(head) => head,
+                        Err(err) => {
+                            let blocked = vec![format!("ensure_phase_branch failed: {err}")];
+                            let merged = sorted_unique(merged);
+                            let not_merged = sorted_unique(not_merged);
+                            let outcome = phase_outcome(&merged, &not_merged, &blocked);
+                            return Ok(PhaseOutput {
+                                phase: input.key,
+                                branch,
+                                outcome: outcome.to_string(),
+                                blocked,
+                                merged,
+                                not_merged,
+                                waves,
+                                finish: None,
+                            });
+                        }
                     },
-                    activity_options(&cfg),
                 )
-                .await
-            {
-                Ok(head) => head,
-                Err(err) => {
-                    let blocked = vec![format!("ensure_phase_branch failed: {err}")];
-                    let merged = sorted_unique(merged);
-                    let not_merged = sorted_unique(not_merged);
-                    let outcome = phase_outcome(&merged, &not_merged, &blocked);
-                    return Ok(PhaseOutput {
-                        phase: input.key,
-                        branch,
-                        outcome: outcome.to_string(),
-                        blocked,
-                        merged,
-                        not_merged,
-                        waves,
-                        finish: None,
-                    });
-                }
             };
 
             let mut started_children = Vec::new();
@@ -210,8 +213,30 @@ impl Phase {
                     continue;
                 }
 
+                if head.is_none() {
+                    match ctx
+                        .execute_activity(
+                            CardActivities::ensure_phase_branch,
+                            PhaseBranchInput {
+                                repo: input.repo.clone(),
+                                base_branch: input.base_branch.clone(),
+                                branch: branch.clone(),
+                            },
+                            activity_options(&cfg),
+                        )
+                        .await
+                    {
+                        Ok(value) => head = Some(value),
+                        Err(err) => {
+                            last_blocked = vec![format!("ensure_phase_branch failed: {err}")];
+                            not_merged.push(card.key.clone());
+                            break;
+                        }
+                    }
+                }
+
                 let claim = Claim {
-                    base_sha: head.head.clone(),
+                    base_sha: head.as_ref().expect("branch ensured").head.clone(),
                     repo: input.repo.clone(),
                     ..claim
                 };
@@ -377,30 +402,5 @@ pub fn phase_outcome(merged: &[String], not_merged: &[String], blocked: &[String
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn phase_outcome_done_when_nothing_ran() {
-        assert_eq!(phase_outcome(&[], &[], &[]), OUTCOME_DONE);
-    }
-
-    #[test]
-    fn phase_outcome_partial_when_not_merged() {
-        let not_merged = vec!["b".to_string()];
-        assert_eq!(phase_outcome(&[], &not_merged, &[]), OUTCOME_PARTIAL);
-    }
-
-    #[test]
-    fn phase_outcome_partial_when_blocked_later() {
-        let merged = vec!["a".to_string()];
-        let blocked = vec!["phase not ready".to_string()];
-        assert_eq!(phase_outcome(&merged, &[], &blocked), OUTCOME_PARTIAL);
-    }
-
-    #[test]
-    fn phase_outcome_blocked_when_nothing_ran_and_blocked() {
-        let blocked = vec!["phase not ready".to_string()];
-        assert_eq!(phase_outcome(&[], &[], &blocked), OUTCOME_BLOCKED);
-    }
-}
+#[path = "phase_outcome_tests.rs"]
+mod tests;

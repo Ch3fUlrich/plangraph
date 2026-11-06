@@ -1,0 +1,1 @@
+Phase runner retries branch infrastructure failures, creates branches only after a usable claim, checks fresh base ancestry on adoption, and records child plan_key memos for projection with replay-safe workflow patches.
