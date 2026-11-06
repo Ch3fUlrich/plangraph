@@ -1,4 +1,4 @@
-# L1 card · build-L1-0237 · 2026-11-06T10:02Z
+# L1 card · build-L1-0245 · 2026-11-06T10:08Z
 ## Goal
 - D-4177 first, then operator GO OS-FLEET-MSG-INVENTORY (phase 0 gate), then D-4174 parallel phase 0
 ## Keeper
@@ -9,9 +9,13 @@
 - 11-06T09:40Z D-4158 - pid 1059285 no unit or cron, inferred opencode session in pane wE:p1
 - 11-06T09:40Z D-4150 - dell no unit, coding.vm has 88ccbc9c92ce, workstation and ci-vm unproven
 - 11-06T09:58Z D-4162 PR#520 CI 42197400614 green, delta seat run-f4e21e23 ACCEPT, GO-REQ sent
+- 11-06T10:05Z D-4185 watchdog uses spawner.token, watchdog.token absent, sent
+- 11-06T10:05Z D-4179(1) witness token BLOCKED sent, on workstation only
+- 11-06T10:07Z fleet keys 18-de-2053, workstation placed 0600, sha prefix match; inventory v2 on 3 hosts, backup inventory.json.bak-d4179
 ## In flight
 - D-4177 run-cbe5ed32 since 09:52Z next check 10:15Z, mimo-pro, plangraph-data lane/d4177-watchdog-seat
 - LE-FLEET-MSG-INVENTORY run-486703ee since 09:54Z next check 10:15Z, mimo-pro, lane/le-fleet-msg-self
+- GO-REQ sent: keeper drop-in PLANGRAPH_BUS_INVENTORY + restart; live keeper lacks it, no restart without D-id
 ## Planned
 1. D-4177 writer exit: read REPRODUCED lines, push, seats with one that ran tests, GO-REQ
 - D-4180 after D-4177 and phase 0: back up then remove launch/plangraph-integrate.json; P2a launch gate + WATCHDOG-IDENTITY-MISMATCH GO with seats
@@ -24,8 +28,9 @@
 - BLOCKED LE-FLEET-MSG-INVENTORY claim refused stale | default router re-confirms, no force_stale | deadline none
 - BLOCKED #451 own reds, S01, no-Sol vs D-3763 as previous card | default as sent | deadline none
 ## Traps
+- Control branch: git push control build-L1 only, NEVER origin (D-1751); 07e8c39e went public, incident sent
+- Left for bus: FLEET_MSG_* in mcp-supervise.workstation.json via workst-L1-autoos; dell-spawner-1800 session MCP env
 - Entered worktrees make git into other repos refused; enter only for an edit
-- This handoff is uncommitted, session could not commit it: commit first
 - Key bytes never in env, logs, git, messages; inventory prints without key fields
 - Seat legs: Haiku works; deepseek go not_served, qwen credit
 - mimo review leg needs inline diff and a NO TOOLS header, else tool calls as text, no VERDICT
