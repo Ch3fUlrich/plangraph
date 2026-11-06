@@ -35,6 +35,8 @@ TOOL_MODES = ("tools", "inline-only")
 #: Models that never sit as a review seat, routed or hand-picked (D-3225:
 #: opencode-go/qwen3.8-flash via OmniRoute returned empty content 6/6, ~289 s).
 NO_VERDICT_SEATS = frozenset({"opencode-go/qwen3.8-flash"})
+# Advisory only: these models remain routable, but explicit reviews warn.
+REVIEW_UNFIT_SEATS = frozenset({"mimo/mimo-v2.6-flash"})
 
 
 @dataclass(frozen=True)

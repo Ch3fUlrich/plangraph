@@ -1,4 +1,5 @@
 //! Pure chronological health replay, with optional observation-anchored reset state.
+pub use crate::health_family::{family_floor, order_legs, LegInfo};
 use crate::{hosts::Role, outcome::Class};
 
 #[cfg(test)]
@@ -26,6 +27,7 @@ pub struct Row {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Closed,
+    Degraded,
     Open,
     HalfOpen,
 }
@@ -37,6 +39,7 @@ pub enum UntilSrc {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Health {
+    pub review_unfit: bool,
     pub state: State,
     pub until_s: Option<i64>,
     pub until_src: Option<UntilSrc>,
@@ -51,6 +54,7 @@ pub struct Health {
 impl Default for Health {
     fn default() -> Self {
         Self {
+            review_unfit: false,
             state: State::Closed,
             until_s: None,
             until_src: None,
@@ -65,8 +69,15 @@ impl Default for Health {
     }
 }
 impl Health {
+    pub(crate) fn clear_on_ok(&mut self, role: Role) {
+        let review_unfit = role != Role::Review && self.review_unfit;
+        *self = Self::default();
+        self.review_unfit = review_unfit;
+    }
+
     pub fn available(&self, now_s: i64) -> bool {
-        self.state == State::Closed || self.until_s.is_none_or(|until| now_s >= until)
+        matches!(self.state, State::Closed | State::Degraded)
+            || self.until_s.is_none_or(|until| now_s >= until)
     }
 
     pub(crate) fn advance(&mut self, ts: i64) {
@@ -257,7 +268,7 @@ fn replay_inner(
         let class = row.outcome;
         if class == Class::Ok && row.kind.is_none() {
             resets.success();
-            health = Health::default();
+            health.clear_on_ok(role);
             success = Some(row.ts);
             killed.clear();
             continue;
@@ -274,6 +285,9 @@ fn replay_inner(
                 }
             }
             continue;
+        }
+        if class == Class::ToolCallOnly && role == Role::Review {
+            health.review_unfit = true;
         }
         health.non_verdict_count = 0;
         health.strikes = health.strikes.saturating_add(1);

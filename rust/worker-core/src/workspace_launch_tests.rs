@@ -1,5 +1,22 @@
 use super::*;
 use tempfile::{tempdir, TempDir};
+#[test]
+fn none_missing_worktrees_root() {
+    let mut f = Fixture::new();
+    f.repo.worktrees_root = f.tmp.path().join("missing/trees").to_str().unwrap().into();
+    f.ws = Workspace {
+        repo_id: "fixture".into(),
+        mode: Mode::None,
+        base_sha: None,
+        revision_sha: None,
+        branch: None,
+    };
+    assert!(launch(&f, &mut Command::new("unused"), None)
+        .unwrap()
+        .is_none());
+    f.repo.worktrees_root = f.tmp.path().to_str().unwrap().into();
+    assert!(launch(&f, &mut Command::new("unused"), None).is_err());
+}
 fn apply(f: &Fixture, tree: &Path) -> Result<(), ResolveError> {
     let mut cmd = Command::new("unused");
     apply_child_env(&mut cmd, &f.repo, tree, "seat", f.tmp.path())

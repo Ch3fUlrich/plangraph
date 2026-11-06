@@ -29,6 +29,8 @@ pub mod fleet_window_catalog;
 pub mod git;
 pub mod hash;
 pub mod health;
+pub mod health_family;
+pub mod health_rates;
 pub mod health_until;
 pub mod host_metrics;
 pub mod host_probe;
@@ -57,6 +59,8 @@ pub mod workspace_launch;
 pub mod workspace_resolver;
 pub mod workspace_verify;
 pub mod worktree;
+pub mod writer_blob;
+pub mod writer_result;
 pub mod wsl;
 
 #[cfg(test)]

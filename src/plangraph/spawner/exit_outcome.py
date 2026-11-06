@@ -240,6 +240,16 @@ def terminal_reason(record, job=None):
     reason = record.get('reason')
     if reason in TERMINAL_REASONS:
         return
+    if (record.get('role') == 'review' and record.get('status') == 'completed'
+            and record.get('exit_code') in (None, 0)):
+        from plangraph.review.verdict import judge
+        # Base dispatch has no job here: use only the final attempt, never the
+        # combined stdout tail (an earlier leg's verdict cannot bless this one).
+        attempts = record.get('attempts') or ()
+        text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
+        if judge(text, getattr(job, 'response_finish_reason', None)).verdict is None:
+            record.update(status='failed', reason='no_verdict')
+            return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
     if reason in ('harness_limit', 'tool_call_only'):
         if ended_ok:

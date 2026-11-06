@@ -1,0 +1,1 @@
+- **LE-SEAT-NO-VERDICT:** Fail verdictless reviews, flag and warn on review-unfit mimo-flash seats, and verify existing inline-only diff delivery.
