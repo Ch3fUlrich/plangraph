@@ -291,6 +291,16 @@ def test_connected_network_prevents_cancel(seat, protocol, state):
     assert not calls
 
 
+def test_ipv4_mapped_unspecified_remote_is_not_activity(seat):
+    _, proc, _, calls, _, check = seat
+    check(0)
+    (proc / '42/fd/3').symlink_to('socket:[99]')
+    (proc / '42/net/tcp6').write_text(
+        'header\n0: 00000000:1234 0000000000000000FFFF000000000000:0043 08 0 0 0 0 0 99\n')
+    assert check(300)
+    assert calls
+
+
 def test_two_hosts_do_not_share_proof_or_idle_interval(seat, monkeypatch):
     root, _, record, calls, _, check = seat
     monkeypatch.setenv('PLANGRAPH_HOST', 'host-a')

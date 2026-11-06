@@ -68,7 +68,8 @@ def _net_active(proc, members, inodes):
                 raw = b''.join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4))
                 address = ipaddress.ip_address(raw)
                 mapped = getattr(address, 'ipv4_mapped', None)
-                active |= not ((mapped or address).is_loopback or address.is_unspecified)
+                remote = mapped or address
+                active |= not (remote.is_loopback or remote.is_unspecified)
     return active
 
 
