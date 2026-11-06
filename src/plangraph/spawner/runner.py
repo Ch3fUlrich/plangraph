@@ -383,6 +383,9 @@ class SpawnerRunner:
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
+            # Completion framing distinguishes a final answer from partial text.
+            if '--format' not in cmd:
+                cmd[2:2] = ['--format', 'json']
             # Name the session so the monitor can witness the served model
             # (D-2898). --title goes right after the --model pair so it always
             # precedes any positional/prompt argument ('opencode run' takes
@@ -719,14 +722,22 @@ class SpawnerRunner:
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
-                # No-tools review seats can emit a complete verdict before rc 1 termination.
+                from .opencode_answer import final_answer, terminated_after_answer
+                # Preserve the existing denied-review terminal verdict contract.
                 lines = stdout_text.rstrip('\r\n').splitlines()
                 review_verdict = (
                     exit_code == 1 and is_opencode(job) and job.role == 'review'
                     and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
                     and bool(lines) and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES')
                 )
-                job.status = "completed" if exit_code == 0 or review_verdict else "failed"
+                job.status = 'completed' if exit_code == 0 or review_verdict else 'failed'
+                if terminated_after_answer(job, stdout_text, stderr_text, exit_code):
+                    job.status = 'terminated_after_answer'
+                    job.events.append({'event': 'terminated_after_answer'})
+                if is_opencode(job) and job.status in ('completed', 'terminated_after_answer'):
+                    answer = final_answer(stdout_text)
+                    if answer is not None:
+                        job.stdout = redact(redact_env_values(answer, env))
             if job.status == 'failed' and is_opencode(job):
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
@@ -1132,7 +1143,7 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if stop and not unavailable and job.status != 'cancelled':
                             notify_leg_refused(self, record, chosen, reason or 'provider_stop')
-                        if job.status in ('completed', 'dry_run') and not unavailable and not stop:
+                        if job.status in ('completed', 'dry_run', 'terminated_after_answer') and not unavailable and not stop:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
