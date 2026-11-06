@@ -81,6 +81,9 @@ cleanliness, ancestry and terminal Writer trailers on every new commit.
 `export_result` requires a reachable-content gate before R4 bundle export and
 seals bytes through `BlobStore`. It never pushes or removes a checkout.
 Base and head are lowercase 40-hex object IDs, never revision expressions.
+Uppercase hex digits are rejected explicitly. None-mode launch permits an absent
+worktrees root without creating it; ancestor resolution still rejects traversal
+and temporary directories inside the resolved root, including symlink aliases.
 Bundle roundtrip tests cover base and head absent from origin; a separate-origin
 test verifies that export does not publish the writer lane.
 `LocalBlobStore` uses SHA-256, a 64 MiB limit and immutable execution sidecars;

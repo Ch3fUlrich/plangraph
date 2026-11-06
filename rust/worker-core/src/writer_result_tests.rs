@@ -10,6 +10,52 @@ fn option_oid_ref_traversal_refused() {
     );
 }
 
+#[test]
+fn writer_oid_rejects_every_uppercase_hex_digit() {
+    assert!(oid(&"abcdef0123456789".repeat(2).repeat(2)[..40]));
+    for upper in b'A'..=b'F' {
+        let mut value = "a".repeat(40).into_bytes();
+        value[20] = upper;
+        assert!(!oid(std::str::from_utf8(&value).unwrap()));
+    }
+}
+
+#[test]
+fn writer_none_launch_missing_root_stays_confined() {
+    let mut f = Fixture::new();
+    f.ws.mode = Mode::None;
+    f.ws.base_sha = None;
+    f.ws.revision_sha = None;
+    f.ws.branch = None;
+    let temp = f._dir.path();
+    let missing = temp.join("missing/trees");
+    f.repo.worktrees_root = missing.to_str().unwrap().into();
+    let launch = |repo: &RepoEntry, temp: &Path| {
+        crate::workspace_launch::prepare_launch(
+            &mut std::process::Command::new("unused"),
+            repo,
+            &f.ws,
+            None,
+            "seat",
+            temp,
+            None,
+        )
+    };
+    assert!(launch(&f.repo, temp).unwrap().is_none());
+    assert!(!missing.exists());
+    f.repo.worktrees_root = temp.join("missing/../escape").to_str().unwrap().into();
+    assert!(launch(&f.repo, temp).is_err());
+    f.repo.worktrees_root = temp.to_str().unwrap().into();
+    assert!(launch(&f.repo, temp).is_err());
+    #[cfg(unix)]
+    {
+        let link = temp.join("trees-link");
+        std::os::unix::fs::symlink(temp, &link).unwrap();
+        f.repo.worktrees_root = link.to_str().unwrap().into();
+        assert!(launch(&f.repo, temp).is_err());
+    }
+}
+
 struct Fixture {
     _dir: tempfile::TempDir,
     repo: RepoEntry,
