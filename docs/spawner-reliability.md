@@ -136,3 +136,8 @@ Inline review refuses missing mandatory `diff_ref` before carrier validation.
 Multiline prompts reject `.cmd`/`.bat` at any argv position; inline payload
 marker/fence sequences are escaped. Timeout cleanup never waits for escaped
 stdout holders outside the invocation-owned process group.
+
+Exact-diff regression checks compare raw text and binary patch bytes with
+`git diff --binary base head`. Tools-mode reviews without a prompt stay unchanged
+when no diff is injected; mandatory inline reviews still require a safe carrier.
+Prompt persistence ordering checks ignore source indentation.

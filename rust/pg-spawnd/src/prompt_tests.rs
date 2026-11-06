@@ -40,6 +40,23 @@ fn no_diff_ref_tools_unchanged() {
     assert_eq!(l.prompt.as_deref(), Some("context"));
 }
 #[test]
+fn tools_without_prompt_unchanged_unless_injecting() {
+    for (reference, enabled) in [(json!(null), true), (json!({}), false)] {
+        let mut l = launch("context");
+        l.prompt = None;
+        prepare_review(
+            &json!({"role":"review", "card":{"diff_ref":reference}}),
+            &json!({}),
+            &mut l,
+            &BTreeMap::new(),
+            enabled,
+        )
+        .unwrap();
+        assert!(l.prompt.is_none());
+        assert_eq!(l.stdin.as_deref(), Some("context"));
+    }
+}
+#[test]
 fn tools_off_shadow_unchanged() {
     let mut l = launch("context");
     prepare_review(

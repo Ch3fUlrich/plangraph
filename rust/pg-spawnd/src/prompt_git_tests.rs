@@ -42,6 +42,30 @@ fn fixture() -> (std::path::PathBuf, RepoEntry, DiffRef) {
     };
     (root, repo, diff)
 }
+#[test]
+fn real_temp_git_commits_exact_diff() {
+    let (root, repo, diff) = fixture();
+    // Include a binary patch as well as non-UTF8 text; preserve every byte.
+    std::fs::write(root.join("binary"), b"\0binary\xff\n").unwrap();
+    git(&root, &["add", "binary"]);
+    git(&root, &["commit", "-qm", "binary"]);
+    let diff = DiffRef {
+        head_sha: git(&root, &["rev-parse", "HEAD"]),
+        ..diff
+    };
+    let expected = std::process::Command::new("git")
+        .current_dir(&root)
+        .args(["diff", "--binary", &diff.base_sha, &diff.head_sha])
+        .output()
+        .unwrap();
+    assert!(expected.status.success());
+    assert!(expected
+        .stdout
+        .windows(16)
+        .any(|w| w == b"GIT binary patch"));
+    assert_eq!(read_diff(&repo, &diff, 262144).unwrap(), expected.stdout);
+    std::fs::remove_dir_all(root).unwrap();
+}
 fn review_fixture() -> (
     std::path::PathBuf,
     crate::launch::LaunchSpec,
@@ -107,12 +131,7 @@ fn check_multiline_native_stdin_roundtrip(launch: &crate::launch::LaunchSpec) {
 fn check_redaction_before_persist(root: &Path, launch: &mut crate::launch::LaunchSpec) {
     use sha2::{Digest, Sha256};
     let source = include_str!("runs.rs");
-    assert!(
-        source
-            .find("crate::prompt::prepare_review(&review_args, &leg, &mut launch")
-            .unwrap()
-            < source.find("        store_prompt(state,").unwrap()
-    );
+    assert_review_before_store(source);
     let id = pg_worker_core::run::record::new_run_id();
     let mut base = serde_json::json!({});
     let raw = format!("{}\nPASSWORD=fixture\n", launch.prompt.as_ref().unwrap());
@@ -129,6 +148,26 @@ fn check_redaction_before_persist(root: &Path, launch: &mut crate::launch::Launc
     assert_eq!(
         base["prompt_sha256"],
         format!("{:x}", Sha256::digest(persisted.as_bytes()))
+    );
+}
+fn assert_review_before_store(source: &str) {
+    let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    let review = compact
+        .find("crate::prompt::prepare_review(&review_args,&leg,&mutlaunch")
+        .expect("run path must prepare the final review prompt");
+    let store = compact
+        .find("store_prompt(state,")
+        .expect("run path must persist the final prompt");
+    assert!(
+        review < store,
+        "prepare review before persisting its prompt"
+    );
+}
+#[test]
+fn redaction_order_ignores_call_indentation() {
+    let source = include_str!("runs.rs");
+    assert_review_before_store(
+        &source.replace("        store_prompt(state,", "store_prompt(state,"),
     );
 }
 #[test]

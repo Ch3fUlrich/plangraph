@@ -113,6 +113,9 @@ pub(crate) fn prepare_review(
     if mandatory && reference.is_null() {
         return Err(InlineDiffError::MissingDiffRef);
     }
+    if launch.prompt.is_none() && !mandatory && (reference.is_null() || !enabled) {
+        return Ok(());
+    }
     let original = launch
         .prompt
         .as_deref()
