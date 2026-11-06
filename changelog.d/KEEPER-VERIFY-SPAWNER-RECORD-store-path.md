@@ -1,0 +1,1 @@
+- **KEEPER-VERIFY-SPAWNER-RECORD** Preserve the configured spawner-record adapter through Store evidence verification (D-4044).
