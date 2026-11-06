@@ -1,6 +1,33 @@
 use super::*;
 use serde_json::json;
 #[test]
+fn legacy_known_facts() {
+    let rows = corrected(
+        &[
+            json!({"run_id":"legacy","role":"research","attempts":[{"exit_code":1},{"exit_code":0,"content":true,"tool":false,"tree_changed":false,"verdict_usable":false,"tool_call_only":false},{}]}),
+        ],
+        &[],
+    );
+    assert_eq!(rows[0]["outcome"], "CRASH");
+    assert_eq!(rows[1]["outcome"], "OK");
+    assert!(rows[2]["outcome"].is_null());
+    let rows = corrected(
+        &[json!({"run_id":"tails","role":"review","attempts":[
+            {"exit_code":1,"redacted_tail":"error: rate limit exceeded"},
+            {"exit_code":0,"reason":"max_time"},
+            {"exit_code":0,"status":"cancelled"},
+            {"exit_code":0},
+            {"exit_code":0,"content":false,"tool":true,"tree_changed":false,"verdict_usable":false,"tool_call_only":true}
+        ]})],
+        &[],
+    );
+    for (i, expected) in ["RATE_LIMIT", "MAX_TIME", "cancelled"].iter().enumerate() {
+        assert_eq!(rows[i]["outcome"], *expected);
+    }
+    assert!(rows[3]["outcome"].is_null());
+    assert_eq!(rows[4]["outcome"], "TOOL_CALL_ONLY");
+}
+#[test]
 fn evidence_correction_beats_record() {
     let records = [json!({"run_id":"run-a","attempts":[{"attempt":0,"outcome":"CRASH","ts":10}]})];
     let rows = corrected(

@@ -84,6 +84,9 @@ pub(crate) fn corrected(records: &[Value], evidence: &[Value]) -> Vec<Value> {
             if row["attempt"].is_null() {
                 row["attempt"] = index.into();
             }
+            if row["outcome"].is_null() {
+                legacy(&mut row);
+            }
             rows.insert((row["run_id"].to_string(), row["attempt"].to_string()), row);
         }
     }
@@ -94,6 +97,63 @@ pub(crate) fn corrected(records: &[Value], evidence: &[Value]) -> Vec<Value> {
         );
     }
     rows.into_values().collect()
+}
+fn legacy(row: &mut Value) {
+    use pg_worker_core::{
+        hosts::Role,
+        outcome::{self, Facts, OwnKill, Terminal},
+    };
+    let (Ok(role), Some(exit)) = (
+        serde_json::from_value::<Role>(row["role"].clone()),
+        row["exit_code"]
+            .as_i64()
+            .and_then(|v| i32::try_from(v).ok()),
+    ) else {
+        return;
+    };
+    let mut facts = Facts::new(role, exit);
+    if row["status"] == "cancelled" {
+        facts.terminal = Some(Terminal::Cancelled);
+    }
+    facts.own_kill = match row["reason"].as_str() {
+        Some("max_time" | "max_s") => Some(OwnKill::MaxS),
+        _ => None,
+    };
+    if let Some(tail) = row["redacted_tail"].as_str() {
+        if let Some(hit) = outcome::markers::scan(&outcome::markers::Input {
+            exit,
+            stdout: "",
+            stderr: tail,
+            headers: &[],
+            response_date: None,
+            ts: row["ts"].as_f64().unwrap_or(0.0),
+        }) {
+            facts = facts.with_hit(hit);
+        }
+    }
+    let known = [
+        "content",
+        "tool",
+        "tree_changed",
+        "verdict_usable",
+        "tool_call_only",
+    ]
+    .iter()
+    .all(|k| row[k].is_boolean());
+    if exit == 0
+        && facts.own_kill.is_none()
+        && facts.terminal.is_none()
+        && facts.marker.is_none()
+        && !known
+    {
+        return;
+    }
+    facts.content = row["content"] == true;
+    facts.tool = row["tool"] == true;
+    facts.tree_changed = row["tree_changed"] == true;
+    facts.verdict_usable = row["verdict_usable"] == true;
+    facts.tool_call_only = row["tool_call_only"] == true;
+    row["outcome"] = outcome::classify(&facts).class.as_str().into();
 }
 pub(crate) fn observations(
     rows: &[Value],

@@ -1,4 +1,53 @@
 use super::*;
+#[test]
+fn classless_seats_false_kill_recovery() {
+    let mut seat = row("seat", "", 20, 1);
+    seat["outcome"] = Value::Null;
+    seat["role"] = json!("review");
+    let mut ok = row("kill", "OK", 40, 1);
+    ok["attempt"] = json!(1);
+    let r = build_report(
+        &[],
+        &[
+            seat,
+            row("kill", "HANG_SILENT", 30, 1),
+            ok,
+            row("sibling", "OK", 1830, 1),
+            row("floor", "TOOL_CALL_ONLY", 50, 1),
+        ],
+        0,
+        2000,
+    )
+    .unwrap();
+    assert_eq!(r["totals"]["seat_deaths_without_class"], 1);
+    for (key, denominator) in [
+        ("tool_call_only_floor", 5),
+        ("sibling_ok_within30min", 1),
+        ("later_ok_fallthrough_recovery", 2),
+    ] {
+        assert_eq!(r[key]["count"], 1);
+        assert_eq!(r[key]["denominator"], denominator);
+        assert_eq!(r[key]["fraction"], json!(1.0 / denominator as f64));
+    }
+}
+#[test]
+fn chronological_leg_metadata() {
+    let mut early = row("z", "CRASH", 10, 1);
+    early["reset_at"] = json!(20);
+    let r = build_report(&[], &[row("a", "CRASH", 30, 1), early], 0, 100).unwrap();
+    assert_eq!(r["per_leg"]["leg"]["raw_reset_at"], json!([20, null]));
+    let renamed = build_report(
+        &[],
+        &[row("z", "CRASH", 30, 1), row("a", "CRASH", 10, 1)],
+        0,
+        100,
+    )
+    .unwrap();
+    assert_eq!(
+        r["per_leg"]["leg"]["strikes"],
+        renamed["per_leg"]["leg"]["strikes"]
+    );
+}
 fn row(id: &str, class: &str, ts: i64, duration: i64) -> Value {
     json!({"run_id":id,"attempt":0,"outcome":class,"ts":ts,"duration_s":duration,"leg_key":"leg","route_key":"route","role":"research"})
 }
@@ -68,9 +117,21 @@ fn unknown_tool_bounds_and_k_count_fraction() {
 fn baseline_target_override_gate_split() {
     let mut a = row("run-a", "OK", 10, 1);
     a["plan"] = json!({"p_source":"override"});
+    a["gate"] = json!(false);
     let r = build_report(&[], &[a], 0, 20).unwrap();
     assert_eq!(r["totals"]["overrides"]["without_gate"], 1);
     assert!(r["baseline"].is_null());
+}
+#[test]
+fn unknown_gate_not_a_skip() {
+    let mut a = row("unknown", "OK", 10, 1);
+    a["override"] = json!(true);
+    let r = build_report(&[], &[a], 0, 20).unwrap();
+    let o = &r["totals"]["overrides"];
+    assert_eq!(o["unknown_gate"], 1);
+    assert_eq!(o["without_gate"], 0);
+    assert_eq!(o["gate_denominator"], 0);
+    assert!(o["skip_fraction"].is_null());
 }
 #[test]
 fn fixture_backfill_within_five_percent() {

@@ -46,6 +46,7 @@ pub(crate) fn build_report(
     let (mut hours, mut unusable, mut hang_hours) = (0.0, 0.0, 0.0);
     let (mut max_time, mut missing, mut overrides, mut gated, mut seats) = (0, 0, 0, 0, 0);
     let mut populations = [0usize; 5];
+    let mut gate_unknown = 0;
     let mut legs: BTreeMap<String, Vec<health::Row>> = BTreeMap::new();
     for r in &rows {
         let ts = r["ts"].as_i64().ok_or(ReportError::InvalidRow)?;
@@ -75,6 +76,8 @@ pub(crate) fn build_report(
             overrides += 1;
             if r["gate"] == true {
                 gated += 1;
+            } else if !r["gate"].is_boolean() {
+                gate_unknown += 1;
             }
         }
         if class == Some("HANG_SILENT") {
@@ -110,7 +113,8 @@ pub(crate) fn build_report(
         });
     }
     let mut per_leg = BTreeMap::new();
-    for (leg, rs) in legs {
+    for (leg, mut rs) in legs {
+        rs.sort_by_key(|r| r.ts);
         let h = health::fold(&leg, &rs[0].route_key, rs[0].role, &rs, until - 1);
         per_leg.insert(leg, json!({"strikes":h.strikes,"state":format!("{:?}",h.state),"until":h.until_s,"raw_reset_at":rs.iter().map(|r|r.reset_at).collect::<Vec<_>>()}));
     }
@@ -130,9 +134,55 @@ pub(crate) fn build_report(
             json!(n as f64 / d as f64)
         }
     };
+    let kills: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            r["outcome"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("HANG_") || c == "NO_PROGRESS")
+        })
+        .collect();
+    let sibling_ok = kills
+        .iter()
+        .filter(|r| {
+            all.iter().any(|s| {
+                s["outcome"] == "OK"
+                    && s["leg_key"].is_string()
+                    && s["leg_key"] == r["leg_key"]
+                    && s["run_id"] != r["run_id"]
+                    && s["ts"]
+                        .as_i64()
+                        .zip(r["ts"].as_i64())
+                        .is_some_and(|(s, t)| s >= t && s.saturating_sub(t) <= 1800)
+            })
+        })
+        .count();
+    let failures: Vec<_> = rows
+        .iter()
+        .filter(|r| r["outcome"].as_str().is_some_and(|c| c != "OK"))
+        .collect();
+    let recovered = failures
+        .iter()
+        .filter(|r| {
+            all.iter().any(|s| {
+                s["outcome"] == "OK"
+                    && s["run_id"].is_string()
+                    && s["run_id"] == r["run_id"]
+                    && s["attempt"].as_u64() > r["attempt"].as_u64()
+                    && s["ts"].as_i64() >= r["ts"].as_i64()
+            })
+        })
+        .count();
+    let tool_only = rows
+        .iter()
+        .filter(|r| r["outcome"] == "TOOL_CALL_ONLY")
+        .count();
     Ok(json!({"version":1,"window":{"since":since,"until":until},
+        "tool_call_only_floor":{"count":tool_only,"denominator":rows.len(),"fraction":fraction(tool_only,rows.len())},
+        "sibling_ok_within30min":{"count":sibling_ok,"denominator":kills.len(),"fraction":fraction(sibling_ok,kills.len())},
+        "later_ok_fallthrough_recovery":{"count":recovered,"denominator":failures.len(),"fraction":fraction(recovered,failures.len())},
         "totals":{"launches":rows.len(),"run_hours":hours,"unusable_run_hours":unusable,"hang_hours":hang_hours,"max_time":max_time,"seat_deaths_without_class":seats,
-        "overrides":{"total":overrides,"with_gate":gated,"without_gate":overrides-gated,"skip_fraction":fraction(overrides-gated,rows.len())}},
+        "overrides":{"total":overrides,"with_gate":gated,"without_gate":overrides-gated-gate_unknown,"unknown_gate":gate_unknown,"gate_denominator":overrides-gate_unknown,"skip_fraction":fraction(overrides-gated-gate_unknown,overrides-gate_unknown)}},
         "per_leg":per_leg,"silent_populations":{"tool_open":populations[0],"tools0":populations[1],"blind":populations[2],"unknown_tools":populations[3],"no_first":populations[4],
         "k_count":populations[0],"k_fraction":fraction(populations[0],known),"unknown_lower_hours":populations[3] as f64*615.01/3600.0,"unknown_upper_hours":populations[3] as f64*1815.01/3600.0,
         "tool_open_savings_hours":populations[0] as f64*(1815.01-615.01)/3600.0,"blind_bound_hours":populations[2] as f64*612.01/3600.0,"no_first_bound_hours":populations[4] as f64*195.01/3600.0},

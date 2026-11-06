@@ -2,6 +2,11 @@
 
 ## RL19: read-only research reports
 
+Reports include TOOL_CALL_ONLY floor counts per launch, sibling-OK within 30 minutes
+per monitor kill, and later-attempt OK recovery per classified non-OK attempt.
+Each exposes count, denominator and fraction (null for an empty denominator).
+Recovery and sibling searches use full corrected history, including outside the window.
+
 `pg-spawnd health --state PATH --json` reads available history. `health report`
 requires explicit RFC3339 `--since` and `--until`, selecting [since, until).
 `--json` suppresses the human summary. `--baseline` atomically stores a private
@@ -10,6 +15,10 @@ It never writes the private historical baseline or enables routing. Rollback:
 `git revert`. Outcome corrections precede window filtering; observations use
 complete history, including prior-start holds and cleared no-time episodes.
 MAX_TIME is neutral for strikes. Unknown legacy evidence remains unknown.
+Legacy classification uses known exit/role facts; successful rows without usable
+facts remain unknown. Gate skip fractions use only overrides with boolean gate
+evidence; missing gates are reported separately, never inferred as skips.
+Recovery metrics retain full corrected history, and leg metadata is chronological.
 
 The immutable operator baseline lives in private plangraph-data at
 `research/2026-11-02-legs`. Before RL14 on, compare the pinned window
