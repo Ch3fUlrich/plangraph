@@ -1,11 +1,13 @@
 import os
 from pathlib import Path
 import shutil
+import runpy
 import subprocess
 import sys
 
 import pytest
 
+PWSH = shutil.which('pwsh')
 ROOT = Path(__file__).resolve().parents[1]
 BASE = 'PLANGRAPH_PROBE_ROOT="/worker"\nPLANGRAPH_PROBE_NOTIFY_CMD="notify --flag"\n'
 
@@ -110,8 +112,7 @@ def test_export_duplicate_rejected(probe):
 
 
 def test_native_windows_rejected_before_config_access():
-    source = (ROOT / 'deploy/bootstrap.ps1').read_text()
-    code = source.split("$probeCode = @'\n", 1)[1].split("'@", 1)[0]
+    code = (ROOT / 'src/plangraph/spawner/probe_enroll.py').read_text()
     prelude = "import os, pathlib, re, shlex, stat, sys, tempfile; os.name = 'nt'\n"
     result = subprocess.run([sys.executable, '-c', prelude + code], capture_output=True)
     assert result.returncode != 0
@@ -122,8 +123,8 @@ def test_powershell_interpreter_detection():
     source = (ROOT / 'deploy/bootstrap.ps1').read_text()
     assert "@('python3', 'python', 'py')" in source
     assert 'WindowsApps' in source
-    assert '& python -m plangraph.spawner.stall_watchdog tick --dry-run' in source
-    assert '& $pythonCommand -c $probeCode' in source
+    assert '& $pythonCommand -m plangraph.spawner.stall_watchdog tick --dry-run' in source
+    assert '& $pythonCommand -m plangraph.spawner.probe_enroll' in source
 
 
 @pytest.mark.parametrize('ending', ['\r\n', '\n', ''])
@@ -167,3 +168,72 @@ def test_powershell_without_python(probe, tmp_path, monkeypatch, interpreter):
     monkeypatch.setenv('PATH', str(tools))
     assert run(ps=True).returncode == 0
     assert 'old new' in config.read_text()
+
+
+@pytest.mark.parametrize('ps', [False, pytest.param(True, marks=pytest.mark.skipif(
+    not shutil.which('pwsh'), reason='pwsh absent'))])
+@pytest.mark.parametrize('quote', ['', "'", '"'])
+def test_tab_separated_hosts(probe, ps, quote):
+    config, run = probe
+    original = BASE + 'PLANGRAPH_PROBE_HOSTS=' + quote + 'old\tnew' + quote + '\n'
+    config.write_text(original)
+    assert run(ps=ps).returncode == 0
+    assert config.read_text() == original
+    assert run('extra', ps=ps).returncode == 0
+    assert 'old new extra' in config.read_text()
+
+
+def test_missing_config_has_clean_error(probe):
+    config, run = probe
+    result = run(path=config.parent / 'missing')
+    assert result.returncode != 0
+    assert 'config must exist and be private' in result.stderr
+    assert 'Traceback' not in result.stderr
+
+
+def test_symlink_config_rejected_unchanged(probe):
+    config, run = probe
+    link = config.parent / 'linked.env'
+    link.symlink_to(config)
+    before = config.read_bytes()
+    result = run(path=link)
+    assert result.returncode != 0
+    assert 'symlink' in result.stderr
+    assert link.is_symlink()
+    assert config.read_bytes() == before
+
+
+@pytest.mark.skipif(not shutil.which('pwsh'), reason='requires POSIX pwsh')
+def test_powershell_tick_without_python(tmp_path, monkeypatch):
+    tools = tmp_path / 'bin'
+    tools.mkdir()
+    log = tmp_path / 'calls'
+    python = tools / 'python3'
+    python.write_text('#!/bin/sh\necho "$*" >> "$COMMAND_LOG"\n')
+    python.chmod(0o700)
+    monkeypatch.setenv('COMMAND_LOG', str(log))
+    monkeypatch.setenv('PATH', str(tools))
+    result = subprocess.run([PWSH,
+        '-NoProfile', '-File', str(ROOT / 'deploy/bootstrap.ps1'), '-DryRun'],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert log.read_text().splitlines() == ['-m plangraph.spawner.stall_watchdog tick --dry-run']
+
+
+def test_failed_replace_preserves_private_config(probe, monkeypatch):
+    config, _ = probe
+    before = config.read_bytes()
+    monkeypatch.setattr(sys, 'argv', ['probe_enroll', 'new', str(config), '0'])
+
+    def fail_replace(temporary, destination):
+        temporary = Path(temporary)
+        assert temporary.parent == config.parent
+        assert destination == config
+        assert temporary.stat().st_mode & 0o777 == 0o600
+        raise OSError('replacement failed')
+
+    monkeypatch.setattr(os, 'replace', fail_replace)
+    with pytest.raises(OSError, match='replacement failed'):
+        runpy.run_module('plangraph.spawner.probe_enroll', run_name='__main__')
+    assert config.read_bytes() == before
+    assert list(config.parent.glob('watchdog.env.*')) == []
