@@ -12,7 +12,9 @@ and its data dir (auth, git); review adds its own store and tool deny.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import tempfile
 
@@ -20,12 +22,104 @@ CLOSED_LAYERS = {'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_CLAUD
                  'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS': '1'}
 WRITER_ROLES = ('implement', 'fix')
 
+#: The one provider whose credential an isolated review child gets (D-4196).
+GO_PROVIDER = 'opencode-go'
+
+#: Override for the *source* credential store the installer reads (hermetic
+#: tests point it at a fabricated store; production reads the invoking
+#: account's store -- root resolves root's empty store and gets a clean
+#: credential-absent answer, never root's or another account's credential).
+GO_AUTH_DB_ENV = 'PLANGRAPH_OPENCODE_GO_AUTH_DB'
+
+#: The clean refusal when no credential can be installed; shaped for
+#: env_redact.unavailable_reason so the run ends not_served, never a crash.
+GO_ABSENT_REASON = 'not_served_on_host: opencode-go credential absent (D-4196)'
+
+
+def go_source_db(environ=None):
+    """Read-only resolution of the source opencode credential store, or None.
+
+    Never raises: the explicit override wins, else the invoking account's
+    ``~/.local/share/opencode/opencode.db``.
+    """
+    env = os.environ if environ is None else environ
+    source = env.get(GO_AUTH_DB_ENV)
+    if source:
+        return Path(source)
+    if env.get('XDG_DATA_HOME'):
+        return Path(env['XDG_DATA_HOME']) / 'opencode' / 'opencode.db'
+    home = env.get('HOME')
+    return (Path(home) / '.local' / 'share' / 'opencode' / 'opencode.db') if home else None
+
+
+def install_go_credential(job_dir, source=None):
+    """D-4196: give the isolated review child the opencode-go credential -- nothing else.
+
+    Review isolation (D-3552) points HOME/XDG_DATA_HOME at the per-job dir,
+    which also hides the model registry that lives in the account's opencode
+    data store: the seat then sees zero opencode-go models and no leg on that
+    provider serves.  Restoring the host data dir is exactly the leak the
+    isolation prevents, so this writes a *fresh, job-owned* store at
+    ``<job_dir>/opencode/opencode.db`` (the review child's
+    ``XDG_DATA_HOME/opencode``) holding the schema and only the selected provider auth
+    row -- the active opencode-go one.  Nothing else is copied: no accounts,
+    no sessions, no other provider's credential, no host key material.  The
+    file is 0600 inside the job dir the spawner already removes with the job.
+
+    True iff the store was written.  False -- never raises -- when the
+    credential is absent or unreadable: the leg then ends ``not_served`` via
+    the host probe, never a crash.  Key bytes touch only the 0600 file: never
+    the child env, an event, or a log line.
+    """
+    src = source if source is not None else go_source_db()
+    dst_dir = Path(job_dir) / 'opencode'
+    dst = dst_dir / 'opencode.db'
+    try:
+        if src is None or not src.is_file():
+            return False
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(dst_dir, 0o700)
+        read = sqlite3.connect(f'file:{src}?mode=ro', uri=True)
+        write = None
+        try:
+            schema = [row[0] for row in read.execute(
+                'SELECT sql FROM sqlite_master WHERE sql IS NOT NULL')]
+            migrations = read.execute(
+                'SELECT id, time_completed FROM migration ORDER BY id').fetchall()
+            creds = read.execute(
+                'SELECT id, integration_id, label, value, connector_id, method_id,'
+                ' active, time_created, time_updated FROM credential'
+                ' WHERE integration_id = ? AND active = 1', (GO_PROVIDER,)).fetchall()
+            if not creds:
+                return False
+            if dst.exists():
+                dst.unlink()
+            fd = os.open(dst, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+            write = sqlite3.connect(dst)
+            for statement in schema:
+                write.execute(statement)
+            write.executemany('INSERT OR IGNORE INTO migration(id, time_completed) VALUES(?, ?)', migrations)
+            write.executemany(
+                'INSERT INTO credential(id, integration_id, label, value, connector_id,'
+                ' method_id, active, time_created, time_updated) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', creds)
+            write.commit()
+        finally:
+            read.close()
+            if write is not None:
+                write.close()
+        os.chmod(dst, 0o600)
+        return True
+    except (OSError, sqlite3.Error):
+        return False
+
 
 def close_config_layers(child_env):
     """Point every opencode config layer at a fresh private dir; returns the dir (caller removes it)."""
     oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')   # mode 0700
     empty = Path(oc_dir) / 'pg-empty.json'
     empty.write_text('{}')
+    empty.chmod(0o600)
     for name, value in dict(CLOSED_LAYERS, OPENCODE_CONFIG_DIR=oc_dir, OPENCODE_CONFIG=str(empty)).items():
         child_env[name] = value   # item by item: a mapping may police each key
     return oc_dir

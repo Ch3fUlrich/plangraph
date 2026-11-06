@@ -103,10 +103,9 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "opencode-go-deepseek-v4-flash",
+        "opencode-go-deepseek-v4-flash",
         "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
-        "opencode-go-qwen3.8-max", "opencode-go-muse-spark",
+        "opencode-go-qwen3.8-max", "opencode-go-muse-spark", "omniroute-gemini-3.8-flash",
         ]
 
 
@@ -119,7 +118,7 @@ def test_unmapped_leg_no_p(tmp_path, capsys):
         assert rows[leg_id]["model_id"] == model_id
     plan = route_json(tmp_path, capsys, "--bench-db", str(db))
     by_leg = {c["leg"]: c for c in plan["candidates"]}
-    for leg in ("opencode-glm-5.3-flash-free", "opencode-deepseek-v4.1-flash-free"):
+    for leg in ("omniroute-gemini-3.8-flash",):
         assert leg not in LEG_BENCHMARK_MODEL
         assert by_leg[leg]["u_core"] is None and by_leg[leg]["p_source"] == "prior"
     assert by_leg["agy-gemini-3.8-flash"]["p_source"] == "measured"

@@ -411,6 +411,9 @@ class SpawnerRunner:
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
                 # child exit -- the shared store is child-writable and proves nothing.
                 child_env['XDG_DATA_HOME'] = oc_dir
+                from .opencode_isolation import install_go_credential, GO_ABSENT_REASON
+                if model_or_combo.startswith('opencode-go/') and not install_go_credential(oc_dir):
+                    render_reason = GO_ABSENT_REASON
                 # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
                 # config layer at all -- HOME and XDG_CONFIG_HOME live in the
                 # per-job dir and every caller-set OPENCODE_* override outside

@@ -40,7 +40,7 @@ def test_explicit_disabled_qwen_refused(tmp_path):
 def test_writer_order_sol_family_excluded():
     plan = plan_spawn({"estimate_tokens": 20000, "risk_tags": []},
                       role="implement", exclude_families=("gpt",))
-    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan.first_leg.id == "openrouter-free"
     assert "gpt" not in {leg.family for leg in plan.legs}
     assert {s["leg"]: s["reason"] for s in plan.skipped}[
         "cx-gpt-6.1-sol"] == "excluded_family"
@@ -57,7 +57,7 @@ def test_writer_order_privacy_excludes_training_sol():
     assert public.first_leg.id == "cx-gpt-6.1-sol"
     private = plan_spawn({"estimate_tokens": 20000, "risk_tags": ["secrets"]},
                          role="implement", legs=legs)
-    assert private.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert private.first_leg.id == "openrouter-free"
     assert "cx-gpt-6.1-sol" not in {leg.id for leg in private.legs}
     assert {s["leg"]: s["reason"] for s in private.skipped}[
         "cx-gpt-6.1-sol"] == "trains_on_data"
@@ -187,4 +187,5 @@ def test_writer_order_d2683_implement_first_seven():
     expected = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
                 "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
                 "mimo-v2.6-flash"]
+    expected = [x for x in expected if x not in {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"}]
     assert [leg.id for leg in plan.legs[:len(expected)]] == expected

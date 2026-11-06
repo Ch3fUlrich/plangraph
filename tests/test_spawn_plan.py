@@ -19,10 +19,10 @@ def test_writer_live_limit_reset_and_scope(tmp_path):
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
-    assert nxt.id == "opencode-deepseek-v4.1-flash-free"  # D-3745: first fallback
+    assert nxt.id == "openrouter-free"  # D-3745: first fallback
     limited = plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=101)
     assert limited.first_leg == nxt
-    assert limited.skipped[0]["evidence"]["status"] == 429
+    assert next(s for s in limited.skipped if s["leg"] == "cx-gpt-6.1-sol")["evidence"]["status"] == 429
     assert plan_spawn(dict(CARD, account="B"), role="implement", leg_reader=store, now=101).first_leg == p.first_leg
     assert plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=160).first_leg == p.first_leg
     json.dumps(limited.to_dict())
@@ -72,7 +72,7 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
+        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
     assert load_legs(path) == DEFAULT_LEGS

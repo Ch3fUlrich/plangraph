@@ -337,7 +337,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
 
     states = {l.id: _leg_status(l) for l in candidates}
     limited = {key for key, state in states.items() if unavailable(state)}
-    skipped = []
+    skipped = [{"leg": l.id, "reason": "disabled: " + l.disabled}
+               for l in legs if role in l.roles and l.disabled]
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
     # Route each leg through the same canonical eligibility rules to retain
