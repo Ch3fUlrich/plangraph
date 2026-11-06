@@ -38,7 +38,7 @@ fn healthy(h: Option<&Health>) -> bool {
 pub fn family_floor(
     healths: &[(String, Health)],
     legs: &[LegInfo],
-    role: Role,
+    _role: Role,
 ) -> Vec<(String, Health)> {
     let plan = unique_plan(legs);
     let mut out = healths.to_vec();
@@ -58,7 +58,6 @@ pub fn family_floor(
             || !h.heuristic
             || h.until_src == Some(UntilSrc::OmniRoute)
             || h.reason.is_some_and(|class| class.carries_reset())
-            || (role != Role::Review && h.review_unfit)
         {
             continue;
         }

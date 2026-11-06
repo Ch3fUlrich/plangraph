@@ -106,10 +106,11 @@ fn review_tool_only_peer_and_last_leg() {
     assert!(out[0].1.review_unfit);
     let mut r = row(Class::ToolCallOnly, 1);
     r.role = Role::Implement;
-    assert_eq!(
-        fold("a", "served", Role::Implement, &[r], 2),
-        Health::default()
-    );
+    let h = fold("a", "served", Role::Implement, &[r], 2);
+    assert_eq!(h.strikes, 1);
+    assert_eq!(h.reason, Some(Class::ToolCallOnly));
+    assert_eq!(h.state, State::Open);
+    assert!(!h.review_unfit);
 }
 
 #[test]
@@ -202,4 +203,29 @@ fn missing_duplicate_metadata_deterministic() {
     );
     assert_eq!(family_floor(&hs, &[], Role::Review), hs);
     assert!(order_legs(&[], &hs, Role::Review).is_empty());
+}
+
+#[test]
+fn non_review_ok_preserves_review_fitness() {
+    let mut h = struck(Class::ToolCallOnly);
+    h.review_unfit = true;
+    h.clear_on_ok(Role::Implement);
+    assert_eq!(
+        h,
+        Health {
+            review_unfit: true,
+            ..Health::default()
+        }
+    );
+    h.clear_on_ok(Role::Review);
+    assert_eq!(h, Health::default());
+}
+
+#[test]
+fn non_review_floor_ignores_review_fitness() {
+    let mut h = struck(Class::ToolCallOnly);
+    h.review_unfit = true;
+    let out = family_floor(&[("a".into(), h.clone())], &[leg("a")], Role::Implement);
+    h.state = State::Degraded;
+    assert_eq!(out, vec![("a".into(), h)]);
 }

@@ -69,6 +69,12 @@ impl Default for Health {
     }
 }
 impl Health {
+    pub(crate) fn clear_on_ok(&mut self, role: Role) {
+        let review_unfit = role != Role::Review && self.review_unfit;
+        *self = Self::default();
+        self.review_unfit = review_unfit;
+    }
+
     pub fn available(&self, now_s: i64) -> bool {
         matches!(self.state, State::Closed | State::Degraded)
             || self.until_s.is_none_or(|until| now_s >= until)
@@ -262,7 +268,7 @@ fn replay_inner(
         let class = row.outcome;
         if class == Class::Ok && row.kind.is_none() {
             resets.success();
-            health = Health::default();
+            health.clear_on_ok(role);
             success = Some(row.ts);
             killed.clear();
             continue;
@@ -280,10 +286,7 @@ fn replay_inner(
             }
             continue;
         }
-        if class == Class::ToolCallOnly {
-            if role != Role::Review {
-                continue;
-            }
+        if class == Class::ToolCallOnly && role == Role::Review {
             health.review_unfit = true;
         }
         health.non_verdict_count = 0;
