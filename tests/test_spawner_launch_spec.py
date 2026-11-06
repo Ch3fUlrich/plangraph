@@ -66,13 +66,15 @@ def test_unknown(request_data):
 
 
 @pytest.mark.parametrize('role', ['implement', 'review'])
-def test_tools(request_data, role, tmp_path):
+@pytest.mark.parametrize('explicit', [False, True])
+def test_tools(request_data, role, tmp_path, explicit):
     from plangraph.spawner.runner import IMPLEMENT_HEADER
     leg_id = 'mimo-v2.6-flash' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
     exe.chmod(0o700)
     request_data.update(role=role, leg={'id': leg_id, 'model': 'untrusted'})
+    request_data['leg']['explicit'] = explicit
     code, out, err = invoke(request_data)
     assert (code, err) == (0, '')
     result = json.loads(out)
@@ -109,13 +111,60 @@ def test_dry(request_data, monkeypatch):
     assert json.loads(out)['argv'][0] == 'qodercli'
 
 
-def test_inline_only_review_without_diff_refused(request_data):
-    # A placement request names the routed leg, never a document review: fail closed
-    # (only SpawnService.spawn with an explicit --leg sets document_review).
+@pytest.mark.parametrize('explicit', [None, False])
+def test_inline_only_review_without_diff_refused(request_data, explicit):
+    # A routed leg id alone is not an explicit document review: fail closed.
+    # Only the explicit boolean opt-in may permit a missing diff_ref.
     request_data.update(role='review', leg={'id': 'mimo-v2.6-flash'})
+    if explicit is not None:
+        request_data['leg']['explicit'] = explicit
     code, out, err = invoke(request_data)
     assert code == 2 and out == ''
     assert 'inline_diff_failed' in err
+
+
+@pytest.mark.parametrize('explicit', ['true', 1, None, [], {}])
+def test_leg_explicit_invalid(request_data, explicit):
+    request_data['leg']['explicit'] = explicit
+    with pytest.raises(spec.InvalidRequest, match='^leg$'):
+        spec.build(request_data)
+
+
+@pytest.mark.parametrize('with_diff', [False, True])
+def test_explicit_document_review(request_data, tmp_path, monkeypatch, with_diff):
+    request_data.update(dry_run=True, leg={'id': 'mimo-v2.6-flash', 'explicit': True})
+    if with_diff:
+        diff = 'diff --git a/example.py b/example.py\n--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-old\n+new\n'
+        from plangraph.spawner import inline_diff
+        from types import SimpleNamespace
+        real_run = inline_diff.subprocess.run
+        monkeypatch.setattr(inline_diff.subprocess, 'run', lambda args, **kw:
+            SimpleNamespace(stdout=diff, stderr='', returncode=0) if 'diff' in args else real_run(args, **kw))
+        request_data['card']['diff_ref'] = dict(repo=str(tmp_path), base='HEAD~1', head='HEAD')
+    result = spec.build(request_data)
+    service = spec.SpawnService(state=request_data['state'])
+    service.runner.default_cwd = request_data['cwd']
+    leg = next(leg for leg in spec.DEFAULT_LEGS if leg.id == request_data['leg']['id'])
+    direct = service._leg_prompt(request_data['prompt'], request_data['card'], 'review', leg,
+                                 document_review=True)
+    assert result['prompt'] == direct
+    if with_diff:
+        assert diff in result['prompt']
+    else:
+        assert result['prompt'] == request_data['prompt']
+        assert 'diff --git' not in result['prompt']
+
+
+def test_explicit_document_review_strict_bound(request_data, monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
+    monkeypatch.setattr(spec, 'DEFAULT_LEGS', tuple(
+        replace(leg, max_request_tokens=200) if leg.id == 'mimo-v2.6-flash' else leg
+        for leg in spec.DEFAULT_LEGS))
+    request_data.update(leg={'id': 'mimo-v2.6-flash', 'explicit': True}, prompt='x' * 1000)
+    with pytest.raises(spec.LaunchRefused, match='inline_prompt_oversized') as exc:
+        spec.build(request_data)
+    assert exc.value.kind == 'inline_diff_failed'
 
 
 @pytest.mark.parametrize('kind', ['render_refused', 'unavailable', 'launch', 'inline_diff_failed', 'context', 'refused'])
@@ -133,7 +182,7 @@ def test_refusals(request_data, monkeypatch, kind):
         monkeypatch.setattr(spec.runner, '_is_nt', lambda: True)
         request_data['prompt'] = 'x' * 40000
     elif kind == 'inline_diff_failed':
-        def fail(*a):
+        def fail(*a, **kw):
             raise InlineDiffError('blocked')
         monkeypatch.setattr(spec.SpawnService, '_leg_prompt', fail)
     elif kind == 'context':
