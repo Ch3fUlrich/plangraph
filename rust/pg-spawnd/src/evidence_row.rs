@@ -77,7 +77,11 @@ impl ObservationRow {
                 if self.kind == OmniRouteSeen && self.phase.is_none() {
                     return Err(EvidenceError::Invalid);
                 }
-                serde_json::json!([self.leg_key, self.kind, state, first, self.phase])
+                if self.kind == OmniRouteSeen {
+                    serde_json::json!([self.leg_key, self.kind, state, first, self.phase])
+                } else {
+                    serde_json::json!([self.leg_key, state, first])
+                }
             }
             _ => serde_json::json!([self.leg_key, self.ts, self.kind]),
         };

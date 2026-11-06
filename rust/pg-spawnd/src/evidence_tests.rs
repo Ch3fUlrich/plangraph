@@ -144,6 +144,81 @@ fn outcome(ts: i64) -> EvidenceRow {
     .unwrap()
 }
 #[test]
+fn child_outcome_append() {
+    let Some(path) = std::env::var_os("PG_OUTCOME_TEST_STATE") else {
+        return;
+    };
+    let state = Path::new(&path);
+    let id = std::env::var("PG_OUTCOME_CHILD").unwrap();
+    let store = EvidenceStore::open(state, true).unwrap();
+    fs::write(state.join(format!("ready-{id}")), b"").unwrap();
+    let start = Instant::now();
+    while !state.join("start").exists() {
+        assert!(start.elapsed() < Duration::from_secs(10));
+        std::thread::yield_now();
+    }
+    for ts in 0..30 {
+        let EvidenceRow::Outcome(mut row) = outcome(ts) else {
+            unreachable!()
+        };
+        row.run_id = format!("run-{id}x{ts}");
+        assert!(store.append(&EvidenceRow::Outcome(row.clone())).unwrap());
+        let mut shared = row.clone();
+        shared.run_id = format!("run-shared{ts}");
+        let record = json!({"attempts":[{"outcome":shared}]});
+        store.backfill(std::slice::from_ref(&record)).unwrap();
+        assert_eq!(store.backfill(&[record]).unwrap(), 0);
+    }
+}
+#[test]
+fn two_process_append_no_loss() {
+    let temp = Temp::new();
+    let mut children = Vec::new();
+    for id in 0..2 {
+        children.push(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "evidence::tests::child_outcome_append"])
+                .env("PG_OUTCOME_TEST_STATE", &temp.0)
+                .env("PG_OUTCOME_CHILD", id.to_string())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    let start = Instant::now();
+    while !(0..2).all(|id| temp.0.join(format!("ready-{id}")).exists()) {
+        assert!(start.elapsed() < Duration::from_secs(10));
+        std::thread::yield_now();
+    }
+    fs::write(temp.0.join("start"), b"").unwrap();
+    for mut child in children {
+        assert!(child.wait().unwrap().success());
+    }
+    let store = EvidenceStore::open(&temp.0, true).unwrap();
+    let rows = store.window(0, 30).unwrap().outcomes;
+    assert_eq!(rows.len(), 90);
+    assert_eq!(store.read().unwrap().0.len(), 90);
+}
+#[test]
+fn parked_no_time_phase_does_not_duplicate() {
+    let temp = Temp::new();
+    let store = EvidenceStore::open(&temp.0, true).unwrap();
+    let mut row = ObservationRow {
+        leg_key: "leg".into(),
+        ts: 1,
+        kind: ObservationKind::OmniRouteParked,
+        until: None,
+        state: Some("parked".into()),
+        first_seen: Some(1),
+        phase: None,
+    };
+    assert!(store
+        .append(&EvidenceRow::Observation(row.clone()))
+        .unwrap());
+    row.phase = Some(Phase::First);
+    assert!(!store.append(&EvidenceRow::Observation(row)).unwrap());
+    assert_eq!(store.window(0, 10).unwrap().observations.len(), 1);
+}
+#[test]
 fn last_outcome_wins() {
     let temp = Temp::new();
     let store = EvidenceStore::open(&temp.0, true).unwrap();

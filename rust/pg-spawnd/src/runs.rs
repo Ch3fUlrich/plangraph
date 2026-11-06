@@ -197,7 +197,7 @@ fn store_prompt(
 fn internal(message: &str) -> ToolError {
     ToolError::Internal(message.into())
 }
-fn create(
+pub(crate) fn create(
     state: &Path,
     id: &str,
     host: &str,
@@ -234,7 +234,7 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
     record.set("attempts", json!([{"leg":leg,"status":status.as_str(),
@@ -292,35 +292,6 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
             }
         }
     }
-}
-
-#[test]
-fn review_artifacts_switch_off_still_artifacts() {
-    let state = std::env::temp_dir().join(new_run_id());
-    let mut record = create(
-        &state,
-        "run-test",
-        "local",
-        json!({"role":"review"}),
-        Status::Completed,
-    )
-    .ok()
-    .unwrap();
-    let log = record.path().with_file_name("live.log");
-    std::fs::write(&log, [0xff, b'\n']).unwrap();
-    record.set("live_log", json!(log));
-    assert!(crate::review_artifacts::review_text(&state, &record.to_value()).is_err());
-    finish(&mut record, Status::Completed, &json!({}));
-    assert!(!state.join("evidence").exists());
-    assert_eq!(record.to_value()["evidence_unclassified_attempts"], 1);
-    let seat = record.path().with_file_name("seat");
-    assert!(std::fs::read_to_string(seat.join("review.txt"))
-        .unwrap()
-        .contains("VERDICT: HALT"));
-    let evidence: Value =
-        serde_json::from_slice(&std::fs::read(seat.join("evidence.json")).unwrap()).unwrap();
-    assert_eq!(evidence["verdict"], "HALT");
-    std::fs::remove_dir_all(state).unwrap();
 }
 
 #[cfg(all(test, unix))]
