@@ -12,7 +12,8 @@ def question_exit(job, record):
     events = [*record.get('events', ()), *getattr(job, 'events', ())]
     if (getattr(job, 'role', record.get('role')) == 'review'
             or record.get('reason') in ('git_config_mutated', 'cancelled', 'kill_incomplete')
-            or any(e.get('event') in ('git_config_mutated', 'cancelled', 'model_refusal') for e in events)
+            or getattr(job, 'reason', None) in ('git_config_mutated', 'cancelled', 'kill_incomplete')
+            or any(e.get('event') in ('git_config_mutated', 'cancelled', 'kill_incomplete', 'model_refusal') for e in events)
             or getattr(job, 'survivors', ())
             or getattr(job, 'status', None) not in ('completed', 'failed', 'needs_input')):
         return False
@@ -21,21 +22,21 @@ def question_exit(job, record):
         text = getattr(job, 'final_message', None)
         if text is None:
             final = final_text(job.stdout)
-            text = final[0] if final else job.stdout
+            text = final[0] if final else ''
         job.question = None
-        for line in reversed(text.splitlines()):
-            if not line.lstrip().startswith('PG_QUESTION:'):
-                continue
+        line = text.splitlines()[-1].lstrip() if text.splitlines() else ''
+        if line.startswith('PG_QUESTION:'):
             try:
                 q = json.loads(line.lstrip()[12:].strip())
-                assert isinstance(q, dict) and isinstance(q.get('text'), str) and q['text'].strip()
-                assert q.get('default') is None or isinstance(q['default'], str)
+                if not (isinstance(q, dict) and isinstance(q.get('text'), str) and q['text'].strip()
+                        and (q.get('default') is None or isinstance(q['default'], str))):
+                    raise ValueError('invalid question text/default')
                 d = q.get('deadline_s')
-                assert d is None or (type(d) is int and 0 <= d <= 2**64 - 1)
-                assert isinstance(q.get('risk_tags', []), list) and all(isinstance(t, str) for t in q.get('risk_tags', []))
+                if not (d is None or (type(d) is int and 0 <= d <= 2**64 - 1)) or not (
+                        isinstance(q.get('risk_tags', []), list) and all(isinstance(t, str) for t in q.get('risk_tags', []))):
+                    raise ValueError('invalid question deadline/tags')
                 job.question = {k: q.get(k, [] if k == 'risk_tags' else None) for k in ('text', 'default', 'deadline_s', 'risk_tags')}
-                break
-            except (ValueError, AssertionError):
+            except ValueError:
                 job.events.append({'event': 'question_packet_malformed'})
     if job.question is None:
         return False
@@ -51,5 +52,9 @@ def rounds_exhausted(service, card, role):
     identity = {'card_hash': hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest()}
     annotate_item(identity, card)
     field = 'item_key' if identity.get('item_key') else 'card_hash'
+    try:
+        limit = int(os.environ.get('PLANGRAPH_MAX_QUESTION_ROUNDS', '3'))
+    except ValueError:
+        limit = 3
     return sum(r.get('status') == 'needs_input' and r.get(field) == identity[field]
-               for r in service.ps()['runs']) >= int(os.environ.get('PLANGRAPH_MAX_QUESTION_ROUNDS', '3'))
+               for r in service.ps()['runs']) >= limit

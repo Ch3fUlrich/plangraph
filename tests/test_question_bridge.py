@@ -15,18 +15,21 @@ PACKET = 'PG_QUESTION: {"text":"Which database?"}'
 
 def job(**kw):
     return NS(**dict(dict(status='completed', role='implement', stdout=PACKET,
-                         stderr='', exit_code=0, events=[], survivors=[]), **kw))
+                         stderr='', exit_code=0, events=[], survivors=[], final_message=kw.get('stdout', PACKET)), **kw))
 
 
-def test_final_only_and_worker_last_valid_rule():
+def test_final_only_and_last_line_rule():
     j = job(stdout=PACKET, final_message='Done')
     assert not question_exit(j, {})
     j = job(stdout=json.dumps({'type': 'tool_result', 'content': PACKET}) + '\n' +
-            json.dumps({'type': 'result', 'result': 'Done'}))
+            json.dumps({'type': 'result', 'result': 'Done'}), final_message=None)
     assert not question_exit(j, {})
     j = job(stdout=PACKET + '\nPG_QUESTION: {"text":"new"}\nPG_QUESTION: nope')
-    assert question_exit(j, {}) and j.question['text'] == 'new'
+    assert not question_exit(j, {})
     assert j.events == [{'event': 'question_packet_malformed'}]
+    assert not question_exit(job(final_message=None), {})
+    assert not question_exit(job(final_message=PACKET + '\nDone'), {})
+    assert not question_exit(job(stdout=json.dumps({'type': 'tool_result', 'content': PACKET}), final_message=None), {})
 
 
 @pytest.mark.parametrize('packet', ['nope', '{}', '{"text":" "}',
@@ -60,6 +63,27 @@ def test_protected(reason):
 @pytest.mark.parametrize('status', ['cancelled', 'timeout', 'stalled'])
 def test_killed(status):
     assert not question_exit(job(status=status), {})
+
+
+@pytest.mark.parametrize('kw', [dict(reason='kill_incomplete'), dict(events=[{'event': 'kill_incomplete'}])])
+def test_job_kill_incomplete(kw):
+    j = job(**kw)
+    assert not question_exit(j, {}) and j.status == 'completed'
+
+
+def test_validation_optimized():
+    import subprocess
+    import sys
+    code = '''import sys
+sys.path.insert(0, 'src')
+from types import SimpleNamespace as NS
+from plangraph.spawner.question_bridge import question_exit
+for packet in ('{"text":1}', '{"text":"q","deadline_s":true}', '{"text":"q","risk_tags":null}'):
+    j = NS(status='completed', role='implement', events=[], final_message='PG_QUESTION: ' + packet)
+    if question_exit(j, {}) or j.events != [{'event': 'question_packet_malformed'}]:
+        raise RuntimeError('invalid packet accepted')
+'''
+    subprocess.run([sys.executable, '-O', '-c', code], check=True)
 
 
 @pytest.mark.parametrize('role,text', [('review', PACKET), ('implement', 'Done')])
@@ -129,9 +153,13 @@ def test_dispatch_wait_event_and_no_continuation(tmp_path, monkeypatch):
     assert r['attempts'][0]['status'] == 'needs_input'
     assert r['completion']['event'] == 'NEEDS_INPUT'
     assert all(e['question']['text'] == 'Which database?' for e in delivered)
+    row = service.ps()['runs'][0]
+    assert row['card_hash'] == r['card_hash'] and row['status'] == 'needs_input'
+    monkeypatch.setenv('PLANGRAPH_MAX_QUESTION_ROUNDS', 'x')
+    assert asyncio.run(service._spawn(card={'title': 'x'}, wait_seconds=None))['status'] == 'needs_input'
     monkeypatch.setenv('PLANGRAPH_MAX_QUESTION_ROUNDS', '1')
     refused = asyncio.run(service._spawn(card={'title': 'x'}, wait_seconds=None))
-    assert refused['reason'] == 'question_rounds_exhausted' and len(calls) == 1
+    assert refused['reason'] == 'question_rounds_exhausted' and len(calls) == 2
 
 
 def test_monitor_skips_unchanged_writer(tmp_path, monkeypatch):
