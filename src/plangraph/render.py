@@ -77,6 +77,7 @@ JS_FILES = (
     "page_activity.js",
     "page_progress.js",
     "page_hosts.js",
+    "page_agents.js",
     "page_boot.js",  # T2: boot must be last — it wires the components it finds.
 )
 
@@ -275,6 +276,11 @@ def render(
         items = []
     # Always give the page JS an `items` array, even for a malformed/empty snapshot.
     safe_snapshot = dict(snapshot)
+    from plangraph.spawner.agent_view import load_view
+    safe_snapshot.pop('agents_view', None)
+    agents_view = load_view()
+    if agents_view is not None:
+        safe_snapshot['agents_view'] = agents_view
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)

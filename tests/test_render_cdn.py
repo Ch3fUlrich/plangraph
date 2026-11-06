@@ -193,6 +193,7 @@ def test_js_and_css_are_data_driven():
         "page_activity.js",
         "page_progress.js",
         "page_hosts.js",
+        "page_agents.js",
         "page_boot.js",
     )
     assert render_mod.CSS_FILES == ("page.css", "page_base.css", "page_graph.css", "page_kg.css")
