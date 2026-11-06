@@ -26,7 +26,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from plangraph.routing_support.leg_state import leg_status
+from plangraph.routing_support.leg_state import leg_status, model_admitted
 from plangraph.routing_support.catalog_seed import TIER_RUNG
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
 from plangraph.routing_support.clients import build_routing_envelope_headers
@@ -572,31 +572,21 @@ def host_skip_reason(row, *, probe=None, env=None):
 
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
     """Check if model is eligible and available.
+
     Enforces Codex ACP luna-only: cxa/gpt-6-luna-high is eligible,
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
     enabled = getattr(leg_state_reader, 'enabled', False)
-    if enabled:
-        mid = str(model.get('id') or model.get('model_id') or '')
-        if mid in OPERATOR_REMOVED_MODELS or not mimo_path_allowed(mid):
-            return False
-        return (model.get('active') is True and not model.get('disabled')
-                and leg_state_reader(mid, account=account, combo=combo)['state'] == 'ok')
-    if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
-        return False
-    # Ranking historical catalog seats is not a new-spawn admission decision.
-    if not catalog_row_admitted(model):
-        return False
-    status = str(model.get("status", "active")).lower()
-    if status not in ("active", ""):
-        return False
-    mid = str(model.get("id") or model.get("model_id") or "").lower()
-    if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
+    if not model_admitted(model, enabled=enabled):
         return False
     reader = leg_state_reader or leg_status
+    if enabled:
+        return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] == "ok"
     return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
+
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.
+
     Claude Sonnet 5.5 does not support effort 'max', clamping 'max' -> 'xhigh'.
     """
     mid = (model_id or "").lower()
@@ -604,6 +594,7 @@ def clamp_effort(model_id: str, requested_effort: str) -> str:
     if ("claude-sonnet-5-5" in mid or "sonnet-5-5" in mid) and eff == "max":
         return "xhigh"
     return requested_effort
+
 def score_model(
     model: Mapping[str, Any],
     role: str = "implement",
@@ -1102,6 +1093,7 @@ def resolve_model_for_task(
     account=None,
 ) -> dict[str, Any]:
     """Resolve the optimal model candidate for a given task role and risk band.
+
     Enforces:
       - 5-rung tier ladder (subscription prioritized over paid)
       - Model utility scoring (mimo/mimo-v2.6-pro prioritized over qwen3.8-max)
@@ -1116,6 +1108,7 @@ def resolve_model_for_task(
     need_tokens = _validate_need_tokens(need_tokens)
     role_l = _validate_role(role)
     risk_l = _validate_risk(risk)
+
     exclude_families_seq = tuple(exclude_families or ())
     excluded = {
         str(f).lower().strip()
@@ -1124,6 +1117,7 @@ def resolve_model_for_task(
     }
     if author_model:
         excluded.add(detect_model_family(author_model))
+
     envelope_intelligence: float | None = None
     if _envelope:
         envelope_intelligence = _risk_envelope_intelligence(
@@ -1138,6 +1132,7 @@ def resolve_model_for_task(
             leg_state_reader=leg_state_reader,
             account=account,
         )
+
     min_intelligence = RISK_MIN_INTELLIGENCE[risk_l]
     reader = leg_state_reader or leg_status
     all_models = get_catalog_models(db)
@@ -1156,10 +1151,12 @@ def resolve_model_for_task(
         if not _passes_context_and_cliff(m, need_tokens, role=role_l):
             return False
         return True
+
     # 1. Filter candidates within combo
     candidates: list[dict[str, Any]] = [
         dict(m) for m in all_models if _eligible(m, require_combo=True)
     ]
+
     # Fallback: relax combo constraint while keeping all exclusions, availability,
     # context, and price-cliff guards.
     if not candidates:

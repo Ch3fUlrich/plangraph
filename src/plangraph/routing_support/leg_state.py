@@ -319,6 +319,19 @@ def last_probe_outcome(leg):
     return _default_store().last_probe_outcome(leg)
 
 
+def model_admitted(model, *, enabled=False):
+    """Shared catalog policy; live authority replaces only local availability."""
+    from .resolver import catalog_row_admitted
+    from plangraph.mimo_policy import mimo_path_allowed
+    mid = str(model.get('id') or model.get('model_id') or '')
+    admission = dict(model, available=1) if enabled else model
+    return (mimo_path_allowed(mid) and catalog_row_admitted(admission)
+            and not (enabled and model.get('disabled'))
+            and str(model.get('status', 'active')).lower() in ('active', '')
+            and not (mid.lower().startswith('cxa/')
+                     and not mid.lower().startswith('cxa/gpt-6-luna')))
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 

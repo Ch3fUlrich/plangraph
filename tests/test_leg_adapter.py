@@ -27,10 +27,14 @@ def adapter(tmp_path, *, available=True, served=('opencode-go/sample',), enabled
     return reader, calls
 
 
+# Recorded from origin/main with an empty local evidence store.
+MAIN_ORDER = ['opencode-go/gemini-4-argon', 'mimo/mimo-v2.6-pro', 'opencode-go/qwen3.8-max', 'opencode-go/muse-spark-1.3-contributor', 'opencode-go/deepseek-v4.1-flash', 'Qwen3.8-Flash', 'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'openrouter/free', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6-luna', 'gemini-3.8-flash', 'mimo/mimo-v2.6-flash', 'claude-sonnet-5-5-medium', 'opencode-go/glm-5.2', 'omniroute/deepseek-direct-flash', 'claude-haiku-5-5']
+
+
 @pytest.mark.parametrize('available,expected', [(True, True), (False, False)])
 def test_authority(tmp_path, available, expected):
     reader, calls = adapter(tmp_path, available=available)
-    row = dict(id='opencode-go/sample', available=0, active=True)
+    row = dict(id='opencode-go/sample', available=0, active=True, expires='2000-01-01')
     assert resolver.is_model_available(row, reader) is expected
     assert resolver.is_model_available(row, reader) is expected
     assert calls == [1]
@@ -89,7 +93,7 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     first = [m['id'] for m in before if resolver.is_model_available(m, reader)]
     second = [m['id'] for m in resolver.DEFAULT_FALLBACK_MODELS
               if resolver.is_model_available(m, reader)]
-    assert first == second
+    assert first == second == MAIN_ORDER
     assert resolver.DEFAULT_FALLBACK_MODELS == before
     assert not calls
 
@@ -112,3 +116,30 @@ def test_refresh_recovers_without_failure_becoming_health(tmp_path):
     reader.clock = lambda: 122
     reader.provider.snapshot = lambda: {'opencode-go': SimpleNamespace(available=True, stale=False)}
     assert reader('opencode-go/sample')['state'] == 'ok'
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('policy', [dict(id='cxa/gpt-6-sol-x'), dict(status='retired')])
+def test_shared_admission(tmp_path, enabled, policy):
+    reader, _ = adapter(tmp_path, enabled=enabled, served=('cxa/gpt-6-sol-x', 'opencode-go/sample'))
+    reader.provider.snapshot = lambda: {'cxa': SimpleNamespace(available=True, stale=False),
+                                      'opencode-go': SimpleNamespace(available=True, stale=False)}
+    assert not resolver.is_model_available(dict(id='opencode-go/sample', active=True,
+                                                available=1) | policy, reader)
+
+
+def test_enabled_probe_recovery(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    reader, calls = adapter(tmp_path, available=False)
+    leg = SimpleNamespace(model='opencode-go/sample', account='sample', combo='worker')
+    runner = SimpleNamespace(leg_reader=reader)
+    probes = []
+    async def recover(*args, **kwargs):
+        probes.append(1)
+        reader.provider.snapshot = lambda: calls.append(1) or {'opencode-go': SimpleNamespace(available=True, stale=False)}
+        return dict(ok=True)
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(leg_probe, 'probe', recover)
+    assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
+    assert probes == calls == [1]
