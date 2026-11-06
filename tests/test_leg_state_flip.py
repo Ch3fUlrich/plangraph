@@ -46,9 +46,14 @@ def test_default_and_single_construction(boundary, tmp_path, monkeypatch, value)
     assert a.hung.reader is a.leg_reader
 
 
-def test_off_byte_identical(boundary, tmp_path, monkeypatch):
+@pytest.mark.parametrize('factory', [False, True])
+def test_off_byte_identical(boundary, tmp_path, monkeypatch, factory):
     monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
-    s = service(tmp_path)
+    if factory:
+        from plangraph.spawner.runner import spawn_service
+        s = spawn_service(runner=SimpleNamespace(), state=tmp_path)
+    else:
+        s = service(tmp_path)
     baseline = plan_spawn(CARD, role='implement', leg_reader=None)
     s.hung.waiting.add(baseline.legs[0].model)
     encode = lambda p: json.dumps(asdict(p), sort_keys=True)
@@ -111,8 +116,39 @@ def test_service_fixture_never_constructs_live_reader(tmp_path, monkeypatch):
     from plangraph.routing_support import omniroute_state
     monkeypatch.setattr(omniroute_state, 'from_env', lambda: pytest.fail('live provider'))
     s = service(tmp_path)
-    assert s.leg_reader is not None
-    assert s.leg_reader.enabled is False  # injected declared-state reader
+    assert s.leg_reader is None  # disabled fixture is identical to main's None
+
+
+@pytest.mark.parametrize('reason', ['unknown', 'unreachable', 'stale'])
+def test_factory_preserves_adapter_and_hung_rank(boundary, tmp_path, reason):
+    from plangraph.spawner.runner import spawn_service
+    s = spawn_service(runner=SimpleNamespace(), state=tmp_path)
+    reader = s.leg_reader
+    reader.leg_status = lambda *a, **k: dict(state='limited', reason=reason, evidence={})
+    baseline = plan_spawn(CARD, role='implement', leg_reader=reader.store)
+    assert len(baseline.legs) > 2
+    s.hung.waiting.add(baseline.legs[0].id)
+    plan = s._route(CARD)
+    assert plan.legs == baseline.legs[1:] + baseline.legs[:1]
+    assert any(c.get('leg_state_reason') == reason for c in plan.candidates)
+    assert s.leg_reader is reader is s.hung.reader is s.runner.leg_reader
+
+
+def test_fixture_disabled_reader_matches_main_plan(tmp_path, monkeypatch):
+    import plangraph.planner.routing as routing
+    original = routing.plan_spawn
+    seen = []
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs['leg_reader'])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(routing, 'plan_spawn', spy)
+    s = service(tmp_path)
+    baseline = original(CARD, role='implement', leg_reader=None)
+    s.hung.waiting.add(baseline.legs[0].id)
+    assert asdict(s._route(CARD)) == asdict(baseline)
+    assert seen == [None]
 
 
 def test_rank_subset_and_leg_keys(boundary, tmp_path):

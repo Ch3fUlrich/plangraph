@@ -26,6 +26,8 @@ def default_reader():
 
 def initialize(service, reader, boundary):
     service.leg_reader = reader = default_reader() if reader is None and enabled() else reader
+    if hasattr(reader, 'enabled') and not reader.enabled:
+        service.leg_reader = reader = None
     service.hung = boundary(reader)
     return reader
 
