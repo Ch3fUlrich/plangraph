@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -153,6 +154,35 @@ def test_npm_missing_skips(host):
     _, _, _, log, run, _ = host
     (log.parent / 'bin/npm').unlink()
     assert 'npm unavailable' in run().stdout
+
+
+@pytest.mark.parametrize('platform', ['nt', 'posix'])
+def test_npm_cache_spaced_path_without_shell(host, monkeypatch, platform):
+    home, site, _, _, _, _ = host
+    site.write_text('')  # Stop before platform-specific session configuration.
+    spec = importlib.util.spec_from_file_location('omnigraph_step', ROOT / 'deploy/omnigraph_step.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, 'os', SimpleNamespace(**{**vars(os), 'name': platform}))
+    monkeypatch.setenv('USERPROFILE', str(home))
+    monkeypatch.setenv('PLANGRAPH_SITE_ENV', str(site))
+    monkeypatch.setattr(sys, 'argv', ['omnigraph_step.py', '0'])
+    npm = str(home / 'Program Files' / ('npm.cmd' if platform == 'nt' else 'npm'))
+    def which(name):
+        assert name == ('npm.cmd' if platform == 'nt' else 'npm')
+        return npm
+    calls = []
+    def run(args, **kwargs):
+        assert not kwargs.get('shell', False)
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+    monkeypatch.setattr(module.shutil, 'which', which)
+    monkeypatch.setattr(module.subprocess, 'run', run)
+    module.main()
+    expected = next(arg for arg in json.loads((ROOT / '.mcp.json').read_text())
+                    ['mcpServers']['omnigraph']['args'] if arg.startswith('@modernrelay/omnigraph-mcp@'))
+    assert calls == [[npm, 'cache', 'add', expected]]
+    assert (home / '.config/plangraph/omnigraph-cache-spec').read_text() == expected
 
 
 def test_health_404_no_second_guess(host, monkeypatch):

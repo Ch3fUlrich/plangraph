@@ -106,13 +106,13 @@ def main():
         return
     root = Path(__file__).resolve().parents[1]
     spec = next(arg for arg in json.loads((root / '.mcp.json').read_text())['mcpServers']['omnigraph']['args'] if arg.startswith('@modernrelay/omnigraph-mcp@'))
-    npm = shutil.which('npm')
+    npm = shutil.which('npm.cmd' if os.name == 'nt' else 'npm')
     marker = home / '.config/plangraph/omnigraph-cache-spec'
     if not npm:
         print('Omnigraph skipped: npm unavailable')
     elif marker.exists() and marker.read_text() == spec:
         print('Omnigraph skipped: client already cached')
-    elif run([npm, 'cache', 'add', spec], shell=os.name == 'nt').returncode == 0:
+    elif run([npm, 'cache', 'add', spec]).returncode == 0:
         update(marker, spec, 0o600)
     else:
         print('Omnigraph skipped: client cache failed')
