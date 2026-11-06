@@ -105,7 +105,11 @@ fn fleet_foundation_files() {
     assert_eq!(failed["attempts_sent"], 2);
     assert_eq!(
         failed["diagnostics"],
-        json!(["outbox append failed", "outbox append failed"])
+        json!([
+            "outbox append failed",
+            "outbox append failed",
+            "outbox append failed"
+        ])
     );
     let saved = state();
     assert_eq!(saved["clock"]["total_ms"], 0);
