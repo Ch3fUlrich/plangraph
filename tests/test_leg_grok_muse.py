@@ -36,6 +36,22 @@ def test_grok_review_only_and_distinct_family():
     assert GROK not in {l.id for l in plan_spawn(CARD, role="implement").legs}
 
 
+def test_console_muse_uses_served_provider():
+    assert BY_ID[MUSE[1]].model == "opencode-go/muse-spark-1.3-contributor"
+
+
+@pytest.mark.real_probe
+def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.routing_support import resolver
+    listing = "\n".join(("omniroute/gc/grok-4.7", "opencode-go/sample",
+                         "Models available", "bad/", "/bad", "bad//id", "bad/id extra"))
+    monkeypatch.setattr(resolver.subprocess, "run", lambda *a, **kw:
+                        SimpleNamespace(returncode=0, stdout=listing))
+    assert resolver._probe_served_models("{}") == frozenset({
+        "omniroute/gc/grok-4.7", "opencode-go/sample"})
+
+
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
 def test_muse_never_automatic_even_if_lifted(role):
     legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in MUSE)
