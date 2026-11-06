@@ -1,0 +1,171 @@
+"""Ref-safety coverage for tools/hooks/pre-push, including installed-hook pushes."""
+import shlex
+import subprocess
+
+import pytest
+
+from test_hooks_prepush import (
+    HOOK, ZERO, commit_file, fake_ip, git, push_line, repo, run_hook,
+)
+
+
+@pytest.mark.parametrize("remote_ref", ["refs/heads/main", "refs/tags/release",
+                                        "refs/custom/review"])
+@pytest.mark.parametrize("case", ["non-ff", "delete", "missing"])
+@pytest.mark.parametrize("unsafe_first", [False, True])
+def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsafe_first):
+    r, base = repo
+    remote = commit_file(r, "app/other.py", "y = 2\n")
+    local = base
+    if case == "delete":
+        local = ZERO
+    elif case == "missing":
+        remote = "1" * 40
+    lines = [push_line("safe", base, ZERO),
+             f"refs/heads/main {local} {remote_ref} {remote}"]
+    if unsafe_first:
+        lines.reverse()
+    res = run_hook(r, lines, {"PLANGRAPH_SCRUB_WORDS": str(tmp_path / "missing")})
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    action = "delete" if case == "delete" else "non-fast-forward update"
+    expected = (f"pre-push: remote object unavailable for {remote_ref}" if case == "missing"
+                else f"pre-push: refused {action} of {remote_ref}")
+    if case == "non-ff" and remote_ref.startswith("refs/tags/"):
+        expected = f"refused update of existing tag {remote_ref}: tags are immutable"
+    assert expected in out
+    assert "scrub" not in out and "file-size" not in out
+
+
+@pytest.mark.parametrize("new_branch", [False, True])
+def test_hook_passes_safe_ref_updates(repo, new_branch):
+    r, base = repo
+    head = commit_file(r, "app/other.py", "y = 2\n")
+    res = run_hook(r, [push_line("feature", head, ZERO if new_branch else base)])
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+@pytest.mark.parametrize("source", ["@", "HEAD~1"])
+@pytest.mark.parametrize("new_branch", [False, True])
+def test_push_revision_expression_uses_installed_hook(repo, tmp_path, source, new_branch):
+    r, base = repo
+    remote = tmp_path / "remote.git"
+    git(r, "init", "--bare", str(remote))
+    if not new_branch:
+        git(r, "push", str(remote), f"{base}:refs/heads/main")
+    head = commit_file(r, "app/next.py", "next = 2\n")
+    if source == "HEAD~1":
+        commit_file(r, "app/later.py", "later = 3\n")
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    marker = tmp_path / "hook-invoked"
+    wrapper = hooks / "pre-push"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f"touch {shlex.quote(str(marker))}\n"
+        f'exec {shlex.quote(str(HOOK))} "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    git(r, "config", "core.hooksPath", str(hooks))
+    git(r, "push", str(remote), f"{source}:refs/heads/main")
+    assert marker.exists(), "Git must invoke the installed pre-push hook"
+    assert git(remote, "rev-parse", "refs/heads/main").strip() == head
+
+
+def test_hook_refuses_lightweight_tag_fast_forward(repo):
+    r, base = repo
+    git(r, "tag", "release", base)
+    head = commit_file(r, "app/next.py", "next = 2\n")
+    assert git(r, "merge-base", "--is-ancestor", base, head) == ""
+    res = run_hook(r, [f"HEAD {head} refs/tags/release {base}"])
+    assert res.returncode == 1
+    assert ("refused update of existing tag refs/tags/release: tags are immutable"
+            in res.stderr)
+    assert "non-fast-forward" not in res.stderr
+    unchanged = run_hook(r, [f"release {base} refs/tags/release {base}"])
+    assert unchanged.returncode == 0, unchanged.stdout + unchanged.stderr
+    created = run_hook(r, [f"HEAD {head} refs/tags/new {ZERO}"])
+    assert created.returncode == 0, created.stdout + created.stderr
+
+
+@pytest.mark.parametrize("target", ["tag", "commit", "blob", "tree"])
+@pytest.mark.parametrize("source", ["tag", "blob", "tree"])
+def test_hook_refuses_noncommit_moves(repo, source, target):
+    r, base = repo
+    git(r, "tag", "-a", "release", "-m", "release")
+    old_tag = git(r, "rev-parse", "release").strip()
+    head = commit_file(r, "app/next.py", "next = 2\n")
+    git(r, "tag", "-a", "next", "-m", "next")
+    old = {"tag": old_tag, "blob": git(r, "rev-parse", f"{base}:app/clean.py").strip(),
+           "tree": git(r, "rev-parse", f"{base}^{{tree}}").strip()}[source]
+    new = {"tag": git(r, "rev-parse", "next").strip(), "commit": head,
+           "blob": git(r, "rev-parse", f"{head}:app/next.py").strip(),
+           "tree": git(r, "rev-parse", f"{head}^{{tree}}").strip()}[target]
+    ref = "refs/custom/object"
+    res = run_hook(r, [f"refs/heads/main {new} {ref} {old}"])
+    assert res.returncode == 1
+    assert f"refused non-fast-forward update of {ref}" in res.stderr
+
+
+@pytest.mark.parametrize("line", ["", "one two three", "a b c d extra",
+                                      "refs/heads/main xyz refs/heads/main xyz",
+                                      "refs/heads/main {oid} bad..ref {oid}",
+                                      "HEAD {oid} refs/heads/bad..ref {oid}"])
+def test_hook_refuses_malformed_records(repo, line):
+    r, base = repo
+    res = run_hook(r, [line.format(oid=base)])
+    assert res.returncode == 1
+    assert "pre-push: malformed push record" in res.stderr
+
+
+def test_hook_ignores_replace_objects(repo):
+    r, base = repo
+    remote = commit_file(r, "app/remote.py", "remote = 1\n")
+    tree = git(r, "rev-parse", f"{base}^{{tree}}").strip()
+    replacement = git(r, "commit-tree", tree, "-p", remote, "-m", "replacement").strip()
+    git(r, "replace", base, replacement)
+    assert git(r, "merge-base", "--is-ancestor", remote, base) == ""
+    res = run_hook(r, [push_line("main", base, remote)])
+    assert res.returncode == 1
+    assert "refused non-fast-forward update" in res.stderr
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("non-ff", "pre-push: refused non-fast-forward update of refs/heads/main"),
+    ("delete", "pre-push: refused delete of refs/heads/main"),
+])
+def test_script_push_uses_installed_hook(repo, tmp_path, case, expected):
+    r, base = repo
+    remote = tmp_path / "remote.git"
+    git(r, "init", "--bare", str(remote))
+    head = commit_file(r, "app/remote.py", "remote = 1\n")
+    git(r, "push", str(remote), f"{head}:refs/heads/main")
+    git(r, "config", "core.hooksPath", str(HOOK.parent))
+    script = tmp_path / "push.sh"
+    script.write_text('#!/bin/bash\ngit push --force "$1" "$2:refs/heads/main"\n')
+    source = base if case == "non-ff" else ""
+    res = subprocess.run(["bash", str(script), str(remote), source], cwd=r,
+                         capture_output=True, text=True, timeout=120)
+    assert res.returncode != 0
+    assert expected in res.stderr
+    assert git(remote, "rev-parse", "refs/heads/main").strip() == head
+
+
+def test_sha256_new_branch_and_delete(tmp_path):
+    r = tmp_path / "sha256"
+    git(tmp_path, "init", "--object-format=sha256", str(r))
+    git(r, "config", "user.name", "t")
+    git(r, "config", "user.email", "t@example.invalid")
+    head = commit_file(r, "clean.txt", "clean\n")
+    zero = "0" * len(head)
+    res = run_hook(r, [push_line("feature", head, zero)])
+    assert res.returncode == 0, res.stderr
+    assert "scrub hit(s)" not in res.stdout + res.stderr
+    dirty = commit_file(r, "app/net.py", fake_ip() + "\n")
+    res = run_hook(r, [push_line("feature", dirty, zero)])
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "app/net.py:1: ipv4" in res.stdout + res.stderr
+    assert fake_ip() not in res.stdout + res.stderr
+    res = run_hook(r, [push_line("feature", zero, head)])
+    assert res.returncode == 1
+    assert "refused delete" in res.stderr
