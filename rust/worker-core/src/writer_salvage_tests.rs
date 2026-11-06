@@ -138,8 +138,8 @@ fn bundle_failure_runs_cleanup_and_reports_cleanup_failure() {
             assert!(matches!(
                 outcome,
                 Err(WriterError::SalvageCleanup {
-                    bundle_failed: true
-                })
+                    bundle: Some(bundle), cleanup
+                }) if matches!(*bundle, WriterError::Git) && matches!(*cleanup, WriterError::Git)
             ));
             std::fs::remove_file(&lock).unwrap();
             command(root, &["update-ref", "-d", reference, &tip], &[], None).unwrap();
@@ -148,6 +148,33 @@ fn bundle_failure_runs_cleanup_and_reports_cleanup_failure() {
         }
         assert!(command(root, &["show-ref", "--verify", reference], &[], None).is_err());
     }
+}
+#[test]
+fn finish_bundle_preserves_both_error_kinds() {
+    for failed in [false, true] {
+        let bundle = if failed {
+            Err(WriterError::Invalid)
+        } else {
+            Ok(vec![])
+        };
+        let outcome = finish_bundle(bundle, || Err(WriterError::Git));
+        match outcome {
+            Err(WriterError::SalvageCleanup { bundle, cleanup }) => {
+                assert!(matches!(*cleanup, WriterError::Git));
+                if failed {
+                    assert!(matches!(bundle.as_deref(), Some(WriterError::Invalid)));
+                } else {
+                    assert!(bundle.is_none());
+                }
+            }
+            other => panic!("expected cleanup failure, got {other:?}"),
+        }
+    }
+    assert!(matches!(
+        finish_bundle(Err(WriterError::Invalid), || Ok(vec![])),
+        Err(WriterError::Invalid)
+    ));
+    assert!(finish_bundle(Ok(vec![]), || Ok(vec![])).is_ok());
 }
 #[test]
 fn bundle_roundtrip_and_ref_cleanup() {

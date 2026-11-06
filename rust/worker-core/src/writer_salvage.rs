@@ -101,9 +101,10 @@ fn finish_bundle(
     result: Result<Vec<u8>, WriterError>,
     cleanup: impl FnOnce() -> Result<Vec<u8>, WriterError>,
 ) -> Result<(), WriterError> {
-    if cleanup().is_err() {
+    if let Err(cleanup) = cleanup() {
         return Err(WriterError::SalvageCleanup {
-            bundle_failed: result.is_err(),
+            bundle: result.err().map(Box::new),
+            cleanup: Box::new(cleanup),
         });
     }
     result.map(|_| ())
