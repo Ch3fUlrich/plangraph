@@ -35,7 +35,7 @@ fn boolean(args: &Args, key: &str, flag: &str, out: &mut Vec<String>) -> Result<
     }
     Ok(())
 }
-fn run(
+pub(crate) fn run(
     state: &Path,
     argv: Vec<String>,
     timeout: Duration,
@@ -71,6 +71,7 @@ fn run(
     }
 }
 pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
+    crate::leg_ref::check_review_role(args)?;
     let card = args
         .get("card")
         .ok_or_else(|| ToolError::Key("card".into()))?
@@ -120,9 +121,11 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
     Ok(argv)
 }
 pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
+    let args = &crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)?;
     run(state, route_args(args)?, Duration::from_secs(30), false)
 }
 pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
+    crate::leg_ref::check_review_role(args)?;
     let mut argv = vec!["probe".into()];
     strings(args, "leg", "--leg", &mut argv)?;
     boolean(args, "all_writers", "--all-writers", &mut argv)?;

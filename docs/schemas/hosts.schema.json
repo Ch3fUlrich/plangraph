@@ -22,6 +22,7 @@
       "required": ["id", "aliases", "transport", "os", "state_dir", "caps", "warmup", "session_mb", "roles", "repos"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+        "class": { "enum": ["worker", "restricted"], "default": "worker", "description": "Policy label; restricted cap bounds are enforced by Rust." },
         "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "transport": { "enum": ["local", "keeper", "ssh"] },
         "os": { "enum": ["linux", "windows"] },

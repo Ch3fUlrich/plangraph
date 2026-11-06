@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import urllib.error
@@ -12,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from git_helpers import git_cli, git_supports_init_branch
 from plangraph.keeper import evidence_ci
 from plangraph.keeper.evidence_ci import CIAdapter
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
@@ -176,19 +176,13 @@ def test_semaphore_parses_json(monkeypatch, tmp_path):
 # GitAdapter, for real, against a temporary repository
 # --------------------------------------------------------------------------- #
 
-def _git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True, text=True, check=True,
-    )
-    return proc.stdout.strip()
-
 
 @pytest.mark.skipif(subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
                     reason="git not available")
-def test_git_adapter_real_repo(tmp_path):
+def test_git_adapter_real_repo(tmp_path, monkeypatch):
     repo = tmp_path / "r"
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    _git, _git_init = git_cli(tmp_path, monkeypatch)
+    _git_init(repo, "-q")
     _git(repo, "config", "user.email", "test@example.invalid")
     _git(repo, "config", "user.name", "Tester")
     (repo / "f.txt").write_text("x", encoding="utf-8")
@@ -530,10 +524,11 @@ def test_ci_adapter_gh_failure_on_second_call_raises(monkeypatch):
     assert len(paths) == 2  # the failure came from the workflow-runs call
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
-def test_git_adapter_merge_commit_of_real_repo(tmp_path: Path) -> None:
+def test_git_adapter_merge_commit_of_real_repo(tmp_path: Path, monkeypatch) -> None:
+    assert shutil.which("git") and git_supports_init_branch(), "git >= 2.28 required (git init -b)"
     repo = tmp_path
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    _git, _git_init = git_cli(tmp_path, monkeypatch)
+    _git_init(repo, "-q", "-b", "main")
     _git(repo, "config", "user.name", "Test User")
     _git(repo, "config", "user.email", "test@example.invalid")
 

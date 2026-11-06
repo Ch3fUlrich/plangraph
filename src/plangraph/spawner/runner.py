@@ -116,6 +116,7 @@ class JobInfo:
     risk: str = "normal"
     command: list[str] = field(default_factory=list)
     start_time: float = field(default_factory=time.time)
+    writer_email: str | None = None
     end_time: float | None = None
     exit_code: int | None = None
     stdout: str = ""
@@ -508,6 +509,7 @@ class SpawnerRunner:
                 command=cmd,
                 dry_run=False,
                 cwd=work_dir,
+                writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
             )
             self.jobs[job_id] = job
             from .run_watchdog import thresholds, edit_signature
@@ -602,6 +604,7 @@ class SpawnerRunner:
                     self._owned[job_id]['job_object'] = self._win_jobs[job_id] = handle
                     # Descendants made before assign() are not job members: record them now, kill+verify at reap.
                     self._escapees = {**getattr(self, '_escapees', {}), job_id: proc_kill.escapees(root_pid, self.win_job_api.pids(handle) if hasattr(type(self.win_job_api), 'pids') else [])}
+                    self._owned[job_id].update(job_name=getattr(self.win_job_api, 'name', None), escapees=list(self._escapees[job_id]))
                 except Exception:
                     stale = self._win_jobs.pop(job_id, None)
                     if stale is not None:   # assigned but unverifiable: release the handle, the run does not start
@@ -650,12 +653,15 @@ class SpawnerRunner:
     def _nt(self) -> bool:
         return self.platform == 'nt' or _is_nt()
 
-    async def kill_recorded(self, pid, pid_start=None):
+    async def kill_recorded(self, pid, pid_start=None, job_name=None, escapees=()):
         """Cancel after a service restart: prove the recorded root by its persisted start token,
         kill its tree, verify.  Returns survivors ([] = clean); unprovable and alive = survivors."""
         plat = 'nt' if self._nt() else None
-        if pid_start is None or plat == 'nt':   # nt: the job died with the old service
-            return unproven_survivors(pid, plat)
+        if plat == 'nt' and type(pid_start) is int:
+            from .win_recorded import kill
+            return await kill(pid, pid_start, job_name, escapees)
+        if pid_start is None or plat == 'nt':
+            return [pid] if plat == 'nt' else unproven_survivors(pid, plat)
         return await kill_proven(self, pid, pid_start, plat=plat) or []
 
     async def _own_kill(self, pid, ident=None):

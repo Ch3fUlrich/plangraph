@@ -330,6 +330,7 @@ class SpawnService(SeatSpawnMixin):
                     process = self.runner._processes.get(job.job_id)
                     record['pid'] = process.pid if process else None
                     record['pid_start'] = getattr(self.runner, '_owned', {}).get(job.job_id, {}).get('pid_start')   # a CLI cancel proves the root by it
+                    record.update({k: v for k, v in getattr(self.runner, '_owned', {}).get(job.job_id, {}).items() if k in ('job_name', 'escapees')})
                     self._save(record)
                     task = self.runner._tasks.get(job.job_id)
                     if task:

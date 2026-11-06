@@ -81,10 +81,11 @@ def ref_head(git: Any, project: str) -> str | None:
         repo = repo_path_fn(project)
         if not repo:
             return None
-        repo_ref_fn = getattr(git, "repo_ref", None)
-        ref = repo_ref_fn(project) if callable(repo_ref_fn) else "main"
+        # ``repo_ref`` is required of every adapter; a missing or empty ref is
+        # an adapter failure -> "unknown head" (None), never an invented "main".
+        ref = git.repo_ref(project)
         if not ref:
-            ref = "main"
+            return None
         sha = head_sha_fn(repo, ref)
         if isinstance(sha, str) and valid_commit_ref(sha) and sha == sha.lower():
             return sha

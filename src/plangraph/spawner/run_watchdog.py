@@ -2,7 +2,6 @@
 import asyncio
 import codecs
 import logging
-import math
 import os
 from pathlib import Path
 import re
@@ -10,6 +9,7 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
+from .run_watchdog_limits import thresholds  # noqa: F401  re-exported for callers and tests
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
@@ -41,37 +41,6 @@ def prepare_run(service, record, card):
     return thresholds(card, role=record.get('role')), record['live_log']
 
 
-def thresholds(card=None, *, role=None):
-    from plangraph.planner.routing import SpawnRefused
-    card = card or {}
-    result = {'hard_max': False}   # table max_min may carry the first-edit hold (M5)
-    for key, default in [('stall_min', 20), ('first_edit_min', 15), ('max_min', 90)]:   # REMOVE-AT-R10 (D-3769): first_edit_min was 45
-        value = card.get(key, default)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-            raise SpawnRefused('invalid watchdog threshold: ' + key)
-        result[key.replace('_min', '_s')] = value * 60
-    timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT') or ('1500' if role == 'review' else None)
-    if timeout and 'max_min' not in card:
-        try:
-            value = float(timeout)
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError
-        except ValueError:
-            # M17: a bad env knob is refused before launch (exit 2), like a bad card.
-            raise SpawnRefused('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
-        result['max_s'] = value
-        # An operator-set run timeout is a wall clock: the first-edit hold never extends it (M5).
-        result['hard_max'] = True
-    interval = os.environ.get('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL')
-    try:
-        result['interval'] = float(interval) if interval else min(120, result['stall_s'] / 4)
-    except ValueError:
-        raise SpawnRefused('invalid watchdog interval') from None
-    if not math.isfinite(result['interval']) or result['interval'] <= 0:
-        raise SpawnRefused('invalid watchdog interval')
-    return result
-
-
 def is_activity(line):
     line = ANSI.sub('', line).strip()
     return bool(line and not HEADER.match(line))
@@ -81,7 +50,7 @@ class Watchdog:
     def __init__(self, limits, start, edit, writer=True):
         # Non-writer roles never edit and may buffer output: only 'max' applies.
         self.limits, self.start, self.edit, self.writer = limits, start, edit, writer
-        self.edited = False
+        self.edited, self.edit_baseline_known = False, edit is not None
         self.cpu = None
         self.progress = dict(edit=start, activity=start, cpu=start)
 
@@ -89,7 +58,8 @@ class Watchdog:
         """Hard deadline in seconds. A pre-edit writer whose edits we can see is owed its first-edit
         window on top of the table run budget (M5's 'holds while output flows' ends at max_s +
         first_edit_s); once edited, or when the edit signal is unavailable, or for non-writers,
-        max_s ends the run. An operator-set PLANGRAPH_SPAWN_RUN_TIMEOUT is a wall clock, never extended."""
+        max_s ends the run. Hard caps (including PLANGRAPH_SPAWN_RUN_TIMEOUT and the default
+        review cap) are wall clocks, never extended. The opt-in first-edit stall is separate."""
         if self.limits.get('hard_max'):
             return self.limits['max_s']
         return self.limits['max_s'] + (self.limits['first_edit_s']
@@ -122,6 +92,8 @@ class Watchdog:
                 # Q7/M4: edits are invisible this tick; no rule may assert
                 # 'no worktree edit' (max is the backstop).
                 pass
+            elif self.limits.get('hard_first_edit') and self.edit_baseline_known and now - self.start >= self.limits['first_edit_s']:
+                rule = 'no-first-edit'
             elif activity is not None and now - activity >= stall:
                 # Q6: no activity signal (buffered harness) is not a stall.
                 rule = 'no-activity'
@@ -133,6 +105,7 @@ class Watchdog:
             rule = 'no-progress'
         if rule:
             return dict(event='watchdog_timeout' if rule == 'max' else 'watchdog_stalled',
+                        **({'edit_evidence': 'changed' if self.edited else 'unchanged' if self.edit_baseline_known and edit is not None else 'unknown'} if self.limits.get('hard_first_edit') else {}),
                         rule=rule, phase='post-edit' if self.edited else 'pre-edit',
                         last_progress=max(self.progress.values()), last_activity_ts=activity,
                         quiet=[k for k, v in self.progress.items() if now - v >= stall
@@ -341,6 +314,8 @@ async def collect(runner, job_id, proc):
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
             delay = min(limits['interval'], max(.001, job.start_time + w.budget() - time.time()))
+            if limits.get('hard_first_edit') and w.writer and not w.edited and w.edit_baseline_known and w.edit is not None:
+                delay = min(delay, max(.001, job.start_time + limits['first_edit_s'] - time.time()))
             if w.edit is None:
                 delay = min(delay, EDIT_RETRY_S)   # Q7: keep retrying a lost baseline
             done, _ = await asyncio.wait(waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
