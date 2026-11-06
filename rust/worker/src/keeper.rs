@@ -57,7 +57,9 @@ pub struct Claim {
     pub forbid: Vec<String>,
     pub prompt: String,
 }
-fn default_check_kind() -> String { "change".into() }
+fn default_check_kind() -> String {
+    "change".into()
+}
 /// What one attempt did, sent back so the keeper can pick the next move.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttemptReport {
