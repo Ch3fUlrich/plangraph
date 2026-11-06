@@ -1,5 +1,22 @@
 # Placement rule loader (R8B A)
 
+## C2 existing-keeper SQLite storage (D5)
+
+Schema v17 installs revision, override and immutable audit tables in the existing
+keeper; no new store or database file is introduced. Missing singleton means
+logical revision zero; C4's first edit transaction inserts it. Installation is
+presence-based and DML-free, with no seed overrides: A owns defaults/seeds.
+`edit` holds exact canonical RuleEdit JSON including `expected_revision` and
+`rollback_of`; `previous` is nullable. Audit UPDATE/DELETE abort. Rollback is a
+new forward audit event, never an item event or a fabricated item key. No secrets
+or host metrics belong in these tables. C4 owns transaction/audit behavior;
+C2 alone does not satisfy item done criteria or claim closure. PG parity and
+row-preserving rollback belong to C3. See the migration-gates section below for GO.
+
+### Migration-gates: placement rules C2 (D5 / GO)
+
+Schema application is a GATED STEP: operator GO must name the reviewed SHA and scope, with a backup and offline rehearsal before application. Only the operator may approve keeper restart/SQLite upgrade; C3 owns the migrate-role PostgreSQL step and row-preserving rollback. Writers run only temporary fixture databases, never open live config/DB, print secret DSNs, or clean up outside fixture ownership. All touched keeper modules are auth-door paths, not a Hand-Edit exemption. Downgrade disables rules endpoints first and preserves the ledger: never drop audit rows. C4 owns transactions, including rollback as a new forward audit event; this is not the item events ledger. C2 installs storage only, not item closure.
+
 `setup/placement-rules.schema.toml` is the sole metadata authority, embedded at
 compile time. `schema()` fails closed with `rules_schema`; it never substitutes
 defaults after a parse failure. The parser accepts only version 1, rule records,
