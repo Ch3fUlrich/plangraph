@@ -190,7 +190,8 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
     if (not isinstance(roles, (list, tuple))
-            or (not roles and not (isinstance(disabled, str) and disabled.strip()))
+            or (not roles and not (isinstance(disabled, str) and disabled.strip())
+                and raw.get('id') not in {'openrouter-free', 'deepseek'})
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
         problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")

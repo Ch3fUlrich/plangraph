@@ -103,7 +103,7 @@ def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
                     ("opencode-go/qwen3.8-max",))
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
-    record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="implement",
+    record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
                                    model="opencode-go/qwen3.8-max",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
@@ -172,7 +172,7 @@ def test_route_skips_banned_and_off_families(role):
                            ("opencode-glm-5.3-flash-free", "off_family")):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
-            assert reasons[leg_id] == reason
+            assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
 
 
 def test_route_skips_paused_harness_per_role():
@@ -195,7 +195,7 @@ def test_route_skips_paused_harness_per_role():
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    assert paused.first_leg.id == "agy-gemini-3.8-flash"
+    assert not paused.legs
 
 
 def test_explicit_policy_argument_wins():

@@ -11,6 +11,12 @@ import pytest
 from plangraph.spawner import stall_watchdog as w
 
 
+@pytest.fixture(autouse=True)
+def isolated_process_evidence(monkeypatch):
+    from plangraph.spawner import stuck_watch
+    monkeypatch.setattr(stuck_watch, 'processes', lambda proc: {})
+
+
 def records(state, count=1, **fields):
     for i in range(count):
         path = state / f'runs/run-{i}/record.json'
@@ -85,6 +91,8 @@ sys.path.insert(0, sys.argv[1])
 sys.modules['plangraph.spawner.runner'] = SimpleNamespace(
     spawn_service=lambda **kw: SimpleNamespace(retry_completions=lambda: None))
 from plangraph.spawner import stall_watchdog as w
+from plangraph.spawner import stuck_watch
+stuck_watch.processes = lambda proc: {}
 w.read_claims = lambda: []
 raise SystemExit(w.main(['tick']))
 '''

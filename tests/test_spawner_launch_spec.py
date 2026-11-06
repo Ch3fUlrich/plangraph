@@ -69,7 +69,7 @@ def test_unknown(request_data):
 @pytest.mark.parametrize('explicit', [False, True])
 def test_tools(request_data, role, tmp_path, explicit):
     from plangraph.spawner.runner import IMPLEMENT_HEADER
-    leg_id = 'mimo-v2.6-flash' if role == 'implement' else request_data['leg']['id']
+    leg_id = 'cx-gpt-6.1-sol' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
     exe.chmod(0o700)

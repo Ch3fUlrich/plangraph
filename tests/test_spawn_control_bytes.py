@@ -55,7 +55,7 @@ def test_service(tmp_path, monkeypatch, hardened, dry_run, fixer):
 def test_launch_spec(tmp_path, monkeypatch):
     from plangraph.spawner import launch_spec as spec
     req = dict(run_id='run-' + 'a' * 32, job_id='test', role='implement', dry_run=True,
-               leg={'id': 'mimo-v2.6-flash'}, prompt='\x0c', card={},
+               leg={'id': 'cx-gpt-6.1-sol'}, prompt='\x0c', card={},
                cwd=str(tmp_path), state=str(tmp_path / 'state'))
     with pytest.raises(spec.LaunchRefused, match='U\\+000C') as caught:
         spec.build(req)
