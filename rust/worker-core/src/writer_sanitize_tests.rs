@@ -1,7 +1,7 @@
 use super::*;
 use crate::writer_secret::{findings, tests::fixture};
 #[test]
-fn rebuild_excludes_original_objects() {
+fn sanitized_objects_no_original_secret() {
     let (dir, repo, base, tip) = fixture();
     let clean = sanitize_history(&repo, &base, &tip).unwrap().tip;
     assert_ne!(clean, tip);
@@ -39,7 +39,7 @@ fn historical_message_and_blob_removed() {
     assert!(findings(&repo, &base, &clean).unwrap().is_empty());
 }
 #[test]
-fn safe_messages_preserved_secret_messages_replaced_with_trailer() {
+fn matching_message_placeholder_and_trailer() {
     let (dir, repo, base, tip) = fixture();
     let token = ["gh", "p_", &"c".repeat(25)].concat();
     command(
@@ -65,7 +65,7 @@ fn safe_messages_preserved_secret_messages_replaced_with_trailer() {
     assert!(clean.dropped_paths.contains("é.txt"));
 }
 #[test]
-fn merge_parent_graph_and_prerequisite_preserved() {
+fn merge_parent_map_and_safe_messages() {
     let (dir, repo, base, tip) = fixture();
     command(dir.path(), &["checkout", "-b", "side", &base], &[], None).unwrap();
     command(
@@ -102,6 +102,11 @@ fn merge_parent_graph_and_prerequisite_preserved() {
             .map(|p| clean.sha_map.get(&p).cloned().unwrap_or(p))
             .collect();
         assert_eq!(parents(new), expected);
+        let old_raw = object(dir.path(), old).unwrap().1;
+        let new_raw = object(dir.path(), new).unwrap().1;
+        let mut expected_message = message(&old_raw).unwrap().to_vec();
+        expected_message.extend_from_slice(b"\n\nSanitized: secret-gate\n");
+        assert_eq!(message(&new_raw).unwrap(), expected_message);
     }
     assert!(clean.sha_map.contains_key(side));
     assert_eq!(clean.sha_map.len(), 3);
@@ -126,4 +131,31 @@ fn dirty_prerequisite_refused_even_when_tip_removes_secret() {
     let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
     assert!(sanitize_history(&repo, &tip, std::str::from_utf8(&head).unwrap().trim()).is_err());
     assert!(sanitize_history(&repo, &base, &tip).is_ok());
+}
+
+#[test]
+fn receiver_rejects_ungated_bundle() {
+    let (dir, mut repo, base, tip) = fixture();
+    let bundle = dir.path().join("ungated.bundle");
+    command(
+        dir.path(),
+        &["bundle", "create", bundle.to_str().unwrap(), "HEAD"],
+        &[],
+        None,
+    )
+    .unwrap();
+    let receiver = tempfile::tempdir().unwrap();
+    command(receiver.path(), &["init"], &[], None).unwrap();
+    command(
+        receiver.path(),
+        &["fetch", bundle.to_str().unwrap(), "HEAD"],
+        &[],
+        None,
+    )
+    .unwrap();
+    repo.root = receiver.path().to_str().unwrap().into();
+    assert!(matches!(
+        SecretGate.check(&repo, &base, &tip),
+        Err(WriterError::SecretInHistory)
+    ));
 }

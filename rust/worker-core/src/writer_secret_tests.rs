@@ -30,9 +30,23 @@ pub(crate) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
     (dir, repo, base, tip)
 }
 #[test]
-fn inherited_blob_is_scanned() {
-    let (_dir, repo, base, tip) = fixture();
-    assert_eq!(findings(&repo, &base, &tip).unwrap().len(), 1);
+fn every_reachable_blob_scanned() {
+    let (dir, repo, base, _) = fixture();
+    let token = ["gh", "p_", &"z".repeat(25)].concat();
+    std::fs::write(dir.path().join("second"), token).unwrap();
+    command(dir.path(), &["add", "."], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "two blobs"], &[], None).unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let found = findings(&repo, &base, std::str::from_utf8(&head).unwrap().trim()).unwrap();
+    assert_eq!(found.len(), 3);
+    assert!(found.iter().any(|f| f.path.as_deref() == Some("second")));
+    assert_eq!(
+        found
+            .iter()
+            .filter(|f| f.path.as_deref() == Some("é.txt"))
+            .count(),
+        2
+    );
 }
 #[test]
 fn utf8_path_and_introducing_commit() {
@@ -112,4 +126,59 @@ fn reintroduced_secret_reports_each_commit_path_without_bytes() {
     );
     assert!(!format!("{found:?}").contains(std::str::from_utf8(&bytes).unwrap()));
     assert!(crate::writer_result::ContentGate::check(&SecretGate, &repo, &base, head).is_err());
+}
+
+#[test]
+fn committed_added_deleted_and_message_secrets_refuse_result() {
+    let (dir, repo, base, tip) = fixture();
+    command(dir.path(), &["rm", "é.txt"], &[], None).unwrap();
+    let token = ["gh", "p_", &"d".repeat(25)].concat();
+    command(dir.path(), &["commit", "-m", &token], &[], None).unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let head = std::str::from_utf8(&head).unwrap().trim();
+    let found = findings(&repo, &base, head).unwrap();
+    assert_eq!(
+        found,
+        vec![
+            SecretFinding {
+                commit: tip,
+                path: Some("é.txt".into())
+            },
+            SecretFinding {
+                commit: head.into(),
+                path: None
+            },
+        ]
+    );
+    assert!(!format!("{found:?}").contains(&token));
+    assert!(matches!(
+        SecretGate.check(&repo, &base, head),
+        Err(WriterError::SecretInHistory)
+    ));
+}
+
+#[test]
+fn no_serial_bundle_scan() {
+    let (dir, repo, base, tip) = fixture();
+    let clean = crate::writer_sanitize::sanitize_history(&repo, &base, &tip).unwrap();
+    // A ref name is transport metadata, not reachable file or message content.
+    let token = ["gh", "p_", &"e".repeat(25)].concat();
+    let reference = format!("refs/heads/{token}");
+    command(
+        dir.path(),
+        &["update-ref", &reference, &clean.tip],
+        &[],
+        None,
+    )
+    .unwrap();
+    let bundle = dir.path().join("transport.bundle");
+    command(
+        dir.path(),
+        &["bundle", "create", bundle.to_str().unwrap(), &reference],
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(scan_bytes(&std::fs::read(bundle).unwrap()));
+    assert!(SecretGate.check(&repo, &base, &clean.tip).is_ok());
 }

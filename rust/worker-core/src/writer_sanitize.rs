@@ -12,12 +12,6 @@ pub struct SanitizedHistory {
     pub sha_map: BTreeMap<String, String>,
     pub dropped_paths: BTreeSet<String>,
 }
-impl std::ops::Deref for SanitizedHistory {
-    type Target = str;
-    fn deref(&self) -> &str {
-        &self.tip
-    }
-}
 pub fn sanitize_history(
     repo: &RepoEntry,
     base: &str,
