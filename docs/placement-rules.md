@@ -1,5 +1,25 @@
 # Placement rule loader (R8B A)
 
+## C4 keeper transaction adapter (ruling 5)
+
+Persistent authenticated principals read coherent RuleSnapshot values; only a
+persistent router edits or reads the rule ledger. Run/oversight tokens and the
+synthetic system identity cannot use these public methods. Project membership
+never grants fleet administration. C6 owns endpoints and internal system reads.
+Each edit rechecks identity inside the existing keeper write lock, validates the
+exact RuleEdit through C1, and commits revision CAS, value and immutable RuleAudit
+together. Rollback verifies scope/key/previous and appends a new revision, not an
+item event. The existing request audit is separate and may record refusals.
+Commit ambiguity remains fatal; edits are never automatically repeated.
+
+The server-only absolute PG_PLACEMENT_RULES_BIN defaults to
+`/usr/local/bin/pg-placement-rules`. C4 uses fixed argv, empty child environment,
+bounded stdin/stdout and a five-second deadline, reaping only its owned child.
+Rust alone owns allow-list/value policy. Every touched keeper module, including
+the bridge, remains an AUTH_DOOR_PATHS door. Helper installation, API restart and
+schema application require operator GO; no live operation is performed by C4.
+Ledger pagination is revision-ascending, with since >= 0 and limit 1..100.
+
 ## C2 existing-keeper SQLite storage (D5)
 
 Schema v17 installs revision, override and immutable audit tables in the existing
