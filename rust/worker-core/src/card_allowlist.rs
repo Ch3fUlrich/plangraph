@@ -1,7 +1,7 @@
 use super::*;
 impl Config {
     /// Explicit unrestricted policy for test harnesses, never worker startup.
-    #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn allow_all_for_tests() -> Self {
         Self {
             test_allow_all_cards: true,
@@ -59,9 +59,9 @@ impl Config {
     }
 
     pub fn card_allowed(&self, key: &str) -> bool {
-        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+        #[cfg(any(test, feature = "test-support"))]
         let default_allowed = self.test_allow_all_cards;
-        #[cfg(not(all(debug_assertions, any(test, feature = "test-support"))))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let default_allowed = false;
         self.card_allowlist
             .as_ref()
