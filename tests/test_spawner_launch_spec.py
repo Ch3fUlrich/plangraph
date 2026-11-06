@@ -13,9 +13,9 @@ def request_data(tmp_path, monkeypatch):
     from dataclasses import replace
     from plangraph.spawner import runner, opencode_overlay
     from plangraph.routing_support import host_keys, opencode_render
-    # Exercise launch mechanics with an enabled qodercli review leg.
+    # Exercise launch mechanics with explicitly enabled historical review legs.
     monkeypatch.setattr(spec, 'DEFAULT_LEGS', tuple(
-        replace(leg, disabled=None) if leg.id == 'qodercli-qwen3.8-flash' else leg
+        replace(leg, disabled=None) if leg.id in ('qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free') else leg
         for leg in spec.DEFAULT_LEGS))
     monkeypatch.setattr(opencode_overlay, 'overlay_env', lambda env: env)
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: None)

@@ -117,6 +117,14 @@ def install_go_credential(job_dir, source=None):
                 Path(str(temporary) + suffix).unlink(missing_ok=True)
 
 
+def review_credential_reason(model, job_dir, child_env, reason=None):
+    """Install only Go auth for an isolated review; fail closed if absent."""
+    child_env['XDG_DATA_HOME'] = job_dir
+    if model.startswith('opencode-go/') and not install_go_credential(job_dir):
+        return GO_ABSENT_REASON
+    return reason
+
+
 def close_config_layers(child_env):
     """Point every opencode config layer at a fresh private dir; returns the dir (caller removes it)."""
     oc_dir = tempfile.mkdtemp(prefix='pg-ocdata-')   # mode 0700

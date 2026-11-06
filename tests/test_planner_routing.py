@@ -330,17 +330,17 @@ def test_writer_order_d2683_unavailable_skipped():
 
 
 def test_writer_order_d2683_review_order_unchanged():
-    # D-3950: the first eligible free review leg now leads.
+    # D-4196: without a diff, disabled Zen and inline-only Go cannot lead.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "opencode-go-deepseek-v4-flash"
+    assert plan.first_leg.id == "agy-gemini-3.8-flash"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     # D-3745: Sol leads implement; family exclusions still apply for both roles.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "opencode-go-deepseek-v4-flash"
+    assert plan_rev.first_leg.id == "agy-gemini-3.8-flash"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
@@ -456,13 +456,3 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     )
     assert nxt_agy is not None
     assert nxt_agy.id == "mimo-v2.6-pro"
-
-
-def test_writer_order_sol_family_excluded():
-    from test_route_free_first import test_writer_order_sol_family_excluded as check
-    check()
-
-
-def test_writer_order_privacy_excludes_training_sol():
-    from test_route_free_first import test_writer_order_privacy_excludes_training_sol as check
-    check()
