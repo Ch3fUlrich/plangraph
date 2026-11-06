@@ -13,6 +13,10 @@ or host metrics belong in these tables. C4 owns transaction/audit behavior;
 C2 alone does not satisfy item done criteria or claim closure. PG parity and
 row-preserving rollback belong to C3. See the migration-gates section below for GO.
 
+### Migration-gates: placement rules C2 (D5 / GO)
+
+Schema application is a GATED STEP: operator GO must name the reviewed SHA and scope, with a backup and offline rehearsal before application. Only the operator may approve keeper restart/SQLite upgrade; C3 owns the migrate-role PostgreSQL step and row-preserving rollback. Writers run only temporary fixture databases, never open live config/DB, print secret DSNs, or clean up outside fixture ownership. All touched keeper modules are auth-door paths, not a Hand-Edit exemption. Downgrade disables rules endpoints first and preserves the ledger: never drop audit rows. C4 owns transactions, including rollback as a new forward audit event; this is not the item events ledger. C2 installs storage only, not item closure.
+
 `setup/placement-rules.schema.toml` is the sole metadata authority, embedded at
 compile time. `schema()` fails closed with `rules_schema`; it never substitutes
 defaults after a parse failure. The parser accepts only version 1, rule records,
@@ -96,8 +100,3 @@ Cargo builds the executable for the integration tests; no separate pre-build
 or nested Cargo invocation is needed. Run `cargo test -p pg-worker-core
 placement_rule`: the integration tests execute and reap Cargo's binary with
 a cleared child environment.
-
-
-### Migration-gates: placement rules C2 (D5 / GO)
-
-Schema application is a GATED STEP: operator GO must name the reviewed SHA and scope, with a backup and offline rehearsal before application. Only the operator may approve keeper restart/SQLite upgrade; C3 owns the migrate-role PostgreSQL step and row-preserving rollback. Writers run only temporary fixture databases, never open live config/DB, print secret DSNs, or clean up outside fixture ownership. All touched keeper modules are auth-door paths, not a Hand-Edit exemption. Downgrade disables rules endpoints first and preserves the ledger: never drop audit rows. C4 owns transactions, including rollback as a new forward audit event; this is not the item events ledger. C2 installs storage only, not item closure.

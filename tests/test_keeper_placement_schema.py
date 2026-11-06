@@ -1,5 +1,7 @@
 """C2 storage checks use only fixture-owned SQLite keeper files."""
+import hashlib
 import json
+from pathlib import Path
 import re
 import sqlite3
 
@@ -83,6 +85,8 @@ def test_revision_and_scope_constraints(tmp_path):
 
 def test_audit_update_delete_refused(tmp_path):
     conn = db.open_db(tmp_path / 'keeper.db', create=True)
+    # REPLACE's implicit DELETE only fires guards with recursive triggers on.
+    assert conn.execute('PRAGMA recursive_triggers').fetchone()[0] == 1
     seed(conn)
     for sql in ["UPDATE placement_rule_audit SET actor='other'",
                 'DELETE FROM placement_rule_audit',
@@ -90,6 +94,28 @@ def test_audit_update_delete_refused(tmp_path):
         with pytest.raises(sqlite3.IntegrityError, match='append-only'):
             conn.execute(sql)
     conn.close()
+
+
+def test_existing_audit_replace_refused(tmp_path):
+    conn = db.open_db(tmp_path / 'keeper.db', create=True)
+    conn.execute("INSERT INTO audit_log(id,action) VALUES (1,'original')")
+    with pytest.raises(sqlite3.IntegrityError, match='append-only'):
+        conn.execute("INSERT OR REPLACE INTO audit_log(id,action) VALUES (1,'other')")
+    assert conn.execute('SELECT action FROM audit_log').fetchone()[0] == 'original'
+    conn.close()
+
+
+def test_migration_gates_under_c2():
+    doc = (Path(__file__).resolve().parents[1] / 'docs/placement-rules.md').read_text()
+    parent = None
+    for line in doc.splitlines():
+        if line.startswith('## '):
+            parent = line
+        if line.startswith('### Migration-gates:'):
+            assert parent == '## C2 existing-keeper SQLite storage (D5)'
+            break
+    else:
+        pytest.fail('missing C2 migration gates')
 
 
 def test_runtime_ddl_denied(tmp_path):
@@ -115,9 +141,18 @@ def test_no_seed_override_rows(tmp_path):
 
 def test_extraction_preserves_existing_guards(tmp_path):
     conn = db.open_db(tmp_path / 'keeper.db', create=True)
-    for name in ['_LOCKED', 'TRIGGERS', 'ALIASES_DDL', 'RUN_TOKENS_DDL',
-                 'OUTBOX_DDL', 'OVERSIGHT_DDL']:
-        assert getattr(schema, name) == getattr(schema_guards, name)
+    # SHA-256 of exact DDL from merge-base c2977272 schema.py, not re-exports.
+    expected = {
+        '_LOCKED': '82563ecbd4111d8b37607217e7463bde7ea85278e278070ea3af112adf46d1e5',
+        'TRIGGERS': '65a437273ed46a6205f8baa93166a87c9aa52756094c17724ca359b64bacd879',
+        'ALIASES_DDL': 'cefad11f48b7eb7bbfb1982c07e379143e8592a68ce195a1867a23041d9704f1',
+        'RUN_TOKENS_DDL': '372c6f7e30a179caef8a59c01e4e02a5a501585bdefb1be3f51877b79835af18',
+        'OUTBOX_DDL': '84caf66f30f7d5fe86f873847b21d2bba8933660bd3bd2efac4cc56583a54b0a',
+        'OVERSIGHT_DDL': 'cbec2e2839f8407370c27060933d5ed09b08e311064c1142d3036b41dbefd9d9',
+    }
+    for name, digest in expected.items():
+        for module in (schema, schema_guards):
+            assert hashlib.sha256(getattr(module, name).encode()).hexdigest() == digest
     locked = list(db._LOCK_TRIGGER.finditer(schema.TRIGGERS))
     assert len(locked) == 10
     for match in locked:
