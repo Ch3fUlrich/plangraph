@@ -33,6 +33,7 @@ No batch, keeper, skill, service, access grant or graph is changed by this docum
 ## Named amendments to the existing plan and batch
 
 1. **U-HOMES** extends CONTRACT/IMPORT: graph is durable why/how, not a keeper mirror.
+   Keeper alone owns state; handoff cards are disposable keeper-derived projections.
    Resolve baseline IMPORT's `reference -> Component` mismatch: current v1 rejects
    Component; retain blocked references until an explicit schema/mapping extension.
 2. **U-READ** extends IO/LEGS: commit-pinned bounded recall and shared feed invalidation,
@@ -40,18 +41,27 @@ No batch, keeper, skill, service, access grant or graph is changed by this docum
 3. **U-WRITE** extends IO/SYNC: batch, dedupe, conditional commit and durable ambiguous
    outcome reconciliation through the existing single facade; no second writer service.
 4. **U-TRANSMIT** extends LEGS/E2E: durable fact plus small wake hint, not graph-as-bus.
+   LEGS Done retains the baseline negative tool-manifest test (WORKER-TOOL-SURFACE).
 5. **U-SAFETY** extends CONTRACT/IO/E2E: quarantine, correction lineage, cache invalidation
    and secret-safe retained-blocked accounting before broad import or activation.
+   Add actor/source-filtered recall/audit and dependent-fact blast-radius correction reports.
 6. **U-REALITY** updates ACCESS/OP-ACCESS acceptance: re-probe the now-readable seats,
-   finish the existing actor access lane; remove obsolete graph-creation fallback.
+   finish the existing actor access lane; acceptance still requires workstation and
+   18-de-2053 authenticated read evidence, not just currently readable seats.
    Do not claim ACCESS complete from configuration or an old baseline inventory.
+   Retain explicit OP-ACCESS login approval and custodian authorization, plus
+   Q-OMNIGRAPH-WS placement action and retirement review.
 7. **U-GATES** preserves IO's mock-first independence from ACCESS and the acyclic
    SYNC -> OP-GO -> E2E activation sequence; adds freeze clearance to live write gates.
    Baseline plan says skill briefs released while batch retains OP-SKILL: reconcile
    the recorded ruling before SKILL-COMPRESS, never infer permission from this proposal.
+   Keep ACCESS and live E2E independently reversible; retain HOST-NAMESPACE-MIGRATE and
+   server sync coordination gates, with explicit operator decisions before activation.
 8. **U-LAYOUT** leaves graph folding/aliases to MEM-OMNIGRAPH-MERGE; retain per-repo
    layout pending that decision. Resolve baseline compression's contradictory ban on
    per-project instructions before editing skill text. No fold, deletion or restore here.
+   Remove the obsolete graph-creation fallback: pre-merge plangraph writes target the
+   existing graph `plangraph`, not hub `plangraph` in `autoos`; folding stays deferred.
 
 These are proposed acceptance-criteria amendments to the named items, not new parallel
 items. Cost: focused Rust facade/launcher tests and operator review; no new persistent LLM.
@@ -65,7 +75,7 @@ Cost: relevance/provenance review per new fact and an extra authoritative lookup
 | --- | --- | --- | --- | --- |
 | Durable rationale, constraints, conventions, explicit preferences | Graph, typed and scoped | Reusable why/how across restarts; revision lineage | Validated facade on behalf of attributed actor | Scoped recall clients and launcher |
 | Tasks, plan status, ownership, dependencies, evidence verdicts, decision ledger | Keeper | Already authoritative; no graph replica | Existing keeper-authorized actors | Planner, workers via bounded keeper context |
-| Current attempt, acceptance checks, next action, blockers | Handoff card | Ephemeral execution context, not reusable fact | Attempt owner | Successor and launcher |
+| Current attempt, acceptance checks, next action, blockers | Keeper; card is disposable derived view | Keeper wins every disagreement; no second state home | Keeper-authorized actor; attempt owner refreshes projection | Successor and launcher |
 | Wake, urgent stop, question, acknowledgment, coordination | Chat/message channel | Addressed delivery and urgency, not durable recall | Participating agents/operator | Named recipient |
 | Code, tests, proposal text, implementation history, large evidence | Git/artifact store | Reviewable exact bytes; avoid graph payload growth | Existing repository/artifact writers | Implementers/reviewers; graph stores safe references only |
 | Reusable lesson derived from a task or decision | Graph with keeper/git reference | Deliberate small semantic extraction, not copied state | Facade after evidence review | Future relevant sessions |
@@ -73,6 +83,7 @@ Cost: relevance/provenance review per new fact and an extra authoritative lookup
 | Secrets, raw transcripts, unreviewed instructions | Never graph, feed payload or recall | Prevent disclosure and instruction laundering | No memory writer permitted | No recall consumer |
 
 Keeper/card/git reads remain necessary. Do not import their bodies merely to save a lookup.
+Cards project keeper state; graph references never override keeper state or evidence verdicts.
 Global recall is explicit opt-in; no automatic cross-project fan-out or preference hub edges
 that v1 refuses. Durable actor/source metadata must survive transport, not just validation.
 
@@ -126,8 +137,8 @@ One path means shared semantics, not an unprotected global lock across distribut
   hashes, edges and history before retry; do not mint another slug or duplicate edge.
 - Preserve old revisions, attribution, reasons and safe evidence references. Current recall
   excludes superseded/retracted facts; history is explicit investigation, not startup context.
-  Versioned graph branches may stage risky imports only after merge semantics are tested;
-  default small approved writes to canonical history, not a branch per agent.
+   No versioned graph-branch staging: approved writes use canonical graph history through
+   the same facade; risky imports remain blocked until safe for that path.
 - Retain safe correction lineage and import manifests; checkpoint only verified outcomes.
   Track live fact count, revisions, bytes, duplicate/blocked rate and feed lag. Archive large
   source evidence in git/artifacts; no automatic graph deletion or history compaction until
@@ -167,6 +178,7 @@ Cost: one small hint where needed, subscriber/cursor overhead; saves repeated kn
    No raw graph query, access material, MCP server or credentialed CLI is added to workers.
 5. Facade returns verified commit/read-back receipt, blocked, or outcome-unknown; supervisor
    records safe status in the run result and returns it to the seat or its successor card.
+   A card only projects keeper-owned state; runtime receipts are evidence, not task transitions.
    Worker exit is not persistence success; reconciliation survives worker disappearance.
 6. Runtime wakes interested readers only after verification; next launch gets bounded recall.
    Interactive no-MCP seats use this same mediated request/result flow, not hidden direct IO.
@@ -194,7 +206,14 @@ Cost: some launches lose optional memory and disputed knowledge waits for human 
   evidence; preserve safe prior history, invalidate caches, wake affected readers and require
   re-recall before dependent action. Do not restore the whole graph or erase unrelated work.
   If secret material already entered history: block recall/export, contain and rotate via
-  operator incident process; ordinary supersession cannot remove historical disclosure.
+   operator incident process; ordinary supersession cannot remove historical disclosure.
+- Actor/source-filtered recall and audit enumerate all authorized facts, revisions and edges
+   attributed to a writer or source, including superseded/quarantined entries, with commit,
+   provenance and pagination/completeness status. A partial audit cannot claim containment.
+   Produce a secret-safe blast-radius report tracing derived facts, dependent edges and
+   affected recall artifacts/readers; quarantine or retract tainted dependents through the
+   same conditional facade, invalidate caches and require re-review/re-recall before reuse.
+   Keeper owns incident state and correction verdicts; graph retains safe knowledge lineage.
 - D-3895 freeze scope/current applicability is unverified. Treat it as blocking mutations,
   deployments, schedules, canaries and corrections on the frozen central service until explicit
   clearance; permitted read-only inspection/mock work may continue. Never route around it
@@ -210,20 +229,29 @@ all flags default off. Rollback disables integration, never deletes shared facts
   transport or prompts; mapping decision recorded. Replaces ambiguous import mapping only.
 - **B — IO bounded protocol (U-READ/U-WRITE).** Depends on CONTRACT, extends OG-MEM-IO.
   Done: mock tests cover cap, scope, conflicts, lost receipts, duplicate edges, correction
-  and feed gaps; verify real API contracts before live use. Replaces unbounded reads/blind retry.
+   and feed gaps, actor/source enumeration and dependent correction reports (including
+   pagination and historical edges); verify API contracts before live use. Replaces blind retry.
 - **C — LEGS mediation.** Depends on IO; extends OG-MEM-LEGS, not ACCESS.
    Done: coding and text-only seats round-trip without MCP or access credentials, safe unavailable
-  banner and durable receipts tested; poisoned payload cannot alter launch scope/tooling.
+   banner and durable receipts tested; poisoned payload cannot alter launch scope/tooling.
+   Assert final leg tool manifests contain no Omnigraph/MCP tools (WORKER-TOOL-SURFACE).
   Replaces repeated memory prompt bodies, not keeper/card context or worker tool policy.
 - **D — IMPORT/SYNC accounting.** Depends on IO then IMPORT as existing batch requires.
   Done: every source classified verified/duplicate/blocked, Component blocked, restarts and
   outcome-unknown reconciled; schedule proven off. Replaces legacy scanner write paths only
   after comparison; deletes no sources and enables nothing before OP-GO/E2E.
-- **E — ACCESS and live E2E.** ACCESS retains doctor/CONTRACT/OP-ACCESS dependencies;
-  OP-GO retains ACCESS/IMPORT/SYNC/LEGS; E2E retains SYNC/LEGS/OP-GO plus freeze clearance.
-  Done: redacted authorized-seat read evidence, canary correction/propagation and outage
-  recovery, context/latency/growth measurements; only then scanner activation as baseline.
-  Replaces obsolete access inventory, not existing access-repair/actor lanes or restore work.
+- **E1 — ACCESS doctor.** Retains SPAWNER-HOST-DOCTOR merge/CONTRACT/OP-ACCESS gates.
+   Done: redacted endpoint and authenticated graph/hub/version evidence on every approved
+   host, including workstation and 18-de-2053; wrong graph, 401/403,
+   timeout, missing hub and old-version tests. Rollback: probe flag off, independent of E2E.
+   Replaces obsolete inventory, not access-repair/actor lanes; does not authorize live writes.
+- **E2 — live E2E.** OP-GO retains ACCESS/IMPORT/SYNC/LEGS; E2E needs SYNC/LEGS/OP-GO,
+   freeze clearance and decisions 8–10 below. Done: redacted cross-host/non-Claude canary,
+   correction/propagation, outage recovery, no duplicate nodes/edges, per-host no-loss counts,
+   pending-not-saved recall and context/latency/growth measurements. Activate scanners only
+   here after OP-GO. Rollback: stop schedules, retain facts/evidence; E1 may remain passed.
+   Before D/E2 sync writes, HOST-NAMESPACE-MIGRATE supplies stable host IDs; coordinate
+   server:OG-DELTA-IMPORT and server:AO-SYNC-PARTIAL-PULL-RESTORE, never a new restore loop.
 - **F — compression/layout follow-up.** SKILL-COMPRESS remains after E2E and reconciled
   OP-SKILL ruling; PH-M2C-KG retains its baseline gates. Done: evaluations and baseline
   line/forbidden-instruction checks reflect an explicit layout ruling. Replaces obsolete
@@ -232,14 +260,31 @@ all flags default off. Rollback disables integration, never deletes shared facts
 ## Operator decisions (defaults)
 
 1. Approve these named amendments for later item updates? **Default: proposal only; no apply.**
-2. Knowledge ownership? **Default: graph why/how; keeper/card/git remain authoritative.**
+2. Knowledge ownership? **Default: keeper alone owns state; cards are disposable projections;
+   graph owns why/how, git owns artifact bytes; no activation.**
 3. Read budget/transmission? **Default: baseline 8 KiB bounded recall, verified feed first,
    scoped fallback checks; messages still carry urgency/acknowledgment.**
 4. Writer/no-MCP integration? **Default: one Rust facade, credentialed mediation and verified
-   receipts; routing exception unchanged, no worker MCP or credential expansion.**
+   receipts as design only; routing exception unchanged; workers gain neither MCP nor access.
+   Host-runtime credential placement requires decision 8; no activation by default.**
 5. Import trust/type gap? **Default: quarantine uncertain content; Component retained blocked;
    no global fan-out or secret override.**
-6. Live activation/freeze? **Default: mock-first, ACCESS and explicit OP-GO plus freeze clearance;
+6. Live activation/freeze? **Default: blocked pending E1 ACCESS, decision 8 OP-ACCESS,
+   decisions 9–10, explicit OP-GO and freeze clearance; mock-first only;
    no local replica, fold, compaction, deployment or new schedule authorized here.**
 7. Retention/layout/skill ruling? **Default: preserve safe history and originals; defer numeric
    retention and graph folding; reconcile existing operator ruling before skill edits.**
+8. Place scoped runtime credentials (OP-ACCESS) on every named participating host, including
+   workstation and 18-de-2053? Operator approves host login and obtains custodian
+   authorization; only operator places credentials, opaque to agents. **Default: none placed;
+   mock work only, no live writes.** Existing access is evidence, not placement permission.
+   Q-OMNIGRAPH-WS owns the workstation placement/configuration action; no placement by default.
+9. Approve OP-GO named-host canary and later scanner activation? Record the host list,
+   scoped access evidence, reviewed import manifests and rollback owner after doctor/mock
+   tests pass. **Default: no GO, no live writes or activation.**
+   Retire workstation sync via Q-OMNIGRAPH-WS after comparison? **Default: defer retirement;
+   old device sync stays disabled, no replacement activation.** Record comparison and owner.
+10. Accept HOST-NAMESPACE-MIGRATE IDs and server:OG-DELTA-IMPORT /
+    server:AO-SYNC-PARTIAL-PULL-RESTORE coordination? Operator records stable-ID evidence,
+    server-owner approval and rollback owner before scanner activation. **Default: defer;
+    no sync-write or scanner activation.** Neither dependency is replaced by this proposal.
