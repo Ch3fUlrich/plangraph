@@ -45,6 +45,47 @@ def test_writer_unchanged():
     assert record == before
 
 
+def test_review_null_exit_requires_verdict():
+    record = dict(role='review', status='completed', exit_code=None)
+    terminal_reason(record, SimpleNamespace(stdout='Review complete'))
+    assert record['status'] == 'failed'
+    assert record['reason'] == 'no_verdict'
+
+
+@pytest.mark.parametrize('text,expected', [('', 'no_verdict'), ('VERDICT: pass', None)])
+def test_review_stale_quota_stamp(text, expected):
+    record = dict(role='review', status='completed', exit_code=0, reason='harness_limit')
+    terminal_reason(record, SimpleNamespace(stdout=text))
+    assert record.get('reason') == expected
+    assert record['status'] == ('failed' if expected else 'completed')
+
+
+def test_review_ended_on_quota_leg():
+    record = dict(role='review', status='failed', exit_code=1, reason='harness_limit')
+    before = record.copy()
+    terminal_reason(record, SimpleNamespace(stdout=''))
+    assert record == before
+
+
+@pytest.mark.parametrize('selection', [dict(model='mimo/mimo-v2.6-flash'), dict(leg='mimo-v2.6-flash')])
+def test_live_implement_initial_chosen_leg_none(tmp_path, monkeypatch, selection):
+    from plangraph.spawner.service import SpawnService
+    saves = []
+    async def launch(**kwargs):
+        raise RuntimeError('hermetic launch boundary')
+    service = SpawnService(runner=SimpleNamespace(spawn=launch, default_cwd=str(tmp_path)), state=tmp_path)
+    monkeypatch.setattr(service, '_leg_prompt', lambda *a, **k: 'Implement')
+    monkeypatch.setattr('plangraph.spawner.context_pack.annotate', lambda *a: None)
+    save = service._save
+    def capture(record):
+        saves.append(json.loads(json.dumps(record)))
+        save(record)
+    monkeypatch.setattr(service, '_save', capture)
+    asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='Implement',
+        role='implement', override_reason='hermetic regression', wait_seconds=None, **selection))
+    assert saves[0]['chosen_leg'] is None
+
+
 def test_catalog_flag(monkeypatch, capsys):
     from plangraph.spawner import cli
     monkeypatch.setattr('plangraph.routing_support.resolver.get_catalog_models',

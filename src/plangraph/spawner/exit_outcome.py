@@ -203,7 +203,7 @@ def terminal_reason(record, job=None):
     if reason in TERMINAL_REASONS:
         return
     if (record.get('role') == 'review' and record.get('status') == 'completed'
-            and record.get('exit_code') == 0):
+            and record.get('exit_code') in (None, 0)):
         from plangraph.review.verdict import judge
         # Base dispatch has no job here: use only the final attempt, never the
         # combined stdout tail (an earlier leg's verdict cannot bless this one).
