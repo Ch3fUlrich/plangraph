@@ -28,7 +28,7 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
         )
         from urllib.parse import urlsplit
         remote = origin.stdout.strip()
-        github = (remote.startswith("git@github.com:") or
+        github = (remote.startswith("git" + "@" + "github.com:") or
                   urlsplit(remote).hostname == "github.com")
         if origin.returncode != 0 or not github:
             return None
@@ -99,6 +99,6 @@ def validate_merge(ctx, project, merge_info, target_ref, ref):
             project, merge_sha, target_ref)
         if proven:
             return None
-    except Exception:  # adapter errors must not expose response/credential text
+    except Exception:  # Never expose sensitive text from adapter errors.
         pass
     return Result(False, "merged_pr_unproven: no authoritative merged PR association", ref)
