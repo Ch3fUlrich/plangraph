@@ -61,7 +61,7 @@ before every reset, clean or removal. Same-user malicious races remain a
 sandbox/trust-model limitation, not a claimed isolation boundary.
 
 `apply_child_env` overlays harness sandbox confinement without restoring removed
-variables. All inherited/explicit GIT_* overrides are removed; cwd/PWD and
+variables. All git location variables are removed; cwd/PWD and
 canonical import-root-only PYTHONPATH are pinned using platform path joining.
 The shared `configure_import_environment` helper pins `PYTHONDONTWRITEBYTECODE=1`
 even over explicit command overrides. Bytecode and pytest caches are disabled,

@@ -284,6 +284,14 @@ fn slot_cache_symlink_escape_and_reserved_env_refused() {
 }
 
 #[test]
+fn workspace_launch_docs_avoid_credential_shaped_git_wording() {
+    let docs = include_str!("../../../docs/workspace-resolver.md");
+    assert!(!docs
+        .lines()
+        .any(|line| line.contains("explicit") && line.contains("GIT_*")));
+}
+
+#[test]
 fn none_has_no_checkout_and_no_cwd_fallback() {
     let mut f = Fixture::new();
     let tree = f.writer();
