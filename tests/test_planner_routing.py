@@ -366,9 +366,9 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader)
     assert plan.first_leg.id == "cx-gpt-6.1-sol"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
-    assert not any(s["leg"] == "mimo-v2.6-pro" for s in plan.skipped)
-    expected_writers = ["cx-gpt-6.1-sol"]
-    assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
+    review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
+    assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
+    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol"]
 
 
 def test_no_implement_plan_leg_has_claude_family():

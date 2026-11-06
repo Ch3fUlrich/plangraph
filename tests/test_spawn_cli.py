@@ -6,8 +6,7 @@ import uuid
 
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
-from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo
-from plangraph.spawner.runner import spawn_service
+from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo, spawn_service
 from plangraph.spawner.leg_state import LegStateStore
 import pytest, sys, os
 from fake_pid import FAKE_PID

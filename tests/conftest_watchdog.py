@@ -3,6 +3,8 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def isolated_process_evidence(monkeypatch):
+def isolated_process_evidence(monkeypatch, tmp_path_factory):
     from plangraph.spawner import stuck_watch
-    monkeypatch.setattr(stuck_watch, 'processes', lambda proc: {})
+    proc_root = tmp_path_factory.mktemp('isolated-proc')
+    real_processes = stuck_watch.processes
+    monkeypatch.setattr(stuck_watch, 'processes', lambda proc: real_processes(proc_root))

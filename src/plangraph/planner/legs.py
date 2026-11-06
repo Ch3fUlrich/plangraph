@@ -133,7 +133,10 @@ DEFAULT_LEGS = (
 )
 
 # D-3828: retain every leg and its review order, but never fall back writers.
-DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'))
+DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
+                             disabled=leg.disabled or (
+                                 'D-3828: writer disabled; no retained review or orchestrate role'
+                                 if leg.roles == ('implement',) else None))
                      if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
@@ -190,8 +193,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}.disabled: must be a non-empty reason string")
     roles = raw.get("roles", ("orchestrate",))
     if (not isinstance(roles, (list, tuple))
-            or (not roles and not (isinstance(disabled, str) and disabled.strip())
-                and raw.get('id') not in {'openrouter-free', 'deepseek'})
+            or (not roles and not (isinstance(disabled, str) and disabled.strip()))
             or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
         problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")

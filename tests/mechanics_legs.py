@@ -10,7 +10,7 @@ def fallthrough_legs():
         'openrouter-free', 'agy-gemini-3.8-flash', 'mimo-v2.6-flash',
         'mimo-v2.6-pro', 'deepseek',
     }
-    return tuple(replace(leg, roles=(*leg.roles, 'implement'))
+    return tuple(replace(leg, roles=(*leg.roles, 'implement'), disabled=None)
                  if leg.id in vehicles else leg for leg in DEFAULT_LEGS)
 
 

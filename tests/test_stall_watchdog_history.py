@@ -11,10 +11,7 @@ import pytest
 from plangraph.spawner import stall_watchdog as w
 
 
-@pytest.fixture(autouse=True)
-def isolated_process_evidence(monkeypatch):
-    from plangraph.spawner import stuck_watch
-    monkeypatch.setattr(stuck_watch, 'processes', lambda proc: {})
+from conftest_watchdog import isolated_process_evidence  # noqa: F401
 
 
 def records(state, count=1, **fields):
@@ -92,7 +89,11 @@ sys.modules['plangraph.spawner.runner'] = SimpleNamespace(
     spawn_service=lambda **kw: SimpleNamespace(retry_completions=lambda: None))
 from plangraph.spawner import stall_watchdog as w
 from plangraph.spawner import stuck_watch
-stuck_watch.processes = lambda proc: {}
+from pathlib import Path
+proc_root = Path('isolated-proc-child')
+proc_root.mkdir(exist_ok=True)
+real_processes = stuck_watch.processes
+stuck_watch.processes = lambda proc: real_processes(proc_root)
 w.read_claims = lambda: []
 raise SystemExit(w.main(['tick']))
 '''

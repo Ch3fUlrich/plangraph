@@ -18,12 +18,16 @@ def rows():
             for i, l in enumerate(WRITERS)}
 
 
-def test_tier_first_and_swap():
-    data = rows()
+def test_tier_first_and_swap(monkeypatch):
+    from mechanics_legs import install_fallthrough_legs
+    writers = tuple(l for l in install_fallthrough_legs(monkeypatch) if 'implement' in l.roles)
+    data = {l.model: {'aa_intelligence': 40 + i * 10,
+                     'cost_per_task_usd': 0, 'pool_burn_weight': 0}
+            for i, l in enumerate(writers)}
     plan = plan_spawn(CARD, role='implement', benchmark=data)
     assert plan.first_leg == LEAD
-    assert plan.legs[-1] == WRITERS[-1]
-    data[WRITERS[0].model]['aa_intelligence'] = 999
+    assert plan.legs[-1] == writers[-1]
+    data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
     assert plan_spawn(CARD, role='implement', benchmark=data).first_leg == LEAD
 
 

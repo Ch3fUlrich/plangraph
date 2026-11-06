@@ -155,7 +155,7 @@ def test_policy_env_path(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
-def test_route_skips_banned_and_off_families(role):
+def test_route_skips_banned_and_off_families(role, tmp_path):
     plan = plan_spawn(CARD, role=role, writer_families=("mimo",))
     families = {leg.family for leg in plan.legs}
     assert "kimi" not in families
@@ -173,6 +173,11 @@ def test_route_skips_banned_and_off_families(role):
         assert policy.skip_reason(by_id[leg_id], role) == reason
         if role == "implement":
             assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
+            from plangraph.planner.routing import SpawnRefused
+            from plangraph.spawner.service import SpawnService
+            with pytest.raises(SpawnRefused, match=r"writer disabled \(D-3828\)"):
+                asyncio.run(SpawnService(state=tmp_path).spawn(
+                    card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
 
 
 def test_route_skips_paused_harness_per_role():
