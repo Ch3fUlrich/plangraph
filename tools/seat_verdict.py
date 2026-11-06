@@ -63,8 +63,12 @@ _LOW_LABEL = re.compile(
     r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 # word end: end/space/punctuation and NOT followed by "|" or "/" (that would
-# be an echoed "pass | fix | halt" template, not a decision)
+# be an echoed "pass | fix | halt" template, not a decision); "?" is not a word
+# end (r3): "PASS? commentary" is a question, not a decision
 _WORD_END = r"(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])"
+# r3: fenced code and ">"-quoted lines never decide a verdict
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 # first word of the decision
 _FIRST_WORD = re.compile(r"([a-z]+)" + _WORD_END, re.I)
 # D-3544: the phrase "request changes" (any case, joined by space, "-" or "_")
@@ -91,10 +95,27 @@ def parse_verdict(text):
     ``REQUEST_CHANGES`` reads as fix and ``ACCEPT`` as pass.
     """
     lines = (text or "").splitlines()
-    for idx in range(len(lines) - 1, -1, -1):
-        match = _VERDICT_LINE.match(lines[idx])
-        if not match:
+    # r3: VERDICT lines inside ``` fences or starting with ">" (quoted template
+    # echoes) never decide; the last remaining line keeps the last-line rule.
+    fence = None
+    found = None
+    for idx, raw in enumerate(lines):
+        if fence is not None:
+            close = _FENCE_CLOSE_RE.match(raw)
+            if close and close.group(1)[0] == fence[0] and len(close.group(1)) >= fence[1]:
+                fence = None
             continue
+        opener = _FENCE_OPEN_RE.match(raw)
+        if opener:
+            fence = (opener.group(1)[0], len(opener.group(1)))
+            continue
+        if raw.lstrip().startswith(">"):
+            continue
+        match = _VERDICT_LINE.match(raw)
+        if match:
+            found = (match, idx)
+    if found is not None:
+        match, idx = found
         stripped = match.group(1).strip()
         if _REQUEST_CHANGES.match(stripped):
             return False, idx

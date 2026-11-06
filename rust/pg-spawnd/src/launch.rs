@@ -21,6 +21,8 @@ pub(crate) struct LaunchSpec {
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
     pub stdin: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
     pub warnings: Option<Vec<String>>,
     pub events: Option<Vec<serde_json::Map<String, Value>>>,
 }

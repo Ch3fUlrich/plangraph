@@ -51,7 +51,7 @@ def test_excluded_writer_family_override_leaves_no_audit_line(tmp_path):
     import asyncio
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnRefused
-    leg = DEFAULT_LEGS[0]
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-flash')
     service = SpawnService(state=tmp_path)
     with pytest.raises(SpawnRefused, match='excluded writer family'):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x', role='review', model=leg.model,

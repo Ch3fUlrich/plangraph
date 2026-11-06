@@ -16,6 +16,24 @@ def test_example_validates_against_schema():
     jsonschema.validate(EXAMPLE, SCHEMA)
 
 
+def test_class_fixture_and_optional_schema_agree():
+    host_schema = SCHEMA["$defs"]["hostEntry"]
+    assert "class" in host_schema["properties"]
+    assert "class" not in host_schema["required"]
+    assert host_schema["properties"]["class"]["enum"] == ["worker", "restricted"]
+    assert all("class" in host for host in EXAMPLE["hosts"])
+    for label in ["worker", "restricted", None]:
+        doc = copy.deepcopy(EXAMPLE)
+        if label is None:
+            del doc["hosts"][0]["class"]
+        else:
+            doc["hosts"][0]["class"] = label
+        jsonschema.validate(doc, SCHEMA)
+    doc["hosts"][0]["class"] = "unknown"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(doc, SCHEMA)
+
+
 def test_schema_property_names_match_example():
     defs = SCHEMA["$defs"]
     samples = {

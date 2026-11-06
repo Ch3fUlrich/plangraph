@@ -19,6 +19,7 @@ pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owne
 def _gateway_url(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
 
+
 @pytest.fixture(autouse=True)
 def fake_host_binaries(tmp_path, monkeypatch):
     """Keep real probes (including worker processes) off the host installation."""
@@ -151,10 +152,12 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         models = [a['leg']['model'] for a in record['attempts']]
         assert 'error' not in record, record.get('error')
-        assert len(models) == 9, record   # D-3605: Sol implement leg active again
+        assert len(models) == 8, record   # D-3817: Sonnet no longer implements
         assert len(runner.jobs) == 3
         assert record['attempts'][3]['skip_reason'] == 'earlier_leg_succeeded'
-        assert models[0] == 'opencode/deepseek-v4.1-flash-free' and 'glm' in models[1] and 'openrouter' in models[2]
+        assert models[:4] == ['omniroute/cx-gpt-6.1-sol',
+                              'opencode/deepseek-v4.1-flash-free',
+                              'opencode/glm-5.3-flash-free', 'openrouter/free']
         for leg in service.route({'estimate_tokens': 1000}).legs:
                 store.record_provider_response(leg.model if '/' in leg.model else 'agy/' + leg.model,
                     429, 'provider quota exhausted', {}, 'test')
@@ -162,7 +165,7 @@ def test_replan_and_all_limited(tmp_path, monkeypatch):
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
         assert record['exit_code'] == 4
         assert record['evidence']
-        assert len(record["attempts"]) == 9   # D-3605: Sol active again
+        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
         assert all(a['status'] == 'skipped' and a['skip_reason'] == 'limited'
                    for a in record['attempts'])
         assert len(runner.jobs) == count
@@ -243,15 +246,6 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
     assert final['status'] == 'completed', {k: final.get(k) for k in ('exit_code', 'reason', 'error', 'events')}
 
 
-def test_route_and_refusal(tmp_path, capsys):
-    assert main(['--state', str(tmp_path), 'route', '--card', '{"estimate_tokens":1000}', '--role', 'implement', '--json']) == 0
-    plan = json.loads(capsys.readouterr().out)
-    assert plan['first_leg']['model'] == 'opencode/deepseek-v4.1-flash-free'
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates'}
-    assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
-    assert 'spawn by card' in capsys.readouterr().err
-
-
 def test_records_and_review(tmp_path):
     async def run():
         service = SpawnService(state=tmp_path)
@@ -279,7 +273,7 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
-        assert len(record["attempts"]) == 9   # D-3605: Sol active again
+        assert len(record["attempts"]) == 8   # D-3817: Sonnet no longer implements
         launched = [a for a in record['attempts'] if a['status'] != 'skipped']
         assert len(launched) == (2 if provider_stop else 1)
         assert len(runner.jobs) == len(launched)
@@ -398,3 +392,8 @@ def test_cli_wait_returns_after_the_dispatcher_died(tmp_path):
     finally:
         child.kill()
         child.wait()
+
+
+def test_route_and_refusal(tmp_path, capsys):
+    from test_route_free_first import test_route_and_refusal as check
+    check(tmp_path, capsys)

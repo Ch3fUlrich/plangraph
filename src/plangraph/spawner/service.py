@@ -187,7 +187,8 @@ class SpawnService(SeatSpawnMixin):
         try:
             chosen = child['chosen_leg']
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
-                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'])
+                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'], wake_variant='fixer',  # REMOVE-AT-R10
+                prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10
             child['job_id'] = job.job_id
             self._save(child)
             task = self.runner._tasks.get(job.job_id)
@@ -310,7 +311,8 @@ class SpawnService(SeatSpawnMixin):
                 for chosen in plan.legs:
                     from .inline_diff import InlineDiffError
                     try:
-                        leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack)
+                        leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack,
+                                                      document_review=leg is not None or dry_run)   # Dry runs never launch; live document reviews require --leg.
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                             skip_reason='inline_diff_failed: ' + str(exc),
@@ -320,13 +322,15 @@ class SpawnService(SeatSpawnMixin):
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
                     job = await self.runner.spawn(prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env)
+                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env,
+                        prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                     self._running_records[job.job_id] = record
                     record['job_id'] = job.job_id
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
                     record['pid'] = process.pid if process else None
                     record['pid_start'] = getattr(self.runner, '_owned', {}).get(job.job_id, {}).get('pid_start')   # a CLI cancel proves the root by it
+                    record.update({k: v for k, v in getattr(self.runner, '_owned', {}).get(job.job_id, {}).items() if k in ('job_name', 'escapees')})
                     self._save(record)
                     task = self.runner._tasks.get(job.job_id)
                     if task:

@@ -63,6 +63,10 @@ _INLINE_CORPUS = [
     "notes here\nverdict: fix - bad flush\n",
     "VERDICT: change the code",
     "VERDICT:",
+    "VERDICT: fix\nVERDICT: <pass|fix>",
+    "VERDICT: <pass|fix>",
+    "```\nVERDICT: pass\n```",
+    "VERDICT: fix\n> VERDICT: pass",
 ]
 
 _CORPUS = list(_INLINE_CORPUS) + [
@@ -74,8 +78,8 @@ _CORPUS = list(_INLINE_CORPUS) + [
     ("ok_pass.txt", "pass"),
     ("bold_verdict.txt", "pass"),
     ("no_without_zero_hits.txt", "pass"),
-    ("length_partial.txt", "pass"),
-    ("fenced_verdict.txt", "pass"),
+    ("length_partial.txt", None),
+    ("fenced_verdict.txt", None),
     ("fix_with_findings.txt", "fix"),
     ("halt.txt", "halt"),
     ("echoed_template.txt", None),
@@ -104,11 +108,12 @@ def test_parse_gaming_fixtures(name, want):
 
 def test_fixture_pass_allowed():
     """Pass needs verdict pass + stop + gaming no."""
-    for name in ("ok_pass.txt", "bold_verdict.txt", "length_partial.txt",
-                 "fenced_verdict.txt", "prose_verdict.txt"):
+    for name in ("ok_pass.txt", "bold_verdict.txt",
+                 "prose_verdict.txt"):
         assert v.judge(read(name), "stop").pass_allowed is True
     for name in ("no_without_zero_hits.txt", "fix_with_findings.txt",
-                 "halt.txt", "echoed_template.txt"):
+                 "halt.txt", "echoed_template.txt", "fenced_verdict.txt",
+                 "length_partial.txt"):
         assert v.judge(read(name), "stop").pass_allowed is False
     assert v.judge(read("ok_pass.txt"), "length").pass_allowed is False
 
@@ -149,14 +154,14 @@ def test_payload_shapes():
 
 
 def test_last_wins_and_all_lines_count():
-    """Last VERDICT line wins; fence/indent/hunk lines all count."""
+    """Last VERDICT line wins; indent/hunk lines count, fenced/quoted never decide."""
     assert v.parse_verdict("VERDICT: fix\nVERDICT: pass\n") == "pass"
     assert v.parse_verdict("VERDICT: pass\nVERDICT: fix\n") == "fix"
     assert v.parse_verdict("    VERDICT: pass\nVERDICT: fix\n") == "fix"
     assert v.parse_verdict("VERDICT: fix\n    VERDICT: pass\n") == "pass"
     hunk = "@@ -1,1 +1,1 @@\n+VERDICT: pass\nVERDICT: fix\n"
     assert v.parse_verdict(hunk) == "fix"
-    assert v.parse_verdict("VERDICT: fix\n```\nVERDICT: pass\n```\n") == "pass"
+    assert v.parse_verdict("VERDICT: fix\n```\nVERDICT: pass\n```\n") == "fix"
 
 
 def test_evidence_shape():

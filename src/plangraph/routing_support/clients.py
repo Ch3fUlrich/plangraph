@@ -15,6 +15,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
+from plangraph.routing_support.claude_seat import claude_access_args
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
@@ -327,6 +328,7 @@ def build_standalone_fallback_command(
     client_name: str,
     prompt: str,
     model: str | None = None,
+    role: str = "implement",
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
     cname = client_name.lower()
@@ -344,10 +346,8 @@ def build_standalone_fallback_command(
     if cname == "codex":
         return ["codex", "exec", *(["--model", model] if model else []), prompt]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
-        cmd = [cname, "-p", *([] if cname == "claude" else [prompt])]
-        if model:
-            cmd.extend(["--model", model])
-        return cmd + (["--output-format", "stream-json", "--verbose", "--permission-mode", "plan"] if cname == "claude" else [])
+        cmd = [cname, "-p", *([] if cname == "claude" else [prompt]), *(["--model", model] if model else [])]
+        return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role)] if cname == "claude" else [])
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run", "--standalone"]
@@ -379,7 +379,7 @@ def build_command(
         if client not in (*CLIENTS, "qodercli"):
             raise ValueError(f"unknown harness: {client}")
         if client != "opencode":
-            return build_standalone_fallback_command(client, prompt, model_or_combo)
+            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role)
     # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(
@@ -396,4 +396,5 @@ def build_command(
         client_name=resolved_client,
         prompt=prompt,
         model=model_or_combo,
+        role=role,
     )
