@@ -12,6 +12,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - **SPAWNER-RL9B part 2b (D-3676, D-3714):** add marker-to-outcome classification tests covering provider failures, quota and rate limits, raw reset propagation, evidence, and exit-status guards; no caller or switch, rollback by revert.
 - **SPAWNER-RL9B part 2 (D-3676, D-3714):** add guarded provider-marker scanning and raw one-shot reset capture; no caller or switch, rollback by git revert.
 
+- **KEEPER-EVIDENCE-MERGE-HEAD (D-3507/D-3538):** keeper `commit+ci` evidence accepts a lane PR whose head is a merge commit: `evidence_git.merge_commit_of` falls through to the non-merge proof instead of refusing, and a failed merge-sha lookup fails closed. Fix round: `writer_trailers(repo, sha, ref)` derives writers from the PR merge commit's range for a lane "merge main into the lane" head (coverage passes the repo ref; `ref=None` keeps the old range behaviour), an annotated-tag object sha is refused as evidence (`cat-file -t` must name a commit, so a tag message's trailers never bind), and every `merge_commit_of` error branch carries a failing-git-runner test.
 - **PLACEMENT-R6A-3C4 (D-3676, D-3685):** Add owned-run cancellation, process-local job status and steering responses, and live supervisor health counts; only catalog and session tools remain stubs.
 
 - **PLACEMENT-R6A-3C3b (D-3676, D-3685):** Finish local records with attempt attribution and route dry runs through the launch adapter without starting a process.

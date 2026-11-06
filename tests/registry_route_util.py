@@ -43,11 +43,11 @@ PRE_D3552_POLICY = json.dumps({
 #: The five D-3552 opencode-go legs' catalog models: their benchmark rows rank
 #: a tools-mode leg above the inline-only luna/mimo-pro seats the tests below pin.
 NEW_LEG_MODELS = frozenset({
-    "opencode-go/gemini-4-argon-contributor",
-    "opencode-go/glm-5.2-max",
+    "opencode-go/gemini-4-argon",
+    "opencode-go/glm-5.2",
     "opencode-go/qwen3.8-max",
     "opencode-go/muse-spark-1.3-contributor",
-    "opencode-go/deepseek-v4-flash-max",
+    "opencode-go/deepseek-v4.1-flash",
 })
 
 

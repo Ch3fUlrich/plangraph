@@ -5,6 +5,7 @@ mod error_tests;
 mod errors;
 mod jobs;
 mod launch;
+mod leg_ref;
 mod placement;
 mod pyjson;
 mod records;
