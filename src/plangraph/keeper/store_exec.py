@@ -164,7 +164,7 @@ class ExecMixin:
             "SELECT seq, payload FROM events WHERE key=? AND type='exec_owner_changed'"
             " ORDER BY seq DESC LIMIT 1", (item_id,)).fetchone()
         if owner is not None and json.loads(owner["payload"] or "{}").get("action") == "clear":
-            return False
+            owner = None
         kinds = tuple(sorted(STATE_EVENT_TYPES))
         state = conn.execute(
             "SELECT seq, payload FROM events WHERE key=? AND type IN ("

@@ -169,26 +169,31 @@ def test_projector_waiting_refuses_delayed_same_run_park_without_expected_state(
     assert snapshot(w, key) == before
 
 
-@pytest.mark.parametrize("owned", [False, True], ids=["unowned", "seeded-no-audit"])
-def test_delayed_blind_park_without_owner_start(w, owned):
+@pytest.mark.parametrize("owned", [False, True, "cleared"],
+                         ids=["unowned", "seeded-no-audit", "post-clear"])
+@pytest.mark.parametrize("exit_class", ["usage_limit", "needs_input"])
+def test_delayed_blind_park_without_owner_start(w, owned, exit_class):
     key, = seed(w, [("A", [])])
     projector = Projector(w.store, w.p("system"), now=w.clock)
-    full = history("usage_limit")
+    full = history(exit_class)
     running = project_history({"events": full["events"][:3]},
                               workflow_id="card:" + key, run_id="run")
     projector.apply_run(running, run_ord=0)
     identity = {"workflow_id": "card:" + key, "run_id": "run", "attempt": 1}
     if owned:
         seed_exec_owner(w, key, ("card:" + key, "run", 1))
+    if owned == "cleared":
+        with w.store._write():
+            w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
     waiting = project_history(full, workflow_id="card:" + key, run_id="run")
     projector.apply_run(waiting, run_ord=0)
-    assert snapshot(w, key)[0] == "waiting"
+    assert snapshot(w, key)[0] == ("waiting" if exit_class == "usage_limit" else "needs_input")
     assert w.store._exec_state_after_owner(w.conn, key)
     before = snapshot(w, key)
     with pytest.raises(Refused):
         w.store.worker_park(w.p("workerA"), {
             "card": key, "tier": "free", "exit_class": "needs_input",
-            **(identity if owned else {})})
+            **(identity if owned is True else {})})
     assert snapshot(w, key) == before
 
 

@@ -332,7 +332,7 @@ class WorkerMixin:
             # Claimed is the normal lease-bound park entry, not a set_state
             # state. All other park entries must follow the forward table.
             if item["state"] != "claimed" and not _forward(item["state"], "parked"):
-                raise Refused("bad_transition", f"{key}: {item['state']} -> parked")
+                raise Refused("bad_state", f"{key}: {item['state']} -> parked")
             self._park_guard(principal, item, epoch, now)
             if item["state"] != "parked":
                 self._exec_gate(item["key"], body, principal, record=True)

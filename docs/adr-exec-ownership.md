@@ -19,7 +19,11 @@ card (no cap), keeping the maximum attempt for each identity, so a run retired
 arbitrarily long ago is still refused `exec_stale`. (An earlier 16-identity
 bound evicted still-live identities after 17 clears; RT-P1 sq12 removed it.) Growth is per item,
 with no age or count bound; closing the item does not clear the fence.
-`CardsMixin._exec_clear` in `src/plangraph/keeper/store_cards.py` preserves it.
+`ExecMixin._exec_clear` in `src/plangraph/keeper/store_exec.py` preserves it.
+Clear-event `retired` payloads historically held a fence snapshot (last 16
+entries); new rows carry only the cleared run's entry, including its maximum
+attempt. The authoritative full fence is `items.exec_retired_runs`; neither
+payload shape changes the card fold, on SQLite or PostgreSQL.
 Park checks forward ordering even when releasing a claim; a park omitting an
 observed state cannot overwrite a state event newer than its attempt's owner
 record/advance. Existing event payloads and replay semantics are unchanged.
