@@ -1,5 +1,6 @@
 """Synthetic refusal boundary tests; no runtime discovery or credentials."""
 import json
+import inspect
 import socket
 import subprocess
 from types import SimpleNamespace as NS
@@ -8,7 +9,7 @@ import pytest
 
 from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
 from plangraph.spawner import exit_outcome
-from plangraph.spawner.env_redact import busy_refusal, early_refusal, harness_limit_line
+from plangraph.spawner.env_redact import busy_refusal, early_refusal, harness_limit_line, unavailable_reason
 
 
 @pytest.fixture(autouse=True)
@@ -120,3 +121,30 @@ def test_booking_uses_adapter_quarantine_interface(tmp_path):
                                'Error: quota reached')
     assert observations == ['synthetic/model']
     assert reader('synthetic/model')['state'] == 'limited'
+
+
+@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+def test_usage_limit_keeps_independent_quota_evidence(stream):
+    line = 'HTTP 429: usage limit resets in 5m'
+    output = {stream: line, ('stderr' if stream == 'stdout' else 'stdout'): ''}
+    assert harness_limit_line(1, **output) == line
+    assert early_refusal(line) == line
+
+
+@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+def test_shaped_unavailable_keeps_legacy_diagnostic(stream):
+    line = 'HTTP 503: Model unavailable: synthetic/model (transient)'
+    output = {stream: line, ('stderr' if stream == 'stdout' else 'stdout'): ''}
+    assert unavailable_reason(1, **output) == line
+    assert unavailable_reason(0, **output) is None
+
+
+def test_legacy_unavailable_stderr():
+    assert unavailable_reason(1, '', 'prefix model unavailable') == 'prefix model unavailable'
+
+
+def test_adapter_keeps_original_documentation():
+    assert inspect.cleandoc(LegAdapter.__doc__) == (
+        'Explicit opt-in reader; one cached boundary shared by routing and probes.\n\n'
+        'Discovery names actual standalone identities, never combo/request aliases.\n'
+        'Failures retain the previous snapshot but never admit from it as healthy.')

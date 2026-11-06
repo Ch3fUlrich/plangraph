@@ -74,7 +74,7 @@ def harness_limit_line(exit_code, stdout, stderr):
     # a mid-line mention in prose, a traceback or a retry log never marks a
     # leg. Agent prose on stdout only counts via its error-shaped lines.
     def quota(line):
-        if re.search(r'usage limit', line, re.I):
+        if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             return _USAGE_LIMIT.fullmatch(line)
         if _ERROR_SHAPED.match(line):
             return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
@@ -102,7 +102,7 @@ def early_refusal(complete_text):
         return busy
     lines = normalize(complete_text).splitlines()
     for line in lines:
-        if re.search(r'usage limit', line, re.I):
+        if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             if _ERROR_SHAPED.match(line) and _USAGE_LIMIT.fullmatch(line):
                 return line.strip()
             continue
@@ -141,10 +141,11 @@ def unavailable_reason(exit_code, stdout, stderr):
         return False
 
     for line in stderr.splitlines():
-        if 'model unavailable' in line.lower():
+        if 'model unavailable:' in line.lower():
             if _MODEL_UNAVAILABLE.fullmatch(line):
                 return line.strip()
-            continue
+            if not _ERROR_SHAPED.match(line):
+                continue
         if marked(line):
             return line
     for line in stdout.splitlines():
@@ -152,7 +153,8 @@ def unavailable_reason(exit_code, stdout, stderr):
         if 'model unavailable' in text.lower() and not text.startswith('{'):
             if _ERROR_SHAPED.match(text) and _MODEL_UNAVAILABLE.fullmatch(text):
                 return text
-            continue
+            if not _ERROR_SHAPED.match(text):
+                continue
         if not marked(text):
             continue
         if text.lower().startswith('error:') or re.match(r'^HTTP \d{3}:', text):

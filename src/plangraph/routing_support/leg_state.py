@@ -333,7 +333,9 @@ def model_admitted(model, *, enabled=False):
 
 
 class LegAdapter:
-    """Opt-in cached reader; discovery names standalone identities, not aliases.
+    """Explicit opt-in reader; one cached boundary shared by routing and probes.
+
+    Discovery names actual standalone identities, never combo/request aliases.
     Failures retain the previous snapshot but never admit from it as healthy.
     """
 
@@ -362,11 +364,9 @@ class LegAdapter:
         return self.leg_status(leg, **kwargs)
 
     def quarantine(self, leg):
-        """Observe an enabled-reader refusal until authoritative refresh."""
         if self.enabled:
-            self.leg_status(leg)  # initialize/refresh before the observation
+            self.leg_status(leg)
             self._served.discard(self.identity(leg))
-
     def leg_status(self, leg, **kwargs):
         if not self.enabled:
             return self.store.leg_status(leg, **kwargs)
