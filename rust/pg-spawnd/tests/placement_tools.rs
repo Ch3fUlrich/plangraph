@@ -287,7 +287,7 @@ fn spawn_dry_run_and_no_launch() {
     let file = std::fs::read_to_string(f.state.path().join("runs").join(id).join("record.json"));
     // JSON float parsing may normalize the last timestamp digit; compare values.
     assert_eq!(row, serde_json::from_str::<Value>(&file.unwrap()).unwrap());
-    keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host job_id pid plan prompt_sha256 request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd wake_variant witness_kind writer_family");
+    keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host item_key job_id pid plan prompt_sha256 request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd wake_variant witness_kind writer_family");
     keys(&row["attempts"][0], "leg provider_response request_side_model served_family served_model served_witness_reason skip_reason status stderr_tail stdout_tail witness_kind");
     keys(&row["plan"], "first_leg legs");
     for leg in [

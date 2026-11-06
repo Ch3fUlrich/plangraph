@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Manually mirror terminal spawner proof, never harness output."""
 import argparse
+import errno
 import fcntl
 from collections import Counter
 import io
@@ -54,13 +55,20 @@ def reduce_record(run_id, raw, host):
             return None, key
     if not isinstance(record.get('status'), str) or record['status'] not in TERMINAL:
         return None, 'status'
-    if not isinstance(record.get('item_key'), str) or not record['item_key']:
+    def identifier(value):
+        return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9._:-]{1,200}', value)
+    if not identifier(record.get('item_key')):
         return None, 'item_key'
-    # Do not permit nested objects to smuggle output through scalar fields.
-    reduced = {k: record.get(k) if isinstance(record.get(k), (str, int, float, bool, type(None))) else None
-               for k in ('run_id', 'host', 'status', 'exit_code', 'item_key', 'writer_family', 'served_family')}
+    if record.get('exit_code') is not None and type(record['exit_code']) is not int:
+        return None, 'exit_code'
+    for key in ('writer_family', 'served_family'):
+        if record.get(key) is not None and not identifier(record[key]):
+            return None, key
     leg = record.get('chosen_leg')
-    reduced['chosen_leg'] = {'id': leg['id']} if isinstance(leg, dict) and isinstance(leg.get('id'), str) else None
+    if leg is not None and (not isinstance(leg, dict) or (leg.get('id') is not None and not identifier(leg['id']))):
+        return None, 'chosen_leg'
+    reduced = {k: record.get(k) for k in ('run_id', 'host', 'status', 'exit_code', 'item_key', 'writer_family', 'served_family')}
+    reduced['chosen_leg'] = {'id': leg.get('id')} if leg is not None else None
     return (json.dumps(reduced, sort_keys=True, ensure_ascii=True) + '\n').encode(), None
 
 
@@ -112,14 +120,14 @@ def write_record(dest, host, run_id, data, dry):
                 except FileNotFoundError:
                     pass
         return 'mirrored'
-    except OSError:
-        return 'io_errors'
+    except OSError as exc:
+        return 'conflicts' if exc.errno in (errno.ELOOP, errno.ENOTDIR) else 'io_errors'
     finally:
         os.close(fd)
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Exit 1 on conflicts (including symlink refusals), source failures, or source/destination OS errors (io_errors); otherwise exit 0.')
     parser.add_argument('--host', required=True)
     parser.add_argument('--dest', required=True)
     group = parser.add_mutually_exclusive_group(required=True)

@@ -46,7 +46,14 @@ def test_mirror(tmp_path, capsys):
 
 @pytest.mark.parametrize('change,reason', [({'status': s}, 'status') for s in ('queued', 'running', 'unknown')] + [
     ({'host': 'host-b'}, 'host'), ({'run_id': 'run-b'}, 'run_id'),
-    ({'item_key': None}, 'item_key'), ('{', 'json'), ('x' * (mirror.LIMIT + 1), 'oversize'), ([], 'object')])
+    ({'item_key': None}, 'item_key'), ('{', 'json'), ('x' * (mirror.LIMIT + 1), 'oversize'), ([], 'object')] + [
+    ({field: value}, field) for field, values in [
+        ('exit_code', ['TAIL-MARKER', True, 1.5, {}]),
+        ('item_key', ['', 'tail/prompt', 'x' * 201, True]),
+        ('writer_family', ['tail/prompt', 'x' * 201, True, {}]),
+        ('served_family', ['tail/prompt', 'x' * 201, 3, []]),
+        ('chosen_leg', [{'id': 'tail/prompt'}, {'id': 'x' * 201}, {'id': True}, 'tail'])
+    ] for value in values])
 def test_skips(tmp_path, capsys, change, reason):
     path, dest, args = setup(tmp_path)
     value = record()
@@ -60,7 +67,7 @@ def test_skips(tmp_path, capsys, change, reason):
     assert not dest.exists()
 
 
-def test_dry_symlinks(tmp_path):
+def test_dry_symlinks(tmp_path, capsys):
     _, dest, args = setup(tmp_path)
     assert mirror.main(args + ['--dry-run']) == 0
     assert not dest.exists()
@@ -70,7 +77,10 @@ def test_dry_symlinks(tmp_path):
         link = dest / relative
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(outside)
+        capsys.readouterr()
         assert mirror.main(args) == 1
+        summary = capsys.readouterr().out
+        assert 'conflicts=1' in summary and 'io_errors=0' in summary
         assert not list(outside.iterdir())
         link.unlink()
 
