@@ -7,7 +7,6 @@ import pytest
 
 from plangraph.keeper import config as config_mod, db as kdb, db_pg, schema, schema_pg
 from plangraph.keeper import schema_pg_spawner
-from plangraph.keeper.placement_rules_schema import SQLITE_ONLY_TABLES
 from plangraph.projector import ddl as projector_ddl
 
 
@@ -150,14 +149,10 @@ def _sqlite_tables():
     out = {}
     for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"
                                 " AND name NOT LIKE 'sqlite_%'"):
-        if name in SQLITE_ONLY_TABLES:
-            continue
         out[name] = [(r[1], r[3]) for r in conn.execute(f"PRAGMA table_info({name})")]
     idx = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='index'"
-                                      " AND name NOT LIKE 'sqlite_%'")
-           if r[1] not in SQLITE_ONLY_TABLES}
-    trg = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='trigger'")
-           if r[1] not in SQLITE_ONLY_TABLES}
+                                      " AND name NOT LIKE 'sqlite_%'")}
+    trg = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='trigger'")}
     return out, idx, trg
 
 
@@ -171,13 +166,14 @@ def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
     pg_tables = schema_pg.parse_tables(ddl)
     for name, cols in tables.items():
         assert name in pg_tables, name
-        if name == "items":
-            # Upgraded Postgres appends columns; fresh SQLite lists them in CREATE order.
-            assert {c for c, _ in cols} == {c for c, _ in pg_tables[name]}, name
-            assert dict(cols) == dict(pg_tables[name]), name
-        else:
-            assert [c for c, _ in cols] == [c for c, _ in pg_tables[name]], name
-            assert [bool(nn) for _, nn in cols] == [bool(nn) for _, nn in pg_tables[name]], name
+        # Migration 7 appends only these five columns on upgraded PG.
+        floating = {"exec_workflow_id", "exec_run_id", "exec_attempt",
+                    "exec_principal", "exec_retired_runs"} if name == "items" else set()
+        assert [c for c, _ in cols if c not in floating] == [
+            c for c, _ in pg_tables[name] if c not in floating], name
+        assert dict(cols) == dict(pg_tables[name]), name
+        assert [c for c, _ in cols if c in floating] == [
+            c for c, _ in pg_tables[name] if c in floating], name
     assert set(pg_tables) == set(tables) | set(schema_pg_spawner.TABLES)
     for name in indexes:
         assert re.search(rf"\b{name}\b", ddl), f"missing index {name}"
@@ -316,3 +312,27 @@ def test_commit_and_rollback_only_when_a_transaction_is_open():
     busy.commit()
     busy.rollback()
     assert busy._raw.sent == ["COMMIT", "ROLLBACK"]
+
+
+@pytest.mark.parametrize("mutation", ["reorder", "floating_reorder", "missing", "extra"])
+def test_parity_rejects_column_drift(monkeypatch, mutation):
+    original = schema_pg.parse_tables
+
+    def changed(ddl):
+        tables = original(ddl)
+        cols = tables["items"]
+        if mutation == "reorder":
+            cols[0], cols[1] = cols[1], cols[0]
+        elif mutation == "floating_reorder":
+            a, b = [i for i, (c, _) in enumerate(cols)
+                    if c in ("exec_workflow_id", "exec_run_id")]
+            cols[a], cols[b] = cols[b], cols[a]
+        elif mutation == "missing":
+            cols.pop(0)
+        else:
+            cols.append(("unexpected_column", 0))
+        return tables
+
+    monkeypatch.setattr(schema_pg, "parse_tables", changed)
+    with pytest.raises(AssertionError):
+        test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers()

@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
 from pathlib import Path
 
 from plangraph.keeper.schema import WINDOW_CLASSES
@@ -57,7 +55,6 @@ class Leg:
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
     tool_mode: str = "tools"
-    expires: str = ""
     disabled: str | None = None
 
 
@@ -150,20 +147,12 @@ LEAD_WRITER = "cx-gpt-6.1-sol"
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
              "max_request_tokens", "trains_on_data")
-_STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode", "expires")
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_STR_FIELDS = ("id", "tier", "harness", "model", "family", "note", "tool_mode")
 
 
-def leg_active(leg: Leg, today: date | datetime | None = None) -> bool:
-    """True unless explicitly disabled or past ``expires`` at UTC end of day."""
-    if leg.disabled is not None:
-        return False
-    if not leg.expires:
-        return True
-    current = today if today is not None else datetime.now(timezone.utc)
-    if isinstance(current, datetime):
-        current = current.date()
-    return current <= date.fromisoformat(leg.expires)
+def leg_active(leg: Leg) -> bool:
+    """Local policy may disable a leg; OmniRoute owns temporal availability."""
+    return leg.disabled is None
 
 
 def _is_int(value) -> bool:
@@ -182,7 +171,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         except MimoPathError as exc:
             problems.append(f"{where}.model: {exc}")
     for key in raw:
-        if key not in _FIELDS:
+        if key not in _FIELDS and key != "expires":
             problems.append(f"{where}: unknown field {key!r}")
     for key in _REQUIRED:
         if key not in raw:
@@ -193,14 +182,6 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     for key in ("id", "model", "family"):
         if isinstance(raw.get(key), str) and not raw[key]:
             problems.append(f"{where}.{key}: must not be empty")
-    expires = raw.get("expires")
-    if isinstance(expires, str) and expires:
-        try:
-            good = bool(_DATE_RE.match(expires)) and date.fromisoformat(expires)
-        except ValueError:
-            good = False
-        if not good:
-            problems.append(f"{where}.expires: must be empty or YYYY-MM-DD")
     if isinstance(raw.get("tier"), str) and raw["tier"] not in TIERS:
         problems.append(f"{where}.tier: {raw['tier']!r} not in {TIERS}")
     if isinstance(raw.get("harness"), str) and raw["harness"] not in HARNESSES:
@@ -233,6 +214,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if len(problems) > start:
         return None
     data = dict(raw)
+    data.pop("expires", None)  # Old operator rows remain loadable, without local expiry.
     data["windows"] = tuple(windows)
     data["roles"] = tuple(roles)
     return Leg(**data)

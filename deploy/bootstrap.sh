@@ -104,4 +104,11 @@ else
   "$PYTHON_CMD" "${WATCHDOG_ARGS[@]}"
 fi
 
+# Omnigraph: site config, cache client, session environment, health verification.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "Omnigraph dry-run: read site config; cache client; install session environment; verify health"
+else
+  "$PYTHON_CMD" "$SCRIPT_DIR/omnigraph_step.py" --dry-run "$DRY_RUN" || echo "Omnigraph skipped: helper unavailable"
+fi
+
 echo "Plangraph bootstrap completed successfully."

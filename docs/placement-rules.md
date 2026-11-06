@@ -1,5 +1,25 @@
 # Placement rule loader (R8B A)
 
+## C4 keeper transaction adapter (ruling 5)
+
+Persistent authenticated principals read coherent RuleSnapshot values; only a
+persistent router edits or reads the rule ledger. Run/oversight tokens and the
+synthetic system identity cannot use these public methods. Project membership
+never grants fleet administration. C6 owns endpoints and internal system reads.
+Each edit rechecks identity inside the existing keeper write lock, validates the
+exact RuleEdit through C1, and commits revision CAS, value and immutable RuleAudit
+together. Rollback verifies scope/key/previous and appends a new revision, not an
+item event. The existing request audit is separate and may record refusals.
+Commit ambiguity remains fatal; edits are never automatically repeated.
+
+The server-only absolute PG_PLACEMENT_RULES_BIN defaults to
+`/usr/local/bin/pg-placement-rules`. C4 uses fixed argv, empty child environment,
+bounded stdin/stdout and a five-second deadline, reaping only its owned child.
+Rust alone owns allow-list/value policy. Every touched keeper module, including
+the bridge, remains an AUTH_DOOR_PATHS door. Helper installation, API restart and
+schema application require operator GO; no live operation is performed by C4.
+Ledger pagination is revision-ascending, with since >= 0 and limit 1..100.
+
 ## C2 existing-keeper SQLite storage (D5)
 
 Schema v17 installs revision, override and immutable audit tables in the existing
@@ -100,3 +120,33 @@ Cargo builds the executable for the integration tests; no separate pre-build
 or nested Cargo invocation is needed. Run `cargo test -p pg-worker-core
 placement_rule`: the integration tests execute and reap Cargo's binary with
 a cleared child environment.
+
+## C3 PostgreSQL migration-gates (D5 / S7 GO)
+
+Migration 11 adds rules to the same keeper database, schema and connection,
+not a Rust-owned database. C2 columns and constraints use BIGINT (signed 64-bit
+revisions), C-collated TEXT, canonical JSON TEXT, no sequences and no seeds.
+Audit UPDATE/DELETE/TRUNCATE are rejected; snapshot copy includes all rule tables.
+
+Deployment is applied through the keeper's migrate role under the S7 GO.
+Live steps need a GO per sha and scope (D-825): disposable local PG schema
+rehearsal; operator backup verification; migrate-role application; runtime-grant
+verification; approved API restart; rollback rehearsal and operator-only
+retirement. The migrate deployment procedure grants runtime only existing table
+DML permissions, never DDL rights. Writers do not apply live steps, issue
+credentials, restart services or change hosts. Never disclose connection strings or secrets.
+Every touched keeper path is an AUTH_DOOR_PATHS door, without Hand-Edit/gate
+bypass. See docs/KEEPER.md for keeper operations; this scoped section holds the
+new gates without shrinking or rewriting that existing oversized document.
+
+Keep application writers stopped throughout rollback. `rollback_pg` accepts a
+raw psycopg migrate-role connection with approved keeper search_path, not the
+guarded PgConnection. Under the migration advisory lock and exclusive locks on
+the three fixed tables it renames tables and primary-key indexes to
+`*_retired_v11`, preserving all audit and current values and removing only
+migration 11's record. Existing retirement names refuse atomically; no drop,
+truncate or CASCADE. Reapplication refuses a retired ledger: require an explicit
+restore plan, never silently introduce revision zero alongside retained history.
+SQLite rollback is service/config rollback retaining tables. C4 owns transaction
+behavior and forward audit rollback; C6 owns routes. Mandatory ephemeral PG CI
+must pass before merge; C3 storage alone does not close the item.

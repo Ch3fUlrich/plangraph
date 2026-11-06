@@ -94,3 +94,32 @@ def test_reason_head_labels_by_verdict():
     reason = sv.build_reason(ev, False, "VERDICT: REQUEST_CHANGES\nwhy", 0)
     assert reason.startswith("seat m FIX corr c prompt 0123456789ab\n")
     assert reason.endswith("\nwhy")
+
+
+@pytest.mark.parametrize("text,want", [
+    ("VERDICT: GO", True),
+    ("VERDICT: FAIL - 2 findings", False),
+    ("VERDICT: NO GO", False),
+])
+def test_parse(text, want):
+    assert sv.parse_verdict(text)[0] is want
+
+
+def test_golden_verdict_words():
+    cases = json.loads((Path(__file__).parent / "fixtures" / "verdict_words.json").read_text())
+    outcomes = {"pass": True, "block": False, "none": None}
+    for case in cases:
+        assert sv.parse_verdict(case["text"])[0] is outcomes[case["expect"]], case
+
+
+@pytest.mark.parametrize("finish,gaming,want", [
+    ("stop", "no", 0), ("end_turn", "no", 0),
+    ("length", "no", sv.EXIT_PASS_REFUSED),
+    (None, "no", sv.EXIT_PASS_REFUSED),
+    ("stop", None, sv.EXIT_PASS_REFUSED),
+    ("stop", "yes", sv.EXIT_PASS_REFUSED),
+    ("stop", "unsure", sv.EXIT_PASS_REFUSED),
+])
+def test_go_keeps_pass_gates(tmp_path, finish, gaming, want):
+    assert run(tmp_path, "go", "VERDICT: GO", finish_reason=finish,
+               test_gaming=gaming, extra=("--dry-run",)) == want

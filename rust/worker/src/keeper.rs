@@ -32,32 +32,9 @@ use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// One unit of work handed to a worker.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Claim {
-    pub card: String,
-    pub repo: String,
-    pub base_sha: String,
-    pub check_cmd: String,
-    /// Empty or `change` requires a red base; `regression` skips that gate.
-    #[serde(default)]
-    pub check_kind: String,
-    /// Repo-relative check inputs, protected unless explicitly allowed.
-    #[serde(default)]
-    pub check_reads: Vec<String>,
-    #[serde(default)]
-    pub smoke_checks: Vec<String>,
-    #[serde(default)]
-    pub exports: Vec<String>,
-    #[serde(default)]
-    pub heldout_cmd: String,
-    #[serde(default)]
-    pub risk_tagged: bool,
-    pub allow: Vec<String>,
-    pub forbid: Vec<String>,
-    pub prompt: String,
-}
-
+#[path = "keeper_claim.rs"]
+mod claim;
+pub use claim::Claim;
 /// What one attempt did, sent back so the keeper can pick the next move.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttemptReport {
@@ -1423,7 +1400,7 @@ mod tests {
     fn old_claim_json_defaults_check_metadata() {
         let old = r#"{"card":"c","repo":"r","base_sha":"abc","check_cmd":"false","allow":[],"forbid":[],"prompt":"p"}"#;
         let c: Claim = serde_json::from_str(old).unwrap();
-        assert!(c.check_kind.is_empty());
+        assert_eq!(c.check_kind, "change");
         assert!(c.check_reads.is_empty());
         assert!(c.smoke_checks.is_empty());
         assert!(c.exports.is_empty());

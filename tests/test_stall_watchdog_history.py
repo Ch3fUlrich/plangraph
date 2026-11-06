@@ -146,7 +146,7 @@ def test_cap_window_replay(tmp_path, monkeypatch):
 
 
 def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):
-    from plangraph.spawner import runner
+    from plangraph.spawner import runner, stuck_watch
     records(tmp_path, 30, status='running', started=0, pid=123)
     monkeypatch.setattr(os, 'kill', lambda *args: None)
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
@@ -168,6 +168,9 @@ def test_dry_run_and_cap(tmp_path, monkeypatch, capsys):
         from plangraph.spawner import private_io
         dry.setattr(private_io, 'atomic_write_private',
                     lambda *a, **kw: pytest.fail('state write called'))
+        # Guard the cached import too, without letting a lazy import retain the
+        # temporary guard after this context (as in the Postgres CI selection).
+        dry.setattr(stuck_watch, 'atomic_write_private', private_io.atomic_write_private)
         class DryService:
             def retry_completions(self):
                 pytest.fail('retry_completions called')

@@ -21,6 +21,7 @@ def boundary(tmp_path, monkeypatch):
     monkeypatch.setattr(leg_state, '_default_store', lambda: leg_state.LegStateStore(tmp_path / 'state'))
     from plangraph.routing_support import omniroute_state
     monkeypatch.setattr(omniroute_state, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
+    monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('unexpected subprocess'))
     yield
     flag.default_reader.cache_clear()

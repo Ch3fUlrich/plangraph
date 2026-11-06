@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import types
 import pytest
@@ -44,6 +45,9 @@ def test_mcp_tools_listed_and_dispatch(site, monkeypatch):
         assert (await server.call_tool("plangraph_session_list", {}))["sessions"][0]["name"] == "alpha"
         run.stdout = "session " + UUID2  # the new process reports a fresh id; the old one is excluded
         hf.write_text("carry on again")  # the marker's handoff must be newer than the record
+        record = json.loads((site.state / "sessions" / "alpha.json").read_text())
+        newer = record["launched_ts"] + 2
+        os.utime(hf, (newer, newer))
         rel = await server.call_tool("plangraph_session_relaunch", {"name": "alpha"})
         assert rel["name"] == "alpha"
         assert (await server.call_tool("plangraph_session_stop", {"name": "alpha"}))["ok"] is True

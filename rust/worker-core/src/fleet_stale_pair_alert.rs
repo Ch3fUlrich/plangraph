@@ -127,6 +127,7 @@ impl State {
                     && m.freshness.is_some_and(|t| t >= 0 && t <= clock.wall)
             });
             let trusted = delta.is_some() && clock.discontinuity.is_none();
+            let mut advanced = [false; 2];
             for (i, m) in s.members.iter().enumerate() {
                 if !valid[i] {
                     out.diagnostics
@@ -143,6 +144,9 @@ impl State {
                     let advances = self.evidence[i]
                         .as_ref()
                         .is_none_or(|p| changed || m.freshness > p.freshness);
+                    advanced[i] = self.evidence[i]
+                        .as_ref()
+                        .is_some_and(|p| m.freshness > p.freshness);
                     if advances {
                         self.ages[i] = m
                             .freshness
@@ -164,12 +168,7 @@ impl State {
                 && s.members[0].revision == s.members[1].revision
                 && s.members[0].checkpoint == s.members[1].checkpoint
                 && (0..2).all(|i| self.evidence[i].as_ref() == Some(&s.members[i]))
-                && self.coherent.as_ref().is_none_or(|p| {
-                    (0..2).all(|i| {
-                        s.members[i].identity != p.members[i].identity
-                            || s.members[i].freshness > p.members[i].freshness
-                    })
-                });
+                && advanced.iter().all(|v| *v);
             if coherent {
                 self.coherent = Some(s.clone());
                 self.baseline = self.count;
