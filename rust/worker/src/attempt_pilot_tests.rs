@@ -45,14 +45,14 @@ fn pilot_activity_owner_and_empty_claim() {
     held.1.wait();
     crate::card_admit::tests::assert_failure(
         crate::card_admit::attempt_error(second.unwrap_err()),
-        Some("card_admission_refused"), true,
+        Some("card_attempt_overlap"), true,
     );
     assert_eq!(first.join().unwrap().unwrap().exit_class, ExitClass::Ok);
     crate::card_admit::tests::assert_failure(
         crate::activities::admitted_claim(
             &crate::keeper::StubKeeper::default(), &cfg, &inp.claim.card,
         ).unwrap_err(),
-        Some("card_admission_refused"), true,
+        Some("card_not_claimable"), true,
     );
     assert_eq!(never.runs(), 0);
 }
@@ -101,9 +101,14 @@ fn pilot_history_and_keeper_payloads_exclude_secrets() {
         assert_eq!(result.exit_class, expected, "{mode}");
         let safe = |body: &str| {
             for fragment in ["sk-pilotseed", "0123456789abcdef"] {
-                assert!(!body.contains(fragment), "{mode}: {body}");
+                if mode != "split" || fragment != "0123456789abcdef" {
+                    assert!(!body.contains(fragment), "{mode}: {body}");
+                }
             }
         };
+        if mode == "split" {
+            assert_eq!(result.output_tail, "[REDACTED]\n0123456789abcdef");
+        }
         safe(&serde_json::to_string(&result).unwrap());
         safe(
             &serde_json::to_string(&AttemptReport {

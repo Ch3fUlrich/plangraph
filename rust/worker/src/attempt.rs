@@ -10,6 +10,7 @@
 use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
 use crate::keeper::Claim;
 use crate::opencode_events::{self, ProviderErrorKind};
+use crate::output_redact::history_text;
 use crate::question::{self, Question, Scan};
 use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
@@ -431,11 +432,11 @@ fn run_attempt_inner(
         exit_class: classification.class,
         diff_hash,
         check_hash,
-        check_tail,
+        check_tail: history_text(&check_tail),
         context_overflow: classification.context_overflow,
         branch,
         head,
-        output_tail,
+        output_tail: history_text(&output_tail),
         harness: None,
         model: None,
         combo: None,
@@ -446,7 +447,9 @@ fn run_attempt_inner(
         tokens_out: ev.as_ref().and_then(|e| e.tokens_out),
         cost: None,
         log_ref: None,
-        question: question.filter(|_| classification.class == ExitClass::NeedsInput),
+        question: question
+            .filter(|_| classification.class == ExitClass::NeedsInput)
+            .map(crate::output_redact::question),
     })
 }
 
@@ -521,61 +524,7 @@ fn violations_tail(violations: &[Violation]) -> String {
 /// A cancelled attempt: keep the branch and head the caller already knows and
 /// skip the commit, confinement and check stages. `output_tail` carries what
 /// the harness printed before it was killed.
-fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptResult {
-    AttemptResult {
-        exit_class: ExitClass::Cancelled,
-        diff_hash: String::new(),
-        check_hash: String::new(),
-        check_tail: String::new(),
-        context_overflow: false,
-        branch: branch.to_string(),
-        head: head.to_string(),
-        output_tail,
-        harness: None,
-        model: None,
-        combo: None,
-        class: None,
-        started_at: None,
-        ended_at: None,
-        tokens_in: None,
-        tokens_out: None,
-        cost: None,
-        log_ref: None,
-        question: None,
-    }
-}
-
-/// A contract-defect result, keeping the diff so the planner can still tell
-/// whether anything was written.
-fn defect_result(
-    dest: &Path,
-    base: &str,
-    branch: &str,
-    head: &str,
-    output_tail: String,
-) -> Result<AttemptResult, AttemptError> {
-    Ok(AttemptResult {
-        exit_class: ExitClass::ContractDefect,
-        diff_hash: confine::diff_hash(dest, base)?,
-        check_hash: String::new(),
-        check_tail: String::new(),
-        context_overflow: false,
-        branch: branch.to_string(),
-        head: head.to_string(),
-        output_tail,
-        harness: None,
-        model: None,
-        combo: None,
-        class: None,
-        started_at: None,
-        ended_at: None,
-        tokens_in: None,
-        tokens_out: None,
-        cost: None,
-        log_ref: None,
-        question: None,
-    })
-}
+include!("attempt_result_helpers.rs");
 
 /// Run the check; on failure run it once more unchanged. A pass on the second
 /// run is a flake, not a fix. Returns the outcome and the last run's result.
@@ -783,6 +732,9 @@ fn verify_git_dir(dest: &Path, repo: &Path, base: &str) -> Result<(), AttemptErr
 #[cfg(all(test, unix))]
 mod tests {
     include!("attempt_admission_tests.rs");
+    mod pilot {
+        include!("attempt_pilot_tests.rs");
+    }
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;
@@ -960,7 +912,10 @@ mod tests {
 
     fn claim(repo: &str, base: &str, allow: &[&str], check_cmd: &str) -> Claim {
         Claim {
-            card: test_card(),
+            card: {
+                static NEXT: AtomicUsize = AtomicUsize::new(0);
+                format!("pilot-card-{}", NEXT.fetch_add(1, Ordering::SeqCst))
+            },
             repo: repo.to_string(),
             base_sha: base.to_string(),
             check_cmd: check_cmd.to_string(),
