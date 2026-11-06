@@ -7,7 +7,7 @@
 - ready next: AUTOOS-HOOKS-INTERIM-S09, AUTOOS-HOOKS-INTERIM-S14 after #446 #447
 ## Done
 - 11-06T09:06Z OP-D4-WITNESS-TOKEN - operator status 200; workstation route has no gateway leg, proof left with replan, no restart
-- 11-06T08:50Z D-4121 44ae0b8b AutoOS Stop kick by mimo run-f1a70872, 24 passed, not pushed, no seat
+- 11-06T08:50Z D-4121 44ae0b8b AutoOS Stop kick by mimo run-f1a70872, 24 passed, push refused check-file-size, no seat
 - 11-06T08:15Z ROUTER-INBOX-MOVE 2b2f8ffd8e40 main merged, dry run ok live, 597 passed, GO-REQ merge+apply sent
 - 11-06T08:06Z SPAWNER-ORPHAN-REAP - leases to 10:06Z; #436 #446 #447 no overlap with main (D-4109)
 ## In flight
