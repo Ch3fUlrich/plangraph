@@ -8,7 +8,8 @@ unreadable list refuses every push. Public remotes use the default (chmod 600);
 if absent, warn once. remote.<name>.plangraph-private=true skips private matching.
 Public patterns always run; PLANGRAPH_SCRUB_RULES adds rules. Any hit refuses (exit 1); output
 is file:line and rule id only -- a matched value is never printed, nor the words-file
-path.  Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
+path. Existing tags are immutable, even when the move would fast-forward.
+Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 """
 from __future__ import annotations
 
@@ -117,9 +118,7 @@ def main():
         if (len(rec) != 4 or
                 not all(re.fullmatch(r"[0-9a-fA-F]+", rec[i]) for i in (1, 3)) or
                 len(rec[1]) != len(rec[3]) or
-                git("check-ref-format", rec[2]).returncode != 0 or
-                (rec[0] != "(delete)" and
-                 git("check-ref-format", "--allow-onelevel", rec[0]).returncode != 0)):
+                git("check-ref-format", rec[2]).returncode != 0):
             print("pre-push: malformed push record: push refused", file=sys.stderr)
             return 1
         _, local_sha, remote_ref, remote_sha = rec
@@ -134,8 +133,12 @@ def main():
             return 1
         if local_sha == remote_sha:
             continue
+        if remote_ref.startswith("refs/tags/"):
+            print(f"pre-push: refused update of existing tag {remote_ref}: tags are immutable",
+                  file=sys.stderr)
+            return 1
         is_commit = git_out("cat-file", "-t", remote_sha) == "commit"
-        if (remote_ref.startswith("refs/tags/") or not is_commit or git(
+        if (not is_commit or git(
                 "merge-base", "--is-ancestor", remote_sha, local_sha).returncode != 0):
             print(f"pre-push: refused non-fast-forward update of {remote_ref}",
                   file=sys.stderr)
