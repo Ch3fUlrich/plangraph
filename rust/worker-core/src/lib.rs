@@ -52,6 +52,7 @@ pub mod stall;
 pub mod watch;
 pub mod workspace;
 pub mod workspace_bundle;
+pub mod workspace_launch;
 pub mod workspace_resolver;
 pub mod workspace_verify;
 pub mod worktree;
