@@ -286,7 +286,7 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
-            if reviewed and {seat_family(f) for f in reviewed} <= {seat_family(chosen.family)}:
+            if reviewed and any(seat_family(f) == seat_family(chosen.family) for f in reviewed):
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             if writers and writers <= {seat_family(chosen.family)}:
@@ -303,7 +303,7 @@ class SpawnService(SeatSpawnMixin):
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run else None, served_model=None,
-            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families', [source.get('writer_family')]) if review_of else []),
+            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [source.get('writer_family')] if review_of else []),
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
         pack = await asyncio.to_thread(context_pack.annotate, record, prompt, card, record['cwd']); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop

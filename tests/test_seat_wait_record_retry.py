@@ -73,3 +73,32 @@ def test_given_family_and_review_of_review(tmp_path, monkeypatch, dispatch):
 
 async def _identity(plan, **kwargs):
     return plan
+
+
+@pytest.mark.parametrize('verb', ['wait', 'result', 'status'])
+@pytest.mark.parametrize('failures', [2, 100])
+def test_record_collision_winerror33(tmp_path, monkeypatch, capsys, verb, failures):
+    test_record_collision(tmp_path, monkeypatch, capsys, verb, failures, 33)
+
+
+@pytest.mark.parametrize('dispatch', [False, True])
+@pytest.mark.parametrize('families', [['gpt', 'claude'], []])
+def test_review_family_overlap_and_empty_fallback(tmp_path, monkeypatch, dispatch, families):
+    from registry_route_util import _Runner, CARD
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan, SpawnRefused
+
+    service = (DispatchService if dispatch else SpawnService)(_Runner(), state=tmp_path)
+    chosen = next(l for l in DEFAULT_LEGS if l.family == 'qwen')
+    plan = SpawnPlan((chosen,), (), 'test', (), ())
+    monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)
+    monkeypatch.setattr(service, '_leg_prompt', lambda *a, **kw: 'review')
+    monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', _identity)
+    source = asyncio.run(service.spawn(card=CARD, writer_families=families, dry_run=True))
+    source.update(given_writer_families=families, writer_family='gpt')
+    service._save(source)
+    record = asyncio.run(service.spawn(card=CARD, role='review', review_of=source['run_id'], dry_run=True))
+    assert record['given_writer_families'] == (families or ['gpt'])
+    gpt = next(l for l in DEFAULT_LEGS if l.family == 'gpt' and l.tool_mode == 'tools')
+    with pytest.raises(SpawnRefused, match='excluded writer family'):
+        asyncio.run(service._spawn(card=CARD, role='review', review_of=source['run_id'], leg=gpt.id, dry_run=True))
