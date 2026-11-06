@@ -4,13 +4,13 @@ use crate::{
     writer_result::{oid, ContentGate, WriterError},
     writer_secret::{command, entries, message, object, scan_bytes, SecretGate},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub struct SanitizedHistory {
     pub tip: String,
     pub sha_map: BTreeMap<String, String>,
-    pub dropped_paths: BTreeSet<String>,
+    pub dropped_paths: Vec<String>,
 }
 pub fn sanitize_history(
     repo: &RepoEntry,
@@ -42,7 +42,7 @@ pub fn sanitize_history(
     let mut result = SanitizedHistory {
         tip: base.into(),
         sha_map: BTreeMap::new(),
-        dropped_paths: BTreeSet::new(),
+        dropped_paths: Vec::new(),
     };
     let temp = tempfile::tempdir()?;
     let index = temp.path().join("index");
@@ -54,7 +54,7 @@ pub fn sanitize_history(
         let mut records = Vec::new();
         for (mode, blob, path) in entries(root, commit)? {
             if mode == "160000" || scan_bytes(&object(root, &blob)?.1) {
-                result.dropped_paths.insert(path);
+                result.dropped_paths.push(path);
                 continue;
             }
             records.extend_from_slice(format!("{mode} {blob}\t{path}\0").as_bytes());
@@ -99,8 +99,22 @@ pub fn sanitize_history(
             .into();
         result.sha_map.insert(commit.into(), result.tip.clone());
     }
+    result.dropped_paths.sort();
+    result.dropped_paths.dedup();
+    #[cfg(test)]
+    REBUILD_LEAK.with(|leak| {
+        if leak.get() {
+            result.tip = tip.into();
+        }
+    });
+    SecretGate.check(repo, base, &result.tip)?;
     Ok(result)
 }
 #[cfg(test)]
 #[path = "writer_sanitize_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+std::thread_local! {
+    static REBUILD_LEAK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}

@@ -62,7 +62,7 @@ fn matching_message_placeholder_and_trailer() {
         message(&removed).unwrap(),
         b"Message removed by secret gate\n\n\nSanitized: secret-gate\n"
     );
-    assert!(clean.dropped_paths.contains("é.txt"));
+    assert!(clean.dropped_paths.contains(&"é.txt".to_owned()));
 }
 #[test]
 fn merge_parent_map_and_safe_messages() {
@@ -158,4 +158,42 @@ fn receiver_rejects_ungated_bundle() {
         SecretGate.check(&repo, &base, &tip),
         Err(WriterError::SecretInHistory)
     ));
+}
+
+#[test]
+fn rebuilt_history_leak_refused() {
+    let (_dir, repo, base, tip) = fixture();
+    REBUILD_LEAK.with(|leak| leak.set(true));
+    let result = sanitize_history(&repo, &base, &tip);
+    REBUILD_LEAK.with(|leak| leak.set(false));
+    assert!(matches!(result, Err(WriterError::SecretInHistory)));
+}
+
+#[test]
+fn dropped_paths_vec_sorted_and_deduplicated() {
+    let (dir, repo, base, _) = fixture();
+    std::fs::write(
+        dir.path().join("aaa"),
+        ["gh", "p_", &"f".repeat(25)].concat(),
+    )
+    .unwrap();
+    command(dir.path(), &["add", "."], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "repeat"], &[], None).unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let clean = sanitize_history(&repo, &base, std::str::from_utf8(&head).unwrap().trim()).unwrap();
+    let paths: Vec<String> = clean.dropped_paths;
+    assert_eq!(paths, vec!["aaa".to_owned(), "é.txt".to_owned()]);
+}
+
+#[test]
+fn nested_secret_path_dropped() {
+    let (dir, repo, base, tip) = crate::writer_secret::tests::nested_fixture();
+    let clean = sanitize_history(&repo, &base, &tip).unwrap();
+    assert!(clean
+        .dropped_paths
+        .contains(&"nested/dir/secret".to_owned()));
+    assert!(findings(&repo, &base, &clean.tip).unwrap().is_empty());
+    let tree = entries(dir.path(), &clean.tip).unwrap();
+    assert!(!tree.iter().any(|e| e.2 == "nested/dir/secret"));
+    assert!(tree.iter().any(|e| e.2 == "nested/dir/safe"));
 }

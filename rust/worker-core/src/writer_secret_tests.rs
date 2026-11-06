@@ -182,3 +182,28 @@ fn no_serial_bundle_scan() {
     assert!(scan_bytes(&std::fs::read(bundle).unwrap()));
     assert!(SecretGate.check(&repo, &base, &clean.tip).is_ok());
 }
+
+pub(crate) fn nested_fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
+    let (dir, repo, base, _) = fixture();
+    std::fs::create_dir_all(dir.path().join("nested/dir")).unwrap();
+    std::fs::write(
+        dir.path().join("nested/dir/secret"),
+        ["gh", "p_", &"n".repeat(25)].concat(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("nested/dir/safe"), "keep me").unwrap();
+    command(dir.path(), &["add", "."], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "nested"], &[], None).unwrap();
+    let tip =
+        String::from_utf8(command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap()).unwrap();
+    (dir, repo, base, tip.trim().into())
+}
+
+#[test]
+fn nested_secret_path_detected() {
+    let (_dir, repo, base, tip) = nested_fixture();
+    let found = findings(&repo, &base, &tip).unwrap();
+    assert!(found
+        .iter()
+        .any(|f| f.commit == tip && f.path.as_deref() == Some("nested/dir/secret")));
+}
