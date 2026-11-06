@@ -98,22 +98,23 @@ def render_gateway_providers(
 
     prov_block = providers.get(provider_prefix)
     has_gw_key = isinstance(prov_block, dict) and GATEWAY_KEY_NAME in _env_names(prov_block)
-    if provider_prefix not in ("mimo", "omniroute") and not has_gw_key:
+    if provider_prefix not in ("mimo", "omniroute", "console-meta") and not has_gw_key:
         return None
 
     if "mimo" not in providers and model_clean in ACCEPTED_MIMO_IDS:
         providers["mimo"] = _mimo_template()
 
     # Only the requested registered leg is added; never widen the host catalog.
-    if provider_prefix == "omniroute":
+    if provider_prefix in ("omniroute", "console-meta"):
         from plangraph.planner.legs import DEFAULT_LEGS
 
         leg = next((leg for leg in DEFAULT_LEGS
                     if leg.harness == "opencode" and leg.model == model_clean), None)
         if leg is not None:
-            block = providers.setdefault("omniroute", {
+            block = providers.setdefault(provider_prefix, {
                 "package": "@opencode/ai/providers/openai-compatible",
-                "name": "OmniRoute", "settings": {}, "models": {},
+                "name": "OmniRoute" if provider_prefix == "omniroute" else "Console Meta",
+                "settings": {}, "models": {},
             })
             if isinstance(block, dict):
                 models = block.setdefault("models", {})
@@ -136,7 +137,7 @@ def render_gateway_providers(
     # Step 5: Fill missing env on gateway providers
     for p_name, p_val in providers.items():
         if isinstance(p_val, dict):
-            if p_name in ("mimo", "omniroute") or GATEWAY_KEY_NAME in _env_names(p_val):
+            if p_name in ("mimo", "omniroute", "console-meta") or GATEWAY_KEY_NAME in _env_names(p_val):
                 if not isinstance(p_val.get("env"), list):
                     p_val["env"] = [GATEWAY_KEY_NAME]
 

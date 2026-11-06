@@ -37,7 +37,32 @@ def test_grok_review_only_and_distinct_family():
 
 
 def test_console_muse_uses_served_provider():
-    assert BY_ID[MUSE[1]].model == "opencode-go/muse-spark-1.3-contributor"
+    assert BY_ID[MUSE[1]].model == "console-meta/muse-spark-1.3-contributor"
+    assert BY_ID[MUSE[0]].model == "opencode-go/muse-spark-1.3-contributor"
+
+
+def test_console_muse_render_and_probe(monkeypatch, hermetic_spawner_host):
+    import os
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, "host_probe_env", lambda env: dict(env))
+    model = "console-meta/muse-spark-1.3-contributor"
+    env = {"PLANGRAPH_GATEWAY_URL": os.environ["PLANGRAPH_GATEWAY_URL"]}
+    assert render_gateway_providers(env, model) is None
+    providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
+    assert providers["console-meta"]["models"] == {
+        "muse-spark-1.3-contributor": {
+            "modelID": "muse-spark-1.3-contributor",
+            "name": "muse-spark-1.3-contributor"}}
+    assert "omniroute" not in providers
+    row = dict(harness="opencode", model=model)
+    assert host_skip_reason(row, env=env, probe=lambda _: {model}) is None
+    assert host_skip_reason(row, env=env, probe=lambda _: set()).startswith("not_served_on_host")
+    assert host_skip_reason(row, env={}, probe=lambda _: {model}).startswith("not_served_on_host")
+    other = dict(harness="opencode", model="console-meta/unregistered-model")
+    assert host_skip_reason(other, env=env, probe=lambda _: {model}).startswith("not_served_on_host")
+    untouched = {"PLANGRAPH_GATEWAY_URL": os.environ["PLANGRAPH_GATEWAY_URL"]}
+    assert render_gateway_providers(untouched, BY_ID[GROK].model) is None
+    assert "console-meta" not in json.loads(untouched["OPENCODE_CONFIG_CONTENT"])["providers"]
 
 
 def test_listing_accepts_nested_ids_not_non_ids(monkeypatch):

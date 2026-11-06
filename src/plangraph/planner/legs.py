@@ -125,7 +125,7 @@ DEFAULT_LEGS = (
         "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         False, roles=("review",)),
     Leg("opencode-console-muse-spark", "subscription", "opencode",
-        "opencode-go/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
+        "console-meta/muse-spark-1.3-contributor", "muse", ("128k",), 100000,
         False, roles=("review",),
         note="D-4280: explicit audited selection; scrubbed or public material only"),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
