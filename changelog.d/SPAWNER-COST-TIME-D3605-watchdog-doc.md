@@ -1,0 +1,1 @@
+- **SPAWNER-COST-TIME-D3605:** Restore Watchdog.budget documentation for table deadline extensions, operator wall clocks, and the opt-in hard first-edit budget; no behavior change.

@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 import subprocess
 import time
-
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
@@ -34,7 +33,6 @@ def terminal_record(record, job):
 def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
     return thresholds(card), record['live_log']
-
 
 def thresholds(card=None):
     from plangraph.planner.routing import SpawnRefused
@@ -75,7 +73,6 @@ def is_activity(line):
     line = ANSI.sub('', line).strip()
     return bool(line and not HEADER.match(line))
 
-
 class Watchdog:
     def __init__(self, limits, start, edit, writer=True):
         # Non-writer roles never edit and may buffer output: only 'max' applies.
@@ -83,8 +80,11 @@ class Watchdog:
         self.edited, self.edit_baseline_known = False, edit is not None
         self.cpu = None
         self.progress = dict(edit=start, activity=start, cpu=start)
-
     def budget(self):
+        """Hard deadline in seconds. A pre-edit writer with a readable edit baseline is owed its first-edit window on top of the table run budget (M5's 'holds while output flows' ends at max_s + first_edit_s).
+        Once edited, without a readable baseline, or for non-writers, max_s is the hard deadline; other watchdog rules may end the run sooner.
+        An operator-set PLANGRAPH_SPAWN_RUN_TIMEOUT, when not overridden by card max_min, is a wall clock and is never extended.
+        Opt-in hard_first_edit also enforces first_edit_s for pre-edit writers with a known spawn baseline and a readable current edit signal, even while output flows."""
         if self.limits.get('hard_max'):
             return self.limits['max_s']
         return self.limits['max_s'] + (self.limits['first_edit_s']
