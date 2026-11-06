@@ -45,7 +45,8 @@ Auth staging excludes `.git-credentials`, `.gitconfig`, `.ssh`, `.netrc`,
 `.npmrc`, `.pypirc`, `.aws`, `.docker`, `.gnupg`, `hosts.yml`, `credentials`,
 and `.config` at both supported directory levels. Ordinary `agent-auth` and
 `sub/agent-auth` survive. Tests prove parent Git credential lookup succeeds
-with a store helper, while confined harness/check lookup fails, the positive
+with a store helper, while confined harness/check lookup fails for missing
+authentication (Git cannot obtain a password), the positive
 control secret is absent from both output streams, and credential environment
 variables are absent. This is not a
 network prohibition or protection from arbitrary other credential filenames.
