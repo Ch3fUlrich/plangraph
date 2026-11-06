@@ -29,6 +29,11 @@ it afterwards. Prerequisites are the merge-base with origin's default branch,
 not the requested base: unpushed base and head both travel. Import fetches origin,
 verifies prerequisites and accepts only the expected single tip; it imports
 objects, not branches. Origin fetches disable hooks and recursive submodules.
+The shared `writer_secret::SecretGate` scans complete reachable blobs and commit
+messages, not compressed bundle bytes. Its byte mapping preserves binary input
+and ASCII secret boundaries. Git object identifiers are metadata, not text to
+redact. Salvage reconstruction is not yet implemented in this slice.
+
 Neither transport pushes. R5 must scan reachable blobs and commit messages,
 then re-scan imported content; serialized bundle scanning is insufficient.
 
