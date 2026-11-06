@@ -8,6 +8,54 @@ from plangraph.spawner.runner import spawn_service
 from plangraph.spawner.notify import FileInbox
 
 
+@pytest.mark.parametrize('item', [None, 'test:item'])
+def test_keeper_completion_skip_or_retry(tmp_path, monkeypatch, caplog, item):
+    from plangraph.spawner.notify import KeeperSink
+    from plangraph.spawner import private_io
+    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
+    sink = KeeperSink(url='https://keeper.invalid', token_file='unused')
+    calls, writes = [], []
+    def fail(recipient, event):
+        calls.append((recipient, event))
+        raise RuntimeError('delivery unavailable')
+    monkeypatch.setattr(sink, 'deliver', fail)
+    original = private_io.atomic_write_private
+    def write(path, data):
+        if path.name == 'keeper.delivered':
+            writes.append(path)
+        return original(path, data)
+    monkeypatch.setattr(private_io, 'atomic_write_private', write)
+    service = spawn_service(state=tmp_path, keeper_sink=sink)
+    record = dict(run_id='run-keeper', status='completed', exit_code=0,
+                  started=1, ended=2, item=item)
+    service._save(record)
+    marker = service._path(record['run_id']).parent / 'keeper.delivered'
+    assert marker.exists() == (item is None)
+    first_logs = list(caplog.records)
+    service.retry_completions()
+    parent = (tmp_path / 'inbox' / 'parent.jsonl').read_text().splitlines()
+    assert len(parent) == 1
+    if item is None:
+        assert calls == []
+        assert len(writes) == 1
+        assert caplog.records == first_logs
+        assert len(first_logs) <= 1
+        assert not any(log.exc_info for log in first_logs)
+    else:
+        assert len(calls) == 2
+        assert writes == []
+        assert not marker.exists()
+        assert len([log for log in caplog.records
+                    if log.message == 'completion delivery failed: keeper' and log.exc_info]) == 2
+
+
+def test_direct_keeper_no_item_still_refused():
+    from plangraph.spawner.notify import KeeperSink
+    with pytest.raises(ValueError, match='requires PLANGRAPH_SPAWN_ITEM'):
+        KeeperSink(url='https://keeper.invalid', token_file='unused').deliver('keeper', {})
+
+
 @pytest.mark.parametrize('rc,status', [(0, 'completed'), (7, 'failed'), (-9, 'failed'), (124, 'timeout')])
 def test_terminal_delivery_once(tmp_path, rc, status):
     service = spawn_service(state=tmp_path, keeper_sink=FileInbox(tmp_path))

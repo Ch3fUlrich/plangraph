@@ -51,7 +51,7 @@ import re
 
 from .errors import Refused
 from .schema import EXIT_CLASSES
-from .store_cards import SETTABLE_STATES, _count, _exec_parts, _number, _text
+from .store_cards import _forward, SETTABLE_STATES, _count, _exec_parts, _number, _text
 
 __all__ = ["WorkerMixin"]
 
@@ -230,7 +230,6 @@ class WorkerMixin:
         can never slip past a validate-only call, and permits a plain read for
         audit-only attempts.
         """
-        # No router/system exemption: router paths clear the owner instead.
         row = self.conn.execute(
             "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
         owned = row is not None and row["exec_run_id"] is not None
@@ -243,8 +242,6 @@ class WorkerMixin:
             return
         parts = _exec_parts(key, (body.get("workflow_id"), body.get("run_id"),
                                   body.get("attempt")))
-        # Always validate (stale / lower attempt / retired fence / principal);
-        # only ``record`` decides whether an unowned card may be acquired.
         self._exec_check(self.conn, key, *parts, principal=principal, record=record)
 
     @staticmethod
@@ -323,17 +320,21 @@ class WorkerMixin:
         why = f"parked: {exit_class} ({tier})"[:500]
 
         def guard(item):
-            # 1. Stale-run / lower-attempt checks decide first, and only
-            #    validate here: a call that fails later must not acquire
-            #    ownership (record=False).
+            # Validate stale runs first, without acquiring ownership.
             self._exec_gate(item["key"], body, principal, record=False)
             # 2. A duplicate park is a success no-op, ahead of expected_state.
             if self._exec_duplicate(item, body, "parked"):
                 return
-            # 3. Observed-state CAS (park: the live set is a fallback, never
-            #    an observation), then the claim binding, then ownership.
+            # A claim release is not permission to roll back a newer state.
+            if (body.get("expected_state") is None
+                    and self._exec_state_after_owner(self.conn, item["key"])):
+                raise Refused("exec_stale", f"{key}: state changed after exec owner")
+            # Observed-state CAS, then claim binding and ownership.
             self._exec_expect_state(item, body.get("expected_state"), principal,
                                     park=True)
+            # Claimed is lease-bound; other states follow the forward table.
+            if item["state"] != "claimed" and not _forward(item["state"], "parked"):
+                raise Refused("bad_state", f"{key}: {item['state']} -> parked")
             self._park_guard(principal, item, epoch, now)
             if item["state"] != "parked":
                 self._exec_gate(item["key"], body, principal, record=True)
@@ -364,8 +365,7 @@ class WorkerMixin:
         key = self._resolve_scoped(principal, card)
         with self._write():
             item = self._get_or_refuse(key)
-            # 1. Stale-run / lower-attempt checks decide first (validate only,
-            #    so a call that fails below acquires nothing).
+            # Validate stale runs first, without acquiring ownership.
             self._exec_gate(key, body, principal, record=False)
             # 2. A duplicate complete is a success no-op, ahead of expected_state.
             duplicate = self._exec_duplicate(item, body, "done")
@@ -379,8 +379,7 @@ class WorkerMixin:
             if self._system_phase_holder(principal, item):
                 # Only phase-worker claims may bypass pre-merge evidence.
                 self._assert_unlocked(item)
-                # System holders validate exec fences but cannot record owners.
-                self._exec_gate(key, body, principal, record=False)
+                # Step 1 validated exec fences; system holders cannot record owners.
                 round_no = int(item.get("round") or 0) + 1
                 self._append(principal, key, "state_set",
                              {"state": "in_review", "was": "claimed",

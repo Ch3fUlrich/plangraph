@@ -29,6 +29,14 @@ it afterwards. Prerequisites are the merge-base with origin's default branch,
 not the requested base: unpushed base and head both travel. Import fetches origin,
 verifies prerequisites and accepts only the expected single tip; it imports
 objects, not branches. Origin fetches disable hooks and recursive submodules.
+The shared `writer_secret::SecretGate` scans complete reachable blobs and commit
+messages, not compressed bundle bytes. Its byte mapping preserves binary input
+and ASCII secret boundaries. Git object identifiers are metadata, not text to
+redact. Sanitized history reconstruction preserves mapped merge parents and safe
+messages, replaces secret-bearing messages, and appends `Sanitized: secret-gate`.
+It returns the rebuilt tip, SHA mapping and dropped paths, and refuses secret-bearing
+prerequisite history through the same gate. Salvage export is outside this slice.
+
 Neither transport pushes. R5 must scan reachable blobs and commit messages,
 then re-scan imported content; serialized bundle scanning is insufficient.
 

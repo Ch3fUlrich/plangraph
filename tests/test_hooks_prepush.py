@@ -79,6 +79,7 @@ def commit_symlink(repo, rel, target):
 
 def run_hook(repo, lines, env_extra=None):
     env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    env["HOME"] = str(Path(repo).parent / "home")
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
     env.update(env_extra or {})
@@ -255,6 +256,91 @@ def test_hook_value_allows_a_path_level_private_word_hit(repo, tmp_path):
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
     assert "<path-hash:" not in out and fake_word() not in out
+
+
+@pytest.mark.parametrize("case", ["default", "env-wins", "missing", "unreadable",
+                                 "absent", "private", "unmarked", "group", "other"])
+def test_private_words_routing(repo, tmp_path, case):
+    r, base = repo
+    words = tmp_path / "home/.config/plangraph/scrub-words.txt"
+    words.parent.mkdir(parents=True)
+    words.write_text(fake_word() + "\n")
+    words.chmod(0o600)
+    env = {}
+    if case == "env-wins":
+        override = tmp_path / "override.txt"
+        override.write_text("syntheticreplacement\n")
+        env["PLANGRAPH_SCRUB_WORDS"] = str(override)
+    if case in ("missing", "unreadable"):
+        env["PLANGRAPH_SCRUB_WORDS"] = str(words)
+        git(r, "config", "remote.origin.plangraph-private", "true")
+        if case == "missing":
+            words.unlink()
+        else:
+            words.chmod(0)
+    if case == "absent":
+        words.unlink()
+    if case == "private":
+        git(r, "config", "remote.origin.plangraph-private", "true")
+    if case == "unmarked":
+        git(r, "config", "remote.origin.url", "https://example.invalid/unreachable.git")
+    if case in ("group", "other"):
+        words.chmod(0o640 if case == "group" else 0o604)
+    head = commit_file(r, "app/plan.py", fake_word() + "\n")
+    res = run_hook(r, [push_line("main", head, base)], env)
+    out = res.stdout + res.stderr
+    assert res.returncode == (0 if case in ("env-wins", "absent", "private") else 1), out
+    assert fake_word() not in out and str(words) not in out
+    if case == "env-wins":
+        assert str(override) not in out
+        head = commit_file(r, "app/plan.py", "syntheticreplacement\n")
+        res = run_hook(r, [push_line("main", head, base)], env)
+        assert res.returncode == 1
+        assert "syntheticreplacement" not in res.stdout + res.stderr
+    if case in ("group", "other"):
+        assert "chmod 600" in res.stderr
+    if case == "absent":
+        assert len([line for line in res.stderr.splitlines()
+                    if "private-word rule is inactive" in line]) == 1
+    if case in ("absent", "private"):
+        head = commit_file(r, "app/net.py", fake_ip() + "\n")
+        res = run_hook(r, [push_line("main", head, base)], env)
+        assert res.returncode == 1
+        assert "ipv4" in res.stdout + res.stderr
+        assert fake_word() not in res.stdout + res.stderr
+        assert fake_ip() not in res.stdout + res.stderr
+
+
+@pytest.mark.parametrize("source", ["global", "system", "worktree", "environment"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_nonlocal_private_marker_cannot_skip_private_words(repo, tmp_path, source, explicit):
+    r, base = repo
+    words = tmp_path / "home/.config/plangraph/scrub-words.txt"
+    words.parent.mkdir(parents=True)
+    words.write_text(fake_word() + "\n")
+    words.chmod(0o600)
+    key = "remote.origin.plangraph-private"
+    assert key not in git(r, "config", "--local", "--list")
+    marker = tmp_path / "nonlocal.gitconfig"
+    marker.write_text('[remote "origin"]\n\tplangraph-private = true\n')
+    env = {}
+    if source == "global":
+        env["GIT_CONFIG_GLOBAL"] = str(marker)
+    elif source == "system":
+        env.update(GIT_CONFIG_SYSTEM=str(marker), GIT_CONFIG_NOSYSTEM="0")
+    elif source == "worktree":
+        git(r, "config", "extensions.worktreeConfig", "true")
+        git(r, "config", "--worktree", key, "true")
+    else:
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=key, GIT_CONFIG_VALUE_0="true")
+    if explicit:
+        env["PLANGRAPH_SCRUB_WORDS"] = str(words)
+    head = commit_file(r, "app/plan.py", fake_word() + "\n")
+    res = run_hook(r, [push_line("main", head, base)], env)
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert "app/plan.py:1: private-word" in out
+    assert fake_word() not in out and str(words) not in out
 
 
 def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():

@@ -1,0 +1,1 @@
+- **RT-P1-EXEC-OWNERSHIP-SQ12:** execution verbs move to `store_exec.py`; the retired-owner fence and the delayed-park ordering signal refuse stale workers on owned, unowned and post-clear cards.

@@ -33,7 +33,7 @@ priority, source, note, description, host, corrects, state, epoch, claimed_by, d
 `audit_findings(id PK, ts, key, code, msg)`.
 Event types: `item_created, item_defined, claimed, delegated, released, lease_expired, evidence_added, submitted,
 changes_requested, review_passed, cancelled, priority_set, kind_set`. `items.state`, `epoch`, `claimed_by`, … are a CACHE written in the same
-transaction as the event; `verify_integrity` proves cache == fold.
+transaction as the event; `verify_integrity` proves cache == fold. Retired exec run fences are uncapped per card and survive close; delayed parks without an observed state cannot overwrite newer attempt state writes, and park state moves follow the forward table while legal parks release claims. See `adr-exec-ownership.md`.
 
 **Unknown event types (PG-FOLD-UNKNOWN-TYPE).** A `type` outside `schema.EVENT_TYPES` was written by a newer keeper: this build cannot
 replay it, so `fold(events, unknown=…)` records `{"seq","type","key"}` in an optional side channel and never touches item state (the
