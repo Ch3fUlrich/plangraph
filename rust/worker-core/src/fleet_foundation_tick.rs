@@ -311,5 +311,8 @@ fn record_alarm(
     }
 }
 #[cfg(test)]
+#[path = "fleet_foundation_tick_state_tests.rs"]
+mod state_tests;
+#[cfg(test)]
 #[path = "fleet_foundation_tick_tests.rs"]
 mod tests;
