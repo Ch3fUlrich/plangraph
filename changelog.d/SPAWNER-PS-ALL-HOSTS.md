@@ -1,0 +1,1 @@
+- Spawner ps optionally queries site-configured hosts concurrently with bounded SSH timeouts, retaining live record host identity and reporting unavailable hosts as unknown in CLI and MCP views.

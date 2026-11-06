@@ -6,14 +6,14 @@ PS_ENDED_LIMIT = 20
 PS_FIELDS = (
     'run_id', 'status', 'role', 'host', 'pid', 'started', 'ended',
     'last_activity_ts', 'exit_code', 'item_key', 'parent_session',
-    'served_model', 'cwd',
+    'served_model', 'cwd', 'reason',
 )
 
 
 def ps_reply(runs):
     """Keep all live runs and the newest ended runs, without record payloads."""
-    live = [run for run in runs if run.get('status') in ('running', 'queued')]
-    ended = [run for run in runs if run.get('status') not in ('running', 'queued')]
+    live = [run for run in runs if run.get('status') in ('running', 'queued', 'unknown')]
+    ended = [run for run in runs if run.get('status') not in ('running', 'queued', 'unknown')]
     selected = live + ended[:PS_ENDED_LIMIT]
     compact = []
     for run in selected:
