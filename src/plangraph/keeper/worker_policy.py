@@ -7,7 +7,8 @@ VERBS = frozenset({"claim", "worker_claim", "show", "phase_plan", "phase_finish"
                    "ask_question", "answer_question"})
 ACTIONS = frozenset({"claim", "show", "worker_attempt", "worker_park",
                      "worker_complete", "worker_alarm", "lock_acquire",
-                     "lock_release", "ask_question", "answer_question"})
+                     "lock_release", "ask_question", "answer_question",
+                     "get_card", "attach_merge_evidence"})
 
 
 def check(principal, action, *, transport=False):

@@ -162,13 +162,13 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             (iso(moment), "?", None, "authenticate", None, 0, "forbidden", msg))
 
     def _check_principal(self, principal):
-        """Refuse a principal whose stored row was revoked or changed.
-        Re-read each verb to reject revoked or changed identities.
-        The sole exception is the API reaper's synthetic
+        """Refuse a principal whose stored row was revoked or changed:
+        Re-read each verb so a token valid at authentication cannot keep acting
+        after a revoke or role/project edit; refuse a stale or forged identity
+        with no row too. The sole exception is the API reaper's synthetic
         ``system``/``system`` identity, which has no row of its own.
         """
-        row = self.conn.execute(
-            "SELECT role,projects,active FROM principals WHERE name=?",
+        row = self.conn.execute("SELECT role,projects,active FROM principals WHERE name=?",
             (getattr(principal, "name", None),)).fetchone()
         if row is None:
             if (getattr(principal, "name", None) == "system"
