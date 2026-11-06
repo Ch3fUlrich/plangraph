@@ -262,3 +262,16 @@ def test_unreadable_state(home, monkeypatch):
         raise PermissionError('denied')
     monkeypatch.setattr(av.os, 'scandir', denied)
     assert av.local(home)['readable'] is False
+
+
+def test_render_projection_matches_public_schema():
+    from plangraph.render import _project_agents_view
+    from plangraph.spawner.agent_view_projection import project_view
+
+    data = {'generated_at': 'now', 'secret': 'excluded', 'hosts': [
+        None, {'host': 'missing', 'readable': False},
+        {'host': 'local', 'readable': True, 'agents': [None, {
+            'host': 'spoofed', 'name': 'one', 'runtime': 'invalid',
+            'model': True, 'state': 'running', 'item': 'demo:A',
+            'age_s': 2, 'secret': 'excluded'}]}]}
+    assert _project_agents_view(data) == project_view(data)
