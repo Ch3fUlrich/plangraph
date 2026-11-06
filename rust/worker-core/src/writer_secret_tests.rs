@@ -252,3 +252,35 @@ fn nested_secret_path_detected() {
         .iter()
         .any(|f| f.commit == tip && f.path.as_deref() == Some("nested/dir/secret")));
 }
+
+#[test]
+fn utf16_tokens_detected() {
+    let token = ["gh", "p_", &"u".repeat(25)].concat();
+    for be in [false, true] {
+        let bytes: Vec<_> = token
+            .encode_utf16()
+            .flat_map(|c| if be { c.to_be_bytes() } else { c.to_le_bytes() })
+            .collect();
+        assert!(scan_bytes(&bytes));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_path_scanned() {
+    use std::os::unix::ffi::OsStrExt;
+    let (dir, repo, base, _) = fixture();
+    std::fs::write(
+        dir.path().join(std::ffi::OsStr::from_bytes(b"raw-\xff")),
+        ["gh", "p_", &"v".repeat(25)].concat(),
+    )
+    .unwrap();
+    command(dir.path(), &["add", "."], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "binary name"], &[], None).unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let found = findings(&repo, &base, std::str::from_utf8(&head).unwrap().trim()).unwrap();
+    assert!(found.iter().any(|f| f
+        .path
+        .as_deref()
+        .is_some_and(|p| p.starts_with("<non-UTF-8 path:"))));
+}
