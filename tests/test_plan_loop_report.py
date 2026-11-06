@@ -1,0 +1,128 @@
+import hashlib
+import json
+
+import pytest
+
+from tools import plan_loop_ledger as ledger
+from tools import plan_loop_report as report
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+
+@pytest.fixture
+def plan(tmp_path):
+    (tmp_path / "plan.md").write_text("A small plan.\n")
+    manifest = ledger.freeze(tmp_path)
+    sha = manifest["text_sha"]
+    manifest.update(plan_chars_r1=14, plan_chars=14,
+                    report={"sha": sha, "ok": True, "claims": ["C1"]},
+                    claims={"C1": {"state": "verified"}})
+    write_json(tmp_path / "manifest.json", manifest)
+    write_json(tmp_path / "ledger.json", [])
+    (tmp_path / "plan-loop.toml").write_text('slug = "sample"\naccept_families = 1\n')
+    seat = dict(round=1, kind="scope-cut", family="qwen", sha=sha,
+                status="completed", witnessed=True, verdict="ACCEPT",
+                counts={}, new_classes=[])
+    (tmp_path / "yield.jsonl").write_text(json.dumps(seat) + "\n")
+    batch = tmp_path / "batch.yaml"
+    batch.write_text(f"batch: sample\nprincipal: author\nsource: plan.md\n"
+                     f"source_sha256: {sha}\nops:\n"
+                     "  - op: create\n    item:\n"
+                     "      - {project: demo, id: A1}\n"
+                     "      - {project: demo, id: A2}\n")
+    return tmp_path, batch
+
+
+def test_check_records_digest_and_each_key(plan):
+    directory, batch = plan
+    code, lines = report.check_batch(directory, batch)
+    assert code == 0
+    digest = hashlib.sha256(batch.read_bytes()).hexdigest()
+    assert lines[0] == f"ops_sha={digest}"
+    assert "other than" in lines[1] and "D-row" in lines[1]
+    records = json.loads((directory / "batches.json").read_text())
+    assert records == [{"ops_sha": digest, "op_keys": ["demo:A1", "demo:A2"]}]
+    assert report.check_batch(directory, batch)[0] == 0
+    assert len(json.loads((directory / "batches.json").read_text())) == 1
+
+
+@pytest.mark.parametrize("change", ["source", "text", "open", "ops", "duplicate"])
+def test_check_refuses_without_recording(plan, change):
+    directory, batch = plan
+    text = batch.read_text()
+    if change == "source":
+        text = text.replace(json.loads((directory / "manifest.json").read_text())["text_sha"], "0" * 64)
+    elif change == "text":
+        (directory / "plan.md").write_text("Edited plan")
+    elif change == "open":
+        (directory / "yield.jsonl").write_text("")
+    elif change == "ops":
+        text = text.replace("op: create", "op: unknown")
+    else:
+        text += "principal: another\n"
+    batch.write_text(text)
+    assert report.check_batch(directory, batch)[0] == 1
+    assert not (directory / "batches.json").exists()
+
+
+def test_waiver_requires_explicit_permission(plan):
+    directory, batch = plan
+    path = directory / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["waived"] = "D-1234"
+    write_json(path, manifest)
+    assert report.check_batch(directory, batch)[0] == 1
+    code, lines = report.check_batch(directory, batch, waived_ok=True)
+    assert code == 0
+    assert any("WAIVED" in line and "--waived-ok" in line for line in lines)
+
+
+def test_ops_edit_needs_new_digest(plan):
+    directory, batch = plan
+    assert report.check_batch(directory, batch)[0] == 0
+    batch.write_text(batch.read_text().replace("demo, id: A2", "demo, id: A3"))
+    assert report.check_batch(directory, batch)[0] == 0
+    records = json.loads((directory / "batches.json").read_text())
+    assert len({r["ops_sha"] for r in records}) == 2
+
+
+def test_report_matches_nested_records_and_is_read_only(plan):
+    directory, batch = plan
+    assert report.check_batch(directory, batch)[0] == 0
+    log = directory / "changelog.json"
+    write_json(log, {"entries": [
+        {"type": "created", "key": "demo:A1", "by": "author", "ts": "today"},
+        {"type": "created", "key": "demo:A9", "by": "writer", "ts": "today"},
+        {"type": "closed", "key": "demo:A8"},
+    ]})
+    before = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+    code, lines = report.report(directory.parent, log)
+    assert code == 0
+    assert lines == ["UNMATCHED demo:A9 by=writer ts=today", report.COVERAGE]
+    assert before == {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+
+
+def test_report_always_prints_coverage(tmp_path):
+    log = tmp_path / "log.json"
+    write_json(log, {"entries": []})
+    assert report.report(tmp_path, log) == (0, [report.COVERAGE])
+
+
+@pytest.mark.parametrize("bad", ["missing", "json", "shape", "records"])
+def test_report_unreadable_input(tmp_path, bad):
+    log = tmp_path / "log.json"
+    if bad != "missing":
+        log.write_text("{" if bad == "json" else '{"entries": []}')
+    if bad == "shape":
+        write_json(log, {"entries": [{}]})
+    if bad == "records":
+        write_json(tmp_path / "batches.json", {})
+    code, lines = report.report(tmp_path, log)
+    assert code == 1
+    assert lines[-1] == report.COVERAGE
+
+
+def test_check_inside_checkout_refused():
+    assert report.check_batch(".", "unused.yaml")[0] == 1
