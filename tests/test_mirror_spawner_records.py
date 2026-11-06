@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import gzip
 import json
 import os
 from pathlib import Path
@@ -214,3 +215,43 @@ def test_ssh_option_alias(tmp_path):
     with pytest.raises(SystemExit) as exc:
         mirror.main(['--host', 'host-a', '--dest', str(tmp_path), '--ssh=-option', '--remote-runs', 'runs'])
     assert exc.value.code == 2
+
+
+@pytest.mark.parametrize('cut', [1024, 1124])
+def test_ssh_truncated_header(tmp_path, monkeypatch, capsys, cut):
+    archive = make_archive(tmp_path, [('run-a/record.json', json.dumps(record()).encode(), tarfile.REGTYPE)])
+    archive.write_bytes(archive.read_bytes()[:cut])
+    monkeypatch.setenv('STREAM', str(archive))
+    args = fake_ssh(tmp_path, monkeypatch, 'cat "$STREAM"')
+    assert mirror.main(args) == 1
+    assert not (tmp_path / 'dest').exists()
+    assert '"source": 1' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('compressed_tar', [False, True])
+def test_ssh_corrupt_gzip(tmp_path, monkeypatch, capsys, compressed_tar):
+    archive = tmp_path / 'bad.gz'
+    archive.write_bytes(b'\x1f\x8b\x08\x00' + b'\x00' * 6 + b'\xff' * 100)
+    if compressed_tar:
+        archive.write_bytes(gzip.compress(make_archive(tmp_path, []).read_bytes()))
+    monkeypatch.setenv('STREAM', str(archive))
+    args = fake_ssh(tmp_path, monkeypatch, 'cat "$STREAM"')
+    assert mirror.main(args) == 1
+    assert not (tmp_path / 'dest').exists()
+    assert '"source": 1' in capsys.readouterr().out
+
+
+def test_ssh_stdin_closed(tmp_path, monkeypatch):
+    archive = make_archive(tmp_path, [('run-a/record.json', json.dumps(record()).encode(), tarfile.REGTYPE)])
+    monkeypatch.setenv('STREAM', str(archive))
+    args = fake_ssh(tmp_path, monkeypatch, 'if read line; then exit 2; fi\ncat "$STREAM"')
+    with (tmp_path / 'input').open('w+b') as stream:
+        stream.write(b'caller input\n'); stream.seek(0)
+        saved = os.dup(0)
+        try:
+            os.dup2(stream.fileno(), 0)
+            assert mirror.main(args) == 0
+        finally:
+            os.dup2(saved, 0)
+            os.close(saved)
+    assert (tmp_path / 'dest/host-a/run-a/record.json').exists()

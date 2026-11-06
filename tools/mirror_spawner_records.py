@@ -33,18 +33,23 @@ def sources(args):
                    'tar --null -T - -cf -')
         with tempfile.TemporaryFile() as errors:
             with subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '--', args.ssh, command],
-                                  stdout=subprocess.PIPE, stderr=errors) as proc:
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors) as proc:
                 try:
-                    with tarfile.open(fileobj=proc.stdout, mode='r|*') as archive:
+                    with tarfile.open(fileobj=proc.stdout, mode='r|') as archive:
                         for member in archive:
                             name = member.name.removeprefix('./')
                             parts = name.split('/')
                             if member.isfile() and len(parts) == 2 and safe_name(parts[0]) and parts[1] == 'record.json':
                                 with archive.extractfile(member) as stream:
                                     yield parts[0], stream.read(LIMIT + 1)
-                    # Drain tar padding without retaining the remaining stream.
-                    while proc.stdout.read(64 * 1024):
-                        pass
+                        # Include tarfile's read-ahead; a missing tail means truncation.
+                        tail = archive.fileobj.read(64 * 1024)
+                        if not tail:
+                            raise tarfile.ReadError('missing tar padding')
+                        while tail:
+                            if tail.strip(b'\0'):
+                                raise tarfile.ReadError('invalid tar padding')
+                            tail = archive.fileobj.read(64 * 1024)
                     code = proc.wait()
                     if code not in (0, 1):
                         errors.seek(max(0, errors.seek(0, os.SEEK_END) - 200))
