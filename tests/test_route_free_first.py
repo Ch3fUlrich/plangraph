@@ -1,4 +1,4 @@
-"""D-3901: Sol-first writers, free-first reviews, disabled anthropic writers."""
+"""D-4147: Sol-first writers, mimo-first reviews, retained policy entries."""
 from __future__ import annotations
 
 import json
@@ -63,7 +63,7 @@ def test_writer_order_privacy_excludes_training_sol():
         "cx-gpt-6.1-sol"] == "trains_on_data"
 
 
-def test_cli_route_implement_free_first_no_claude_writer(tmp_path, capsys):
+def test_cli_route_implement_gpt_first_no_claude_writer(tmp_path, capsys):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "implement", "--json"]) == 0
     plan = json.loads(capsys.readouterr().out)
@@ -82,10 +82,10 @@ def test_route_and_refusal(tmp_path, capsys):
     assert 'spawn by card' in capsys.readouterr().err
 
 
-def test_review_free_first():
+def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == [*FREE[:2], "mimo-v2.6-flash"]
+    assert ids[:4] == ["mimo-v2.6-flash", "mimo-v2.6-pro", *FREE[:2]]
 
 
 def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
@@ -114,11 +114,11 @@ def test_agy_skipped_while_out_of_quota():
     assert {s["leg"]: s["reason"] for s in plan.skipped}["agy-gemini-3.8-flash"] == "limited"
 
 
-def test_cli_route_review_free_first(tmp_path, capsys):
+def test_cli_route_review_mimo_first(tmp_path, capsys):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:3] == [*FREE[:2], "mimo-v2.6-flash"]
+    assert ids[:4] == ["mimo-v2.6-flash", "mimo-v2.6-pro", *FREE[:2]]
     assert ids.index("agy-gemini-3.8-flash") > 2
 
 
@@ -142,8 +142,8 @@ def test_fixed_review_order():
     legs = tuple(replace(table[id], roles=("review",), disabled=None) for id in ids)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs,
                       policy=RoutePolicy(), leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
-    assert [leg.id for leg in plan.legs] == ["qodercli-qwen3.8-flash", *FREE,
-        "mimo-v2.6-flash", "deepseek", "agy-gemini-3.8-flash", "claude-haiku-5.5"]
+    assert [leg.id for leg in plan.legs] == ["mimo-v2.6-flash", "deepseek",
+        "agy-gemini-3.8-flash", "qodercli-qwen3.8-flash", *FREE, "claude-haiku-5.5"]
 
 
 def test_no_anthropic_implement_leg_removes_sonnet():
@@ -180,6 +180,15 @@ def test_fixed_implement_sol_across_tiers():
         assert [leg.id for leg in fallback.legs] == expected[1:]
 
 
+def test_implement_lead_independent_of_writer_order(monkeypatch):
+    from plangraph.planner import legs
+    assert legs.WRITER_ORDER[0] == legs.LEAD_WRITER == "cx-gpt-6.1-sol"
+    monkeypatch.setattr(legs, "WRITER_ORDER", ("openrouter-free", *legs.WRITER_ORDER))
+    plan = plan_spawn(CARD, role="implement",
+                      leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert plan.first_leg.id == legs.LEAD_WRITER
+
+
 def test_writer_order_d2683_implement_first_seven():
     # D-3745: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
     c = {"estimate_tokens": 20000, "risk_tags": []}
@@ -188,3 +197,24 @@ def test_writer_order_d2683_implement_first_seven():
                 "openrouter-free", "agy-gemini-3.8-flash", "mimo-v2.6-pro",
                 "mimo-v2.6-flash"]
     assert [leg.id for leg in plan.legs[:len(expected)]] == expected
+
+
+def test_main_policy_gpt_first_and_retained_routes():
+    from plangraph.planner.route_policy import load_route_policy, DEFAULT_POLICY_PATH
+    policy = load_route_policy(DEFAULT_POLICY_PATH)
+    clear = lambda *a, **k: {"state": "ok", "evidence": None}
+    implement = plan_spawn(CARD, role="implement", policy=policy, leg_reader=clear)
+    assert implement.first_leg.id == "cx-gpt-6.1-sol"
+    assert implement.legs[1].id == "openrouter-free"
+    assert "agy-gemini-3.8-flash" in {leg.id for leg in implement.legs}
+    for writers in (("mimo",), ("gpt",), ("claude",), ("gpt", "mimo")):
+        review = plan_spawn(CARD, role="review", writer_families=writers,
+                            policy=policy, leg_reader=clear)
+        assert not {leg.family for leg in review.legs} & set(writers)
+        assert not {leg.family for leg in review.review_seats} & set(writers)
+        assert review.first_leg.family == ("deepseek" if "mimo" in writers else "mimo")
+        assert {"deepseek", "glm"} <= {leg.family for leg in review.legs}
+    assert {leg.id for leg in DEFAULT_LEGS} == {
+        "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5",
+        "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
+        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5"}

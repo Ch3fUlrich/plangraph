@@ -22,7 +22,7 @@ pub enum ResolveError {
     Verify(&'static str),
 }
 
-pub(crate) fn git_command(root: &Path) -> Command {
+pub fn git_command(root: &Path) -> Command {
     let mut cmd = Command::new("git");
     for (key, _) in std::env::vars_os() {
         if key

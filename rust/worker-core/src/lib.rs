@@ -15,6 +15,7 @@ pub mod exit_class;
 pub mod exports;
 pub mod fleet_alarm_delivery;
 pub mod fleet_cap_resolver;
+pub mod fleet_foundation_tick;
 pub mod fleet_owner_lease;
 pub mod fleet_owner_store;
 pub mod fleet_owner_transition;
