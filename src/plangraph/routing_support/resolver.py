@@ -365,7 +365,7 @@ def detect_model_family(model_id: str) -> str:
 def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     """Policy admission; an optional dynamic availability field may veto it."""
     return (row.get('id') not in OPERATOR_REMOVED_MODELS
-            and row.get('available', True) == 1 and row.get('active') is True)
+            and row.get('available') == 1 and row.get('active') is True)
 
 
 _served_cache = {}
@@ -564,10 +564,14 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     """
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
-    # Ranking historical catalog seats is not a new-spawn admission decision.
-    if (os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') == '1'
-            and model.get('active') is True and not model.get('disabled')):
-        pass  # Runtime availability is read below, never from the catalog.
+    reader = leg_state_reader or leg_status
+    enabled = getattr(getattr(reader, '__self__', reader), 'enabled',
+                      os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') == '1')
+    if model.get('id') in OPERATOR_REMOVED_MODELS:
+        return False
+    if enabled:
+        if model.get('active') is not True or model.get('disabled'):
+            return False
     elif not catalog_row_admitted(model):
         return False
     status = str(model.get("status", "active")).lower()
@@ -576,9 +580,8 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     mid = str(model.get("id") or model.get("model_id") or "").lower()
     if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
         return False
-    reader = leg_state_reader or leg_status
     denied = {"limited", "unavailable", "unreachable", "stale", "unknown", "not_listed"}
-    if os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') != '1':
+    if not enabled:
         denied = {"limited"}
     return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] not in denied
 

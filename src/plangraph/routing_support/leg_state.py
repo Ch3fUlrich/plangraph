@@ -327,13 +327,7 @@ class LegStateStore:
 
 
 def _default_store():
-    global _shared_store
-    if _shared_store is None:
-        _shared_store = LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
-    return _shared_store
-
-
-_shared_store = None
+    return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
 
 
 def record_provider_response(leg, status, body, headers, caller, now=None, account=None, combo=None):
