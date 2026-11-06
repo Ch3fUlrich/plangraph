@@ -1,7 +1,1 @@
 Added Unix event supervision with bounded stdin/output handling, Blind byte-stall enforcement, confirm-window decisions, and bounded process-group kill proof; harness routing remains unchanged until RL14.
-Honor TERM promptly even with long grace, drain all queued confirm signals, and retain Blind summaries on batch I/O errors.
-Owned groups remain signallable after leader exit; latch ESRCH, guard emptiness probes, and report the first teardown error with survivors.
-Review fixes gate the Unix supervisor explicitly, latch Blind before draining provider errors, preserve successful exits during pipe-tail draining, and retain transient probe errors in survivor reports.
-Seat fixes explicitly gate Blind tests on Unix (the public module was already gated), require a wall timeout before spawning, and cancel/join nonblocking stdin writers to release prompts on teardown.
-Part B retains reaped exit status and I/O errors in Watched, ignores cancellation after natural exit, accepts signal-race ESRCH, verifies mixed parser counters, removes source-text gating assertions, and increases process-fixture scheduler slack.
-Fix-round routes stdin setup failures through bounded teardown, suppresses monitor ticks on I/O errors, probes natural-exit groups only at drain boundaries, and exercises tree/CPU hooks with a real child. Windows all-targets remains covered by the existing Unix module gate.

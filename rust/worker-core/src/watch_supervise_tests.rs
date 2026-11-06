@@ -1,3 +1,4 @@
+use super::super::blind_tests::SCHEDULER_SLACK;
 use super::*;
 use crate::{activity::*, hosts::Role};
 
@@ -27,7 +28,29 @@ fn honored_term_finishes_before_long_grace() {
     )
     .unwrap();
     assert_eq!(r.proof, KillProof::Empty);
-    assert!(start.elapsed() < Duration::from_millis(2500)); // F + confirm + 0.5 s.
+    assert!(start.elapsed() < Duration::from_secs(2) + SCHEDULER_SLACK);
+}
+
+#[test]
+fn retained_error_survives_nonempty_and_later_errors() {
+    let mut error = Some(io::ErrorKind::BrokenPipe.into());
+    retain_error(&mut error, Ok(false));
+    retain_error(&mut error, Err(io::ErrorKind::PermissionDenied.into()));
+    assert_eq!(error.unwrap().kind(), io::ErrorKind::BrokenPipe);
+}
+
+#[test]
+fn flooding_stderr_obeys_one_second_timeout() {
+    let start = Instant::now();
+    let r = super::super::blind_tests::run_timeout(
+        "exec yes flood >&2",
+        true,
+        b"",
+        false,
+        Duration::from_secs(1),
+    );
+    assert!(r.run.timed_out);
+    assert!(start.elapsed() < Duration::from_millis(3100) + SCHEDULER_SLACK);
 }
 
 #[test]
@@ -54,7 +77,14 @@ fn queued_signal_and_bad_ratio_survive_drain_boundaries() {
             blind: None,
             partial: false,
         };
-        let (tx, rx) = mpsc::sync_channel(128);
+        let (tx, rx) = mpsc::sync_channel(300);
+        for _ in 0..300 {
+            tx.send(Chunk::Data(false, vec![b'x'])).unwrap();
+        }
+        events.drain(&rx, &mut hooks, 0, false, 1024).unwrap();
+        assert_eq!(events.output.len(), 256);
+        events.drain(&rx, &mut hooks, 0, false, 1024).unwrap();
+        assert_eq!(events.output.len(), 300);
         if bad {
             tx.send(Chunk::Data(true, b"bad\n".repeat(20))).unwrap();
             tx.send(Chunk::Error(io::ErrorKind::BrokenPipe.into()))

@@ -91,12 +91,12 @@ impl Events {
         stopping: bool,
         max: usize,
     ) -> io::Result<()> {
-        // Feed all queued signals before allowing a confirm-window decision.
+        // Twice the queue capacity: see queued signals without starving clock checks.
         self.blind = self.blind.or(hooks.channel.blind(now));
         if self.blind.is_some() {
             self.provider = false;
         }
-        loop {
+        for _ in 0..256 {
             match rx.try_recv() {
                 Ok(Chunk::Data(stdout, bytes)) => {
                     self.last_byte = now;
@@ -282,7 +282,7 @@ fn supervise_with_writer(
                 match child.empty() {
                     Ok(true) => {}
                     result => {
-                        error = result.err();
+                        retain_error(&mut error, result);
                         stop = Some(Stop::default());
                         stopped_at = Some(now);
                         finished_at = None;
@@ -328,4 +328,10 @@ fn record_writer_result(mut watched: Watched, result: io::Result<()>) -> Watched
         watched.io_error.get_or_insert(error);
     }
     watched
+}
+
+fn retain_error(error: &mut Option<io::Error>, result: io::Result<bool>) {
+    if let Err(e) = result {
+        error.get_or_insert(e);
+    }
 }

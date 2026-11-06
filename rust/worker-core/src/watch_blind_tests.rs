@@ -13,9 +13,11 @@ const FIXTURE_FIRST_S: u64 = 2;
 const FIXTURE_CONFIRM_S: u64 = 2;
 const FIXTURE_SILENCE_S: u64 = 3;
 const ESCAPED_FIXTURE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) const SCHEDULER_SLACK: Duration = Duration::from_millis(1500);
 
 #[test]
 fn fixture_scheduler_slack_is_separate_from_contract() {
+    assert_eq!(SCHEDULER_SLACK, Duration::from_millis(1500));
     let margin = |limit, emission| limit - emission;
     assert!(margin(FIXTURE_FIRST_S + FIXTURE_CONFIRM_S, 2) >= 2);
     assert!(margin(FIXTURE_SILENCE_S + FIXTURE_CONFIRM_S, 1) >= 2);
@@ -75,7 +77,7 @@ impl EventParser for Parser {
 pub(super) fn run(script: &str, blind: bool, input: &[u8], cancel: bool) -> Watched {
     run_timeout(script, blind, input, cancel, Duration::from_secs(8))
 }
-fn run_timeout(
+pub(super) fn run_timeout(
     script: &str,
     blind: bool,
     input: &[u8],
@@ -242,7 +244,9 @@ fn sigterm_ignorer_reaped() {
     let r = run("trap '' TERM; while :; do :; done", false, b"", false);
     assert_eq!(r.run.signal, Some(libc::SIGKILL));
     assert_eq!(r.proof, KillProof::Empty);
-    assert!(start.elapsed() < Duration::from_millis(2_000 + 2_000 + 100 + 2_000 + 10 + 1500));
+    assert!(
+        start.elapsed() < Duration::from_millis(2_000 + 2_000 + 100 + 2_000 + 10) + SCHEDULER_SLACK
+    );
 }
 #[test]
 fn stdin_one_megabyte_delivered_then_eof() {

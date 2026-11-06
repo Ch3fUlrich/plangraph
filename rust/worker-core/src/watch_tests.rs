@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::process::ExitStatusExt;
 
 #[derive(Default)]
 struct Fake {
@@ -9,6 +10,8 @@ struct Fake {
     denied: bool,
     signals_fail: bool,
     deny_once: bool,
+    probes: u32,
+    exited: bool,
 }
 impl Child for Fake {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
@@ -29,6 +32,7 @@ impl Child for Fake {
         Ok(())
     }
     fn empty(&mut self) -> io::Result<bool> {
+        self.probes += 1;
         if std::mem::take(&mut self.deny_once) || self.denied {
             Err(io::Error::from_raw_os_error(libc::EPERM))
         } else {
@@ -37,8 +41,24 @@ impl Child for Fake {
     }
     fn reap(&mut self) -> io::Result<Option<ExitStatus>> {
         self.reaps += 1;
-        Ok(None)
+        Ok(self.exited.then(|| ExitStatus::from_raw(0)))
     }
+}
+
+#[test]
+fn exited_root_probes_only_on_edge_and_deadlines() {
+    let (mut stop, mut child) = (Stop::default(), Fake::default());
+    stop.tick(&mut child, 0, 1000, 2000);
+    child.exited = true;
+    for now in 1..3000 {
+        assert_eq!(stop.tick(&mut child, now, 1000, 2000), None);
+    }
+    assert_eq!(child.probes, 3); // initial, exit edge, grace
+    assert_eq!(
+        stop.tick(&mut child, 3000, 1000, 2000),
+        Some(KillProof::Survivors { cause: None })
+    );
+    assert_eq!(child.probes, 4);
 }
 
 #[test]
