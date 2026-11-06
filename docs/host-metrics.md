@@ -29,3 +29,18 @@ before C can be live. That adapter is an explicit missing integration dependency
 not completed here. C owns display only. This slice adds no service, polling,
 ingest route, migration, sampler or change to `host_probe::probe`; it does not
 claim neighbour done clauses or the keeper item's web view are complete.
+
+## Hosts page (C)
+
+The accessible Hosts tab supports `#pg=hosts` and reads only `snapshot.fleet`.
+It displays every supplied host sorted by `host_id`, including unsampled hosts;
+fleet and row running-agent counts are supplied values, never reconstructed.
+The wire shape is `{hosts: [{host_id, class, caps, sample, running_agents}],
+running_agents}`; sample fields follow `HostSample` above. Caps show max_runs,
+max_writers, max_seats, max_sessions and mem_floor_mb with their field labels.
+Missing metrics/counts display `unknown`, measured zero remains `0`, and missing
+fleet displays `unavailable` rather than a known empty fleet. Malformed rows
+remain visible as unknown data. All supplied strings use DOM text, not HTML.
+Hermetic Node/DOM tests use fake snapshots only. No fetch or sampler is added.
+Live rows still require the neighbour adapter; closure also requires A/B/C,
+green CI and outside-writer-family ACCEPT arranged by the merger.
