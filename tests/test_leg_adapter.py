@@ -117,7 +117,7 @@ def test_default_discovery_consumed(tmp_path, monkeypatch):
                         SimpleNamespace(stdout='opencode-go/sample\n'))
     reader, _ = adapter(tmp_path)
     reader = leg_state.LegAdapter(reader.store, reader.provider, enabled=True)
-    assert reader.models == ['opencode-go/sample']
+    assert reader.models() == ['opencode-go/sample']
     assert reader('opencode-go/sample')['state'] == 'ok'
 
 
