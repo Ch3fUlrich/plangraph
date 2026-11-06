@@ -1,0 +1,1 @@
+- **SPAWNER-FALSE-FAILED-EXIT:** Exclude OpenCode tool progress from failure evidence while preserving non-zero exits and real failure diagnostics.

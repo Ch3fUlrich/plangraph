@@ -20,11 +20,11 @@ import re
 import threading
 import time
 
-from .evidence_decisions import _decision_cell
+from .evidence_decisions import DecisionsAdapter, _decision_cell
 from .evidence_git import valid_ref
 from .evidence_types import valid_commit_ref
 
-__all__ = ["plan_item_commits", "open_lanes", "decision_ids", "decision_book",
+__all__ = ["plan_item_commits", "open_lanes", "decision_ids", "decision_book", "decision_texts",
            "decisions_naming", "superseded_map", "COMMIT_LIMIT"]
 
 COMMIT_LIMIT = 5
@@ -242,16 +242,27 @@ _BOOK_SLOTS = 3
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 
 
-def decision_book(decisions):
+class DecisionsUnreadable(Exception):
+    """The decisions authority could not be read for enforcement."""
+
+
+def decision_book(decisions, *, fresh=False):
     """``{"rows", "superseded", "index"}`` for a :class:`DecisionsAdapter`.
 
     ``rows`` = ``{"D-n": [row lines]}``, ``superseded`` = :func:`superseded_map`
     and ``index`` = ``{token: {D-ids}}`` over every key-like token, so naming
     lookups cost one dict probe.  Built once per file version (path, inode,
     mtime, size; up to three files kept); an unreadable source is an empty book.
+    ``fresh`` bypasses the cache for enforcement without replacing read books.
     """
     if decisions is None:
         return _build_book({})
+    if fresh:
+        try:
+            rows = getattr(decisions, "_rows_strict", getattr(decisions, "_rows", dict))()
+        except (OSError, UnicodeDecodeError):
+            raise DecisionsUnreadable from None
+        return _build_book({did: tuple(lines) for did, lines in rows.items()})
     path = getattr(decisions, "_path", None)
     try:
         stat = os.stat(path) if path is not None else None
@@ -272,6 +283,40 @@ def decision_book(decisions):
             del _BOOKS[next(iter(_BOOKS))]
         _BOOKS[stamp] = book
     return book
+
+
+def decision_texts(decisions, ids):
+    """Nonempty DECISION cells for cited ids; state lives only in decision_book.
+
+    Preserve reference spelling and the adapter's first nonempty, whitespace-
+    collapsed cell semantics, including retired decisions. Enforcement must
+    continue reading the adapter directly, never this best-effort read view.
+    Same-size, same-mtime rewrites may leave decision_book stale; enforcement stays fresh.
+    """
+    try:
+        rows = decision_book(decisions)["rows"]
+    except Exception:
+        rows = {}
+    texts = {}
+    for did in ids:
+        try:
+            if decisions is not None and not isinstance(decisions, DecisionsAdapter):
+                text = decisions.text(did)
+                if text:
+                    texts[did] = text
+                continue
+            canonical = DecisionsAdapter._canonical(did)
+        except Exception:
+            continue
+        for row in rows.get(canonical, ()):
+            try:
+                text = re.sub(r"\s+", " ", _decision_cell(row)).strip()
+            except Exception:
+                continue
+            if text:
+                texts[did] = text
+                break
+    return texts
 
 
 def _read_rows(decisions):

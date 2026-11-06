@@ -1,0 +1,1 @@
+- **FLEET-SEAT-SUPPLY (part 1):** Add inactive catalog-validated seat counting, policy-enforced restrictions and SHA-bound shortage/ruling records; sink/planner remain deferred, with no scheduling or activation.

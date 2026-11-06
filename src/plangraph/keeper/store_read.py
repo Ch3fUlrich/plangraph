@@ -10,7 +10,7 @@ import json
 
 from .. import views
 from ..views_progress import progress
-from . import auth, jev_report
+from . import auth, jev_report, timing
 from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
@@ -213,6 +213,7 @@ class ReadMixin:
             " ('commit+ci','commit') GROUP BY key")}
         return created, done, reviewed, merged
 
+    @timing.measured("snapshot_timing")
     def _snapshot(self, now):
         items = self._all_items()
         corrected, fixed = {}, {}
@@ -334,19 +335,9 @@ class ReadMixin:
                 adapter = self._ctx(items[0], now).decisions
             except Exception:  # noqa: BLE001 - snapshot never raises
                 return {}
-            text_fn = getattr(adapter, "text", None)
-            if not callable(text_fn):
-                return {}
-            result: dict[str, str] = {}
-            for did in wanted:
-                try:
-                    value = text_fn(did)
-                except Exception:  # noqa: BLE001 - one bad row skips
-                    continue
-                if not isinstance(value, str) or not value:
-                    continue
-                result[did] = value[:600]
-            return result
+            from . import context_sources
+            return {did: value[:600] for did, value in
+                    context_sources.decision_texts(adapter, wanted).items()}
         except Exception:  # noqa: BLE001 - snapshot never raises
             return {}
 

@@ -32,6 +32,7 @@ wholly past the end is not packed).
 """
 from __future__ import annotations
 
+import errno
 import fnmatch
 import os
 import re
@@ -40,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
+from .inline_diff import InlineDiffError
 
 BIG_FILE_LINES = 400
 DEFAULT_MAX_CHARS = 60_000
@@ -83,8 +85,18 @@ class Pack:
     warnings: tuple[str, ...] = ()
 
 
+def _check_loop(path: Path) -> None:
+    # Non-strict resolve() no longer raises on loops on Python 3.13+.
+    try:
+        os.stat(path)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise
+
+
 def _root(cwd) -> Path:
     try:
+        _check_loop(Path(cwd))
         return Path(cwd).resolve()
     except (RuntimeError, OSError):
         raise ContextError('the run cwd cannot be resolved (symlink loop or unreadable)') from None
@@ -97,7 +109,8 @@ def _locate(root: Path, raw: str) -> Path:
     if not path.is_relative_to(root):
         raise ContextError(f'context path {raw!r} is outside the run cwd')
     try:
-        resolved = path.resolve()   # RuntimeError on a symlink loop (Python < 3.13), OSError elsewhere
+        _check_loop(path)
+        resolved = path.resolve()
         inside, is_file = resolved.is_relative_to(root), resolved.is_file()
     except (RuntimeError, OSError):
         raise ContextError(f'context path {raw!r} cannot be resolved (symlink loop or unreadable)') from None
@@ -320,13 +333,33 @@ def build(prompt: str, card, cwd) -> Pack:
     cap = max_chars()
     kept, notes = _slices(root, ents, files, cap)
     text, unfit = _fit(kept, cap)
-    return Pack(text, tuple(notes + unfit + skipped + _big_files(root, names, files, {k[0] for k in kept})))
+    big = _big_files(root, names, files, {k[0] for k in kept})
+    # Opt-in runtime policy, never a caller-card override. Only counts/reason codes leave this refusal.
+    if big and os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
+        raise ContextError(f'big_file_unsliced: count {len(big)}')
+    return Pack(text, tuple(notes + unfit + skipped + big))
+
+
+class PromptBoundError(ContextError, InlineDiffError):
+    """A context bound refusal also handled by the launcher's inline-payload boundary."""
+
+
+def bound_prompt(prompt: str, max_request_tokens: int) -> str:
+    """Refuse the entire inline payload; conservative three characters per estimated token.
+
+    Requirements are never truncated. Diagnostics contain sizes and a reason code, not prompt content.
+    """
+    if len(prompt) > max_request_tokens * 3:
+        raise PromptBoundError(f'inline_prompt_oversized: chars {len(prompt)} '
+                           f'estimated_tokens {(len(prompt) + 2) // 3} max_request_tokens {max_request_tokens}')
+    return prompt
 
 
 def pack_prompt(prompt: str, card, cwd, pack: Pack | None = None) -> str:
     """The prompt plus a CONTEXT PACK section no longer than the cap (framing and ``omitted:`` included).  ``pack``
-    is the spawn's :func:`build` result; without one the pack is built here (no brief scan)."""
-    return prompt + (pack if pack is not None else build('', card, cwd)).text
+    is the spawn's :func:`build` result; strict admission also scans the brief when built here."""
+    brief = prompt if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1' else ''
+    return prompt + (pack if pack is not None else build(brief, card, cwd)).text
 
 
 def warnings(prompt: str, card, cwd) -> list[str]:

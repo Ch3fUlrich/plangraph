@@ -89,7 +89,7 @@ class FakeGit:
             return dict(self.trailers_by_sha[sha])
         return dict(self.message_trailers)
 
-    def writer_trailers(self, repo, sha):
+    def writer_trailers(self, repo, sha, ref=None):
         """One dict per commit whose trailers name the writers (ADDENDUM).
 
         A merge/phase evidence sha carries the branch commits' trailers; any
@@ -132,6 +132,9 @@ class FakeCI:
 
     def mode(self, project):
         return self._mode
+
+    def merged_pr_for(self, project, merge_sha, target_ref):
+        return {"merge_commit_sha": merge_sha, "merged_at": "mock-merged"}
 
     def check_runs(self, repo_slug_or_path, sha):
         self.calls.append((repo_slug_or_path, sha))

@@ -26,7 +26,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from plangraph.routing_support.leg_state import leg_status
+from plangraph.routing_support.leg_state import leg_status, model_admitted
 from plangraph.routing_support.catalog_seed import TIER_RUNG
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
 from plangraph.routing_support.clients import build_routing_envelope_headers
@@ -76,7 +76,7 @@ except ImportError:
 
 DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
     {
-        "id": "opencode-go/gemini-4-argon-contributor",
+        "id": "opencode-go/gemini-4-argon",
         "family": "gemini",
         "aa_intelligence": 53.0,
         "verified_tok_per_s": 115.0,
@@ -185,7 +185,7 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "combos": ["l2-worker"],
     },
     {
-        "id": "opencode-go/deepseek-v4-flash-max",
+        "id": "opencode-go/deepseek-v4.1-flash",
         "family": "deepseek",
         "aa_intelligence": 45.0,
         "verified_tok_per_s": 231.0,
@@ -458,7 +458,7 @@ def _probe_served_models(config, *, env=None):
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
         executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
-        result = subprocess.run([executable, 'models'], env=env, capture_output=True,
+        result = subprocess.run([executable, 'models', '--standalone'], env=env, capture_output=True,
                                 text=True, timeout=10)
         if result.returncode == 0:
             import re
@@ -576,18 +576,12 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     Enforces Codex ACP luna-only: cxa/gpt-6-luna-high is eligible,
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
-    if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
-        return False
-    # Ranking historical catalog seats is not a new-spawn admission decision.
-    if not catalog_row_admitted(model):
-        return False
-    status = str(model.get("status", "active")).lower()
-    if status not in ("active", ""):
-        return False
-    mid = str(model.get("id") or model.get("model_id") or "").lower()
-    if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
+    enabled = getattr(leg_state_reader, 'enabled', False)
+    if not model_admitted(model, enabled=enabled):
         return False
     reader = leg_state_reader or leg_status
+    if enabled:
+        return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] == "ok"
     return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
@@ -887,6 +881,8 @@ def resolve_review_plan(
     def annotate(m):
         d = dict(m)
         d["leg_state"] = reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)
+        if getattr(reader, 'enabled', False):
+            d['available'] = int(d['leg_state']['state'] == 'ok')
         return d
     all_models = [annotate(m) for m in get_catalog_models(db)]
 
@@ -1141,7 +1137,8 @@ def resolve_model_for_task(
     reader = leg_state_reader or leg_status
     all_models = get_catalog_models(db)
     all_models = [dict(m, leg_state=reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)) for m in all_models]
-
+    if getattr(reader, 'enabled', False):
+        all_models = [dict(m, available=int(m['leg_state']['state'] == 'ok')) for m in all_models]
     def _eligible(m: Mapping[str, Any], require_combo: bool) -> bool:
         if not is_model_available(m, reader, account=account, combo=combo_name):
             return False

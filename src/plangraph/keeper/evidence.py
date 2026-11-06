@@ -31,10 +31,12 @@ from typing import Any
 from .evidence_ci import CIAdapter
 from .evidence_decisions import DecisionsAdapter
 from .evidence_floor import check_floor
+from .evidence_pr import validate_merge
 from .evidence_forgejo import ForgejoStatusAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_repo import repo_key
 from .evidence_runs import RunRecordAdapter
+from .evidence_spawner import SpawnerRecordAdapter
 from .evidence_semaphore import SemaphoreAdapter, SemaphoreError, positive_int
 from .item_fixes import ErrorRecordVerifier
 from .evidence_types import (
@@ -335,8 +337,8 @@ class CommitCiVerifier:
 
         target_ref = "main"
         try:
-            if hasattr(ctx.git, "repo_ref"):
-                target_ref = ctx.git.repo_ref(project)
+            # ``repo_ref`` is required of every adapter (no invented "main").
+            target_ref = ctx.git.repo_ref(project)
             if hasattr(ctx.git, "is_ancestor"):
                 is_anc = ctx.git.is_ancestor(repo, commit, target_ref)
             else:
@@ -377,15 +379,9 @@ class CommitCiVerifier:
                 f"commit {commit} is not reachable from {target_ref} through a merged PR (direct push or unmerged)",
                 ref,
             )
-        _merge_sha, email = merge_info
-        principals = getattr(ctx, "merge_principals", ())
-        if principals:
-            allowed = {p.lower() for p in principals if isinstance(p, str)}
-            if email.lower() not in allowed:
-                return _fail(
-                    f"merge commit committer {email!r} is not an allowed merge principal",
-                    ref,
-                )
+        refusal = validate_merge(ctx, project, merge_info, target_ref, ref)
+        if refusal is not None:
+            return refusal
 
         # The ancestry floor for the repo the commit resolved to: bind_floor_sha
         # for the primary key, bases[track_key] for a track repo (D-3335).
@@ -429,6 +425,9 @@ class RunRecordVerifier:
     def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
         ref = _ref(ref)
         run_id = ref.get("run_id")
+        if "host" in ref:
+            adapter = getattr(ctx, "spawner_records", None) or SpawnerRecordAdapter(None)
+            return adapter.verify(item, ref)
         if not isinstance(run_id, str) or not run_id:
             return _fail("run-record requires a 'run_id'", ref)
         if ctx.runs is None or not ctx.runs.valid_run_id(run_id):
@@ -670,14 +669,16 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
     forgejo_token_file = _cfg(config, "forgejo_token_file")
     if forgejo_url and forgejo_token_file:
         forgejo = ForgejoStatusAdapter(str(forgejo_url), str(forgejo_token_file))
-    return Context(
+    context = Context(
         git=GitAdapter(_cfg(config, "repos", {}) or {}),
         ci=CIAdapter(_cfg(config, "ci", {}) or {}, forgejo=forgejo),
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file")),
+        spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
         merge_principals=_principals(_cfg(config, "merge_principals")),
         skew=float(_cfg(config, "skew", DEFAULT_SKEW_S)),
     )
+    return context

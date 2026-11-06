@@ -1,0 +1,32 @@
+[package]
+name = "pg-spawnd"
+version = "0.1.0"
+edition = "2021"
+description = "Host capacity probe CLI"
+
+[dependencies]
+pg-worker-core = { path = "../worker-core" }
+rmcp = { version = "2.2", default-features = false, features = ["server", "transport-async-rw"] }
+serde_json = "1"
+serde = "1"
+sha2 = "0.10"
+tokio = { version = "1.53", features = ["rt", "net", "io-util", "macros", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_SystemServices",
+] }

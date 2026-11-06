@@ -33,8 +33,7 @@ def test_missing_ranked_last_in_tier(as_list):
                        "reason": "no benchmark row"},)
     assert any(WRITERS[0].id in r and "no benchmark row" in r for r in p.reasons)
     assert [l.id for l in p.legs if l.tier == "subscription"] == [
-        "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash",
-        "opencode-console-sonnet-5.5"]
+        "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]
     assert p.to_dict()["gaps"] == p.gaps
     assert not plan(benchmark=rows(WRITERS)).gaps
 
@@ -49,7 +48,7 @@ def test_absent_explicit_operator_order():
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*opencode-deepseek-v4.1-flash-free"):
+    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*cx-gpt-6.1-sol"):  # D-3745
         plan(benchmark=data, strict=True)
 
 
@@ -115,14 +114,14 @@ def test_gate_import_guard():
 
 def test_review_gaps_include_filtered_policy_legs():
     reviewers = tuple(l for l in POLICY if "review" in l.roles)
-    missing = reviewers[0]
+    missing = next(leg for leg in reviewers if leg.disabled is None)
     p = routing.plan_spawn({"estimate_tokens": 1000}, role="review",
-                           writer_families=(missing.family,), benchmark=rows(reviewers[1:]),
+                           writer_families=(missing.family,), benchmark=rows(tuple(l for l in reviewers if l != missing)),
                            leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
     assert p.gaps == ({"leg": missing.id, "model": missing.model, "reason": "no benchmark row"},)
     with pytest.raises(routing.SpawnRefused, match=missing.id):
         routing.plan_spawn({"estimate_tokens": 1000}, role="review", strict=True,
-                           writer_families=(missing.family,), benchmark=rows(reviewers[1:]))
+                           writer_families=(missing.family,), benchmark=rows(tuple(l for l in reviewers if l != missing)))
 
 
 def test_duplicate_rows_counted(tmp_path):

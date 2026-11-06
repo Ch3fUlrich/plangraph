@@ -1,0 +1,157 @@
+//! Read shared records without rewriting them. Python's watchdog/bad-records.json
+//! diagnostic output is intentionally not ported; malformed rows are skipped.
+use crate::errors::ToolError;
+use pg_worker_core::run::record::{run_dir, valid_run_id};
+use serde_json::Value;
+use std::io::Read;
+use std::path::Path;
+
+const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
+
+pub(crate) fn valid_item(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 200
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guarded_open_rejects_fifo_without_blocking() {
+        let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("record.json");
+        let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(open_record(&path).is_err());
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(2));
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn guarded_open_rejects_symlink_and_accepts_regular() {
+        let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("record.json");
+        std::fs::write(&path, b"{}").unwrap();
+        assert!(open_record(&path).is_ok());
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(path, &link).unwrap();
+        let rejected = open_record(&link).is_err();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(rejected);
+    }
+}
+
+fn open_record(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(std::io::Error::other("invalid run record"));
+        }
+    }
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("invalid run record"));
+    }
+    Ok(file)
+}
+
+fn read_record_file(path: &Path) -> Result<Value, ToolError> {
+    let invalid = || ToolError::Value("invalid run record".into());
+    let read = || -> std::io::Result<Vec<u8>> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
+            return Err(std::io::Error::other("invalid run record"));
+        }
+        let file = open_record(path)?;
+        let mut bytes = Vec::new();
+        file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    };
+    let bytes = read().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ToolError::Value("unknown run id".into())
+        } else {
+            invalid()
+        }
+    })?;
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err(invalid());
+    }
+    serde_json::from_slice(&bytes).map_err(|_| invalid())
+}
+
+pub(crate) fn read_record(state: &Path, run_id: &Value) -> Result<Value, ToolError> {
+    let id = run_id
+        .as_str()
+        .filter(|id| valid_run_id(id))
+        .ok_or_else(|| ToolError::Value("unknown run id".into()))?;
+    let path = run_dir(state, id).map_err(|_| ToolError::Value("unknown run id".into()))?;
+    read_record_file(&path.join("record.json"))
+}
+
+pub(crate) fn list_runs(state: &Path) -> Vec<Value> {
+    let mut paths: Vec<_> = std::fs::read_dir(state.join("runs"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("run-"))
+        .map(|e| e.path().join("record.json"))
+        .collect();
+    paths.sort();
+    let mut runs = Vec::new();
+    for path in paths {
+        let Ok(mut record) = read_record_file(&path) else {
+            continue;
+        };
+        if !record.is_object() || !record["run_id"].is_string() {
+            continue;
+        }
+        for (source, dest) in [("parent_session", "parent_session"), ("item", "item_key")] {
+            if (dest == "item_key" && record[dest].is_null())
+                || (dest != "item_key" && record.get(dest).is_none())
+            {
+                if let Some(value) = record["completion"].get(source).cloned() {
+                    if dest != "item_key" || value.as_str().is_some_and(valid_item) {
+                        record[dest] = value;
+                    }
+                }
+            }
+        }
+        if path.parent().unwrap().join("parent.delivered").exists() {
+            record["_completion_acknowledged"] = true.into();
+        }
+        runs.push(record);
+    }
+    runs.sort_by(|a, b| {
+        b["started"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&a["started"].as_f64().unwrap_or(0.0))
+    });
+    runs
+}

@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from plangraph.keeper import config as config_mod, db as kdb, db_pg, schema, schema_pg
+from plangraph.keeper import schema_pg_spawner
+from plangraph.keeper.placement_rules_schema import SQLITE_ONLY_TABLES
 from plangraph.projector import ddl as projector_ddl
 
 
@@ -148,10 +150,14 @@ def _sqlite_tables():
     out = {}
     for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"
                                 " AND name NOT LIKE 'sqlite_%'"):
+        if name in SQLITE_ONLY_TABLES:
+            continue
         out[name] = [(r[1], r[3]) for r in conn.execute(f"PRAGMA table_info({name})")]
-    idx = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'"
-                                      " AND name NOT LIKE 'sqlite_%'")}
-    trg = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    idx = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='index'"
+                                      " AND name NOT LIKE 'sqlite_%'")
+           if r[1] not in SQLITE_ONLY_TABLES}
+    trg = {r[0] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='trigger'")
+           if r[1] not in SQLITE_ONLY_TABLES}
     return out, idx, trg
 
 
@@ -172,7 +178,7 @@ def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
         else:
             assert [c for c, _ in cols] == [c for c, _ in pg_tables[name]], name
             assert [bool(nn) for _, nn in cols] == [bool(nn) for _, nn in pg_tables[name]], name
-    assert set(pg_tables) == set(tables)
+    assert set(pg_tables) == set(tables) | set(schema_pg_spawner.TABLES)
     for name in indexes:
         assert re.search(rf"\b{name}\b", ddl), f"missing index {name}"
     for name in triggers:
@@ -268,7 +274,7 @@ def _store_sources():
     root = Path(config_mod.__file__).parent
     names = [p for p in root.glob("*.py")
              if p.name not in ("db.py", "db_pg.py", "db_errors.py", "schema.py", "schema_pg.py",
-                               "importer.py", "copy_to_pg.py")]   # copy_to_pg reads a SQLite file
+                               "schema_guards.py", "importer.py", "copy_to_pg.py")]   # SQLite DDL / reader
     return {p.name: p.read_text() for p in names}
 
 

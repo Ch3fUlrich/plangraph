@@ -19,10 +19,20 @@ FOOTER = "\n=== END INLINE DIFF ===\n"
 class InlineDiffError(Exception):
     """The diff could not be produced or does not fit the leg."""
 
+    def __init__(self, message, *, chars=None, max_chars=None):
+        super().__init__(message)
+        self.chars, self.max_chars = chars, max_chars
 
-def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60) -> str:
+
+def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
+                       allow_document: bool = False) -> str:
+    """The prompt with the diff inlined. ``diff_ref is None`` returns the prompt
+    unchanged only when ``allow_document`` says the caller already decided a
+    document review (no diff) is allowed; otherwise the leg must not proceed."""
     if diff_ref is None:
-        raise InlineDiffError("card has no diff_ref")
+        if allow_document:
+            return prompt
+        raise InlineDiffError("no diff_ref for inline-only leg")
     try:
         _check_diff_ref(diff_ref)
     except SpawnRefused as exc:
@@ -32,13 +42,16 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         proc = subprocess.run(
             ["git", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
              "--no-textconv", f"{base}...{head}", "--"],
-            capture_output=True, text=True, timeout=timeout, check=False)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InlineDiffError(f"git diff failed: {type(exc).__name__}") from None
+    if proc.stdout is None or proc.stderr is None:
+        raise InlineDiffError("git diff reader failure: stdout or stderr is None")
     if proc.returncode != 0:
         raise InlineDiffError("git diff failed: " + (proc.stderr.strip().splitlines() or ["exit %d" % proc.returncode])[0][:200])
     if not proc.stdout.strip():
         raise InlineDiffError("empty diff")
     if len(proc.stdout) > max_chars:
-        raise InlineDiffError(f"diff too large for leg: {len(proc.stdout)} > {max_chars} chars")
+        raise InlineDiffError(f"diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
+                              chars=len(proc.stdout), max_chars=max_chars)
     return prompt + HEADER.format(base=base, head=head) + proc.stdout + FOOTER

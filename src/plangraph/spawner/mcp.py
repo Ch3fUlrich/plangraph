@@ -12,13 +12,16 @@ from __future__ import annotations
 from plangraph.routing_errors import ParameterRefused
 
 import asyncio
+import concurrent.futures
 import copy
 import json
 import sys
+import threading
 from typing import Any, Mapping
 
 from plangraph.spawner.clients import effective_child_base_url
 from plangraph.spawner.leg_state import leg_status
+from plangraph.spawner.mcp_limits import encode_reply, ps_reply
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -191,7 +194,7 @@ class MCPSpawnerServer:
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
                 arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
         if name == 'plangraph_agent_ps':
-            return self.service.ps()
+            return ps_reply(self.service.ps()['runs'])
         if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
             return self.service.result(arguments['run_id'])
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
@@ -333,33 +336,56 @@ class MCPSpawnerServer:
         }
 
 
+async def stdio_reply(server, line: bytes) -> str | None:
+    """Handle one input line; notifications never dispatch or receive replies."""
+    req = {}
+    try:
+        req = json.loads(line.decode('utf-8').strip())
+        if isinstance(req, dict) and isinstance(req.get('method'), str) and 'id' not in req:
+            return None
+        resp = await server.handle_rpc_request(req)
+        return encode_reply(resp)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        resp = {'jsonrpc': '2.0', 'id': None,
+                'error': {'code': -32700, 'message': 'Parse error'}}
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning('stdio_failed: %s', type(exc).__name__)
+        resp = {'jsonrpc': '2.0', 'id': req.get('id') if isinstance(req, dict) else None,
+                'error': {'code': -32603, 'message': 'Internal error'}}
+    return encode_reply(resp)
+
+
+def _read_line(stdin) -> asyncio.Future:
+    """Read one line on a daemon thread, so a blocked read never delays process exit.
+
+    An executor thread would: asyncio.run and interpreter exit both join those.
+    """
+    done = concurrent.futures.Future()
+    done.set_running_or_notify_cancel()
+
+    def read() -> None:
+        try:
+            done.set_result(stdin.readline())
+        except Exception as exc:
+            done.set_exception(exc)
+
+    threading.Thread(target=read, daemon=True, name='mcp-stdin').start()
+    return asyncio.wrap_future(done)
+
+
 async def run_stdio_server() -> None:
     """Run MCP server over standard input and output."""
     server = MCPSpawnerServer()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    loop = asyncio.get_running_loop()
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    # connect_read_pipe cannot serve an inherited stdin on Windows: the Proactor loop fails inside
+    # a transport callback and the awaiting reader hangs forever. A private reader, not
+    # sys.stdin.buffer, because a daemon thread holding that lock can abort interpreter shutdown.
+    stdin = open(sys.stdin.fileno(), 'rb', closefd=False)
 
-    while not reader.at_eof():
-        line = await reader.readline()
-        if not line:
-            break
-        req = {}
-        try:
-            req = json.loads(line.decode("utf-8").strip())
-            resp = await server.handle_rpc_request(req)
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': None,
-                'error': {'code': -32700, 'message': 'Parse error'}}) + '\n')
-            sys.stdout.flush()
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning('stdio_failed: %s', type(exc).__name__)
-            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': req.get('id') if isinstance(req, dict) else None,
-                'error': {'code': -32603, 'message': 'Internal error'}}) + '\n')
+    while line := await _read_line(stdin):
+        reply = await stdio_reply(server, line)
+        if reply is not None:
+            sys.stdout.write(reply + '\n')
             sys.stdout.flush()
 
 

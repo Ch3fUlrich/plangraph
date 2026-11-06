@@ -2,6 +2,7 @@
 import asyncio
 import math
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import subprocess
@@ -54,7 +55,7 @@ def caller_heads():
         try:
             heads[label] = subprocess.check_output(
                 ['git', 'rev-parse', 'HEAD'], cwd=os.getcwd(), env=env,
-                stderr=subprocess.DEVNULL).decode().strip()
+                stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
         except (OSError, subprocess.CalledProcessError):
             pass
     return heads
@@ -76,6 +77,20 @@ def key(leg):
     """
     return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
             else leg.model)
+
+
+def reset_iso(reset):
+    """UTC ISO-8601 for a booked reset; 'unknown' when absent or unformattable.
+
+    The 24 h reset cap is write-time only, so a legacy out-of-range reset_at
+    must never raise from display or skip-reason code (D-3685).
+    """
+    if reset is None:
+        return 'unknown'
+    try:
+        return datetime.fromtimestamp(reset, timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return 'unknown'
 
 
 def read_status(reader, model, **kw):
@@ -126,7 +141,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
 
     def git(*args):
         return subprocess.check_output(['git', '-C', root, *args], env=probe_env(),
-                                       stderr=subprocess.DEVNULL).decode().strip()
+                                       stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
 
     try:
         ok = reason = None
@@ -206,13 +221,32 @@ _INFLIGHT = {}
 
 
 async def before_launch(runner, leg, role, dry_run):
-    ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
-    if not ttl or dry_run or role not in ('implement', 'fix'):
+    if dry_run:
         return None
     state = _store_for(runner)
+    adapter = state if getattr(state, 'enabled', False) else None
+    state = adapter.store if adapter else state
+
+    def admission():
+        if adapter:
+            status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None),
+                                        combo=getattr(leg, 'combo', None))
+            if status['state'] != 'ok':
+                return status.get('reason', status['state'])
+        return None
+    # D-3685: a leg booked limited is known-unusable until its reset. Skip it
+    # before any freshness or probe logic -- every role, TTL 0 included --
+    # without a probe run or a probe row; a newer success lifts the booking
+    # and leg_status then says ok again.
+    status = state.leg_status(key(leg))
+    if status.get('state') == 'limited':
+        return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
+    ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
+    if not ttl or role not in ('implement', 'fix'):
+        return admission()
     ts = state.last_probe_ts(key(leg))  # successes only: a failed probe is not fresh evidence
     if ts is not None and time.time() - ts < ttl:
-        return None
+        return admission()
     # Single flight per leg: concurrent launches share one in-flight probe and
     # its verdict, fresh failure included, instead of each paying a model run.
     pending = _INFLIGHT.get(key(leg))
@@ -220,7 +254,7 @@ async def before_launch(runner, leg, role, dry_run):
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
     result = await asyncio.shield(pending)
-    return None if result['ok'] or result.get('infra') else 'down: ' + result['reason']
+    return admission() if result['ok'] or result.get('infra') else 'down: ' + result['reason']
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None):
@@ -235,6 +269,18 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
                 (leg.id in ids or
                  (all_writers and any(role in leg.roles for role in ('implement', 'fix'))))]
     results = []
+    state = _store_for(runner)
+    state = state.store if getattr(state, 'enabled', False) else state
     for leg in selected:
-        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout)))
+        # D-3685: a leg booked limited is known-unusable; probing it would only
+        # spend a model run and let the probe failure mask the booked reset.
+        status = state.leg_status(key(leg))
+        if status.get('state') == 'limited':
+            # Same row shape as a probed result (reason/seconds/infra included):
+            # every probe-row reader keeps working on skipped rows.
+            results.append(dict(id=leg.id, ok=False, reason='limited', infra=False, seconds=0.0,
+                                skipped='limited',
+                                reset_at=(status.get('evidence') or {}).get('reset_at')))
+            continue
+        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state)))
     return dict(ok=all(row['ok'] for row in results), probes=results)

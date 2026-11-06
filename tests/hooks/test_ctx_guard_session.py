@@ -12,6 +12,7 @@ thresholds in Claude Code's settings files are layered underneath. The AUTOOS_CT
 import json
 import shutil
 import sys
+from unittest import mock
 import unittest
 from pathlib import Path
 
@@ -174,13 +175,96 @@ class SettingsLayers(WrapperCase):
 
 
 class Plumbing(WrapperCase):
+    def test_surrogate_destination_uses_default_guidance(self):
+        self.write(usage_line(read=275000))
+        self.set_override({"handoff_path": "\ud800"})
+        text = self.line(self.guard())
+        self.assertIn("HANDOFF-NOW ctx=275k >= 270k", text)
+        self.assertIn("your private handoff path", text)
+
+    def test_invalid_file_thresholds_use_defaults(self):
+        for n, doc in enumerate(({"handoff": 0, "hard": 5}, {"handoff": -1, "hard": 5},
+                                 {"handoff": 5, "hard": 5}, {"handoff": 6, "hard": 5},
+                                 {"handoff": 0}, {"hard": -1})):
+            sid = "invalid%d" % n
+            self.set_override(doc, sid=sid)
+            self.write(usage_line(read=60000))
+            self.assert_silent(self.guard(self.payload(sid=sid)))
+            self.write(usage_line(read=301000))
+            self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid=sid))))
+
+    def test_nul_destination_uses_default_guidance(self):
+        self.write(usage_line(read=301000))
+        self.set_override({"handoff_path": "/a\x00b"})
+        text = self.line(self.guard())
+        self.assertIn("HARD-CAP ctx=301k >= 300k", text)
+        self.assertIn("your private handoff path", text)
+
+    def test_set_command_writes_atomically_and_isolates(self):
+        wrapper = load_module("ctx_guard_session")
+        with mock.patch.object(wrapper, "overrides_dir", return_value=self.override_file().parent), \
+                mock.patch.object(sys, "argv", [str(SCRIPT), "--set", SID, "320000", "330000"]), \
+                mock.patch("hook_common.os.replace", wraps=__import__("os").replace) as replace:
+            self.assertEqual(wrapper.main(), 0)
+            replace.assert_called_once()
+        self.assertEqual(json.loads(self.override_file().read_text()), {"handoff": 320000, "hard": 330000})
+        self.write(usage_line(read=301000))
+        self.assert_silent(self.guard())
+        self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid="other"))))
+        before = self.override_file().read_bytes()
+        for sid, handoff, hard in (("../bad", "1", "2"), (SID, "0", "2"), (SID, "2", "2"),
+                                   (SID, "3", "2"), (SID, "bad", "4"), (SID, "-1", "2")):
+            with mock.patch.object(sys, "argv", [str(SCRIPT), "--set", sid, handoff, hard]):
+                self.assertEqual(wrapper.main(), 2)
+        self.assertEqual(self.override_file().read_bytes(), before)
+
+    def test_calm_text_at_both_levels_and_private_destination(self):
+        for n, read in enumerate((275000, 301000)):
+            self.write(usage_line(read=read))
+            for configured in (False, True):
+                sid = "calm%d%s" % (n, configured)
+                path = str(self.tmp / "private" / "handoff.md")
+                if configured:
+                    self.set_override({"handoff_path": path}, sid=sid)
+                text = self.line(self.guard(self.payload(sid=sid)))
+                self.assertIn("HARD-CAP" if n else "HANDOFF-NOW", text)
+                self.assertIn("ctx=%dk" % (read // 1000), text)
+                self.assertIn("at the next natural stop, write your handoff to %s, then run" %
+                              (path if configured else "your private handoff path"), text)
+                for forbidden in ("commit+push", "no new work", "plangraph"):
+                    self.assertNotIn(forbidden, text)
+                self.assertTrue(text.endswith("If you are a subagent, finish your task and report; "
+                                              "this does not apply to you."))
+
+    def test_subagents_neither_emit_nor_touch_state(self):
+        for script in (SCRIPT, HOOKS / "context_guard.py"):
+            for read in (1000, 275000, 301000):
+                self.write(usage_line(read=read))
+                self.assert_silent(self.run_hook(script, self.payload(agent_id="worker")))
+                self.assertFalse(self.state_file().exists())
+                self.state_file().parent.mkdir(parents=True, exist_ok=True)
+                self.state_file().write_text('{"ctx": 290000}', encoding="utf-8")
+                self.assert_silent(self.run_hook(script, self.payload(agent_id="worker")))
+                self.assertEqual(self.state_file().read_text(), '{"ctx": 290000}')
+                self.state_file().unlink()
+
+    def test_launch_override_raises_lowers_isolates_and_clamps(self):
+        self.write(usage_line(read=301000))
+        self.set_override({"handoff": 320000, "hard": 330000})
+        self.assert_silent(self.guard())
+        self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid="other"))))
+        self.set_override({"handoff": 290000, "hard": 1})
+        self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard()))
+        self.set_override("{broken", sid="garbled")
+        self.assertIn("HARD-CAP ctx=301k >= 300k", self.line(self.guard(self.payload(sid="garbled"))))
+
     def test_card_rule_is_appended_to_both_levels(self):
         card = load_module("ctx_guard_session").CARD_RULE
         for sid, read, head in (("s1", 275000, "HANDOFF-NOW"), ("s2", 301000, "HARD-CAP")):
             self.write(usage_line(read=read))
             proc = self.guard(self.payload(sid=sid))
             text = self.line(proc)
-            self.assertTrue(text.startswith(head) and text.endswith(card), text)
+            self.assertTrue(text.startswith(head) and card in text, text)
             self.assertEqual(len(proc.stdout.splitlines()), 1, "still one JSON line")
             self.assertTrue(proc.stdout.endswith("\n"))
 

@@ -6,7 +6,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pid 123 is never a live host pid
+from fake_pid import FAKE_PID
+pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID exceeds the host PID range; no live process can match
 
 from plangraph.spawner import gateway_witness as gw
 
@@ -36,12 +37,14 @@ def _env(job_id):
 
 
 def test_tag_session_sets_header_on_omniroute_provider_only():
-    cfg = {'provider': {'omniroute': {}, 'mimo': {}}}
+    cfg = {'provider': {'omniroute': {}, 'mimo': {}, 'other': {}}}
     gw.tag_session(cfg, 'job-1')
     # Provider-level headers carry the envelope headers to the gateway (build_child_env).
     assert cfg['provider']['omniroute']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
     assert cfg['provider']['omniroute']['options']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
-    assert 'options' not in cfg['provider']['mimo'] and 'headers' not in cfg['provider']['mimo']
+    assert cfg['provider']['mimo']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
+    assert cfg['provider']['mimo']['options']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
+    assert cfg['provider']['other'] == {}
 
 
 def test_witness_skips_a_leg_not_served_by_the_gateway():
@@ -131,7 +134,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
         async def communicate():
             return b'VERDICT: ACCEPT', b''
-        return SimpleNamespace(pid=123, returncode=returncode, communicate=communicate)
+        return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():
         job = await runner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6-luna', role='review',

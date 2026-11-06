@@ -5,7 +5,7 @@ set -euo pipefail
 
 DRY_RUN=0
 SKIP_AUTOOS=0
-AUTOOS_ROOT="${AUTOOS_ROOT:-}"
+AUTOOS_ROOT=""
 CATALOG_DB_PATH=""
 
 while [[ $# -gt 0 ]]; do
@@ -57,16 +57,9 @@ print(",".join(items))
 
 echo "Resolved host components: $COMPONENTS"
 
-if [[ "$SKIP_AUTOOS" -eq 0 ]]; then
-  if [[ -z "$AUTOOS_ROOT" ]]; then
-    for cand in "$SCRIPT_DIR/../../AutoOS" "$SCRIPT_DIR/../../../AutoOS" "$HOME/Documents/Code/AutoOS" "$HOME/.cache/plangraph/AutoOS"; do
-      if [[ -f "$cand/setup.sh" ]]; then
-        AUTOOS_ROOT="$(cd "$cand" && pwd)"
-        break
-      fi
-    done
-  fi
+"$PYTHON_CMD" -m plangraph.spawner.stall_watchdog tick --dry-run
 
+if [[ "$SKIP_AUTOOS" -eq 0 && -n "$AUTOOS_ROOT" ]]; then
   if [[ -n "$AUTOOS_ROOT" && -f "$AUTOOS_ROOT/setup.sh" ]]; then
     SETUP_ARGS=("--only" "$COMPONENTS" "--yes")
     if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -76,7 +69,8 @@ if [[ "$SKIP_AUTOOS" -eq 0 ]]; then
       bash "$AUTOOS_ROOT/setup.sh" "${SETUP_ARGS[@]}"
     fi
   else
-    echo "Warning: AutoOS setup.sh not found (AUTOOS_ROOT='$AUTOOS_ROOT'). Skipping AutoOS invocation." >&2
+    echo "AutoOS setup.sh not found (AUTOOS_ROOT='$AUTOOS_ROOT')." >&2
+    exit 1
   fi
 fi
 
@@ -94,8 +88,9 @@ fi
 
 WATCHDOG_ARGS=("-m" "plangraph.spawner.stall_watchdog" "install" "--host" "linux")
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  WATCHDOG_ARGS+=("--dry-run")
+  echo "[DRY-RUN] Would execute: $PYTHON_CMD ${WATCHDOG_ARGS[*]}"
+else
+  "$PYTHON_CMD" "${WATCHDOG_ARGS[@]}"
 fi
-"$PYTHON_CMD" "${WATCHDOG_ARGS[@]}"
 
 echo "Plangraph bootstrap completed successfully."

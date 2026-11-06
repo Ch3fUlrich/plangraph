@@ -63,7 +63,7 @@ def test_all_legs_removed_classification(tmp_path, monkeypatch, host):
     (1, '', 'failed'),
 ])
 def test_attempt_outcome(tmp_path, monkeypatch, rc, text, expected):
-    leg = DEFAULT_LEGS[0]
+    leg = next(l for l in DEFAULT_LEGS if l.disabled is None)
     job = JobInfo('j', 'completed' if rc == 0 else 'failed', 'x', leg.model,
                   exit_code=rc, stdout=text)
     async def spawn(**kw):
@@ -119,7 +119,7 @@ def test_supervisor_secret_straddles_old_boundary(tmp_path, monkeypatch, capsys)
 ])
 def test_explicit_leg_error_rule(tmp_path, monkeypatch, rc, stderr, expected):
     from plangraph.spawner.service import SpawnService
-    leg = DEFAULT_LEGS[0]
+    leg = next(l for l in DEFAULT_LEGS if l.disabled is None)
     job = JobInfo('j', expected, 'x', leg.model, exit_code=rc, stderr=stderr)
     async def spawn(**kw):
         return job

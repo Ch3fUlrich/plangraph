@@ -575,11 +575,9 @@ def test_production_e2e_vendor_guardrails(live_gateway: GatewayServerInfo):
 
 class ProductionGatewayChildRunner(SpawnerRunner):
     """SpawnerRunner that spawns a real Python child process querying the live HTTP gateway."""
-
     def __init__(self, gateway_url: str):
         super().__init__()
         self.gateway_url = gateway_url
-
     async def spawn(
         self,
         prompt: str,
@@ -593,7 +591,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None, watchdog=None, live_log=None,
+        client: str | None = None, watchdog=None, live_log=None, prompt_record=None,
     ) -> JobInfo:
         if dry_run:
             return await super().spawn(
@@ -608,11 +606,20 @@ class ProductionGatewayChildRunner(SpawnerRunner):
                 gateway=gateway,
                 gateway_online=gateway_online,
                 wait_seconds=wait_seconds,
+                prompt_record=prompt_record,
             )
 
+        from plangraph.spawner.runner import redact
+        from plangraph.spawner.private_io import atomic_write_private
+        import hashlib
+        prompt = redact(prompt)
+        if prompt_record is not None:
+            path, record, save = prompt_record
+            atomic_write_private(path, prompt)
+            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant='initial')
+            save(record)
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         work_dir = cwd or self.default_cwd
-
         envelope_headers = dict(headers or {})
         if not envelope_headers:
             envelope_headers = build_routing_envelope_headers(
@@ -621,7 +628,6 @@ class ProductionGatewayChildRunner(SpawnerRunner):
                 min_intelligence=44.0,
                 required_context=32000,
             )
-
         # Real Python script executed as child process, connecting to the live gateway
         child_script = (
             "import urllib.request, json, os, sys\n"
@@ -640,14 +646,11 @@ class ProductionGatewayChildRunner(SpawnerRunner):
             "    sys.stderr.write(str(e))\n"
             "    sys.exit(1)\n"
         )
-
         child_env = build_child_env(
             {"OMNIROUTE_BASE_URL": f"{self.gateway_url}/v1", **(extra_env or {})},
             headers=envelope_headers,
         )
-
         cmd = [sys.executable, "-c", child_script]
-
         job = JobInfo(
             job_id=job_id,
             status="running",
@@ -670,7 +673,6 @@ class ProductionGatewayChildRunner(SpawnerRunner):
         with urllib.request.urlopen(request, timeout=10) as response:
             self.served_witness(job_id, response.headers['X-OmniRoute-Selected-Model'],
                                 adapter_token=self._adapter_tokens[job_id])
-
         proc = await asyncio.create_subprocess_exec(
             cmd[0],
             *cmd[1:],
@@ -681,10 +683,8 @@ class ProductionGatewayChildRunner(SpawnerRunner):
             stdin=asyncio.subprocess.DEVNULL,
         )
         self._processes[job_id] = proc
-
         task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
         self._tasks[job_id] = task
-
         if wait_seconds > 0:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=wait_seconds)

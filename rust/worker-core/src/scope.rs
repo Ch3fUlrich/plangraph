@@ -260,6 +260,8 @@ mod tests {
         assert!(a.iter().any(|x| x.starts_with("MemoryMax=")));
     }
 
+    // The listed system paths are Linux paths: none exist on Windows.
+    #[cfg(unix)]
     #[test]
     fn system_ro_only_returns_existing_paths() {
         let ro = system_ro();

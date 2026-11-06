@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import time
+from fake_pid import FAKE_PID
 
 import pytest
 
@@ -275,7 +276,7 @@ def test_tree_killer_invoked_on_exit(exit_code):
     killed_pids = []
 
     class FakeProcess:
-        pid = 9876
+        pid = FAKE_PID
         returncode = exit_code
 
         async def communicate(self):
@@ -292,7 +293,7 @@ def test_tree_killer_invoked_on_exit(exit_code):
         job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
         await runner._tasks[job.job_id]
         assert job.exit_code == exit_code
-        assert killed_pids == [9876]
+        assert killed_pids == [FAKE_PID]
 
     asyncio.run(run())
 
@@ -305,7 +306,7 @@ def test_tree_killer_invoked_once_on_timeout_no_double_kill(monkeypatch):
     killed_pids = []
 
     class HangingProcess:
-        pid = 9876
+        pid = FAKE_PID
         returncode = 124
 
         def __init__(self):
@@ -329,7 +330,7 @@ def test_tree_killer_invoked_once_on_timeout_no_double_kill(monkeypatch):
         job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash')
         await runner._tasks[job.job_id]
         assert job.exit_code == 124
-        assert killed_pids == [9876]
+        assert killed_pids == [FAKE_PID]
 
     asyncio.run(run())
 
@@ -341,7 +342,7 @@ def test_tree_killer_process_lookup_error_tolerated():
     killed_pids = []
 
     class FakeProcess:
-        pid = 9876
+        pid = FAKE_PID
         returncode = 0
 
         async def communicate(self):
@@ -360,7 +361,7 @@ def test_tree_killer_process_lookup_error_tolerated():
         await runner._tasks[job.job_id]
         assert job.status == 'completed'
         assert job.exit_code == 0
-        assert killed_pids == [9876]
+        assert killed_pids == [FAKE_PID]
 
     asyncio.run(run())
 
@@ -372,7 +373,7 @@ def test_tree_killer_permission_error_tolerated():
     killed_pids = []
 
     class FakeProcess:
-        pid = 9876
+        pid = FAKE_PID
         returncode = 0
 
         async def communicate(self):
@@ -391,7 +392,7 @@ def test_tree_killer_permission_error_tolerated():
         await runner._tasks[job.job_id]
         assert job.status == 'completed'
         assert job.exit_code == 0
-        assert killed_pids == [9876]
+        assert killed_pids == [FAKE_PID]
 
     asyncio.run(run())
 
@@ -406,7 +407,7 @@ def test_reap_failure_recorded_not_swallowed():
     from plangraph.spawner.runner import SpawnerRunner
 
     class FakeProcess:
-        pid = 9876
+        pid = FAKE_PID
         returncode = 0
 
         async def communicate(self):

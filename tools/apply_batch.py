@@ -13,9 +13,11 @@ from collections import Counter
 import yaml
 
 import apply_batch_atomic as atomic
+import apply_batch_transport as transport
 
 # No built-in keeper URL (D-A): --url or PG_URL required; main() reads the env at call time.
-TIMEOUT = 15
+TIMEOUT = transport.TIMEOUT
+SNAPSHOT_TIMEOUT = 60  # MD-SYNC-SNAPSHOT-TIMEOUT: the keeper "snapshot" GET is large; its own budget.
 OP_SPECS = {
     "create": (["item"], {}),
     "edit": (["key", "fields"], {"fields": dict}),
@@ -58,8 +60,7 @@ class ApiError(Exception):
 def sha256_of(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
+        for chunk in iter(lambda: handle.read(65536), b""): digest.update(chunk)
     return digest.hexdigest()
 class _DupLoader(yaml.SafeLoader):
     """Safe loader that refuses duplicate mapping keys (nested too)."""
@@ -75,8 +76,7 @@ def _dup_mapping(loader, node, deep=False):
             raise BatchError(f"duplicate key {key!r}")
         mapping[key] = loader.construct_object(value_node, deep=True)
     return mapping
-_DupLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _dup_mapping)
+_DupLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _dup_mapping)
 def resolve_source(batch_file, source):
     base = os.path.dirname(os.path.realpath(batch_file))
     if not os.path.isabs(source):
@@ -184,16 +184,15 @@ def build_request(op, source, digest):
     if name == "edit":
         return "edit_definition", {"key": op["key"], "fields": op["fields"]}
     if name == "legacy_state":
-        return ("set_legacy_state", {"key": op["key"], "state": op["state"],
-                                     "note": op.get("note", "")})
+        return "set_legacy_state", {"key": op["key"], "state": op["state"],
+                                    "note": op.get("note", "")}
     if name == "add_evidence":
         ref = dict(op.get("ref") or {})
         if op.get("repo") is not None: ref["repo"] = op["repo"]
         return "add_evidence_router", {"key": op["key"], "kind": op["kind"],
                                        "ref": ref}
     if name == "close_on_decision":
-        return ("close_on_decision",
-                {"key": op["key"], "batch_ref": f"{source}@{digest}"})
+        return "close_on_decision", {"key": op["key"], "batch_ref": f"{source}@{digest}"}
     if name == "cancel":
         return "cancel", {"key": op["key"], "reason": op.get("reason", "")}
     if name == "priority":
@@ -208,54 +207,10 @@ def build_request(op, source, digest):
         # apply_ops call, so it keeps the atomic verb's checks (and result).
         return "apply_ops", {"ops": [op]}
     raise BatchError(f"unknown op {name!r}")
-class Session:
-    """Bearer-token calls to the keeper API; the token is never printed."""
+class Session(transport.Session):
+    """Compatibility seam with explicitly injected entry-point exceptions."""
     def __init__(self, url, token):
-        self.url = url.rstrip("/")
-        self.token = token
-        # Build an opener that does NOT follow redirects and ignores HTTP_PROXY
-        class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-            def http_error_302(self, req, fp, code, msg, headers):
-                raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
-            http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
-        self._opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}),
-            NoRedirectHandler()
-        )
-    def _call(self, verb, body=None):
-        try:
-            data = json.dumps(body, allow_nan=False).encode("utf-8") if body is not None else None
-        except (TypeError, ValueError) as exc:
-            raise BatchError(f"cannot encode {verb}: {exc.__class__.__name__}") from None
-        request = urllib.request.Request(
-            f"{self.url}/v1/{verb}", data=data,
-            method="POST" if body is not None else "GET")
-        request.add_header("Authorization", f"Bearer {self.token}")
-        if body is not None:
-            request.add_header("Content-Type", "application/json")
-        try:
-            with self._opener.open(request, timeout=TIMEOUT) as resp:
-                return resp.read()
-        except urllib.error.HTTPError as exc:
-            code, msg = _parse_error(exc.read(), exc.code)
-            raise ApiError(code, msg) from None
-        except (urllib.error.URLError, OSError) as exc:
-            raise ApiError("unreachable", exc.__class__.__name__) from None
-    def post(self, verb, body):
-        return self._call(verb, body)
-    def get(self, verb):
-        try:
-            raw = self._call(verb)
-            data = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise ApiError("unreachable", f"bad whoami reply: {exc.__class__.__name__}") from None
-        except ApiError:
-            raise
-        except Exception as exc:
-            raise ApiError("unreachable", exc.__class__.__name__) from None
-        if not isinstance(data, dict):
-            raise ApiError("unreachable", "bad whoami reply")
-        return data
+        super().__init__(url, token, errors=(BatchError, ApiError), parse_error=_parse_error)
 def _parse_error(raw, status):
     try:
         data = json.loads(raw.decode("utf-8"))
@@ -280,7 +235,7 @@ def read_token(path):
 def print_help(out):
     out.write("usage: apply_batch.py BATCH.yaml --url URL --token-file PATH "
               "[--dry-run] [--preview] [--from N] [--per-op] [--allow-no-whoami] "
-              "[--queue-line TEXT --queue-file PATH]\n")
+              "[--timeout SECONDS] [--queue-line TEXT --queue-file PATH]\n")
 def main(argv=None, out=None, err=None):
     args_in = list(sys.argv[1:] if argv is None else argv)
     out = out or sys.stdout
@@ -294,6 +249,7 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--from", dest="from_n", default=None)
     parser.add_argument("--allow-no-whoami", action="store_true")
     parser.add_argument("--per-op", action="store_true")
+    parser.add_argument("--timeout", default=transport.MUTATION_TIMEOUT)
     parser.add_argument("--queue-line", default=None)
     parser.add_argument("--queue-file", default=None)
     try:
@@ -371,10 +327,20 @@ def main(argv=None, out=None, err=None):
                      f"got {opts.from_n!r}", refusal=True)
             return _done(2)
     def fail(n, name, key, code, message):
+        if code in ("unknown outcome", "unreachable"):
+            for text in transport.uncertain(identity, submitted, message):
+                line(text, refusal=True)
+            return _done(1)
         line(f"op {n} {name} {key}: {code} {message}", refusal=True)
         line(f"resume with --from {n}")
         return _done(1)
     try:
+        try:
+            mutation_timeout = transport.timeout_seconds(opts.timeout)
+        except ValueError as exc:
+            err.write(f"error: {exc}\n")
+            line(f"error: {exc}", refusal=True)
+            return _done(2)
         data = load_batch(opts.batch_file)
         base_seq = data.get("base_seq")
         if opts.per_op and base_seq is not None:
@@ -420,6 +386,7 @@ def main(argv=None, out=None, err=None):
                 # Also ensure the request body is JSON-encodable
                 verb, body = build_request(op, source, digest)
                 json.dumps(body, allow_nan=False)
+                transport.operation_identity(data["principal"], verb, body, digest, f"index {n}")
             except BatchError as exc:
                 return fail(n, name, key, "error", str(exc))
             except (TypeError, ValueError) as exc:
@@ -440,7 +407,10 @@ def main(argv=None, out=None, err=None):
                                           for name in sorted(counts))
                                  or "no ops") + " (no calls made)")
             return _done(0)
+        atomic_body = atomic.payload(ops, start, source, digest, base_seq, opts.preview)
+        identity = transport.operation_identity(data["principal"], "apply_ops", atomic_body, digest, f"slice {start}-{total}")
         session = Session(url, token)
+        session.mutation_timeout = mutation_timeout
     except (BatchError, OSError) as exc:
         err.write(f"error: {exc}\n")
         if queue_mode:
@@ -469,12 +439,15 @@ def main(argv=None, out=None, err=None):
     applied = Counter()
     done = 0
     if not opts.per_op:
+        submitted = f"slice {start}-{total}"
+        line(f"operation {identity}; {submitted} (reconciliation fingerprint, not an idempotency key)")
         try:
             code, report = atomic.send(session, ops, start, source, digest,
                                        (ApiError, BatchError), op_key,
                                        base_seq=base_seq,
                                        dry_run=opts.preview,
-                                       batch_label=data.get("batch"))
+                                       batch_label=data.get("batch"),
+                                       identity=identity, submitted=submitted)
         except Exception as exc:
             if not queue_mode:
                 raise
@@ -484,7 +457,7 @@ def main(argv=None, out=None, err=None):
         # refusal_lines()/send() put the error first, so index 0 is the refusal.
         for i, text in enumerate(report):
             line(text, refusal=bool(code and i == 0))
-        if opts.preview:
+        if opts.preview and not code:
             line("preview: nothing applied (dry run on the keeper)")
             return _done(code)
         if code:
@@ -497,10 +470,13 @@ def main(argv=None, out=None, err=None):
         try:
             if opts.per_op:
                 verb, body = build_request(op, source, digest)
-                reply = atomic.parsed(session.post(verb, body))
+                submitted = f"index {n}"
+                identity = transport.operation_identity(data["principal"], verb, body, digest, submitted)
+                line(f"operation {identity}; {submitted} (reconciliation fingerprint, not an idempotency key)")
+                reply = atomic.parsed(session.post(verb, body, timeout=session.mutation_timeout))
                 for text in atomic.warnings(reply): line(text)
-                if reply is None:
-                    raise ApiError("error", "unreadable keeper reply "
+                if reply is None or ("applied" in reply and reply["applied"] != 1):
+                    raise ApiError("unknown outcome", "unreadable or short keeper reply "
                                             "(op state unknown)")
         except BatchError as exc:
             return fail(n, name, key, "error", str(exc))
@@ -527,8 +503,8 @@ def main(argv=None, out=None, err=None):
         try:
             payload = (opts.queue_line + "\n").encode("utf-8")
         except (OSError, UnicodeError) as exc:
-            detail = getattr(exc, "strerror", None) or str(exc) \
-                or exc.__class__.__name__
+            detail = (getattr(exc, "strerror", None) or str(exc)
+                      or exc.__class__.__name__)
             line(f"error: batch applied but queue line not written: {detail}",
                  refusal=True)
             return _done(3)
@@ -546,8 +522,8 @@ def main(argv=None, out=None, err=None):
             finally:
                 os.close(fd)
         except (OSError, UnicodeError) as exc:
-            detail = getattr(exc, "strerror", None) or str(exc) \
-                or exc.__class__.__name__
+            detail = (getattr(exc, "strerror", None) or str(exc)
+                      or exc.__class__.__name__)
             line(f"error: batch applied but queue line not written: {detail}",
                  refusal=True)
             return _done(3)

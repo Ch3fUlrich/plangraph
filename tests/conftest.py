@@ -87,11 +87,71 @@ def _use_tmpfs_tempdir() -> None:
 
 _use_tmpfs_tempdir()
 
+
+@pytest.fixture(autouse=True)
+def hermetic_writer_env(monkeypatch):
+    """Writer identity/config must not override a test's own setup."""
+    for name in (
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "OPENCODE_DISABLE_CLAUDE_CODE",
+        "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def short_socket_dir():
+    """Bound Unix sockets avoid pytest's long per-test directory names."""
+    with tempfile.TemporaryDirectory(prefix="s-", dir=tempfile.gettempdir()) as directory:
+        path = Path(directory)
+        assert len(os.fsencode(path / "anchor.sock")) < 108
+        assert len(os.fsencode(path / "silent.sock")) < 108
+        yield path
+
 from plangraph.spawner import resolver as _resolver
 _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served_models)
 
 
+def _remove_windows_basetemp(root):
+    """Retry transient child-process handles as well as read-only git objects."""
+    import time
+    from _pytest.pathlib import rm_rf
+    # Failed assertions in mkstemp hooks can strand CRT descriptors before the
+    # caller receives them. At process exit, close only files in our owned root.
+    identities = set()
+    for path in Path(root).rglob("*"):
+        if path.is_file():
+            st = path.stat()
+            identities.add((st.st_dev, st.st_ino))
+    for fd in range(3, 2048):
+        try:
+            st = os.fstat(fd)
+            if (st.st_dev, st.st_ino) in identities:
+                os.close(fd)
+        except OSError:
+            pass
+    for attempt in range(31):
+        try:
+            rm_rf(Path(root))
+            return
+        except PermissionError:
+            if attempt == 30:
+                raise  # report the leftover rather than silently leaking it
+            time.sleep(1)
+
+
 def pytest_configure(config):
+    if sys.platform == "win32" and config.option.basetemp is None:
+        # Avoid numbered-root/pytest-current symlink cleanup on Windows mounts
+        # affected by the reported WinError 448 (not reproduced on this run).
+        # A fresh owned root avoids that machinery without touching old roots.
+        root = tempfile.mkdtemp(prefix="pg-win-pytest-")
+        config.option.basetemp = str(Path(root) / "tests")
+        atexit.register(_remove_windows_basetemp, root)
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
 
@@ -144,6 +204,11 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     unknown.cache_clear = probe.cache_clear
     if request.node.get_closest_marker('real_probe') is None:
         monkeypatch.setattr(resolver, 'served_models', unknown)
+        # Async spawn retains the real-function alias; stub both entry points.
+        monkeypatch.setattr(resolver, '_served_models_real', unknown)
+        def forbidden_probe(*args, **kwargs):
+            pytest.fail('Host binary probe requires @pytest.mark.real_probe', pytrace=False)
+        monkeypatch.setattr(resolver, '_probe_served_models', forbidden_probe)
     original_which = shutil.which
     monkeypatch.setattr(shutil, 'which', lambda command, *a, **kw:
                         (original_which(command, *a, **kw) or command)
@@ -189,6 +254,12 @@ def pytest_ignore_collect(collection_path, config):
 
 
 def pytest_collection_modifyitems(config, items):
+    if sys.platform == "win32":
+        from win_skips import skip_reason
+        for item in items:
+            reason = skip_reason(item.nodeid, sys.platform, item.fixturenames)
+            if reason:
+                item.add_marker(pytest.mark.skip(reason=reason))
     if not _PG:
         return
     kept, dropped = [], []
