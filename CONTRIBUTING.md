@@ -68,4 +68,9 @@ Or set `PLANGRAPH_PUBLIC_REMOTES` to comma-separated remote substrings (empty it
 
 The private word list is never stored in the repo: point the hook at it via environment,
 `PLANGRAPH_SCRUB_WORDS=<path to words.txt>` (optional extra allowances: `PLANGRAPH_SCRUB_RULES=<path to rules.toml>`).
-Unset, the hook still runs the public patterns and prints a one-line notice.
+Unset, the hook uses `~/.config/plangraph/scrub-words.txt` (requires `chmod 600`).
+A missing default warns once that the private-word rule is inactive; public patterns still run.
+An explicit missing or unreadable list refuses pushes to any remote. The env list wins.
+Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
+that skips private-word matching, not public patterns. Classification uses local config only.
+Diagnostics never show matched values or the words-file path.
