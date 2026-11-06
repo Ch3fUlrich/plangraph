@@ -15,6 +15,21 @@ LINE = ("You've reached your credit usage limit. Please upgrade your subscriptio
         "to get more resources. Report Issue (input /feedback)")
 
 
+@pytest.mark.parametrize('code', [None, 0, 1, 7])
+@pytest.mark.parametrize('stdout', [LINE, 'Starting\n' + LINE + '\n \n',
+                                   LINE + '\nAgent continued.'])
+def test_bare_stdout_credit_limit_requires_failed_final_line(code, stdout):
+    expected = LINE if code in (1, 7) and stdout.rstrip().endswith(LINE) else None
+    assert harness_limit_line(code, stdout, '') == expected
+
+
+@pytest.mark.parametrize('prefix', ['', 'error: '])
+def test_streaming_credit_limit_requires_error_shape(prefix):
+    from plangraph.spawner.env_redact import early_refusal
+    text = prefix + LINE
+    assert early_refusal(text + '\n') == (text if prefix else None)
+
+
 @pytest.mark.parametrize('stream', ['stdout', 'stderr'])
 @pytest.mark.parametrize('terminal', [None, 'git_config_mutated', 'writer_no_changes',
                                      'cancelled', 'kill_incomplete', 'model_refusal'])

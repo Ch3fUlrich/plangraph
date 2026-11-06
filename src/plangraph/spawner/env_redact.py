@@ -127,7 +127,7 @@ def harness_limit_line(exit_code, stdout, stderr):
         return busy
     # Quota evidence needs an error-shaped or start-anchored line (D-3257):
     # a mid-line mention in prose, a traceback or a retry log never marks a
-    # leg. Agent prose on stdout only counts via its error-shaped lines.
+    # leg. Bare stdout credit refusals count only as the final non-empty line.
     def quota(line):
         if _CREDIT_LIMIT.fullmatch(re.sub(r'^\s*error:\s*', '', line, flags=re.I)):
             return True
@@ -139,9 +139,11 @@ def harness_limit_line(exit_code, stdout, stderr):
         # marks; it needs a quota/rate-limit name alongside.
         return _QUOTA_MARKER.match(line.strip()) or (
             _RESET_AFTER.match(line.strip()) and _QUOTA_MARKER.search(line))
+    stdout_lines = [line for line in normalize(stdout).splitlines() if line.strip()]
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
-        line for line in normalize(stdout).splitlines()
-        if _ERROR_SHAPED.match(line) and quota(line)]
+        line for index, line in enumerate(stdout_lines)
+        if (_ERROR_SHAPED.match(line) and quota(line)) or (
+            index == len(stdout_lines) - 1 and _CREDIT_LIMIT.fullmatch(line))]
     return lines[0].strip() if lines else None
 
 
@@ -159,6 +161,9 @@ def early_refusal(complete_text):
         return busy
     lines = normalize(complete_text).splitlines()
     for line in lines:
+        if _ERROR_SHAPED.match(line) and _CREDIT_LIMIT.fullmatch(
+                re.sub(r'^\s*error:\s*', '', line, flags=re.I)):
+            return line.strip()
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             if _ERROR_SHAPED.match(line) and _USAGE_LIMIT.fullmatch(line):
                 return line.strip()

@@ -75,7 +75,7 @@ def test_quoted_credit_stdout():
     from plangraph.spawner.env_redact import harness_limit_line
     line = ("You've reached your credit usage limit. Please upgrade your subscription plan "
             'to get more resources. Report Issue (input /feedback)')
-    assert harness_limit_line(1, line, '') is None
+    assert harness_limit_line(1, line + '\nAgent continued.', '') is None
     assert harness_limit_line(1, '', line) == line
 
 
