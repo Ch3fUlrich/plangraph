@@ -115,7 +115,7 @@ def main():
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
     remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
-    private = git_out("config", "--bool", f"remote.{remote}.plangraph-private") == "true"
+    private = git_out("config", "--local", "--bool", f"remote.{remote}.plangraph-private") == "true"
     rules_files = [str(SPLIT / name) for name in BASE_RULES if (SPLIT / name).is_file()]
     if os.environ.get("PLANGRAPH_SCRUB_RULES"):
         rules_files.append(os.environ["PLANGRAPH_SCRUB_RULES"])

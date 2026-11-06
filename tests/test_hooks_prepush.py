@@ -311,6 +311,38 @@ def test_private_words_routing(repo, tmp_path, case):
         assert fake_ip() not in res.stdout + res.stderr
 
 
+@pytest.mark.parametrize("source", ["global", "system", "worktree", "environment"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_nonlocal_private_marker_cannot_skip_private_words(repo, tmp_path, source, explicit):
+    r, base = repo
+    words = tmp_path / "home/.config/plangraph/scrub-words.txt"
+    words.parent.mkdir(parents=True)
+    words.write_text(fake_word() + "\n")
+    words.chmod(0o600)
+    key = "remote.origin.plangraph-private"
+    assert key not in git(r, "config", "--local", "--list")
+    marker = tmp_path / "nonlocal.gitconfig"
+    marker.write_text('[remote "origin"]\n\tplangraph-private = true\n')
+    env = {}
+    if source == "global":
+        env["GIT_CONFIG_GLOBAL"] = str(marker)
+    elif source == "system":
+        env.update(GIT_CONFIG_SYSTEM=str(marker), GIT_CONFIG_NOSYSTEM="0")
+    elif source == "worktree":
+        git(r, "config", "extensions.worktreeConfig", "true")
+        git(r, "config", "--worktree", key, "true")
+    else:
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=key, GIT_CONFIG_VALUE_0="true")
+    if explicit:
+        env["PLANGRAPH_SCRUB_WORDS"] = str(words)
+    head = commit_file(r, "app/plan.py", fake_word() + "\n")
+    res = run_hook(r, [push_line("main", head, base)], env)
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert "app/plan.py:1: private-word" in out
+    assert fake_word() not in out and str(words) not in out
+
+
 def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():
     wf = yaml.safe_load(WORKFLOWS.read_text(encoding="utf-8"))
     jobs = wf["jobs"]
