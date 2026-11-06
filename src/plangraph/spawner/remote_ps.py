@@ -15,7 +15,7 @@ def query_host(host, timeout):
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], 'python3 -m plangraph.spawner.remote_ps'],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        text=True, timeout=timeout, check=True)
+        text=True, encoding='utf-8', errors='replace', timeout=timeout, check=True)
     return result.stdout
 
 
