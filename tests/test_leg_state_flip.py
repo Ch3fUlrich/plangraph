@@ -163,6 +163,39 @@ def test_rank_subset_and_leg_keys(boundary, tmp_path):
     assert s._route(CARD).legs == first[1:] + first[:1]
 
 
+@pytest.mark.parametrize('reader_enabled', [None, True, False])
+@pytest.mark.parametrize('factory', [False, True])
+def test_off_injected_readers_identical_to_main(boundary, tmp_path, monkeypatch,
+                                               reader_enabled, factory):
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
+    reader = None if reader_enabled is None else SimpleNamespace(
+        enabled=reader_enabled, leg_status=lambda *a, **k: dict(state='ok', reason='stale'))
+    from plangraph.spawner.runner import spawn_service
+    make = spawn_service if factory else SpawnService
+    s = make(runner=SimpleNamespace(), state=tmp_path, leg_reader=reader)
+    baseline = plan_spawn(CARD, role='implement', leg_reader=reader)
+    s.hung.rank = lambda keys: list(reversed(keys))
+    assert json.dumps(asdict(s._route(CARD)), sort_keys=True) == json.dumps(asdict(baseline), sort_keys=True)
+    assert s.leg_reader is reader
+
+
+@pytest.mark.parametrize('reason', ['unknown', 'unreachable', 'stale'])
+def test_storeless_dead_reader_preserves_reported_status(boundary, tmp_path, reason):
+    reader = SimpleNamespace(enabled=True, leg_status=lambda *a, **k: dict(state='ok', reason=reason))
+    s = SpawnService(runner=SimpleNamespace(), state=tmp_path, leg_reader=reader)
+    baseline = plan_spawn(CARD, role='implement', leg_reader=reader)
+    plan = s._route(CARD)
+    assert plan.legs == baseline.legs and plan.legs
+    assert any(c.get('leg_state_reason') == reason for c in plan.candidates)
+
+
+def test_empty_xdg_preserves_main_store_path(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setenv('XDG_STATE_HOME', '')
+    monkeypatch.setattr(leg_state, 'LegStateStore', lambda path: path)
+    assert leg_state._default_store() == Path('plangraph/leg-state.sqlite')
+
+
 def test_production_hooks(boundary, tmp_path):
     import os
     from plangraph.spawner import proc_kill

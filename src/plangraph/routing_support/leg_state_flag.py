@@ -26,8 +26,6 @@ def default_reader():
 
 def initialize(service, reader, boundary):
     service.leg_reader = reader = default_reader() if reader is None and enabled() else reader
-    if hasattr(reader, 'enabled') and not reader.enabled:
-        service.leg_reader = reader = None
     service.hung = boundary(reader)
     return reader
 
@@ -35,14 +33,15 @@ def initialize(service, reader, boundary):
 def service_plan(service, **kwargs):
     from plangraph.planner.routing import plan_spawn
     reader = getattr(service, 'leg_reader', None)
-    if not getattr(reader, 'enabled', False):
+    if not enabled() or not getattr(reader, 'enabled', False):
         return plan_spawn(**kwargs, leg_reader=reader)
     reasons = {}
     def read(model, **scope):
         status = reader.leg_status(model, **scope)
         if status.get('reason') in ('unknown', 'unreachable', 'stale'):
             reasons[model] = status['reason']
-            return reader.store.leg_status(model, **scope)
+            store = getattr(reader, 'store', None)
+            return store.leg_status(model, **scope) if store is not None else status
         return status
     plan = plan_spawn(**kwargs, leg_reader=read)
     by_id = {leg.id: leg.model for leg in plan.legs}

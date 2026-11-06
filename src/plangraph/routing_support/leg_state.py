@@ -288,7 +288,7 @@ class LegStateStore:
 
 
 def _default_store():
-    return LegStateStore(Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "plangraph" / "leg-state.sqlite")
+    return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
 
 
 def record_provider_response(leg, status, body, headers, caller, now=None, account=None, combo=None):
