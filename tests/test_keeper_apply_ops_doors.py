@@ -28,7 +28,7 @@ def _spy(monkeypatch):
     calls = []
     orig = apply_batch.Session.post
 
-    def spy(self, verb, body):
+    def spy(self, verb, body, timeout=None):
         calls.append(verb)
         return orig(self, verb, body)
     monkeypatch.setattr(apply_batch.Session, "post", spy)

@@ -12,6 +12,8 @@ import pytest
 
 from plangraph.keeper import cli, config, db as kdb, events as keeper_events
 from keeper_util import World
+from plangraph.keeper import copy_to_pg
+from plangraph.keeper.placement_rules_schema import SQLITE_ONLY_TABLES
 from test_keeper_pg_parity import replay
 
 DSN = os.environ.get("PG_DSN")
@@ -48,6 +50,34 @@ def cfg_path(tmp_path):
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("table", sorted(SQLITE_ONLY_TABLES))
+def test_copy_refuses_nonempty_sqlite_only_table(tmp_path, table):
+    path = tmp_path / "source.db"
+    with sqlite3.connect(path) as raw:
+        raw.executescript(f'CREATE TABLE events(x); CREATE TABLE items(x); '
+                          f'CREATE TABLE "{table}"(x); INSERT INTO "{table}" VALUES(1);')
+    with pytest.raises(copy_to_pg.CopyError, match=f"SQLite-only table {table} is not empty"):
+        copy_to_pg._open_source(path)
+
+
+def test_copy_skips_only_empty_sqlite_only_tables(tmp_path):
+    assert SQLITE_ONLY_TABLES == {
+        "placement_rule_revision", "placement_rule_values", "placement_rule_audit",
+    }
+    path = tmp_path / "source.db"
+    with sqlite3.connect(path) as raw:
+        raw.executescript('CREATE TABLE events(x); CREATE TABLE items(x);')
+        for table in SQLITE_ONLY_TABLES:
+            raw.execute(f'CREATE TABLE "{table}"(x)')
+    conn, tables = copy_to_pg._open_source(path)
+    conn.close()
+    assert tables == ["events", "items"]
+    with sqlite3.connect(path) as raw:
+        raw.execute('CREATE TABLE unexpected(x)')
+    with pytest.raises(copy_to_pg.CopyError, match="does not know: unexpected"):
+        copy_to_pg._open_source(path)
 
 
 def raw_counts(path):

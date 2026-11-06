@@ -73,7 +73,7 @@ def test_git_adapter_merge_commit_of_lane_merge_head(tmp_path: Path, monkeypatch
     # the PR merge commit maps to itself (same tuple shape as the test above)
     assert adapter.merge_commit_of(repo, m, "main") == (m, email)
     # direct-push merge (first-parent, no PR merge above it where it is ^2):
-    # behaviour unchanged -- it maps to itself, as before this fix
+    # ancestry only: verifier must separately require hosted PR provenance
     assert adapter.merge_commit_of(repo, direct, "main") == (direct, email)
     # head reachable only via M^1
     assert adapter.merge_commit_of(repo, m2, "main") is None

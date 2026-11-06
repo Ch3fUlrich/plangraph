@@ -1,5 +1,5 @@
 # Keeper contract (M2a) — store, state machine, evidence, API, CLI, MCP
-
+Store snapshot filters (S1a): `open=1` / `closed=1`, UTC `since`, item `fields` (always `key`), and `blocks`; nonblank filters add selection/returned counts in `filter`. Activity uses only `since`; aliases, requested decision text and progress stay full until S1b. No filters preserves legacy bytes; HTTP wiring is S2. Signed snapshots, serve and pull stay full.
 Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12 **stdlib only** (sqlite3, http.server, hashlib,
 secrets, json, graphlib, subprocess, urllib); PyYAML only in the importer. Package `src/plangraph/keeper/`. Every file ≤ 400 lines,
 tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests. M2a = per-principal tokens; M2b (later) adds
@@ -374,7 +374,7 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
   command of a `restrict` authorized_keys line (one pull key per host). It prints one JSON line
   `{"format": "plangraph-snapshot-pull-v1", "snapshot": <base64>, "sig": <base64>}` and nothing
   else, ignores `SSH_ORIGINAL_COMMAND` and stdin, opens files with `O_NOFOLLOW`, and serves nothing
-  unless signing is configured and the snapshot verifies.
+  unless signing is configured and the snapshot verifies. Pinned checkout: `~/.local/share/plangraph/snapshot-serve` (outside `.claude/worktrees/`, live-sync refresh only); read-only helper: `docs/SNAPSHOT-SERVE-PATH.md`.
 - Reader side: `pg --config reader.json sync pull` runs a locked-down ssh (`-F none`, BatchMode,
   StrictHostKeyChecking, no agent/X11/forwarding/tty, host after `--`, every config value validated),
   verifies the signature with `snapshot_pubkey`, refuses a copy older than the newest one seen

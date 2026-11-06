@@ -7,9 +7,15 @@ DRY_RUN=0
 SKIP_AUTOOS=0
 AUTOOS_ROOT=""
 CATALOG_DB_PATH=""
+PROBE_HOST=""
+PROBE_CONFIG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --probe-host|--probe-config)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "Missing probe argument" >&2; exit 1; }
+      if [[ "$1" == --probe-host ]]; then PROBE_HOST="$2"; else PROBE_CONFIG="$2"; fi
+      shift 2 ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -44,6 +50,11 @@ fi
 PYTHON_CMD="python3"
 if ! command -v python3 &>/dev/null && command -v python &>/dev/null; then
   PYTHON_CMD="python"
+fi
+
+if [[ -n "$PROBE_HOST$PROBE_CONFIG" ]]; then
+  "$PYTHON_CMD" -m plangraph.spawner.probe_enroll "$PROBE_HOST" "$PROBE_CONFIG" "$DRY_RUN"
+  exit $?
 fi
 
 COMPONENTS="$("$PYTHON_CMD" -c '

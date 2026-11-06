@@ -45,7 +45,7 @@ def spy_posts(monkeypatch):
     calls = []
     real_post = apply_batch.Session.post
 
-    def spy(self, verb, body):
+    def spy(self, verb, body, timeout=None):
         calls.append((verb, body))
         return real_post(self, verb, body)
 
