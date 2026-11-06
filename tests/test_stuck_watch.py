@@ -5,6 +5,7 @@ import os
 import pytest
 
 from plangraph.spawner import stuck_watch as watch
+from fake_pid import FAKE_PID
 
 
 @pytest.fixture(autouse=True)
@@ -16,14 +17,14 @@ def no_signals(monkeypatch):
 def seat(tmp_path):
     proc = tmp_path / 'proc'
     proc.mkdir()
-    record = dict(run_id='run-test', status='running', pid=42, pid_start=7, started=0)
+    record = dict(run_id='run-test', status='running', pid=FAKE_PID, pid_start=7, started=0)
     calls = []
-    def process(pid=42, parent=1, start=7, cpu=0, tty=0,
+    def process(pid=FAKE_PID, parent=1, start=7, cpu=0, tty=0,
                 cmd='plangraph-job-run-test'):
         directory = proc / str(pid)
         directory.mkdir(exist_ok=True)
         fields = ['0'] * 22
-        fields[0:5] = ['S', str(parent), '42', '42', str(tty)]
+        fields[0:5] = ['S', str(parent), str(FAKE_PID), str(FAKE_PID), str(tty)]
         fields[11], fields[19] = str(cpu), str(start)
         (directory / 'stat').write_text(f'{pid} (fake) ' + ' '.join(fields))
         (directory / 'cmdline').write_bytes(cmd.encode())
@@ -58,8 +59,8 @@ def test_cpu_change_and_pid_reuse_reset(seat, change):
 
 def socket(seat, remote):
     _, proc, _, _, _, _ = seat
-    (proc / '42/fd/3').symlink_to('socket:[99]')
-    (proc / '42/net/tcp').write_text(
+    (proc / f'{FAKE_PID}/fd/3').symlink_to('socket:[99]')
+    (proc / f'{FAKE_PID}/net/tcp').write_text(
         'header\n0: 00000000:1234 ' + remote + ':443 01 0 0 0 0 0 99\n')
 
 
@@ -77,7 +78,7 @@ def test_outbound_socket_resets(seat):
     check(0)
     socket(seat, '08080808')
     check(298)
-    (proc / '42/net/tcp').write_text('header\n')
+    (proc / f'{FAKE_PID}/net/tcp').write_text('header\n')
     check(300)
     assert not calls
 
@@ -95,7 +96,7 @@ def test_tty_service_unproven_report_only(seat, shape):
     if shape == 'tty':
         process(tty=1)
     elif shape == 'service':
-        process(pid=43, parent=42, cmd='opencode serve --service')
+        process(pid=43, parent=FAKE_PID, cmd='opencode serve --service')
     else:
         record['pid_start'] = 99
     assert check(0)[0]['rule'] == 'stuck-watch-report'
@@ -132,9 +133,9 @@ def test_unreadable_evidence_no_action(seat, failure):
     root, proc, record, calls, _, check = seat
     check(0)
     if failure == 'proc':
-        (proc / '42/stat').write_text('broken')
+        (proc / f'{FAKE_PID}/stat').write_text('broken')
     elif failure == 'socket':
-        (proc / '42/net/tcp').unlink()
+        (proc / f'{FAKE_PID}/net/tcp').unlink()
     else:
         record.clear()
         path = root / 'runs/run-test/record.json'
@@ -284,8 +285,8 @@ def test_connected_network_prevents_cancel(seat, protocol, state):
     _, proc, _, calls, _, check = seat
     check(0)
     remote = '08080808' if not protocol.endswith('6') else '00000000000000000000000008080808'
-    (proc / '42/fd/3').symlink_to('socket:[99]')
-    (proc / '42/net' / protocol).write_text(
+    (proc / f'{FAKE_PID}/fd/3').symlink_to('socket:[99]')
+    (proc / f'{FAKE_PID}/net' / protocol).write_text(
         f'header\n0: 00000000:1234 {remote}:0043 {state} 0 0 0 0 0 99\n')
     assert not check(300)
     assert not calls
@@ -294,8 +295,8 @@ def test_connected_network_prevents_cancel(seat, protocol, state):
 def test_ipv4_mapped_unspecified_remote_is_not_activity(seat):
     _, proc, _, calls, _, check = seat
     check(0)
-    (proc / '42/fd/3').symlink_to('socket:[99]')
-    (proc / '42/net/tcp6').write_text(
+    (proc / f'{FAKE_PID}/fd/3').symlink_to('socket:[99]')
+    (proc / f'{FAKE_PID}/net/tcp6').write_text(
         'header\n0: 00000000:1234 0000000000000000FFFF000000000000:0043 08 0 0 0 0 0 99\n')
     assert check(300)
     assert calls
@@ -323,7 +324,7 @@ def test_racing_fd_reports_unavailable_and_resets_interval(seat, monkeypatch):
     from pathlib import Path
     _, proc, _, calls, _, check = seat
     check(0)
-    fd = proc / '42/fd/3'
+    fd = proc / f'{FAKE_PID}/fd/3'
     fd.symlink_to('socket:[99]')
     original = Path.readlink
     def racing(path):

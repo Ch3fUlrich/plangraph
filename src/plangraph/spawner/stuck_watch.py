@@ -28,7 +28,7 @@ def processes(proc):
             table[int(path.name)] = dict(parent=int(fields[1]), tty=int(fields[4]),
                                         cpu=int(fields[11]) + int(fields[12]),
                                         start=int(fields[19]),
-                                        cmd=(path / 'cmdline').read_bytes().replace(b'\0', b' ').decode())
+                                        cmd=(path / 'cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'replace'))
         except (OSError, ValueError, IndexError, UnicodeError):
             continue
     return table
