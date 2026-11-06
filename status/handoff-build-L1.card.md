@@ -2,7 +2,7 @@
 ## Goal
 - D-3893 phase 0 first; D-3956/D-3957/D-3959 rulings; KEEPER-SNAP S0 to S3; #419 + #407 ff live; #314 seat; orphan slices
 ## Keeper
-- claimed: S0-TIMINGS (ep3), HOOKS S06 + S13 (ep1), ROUTERCTL-CTX-GUARD-CAPS (ep1), OOM (ep1), RIN-LEDGER + REPOINT (ep4), SEAT-PATH (ep6), VERDICT (ep2), ORPHAN (ep1), INBOX (ep1), FLEET-MSG (ep5): leases 01:38Z, keys need plangraph: prefix
+- claimed: S0-TIMINGS (ep3), HOOKS S06 + S13 (ep1), ROUTERCTL-CTX-GUARD-CAPS (ep1), OOM (ep1), RIN-LEDGER + REPOINT (ep4), VERDICT (ep2), ORPHAN (ep1), INBOX (ep1), FLEET-MSG (ep5): leases 01:38Z, keys need plangraph: prefix
 - ready next: KEEPER-SNAP S1 after S0; HOOKS S09 after S06, S14 after S13 + S06
 ## Done
 - 11-05T23:40Z SEAT-VERDICT-FROM-RECORD cd7146308 D-3956 one-line trim pushed, 172 passed, file-size ok, no seat yet
@@ -17,7 +17,7 @@
 3. #451 round 2: read diff, mimo delta seat, run once on 18-de-2053, CI (round 3 is the cap)
 4. #419 MERGED 191d7df4fc76 (replan, CI + evidence still running): ff live, tests, rollback, smoke, Haiku probe, DONE; #407 after replan merges
 5. REPOINT + LEDGER after router applies: merge lanes, submit; INBOX one GO-REQ; resend gen-89 open
-6. #338 tests seat; S09 S14 (S14 takes the _parity.py MED); OOM evidence retry
+6. #338 handed to replan-0207, do not start; S09 S14 (S14 takes the _parity.py MED); OOM evidence retry
 ## Open
 - BLOCKED GO-REQs #446 #447 #436 #450 #464 ROUTERCTL #309-sync unanswered | default wait, no merge | deadline none
 - BLOCKED OpenCode free leg key expired on code host, operator step | default dell, qwen, workst seats | deadline none
