@@ -39,19 +39,23 @@ const rows = table ? table.children.find(c => c.tag === 'tbody').children.map(
 nodes['panel-hosts'] = new El('section'); nodes['tab-hosts'] = new El('button');
 require(process.argv[2] + '/page_pages.js');
 PlanUI.Pages.mount(null);
-let hash = '';
-PlanUI.Pages.onChange = name => { hash = '#pg=' + name; };
-nodes['tab-hosts'].listeners.click();
 PlanUI.Pages.show('graph');
 // Execute the actual boot hash matcher and afterInit block against minimal dependencies.
 const boot = fs.readFileSync(process.argv[2] + '/page_boot.js', 'utf8');
 const matcher = boot.match(/var HASH_PG = (.*?);/)[0];
+const writer = boot.slice(boot.indexOf('  function writeHash()'),
+  boot.indexOf('\n  /* ---- keyboard map:'));
 const after = boot.slice(boot.indexOf('  function afterInit()'), boot.indexOf('\n  boot();'));
 const context = {location: {hash: '#pg=hosts'}, PlanUI, PP: {initData() {}, setTab() {}, state: {}},
-  ui: {get() {return 'graph';}}, writeHash() {hash = '#pg=' + PlanUI.Pages.current();},
+  global: {}, ui: {get() {return 'graph';}},
   setScreen() {}, $() {}, resizeGraph() {}};
-vm.runInNewContext(matcher + after + '\nafterInit();', context);
-process.stdout.write(JSON.stringify({rows, text: box.textContent, hash,
+PlanUI.hashEncode = () => '';
+vm.runInNewContext(matcher + writer + after + '\nafterInit();', context);
+const deepLinkPage = PlanUI.Pages.current();
+PlanUI.Pages.show('graph');
+context.location.hash = '';
+nodes['tab-hosts'].listeners.click();
+process.stdout.write(JSON.stringify({rows, text: box.textContent, hash: context.location.hash, deepLinkPage,
   page: PlanUI.Pages.current(), selected: nodes['tab-hosts'].attrs['aria-selected'],
   hidden: nodes['panel-hosts'].hidden}));
 """
@@ -106,6 +110,7 @@ def test_html_in_host_id_is_text(tmp_path):
 
 def test_hosts_tab_and_hash_roundtrip(tmp_path):
     out = view(tmp_path, {})
+    assert out["deepLinkPage"] == "hosts"
     assert (out["page"], out["hash"], out["selected"], out["hidden"]) == ("hosts", "#pg=hosts", "true", False)
     template = (WEB / "page_template.html").read_text()
     assert 'aria-controls="panel-hosts"' in template
