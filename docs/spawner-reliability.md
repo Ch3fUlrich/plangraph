@@ -1,5 +1,60 @@
 # Spawner reliability
 
+## RL19: read-only research reports
+
+Reports include TOOL_CALL_ONLY floor counts per launch, sibling-OK within 30 minutes
+per monitor kill, and later-attempt OK recovery per classified non-OK attempt.
+Each exposes count, denominator and fraction (null for an empty denominator).
+Recovery and sibling searches use full corrected history, including outside the window.
+
+`pg-spawnd health --state PATH --json` reads available history. `health report`
+requires explicit RFC3339 `--since` and `--until`, selecting [since, until).
+`--json` suppresses the human summary. `--baseline` atomically stores a private
+`reports/baseline-<since>-<until>.json` under the resolved state directory.
+It never writes the private historical baseline or enables routing. Rollback:
+`git revert`. Outcome corrections precede window filtering; observations use
+complete history, including prior-start holds and cleared no-time episodes.
+MAX_TIME is neutral for strikes. Unknown legacy evidence remains unknown.
+Legacy classification uses known exit/role facts; successful rows without usable
+facts remain unknown. Gate skip fractions divide gate-less overrides by all launches.
+The gate-known override denominator and unknown-gate count are separate metrics;
+missing gates are never inferred as skips.
+Recovery metrics retain full corrected history, and leg metadata is chronological.
+
+The immutable operator baseline lives in private plangraph-data at
+`research/2026-11-02-legs`. Before RL14 on, compare the pinned window
+2026-10-30 10:30Z through 2026-11-02 10:30Z: 641 runs, 155 run-hours,
+77.3 unusable hours, 71 hangs, 43.8 hang hours, and every other stored metric.
+Require relative error at most 5% for every nonzero metric and exact zero
+otherwise. Store a local copy; never overwrite the historical measurement.
+Seed timed and no-time parked observations for the operator check. No network
+is used by the verb. Synthetic public fixtures are not historical measurements
+and do not satisfy this live gate or independent ACCEPT.
+
+## RL11: family floor and served-rate ordering
+
+Pure `health::family_floor` and `health::order_legs` use first plan metadata per
+leg id. Missing health is Closed; unknown metadata retains its evidence. A family
+without Closed/Degraded peers floors exactly its first eligible heuristic OPEN
+to available Degraded, preserving evidence and deadline. Hard reset facts and
+provider overlays never qualify. Healthy peers are never demoted for a floor.
+Review TOOL_CALL_ONLY retains review_unfit until a later review OK; other roles
+still strike, open, and reset the non-verdict counter without setting review_unfit.
+Stable order is tier, review-unfit (review only), then
+Closed/Degraded/HalfOpen/Open. Unfit is last within its tier, even after reprobes.
+OPEN filtering remains RL18's responsibility.
+
+`health_rates` counts only first attempts, last physical correction per
+run/served-route/model. Default minimum is 20 samples and 50 percent usable;
+below the minimum no demotion occurs. Only Closed becomes Degraded: rates never
+create hard OPEN, reset evidence, or expiry. Authenticated served identifiers
+must be supplied by RL18/R11, never guessed from requested models. RL10B's
+provider window still outranks quota midnight when applicable.
+
+No switch, daemon caller, or live routing is added. Rollback is `git revert`.
+Hermetic fixtures are not recorded harness-version/oracle parity or live GO.
+Those gates, green CI and independent HIGH acceptance remain required.
+
 ## RL17: derived evidence and review seats
 
 Evidence defaults off. `reliability.json` accepts `evidence` values off/shadow/on,
@@ -118,3 +173,14 @@ Tests use real local children, synthetic parsers, integer-second event limits
 and scheduler slack; they cover bounded I/O, Blind, escalation and escaped pipes.
 Notifications/persistence, CPU sampling and safe fall-through remain RL14/RL17,
 RL13 and RL15 respectively; no daemon or harness integration is enabled.
+
+Health research reports retain all recognized neutral outcomes in chronological
+health replay and preserve their raw reset timestamps separately from effective
+fold state. Unknown outcome strings count as missing classification evidence.
+The tool-open savings population requires both open tools and a recorded
+`s_eff_s`; open-tool rows without that timing evidence receive unknown bounds.
+Invalid report windows are rejected before resolving or reading the state store.
+
+The remaining behavior and tests require a follow-up size allocation, rather
+than removal of tests to meet the 400-production-line limit. Rollback is
+`git revert`; RL14 must not call this partial API.
