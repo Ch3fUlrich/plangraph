@@ -94,7 +94,17 @@ fn export_with_cleanup(
     }
     let _guard = lock(repo, revision)?;
     let root = Path::new(&repo.root);
-    git(root, &["fetch".as_ref(), "--".as_ref(), "origin".as_ref()])?;
+    git(
+        root,
+        &[
+            "-c".as_ref(),
+            "core.hooksPath=".as_ref(),
+            "fetch".as_ref(),
+            "--recurse-submodules=no".as_ref(),
+            "--".as_ref(),
+            "origin".as_ref(),
+        ],
+    )?;
     let default = git(
         root,
         &["symbolic-ref".as_ref(), "refs/remotes/origin/HEAD".as_ref()],
@@ -168,7 +178,17 @@ pub fn import_bundle(repo: &RepoEntry, revision: &str, bundle: &Path) -> Result<
     }
     let bundle = bundle.canonicalize()?;
     let root = Path::new(&repo.root);
-    git(root, &["fetch".as_ref(), "--".as_ref(), "origin".as_ref()])?;
+    git(
+        root,
+        &[
+            "-c".as_ref(),
+            "core.hooksPath=".as_ref(),
+            "fetch".as_ref(),
+            "--recurse-submodules=no".as_ref(),
+            "--".as_ref(),
+            "origin".as_ref(),
+        ],
+    )?;
     git(
         root,
         &["bundle".as_ref(), "verify".as_ref(), bundle.as_os_str()],
