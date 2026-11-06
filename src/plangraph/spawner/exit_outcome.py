@@ -186,8 +186,6 @@ def terminal_reason(record, job=None):
     later attempt's outcome.  Guard evidence names the run (M9), and guard and
     cancel verdicts are terminal: never stomped, never popped (M15, Q14).
     """
-    from .seat_spawn import annotate_review_warning
-    annotate_review_warning(record)
     if record.get('reason') == 'kill_incomplete':
         return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()

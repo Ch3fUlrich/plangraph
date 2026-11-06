@@ -74,28 +74,74 @@ def test_forced_leg_warning(tmp_path, monkeypatch, selection):
     assert saved[0]['warnings'] == ['review_unfit: mimo/mimo-v2.6-flash']
 
 
-def test_classifier_warns_for_resolved_override():
+def test_classifier_does_not_emit_spawn_warning():
     record = dict(role='review', status='running', plan={'p_source': 'override'},
                   chosen_leg={'model': 'mimo/mimo-v2.6-flash'})
     terminal_reason(record)
     terminal_reason(record)
-    assert record['warnings'] == ['review_unfit: mimo/mimo-v2.6-flash']
+    assert 'warnings' not in record
+
+
+def test_routed_warning_absent(tmp_path, monkeypatch):
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.service import SpawnService
+    chosen = next(l for l in DEFAULT_LEGS if l.model == 'mimo/mimo-v2.6-flash')
+    service = SpawnService(runner=SimpleNamespace(), state=tmp_path)
+    monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'prior', (), ()))
+    record = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='Review',
+        role='review', writer_families=['gpt'], dry_run=True))
+    assert record['chosen_leg']['model'] == chosen.model
+    assert 'warnings' not in record
+
+
+@pytest.mark.parametrize('explicit', [True, False])
+def test_real_spawn_warning_selection(tmp_path, monkeypatch, explicit):
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.service import SpawnService
+    chosen = next(l for l in DEFAULT_LEGS if l.model == 'mimo/mimo-v2.6-flash')
+    launches, saves = [], []
+    async def launch(**kwargs):
+        launches.append(kwargs)
+        raise RuntimeError('hermetic launch boundary')
+    service = SpawnService(runner=SimpleNamespace(spawn=launch, default_cwd=str(tmp_path)), state=tmp_path)
+    monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'prior', (), ()))
+    monkeypatch.setattr(service, '_leg_prompt', lambda *a, **k: 'Review')
+    save = service._save
+    def capture(record):
+        saves.append(json.loads(json.dumps(record)))
+        save(record)
+    monkeypatch.setattr(service, '_save', capture)
+    record = asyncio.run(service.spawn(
+        card={'estimate_tokens': 100}, prompt='Review', role='review',
+        writer_families=['gpt'], override_reason='hermetic regression',
+        **({'leg': chosen.id} if explicit else {})))
+    assert len(launches) == 1
+    expected = ['review_unfit: mimo/mimo-v2.6-flash'] if explicit else []
+    assert saves[0].get('warnings', []) == expected
+    assert record.get('warnings', []) == expected
 
 
 @pytest.mark.parametrize('mode', ['tools', 'inline-only'])
-def test_routed_spawn_diff_ref_refusal(tmp_path, monkeypatch, mode):
-    from plangraph.spawner.service import SpawnService
-    from plangraph.planner.routing import SpawnPlan, SpawnRefused
+@pytest.mark.parametrize('has_diff', [False, True])
+def test_routed_spawn_diff_delivery(tmp_path, monkeypatch, mode, has_diff):
+    from plangraph.spawner.inline_diff import InlineDiffError
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(default_cwd=str(tmp_path))
     chosen = replace(DEFAULT_LEGS[0], tool_mode=mode)
-    service = SpawnService(runner=SimpleNamespace(), state=tmp_path)
-    monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan((chosen,), (), 'override', (), ()))
-    call = service.spawn(card={'estimate_tokens': 100}, prompt='Review', role='review',
-                         writer_families=['gpt'], dry_run=mode == 'tools', override_reason='regression')
-    if mode == 'inline-only':
-        with pytest.raises(SpawnRefused, match='diff_ref_required'):
-            asyncio.run(call)
+    card = {'diff_ref': {'repo': str(tmp_path), 'base': 'base', 'head': 'head'}} if has_diff else {}
+    monkeypatch.setattr('plangraph.spawner.context_pack.pack_prompt', lambda p, *a: p)
+    monkeypatch.setattr('plangraph.spawner.inline_diff.subprocess.run',
+                        lambda *a, **k: SimpleNamespace(returncode=0, stdout='+change\n', stderr=''))
+    # Admission itself must never refuse; only inline prompt assembly requires a diff.
+    monkeypatch.setattr('plangraph.spawner.context_pack.annotate', lambda *a: None)
+    seat._annotate_spawn(dict(role='review', plan={'p_source': 'override'}),
+                         'Review', card, str(tmp_path), SimpleNamespace(first_leg=chosen), False)
+    if mode == 'inline-only' and not has_diff:
+        with pytest.raises(InlineDiffError, match='no diff_ref'):
+            seat._leg_prompt('Review', card, 'review', chosen)
     else:
-        assert asyncio.run(call)['run_id'].startswith('run-')  # Admitted; fake runner cannot launch.
+        result = seat._leg_prompt('Review', card, 'review', chosen)
+        assert ('+change' in result) if mode == 'inline-only' else result == 'Review'
 
 
 def test_warning_uses_record_not_selector(monkeypatch):

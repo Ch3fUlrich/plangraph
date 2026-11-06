@@ -39,11 +39,6 @@ class SeatSpawnMixin:
         pack = annotate(record, prompt, card, cwd)
         if record.get('chosen_leg'):
             annotate_review_warning(record)
-        if (record['role'] == 'review' and plan.first_leg.tool_mode == 'inline-only'
-                and card.get('diff_ref') is None and not explicit and not record.get('chosen_leg')
-                and record['plan'].get('p_source') == 'override'):
-            from plangraph.routing_errors import SpawnRefused
-            raise SpawnRefused('diff_ref_required: inline-only review leg')
         return pack
 
     def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):

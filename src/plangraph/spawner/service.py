@@ -302,7 +302,7 @@ class SpawnService(SeatSpawnMixin):
             raise SpawnRefused(plan.error or 'no eligible leg')
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
-            plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run else None, served_model=None,
+            plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or model is not None or leg is not None else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running',
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
