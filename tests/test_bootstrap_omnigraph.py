@@ -156,7 +156,11 @@ def test_npm_missing_skips(host):
     assert 'npm unavailable' in run().stdout
 
 
-@pytest.mark.parametrize('platform', ['nt', 'posix'])
+@pytest.mark.parametrize('platform', [
+    'nt',
+    pytest.param('posix', marks=pytest.mark.skipif(
+        os.name == 'nt', reason='POSIX fchmod and mode bits require a POSIX host')),
+])
 def test_npm_cache_spaced_path_without_shell(host, monkeypatch, capsys, platform):
     home, site, _, _, _, _ = host
     site.write_text('')  # Stop before platform-specific session configuration.
@@ -190,6 +194,23 @@ def test_npm_cache_spaced_path_without_shell(host, monkeypatch, capsys, platform
         assert 'OPERATOR: place private ' + name in output
     if platform == 'posix':
         assert (home / '.config/plangraph/omnigraph-cache-spec').stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('host_name', ['nt', 'posix'])
+def test_npm_cache_posix_case_requires_posix_host(monkeypatch, host_name):
+    spec = importlib.util.spec_from_file_location('bootstrap_tests', __file__)
+    module = importlib.util.module_from_spec(spec)
+    # Simulate the importing host without changing pathlib's real OS module.
+    with monkeypatch.context() as patch:
+        patch.setitem(sys.modules, 'os', SimpleNamespace(**{**vars(os), 'name': host_name}))
+        spec.loader.exec_module(module)
+    marks = module.test_npm_cache_spaced_path_without_shell.pytestmark
+    parameters = next(mark.args[1] for mark in marks if mark.name == 'parametrize')
+    posix_case = next(case for case in parameters if not isinstance(case, str)
+                      and case.values == ('posix',))
+    skip = next(mark for mark in posix_case.marks if mark.name == 'skipif')
+    assert skip.args == (host_name == 'nt',)
+    assert 'nt' in parameters  # Windows coverage remains enabled on either host.
 
 
 def test_health_404_no_second_guess(host, monkeypatch):
