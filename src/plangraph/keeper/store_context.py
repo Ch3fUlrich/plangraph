@@ -289,7 +289,12 @@ class ContextMixin:
         """Refuse a stale claim with the facts, or return the override record."""
         reason = self._force_stale_reason(reason)
         index = {it["key"]: it for it in self._all_items()}
-        ctx = self._task_context(item, index, inputs=self._inputs(index, fresh=True),
+        try:
+            inputs = self._inputs(index, fresh=True)
+        except (OSError, UnicodeDecodeError):
+            path = getattr(self._adapter("decisions"), "_path", None)
+            raise Refused("bad_state", f"cannot read decisions file: {path}") from None
+        ctx = self._task_context(item, index, inputs=inputs,
                                  fetch=True)
         facts = []
         commits = ctx["work_exists"]["commits"]

@@ -254,7 +254,8 @@ def decision_book(decisions, *, fresh=False):
     if decisions is None:
         return _build_book({})
     if fresh:
-        return _build_book(_read_rows(decisions))
+        rows = getattr(decisions, "_rows_strict", getattr(decisions, "_rows", dict))()
+        return _build_book({did: tuple(lines) for did, lines in rows.items()})
     path = getattr(decisions, "_path", None)
     try:
         stat = os.stat(path) if path is not None else None
