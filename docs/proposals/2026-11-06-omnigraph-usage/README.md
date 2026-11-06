@@ -69,7 +69,7 @@ Cost: relevance/provenance review per new fact and an extra authoritative lookup
 | Wake, urgent stop, question, acknowledgment, coordination | Chat/message channel | Addressed delivery and urgency, not durable recall | Participating agents/operator | Named recipient |
 | Code, tests, proposal text, implementation history, large evidence | Git/artifact store | Reviewable exact bytes; avoid graph payload growth | Existing repository/artifact writers | Implementers/reviewers; graph stores safe references only |
 | Reusable lesson derived from a task or decision | Graph with keeper/git reference | Deliberate small semantic extraction, not copied state | Facade after evidence review | Future relevant sessions |
-| Rejected/pending submission accounting | Private host runtime ledger | Recovery, not a second knowledge base; status only in recall | Credentialed supervisor | Submitter/operator; no rejected body exposed |
+| Rejected/pending submission accounting | Private host runtime ledger | Recovery, not a second knowledge base; status only in recall | Supervisor holding access credentials | Submitter/operator; no rejected body exposed |
 | Secrets, raw transcripts, unreviewed instructions | Never graph, feed payload or recall | Prevent disclosure and instruction laundering | No memory writer permitted | No recall consumer |
 
 Keeper/card/git reads remain necessary. Do not import their bodies merely to save a lookup.
@@ -153,7 +153,7 @@ Cost: one small hint where needed, subscriber/cursor overhead; saves repeated kn
 
 ## 5. Exact no-MCP flow (U-READ/U-WRITE/U-TRANSMIT under LEGS)
 
-1. Credentialed launcher/supervisor derives project and allowed scope from trusted launch
+1. Launcher/supervisor holding access credentials derives project and allowed scope from trusted launch
    metadata, not worker-supplied access claims; calls facade recall before launch.
 2. It validates output, caps it, injects a facts artifact with commit, age, sources and
    unavailable/omitted status through existing prompt packing. Memory is quoted data,
@@ -212,7 +212,7 @@ all flags default off. Rollback disables integration, never deletes shared facts
   Done: mock tests cover cap, scope, conflicts, lost receipts, duplicate edges, correction
   and feed gaps; verify real API contracts before live use. Replaces unbounded reads/blind retry.
 - **C — LEGS mediation.** Depends on IO; extends OG-MEM-LEGS, not ACCESS.
-  Done: coding and text-only seats round-trip without MCP/credentials, safe unavailable
+   Done: coding and text-only seats round-trip without MCP or access credentials, safe unavailable
   banner and durable receipts tested; poisoned payload cannot alter launch scope/tooling.
   Replaces repeated memory prompt bodies, not keeper/card context or worker tool policy.
 - **D — IMPORT/SYNC accounting.** Depends on IO then IMPORT as existing batch requires.
