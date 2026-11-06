@@ -35,7 +35,7 @@ def load_watchdog_env():
             value = value[1:-1]
         if key and '\0' not in key and '\0' not in value and key not in os.environ:
             os.environ.setdefault(key, value)
-            if value:
+            if len(value) >= 8:
                 _watchdog_values.add(value)
 
 

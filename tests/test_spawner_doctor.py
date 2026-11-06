@@ -15,6 +15,18 @@ from plangraph.spawner import doctor as d
 from plangraph.spawner.service import SpawnService as RealService
 
 
+@pytest.fixture(autouse=True)
+def watchdog_state():
+    environment, values = dict(os.environ), set(d._watchdog_values)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(environment)
+        d._watchdog_values.clear()
+        d._watchdog_values.update(values)
+
+
 @pytest.fixture
 def host(tmp_path, monkeypatch):
     from plangraph.planner import legs
@@ -70,6 +82,31 @@ def test_watchdog_env_missing(host):
     before = dict(os.environ)
     d.load_watchdog_env()
     assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize('value', ['1', 'info', '1234567'])
+def test_watchdog_env_short_value_preserves_output(host, monkeypatch, value):
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    watchdog_env(host, f'DOCTOR_SETTING={value}\n')
+    d.load_watchdog_env()
+    text = 'python3.11 info version 1234567'
+    assert d.clean(text) == text
+
+
+def test_watchdog_state_restores_loaded_values(host, monkeypatch):
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    environment, values = dict(os.environ), set(d._watchdog_values)
+    state = watchdog_state.__wrapped__()
+    next(state)
+    try:
+        watchdog_env(host, 'DOCTOR_SETTING=isolation-private-value\n')
+        d.load_watchdog_env()
+        assert os.environ['DOCTOR_SETTING'] == 'isolation-private-value'
+        assert 'isolation-private-value' in d._watchdog_values
+    finally:
+        state.close()
+    assert dict(os.environ) == environment
+    assert d._watchdog_values == values
 
 
 def test_watchdog_env_discarded_value_not_redacted(host, monkeypatch):
