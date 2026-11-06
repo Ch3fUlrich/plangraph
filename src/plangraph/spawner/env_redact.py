@@ -33,14 +33,23 @@ def redact(value):
 class OutputLines:
     """Hold incomplete lines across reads, including cancellation/EOF tails."""
     def __init__(self, scrub):
-        self.scrub, self.pending = scrub, ''
+        self.scrub, self.pending, self.discarding = scrub, '', False
 
     def feed(self, text, final=False):
+        withheld = self.discarding and bool(text)
         self.pending += text
-        end = len(self.pending) if final else self.pending.rfind('\n') + 1
+        if self.discarding:
+            match = re.search(r'[\r\n]', self.pending)
+            self.pending = self.pending[match.end():] if match else ''
+            self.discarding = not bool(match)
+        end = len(self.pending) if final else max(self.pending.rfind('\n'), self.pending.rfind('\r')) + 1
         text, self.pending = self.pending[:end], self.pending[end:]
+        if len(self.pending) > 65536:
+            # An arbitrarily long credential cannot safely be partially emitted.
+            text += '[autoos:overlong line withheld]\n'
+            self.pending, self.discarding = '', True
         if not text:
-            return ''
+            return '[autoos:overlong line withheld]\n' if withheld else ''
         try:
             return self.scrub(text)
         except Exception:
@@ -121,7 +130,7 @@ def harness_limit_line(exit_code, stdout, stderr):
     # a mid-line mention in prose, a traceback or a retry log never marks a
     # leg. Agent prose on stdout only counts via its error-shaped lines.
     def quota(line):
-        if _CREDIT_LIMIT.fullmatch(line):
+        if _CREDIT_LIMIT.fullmatch(re.sub(r'^\s*error:\s*', '', line, flags=re.I)):
             return True
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             return _USAGE_LIMIT.fullmatch(line)
@@ -133,7 +142,7 @@ def harness_limit_line(exit_code, stdout, stderr):
             _RESET_AFTER.match(line.strip()) and _QUOTA_MARKER.search(line))
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
         line for line in normalize(stdout).splitlines()
-        if (_ERROR_SHAPED.match(line) and quota(line)) or _CREDIT_LIMIT.fullmatch(line)]
+        if _ERROR_SHAPED.match(line) and quota(line)]
     return lines[0].strip() if lines else None
 
 

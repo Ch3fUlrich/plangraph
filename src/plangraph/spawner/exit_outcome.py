@@ -141,8 +141,7 @@ def tool_call_only(job, record):
             or any(e.get('event') in protected for e in [*events, *record.get('events', ())])
             or getattr(job, 'status', None) not in ('completed', 'failed')):
         return False
-    text = '\n'.join(line for line in normalize(job.stdout).splitlines()
-                     if not re.fullmatch(r'\s*>\s+\S+\s+·\s+\S+\s*', line))
+    text = without_progress(normalize(job.stdout))
     if not re.fullmatch(r'\s*(?:<tool_call>\s*<function=[^<>]+>(?:(?!</?tool_call>|</function>).)*'
                         r'</function>\s*</tool_call>\s*)+', text, re.S):
         return False
@@ -250,7 +249,7 @@ def terminal_reason(record, job=None):
         from plangraph.review.verdict import judge
         # Base dispatch has no job here: use only the final attempt, never the
         # combined stdout tail (an earlier leg's verdict cannot bless this one).
-        attempts = record.get('attempts') or ()
+        attempts = [a for a in record.get('attempts') or () if a.get('status') != 'skipped']
         text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
         if judge(text, getattr(job, 'response_finish_reason', None)).verdict is None:
             record.update(status='failed', reason='no_verdict')

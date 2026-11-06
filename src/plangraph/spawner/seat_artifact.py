@@ -11,6 +11,8 @@ def publish(directory, record, job):
     """Publish evidence last; never recover evidence from combined run tails."""
     if record.get('role') != 'review' or record.get('ended') is None:
         return
+    if job is None or record.get('job_id') != job.job_id:
+        return  # retries without the owning final job cannot invalidate evidence
     directory = Path(directory)
     if directory.is_symlink():
         raise ValueError('symlink run directory')

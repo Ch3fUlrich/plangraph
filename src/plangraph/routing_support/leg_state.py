@@ -342,7 +342,7 @@ class LegAdapter:
     def __init__(self, store, provider, models=None, *, enabled=False,
                  clock=time.monotonic, ttl_s=60):
         self.store, self.provider = store, provider
-        self.models = models or self.standalone_models()
+        self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
     def __getattr__(self, name):

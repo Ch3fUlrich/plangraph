@@ -33,7 +33,8 @@ def test_recorded_refusal_books_and_runs_next_leg(tmp_path, monkeypatch, stream,
         job = NS(job_id=name, status='failed' if name == 'first' else 'completed',
                  exit_code=1 if name == 'first' else 0, stdout='', stderr='',
                  served_model=name, served_family='synthetic', served_witness_reason='', events=[])
-        setattr(job, stream, LINE if name == 'first' else 'review complete')
+        setattr(job, stream, ('error: ' + LINE if stream == 'stdout' else LINE)
+                if name == 'first' else 'review complete')
         if name != 'first':
             job.stdout += '\nVERDICT: pass\n'
         runner.jobs[name] = job
@@ -56,7 +57,7 @@ def test_recorded_refusal_books_and_runs_next_leg(tmp_path, monkeypatch, stream,
     assert store.leg_status('first')['state'] == 'limited'
     assert record['status'] == 'completed' and 'reason' not in record
     assert [(a['leg']['id'], a['status'], a['skip_reason']) for a in record['attempts']] == [
-        ('first', 'failed', 'harness_limit: ' + LINE),
+        ('first', 'failed', 'harness_limit: ' + ('error: ' if stream == 'stdout' else '') + LINE),
         ('next', 'completed', None), ('unused', 'skipped', 'earlier_leg_succeeded')]
 
 
