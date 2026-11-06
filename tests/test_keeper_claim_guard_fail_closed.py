@@ -108,3 +108,19 @@ def test_display_unreadable_matches_unconfigured(scenario, bad):
     before = world.store.show(world.p("reader"), "demo:A")
     world.store.ctx.decisions = DecisionsAdapter(None)
     assert world.store.show(world.p("reader"), "demo:A") == before
+
+
+@pytest.mark.parametrize("error", [OSError("task input unavailable"),
+                                  UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")])
+@pytest.mark.parametrize("force", [None, "checked"])
+def test_non_decisions_input_failure_propagates(scenario, monkeypatch, error, force):
+    world, path, adapter = scenario
+
+    def unreadable():
+        raise error
+
+    monkeypatch.setattr(world.store, "_decision_clock", unreadable)
+    with pytest.raises(type(error)) as exc:
+        world.store._claim_guard(world.store._item("demo:A"), force)
+    assert exc.value is error
+    assert world.store._item("demo:A")["state"] == "open"
