@@ -104,6 +104,23 @@ def render_gateway_providers(
     if "mimo" not in providers and model_clean in ACCEPTED_MIMO_IDS:
         providers["mimo"] = _mimo_template()
 
+    # Only the requested registered leg is added; never widen the host catalog.
+    if provider_prefix == "omniroute":
+        from plangraph.planner.legs import DEFAULT_LEGS
+
+        leg = next((leg for leg in DEFAULT_LEGS
+                    if leg.harness == "opencode" and leg.model == model_clean), None)
+        if leg is not None:
+            block = providers.setdefault("omniroute", {
+                "package": "@opencode/ai/providers/openai-compatible",
+                "name": "OmniRoute", "settings": {}, "models": {},
+            })
+            if isinstance(block, dict):
+                models = block.setdefault("models", {})
+                if isinstance(models, dict):
+                    model_id = model_clean.split("/", 1)[1]
+                    models.setdefault(model_id, {"modelID": model_id, "name": model_id})
+
     # Step 4: Resolve base URL in I4 order
     resolved_url = None
     for var in (
