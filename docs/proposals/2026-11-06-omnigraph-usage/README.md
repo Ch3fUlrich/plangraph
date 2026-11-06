@@ -60,8 +60,9 @@ No batch, keeper, skill, service, access grant or graph is changed by this docum
 8. **U-LAYOUT** leaves graph folding/aliases to MEM-OMNIGRAPH-MERGE; retain per-repo
    layout pending that decision. Resolve baseline compression's contradictory ban on
    per-project instructions before editing skill text. No fold, deletion or restore here.
-   Remove the obsolete graph-creation fallback: pre-merge plangraph writes target the
-   existing graph `plangraph`, not hub `plangraph` in `autoos`; folding stays deferred.
+   Retain the baseline hub `plangraph` in `autoos` fallback until a live existence/read
+   check or recorded operator confirmation verifies graph `plangraph`; the configuration
+   pin alone does not retire that fallback. Folding stays deferred; no writes authorized here.
 
 These are proposed acceptance-criteria amendments to the named items, not new parallel
 items. Cost: focused Rust facade/launcher tests and operator review; no new persistent LLM.
@@ -94,19 +95,20 @@ selected fields, current revisions, source references and graph commit. Filter a
 before ranking; bound traversal depth, result count, query time and rendered bytes.
 Use the baseline 8 KiB output cap, including provenance/status; select whole facts rather
 than cutting safety qualifiers. Return omitted-count/continuation and fetch details on demand.
-Numeric traversal/time limits require IO profiling and operator acceptance, not invented defaults.
+Numeric traversal/time limits require IO profiling and operator acceptance under decision 11,
+not invented defaults.
 
 At start, combine this recall artifact with the existing small keeper/card context; do not
 append it to an unchanged full reload and call that a saving. Cache only authorized,
 validated, commit-keyed recall artifacts; label unavailable memory separately from empty results.
 No cache is OG-LOCAL-COPY and no cache is authoritative offline memory.
 
-On change, prefer one host-runtime feed consumer with a durable cursor and scoped invalidation
+On change, subject to decision 12, prefer one host-runtime feed consumer with a durable cursor and scoped invalidation
 over per-session full-query polling. Wake only affected sessions; retrieve bounded deltas at
 safe task boundaries, not mid-edit. Check feed continuity, permissions and head commit;
 on cursor expiry/gap perform a bounded re-recall, never assume no changes.
 Until feed behavior is verified, use coalesced head checks at explicit recall/task boundaries;
-any timer cadence needs an approved freshness requirement. The baseline five-minute scanner
+any timer cadence needs an approved freshness requirement under decision 11. The baseline five-minute scanner
 default concerns source-file discovery, not a justified feed/polling latency target.
 
 Estimate (unmeasured): saving = replaced startup memory tokens minus recall/invalidation tokens;
@@ -236,21 +238,26 @@ all flags default off. Rollback disables integration, never deletes shared facts
    banner and durable receipts tested; poisoned payload cannot alter launch scope/tooling.
    Assert final leg tool manifests contain no Omnigraph/MCP tools (WORKER-TOOL-SURFACE).
   Replaces repeated memory prompt bodies, not keeper/card context or worker tool policy.
-- **D — IMPORT/SYNC accounting.** Depends on IO then IMPORT as existing batch requires.
-  Done: every source classified verified/duplicate/blocked, Component blocked, restarts and
-  outcome-unknown reconciled; schedule proven off. Replaces legacy scanner write paths only
-  after comparison; deletes no sources and enables nothing before OP-GO/E2E.
+- **D1 — IMPORT accounting.** Depends on IO, extends baseline IMPORT; at most 400 changed lines.
+  Done: every source classified verified/duplicate/blocked, Component blocked and
+  outcome-unknown reconciled. Rollback: disable import integration, retain manifests and sources.
+- **D2 — SYNC checkpoint/restart.** Depends on IO then IMPORT as existing batch requires;
+  extends baseline SYNC, separately at most 400 changed lines. Done: restart/checkpoint and
+  outcome-unknown reconciliation tested; schedule proven off. Replaces legacy scanner write
+  paths only after comparison; deletes no sources and enables nothing before OP-GO/E2E.
+  Rollback: disable scanner integration/schedules, retain checkpoints and evidence.
 - **E1 — ACCESS doctor.** Retains SPAWNER-HOST-DOCTOR merge/CONTRACT/OP-ACCESS gates.
    Done: redacted endpoint and authenticated graph/hub/version evidence on every approved
    host, including workstation and 18-de-2053; wrong graph, 401/403,
    timeout, missing hub and old-version tests. Rollback: probe flag off, independent of E2E.
    Replaces obsolete inventory, not access-repair/actor lanes; does not authorize live writes.
 - **E2 — live E2E.** OP-GO retains ACCESS/IMPORT/SYNC/LEGS; E2E needs SYNC/LEGS/OP-GO,
-   freeze clearance and decisions 8–10 below. Done: redacted cross-host/non-Claude canary,
+    freeze clearance and decisions 8–10 below; live feed use also requires decision 12.
+    Done: redacted cross-host/non-Claude canary,
    correction/propagation, outage recovery, no duplicate nodes/edges, per-host no-loss counts,
    pending-not-saved recall and context/latency/growth measurements. Activate scanners only
    here after OP-GO. Rollback: stop schedules, retain facts/evidence; E1 may remain passed.
-   Before D/E2 sync writes, HOST-NAMESPACE-MIGRATE supplies stable host IDs; coordinate
+    Before D2/E2 sync writes, HOST-NAMESPACE-MIGRATE supplies stable host IDs; coordinate
    server:OG-DELTA-IMPORT and server:AO-SYNC-PARTIAL-PULL-RESTORE, never a new restore loop.
 - **F — compression/layout follow-up.** SKILL-COMPRESS remains after E2E and reconciled
   OP-SKILL ruling; PH-M2C-KG retains its baseline gates. Done: evaluations and baseline
@@ -262,8 +269,9 @@ all flags default off. Rollback disables integration, never deletes shared facts
 1. Approve these named amendments for later item updates? **Default: proposal only; no apply.**
 2. Knowledge ownership? **Default: keeper alone owns state; cards are disposable projections;
    graph owns why/how, git owns artifact bytes; no activation.**
-3. Read budget/transmission? **Default: baseline 8 KiB bounded recall, verified feed first,
-   scoped fallback checks; messages still carry urgency/acknowledgment.**
+3. Read budget/transmission? **Default: baseline 8 KiB bounded recall, coalesced head checks
+   only at explicit recall/task boundaries; no feed activation.** Decisions 11–12 gate limits,
+   timers and feed use; messages still carry urgency/acknowledgment.
 4. Writer/no-MCP integration? **Default: one Rust facade, credentialed mediation and verified
    receipts as design only; routing exception unchanged; workers gain neither MCP nor access.
    Host-runtime credential placement requires decision 8; no activation by default.**
@@ -287,4 +295,13 @@ all flags default off. Rollback disables integration, never deletes shared facts
 10. Accept HOST-NAMESPACE-MIGRATE IDs and server:OG-DELTA-IMPORT /
     server:AO-SYNC-PARTIAL-PULL-RESTORE coordination? Operator records stable-ID evidence,
     server-owner approval and rollback owner before scanner activation. **Default: defer;
-    no sync-write or scanner activation.** Neither dependency is replaced by this proposal.
+     no sync-write or scanner activation.** Neither dependency is replaced by this proposal.
+11. Accept profiled traversal/query-time limits and a freshness requirement for any timer?
+    Record IO measurements and operator acceptance before adopting numeric limits or cadence.
+    **Default: limits unset until IO profiling; head-checks-only at explicit recall/task
+    boundaries, no timer and no activation.**
+12. Enable the host-runtime feed consumer and server change-feed access? Record participating
+    hosts, service owner, scoped read/feed access grant, verified feed/cursor contract and
+    rollback owner before live use; decision 8 placement alone does not authorize the service.
+    Rollback stops the consumer and returns to coalesced head checks at recall/task boundaries.
+    **Default: feed consumer off, no new feed access grant or activation; coalesced head checks only.**
