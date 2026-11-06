@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "omnigraph": {
+      "command": "npx",
+      "args": ["-y", "@modernrelay/omnigraph-mcp@0.13.0"],
+      "env": {
+        "OMNIGRAPH_BASE_URL": "${OMNIGRAPH_BASE_URL}",
+        "OMNIGRAPH_TOKEN": "${OMNIGRAPH_TOKEN}",
+        "OMNIGRAPH_GRAPH_ID": "plangraph"
+      }
+    }
+  }
+}

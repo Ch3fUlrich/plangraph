@@ -52,6 +52,7 @@ from .store_waiver import WaiverMixin
 from .store_worker import WorkerMixin
 from .store_jev import JevMixin
 from .store_messages import MessagesMixin
+from .store_placement_rules import PlacementRulesMixin
 
 __all__ = ["Store", "Refused", "iso", "parse_iso"]
 
@@ -77,7 +78,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
             WorkerMixin, OversightMixin, JevMixin, MessagesMixin, BusHostsMixin,
-            ContextMixin):
+            ContextMixin, PlacementRulesMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,

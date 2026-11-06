@@ -1,0 +1,1 @@
+- **AO-BRIEF-RAW-CONTROL-BYTES:** Pin the refusal of an explicit null role before launch, make the launch-spec test catch a supervisor launch, fix an mtime tie that made a sessions MCP test flake, and record the Windows comparison of the prompt guard's merge.
