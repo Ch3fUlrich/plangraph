@@ -49,7 +49,8 @@ def _validate(req):
         job_id=lambda v: isinstance(v, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', v),
         role=lambda v: isinstance(v, str) and v in ('implement', 'review', 'orchestrate'),
         dry_run=lambda v: type(v) is bool,
-        leg=lambda v: isinstance(v, dict) and isinstance(v.get('id'), str) and bool(v['id']),
+        leg=lambda v: isinstance(v, dict) and isinstance(v.get('id'), str) and bool(v['id'])
+            and ('explicit' not in v or type(v['explicit']) is bool),
         prompt=lambda v: isinstance(v, str), card=lambda v: isinstance(v, dict),
         cwd=lambda v: isinstance(v, str) and os.path.isabs(v) and os.path.isdir(v),
         state=lambda v: isinstance(v, str) and os.path.isabs(v))
@@ -109,7 +110,8 @@ def build(request: dict) -> dict:
         except context_pack.ContextError as exc:
             raise LaunchRefused('context', str(exc)) from None
         try:
-            prompt = service._leg_prompt(request['prompt'], request['card'], request['role'], leg, pack)
+            prompt = service._leg_prompt(request['prompt'], request['card'], request['role'], leg, pack,
+                                         document_review=request['leg'].get('explicit') is True)
         except InlineDiffError as exc:
             raise LaunchRefused('inline_diff_failed', str(exc)) from None
         prompt, writer_env = writer_launch(prompt, request['role'], leg.model, request['run_id'])
