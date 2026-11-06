@@ -21,7 +21,7 @@ qwen-clamp-reapply-README.md qwen-clamp-reapply.ps1 reason-fix-README.md
 reason-fix-reapply.ps1 reasoning-defense.md verify-clamp.mjs vertex-failover-knobs.json
 vertex-trailing-turn-README.md'''.split()
 CHANGED = set('''apply-capability-overrides.ps1 apply-custom-models.sh apply.ps1 apply.sh
-qwen-clamp-reapply-README.md reason-fix-README.md reason-fix-reapply.ps1
+qwen-clamp-reapply-README.md qwen-clamp-reapply.ps1 reason-fix-README.md reason-fix-reapply.ps1
 reasoning-defense.md verify-clamp.mjs live/server-combos.json vertex-failover-knobs.json'''.split())
 
 

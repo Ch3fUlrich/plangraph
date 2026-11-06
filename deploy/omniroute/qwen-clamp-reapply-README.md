@@ -92,7 +92,7 @@ reproduced exactly.
 ## Usage
 
 ```powershell
-# From the AutoOS repository root:
+# From this directory:
 pwsh -File ./qwen-clamp-reapply.ps1
 
 # Preview without writing:
