@@ -139,3 +139,10 @@ Listed above but not failing at head:
 - tests/test_spawner_launch_spec.py::test_tools[implement
 - tests/test_spawner_launch_spec.py::test_tools[review
 Parametrized names are cut at the first space by the log filter.
+
+## tests/test_changelog_fragments.py (L1 measured 2026-11-06, D-4346)
+Same flags, this one file. Failure names are identical on base e6c48516, #546 head a07954d3 and merge af466362: 9 failed, 17 passed, 0 new, 0 gone. Not caused by #546.
+- test_fold_preserves_and_reports_fragments_without_entries, 6 cases | owner: none yet
+  The report prints changelog.d\PG-EMPTY.md; the test expects a forward slash.
+- test_fold_uncommitted_fragments_sort_newest_by_mtime_then_name[edited, staged, untracked] | owner: none yet
+  Order came back [24, 34, 14, 44], expected [14, 24, 34, 44]; cause not investigated.

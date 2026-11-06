@@ -3,7 +3,6 @@
 //! `PG_RECORD_DIR`), with host identity scrubbed. Replay only re-executes the
 //! workflow code against the recorded event stream, so it catches any
 //! non-deterministic edit before it reaches a live worker.
-
 use pg_worker::activities::{CardActivities, CardInput, CardOutput, Tick};
 use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::Card;
@@ -395,6 +394,20 @@ async fn drifted_code_fails_replay() {
     let res = r.replay_workflow(history("happy")).await;
     assert!(res.is_err(), "non-deterministic change must fail replay");
 }
-
 #[path = "replay_phase_legacy/mod.rs"]
 mod phase_legacy;
+#[tokio::test]
+async fn replays_phase_two_cards() {
+    replayer()
+        .replay_workflow(history("phase_two_cards"))
+        .await
+        .expect("phase_two_cards history replays");
+}
+#[tokio::test]
+async fn replays_phase_defer() {
+    replayer()
+        .replay_workflow(history("phase_defer"))
+        .await
+        .expect("phase_defer history replays");
+}
+mod phase_terminal;

@@ -1,0 +1,1 @@
+- **AUTOOS-HOOKS-INTERIM-S13 (D-3516):** add the recorded hook parity payloads fixture from PR #292.
