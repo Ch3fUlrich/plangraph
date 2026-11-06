@@ -107,6 +107,15 @@ def test_bounded_discovery(monkeypatch):
     assert leg_state.LegAdapter.standalone_models() == ['opencode-go/sample']
 
 
+def test_default_discovery_consumed(tmp_path, monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw:
+                        SimpleNamespace(stdout='opencode-go/sample\n'))
+    reader, _ = adapter(tmp_path)
+    reader = leg_state.LegAdapter(reader.store, reader.provider, enabled=True)
+    assert reader.models == ['opencode-go/sample']
+    assert reader('opencode-go/sample')['state'] == 'ok'
+
+
 @pytest.mark.parametrize('error', [subprocess.CalledProcessError(1, 'opencode'),
                                   subprocess.TimeoutExpired('opencode', 8), OSError()])
 def test_bounded_discovery_failure(monkeypatch, error):

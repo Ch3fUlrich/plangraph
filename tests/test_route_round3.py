@@ -8,7 +8,7 @@ from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
 
 
-def test_review_same_family_measured_order():
+def test_review_same_family_table_order():
     base = next(l for l in DEFAULT_LEGS if l.id == "mimo-v2.6-flash")
     legs = (replace(base, id="first", roles=("review",)),
             replace(base, id="second", roles=("review",)))

@@ -248,7 +248,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     The implement role ignores benchmark permutation (operator order D-2683).
     ``exclude_families`` excludes the specified family names from candidate legs.
     ``policy`` (default :func:`load_route_policy`) skips banned/off families and
-    paused harnesses.  A review leg whose family is EVERY writer family is
+    paused harnesses.  A review leg whose family is ANY writer family is
     excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
     Readers may be a LegStateStore or a callable with the leg_status contract.
@@ -318,7 +318,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     writer_set = writer_parts(writer_families) if role == "review" else {w for w in writer_families if w}
     if role == "review" and not writer_set:   # D-1533: no writer named = none excluded; fail closed
         raise SpawnRefused("review needs a writer family (writer_families or review_of)")
-    # D-3084 per-part seats: only a family that is EVERY writer covers no part.
+    # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
     def _leg_status(leg_obj):

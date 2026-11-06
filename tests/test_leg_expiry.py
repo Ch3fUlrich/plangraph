@@ -38,6 +38,7 @@ def test_omniroute_expired_or_down_no_route_or_override(tmp_path, state):
     import asyncio
     from plangraph.planner.routing import SpawnRefused
     from plangraph.spawner.service import SpawnService
+    from plangraph.spawner.runner import SpawnerRunner
 
     leg = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol")
     def reader(model, **kwargs):
@@ -47,8 +48,8 @@ def test_omniroute_expired_or_down_no_route_or_override(tmp_path, state):
     assert leg.id not in {candidate.id for candidate in plan.legs}
     for selection in ({"leg": leg.id}, {"model": leg.model}):
         with pytest.raises(SpawnRefused, match=state):
-            asyncio.run(SpawnService(state=tmp_path, leg_reader=reader).spawn(
-                card=card, override_reason="D-4151 hermetic regression",
+            asyncio.run(SpawnService(runner=SpawnerRunner(), state=tmp_path, leg_reader=reader).spawn(
+                card=card, prompt="task", role="implement", override_reason="D-4151 hermetic regression",
                 dry_run=True, **selection))
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 

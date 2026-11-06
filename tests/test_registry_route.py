@@ -227,7 +227,7 @@ def test_seat_never_shares_family_with_a_single_writer():
     assert any(s["leg"] == "cx-gpt-6-luna" and s["reason"] == "excluded_family" for s in plan.skipped)
 
 
-def test_seat_may_share_family_with_another_writer_part(pre_d3552_policy):
+def test_seat_excludes_every_writer_family(pre_d3552_policy):
     # D-3084 coverage survives D-3901 review-route seat ordering.
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))

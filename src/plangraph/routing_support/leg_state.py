@@ -342,7 +342,7 @@ class LegAdapter:
     def __init__(self, store, provider, models=None, *, enabled=False,
                  clock=time.monotonic, ttl_s=60):
         self.store, self.provider = store, provider
-        self.models = models or self.standalone_models
+        self.models = models or self.standalone_models()
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
     def __getattr__(self, name):
@@ -377,7 +377,7 @@ class LegAdapter:
         if self._at is None or now - self._at >= self.ttl_s:
             try:
                 states = self.provider.snapshot()
-                served = {self.identity(mid) for mid in self.models()}
+                served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
                 self._states, self._served = states, served
                 self._error = None if states else 'unreachable'
             except Exception:
