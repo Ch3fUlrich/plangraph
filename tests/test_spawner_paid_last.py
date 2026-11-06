@@ -125,6 +125,8 @@ def test_paid_pin_measured(tmp_path, monkeypatch, one_up):
 
 
 @pytest.mark.parametrize('status,stop,unavailable,expected', [
+    ('failed', {'status': 402}, True, 'credit_limit'),
+    ('failed', {'status': 429}, True, 'usage_limit'),
     ('failed', {'status': 402}, False, 'credit_limit'),
     ('failed', {'status': 429}, False, 'usage_limit'),
     ('failed', None, True, 'not_served_on_host'),
