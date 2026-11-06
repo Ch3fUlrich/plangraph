@@ -30,6 +30,10 @@ standalone agent mode.
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
 | `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset refuses all cards. Unlisted keys are refused before claim and attempt setup. |
 
+Set `PG_CARD_ALLOWLIST` before deployment. When unset, the worker still starts
+and logs a warning, but terminally refuses every card claim; a healthy poller
+does not imply that cards can run.
+
 Cross-worker exclusivity uses keeper claim arbitration. Each claim sends
 `merge_owner_id()`, the process-stable random worker identity also used for merge
 locks; an empty claim is a non-retryable refusal. A process-global

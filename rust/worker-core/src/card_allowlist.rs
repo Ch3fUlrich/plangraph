@@ -1,6 +1,7 @@
 use super::*;
 impl Config {
     /// Explicit unrestricted policy for test harnesses, never worker startup.
+    #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
     pub fn allow_all_for_tests() -> Self {
         Self {
             test_allow_all_cards: true,
@@ -13,7 +14,18 @@ impl Config {
         if self.card_allowlist.is_some() {
             return Ok(self);
         }
-        let path = std::env::var_os("PG_CARD_ALLOWLIST");
+        self.with_card_allowlist_source(|| std::env::var_os("PG_CARD_ALLOWLIST"))
+    }
+
+    /// Load startup policy from an injectable environment source.
+    pub(super) fn with_card_allowlist_source(
+        self,
+        source: impl FnOnce() -> Option<std::ffi::OsString>,
+    ) -> std::io::Result<Self> {
+        if self.card_allowlist.is_some() {
+            return Ok(self);
+        }
+        let path = source();
         self.with_card_allowlist(path.as_deref().map(std::path::Path::new))
     }
     /// Load an explicit startup policy; never expose file contents in an error.
@@ -47,8 +59,12 @@ impl Config {
     }
 
     pub fn card_allowed(&self, key: &str) -> bool {
+        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+        let default_allowed = self.test_allow_all_cards;
+        #[cfg(not(all(debug_assertions, any(test, feature = "test-support"))))]
+        let default_allowed = false;
         self.card_allowlist
             .as_ref()
-            .map_or(self.test_allow_all_cards, |keys| keys.contains(key))
+            .map_or(default_allowed, |keys| keys.contains(key))
     }
 }

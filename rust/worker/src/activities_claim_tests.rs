@@ -43,3 +43,31 @@ fn empty_claim_is_terminal_refusal() {
     crate::card_admit::tests::assert_failure(result.unwrap_err(), Some("card_not_claimable"), true);
     assert_eq!(keeper.claim_card_calls().len(), 1);
 }
+
+#[test]
+fn empty_claim_attempt_entry_never_starts_or_sets_up() {
+    use crate::attempt::{AttemptInput, LegSpec};
+    use crate::harness::{Harness, HarnessRun};
+    use pg_worker_core::{config::Tier, exit_class::Patterns};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Never(AtomicUsize);
+    impl Harness for Never {
+        fn name(&self) -> &str { "never" }
+        fn command(&self, _: &HarnessRun) -> std::process::Command {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            std::process::Command::new("false")
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let harness = Never(AtomicUsize::new(0));
+    let input = AttemptInput {
+        claim: Claim::default(), n: 1,
+        leg: LegSpec { id: "test".into(), tier: Tier::Trial, model: "test".into(), harness: "never".into() },
+        workroot: root.path().to_string_lossy().into_owned(), class: String::new(), answers: vec![],
+    };
+    // Exercise the actual attempt entry, not an unreachable map after claimed().
+    let error = crate::card_admit::run_attempt(Some(&harness), &Config::allow_all_for_tests(), &Patterns::default(), &input, &|| false).unwrap_err();
+    crate::card_admit::tests::assert_failure(crate::card_admit::attempt_error(error), Some("card_not_claimable"), true);
+    assert_eq!(harness.0.load(Ordering::SeqCst), 0);
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}

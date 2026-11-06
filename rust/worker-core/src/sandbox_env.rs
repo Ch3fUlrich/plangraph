@@ -147,7 +147,6 @@ impl Drop for HomeGuard {
             let _ = std::fs::remove_dir_all(&self.path);
             return;
         }
-        // A pre-existing home stays, but the auth files we put in it do not.
         for staged in &self.staged {
             let _ = std::fs::remove_file(staged);
         }
@@ -160,8 +159,6 @@ impl Drop for HomeGuard {
 /// the staged files, never from the environment.
 pub const HARNESS_AUTH_DIR_ENV: &str = "PG_HARNESS_AUTH_DIR";
 
-/// Body of [`HomeGuard::stage_harness_auth`]: stages each file and records it
-/// so the guard can undo it.
 fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()> {
     let Some(dir) = std::env::var_os(HARNESS_AUTH_DIR_ENV) else {
         return Ok(());
@@ -172,7 +169,9 @@ fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()
     }
     for entry in std::fs::read_dir(&src)? {
         let entry = entry?;
-        // file_type comes from symlink_metadata: it never follows the link.
+        if worker_credential_name(&entry.file_name()) {
+            continue;
+        }
         let ft = entry.file_type()?;
         if ft.is_symlink() {
             return Err(symlink_refused(&entry.path()));
@@ -180,12 +179,13 @@ fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()
         if ft.is_file() {
             stage_file(&entry.path(), &home.join(entry.file_name()), staged)?;
         } else if ft.is_dir() {
-            // One level of subdirectories, no deeper: everything below is
-            // skipped rather than recursed into.
             let dest = home.join(entry.file_name());
             create_staged_dir(&dest)?;
             for sub in std::fs::read_dir(entry.path())? {
                 let sub = sub?;
+                if worker_credential_name(&sub.file_name()) {
+                    continue;
+                }
                 let sft = sub.file_type()?;
                 if sft.is_symlink() {
                     return Err(symlink_refused(&sub.path()));
@@ -199,15 +199,7 @@ fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()
     Ok(())
 }
 
-fn symlink_refused(path: &Path) -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        format!(
-            "{}: harness auth entries must not be symlinks",
-            path.display()
-        ),
-    )
-}
+include!("sandbox_auth_policy.rs");
 
 /// Create a staged directory at its final mode 0700 (unix) up front, so no
 /// window exists between creation and the private mode taking effect. A
@@ -462,10 +454,18 @@ mod tests {
         std::fs::create_dir_all(src.join("sub")).unwrap();
         std::fs::write(src.join("credentials.json"), "sentinel-wf8-auth").unwrap();
         std::fs::write(src.join("sub").join("login"), "x").unwrap();
+        for name in ["PG_KEEPER_TOKEN", "temporal-key", "keeper-token", "tls-key"] {
+            std::fs::write(src.join(name), "synthetic-control-plane").unwrap();
+            std::fs::write(src.join("sub").join(name), "synthetic-control-plane").unwrap();
+        }
         std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
         {
             let mut g = HomeGuard::for_dir(&dir).unwrap();
             g.stage_harness_auth().unwrap();
+            for name in ["PG_KEEPER_TOKEN", "temporal-key", "keeper-token", "tls-key"] {
+                assert!(!g.path().join(name).exists());
+                assert!(!g.path().join("sub").join(name).exists());
+            }
             let f = g.path().join("credentials.json");
             assert_eq!(std::fs::read_to_string(&f).unwrap(), "sentinel-wf8-auth");
             assert_eq!(

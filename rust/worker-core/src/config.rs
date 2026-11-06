@@ -28,6 +28,7 @@ impl Tier {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Explicit test-only bypass; production callers must load an allowlist.
+    #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
     pub test_allow_all_cards: bool,
     pub card_allowlist: Option<std::collections::BTreeSet<String>>,
     pub heartbeat: Duration,
@@ -54,6 +55,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
             test_allow_all_cards: false,
             card_allowlist: None,
             heartbeat: Duration::from_secs(30),

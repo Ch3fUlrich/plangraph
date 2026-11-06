@@ -140,6 +140,11 @@ pub fn run_attempt_with(
     inp: &AttemptInput,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<AttemptResult, AttemptError> {
+    if inp.claim.card.trim().is_empty() {
+        return Err(AttemptError::Admission(
+            crate::AdmissionReason::NotClaimable(inp.claim.card.clone()),
+        ));
+    }
     let _owner = crate::card_admit::enter(cfg, &inp.claim.card).map_err(AttemptError::Admission)?;
     // Stamped in one place so every caller's result carries the projector
     // keys, whether the attempt succeeded, was cancelled or was a defect.
