@@ -5,20 +5,45 @@ fn main() {}
 #[cfg(test)]
 mod placement_rule_binary {
     use std::io::Write;
+    use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
+    use std::sync::OnceLock;
 
-    fn child(input: &[u8], args: &[&str]) -> Output {
-        let executable = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join(format!(
+    fn executable() -> &'static PathBuf {
+        static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
+        EXECUTABLE.get_or_init(|| {
+            let test = std::env::current_exe().unwrap();
+            let target = test.parent().unwrap().parent().unwrap().parent().unwrap();
+            // Unit-test targets do not cause Cargo to build the runnable binary.
+            let build = Command::new(env!("CARGO"))
+                .args([
+                    "build",
+                    "--locked",
+                    "--package",
+                    "pg-worker-core",
+                    "--bin",
+                    "pg-placement-rules",
+                ])
+                .arg("--manifest-path")
+                .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+                .arg("--target-dir")
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(
+                build.status.success(),
+                "{}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+            target.join("debug").join(format!(
                 "pg-placement-rules{}",
                 std::env::consts::EXE_SUFFIX
-            ));
-        let mut child = Command::new(executable)
+            ))
+        })
+    }
+
+    fn child(input: &[u8], args: &[&str]) -> Output {
+        let mut child = Command::new(executable())
             .args(args)
             .env_clear()
             .env("PG_RULE_HOST_WORKER_CAP_COUNT", "1")
