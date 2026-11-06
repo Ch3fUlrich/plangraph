@@ -83,7 +83,7 @@ def test_injected_rows_failure_propagates(scenario):
         raise OSError("PRIVATE FILE CONTENT")
 
     injected = SimpleNamespace(_rows=unreadable, _path=path)
-    with pytest.raises(OSError):
+    with pytest.raises(src.DecisionsUnreadable):
         src.decision_book(injected, fresh=True)
     assert src.decision_book(injected)["rows"] == {}
 
@@ -124,3 +124,17 @@ def test_non_decisions_input_failure_propagates(scenario, monkeypatch, error, fo
         world.store._claim_guard(world.store._item("demo:A"), force)
     assert exc.value is error
     assert world.store._item("demo:A")["state"] == "open"
+
+
+def test_claim_non_decisions_oserror_is_not_refused(scenario, monkeypatch):
+    world, path, adapter = scenario
+    error = OSError("task clock unavailable")
+
+    def unavailable():
+        raise error
+
+    monkeypatch.setattr(world.store, "_decision_clock", unavailable)
+    with pytest.raises(OSError) as exc:
+        world.store.claim(world.p("l1main"), "demo:A", force_stale="checked")
+    assert exc.value is error
+    assert not isinstance(exc.value, Refused)

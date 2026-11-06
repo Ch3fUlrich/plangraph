@@ -242,6 +242,10 @@ _BOOK_SLOTS = 3
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 
 
+class DecisionsUnreadable(Exception):
+    """The decisions authority could not be read for enforcement."""
+
+
 def decision_book(decisions, *, fresh=False):
     """``{"rows", "superseded", "index"}`` for a :class:`DecisionsAdapter`.
 
@@ -254,7 +258,10 @@ def decision_book(decisions, *, fresh=False):
     if decisions is None:
         return _build_book({})
     if fresh:
-        rows = getattr(decisions, "_rows_strict", getattr(decisions, "_rows", dict))()
+        try:
+            rows = getattr(decisions, "_rows_strict", getattr(decisions, "_rows", dict))()
+        except (OSError, UnicodeDecodeError):
+            raise DecisionsUnreadable from None
         return _build_book({did: tuple(lines) for did, lines in rows.items()})
     path = getattr(decisions, "_path", None)
     try:

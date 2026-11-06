@@ -79,10 +79,9 @@ class ContextMixin:
     """Task-context reads and the stale-claim guard."""
 
     # ------------------------------------------------------------ inputs
-    def _inputs(self, index, *, fresh=False, book=None):
+    def _inputs(self, index, *, fresh=False):
         """Per-request shared inputs: decision rows, retirements, graph, clock."""
-        return {"book": (src.decision_book(self._adapter("decisions"), fresh=fresh)
-                         if book is None else book),
+        return {"book": src.decision_book(self._adapter("decisions"), fresh=fresh),
                 "graph": _graph(index), "clock": self._decision_clock()}
 
     def _last_activity_map(self):
@@ -291,11 +290,10 @@ class ContextMixin:
         reason = self._force_stale_reason(reason)
         index = {it["key"]: it for it in self._all_items()}
         try:
-            book = src.decision_book(self._adapter("decisions"), fresh=True)
-        except (OSError, UnicodeDecodeError):
+            inputs = self._inputs(index, fresh=True)
+        except src.DecisionsUnreadable:
             path = getattr(self._adapter("decisions"), "_path", None)
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
-        inputs = self._inputs(index, book=book)
         ctx = self._task_context(item, index, inputs=inputs,
                                  fetch=True)
         facts = []
