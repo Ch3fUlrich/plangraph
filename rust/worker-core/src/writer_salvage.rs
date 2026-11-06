@@ -123,6 +123,8 @@ fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<String>),
         None,
     )?);
     validate_paths(&listed)?;
+    // Preserve unchanged entries for history sanitization; scan only listed dirty paths.
+    let original = entries(root, tip)?;
     let mut files = BTreeMap::new();
     let mut dropped = Vec::new();
     for name in listed.split(|b| *b == 0).filter(|p| !p.is_empty()) {
@@ -148,7 +150,7 @@ fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<String>),
                         meta.permissions().mode() & 0o111 != 0
                     };
                     #[cfg(not(unix))]
-                    let executable = entries(root, tip)?
+                    let executable = original
                         .iter()
                         .any(|e| e.2 == name.as_bytes() && e.0 == "100755");
                     files.insert(
@@ -162,7 +164,6 @@ fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<String>),
             Err(e) => return Err(e.into()),
         }
     }
-    let original = entries(root, tip)?;
     let base_entries = entries(root, base)?;
     for entry @ (mode, _, path) in &original {
         if (mode == "160000" && !base_entries.contains(entry))
@@ -216,3 +217,7 @@ fn snapshot(root: &Path, base: &str, tip: &str) -> Result<(String, Vec<String>),
 #[cfg(test)]
 #[path = "writer_salvage_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "writer_salvage_snapshot_tests.rs"]
+mod snapshot_tests;

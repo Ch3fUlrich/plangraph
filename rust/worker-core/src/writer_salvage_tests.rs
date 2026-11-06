@@ -1,7 +1,6 @@
 use super::*;
 use crate::writer_blob::LocalBlobStore;
-use crate::writer_secret::object;
-fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
+pub(super) fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
     let (dir, mut repo, _, _) = crate::writer_secret::tests::fixture();
     command(
         dir.path(),
@@ -45,7 +44,7 @@ fn fixture() -> (tempfile::TempDir, RepoEntry, String, String) {
     repo.root = checkout.to_str().unwrap().into();
     (dir, repo, base.clone(), base)
 }
-fn export_salvage(
+pub(super) fn export_salvage(
     repo: &RepoEntry,
     base: &str,
     _tip: &str,
@@ -160,7 +159,7 @@ fn real_index_and_lane_unchanged() {
     );
 }
 
-fn imported(repo: &RepoEntry, bytes: &[u8]) -> (tempfile::TempDir, RepoEntry, String) {
+pub(super) fn imported(repo: &RepoEntry, bytes: &[u8]) -> (tempfile::TempDir, RepoEntry, String) {
     let dest = tempfile::tempdir().unwrap();
     command(dest.path(), &["init", "--bare"], &[], None).unwrap();
     // Receiver has only the public prerequisite, never accesses the failed checkout.
@@ -192,180 +191,4 @@ fn imported(repo: &RepoEntry, bytes: &[u8]) -> (tempfile::TempDir, RepoEntry, St
         receiver,
         String::from_utf8(tip).unwrap().trim().into(),
     )
-}
-
-#[test]
-fn dirty_untracked_snapshot_ignored_excluded() {
-    let (_dir, repo, base, tip) = fixture();
-    let root = Path::new(&repo.root);
-    std::fs::write(root.join(".gitignore"), "ignored\n").unwrap();
-    std::fs::write(root.join("ignored"), "not exported").unwrap();
-    std::fs::write(root.join("new\nfile"), "new bytes").unwrap();
-    std::fs::write(root.join("safe"), "dirty bytes").unwrap();
-    let token = ["gh", "p_", &"s".repeat(25)].concat();
-    std::fs::write(root.join("bad"), &token).unwrap();
-    let bytes = export_salvage(&repo, &base, &tip, "run", b"").unwrap();
-    let (dest, receiver, head) = imported(&repo, &bytes);
-    let names = entries(dest.path(), &head).unwrap();
-    assert!(!names.iter().any(|e| e.2 == b"ignored" || e.2 == b"bad"));
-    for (name, expected) in [("safe", "dirty bytes"), ("new\nfile", "new bytes")] {
-        let blob = &names.iter().find(|e| e.2 == name.as_bytes()).unwrap().1;
-        assert_eq!(object(dest.path(), blob).unwrap().1, expected.as_bytes());
-    }
-    assert!(crate::writer_secret::findings(&receiver, &base, &head)
-        .unwrap()
-        .is_empty());
-    let hash = command(root, &["hash-object", "--stdin"], token.as_bytes(), None).unwrap();
-    assert!(object(root, std::str::from_utf8(&hash).unwrap().trim()).is_err());
-}
-
-#[test]
-fn failed_writer_returns_blob_without_host_access() {
-    let (_dir, repo, base, _) = fixture();
-    let root = Path::new(&repo.root);
-    std::fs::write(
-        root.join("committed-secret"),
-        ["gh", "p_", &"t".repeat(25)].concat(),
-    )
-    .unwrap();
-    command(root, &["add", "."], &[], None).unwrap();
-    command(root, &["commit", "-m", "failed without trailer"], &[], None).unwrap();
-    let old = command(root, &["rev-parse", "HEAD"], &[], None).unwrap();
-    std::fs::write(
-        root.join("committed-secret"),
-        ["gh", "p_", &"u".repeat(25)].concat(),
-    )
-    .unwrap();
-    let bytes = export_salvage(&repo, &base, "", "run", b"").unwrap();
-    let (dest, receiver, head) = imported(&repo, &bytes);
-    assert!(crate::writer_secret::findings(&receiver, &base, &head)
-        .unwrap()
-        .is_empty());
-    let objects = command(
-        dest.path(),
-        &["rev-list", "--objects", &head, "--not", &base],
-        &[],
-        None,
-    )
-    .unwrap();
-    assert!(!String::from_utf8(objects)
-        .unwrap()
-        .contains(std::str::from_utf8(&old).unwrap().trim()));
-    assert!(!entries(dest.path(), &head)
-        .unwrap()
-        .iter()
-        .any(|e| e.2 == b"committed-secret"));
-}
-
-#[cfg(unix)]
-#[test]
-fn unsafe_symlink_and_submodule_refused() {
-    let (_dir, repo, base, tip) = fixture();
-    let root = Path::new(&repo.root);
-    std::os::unix::fs::symlink("safe", root.join("link")).unwrap();
-    assert!(export_salvage(&repo, &base, &tip, "run", b"").is_err());
-    std::fs::remove_file(root.join("link")).unwrap();
-    command(
-        root,
-        &[
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            &format!("160000,{base},sub"),
-        ],
-        &[],
-        None,
-    )
-    .unwrap();
-    command(root, &["commit", "-m", "submodule"], &[], None).unwrap();
-    std::fs::create_dir(root.join("sub")).unwrap();
-    std::fs::write(root.join("sub/file"), "dirty").unwrap();
-    assert!(export_salvage(&repo, &base, &tip, "run", b"").is_err());
-}
-
-#[test]
-fn result_never_becomes_salvage_publication() {
-    let (_dir, repo, base, tip) = fixture();
-    let root = Path::new(&repo.root);
-    command(
-        root,
-        &["commit", "--allow-empty", "-m", "no trailer"],
-        &[],
-        None,
-    )
-    .unwrap();
-    let ws = Workspace {
-        repo_id: "test".into(),
-        mode: Mode::Writer,
-        base_sha: Some(base.clone()),
-        revision_sha: Some(base.clone()),
-        branch: Some("lane/test".into()),
-    };
-    let mut registry = repo.clone();
-    registry.root = repo.remote.clone();
-    assert!(crate::writer_result::check_result(&registry, root, &ws).is_err());
-    export_salvage(&repo, &base, &tip, "run", b"").unwrap();
-    assert!(crate::writer_result::check_result(&registry, root, &ws).is_err());
-}
-
-#[test]
-fn gate_before_any_snapshot_object() {
-    let (_dir, repo, base, tip) = fixture();
-    let root = Path::new(&repo.root);
-    let safe = b"safe candidate not yet stored";
-    std::fs::write(root.join("a-safe"), safe).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink("safe", root.join("z-unsafe")).unwrap();
-    #[cfg(not(unix))]
-    {
-        std::fs::remove_file(root.join("safe")).unwrap();
-        std::fs::create_dir(root.join("safe")).unwrap();
-    }
-    assert!(export_salvage(&repo, &base, &tip, "run", b"").is_err());
-    {
-        let sha = command(root, &["hash-object", "--stdin"], safe, None).unwrap();
-        assert!(object(root, std::str::from_utf8(&sha).unwrap().trim()).is_err());
-    }
-}
-
-#[test]
-fn unchanged_gitlink_preserved() {
-    let (_dir, repo, base, _) = fixture();
-    let root = Path::new(&repo.root);
-    command(
-        root,
-        &[
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            &format!("160000,{base},sub"),
-        ],
-        &[],
-        None,
-    )
-    .unwrap();
-    command(root, &["commit", "-m", "base gitlink"], &[], None).unwrap();
-    std::fs::create_dir(root.join("sub")).unwrap();
-    let base =
-        String::from_utf8(command(root, &["rev-parse", "HEAD"], &[], None).unwrap()).unwrap();
-    std::fs::write(root.join("safe"), "dirty").unwrap();
-    export_salvage(&repo, base.trim(), "", "run", b"").unwrap();
-}
-
-#[cfg(unix)]
-#[test]
-fn dirty_executable_modes_preserved() {
-    use std::os::unix::fs::PermissionsExt;
-    let (_dir, repo, base, tip) = fixture();
-    let root = Path::new(&repo.root);
-    std::fs::write(root.join("new"), "executable").unwrap();
-    for name in ["safe", "new"] {
-        std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let bytes = export_salvage(&repo, &base, &tip, "run", b"").unwrap();
-    let (dest, _, head) = imported(&repo, &bytes);
-    let names = entries(dest.path(), &head).unwrap();
-    for name in [b"safe".as_slice(), b"new".as_slice()] {
-        assert_eq!(names.iter().find(|e| e.2 == name).unwrap().0, "100755");
-    }
 }
