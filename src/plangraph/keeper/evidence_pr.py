@@ -64,7 +64,7 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
     if proc.returncode != 0:
         raise RuntimeError("PR lookup failed")
     pages = json.loads(proc.stdout)
-    if not isinstance(pages, list) or not pages or any(
+    if not isinstance(pages, list) or any(
         not isinstance(page, list) or any(not isinstance(p, Mapping) for p in page)
         for page in pages
     ):
@@ -100,5 +100,10 @@ def validate_merge(ctx, project, merge_info, target_ref, ref):
         if proven:
             return None
     except Exception:  # Never expose sensitive text from adapter errors.
+        pass
+    try:
+        if (ctx.ci.mode(project) or "").startswith("forgejo:"):
+            return Result(False, "merged_pr_unproven: forgejo has no merged PR lookup", ref)
+    except Exception:
         pass
     return Result(False, "merged_pr_unproven: no authoritative merged PR association", ref)

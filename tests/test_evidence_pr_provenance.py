@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from evidence_fakes import FakeCI, FakeGit, ITEM, SHA, MERGE_SHA, make_ctx, verify
+from evidence_fakes import FakeCI, ITEM, SHA, MERGE_SHA, make_ctx, verify
 from git_helpers import git_cli
 from plangraph.keeper.evidence_ci import CIAdapter
 from plangraph.keeper.evidence_git import GitAdapter
@@ -79,6 +79,18 @@ def test_unproven_pages_refuse(monkeypatch, pages):
                         subprocess.CompletedProcess(a, 0, json.dumps(pages), ""))
     result = verify("commit+ci", {"commit": SHA}, make_ctx(ci=adapter))
     assert not result.ok and "merged_pr_unproven" in result.detail
+
+
+@pytest.mark.parametrize("pages", [[], [[]], {}, [None], [[None]], [[pr()], {}]])
+def test_empty_pages_return_none_but_malformed_pages_raise(monkeypatch, pages):
+    adapter = CIAdapter({"routing": "owner/repo"})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a, 0, json.dumps(pages), ""))
+    if pages in ([], [[]]):
+        assert adapter.merged_pr_for("routing", MERGE_SHA, "main") is None
+    else:
+        with pytest.raises(ValueError, match="malformed PR pages"):
+            adapter.merged_pr_for("routing", MERGE_SHA, "main")
 
 
 @pytest.mark.parametrize("failure", ["json", "truncated", "error", "timeout"])
