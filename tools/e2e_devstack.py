@@ -201,9 +201,6 @@ def run(args) -> int:
             write_stub_opencode(scratch / "stub-bin")
         elif args.leg == "stub-fail":
             write_failing_opencode(scratch / "stub-bin")  # always crashes -> worker_crash x3 -> parked
-        else:
-            step("leg=opencode: the question step is skipped (that path needs a real model that "
-                 "asks); this mode only requires the card to finish done/merged")
 
         step("start pg-worker against the dev keeper")
         env = dict(os.environ, PG_TEMPORAL_ADDR=f"http://{args.temporal}", PG_BUILD_ID=build_id,
@@ -242,7 +239,12 @@ def run(args) -> int:
             step(f"start Card workflow {wid} on pg-cards")
             card = {"claim": {"card": key, "repo": str(repo), "base_sha": base_sha,
                               "check_cmd": f"test -f {u.CARD_FILE}", "allow": [u.CARD_FILE],
-                              "forbid": [], "prompt": "write out.txt"},
+                               "forbid": [], "prompt": (
+                                   "Before writing any files, ask which colour out.txt should use. "
+                                   'Emit exactly PG_QUESTION: {"text":"Which colour should out.txt '
+                                   'use?","default":null,"deadline_s":null,"risk_tags":[]} '
+                                   "on its own line and stop. When resumed with the human answer, "
+                                   "write out.txt containing that answer and finish successfully.")},
                     "legs": legs, "workroot": str(workroot), "main_branch": u.BRANCH,
                     "question_wait_cap_s": WORKFLOW_WAIT_S}
             loop = asyncio.new_event_loop()
@@ -255,7 +257,7 @@ def run(args) -> int:
                 handle = loop.run_until_complete(client.start_workflow(
                     "Card", card, id=wid, task_queue="pg-cards"))
 
-                if args.leg == "stub":
+                if args.leg != "stub-fail":
                     def open_question():
                         status, body = u.call(keeper, "GET", f"/v1/questions?key={key}",
                                               token=tokens["router"])
@@ -304,14 +306,12 @@ def run(args) -> int:
             run_projector(cfg, args.temporal)
             rows = read_attempts(cfg, key)
             pairs = [(a["n"], a["exit_class"]) for a in rows]
-            if args.leg == "stub":
+            if args.leg != "stub-fail":
                 if pairs != [(1, "needs_input"), (2, "ok")]:
                     raise Fail(f"attempt pairs {pairs}, expected [(1, 'needs_input'), (2, 'ok')]")
             elif args.leg == "stub-fail":
                 if pairs != [(1, "worker_crash"), (2, "worker_crash"), (3, "worker_crash")]:
                     raise Fail(f"attempt pairs {pairs}, expected worker_crash x3")
-            elif not any(a["exit_class"] == "ok" for a in rows):
-                raise Fail("no_ok_attempt")
             audit = read_audit(cfg, names["worker"])
             for row in audit:
                 print(f"[step] audit action={row['action']} key={row['key']} "
