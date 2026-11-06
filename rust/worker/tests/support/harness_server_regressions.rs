@@ -6,7 +6,7 @@ fn retry_fake_server_spawn<T>(mut run: impl FnMut() -> std::io::Result<T>) -> st
     for attempt in 0..20 {
         match run() {
             Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 19 => {
-                std::thread::sleep(std::time::Duration::from_millis(5));
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
             result => return result,
         }
