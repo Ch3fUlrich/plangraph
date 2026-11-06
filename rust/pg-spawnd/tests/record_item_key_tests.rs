@@ -5,7 +5,7 @@ use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 pub struct Fixture {
-    _state: TempDir,
+    pub(crate) _state: TempDir,
     _guard: ChildGuard,
     client: McpClient,
 }

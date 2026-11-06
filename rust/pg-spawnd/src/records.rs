@@ -124,7 +124,7 @@ pub(crate) fn list_runs(state: &Path) -> Vec<Value> {
             continue;
         }
         for (source, dest) in [("parent_session", "parent_session"), ("item", "item_key")] {
-            if record.get(dest).is_none() {
+            if record[dest].is_null() {
                 if let Some(value) = record["completion"].get(source).cloned() {
                     record[dest] = value;
                 }

@@ -165,7 +165,8 @@ class SpawnService(SeatSpawnMixin):
                 return await self._spawn(**options)
             return await self._spawn(*args, **kwargs)
         except Exception as exc:
-            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'))
+            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'),
+                              card=kwargs.get('card', args[0] if args else None))
             raise
 
     async def _continue_writer(self, record, output):
@@ -203,7 +204,7 @@ class SpawnService(SeatSpawnMixin):
             child['ended'] = time.time()
             self._save(child)
 
-    def save_refusal(self, exc, role='implement', **extra):
+    def save_refusal(self, exc, role='implement', *, card=None, **extra):
         """Persist pre-service refusals using the same record contract (``extra``: seat fields)."""
         from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
@@ -214,6 +215,8 @@ class SpawnService(SeatSpawnMixin):
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
         try:
+            from .item_key import annotate_item
+            annotate_item(record, card)
             self._save(record)
         except Exception as storage_error:
             import logging

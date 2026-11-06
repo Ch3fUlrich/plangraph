@@ -5,6 +5,20 @@ use fixture::{payload, Fixture};
 use serde_json::{json, Value};
 
 #[test]
+fn null_item_key_uses_completion_item() {
+    let mut f = Fixture::new(None);
+    let dir = f._state.path().join("runs/run-fallback");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("record.json"),
+        json!({"run_id":"run-fallback", "item_key":null, "completion":{"item":"x"}}).to_string(),
+    )
+    .unwrap();
+    let result = payload(f.call("ps", json!({})));
+    assert_eq!(result["runs"][0]["item_key"], "x");
+}
+
+#[test]
 fn record_item_key() {
     for (item, env, expected) in [
         (json!("p:card"), None, json!("p:card")),

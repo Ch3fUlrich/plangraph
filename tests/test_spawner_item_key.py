@@ -1,7 +1,23 @@
 import asyncio
 import pytest
+from plangraph.planner.routing import SpawnRefused
 from registry_route_util import _Runner, _service
 from plangraph.spawner.runner import spawn_service
+
+
+@pytest.mark.parametrize('positional', [False, True])
+def test_refusal_item_key(tmp_path, monkeypatch, positional):
+    service = _service(tmp_path, monkeypatch)
+    def refuse(*args, **kwargs):
+        raise SpawnRefused('test refusal')
+    monkeypatch.setattr(service, '_route', refuse)
+    saved = []
+    monkeypatch.setattr(service, '_save', lambda record: saved.append(dict(record)))
+    card = {'estimate_tokens': 100, 'item': 'p:x'}
+    with pytest.raises(SpawnRefused, match='test refusal'):
+        asyncio.run(service.spawn(card) if positional else service.spawn(card=card))
+    assert len(saved) == 1 and saved[0]['status'] == 'refused'
+    assert saved[0]['item_key'] == 'p:x'
 
 
 @pytest.mark.parametrize('dispatch', [False, True])
