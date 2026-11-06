@@ -1,5 +1,7 @@
+import ast
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 from types import SimpleNamespace
@@ -93,10 +95,42 @@ def test_atomic_write_and_render_projection(home, monkeypatch):
     assert av.load_view(home / 'absent') is None
 
 
+def assert_no_runtime_invocation(text):
+    tree = ast.parse(text)
+    # Inspect every call, including os.system, aliased runners and string argv.
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        assert not any(keyword.arg == 'shell' and
+                       isinstance(keyword.value, ast.Constant) and keyword.value.value is True
+                       for keyword in call.keywords)
+        # These local helpers consume runtime labels as data, not commands.
+        if isinstance(call.func, ast.Name) and call.func.id in {'ingest', 'project'}:
+            continue
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            for value in ast.walk(arg):
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    assert not any(token.rsplit('/', 1)[-1] == 'claude'
+                                   for token in value.value.split())
+
+
 def test_no_runtime_invocation():
-    text = Path(av.__file__).read_text()
-    assert "['claude'" not in text and '["claude"' not in text
-    assert 'shell=True' not in text
+    assert_no_runtime_invocation(Path(av.__file__).read_text())
+
+
+@pytest.mark.parametrize('invocation', [
+    "os.system('claude ps')", "subprocess.run('claude ps')",
+    "runner(['/bin/claude', 'ps'])", "runner(args='claude ps')",
+    "runner(['echo'], shell=True)",
+])
+def test_runtime_guard_rejects_invocations(invocation):
+    with pytest.raises(AssertionError):
+        assert_no_runtime_invocation(invocation)
+
+
+def test_render_uses_shared_projector(monkeypatch):
+    from plangraph.render import _load_agents_view
+    sentinel = {'hosts': []}
+    monkeypatch.setattr(av, 'load_view', lambda: sentinel)
+    assert _load_agents_view() is sentinel
 
 
 def test_atomic_failure_preserves_snapshot(home, monkeypatch):
@@ -121,7 +155,12 @@ def test_render_reads_private_file(home, monkeypatch):
     assert '"readable":false' in document.replace(' ', '')
 
 
-def test_page_unknown():
+def test_page_unknown(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    node_binary = shutil.which('node')
+    if node_binary is None:
+        pytest.skip('Node.js is required for the page behavior test')
+    monkeypatch.chdir(tmp_path)
     script = r'''
 const assert = require('assert');
 function node(tag) { return {tag, children: [], appendChild(n) {this.children.push(n);},
@@ -130,7 +169,7 @@ const box = node('div');
 global.document = {createElement: node, getElementById: () => box};
 global.PlanPage = {state: {snapshot: {agents_view: {generated_at: '2000-01-01',
   hosts: [{host: 'remote', readable: false, agents: []}]}}}};
-require('./src/plangraph/web/page_agents.js');
+require(process.argv[1]);
 PlanUI.AgentsPage.render();
 const row = box.children[1].children[1].children[0];
 assert.equal(row.children[0].textContent, 'remote');
@@ -140,9 +179,9 @@ global.PlanPage.state.snapshot = {};
 PlanUI.AgentsPage.render();
 assert.equal(box.children[1].children[1].children.length, 1);
 '''
-    subprocess.run(['node', '-e', script], check=True)
-    assert 'tab-agents' in Path('src/plangraph/web/page_template.html').read_text()
-    assert 'agents: "panel-agents"' in Path('src/plangraph/web/page_pages.js').read_text()
+    subprocess.run([node_binary, '-e', script, str(root / 'src/plangraph/web/page_agents.js')], check=True)
+    assert 'tab-agents' in (root / 'src/plangraph/web/page_template.html').read_text()
+    assert 'agents: "panel-agents"' in (root / 'src/plangraph/web/page_pages.js').read_text()
 
 
 @pytest.mark.parametrize('entry', ['x', {'readable': True, 'agents': ['x']}])
