@@ -317,3 +317,67 @@ def last_probe_ts(leg):
 
 def last_probe_outcome(leg):
     return _default_store().last_probe_outcome(leg)
+
+
+class LegAdapter:
+    """Explicit opt-in reader; one cached boundary shared by routing and probes.
+
+    Discovery names actual standalone identities, never combo/request aliases.
+    Failures retain the previous snapshot but never admit from it as healthy.
+    """
+
+    def __init__(self, store, provider, models=None, *, enabled=False,
+                 clock=time.monotonic, ttl_s=60):
+        self.store, self.provider = store, provider
+        self.models = models or self.standalone_models
+        self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
+        self._at, self._states, self._served = None, {}, set()
+
+    def __getattr__(self, name):
+        return getattr(self.store, name)
+
+    @staticmethod
+    def standalone_models():
+        import subprocess
+        result = subprocess.run(['opencode', 'models'], capture_output=True,
+                                text=True, timeout=8, shell=False, check=True)
+        return result.stdout.splitlines()
+
+    @staticmethod
+    def identity(model):
+        return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
+
+    def __call__(self, leg, **kwargs):
+        return self.leg_status(leg, **kwargs)
+
+    def leg_status(self, leg, **kwargs):
+        if not self.enabled:
+            return self.store.leg_status(leg, **kwargs)
+        from .resolver import OPERATOR_REMOVED_MODELS
+        if leg in OPERATOR_REMOVED_MODELS:
+            return dict(state='unavailable', evidence=None)
+        now = self.clock()
+        if self._at is None or now - self._at >= self.ttl_s:
+            try:
+                states = self.provider.snapshot()
+                served = {self.identity(mid) for mid in self.models()}
+                self._states, self._served = states, served
+                self._error = None if states else 'unreachable'
+            except Exception:
+                self._error = 'unknown'
+            self._at = now
+        state = self._error
+        if not state:
+            identity = self.identity(leg)
+            provider = self._states.get(leg.split('/')[0])
+            if identity not in self._served:
+                state = 'not_listed'
+            elif provider is None:
+                state = 'unreachable'
+            elif provider.stale:
+                state = 'stale'
+            else:
+                state = 'ok' if provider.available else 'unavailable'
+        # Legacy planner understands limited/down only; preserve explicit reason.
+        return dict(state='ok' if state == 'ok' else 'limited',
+                    reason=state, evidence=None)

@@ -224,6 +224,9 @@ async def before_launch(runner, leg, role, dry_run):
     if dry_run:
         return None
     state = _store_for(runner)
+    if getattr(state, 'enabled', False):
+        status = state.leg_status(key(leg))
+        return None if status['state'] == 'ok' else status.get('reason', status['state'])
     # D-3685: a leg booked limited is known-unusable until its reset. Skip it
     # before any freshness or probe logic -- every role, TTL 0 included --
     # without a probe run or a probe row; a newer success lifts the booking
