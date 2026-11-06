@@ -15,10 +15,16 @@ def redact(value):
         if isinstance(value, str):
             value = re.sub(r'\b(?:x?sk)-[A-Za-z0-9_-]+', '[REDACTED]', value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
-            value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:]+:)[^\s/@]*(@)',
+            # Greedily consume through the last @ within the quoted/space boundary.
+            value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
-            return re.sub(r'(?im)(\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)\s*[=:]\s*)[^\r\n]+',
-                          r'\1[REDACTED]', value)
+            return re.sub(
+                r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+                r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
+                r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)",
+                lambda m: m[1] + (m[0][len(m[1])] + '[REDACTED]' + m[0][-1]
+                                  if m[0][len(m[1])] in '\"\x27' and
+                                  m[0][-1] == m[0][len(m[1])] else '[REDACTED]'), value)
         return value
     except Exception:
         return '[autoos:redaction failed; output withheld]\n'

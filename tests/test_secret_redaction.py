@@ -50,10 +50,39 @@ def test_url_host_preserved():
     assert result == 'postgres://writer:[REDACTED]@example.invalid/db'
 
 
+@pytest.mark.parametrize('password', ['ab/cd', 'p@ss', 'ab:cd/@ef'])
+def test_reserved_dsn_password(password):
+    assert env_redact.redact('db://u:' + password + '@h/x') == 'db://u:[REDACTED]@h/x'
+
+
+def test_url_port_with_path_at_fails_closed():
+    assert env_redact.redact('https://host:8080/a@b') == 'https://host:[REDACTED]@b'
+
+
+@pytest.mark.parametrize('text', ['https://host:8080/a', 'db://u:ab/cd', '"db://u:ab/cd"'])
+def test_url_without_at_is_byte_identical(text):
+    assert env_redact.redact(text).encode() == text.encode()
+
+
+@pytest.mark.parametrize('quote', ['"', "'"])
+@pytest.mark.parametrize('separator', [': ', '='])
+def test_quoted_secret_preserves_structure(quote, separator):
+    text = quote + 'password' + quote + separator + quote + 'fake\\' + quote + 'value' + quote
+    expected = quote + 'password' + quote + separator + quote + '[REDACTED]' + quote
+    assert env_redact.redact(text) == expected
+
+
+@pytest.mark.parametrize('payload', ['dsn', 'reserved_dsn', 'json', 'escaped_json'])
 @pytest.mark.parametrize('split', [False, True])
 @pytest.mark.parametrize('failure', [False, True])
-def test_real_output_boundaries(tmp_path, monkeypatch, split, failure):
+def test_real_output_boundaries(tmp_path, monkeypatch, split, failure, payload):
     password, dsn = sample()
+    if payload == 'reserved_dsn':
+        password = 'ab/cd@ef:gh'
+        dsn = 'db://writer:' + password + '@example.invalid/db'
+    elif payload in ('json', 'escaped_json'):
+        password = 'fake-value' if payload == 'json' else 'fake\\"value'
+        dsn = '{"password": "' + password + '"}'
     text = 'diagnostic ' + dsn + '\n'
     if failure:
         original_sub = env_redact.re.sub
@@ -91,8 +120,10 @@ def test_real_output_boundaries(tmp_path, monkeypatch, split, failure):
         assert password not in log
         if failure:
             assert 'redaction failed; output withheld' in log
-        else:
+        elif payload in ('dsn', 'reserved_dsn'):
             assert '@example.invalid/db' in log
+        else:
+            assert '{"password": "[REDACTED]"}' in log
 
         service = SpawnService(runner=runner, state=tmp_path)
         record = dict(run_id='run-test', host='synthetic', stdout_tail=text,
