@@ -17,6 +17,26 @@ import sys
 import urllib.request
 
 TIMEOUT = 10
+_watchdog_values = set()
+
+
+def load_watchdog_env():
+    """Load service defaults silently, without replacing shell overrides."""
+    try:
+        lines = (Path.home() / '.config/plangraph/watchdog.env').read_text().splitlines()
+    except (OSError, UnicodeError):
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = (part.strip() for part in line.split('=', 1))
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key and '\0' not in key and '\0' not in value:
+            os.environ.setdefault(key, value)
+            if value:
+                _watchdog_values.add(value)
 
 
 def clean(value):
@@ -24,7 +44,7 @@ def clean(value):
     from .env_redact import redact_env_values
     text = redact_env_values(str(value), os.environ)
     # Also scrub unstructured subprocess/HTTP errors, including opaque tokens.
-    secrets = []
+    secrets = list(_watchdog_values)
     try:
         secrets.append(Path(os.environ['PG_TOKEN_FILE']).read_text().strip())
     except (KeyError, OSError, UnicodeError):
@@ -178,6 +198,7 @@ async def diagnose(probe=False):
 
 
 def main(argv=None):
+    load_watchdog_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--probe', action='store_true')

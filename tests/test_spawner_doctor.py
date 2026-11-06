@@ -19,6 +19,7 @@ from plangraph.spawner.service import SpawnService as RealService
 def host(tmp_path, monkeypatch):
     from plangraph.planner import legs
     from plangraph.spawner import service, leg_probe
+    monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('PATH', str(tmp_path))
     token = tmp_path / 'credential'
     token.write_text('planted-credential-value')
@@ -46,6 +47,66 @@ def host(tmp_path, monkeypatch):
         pytest.fail('default must not call probe')
     monkeypatch.setattr(leg_probe, 'probe_many', no_probe)
     return tmp_path
+
+
+def watchdog_env(host, text):
+    path = host / '.config/plangraph/watchdog.env'
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+    return path
+
+
+@pytest.mark.parametrize('existing', [None, '', 'shell-choice'])
+def test_watchdog_env_precedence(host, monkeypatch, existing):
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    if existing is not None:
+        monkeypatch.setenv('DOCTOR_SETTING', existing)
+    watchdog_env(host, 'DOCTOR_SETTING=file-choice\n')
+    d.load_watchdog_env()
+    assert os.environ['DOCTOR_SETTING'] == ('file-choice' if existing is None else existing)
+
+
+def test_watchdog_env_missing(host):
+    before = dict(os.environ)
+    d.load_watchdog_env()
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize('failure', [PermissionError, UnicodeError])
+def test_watchdog_env_unreadable(host, monkeypatch, failure):
+    def unreadable(*args, **kwargs):
+        raise failure()
+    monkeypatch.setattr(Path, 'read_text', unreadable)
+    before = dict(os.environ)
+    d.load_watchdog_env()
+    assert dict(os.environ) == before
+
+
+def test_watchdog_env_parsing(host, monkeypatch, capsys, caplog):
+    for key in ('DOCTOR_DOUBLE', 'DOCTOR_SINGLE', 'DOCTOR_BARE'):
+        monkeypatch.delenv(key, raising=False)
+    watchdog_env(host, '\n  # ignored=yes\nnot an assignment\n'
+                 ' DOCTOR_DOUBLE = "double=quoted" \n'
+                 "DOCTOR_SINGLE = 'single quoted'\nDOCTOR_BARE = bare=value\n")
+    d.load_watchdog_env()
+    assert os.environ['DOCTOR_DOUBLE'] == 'double=quoted'
+    assert os.environ['DOCTOR_SINGLE'] == 'single quoted'
+    assert os.environ['DOCTOR_BARE'] == 'bare=value'
+    assert capsys.readouterr() == ('', '')
+    assert not caplog.records
+
+
+def test_watchdog_env_json_no_values(isolated, monkeypatch, capsys, caplog):
+    monkeypatch.delenv('DOCTOR_SETTING', raising=False)
+    watchdog_env(isolated, 'DOCTOR_SETTING=synthetic-private-setting\n')
+    async def mcp(module):
+        assert os.environ['DOCTOR_SETTING'] == 'synthetic-private-setting'
+        raise RuntimeError(os.environ['DOCTOR_SETTING'])
+    monkeypatch.setattr(d, 'mcp', mcp)
+    assert d.main(['--json']) == 1
+    captured = capsys.readouterr()
+    assert 'synthetic-private-setting' not in captured.out + captured.err + caplog.text
+    assert json.loads(captured.out)['checks'][0]['detail'] == 'RuntimeError: [REDACTED]'
 
 
 def run(coro):
