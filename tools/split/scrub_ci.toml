@@ -702,3 +702,154 @@ path = "skills/mcp-servers-setup/references/playwright.md"
 rule = "hostname"
 value_sha256 = "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
 why = "Docker's documented built-in host alias, not a site hostname"
+
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/apply.ps1"
+rule = "credential-shape"
+value_sha256 = "e7b3cf31df13add075d093cf6e4046121a487ec3c657b8e9bfd129b079649778"
+why = "Documented placeholder credential filename, not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/apply.sh"
+rule = "credential-shape"
+value_sha256 = "e7b3cf31df13add075d093cf6e4046121a487ec3c657b8e9bfd129b079649778"
+why = "Documented placeholder credential filename, not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/capability-overrides.json"
+rule = "high-entropy"
+value_sha256 = "598d8b14e80b3243e03a6279b8bd52e9a3ee85f5ec9ca28099f43cac38448eeb"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/live/server-combos.json"
+rule = "high-entropy"
+value_sha256 = "6083ef8907eba69db9ab191716694855a1ca0d06e096fab6c54fff3c5efd2001"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/qwen-clamp-reapply-README.md"
+rule = "high-entropy"
+value_sha256 = "69fbc3c575354ff8034ce11c3e79be99d944c22b8ed4bd208312561e546fa999"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/qwen-clamp-reapply-README.md"
+rule = "high-entropy"
+value_sha256 = "439123324b53afc19c5b4b2caec75acad05905f6627b05a078465f1b361ec169"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/qwen-clamp-reapply-README.md"
+rule = "high-entropy"
+value_sha256 = "a217c4a97b57f32417e004a74fff72fc446fb2f294d7d04a0b906e6dd54b46c4"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/qwen-clamp-reapply.ps1"
+rule = "high-entropy"
+value_sha256 = "439123324b53afc19c5b4b2caec75acad05905f6627b05a078465f1b361ec169"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/qwen-clamp-reapply.ps1"
+rule = "high-entropy"
+value_sha256 = "69fbc3c575354ff8034ce11c3e79be99d944c22b8ed4bd208312561e546fa999"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/reason-fix-README.md"
+rule = "high-entropy"
+value_sha256 = "69fbc3c575354ff8034ce11c3e79be99d944c22b8ed4bd208312561e546fa999"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/reason-fix-README.md"
+rule = "high-entropy"
+value_sha256 = "439123324b53afc19c5b4b2caec75acad05905f6627b05a078465f1b361ec169"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/reason-fix-reapply.ps1"
+rule = "high-entropy"
+value_sha256 = "c5da95d85182f9284c697832b69b6df133e980df49b69b654afda18c94f7ee85"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/reason-fix-reapply.ps1"
+rule = "high-entropy"
+value_sha256 = "69fbc3c575354ff8034ce11c3e79be99d944c22b8ed4bd208312561e546fa999"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/verify-clamp.mjs"
+rule = "high-entropy"
+value_sha256 = "598d8b14e80b3243e03a6279b8bd52e9a3ee85f5ec9ca28099f43cac38448eeb"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/vertex-trailing-turn-README.md"
+rule = "high-entropy"
+value_sha256 = "47bffcf77fbc0f0526d67b5351aac9856763fa5584f22a8ad082b3b04e71bcbe"
+why = "Public model identifier, source path or branch name; not a credential"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "credential-shape"
+value_sha256 = "e7b3cf31df13add075d093cf6e4046121a487ec3c657b8e9bfd129b079649778"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "high-entropy"
+value_sha256 = "69fbc3c575354ff8034ce11c3e79be99d944c22b8ed4bd208312561e546fa999"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "high-entropy"
+value_sha256 = "a217c4a97b57f32417e004a74fff72fc446fb2f294d7d04a0b906e6dd54b46c4"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "high-entropy"
+value_sha256 = "c5da95d85182f9284c697832b69b6df133e980df49b69b654afda18c94f7ee85"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "high-entropy"
+value_sha256 = "439123324b53afc19c5b4b2caec75acad05905f6627b05a078465f1b361ec169"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "high-entropy"
+value_sha256 = "47bffcf77fbc0f0526d67b5351aac9856763fa5584f22a8ad082b3b04e71bcbe"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "high-entropy"
+value_sha256 = "6083ef8907eba69db9ab191716694855a1ca0d06e096fab6c54fff3c5efd2001"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "high-entropy"
+value_sha256 = "598d8b14e80b3243e03a6279b8bd52e9a3ee85f5ec9ca28099f43cac38448eeb"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/combo-set/combos.json"
+rule = "high-entropy"
+value_sha256 = "6083ef8907eba69db9ab191716694855a1ca0d06e096fab6c54fff3c5efd2001"
+why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
+
+[[scrub.allow_value]]
+path = "deploy/omniroute/README.md"
+rule = "credential-shape"
+value_sha256 = "ffcc82384f460741a3a5a31cd6330c0240a63318fc05b387df830391eaca456c"
+why = "Relative evidence directory fragment, not a credential"
