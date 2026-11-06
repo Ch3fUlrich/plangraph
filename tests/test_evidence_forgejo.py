@@ -175,8 +175,7 @@ def test_all_success_is_green_through_ci_adapter(forgejo_server, token_file):
 
 def test_commit_ci_verifier_refuses_unproven_forgejo_merge(forgejo_server, token_file):
     state = forgejo_server([_status(1, "build", "success")])
-    ci = CIAdapter({"routing": f"forgejo:{SLUG}"},
-                   forgejo=_adapter(state["base_url"], token_file))
+    ci = CIAdapter({"routing": f"forgejo:{SLUG}"}, forgejo=_adapter(state["base_url"], token_file))
     res = ev.VERIFIERS["commit+ci"].verify(ITEM, {"commit": SHA}, make_ctx(ci=ci))
     assert res.ok is False
     assert res.detail == "merged_pr_unproven: forgejo has no merged PR lookup"
