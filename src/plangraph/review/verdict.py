@@ -95,7 +95,8 @@ def _scan_verdict(text: str) -> tuple[str | None, bool]:
         else:
             word_m = _FIRST_WORD.match(stripped)
         word = word_m.group(1).lower() if word_m else ""
-        word = re.sub(r"\s+", "-", word)
+        if word_m and re.match(r"no(?:-|\s+)go\b", stripped, re.I):
+            word = "no-go"
         if word in PASS_WORDS:
             return "pass", False
         if word == "halt":

@@ -124,7 +124,8 @@ def parse_verdict(text):
         else:
             word_m = _FIRST_WORD.match(stripped)
         word = word_m.group(1).lower() if word_m else ""
-        word = re.sub(r"\s+", "-", word)
+        if word_m and re.match(r"no(?:-|\s+)go\b", stripped, re.I):
+            word = "no-go"
         if word in PASS_WORDS:
             return True, idx
         # halt/reject are excluded from _LOW_ONLY_WORDS on purpose: they fall through to FIX_WORDS -> False, like verdict.py's halt check
