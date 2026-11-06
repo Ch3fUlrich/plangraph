@@ -95,7 +95,8 @@ def _gateway_mimo(env):
             options = block.get(name)
             if isinstance(options, dict) and 'baseURL' in options:
                 endpoints.append(options['baseURL'])
-    normalize = lambda value: value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
+    def normalize(value):
+        return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
     return bool(endpoints) and all(normalize(e) == normalize(gateway) for e in endpoints)
 
 

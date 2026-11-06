@@ -84,7 +84,17 @@ def test_tag_must_be_in_active_provider():
                                    gw.SESSION_HEADER: 'elsewhere'}), 'seat')
 
 
-def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch):
+def test_gateway_endpoint_normalizer_is_named_function():
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(gw._gateway_mimo))
+    assert any(isinstance(node, ast.FunctionDef) and node.name == 'normalize'
+               for node in tree.body[0].body)
+
+
+@pytest.mark.parametrize('spelling', ['provider', 'providers'])
+def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
     import asyncio
     from fake_pid import FAKE_PID
     from plangraph.spawner import resolver
@@ -95,9 +105,15 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
     monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
-    # Inject the renderer's final merge result, not a deployment endpoint.
-    monkeypatch.setattr(opencode_render, 'render_gateway_providers',
-                        lambda env, model: env.update(config()) or None)
+    # Replace any earlier tags with an untagged final provider merge.
+    def render(env, model):
+        cfg = {spelling: {
+            name: {'headers': {'keep': 'yes'}, 'options': {'headers': {'also': 'yes'}}}
+            for name in ('mimo', 'omniroute', 'other')}}
+        cfg[spelling]['mimo']['settings'] = {'baseURL': '/gateway/v1'}
+        assert not gw.tagged(json.dumps(cfg), 'seat')
+        env.update(OPENCODE_CONFIG_CONTENT=json.dumps(cfg), OMNIROUTE_BASE_URL='/gateway/v1')
+    monkeypatch.setattr(opencode_render, 'render_gateway_providers', render)
     seen = {}
 
     async def factory(*a, **kw):
@@ -119,6 +135,11 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch):
         return seat
     seat = asyncio.run(run())
     assert gw.tagged(seen['OPENCODE_CONFIG_CONTENT'], seat.job_id, 'mimo')
+    providers = json.loads(seen['OPENCODE_CONFIG_CONTENT'])[spelling]
+    for name in ('mimo', 'omniroute'):
+        assert providers[name]['headers'] == {'keep': 'yes', gw.SESSION_HEADER: gw.session_tag(seat.job_id)}
+        assert providers[name]['options']['headers'] == {'also': 'yes', gw.SESSION_HEADER: gw.session_tag(seat.job_id)}
+    assert providers['other'] == {'headers': {'keep': 'yes'}, 'options': {'headers': {'also': 'yes'}}}
     assert seat.served_model == 'mimo/mimo-v2.6-pro'
     assert seat.witness_kind == gw.WITNESS_KIND
     assert gw.TOKEN_ENV not in seen
