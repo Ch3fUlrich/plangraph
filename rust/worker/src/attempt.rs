@@ -10,6 +10,7 @@
 use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
 use crate::keeper::Claim;
 use crate::opencode_events::{self, ProviderErrorKind};
+use crate::output_redact::history_text;
 use crate::question::{self, Question, Scan};
 use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
@@ -163,13 +164,7 @@ fn run_attempt_inner(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<AttemptResult, AttemptError> {
     let claim = &inp.claim;
-    if !cfg.card_allowed(&claim.card) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("card not allowlisted: {}", claim.card),
-        )
-        .into());
-    }
+    let _owner = crate::card_admit::enter(cfg, &claim.card)?;
     let id = AttemptId::new(claim.card.clone(), inp.n);
     let branch = id.branch();
     let repo = Path::new(&claim.repo);
@@ -320,12 +315,7 @@ fn run_attempt_inner(
     } else {
         match question::scan_output(&output) {
             Scan::None => (None, None),
-            Scan::Asked(mut q) => {
-                q.text = history_text(&q.text);
-                q.default = q.default.map(|s| history_text(&s));
-                q.risk_tags = q.risk_tags.iter().map(|s| history_text(s)).collect();
-                (Some(q), None)
-            }
+            Scan::Asked(q) => (Some(crate::output_redact::question(q)), None),
             Scan::Malformed(why) => (None, Some(why)),
         }
     };
@@ -525,70 +515,7 @@ fn violations_tail(violations: &[Violation]) -> String {
         .join("\n")
 }
 
-/// A cancelled attempt: keep the branch and head the caller already knows and
-/// skip the commit, confinement and check stages. `output_tail` carries what
-/// the harness printed before it was killed.
-fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptResult {
-    AttemptResult {
-        exit_class: ExitClass::Cancelled,
-        diff_hash: String::new(),
-        check_hash: String::new(),
-        check_tail: String::new(),
-        context_overflow: false,
-        branch: branch.to_string(),
-        head: head.to_string(),
-        output_tail: history_text(&output_tail),
-        harness: None,
-        model: None,
-        combo: None,
-        class: None,
-        started_at: None,
-        ended_at: None,
-        tokens_in: None,
-        tokens_out: None,
-        cost: None,
-        log_ref: None,
-        question: None,
-    }
-}
-
-/// A contract-defect result, keeping the diff so the planner can still tell
-/// whether anything was written.
-fn defect_result(
-    dest: &Path,
-    base: &str,
-    branch: &str,
-    head: &str,
-    output_tail: String,
-) -> Result<AttemptResult, AttemptError> {
-    Ok(AttemptResult {
-        exit_class: ExitClass::ContractDefect,
-        diff_hash: confine::diff_hash(dest, base)?,
-        check_hash: String::new(),
-        check_tail: String::new(),
-        context_overflow: false,
-        branch: branch.to_string(),
-        head: head.to_string(),
-        output_tail: history_text(&output_tail),
-        harness: None,
-        model: None,
-        combo: None,
-        class: None,
-        started_at: None,
-        ended_at: None,
-        tokens_in: None,
-        tokens_out: None,
-        cost: None,
-        log_ref: None,
-        question: None,
-    })
-}
-
-/// Run the check; on failure run it once more unchanged. A pass on the second
-/// run is a flake, not a fix. Returns the outcome and the last run's result.
-fn history_text(text: &str) -> String {
-    pg_worker_core::redact::redacted_tail(text, usize::MAX, pg_worker_core::redact::MAX_TAIL_BYTES)
-}
+include!("attempt_result_helpers.rs");
 
 fn check_with_rerun(
     cmd: &str,
@@ -979,70 +906,8 @@ mod tests {
         }
     }
 
-    fn secret_attempt(script: &'static str, timeout: bool, cancel: bool) {
-        let (r, base) = repo();
-        let root = tempfile::tempdir().unwrap();
-        let inp = input(
-            claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"),
-            1,
-            root.path(),
-        );
-        let h = Fake::new(script);
-        let mut cfg = tiny();
-        if timeout {
-            cfg.start_to_close = Duration::from_millis(300);
-        }
-        let start = std::time::Instant::now();
-        let res = run_attempt(&h, &cfg, &Patterns::default(), &inp, &|| {
-            cancel && start.elapsed() > Duration::from_millis(300)
-        })
-        .unwrap();
-        let json = serde_json::to_string(&res).unwrap();
-        assert!(!json.contains("pilotseed"), "{json}");
-        assert!(!json.contains("0123456789abcdef"), "{json}");
-        if timeout {
-            assert_eq!(res.exit_class, ExitClass::Timeout);
-        }
-        if cancel {
-            assert_eq!(res.exit_class, ExitClass::Cancelled);
-        }
-    }
-
-    #[test]
-    fn pilot_clean_secret() {
-        secret_attempt(
-            "echo sk-pilotseed-0123456789abcdef; echo hi > out.txt",
-            false,
-            false,
-        );
-    }
-    #[test]
-    fn pilot_failed_secret() {
-        secret_attempt("echo sk-pilotseed-0123456789abcdef; exit 1", false, false);
-    }
-    #[test]
-    fn pilot_cancelled_secret() {
-        secret_attempt("echo sk-pilotseed-0123456789abcdef; sleep 5", false, true);
-    }
-    #[test]
-    fn pilot_timed_out_secret() {
-        secret_attempt("echo sk-pilotseed-0123456789abcdef; sleep 5", true, false);
-    }
-    #[test]
-    fn pilot_stderr_secret() {
-        secret_attempt(
-            "echo sk-pilotseed-0123456789abcdef >&2; exit 1",
-            false,
-            false,
-        );
-    }
-    #[test]
-    fn pilot_split_secret() {
-        secret_attempt(
-            "printf 'sk-pilotseed-\n0123456789abcdef\n'; exit 1",
-            false,
-            false,
-        );
+    mod pilot_tests {
+        include!("attempt_pilot_tests.rs");
     }
 
     fn claim(repo: &str, base: &str, allow: &[&str], check_cmd: &str) -> Claim {

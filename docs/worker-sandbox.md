@@ -36,8 +36,10 @@ are redacted too. Prefixed secrets wrapped onto a second line are removed
 before line trimming. Git/SSH environment credentials are not inherited;
 harness auth staging skips `.git-credentials`, `.gitconfig`, and `.ssh`.
 This is not a network prohibition or a guarantee against credentials supplied
-in arbitrary other auth files. The current `Claim` wire type carries no owner
-identity, so this worker cannot yet verify foreign-owner claim responses.
+in arbitrary other auth files. Cross-worker exclusivity is the keeper's claim
+arbitration (`store_worker.py`), with the worker owner id sent on each claim;
+`None` is a non-retryable refusal. A process-local drop guard prevents overlapping
+attempts for the same card key and releases ownership on return or unwind.
 
 Each attempt creates its own private temporary directory under the system temp
 directory, removed on drop alongside its private HOME. Only that temporary

@@ -1274,7 +1274,7 @@ impl CardActivities {
         if cancelled {
             return Err(ActivityError::cancelled());
         }
-        result.map_err(activity_error)
+        result.map_err(crate::card_admit::attempt_error)
     }
 
     /// Sample the clock for the workflow's backoff decisions.
@@ -1558,20 +1558,15 @@ impl CardActivities {
     ) -> Result<Option<Claim>, ActivityError> {
         let keeper = self.deps.keeper.clone();
         let key = input.key;
-        if !self.deps.cfg.card_allowed(&key) {
-            return Err(ActivityError::application(
-                temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!(
-                    "card not allowlisted: {key}"
-                ))
-                .type_name("card_not_allowlisted".to_owned())
-                .non_retryable(true)
-                .build(),
-            ));
-        }
+        let claim_key = key.clone();
+        crate::card_admit::allow(&self.deps.cfg, &key)?;
         let res = tokio::task::spawn_blocking(move || do_claim_card(&*keeper, &key))
             .await
             .map_err(activity_error)?;
-        settle_refusal(res, "claim_card").map(Option::flatten)
+        crate::card_admit::claimed(
+            settle_refusal(res, "claim_card").map(Option::flatten)?,
+            &claim_key,
+        )
     }
 
     /// Create the phase branch once; a racing creator simply wins the CAS.
@@ -3548,28 +3543,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn claim_card_pure_body_uses_keeper() {
-        let keeper = StubKeeper::default();
-        let claim = Claim {
-            card: "c1".to_string(),
-            repo: "r".to_string(),
-            base_sha: "s".to_string(),
-            check_cmd: "true".to_string(),
-            allow: vec![],
-            forbid: vec![],
-            prompt: "p".to_string(),
-            ..Default::default()
-        };
-        keeper.push_card_claim(claim.clone());
-
-        assert_eq!(do_claim_card(&keeper, "c1").unwrap(), Some(claim));
-        assert_eq!(
-            keeper.claim_card_calls(),
-            vec![(merge_owner_id().to_string(), "c1".to_string())]
-        );
-
-        let empty = StubKeeper::default();
-        assert_eq!(do_claim_card(&empty, "missing").unwrap(), None);
-    }
+    include!("activities_claim_tests.rs");
 }

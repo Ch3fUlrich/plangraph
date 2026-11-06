@@ -3,10 +3,12 @@
 pub mod activities;
 pub mod attempt;
 pub mod buildid;
+mod card_admit;
 pub mod harness;
 pub mod keeper;
 pub mod mergelock;
 pub mod opencode_events;
+mod output_redact;
 pub mod phase;
 pub mod phase_workflow;
 pub mod question;

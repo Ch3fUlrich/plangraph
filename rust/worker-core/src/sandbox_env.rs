@@ -172,11 +172,7 @@ fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()
     }
     for entry in std::fs::read_dir(&src)? {
         let entry = entry?;
-        // Harness login staging must never copy git/SSH push credentials.
-        if matches!(
-            entry.file_name().to_str(),
-            Some(".git-credentials" | ".gitconfig" | ".ssh")
-        ) {
+        if crate::sandbox_push::excluded(&entry.file_name()) {
             continue;
         }
         // file_type comes from symlink_metadata: it never follows the link.
@@ -286,28 +282,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn allowlist_is_exact_names_only() {
-        for n in ["PATH", "LANG", "TERM", "CARGO_HOME", "RUSTUP_HOME"] {
-            assert!(is_passed(n) && is_passed_check(n), "{n} must pass");
-        }
-        for n in [
-            // The harness sets this on its own Command; it survives via
-            // `explicit`, it is not forwarded from the worker env.
-            "OPENCODE_DISABLE_AUTOUPDATE",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "OPENCODE_API_KEY",
-            "PG_KEEPER_URL",
-            "TEMPORAL_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "HOME",
-        ] {
-            assert!(!is_passed(n), "{n} must not pass");
-            assert!(!is_passed_check(n), "{n} must not reach a check child");
-        }
-    }
-
+    include!("sandbox_existing_tests.rs");
     #[test]
     fn allowlist_never_names_a_secret() {
         // The allowlist is an env-forwarding policy: one TOKEN/KEY/... name in
@@ -454,63 +429,6 @@ mod tests {
 
     #[test]
     #[serial_test::serial(env)]
-    fn pilot_no_push_credentials() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("source");
-        std::fs::create_dir_all(source.join(".ssh")).unwrap();
-        std::fs::write(source.join(".ssh/id_ed25519"), "private").unwrap();
-        std::fs::write(source.join(".git-credentials"), "credential").unwrap();
-        let names = [
-            "GIT_ASKPASS",
-            "GIT_SSH_COMMAND",
-            "SSH_AUTH_SOCK",
-            "GITHUB_TOKEN",
-            "GH_TOKEN",
-            "GITLAB_TOKEN",
-            "GIT_CONFIG_GLOBAL",
-            "GIT_CONFIG_COUNT",
-            "PG_PILOT_CREDENTIAL",
-        ];
-        let saved: Vec<_> = names.iter().map(|n| (*n, std::env::var_os(n))).collect();
-        let old_auth = std::env::var_os(HARNESS_AUTH_DIR_ENV);
-        for name in names {
-            std::env::set_var(name, "pilot-parent");
-        }
-        std::env::set_var(HARNESS_AUTH_DIR_ENV, &source);
-        let dir = root.path().join("work");
-        std::fs::create_dir(&dir).unwrap();
-        let mut home = HomeGuard::for_dir(&dir).unwrap();
-        home.stage_harness_auth().unwrap();
-        for confine in [confine_harness, confine_check] {
-            let mut cmd = Command::new("sh");
-            cmd.current_dir(&dir).args(["-c", "env; test ! -e \"$HOME/.git-credentials\" && test ! -e \"$HOME/.ssh\" && git init -q && test -z \"$(git remote)\" && ! git push"]);
-            confine(&mut cmd, home.path());
-            let out = cmd.output().unwrap();
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-            let env = String::from_utf8_lossy(&out.stdout);
-            for name in names {
-                assert!(!env.lines().any(|l| l.starts_with(&format!("{name}="))));
-                assert_eq!(std::env::var(name).unwrap(), "pilot-parent");
-            }
-        }
-        for (name, value) in saved {
-            match value {
-                Some(v) => std::env::set_var(name, v),
-                None => std::env::remove_var(name),
-            }
-        }
-        match old_auth {
-            Some(v) => std::env::set_var(HARNESS_AUTH_DIR_ENV, v),
-            None => std::env::remove_var(HARNESS_AUTH_DIR_ENV),
-        }
-    }
-
-    #[test]
-    #[serial_test::serial(env)]
     fn stage_harness_auth_stages_plain_files_and_refuses_symlinks() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
@@ -632,3 +550,7 @@ mod tests {
         assert!(home.is_dir());
     }
 }
+
+#[cfg(test)]
+#[path = "sandbox_push_tests.rs"]
+mod push_tests;
