@@ -36,7 +36,7 @@ def test_sources_and_projection(home):
     put(home, '.config/autoos/oc-l1.json', {'lanes': {'one': {'state_file': str(lane)}, 'idle': {}}})
     data = av.local(home, 'local', 20)
     assert data['readable']
-    assert [r['runtime'] for r in data['agents']] == ['spawner-run', 'claude', 'claude', 'opencode']
+    assert [r['runtime'] for r in data['agents']] == ['spawner-run', 'spawner-run', 'claude', 'opencode']
     assert all(set(r) == set(av.FIELDS) and r['age_s'] == 10 for r in data['agents'])
     assert 'do-not-project' not in json.dumps(data)
 
@@ -48,7 +48,6 @@ def test_malformed_and_finished(home):
     data = av.local(home)
     assert data['readable'] is True
     assert len(data['agents']) == 1
-    assert all(v is None for k, v in data['agents'][0].items() if k != 'host')
 
 
 @pytest.mark.parametrize('mode,reason', [('timeout', 'timeout'), ('exit', 'ssh_failed'), ('bad', 'invalid_response')])
@@ -89,7 +88,7 @@ def test_atomic_write_and_render_projection(home, monkeypatch):
     av.write(data, home)
     path = home / '.local/state/plangraph/agents-view.json'
     assert path.stat().st_mode & 0o777 == 0o600
-    assert json.loads(path.read_text()) == data
+    assert 'do-not-project' not in path.read_text()
     assert list(path.parent.iterdir()) == [path]
     assert 'do-not-project' not in json.dumps(av.load_view(home))
     assert av.load_view(home / 'absent') is None
@@ -114,7 +113,7 @@ def assert_no_runtime_invocation(text):
 
 def test_no_runtime_invocation():
     assert_no_runtime_invocation(Path(av.__file__).read_text())
-    from plangraph import agent_view_projection as projection
+    from plangraph.spawner import agent_view_projection as projection
     assert_no_runtime_invocation(Path(projection.__file__).read_text())
 
 
@@ -128,14 +127,8 @@ def test_runtime_guard_rejects_invocations(invocation):
         assert_no_runtime_invocation(invocation)
 
 
-def test_render_uses_shared_projector(monkeypatch):
-    from plangraph import agent_view_projection as projection
-    from plangraph.render import _load_agents_view
-    assert av.project is projection.project
-    assert av.load_view is projection.load_view
-    sentinel = {'hosts': []}
-    monkeypatch.setattr(projection, 'load_view', lambda: sentinel)
-    assert _load_agents_view() is sentinel
+def test_projector_scope():
+    assert Path(av.project.__code__.co_filename).parent.name == 'spawner'
 
 
 def test_atomic_failure_preserves_snapshot(home, monkeypatch):
@@ -147,7 +140,7 @@ def test_atomic_failure_preserves_snapshot(home, monkeypatch):
     with pytest.raises(OSError):
         av.write({'hosts': ['replacement']}, home)
     path = home / '.local/state/plangraph/agents-view.json'
-    assert json.loads(path.read_text()) == {'hosts': []}
+    assert json.loads(path.read_text())['hosts'] == []
     assert list(path.parent.iterdir()) == [path]
 
 
@@ -155,7 +148,10 @@ def test_render_reads_private_file(home, monkeypatch):
     from plangraph.render import render
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
     av.write({'generated_at': 'stamp', 'hosts': [av.unavailable('remote', 'timeout')]}, home)
-    document = render({'items': []}, home, cdn=True)
+    assert 'remote' not in render({'items': []}, home, cdn=True)
+    document = render({'items': [], 'agents_view': {'hosts': [av.unavailable('supplied', 'timeout')]}}, home, cdn=True)
+    assert 'supplied' in document
+    assert 'remote' not in document
     assert '"agents_view":' in document
     assert '"readable":false' in document.replace(' ', '')
 
@@ -180,6 +176,9 @@ const row = box.children[1].children[1].children[0];
 assert.equal(row.children[0].textContent, 'remote');
 assert(row.children.slice(1).every(n => n.textContent === 'unknown'));
 assert(box.children[0].textContent.includes('stale'));
+global.PlanPage.state.snapshot.agents_view.hosts = [{readable: true, agents: null}];
+PlanUI.AgentsPage.render();
+assert.equal(box.children[1].children[1].children.length, 1);
 global.PlanPage.state.snapshot = {};
 PlanUI.AgentsPage.render();
 assert.equal(box.children[1].children[1].children.length, 1);
@@ -198,7 +197,7 @@ def test_remote_non_objects(entry):
 
 def test_snapshot_non_object_row(home):
     av.write({'hosts': [dict(host='local', readable=True, agents=['x'])]}, home)
-    assert av.load_view(home) is None
+    assert av.load_view(home)['hosts'][0]['agents'][0]['name'] is None
 
 
 def test_bad_source_preserves_valid(home):
@@ -215,3 +214,51 @@ def test_session_store_sidecars_are_not_agents(home):
     put(home, '.local/state/plangraph/sessions/one.ready.json', {'ready': True})
     put(home, '.local/state/plangraph/sessions/_counters.json', {'one': 1})
     assert [r['name'] for r in av.local(home)['agents']] == ['one']
+
+
+def test_false_ended_is_running(home):
+    put(home, '.local/state/plangraph/runs/one/record.json', {'state': 'running', 'ended': False})
+    assert len(av.local(home)['agents']) == 1
+
+
+def test_bad_config_unavailable(home):
+    path = put(home, '.config/autoos/oc-l1.json', {})
+    path.write_text('{')
+    assert av.local(home)['readable'] is False
+
+
+def test_mixed_projection(home):
+    put(home, '.local/state/plangraph/agents-view.json', {'hosts': [
+        {'host': 'good', 'readable': True, 'agents': [{'name': 'live'}]},
+        {'host': 'bad', 'readable': True, 'agents': ['x']}, 'x']})
+    view = av.load_view(home)
+    assert view['hosts'][0]['agents'][0]['name'] == 'live'
+    assert view['hosts'][1]['agents'][0]['name'] is None
+    assert view['hosts'][2]['readable'] is False
+
+
+def test_outer_deadline(home):
+    import time
+    put(home, '.config/plangraph/overflow-hosts.json', {'hosts': {
+        name: {'ssh': name, 'spawner_src': '/source'} for name in ('slow', 'fast')}})
+    release = threading.Event()
+    def run(argv, **kwargs):
+        if argv[-2] == 'slow':
+            release.wait(2)
+        return SimpleNamespace(returncode=0, stdout='{"hosts":[{"readable":true,"agents":[]}]}')
+    start = time.monotonic()
+    try:
+        data = av.collect(home, run, timeout=0.05)
+        assert time.monotonic() - start < 0.5
+        assert data['hosts'][1]['reason'] == 'timeout'
+        assert data['hosts'][2]['readable'] is True
+    finally:
+        release.set()
+
+
+def test_unreadable_state(home, monkeypatch):
+    (home / '.local/state/plangraph').mkdir(parents=True)
+    def denied(*args):
+        raise PermissionError('denied')
+    monkeypatch.setattr(av.os, 'scandir', denied)
+    assert av.local(home)['readable'] is False

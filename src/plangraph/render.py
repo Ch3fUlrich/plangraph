@@ -255,13 +255,6 @@ def build_sha(pkg_dir: Path | None = None) -> str:
     return sha if _SHA_SAFE.fullmatch(sha) else "unknown"
 
 
-def _load_agents_view():
-    """Use the inventory's single whitelist projector for public rendering."""
-    from .agent_view_projection import load_view
-
-    return load_view()
-
-
 def render(
     snapshot: dict,
     vendor_dir: Path,
@@ -283,10 +276,9 @@ def render(
         items = []
     # Always give the page JS an `items` array, even for a malformed/empty snapshot.
     safe_snapshot = dict(snapshot)
-    safe_snapshot.pop('agents_view', None)
-    agents_view = _load_agents_view()
-    if agents_view is not None:
-        safe_snapshot['agents_view'] = agents_view
+    if 'agents_view' in safe_snapshot:
+        from .spawner.agent_view_projection import project_view
+        safe_snapshot['agents_view'] = project_view(safe_snapshot['agents_view'])
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)

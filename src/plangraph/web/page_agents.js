@@ -28,8 +28,8 @@
     }
     if (!data || !Array.isArray(data.hosts) || !data.hosts.length) row({});
     else data.hosts.forEach(function (host) {
-      if (host.readable !== true) row({host: host.host});
-      else host.agents.forEach(row);
+      if (!host || host.readable !== true || !Array.isArray(host.agents)) row({host: host && host.host});
+      else host.agents.forEach(function (agent) { row(agent || {}); });
     });
     table.appendChild(body); box.appendChild(table);
   }

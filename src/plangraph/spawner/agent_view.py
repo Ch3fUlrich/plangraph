@@ -1,6 +1,6 @@
 """Read-only fleet agent inventory; no session APIs or runtime commands."""
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import json
 import os
@@ -12,7 +12,7 @@ import time
 
 from plangraph.routing_support.private_io import atomic_write_private
 
-from plangraph.agent_view_projection import FIELDS, load_view, project, read, unavailable
+from .agent_view_projection import FIELDS, load_view, project, project_view, read, unavailable
 FINISHED = {'done', 'stopped', 'completed', 'failed', 'cancelled', 'exited'}
 
 
@@ -22,22 +22,27 @@ def local(home=None, host=None, now=None):
     now = time.time() if now is None else now
     state = Path(os.environ.get('PLANGRAPH_SPAWN_STATE') or
                  Path(os.environ.get('XDG_STATE_HOME', home / '.local/state')) / 'plangraph')
-    agents = []
+    agents, failures, successes = [], [], []
 
     def ingest(path, runtime):
         try:
             source = read(path)
+            successes.append(path)
             row = project(source, host, runtime, now)
-            if source.get('stopped_ts') is not None or source.get('ended') is not None:
+            if source.get('stopped_ts') is not None or source.get('ended'):
                 return
             if row['state'] not in FINISHED:
                 agents.append(row)
         except (OSError, ValueError, TypeError):
+            failures.append(path)
             agents.append(project({}, host))
 
     try:
+        if state.exists():
+            with os.scandir(state) as children:
+                list(children)  # glob may silently suppress directory read errors
         for pattern, runtime in [('runs/*/record.json', 'spawner-run'),
-                                 ('sessions/*.json', 'claude')]:
+                                 ('sessions/*.json', 'spawner-run')]:
             for path in state.glob(pattern):
                 if path.name != '_counters.json' and not path.name.endswith('.ready.json'):
                     ingest(path, runtime)
@@ -55,7 +60,9 @@ def local(home=None, host=None, now=None):
                     if path.exists():
                         ingest(path, 'opencode')
     except (OSError, ValueError, TypeError):
-        agents.append(project({}, host))
+        failures.append(state)
+    if failures and not successes:
+        return unavailable(host, 'source_unreadable')
     return dict(host=host, readable=True, reason=None, agents=agents)
 
 
@@ -91,10 +98,15 @@ def collect(home=None, run=subprocess.run, timeout=20, local_only=False):
     if not local_only and config.exists():
         try:
             entries = read(config)['hosts']
-            with ThreadPoolExecutor(max_workers=max(1, len(entries))) as pool:
-                futures = [pool.submit(remote, name, cfg, run, timeout)
-                           for name, cfg in entries.items()]
-                hosts.extend(f.result() for f in futures)
+            pool = ThreadPoolExecutor(max_workers=max(1, len(entries)))
+            try:
+                futures = {pool.submit(remote, name, cfg, run, timeout): name
+                           for name, cfg in entries.items()}
+                done, pending = wait(futures, timeout=timeout)
+                hosts.extend(f.result() if f in done else unavailable(name, 'timeout')
+                             for f, name in futures.items())
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             hosts.append(unavailable('unknown', 'config_unreadable'))
     return dict(generated_at=datetime.now(timezone.utc).isoformat(), hosts=hosts)
@@ -102,7 +114,7 @@ def collect(home=None, run=subprocess.run, timeout=20, local_only=False):
 
 def write(data, home=None):
     path = Path(home or Path.home()) / '.local/state/plangraph/agents-view.json'
-    atomic_write_private(path, json.dumps(data) + '\n')
+    atomic_write_private(path, json.dumps(project_view(data)) + '\n')
 
 
 def main():

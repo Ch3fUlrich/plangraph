@@ -41,19 +41,25 @@ def unavailable(host, reason):
     return dict(host=host, readable=False, reason=reason, agents=[])
 
 
+def project_view(data):
+    """Isolate malformed hosts and rows while enforcing the public schema."""
+    hosts = []
+    for entry in data['hosts']:
+        entry = entry if isinstance(entry, dict) else {}
+        host = entry.get('host') if isinstance(entry.get('host'), str) else 'unknown'
+        rows = entry.get('agents')
+        if entry.get('readable') is not True or not isinstance(rows, list):
+            hosts.append(unavailable(host, 'unreadable'))
+        else:
+            hosts.append(dict(host=host, readable=True, reason=None,
+                              agents=[project(r if isinstance(r, dict) else {}, host) for r in rows]))
+    return dict(generated_at=data.get('generated_at') if isinstance(
+        data.get('generated_at'), str) else None, hosts=hosts)
+
+
 def load_view(home=None):
     """Re-project the private file before embedding it in a public page."""
     try:
-        data = read(Path(home or Path.home()) / '.local/state/plangraph/agents-view.json')
-        hosts = []
-        for entry in data['hosts']:
-            host = entry['host'] if isinstance(entry['host'], str) else 'unknown'
-            if entry.get('readable') is not True:
-                hosts.append(unavailable(host, 'unreadable'))
-            else:
-                hosts.append(dict(host=host, readable=True, reason=None,
-                                  agents=[project(r, host) for r in entry['agents']]))
-        return dict(generated_at=data.get('generated_at') if isinstance(
-            data.get('generated_at'), str) else None, hosts=hosts)
+        return project_view(read(Path(home or Path.home()) / '.local/state/plangraph/agents-view.json'))
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
