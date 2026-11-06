@@ -1,39 +1,36 @@
-# L1 card · build-L1-0245 · 2026-11-06T10:08Z
+# L1 card · build-L1-0245 · 2026-11-06T10:30Z
 ## Goal
-- D-4177 first, then operator GO OS-FLEET-MSG-INVENTORY (phase 0 gate), then D-4174 parallel phase 0
+- D-4207 terra leg first, then D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
 ## Keeper
-- claimed: AUTOOS-HOOKS-INTERIM-S06, S13, SPAWNER-ORPHAN-REAP, RIN-PATH-REPOINT, ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z, epochs 2 2 2 5 2), keys need the plangraph: prefix
-- ready next: OS-FLEET-MSG-INVENTORY, AUTOOS-HOOKS-INTERIM-S09 and S14 after #446 #447
+- claimed: plangraph:AUTOOS-HOOKS-INTERIM-S06, plangraph:SPAWNER-ORPHAN-REAP, plangraph:RIN-PATH-REPOINT, plangraph:ROUTERCTL-CTX-GUARD-CAPS (lease 11:27Z); S13 lapsed per digest, reclaim
+- ready next: plangraph:AUTOOS-HOOKS-INTERIM-S09, plangraph:AUTOOS-HOOKS-INTERIM-S14 after #446 #447
 ## Done
-- 11-06T09:39Z D-4162 62542ed0 md-sync close on DONE no-op live on pin, path+timer active, run applied, error none
-- 11-06T09:40Z D-4158 - pid 1059285 no unit or cron, inferred opencode session in pane wE:p1
-- 11-06T09:40Z D-4150 - dell no unit, coding.vm has 88ccbc9c92ce, workstation and ci-vm unproven
-- 11-06T09:58Z D-4162 PR#520 CI 42197400614 green, delta seat run-f4e21e23 ACCEPT, GO-REQ sent
 - 11-06T10:05Z D-4185 - watchdog uses spawner.token, watchdog.token absent, sent
-- 11-06T10:05Z D-4179 - witness token BLOCKED sent, on workstation only
-- 11-06T10:07Z D-4179 - fleet keys 18-de-2053, workstation placed 0600, sha prefix match; inventory v2 on 3 hosts, backup inventory.json.bak-d4179
+- 11-06T10:05Z D-4179 - witness token BLOCKED sent, workstation only
+- 11-06T10:07Z D-4179 - fleet keys placed 0600 on 2 hosts, sha prefix match, inventory on 3 hosts
+- 11-06T10:23Z D-4162 62542ed0 md-sync restarted, one run applied, error none, refused 1 untraced
+- 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
 ## In flight
-- D-4177 run-cbe5ed32 since 09:52Z next check 10:15Z, mimo-pro, plangraph-data lane/d4177-watchdog-seat
-- LE-FLEET-MSG-INVENTORY run-486703ee since 09:54Z next check 10:15Z, mimo-pro, lane/le-fleet-msg-self
-- GO-REQ sent: keeper drop-in PLANGRAPH_BUS_INVENTORY + restart; live keeper lacks it, no restart without D-id
+- D-4207 lane/terra-review-leg writer job biwkrk6bm since 10:27Z next check 10:45Z
+- D-4196 run-baea999e lane/d4196-go-legs since 10:19Z next check 10:45Z
+- D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
+- #528 run-34a2095f since 10:16Z next check 10:40Z, replan-0251 takes over after commit
 ## Planned
-1. D-4177 writer exit: read REPRODUCED lines, push, seats with one that ran tests, GO-REQ
-- D-4180 after D-4177 and phase 0: back up then remove launch/plangraph-integrate.json; P2a launch gate + WATCHDOG-IDENTITY-MISMATCH GO with seats
-- D-4179 routing-0244 order in handoff, not started: witness token check, one line by host for fleet inventory
-2. OS-FLEET-MSG-INVENTORY operator GO typed in session: inventory, keys 0600, MCP env, reconnect; done = fleet_msg_send to routing from each host
-3. #520 on GO: merge, repin md-sync, restart
+1. D-4207 terra: seats, probe, send plangraph-improve-0249 the leg id, DONE to routing
+2. D-4196 + D-4193: seats, GO-REQ, DONE with leg ids, tell plangraph-improve-0246
+3. D-4177: tests seat, delta seat, GO-REQ, live proof
+4. D-4195 DONE line after ruling; D-4180 after phase 0 order
 ## Open
-- BLOCKED RIN-LEDGER-VIEWS r3 cap, 2 HIGH confirmed | default router applies reconcile batch, then one writer | deadline none
-- BLOCKED ROUTER-LAUNCH-OOM-SCOPE router adj 800 from daemon | default keep open, no daemon restart without D-id | deadline none
-- BLOCKED LE-FLEET-MSG-INVENTORY claim refused stale | default router re-confirms, no force_stale | deadline none
-- BLOCKED #451 own reds, S01, no-Sol vs D-3763 as previous card | default as sent | deadline none
+- BLOCKED public push 07e8c39e on origin/build-L1 | default operator deletes branch as OS-219 | deadline none
+- BLOCKED keeper drop-in PLANGRAPH_BUS_INVENTORY + restart GO-REQ | default hold | deadline none
+- BLOCKED OP-D4-WITNESS-TOKEN | default replan proves a gateway seat on ws-build | deadline none
+- BLOCKED D-4195 lane/d4195-caps b2d7c6827beb GO-REQ, dell cap number after D-4198 | default keep 100 | deadline none
+- BLOCKED RIN-LEDGER-VIEWS, ROUTER-LAUNCH-OOM-SCOPE, #451 as previous card | default as sent | deadline none
 ## Traps
-- Control branch: git push control build-L1 only, NEVER origin (D-1751); 07e8c39e went public, incident sent
-- Left for bus: FLEET_MSG_* in mcp-supervise.workstation.json via workst-L1-autoos; dell-spawner-1800 session MCP env
-- Entered worktrees make git into other repos refused; enter only for an edit
-- Key bytes never in env, logs, git, messages; inventory prints without key fields
-- Seat legs: Haiku works; deepseek go not_served, qwen credit
-- mimo review leg needs inline diff and a NO TOOLS header, else tool calls as text, no VERDICT
-- Never Hand-Edit src/plangraph/keeper/* or gates; stale claim refusals reported, not overridden
+- git push control build-L1 ONLY, never origin (D-1751)
+- Review card without diff_ref fails inline_diff_failed
+- Haiku seat in plan mode did not run tests: does not count for HIGH 3.3
+- Key bytes never in env, logs, git, messages; WSL holds workstation keys
+- Workstation mcp-proxy shows PG_TOKEN inline in its cmdline, not yet reported
 ## Drill-down
-- handoff: /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools /home/s/.claude/jobs/3ab76525/tmp
+- handoff /home/s/code/plangraph-worktrees/build-L1/status/handoff-build-L1.md; tools ~/.local/share/plangraph/handoffs/build-L1-0245
