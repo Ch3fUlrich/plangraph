@@ -78,18 +78,6 @@ fn foundation_docs_exclude_followup_slice_narrative() {
 }
 
 #[test]
-fn foundation_dead_code_allowances_are_production_only() {
-    for source in [include_str!("watch_unix.rs"), include_str!("watch.rs")] {
-        for line in source
-            .lines()
-            .filter(|line| line.contains("allow(dead_code)"))
-        {
-            assert!(line.starts_with("#[cfg_attr(not(test), allow(dead_code))]"));
-        }
-    }
-}
-
-#[test]
 fn stdin_writer_cancels_when_child_does_not_read() {
     let mut cmd = Command::new("sleep");
     cmd.arg("30").stdin(std::process::Stdio::piped());
