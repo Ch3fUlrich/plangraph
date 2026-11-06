@@ -1,0 +1,1 @@
+- **SPAWNER-TEXT-ONLY-TOOLCALL:** Fail text-only tool-call responses as tool_call_only and try the next leg, preserving real commits and terminal guards.

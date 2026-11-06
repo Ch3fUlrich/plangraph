@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import db as kdb, db_errors, events
+from .placement_rules_schema import SQLITE_ONLY_TABLES
 
 __all__ = ["run", "TABLES", "CopyError"]
 
@@ -54,10 +55,14 @@ def _open_source(src):
     if "events" not in names or "items" not in names:
         conn.close()
         raise CopyError("source is not a keeper database")
-    unknown = sorted(set(names) - set(TABLES))
+    unknown = sorted(set(names) - set(TABLES) - SQLITE_ONLY_TABLES)
     if unknown:
         conn.close()
         raise CopyError("source has tables this tool does not know: " + ", ".join(unknown))
+    for table in sorted(set(names) & SQLITE_ONLY_TABLES):
+        if conn.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone():
+            conn.close()
+            raise CopyError(f"source SQLite-only table {table} is not empty; wait for C3")
     return conn, [t for t in TABLES if t in names]
 
 
