@@ -197,7 +197,7 @@ fn store_prompt(
 fn internal(message: &str) -> ToolError {
     ToolError::Internal(message.into())
 }
-fn create(
+pub(crate) fn create(
     state: &Path,
     id: &str,
     host: &str,
@@ -234,7 +234,7 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
     record.set("attempts", json!([{"leg":leg,"status":status.as_str(),
@@ -253,6 +253,45 @@ fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         },
     );
     record.set("writer_family", leg["family"].clone());
+    if let Some(state) = record
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_owned)
+    {
+        let value = record.to_value();
+        let (rows, skipped) = crate::evidence_row::adapted(&value);
+        if !dry {
+            record.set("evidence_unclassified_attempts", json!(skipped));
+        }
+        if value["role"] == "review" {
+            let text = crate::review_artifacts::review_text(&state, &value)
+                .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
+            let result = crate::review_artifacts::write_review_artifacts(&state, &value, &text);
+            if result.is_ok() {
+                record.set("seat_dir", json!(record.path().with_file_name("seat")));
+            } else {
+                record.set(
+                    "review_artifact_error",
+                    json!("review artifacts unavailable"),
+                );
+            }
+        }
+        let role = value["role"].as_str().unwrap_or("");
+        if let Ok(store) =
+            crate::evidence::EvidenceStore::open(&state, crate::evidence::enabled(&state, role))
+        {
+            if store.backfill(&crate::records::list_runs(&state)).is_err() {
+                record.set("evidence_error", json!("evidence unavailable"));
+            }
+            for row in rows {
+                if store.append(&row).is_err() {
+                    record.set("evidence_error", json!("evidence unavailable"));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
