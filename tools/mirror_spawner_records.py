@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 
 LIMIT = 16 * 1024 * 1024
+# Mirrors Status::is_terminal in rust/worker-core/src/run/record.rs (Status enum).
 TERMINAL = {'completed', 'failed', 'cancelled', 'stalled', 'timeout', 'refused', 'limited', 'dry_run'}
 
 
@@ -90,7 +91,7 @@ def write_record(dest, host, run_id, data, dry):
             with os.fdopen(old, 'rb') as stream:
                 return 'unchanged' if stream.read(len(data) + 1) == data else 'conflicts'
         if not dry:
-            # Directory lock serializes mirrors; rename publishes only complete bytes.
+            # Hard-link publication never replaces a non-cooperating writer's proof.
             name = next(tempfile._get_candidate_names()) + '.tmp'
             temp = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd)
             try:
@@ -98,7 +99,12 @@ def write_record(dest, host, run_id, data, dry):
                     stream.write(data)
                     stream.flush()
                     os.fsync(stream.fileno())
-                os.rename(name, 'record.json', src_dir_fd=fd, dst_dir_fd=fd)
+                try:
+                    os.link(name, 'record.json', src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
+                except FileExistsError:
+                    old = os.open('record.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                    with os.fdopen(old, 'rb') as stream:
+                        return 'unchanged' if stream.read(len(data) + 1) == data else 'conflicts'
                 os.fsync(fd)
             finally:
                 try:
@@ -107,7 +113,7 @@ def write_record(dest, host, run_id, data, dry):
                     pass
         return 'mirrored'
     except OSError:
-        return 'conflicts'
+        return 'io_errors'
     finally:
         os.close(fd)
 
@@ -137,8 +143,8 @@ def main(argv=None):
     except (OSError, subprocess.CalledProcessError, tarfile.TarError):
         failed = True
         skipped['source'] += 1
-    print(f"mirrored={counts['mirrored']} unchanged={counts['unchanged']} conflicts={counts['conflicts']} skipped={json.dumps(dict(skipped), sort_keys=True)}")
-    return int(failed or counts['conflicts'] > 0)
+    print(f"mirrored={counts['mirrored']} unchanged={counts['unchanged']} conflicts={counts['conflicts']} io_errors={counts['io_errors']} skipped={json.dumps(dict(skipped), sort_keys=True)}")
+    return int(failed or counts['conflicts'] > 0 or counts['io_errors'] > 0)
 
 
 if __name__ == '__main__':

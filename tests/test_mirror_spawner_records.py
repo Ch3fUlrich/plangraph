@@ -44,7 +44,7 @@ def test_mirror(tmp_path, capsys):
     assert out.read_bytes() == old
 
 
-@pytest.mark.parametrize('change,reason', [({'status': 'running'}, 'status'),
+@pytest.mark.parametrize('change,reason', [({'status': s}, 'status') for s in ('queued', 'running', 'unknown')] + [
     ({'host': 'host-b'}, 'host'), ({'run_id': 'run-b'}, 'run_id'),
     ({'item_key': None}, 'item_key'), ('{', 'json'), ('x' * (mirror.LIMIT + 1), 'oversize'), ([], 'object')])
 def test_skips(tmp_path, capsys, change, reason):
@@ -80,10 +80,45 @@ def test_all_terminal_and_missing_item(tmp_path):
     value = record(); del value['item_key']
     path.write_text(json.dumps(value))
     assert mirror.main(args) == 0 and not dest.exists()
-    for status in mirror.TERMINAL:
+    statuses = {'completed', 'failed', 'cancelled', 'stalled', 'timeout', 'refused', 'limited', 'dry_run'}
+    assert mirror.TERMINAL == statuses
+    for status in statuses:
         value = record(); value['status'] = status
         data, reason = mirror.reduce_record('run-a', json.dumps(value).encode(), 'host-a')
         assert reason is None and json.loads(data)['status'] == status
+
+
+def test_destination_io_error(tmp_path, capsys):
+    _, dest, args = setup(tmp_path)
+    dest.mkdir(mode=0o500)
+    try:
+        assert mirror.main(args) == 1
+        summary = capsys.readouterr().out
+        assert 'io_errors=1' in summary and 'conflicts=0' in summary
+        assert not list(dest.iterdir())
+    finally:
+        dest.chmod(0o700)
+
+
+@pytest.mark.parametrize('same', [False, True])
+def test_publish_race(tmp_path, monkeypatch, capsys, same):
+    _, dest, args = setup(tmp_path)
+    original = mirror.os.fsync
+    raced = []
+    out = dest / 'host-a/run-a/record.json'
+
+    def race(fd):
+        original(fd)
+        if not raced:
+            data = next(out.parent.glob('*.tmp')).read_bytes() if same else b'other proof\n'
+            out.write_bytes(data)
+            raced.append(data)
+
+    monkeypatch.setattr(mirror.os, 'fsync', race)
+    assert mirror.main(args) == (0 if same else 1)
+    assert out.read_bytes() == raced[0]
+    assert ('unchanged=1' if same else 'conflicts=1') in capsys.readouterr().out
+    assert not list(out.parent.glob('*.tmp'))
 
 
 def test_ssh_tar(tmp_path, monkeypatch):
