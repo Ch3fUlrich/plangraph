@@ -90,10 +90,19 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 record['main_sha'] = measure('main', 'git -C ' + repo + ' rev-parse origin/main', sha)
             if record['checkout_sha'] and record['main_sha'] and record['checkout_sha'] != record['main_sha']:
                 fail('checkout', 'behind')
-            doctor = measure('doctor', prefix + 'doctor --json', json.loads)
+            def parse_doctor(output):
+                doctor = json.loads(output)
+                ok, rows = doctor['ok'], doctor['checks']
+                if not isinstance(ok, bool) or not isinstance(rows, list):
+                    raise ValueError()
+                for row in rows:
+                    if not isinstance(row['name'], str) or row['status'] not in ('pass', 'warn', 'fail'):
+                        raise ValueError()
+                return ok, rows
+            doctor = measure('doctor', prefix + 'doctor --json', parse_doctor)
             if doctor is not None:
-                rows = doctor['checks']
-                record['doctor_ok'] = doctor['ok'] is True and not any(r['status'] == 'fail' for r in rows)
+                ok, rows = doctor
+                record['doctor_ok'] = ok and not any(r['status'] == 'fail' for r in rows)
                 record['keeper_ok'] = any(r['name'] == 'keeper_whoami' and r['status'] == 'pass' for r in rows)
                 for row in rows:
                     if row['status'] == 'fail':
@@ -139,6 +148,8 @@ def main(argv=None):
                                 Path.home() / '.config/plangraph/overflow-hosts.json'))
     hosts = json.loads(config.read_text())['hosts']
     if args.host:
+        if args.host not in hosts:
+            parser.error('unknown host')
         hosts = {args.host: hosts[args.host]}
     if any(not re.fullmatch(r'[A-Za-z0-9_-]+', name) for name in hosts):
         parser.error('invalid host name')

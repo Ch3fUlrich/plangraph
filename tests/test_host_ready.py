@@ -45,6 +45,33 @@ def test_green_atomic(tmp_path):
     assert not h.fresh(result, datetime.now(timezone.utc) + timedelta(minutes=11))
 
 
+@pytest.mark.parametrize('payload', [{'ok': True}, {'checks': []}])
+def test_doctor_missing_keys(tmp_path, payload):
+    def fake(argv, **kwargs):
+        if 'doctor --json' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+        return runner(argv, **kwargs)
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert not result['ok']
+    assert result['failures'] == ['doctor: invalid_response']
+    assert result['doctor_ok'] is None and result['keeper_ok'] is None
+    assert result['live_runs'] == 1
+    assert json.loads((tmp_path / 'fiction.json').read_text()) == result
+
+
+def test_main_unknown_host(tmp_path, monkeypatch, capsys):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'hosts': {'fiction': CONFIG}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    with pytest.raises(SystemExit) as exc:
+        h.main(['--host', 'nosuch'])
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert 'error: unknown host' in captured.err
+    assert 'Traceback' not in captured.err
+
+
 @pytest.mark.parametrize('mode', ['unreachable', 'timeout', 'no_route', 'behind', 'doctor', 'fetch', 'session'])
 def test_failures(tmp_path, mode):
     config = dict(CONFIG)
