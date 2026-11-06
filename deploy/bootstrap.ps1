@@ -11,6 +11,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$pythonCommand = @('python3', 'python', 'py') | Where-Object {
+    $candidate = Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue
+    $candidate -and $candidate.Source -notmatch '[\\/]WindowsApps[\\/]'
+} | Select-Object -First 1
+if (-not $pythonCommand) { throw "Python interpreter required (python3, python or py)" }
 
 function Resolve-AutoOSRoot {
     [CmdletBinding()]
@@ -32,6 +37,7 @@ function Invoke-PlangraphBootstrap {
     if ($ProbeHost -or $ProbeConfig) {
         $probeCode = @'
 import os, pathlib, re, shlex, stat, sys, tempfile
+assert os.name == "posix", "Probe enrollment requires POSIX pwsh; native Windows is unsupported"
 host, name, dry = sys.argv[1:]
 valid = lambda h: re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", h) is not None
 assert valid(host) and name, "paired probe host/config required; invalid host"
@@ -41,7 +47,7 @@ assert path.is_file() and not mode & 0o077, "config must exist and be private"
 text = path.read_bytes().decode("utf-8")
 lines = text.splitlines(keepends=True)
 entries = [(i, line.split("=", 1)[1].strip()) for i, line in enumerate(lines)
-           if re.match(r"^\s*PLANGRAPH_PROBE_HOSTS\s*=", line)]
+           if re.match(r"^\s*(?:export\s+)?PLANGRAPH_PROBE_HOSTS\s*=", line)]
 assert len(entries) == 1, "exactly one hosts assignment required"
 index, value = entries[0]
 hosts = shlex.split(value)
@@ -58,7 +64,7 @@ try:
 finally:
     if os.path.exists(temporary): os.unlink(temporary)
 '@
-        & python -c $probeCode $ProbeHost $ProbeConfig ([int]$DryRun.IsPresent)
+        & $pythonCommand -c $probeCode $ProbeHost $ProbeConfig ([int]$DryRun.IsPresent)
         if ($LASTEXITCODE -ne 0) { throw "Probe enrollment failed" }
         return
     }
@@ -76,7 +82,7 @@ finally:
 
     Write-Host "Resolved host components ($($allComponents.Count)): $($allComponents -join ', ')"
 
-    & python -m plangraph.spawner.stall_watchdog tick --dry-run
+    & $pythonCommand -m plangraph.spawner.stall_watchdog tick --dry-run
     if ($LASTEXITCODE -ne 0) { throw "Watchdog count failed" }
 
     if (-not $SkipAutoOS -and $AutoOSRoot) {
@@ -118,7 +124,7 @@ finally:
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
-            & python @pythonArgs
+            & $pythonCommand @pythonArgs
             if ($LASTEXITCODE -ne 0) {
                 throw "Catalog DB init-and-seed failed with exit code $LASTEXITCODE"
             }
@@ -130,7 +136,7 @@ finally:
     $watchdogArgs = @("-m", "plangraph.spawner.stall_watchdog", "install", "--host", "windows")
     if ($DryRun) { Write-Host "[DRY-RUN] Would execute: python $($watchdogArgs -join ' ')" }
     else {
-        & python @watchdogArgs
+        & $pythonCommand @watchdogArgs
         if ($LASTEXITCODE -ne 0) { throw "Watchdog installation failed" }
     }
 

@@ -64,7 +64,7 @@ assert path.is_file() and not mode & 0o077, "config must exist and be private"
 text = path.read_bytes().decode("utf-8")
 lines = text.splitlines(keepends=True)
 entries = [(i, line.split("=", 1)[1].strip()) for i, line in enumerate(lines)
-           if re.match(r"^\s*PLANGRAPH_PROBE_HOSTS\s*=", line)]
+           if re.match(r"^\s*(?:export\s+)?PLANGRAPH_PROBE_HOSTS\s*=", line)]
 assert len(entries) == 1, "exactly one hosts assignment required"
 index, value = entries[0]
 hosts = shlex.split(value)

@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -55,7 +56,7 @@ def test_invalid_host_or_config_unchanged(probe):
         assert run(host).returncode != 0
         assert config.read_bytes() == original
     assert run(path=config.parent / 'missing').returncode != 0
-    for suffix in ("PLANGRAPH_PROBE_HOSTS=other\n",):
+    for suffix in ("PLANGRAPH_PROBE_HOSTS=other\n", "export PLANGRAPH_PROBE_HOSTS=other\n"):
         config.write_bytes(original + suffix.encode())
         before = config.read_bytes()
         assert run().returncode != 0
@@ -83,6 +84,11 @@ def test_probe_dry_run_preserves_config(probe):
 @pytest.mark.skipif(not shutil.which('pwsh'), reason='pwsh absent; PowerShell fixture skipped')
 def test_powershell_same_failure(probe):
     config, run = probe
+    parsed = subprocess.run(['pwsh', '-NoProfile', '-Command',
+        "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('"
+        + str(ROOT / 'deploy/bootstrap.ps1').replace("'", "''")
+        + "',[ref]$null,[ref]$e); if ($e) { exit 1 }"], capture_output=True)
+    assert parsed.returncode == 0
     before = config.read_bytes()
     assert run('bad host', ps=True).returncode != 0
     assert config.read_bytes() == before
@@ -91,3 +97,47 @@ def test_powershell_same_failure(probe):
     assert run(ps=True).returncode == 0
     assert run(ps=True).returncode == 0
     assert config.read_text().count('old new') == 1
+
+
+@pytest.mark.parametrize('wrapper', ['bootstrap.sh', 'bootstrap.ps1'])
+def test_export_duplicate_rejected(probe, wrapper):
+    config, _ = probe
+    config.write_text(config.read_text() + 'export PLANGRAPH_PROBE_HOSTS=other\n')
+    before = config.read_bytes()
+    source = (ROOT / 'deploy' / wrapper).read_text()
+    code = source.split('import os, pathlib, re, shlex, stat, sys, tempfile\n', 1)[1]
+    code = 'import os, pathlib, re, shlex, stat, sys, tempfile\n' + code.split("'@" if wrapper.endswith('ps1') else "' \"$PROBE_HOST\"")[0]
+    result = subprocess.run([sys.executable, '-c', code, 'new', str(config), '0'], capture_output=True)
+    assert result.returncode != 0
+    assert b'exactly one hosts assignment required' in result.stderr
+    assert config.read_bytes() == before
+
+
+def test_native_windows_rejected_before_config_access():
+    source = (ROOT / 'deploy/bootstrap.ps1').read_text()
+    code = source.split("$probeCode = @'\n", 1)[1].split("'@", 1)[0]
+    prelude = "import os, pathlib, re, shlex, stat, sys, tempfile; os.name = 'nt'\n"
+    result = subprocess.run([sys.executable, '-c', prelude + code], capture_output=True)
+    assert result.returncode != 0
+    assert b'Probe enrollment requires POSIX pwsh' in result.stderr
+
+
+def test_powershell_interpreter_detection():
+    source = (ROOT / 'deploy/bootstrap.ps1').read_text()
+    assert "@('python3', 'python', 'py')" in source
+    assert 'WindowsApps' in source
+    assert '& python ' not in source
+    assert '& $pythonCommand -c $probeCode' in source
+
+
+@pytest.mark.skipif(not shutil.which('pwsh') or os.name != 'posix', reason='requires POSIX pwsh')
+@pytest.mark.parametrize('interpreter', ['python3', 'py'])
+def test_powershell_without_python(probe, tmp_path, monkeypatch, interpreter):
+    config, run = probe
+    tools = tmp_path / 'bin'
+    tools.mkdir()
+    (tools / 'pwsh').symlink_to(shutil.which('pwsh'))
+    (tools / interpreter).symlink_to(sys.executable)
+    monkeypatch.setenv('PATH', str(tools))
+    assert run(ps=True).returncode == 0
+    assert 'old new' in config.read_text()

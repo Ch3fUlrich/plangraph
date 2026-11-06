@@ -80,6 +80,7 @@ These persistent steps require human action or explicit pre-authorization; no su
 On the orchestrator, separately run the same dry-run/review/authorized bootstrap to create units; the remote
 timer stays disabled: enrollment never enables it. On the orchestrator, run `bootstrap.sh --probe-host NAME --probe-config FILE`
 (PowerShell: `bootstrap.ps1 -ProbeHost NAME -ProbeConfig FILE`), first with `--dry-run` / `-DryRun`.
+Probe enrollment requires POSIX (including `pwsh`); native Windows is rejected before config access because POSIX private modes are required.
 FILE must be an existing private operator-managed `watchdog.env` with one `PLANGRAPH_PROBE_HOSTS` assignment.
 Enrollment only adds the host once; it does not run worker setup or SSH. A human sets root/notify config, reviews it, then
 explicitly runs `systemctl --user enable --now plangraph-remote-probe.timer` after approval.
