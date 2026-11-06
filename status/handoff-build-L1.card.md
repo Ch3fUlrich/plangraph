@@ -15,7 +15,7 @@
 1. Heartbeat all claims before 01:38Z
 2. Retry seats after free reset about 00:10Z: 314d-0208 on dell, S0a r2 non-mimo delta
 3. #451 round 2: read diff, mimo delta seat, run once on 18-de-2053, CI (round 3 is the cap)
-4. D-3975 overrides D-3956: do NOT move spawner-main for #419 (191d7df4fc76 is after #465, makes opencode-go legs reachable, billing unanswered); GO-REQ sent, wait for it; #407 after replan merges
+4. D-3986 + D-3987: no spawner-main move, Haiku probe or cherry-pick for #419 until OS-OPENCODE-GO-BILLING answered ~04:10Z; meanwhile read-only review of what the 242+ commits change live, for its own GO-REQ (D-3975); #407 after replan merges
 5. REPOINT + LEDGER after router applies: merge lanes, submit; INBOX one GO-REQ; resend gen-89 open
 6. #338 handed to replan-0207, do not start; S09 S14 (S14 takes the _parity.py MED); OOM evidence retry
 ## Open
