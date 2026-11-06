@@ -18,6 +18,7 @@
 - D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
 - #528 run-34a2095f since 10:16Z next check 10:40Z, replan-0251 takes over after commit
 ## Planned
+0. D-4214 GW-QUEUE-WAIT-VISIBLE in Ch3fUlrich/OmniRoute after terra: fill call-log addedWaitMs/addedWaitCause (empty on 15.7k rows), merged, CI green, 1 non-writer seat, prox deploys; router files the item
 1. D-4207 terra: seats, probe, send plangraph-improve-0249 the leg id, DONE to routing
 2. D-4196 + D-4193: seats, GO-REQ, DONE with leg ids, tell plangraph-improve-0246
 3. D-4177: tests seat, delta seat, GO-REQ, live proof
