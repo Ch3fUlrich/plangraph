@@ -5,6 +5,18 @@ from plangraph.spawner.runner import spawn_service
 
 
 @pytest.mark.parametrize('dispatch', [False, True])
+def test_item_card_intake(tmp_path, monkeypatch, dispatch):
+    service = _service(tmp_path, monkeypatch)
+    if dispatch:
+        service = spawn_service(_Runner(), state=tmp_path)
+    card = {'estimate_tokens': 100, 'item': 'p:card'}
+    # route is the public card-check entry point shared by both Python paths.
+    assert service.route(card).legs
+    result = asyncio.run(service.spawn(card=card, prompt='', dry_run=True))
+    assert result['item_key'] == 'p:card'
+
+
+@pytest.mark.parametrize('dispatch', [False, True])
 @pytest.mark.parametrize('item,env,expected', [
     ('p:card', None, 'p:card'), (None, 'p:env', 'p:env'),
     ('p:card', 'p:env', 'p:card'), (None, None, None),

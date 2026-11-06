@@ -44,7 +44,7 @@ def test_mirror(tmp_path, capsys):
     assert out.read_bytes() == old
 
 
-@pytest.mark.parametrize('change,reason', [({'status': s}, 'status') for s in ('queued', 'running', 'unknown')] + [
+@pytest.mark.parametrize('change,reason', [({'status': s}, 'status') for s in ('queued', 'running', 'bad;status', '', 'x' * 41, None)] + [
     ({'host': 'host-b'}, 'host'), ({'run_id': 'run-b'}, 'run_id'),
     ({'item_key': None}, 'item_key'), ('{', 'json'), ('x' * (mirror.LIMIT + 1), 'oversize'), ([], 'object')] + [
     ({field: value}, field) for field, values in [
@@ -90,12 +90,12 @@ def test_all_terminal_and_missing_item(tmp_path):
     value = record(); del value['item_key']
     path.write_text(json.dumps(value))
     assert mirror.main(args) == 0 and not dest.exists()
-    statuses = {'completed', 'failed', 'cancelled', 'stalled', 'timeout', 'refused', 'limited', 'dry_run'}
-    assert mirror.TERMINAL == statuses
-    for status in statuses:
+    for status in ('completed', 'future_terminal'):
         value = record(); value['status'] = status
-        data, reason = mirror.reduce_record('run-a', json.dumps(value).encode(), 'host-a')
-        assert reason is None and json.loads(data)['status'] == status
+        path.write_text(json.dumps(value))
+        target = dest / status
+        assert mirror.main(args + ['--dest', str(target)]) == 0
+        assert json.loads((target / 'host-a/run-a/record.json').read_bytes())['status'] == status
 
 
 def test_destination_io_error(tmp_path, capsys):
@@ -143,14 +143,23 @@ def test_ssh_tar(tmp_path, monkeypatch):
             else:
                 member.size = len(raw); tar.addfile(member, io.BytesIO(raw))
     ssh = tmp_path / 'ssh'
-    ssh.write_text('#!/bin/sh\n[ "$1" = "-o" ] && [ "$2" = "BatchMode=yes" ] && [ "$3" = "--" ] || exit 2\ncat "$STREAM"\nexit "${FAIL:-0}"\n')
+    ssh.write_text('#!/bin/sh\n[ "$1" = "-o" ] && [ "$2" = "BatchMode=yes" ] && [ "$3" = "--" ] || exit 2\nprintf "%s" "$5" > "$COMMAND"\ncat "$STREAM"\nexit "${FAIL:-0}"\n')
     ssh.chmod(0o700)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('STREAM', str(archive))
-    args = ['--host', 'host-a', '--dest', str(tmp_path / 'dest'), '--ssh', 'host-a', '--remote-runs', 'runs']
+    command = tmp_path / 'command'
+    monkeypatch.setenv('COMMAND', str(command))
+    args = ['--host', 'host-a', '--dest', str(tmp_path / 'dest'), '--ssh', 'host-a', '--remote-runs', 'runs; touch marker']
     monkeypatch.setenv('FAIL', '1')
     assert mirror.main(args) == 1
     assert not (tmp_path / 'dest').exists()
     monkeypatch.setenv('FAIL', '0')
     assert mirror.main(args) == 0
+    assert command.read_text() == "tar -C 'runs; touch marker' -cf - --wildcards '*/record.json'"
     assert len(list((tmp_path / 'dest').rglob('record.json'))) == 1
+
+
+def test_ssh_option_alias(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        mirror.main(['--host', 'host-a', '--dest', str(tmp_path), '--ssh=-option', '--remote-runs', 'runs'])
+    assert exc.value.code == 2

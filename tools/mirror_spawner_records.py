@@ -9,13 +9,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import tarfile
 import tempfile
 
 LIMIT = 16 * 1024 * 1024
-# Mirrors Status::is_terminal in rust/worker-core/src/run/record.rs (Status enum).
-TERMINAL = {'completed', 'failed', 'cancelled', 'stalled', 'timeout', 'refused', 'limited', 'dry_run'}
 
 
 def safe_name(value):
@@ -31,8 +30,8 @@ def sources(args):
                     yield directory.name, stream.read(LIMIT + 1)
     else:
         result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '--', args.ssh,
-                                 'tar', '-C', args.remote_runs, '-cf', '-', '--wildcards',
-                                 '*/record.json'], capture_output=True, check=True)
+                                 shlex.join(['tar', '-C', args.remote_runs, '-cf', '-', '--wildcards',
+                                             '*/record.json'])], capture_output=True, check=True)
         with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r:*') as archive:
             for member in archive:
                 parts = member.name.split('/')
@@ -53,7 +52,9 @@ def reduce_record(run_id, raw, host):
     for key, expected in [('run_id', run_id), ('host', host)]:
         if record.get(key) != expected:
             return None, key
-    if not isinstance(record.get('status'), str) or record['status'] not in TERMINAL:
+    # Status::is_terminal, rust/worker-core/src/run/record.rs: neither queued nor running.
+    status = record.get('status')
+    if not isinstance(status, str) or not re.fullmatch(r'[a-z_]{1,40}', status) or status in ('queued', 'running'):
         return None, 'status'
     def identifier(value):
         return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9._:-]{1,200}', value)
@@ -136,6 +137,8 @@ def main(argv=None):
     parser.add_argument('--remote-runs')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
+    if args.ssh and args.ssh.startswith('-'):
+        parser.error('--ssh alias must not start with -')
     if not safe_name(args.host) or bool(args.ssh) != bool(args.remote_runs):
         parser.error('safe host and --ssh with --remote-runs required')
     counts, skipped, failed = Counter(), Counter(), False
