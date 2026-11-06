@@ -1,4 +1,7 @@
-//! Hermetic process death tests; the parent owns a private Temporal dev server.
+//! Unversioned synthetic process-death regression; NOT pinned-build acceptance.
+//! Both children use the same executable. CRASH_BUILD changes activity behavior,
+//! not the compiled build identity or Temporal deployment routing. See the open
+//! V1/V2 acceptance gaps in docs/plan/rt-p1-wf-versioning-audit.md.
 #![cfg(unix)]
 use std::{
     path::Path,
@@ -137,7 +140,7 @@ fn worker(addr: &str, queue: &str, build: &str, ready: &Path) -> Process {
 }
 
 #[test]
-fn sigkill_mid_attempt_and_mid_timer_new_build_resumes() {
+fn sigkill_mid_attempt_and_mid_timer_unversioned_same_binary_recovers() {
     use std::os::unix::process::ExitStatusExt;
     let cli = std::env::var("PG_TEMPORAL_CLI")
         .expect("SIGKILL acceptance requires PG_TEMPORAL_CLI; absence is not evidence");

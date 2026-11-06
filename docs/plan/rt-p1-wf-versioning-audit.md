@@ -2,6 +2,44 @@
 
 ## Fix-round status (supersedes the original snapshot below)
 
+### PR #536 ruling checkpoint (run-5ba6e566f88e45d6a26a62af2feaf14b)
+
+**Not acceptance-ready. Both seat findings remain open.** This checkpoint does
+not substitute a synthetic regression for either required production proof.
+
+- **HIGH / V1 — gap:** `process_crash.rs` still launches the same executable
+  twice with runtime `CRASH_BUILD` values. `child_worker` has no
+  `deployment_options`. Its test is now explicitly named unversioned/same-binary
+  recovery, not new-build or pinned-workflow recovery. Required follow-up: compile
+  two separate worker binaries with different compile-time build identities;
+  register both with worker deployment versioning and pinned behavior, promote
+  the new build, SIGKILL the old process at both crash points, and demonstrate
+  that the pinned run completes on a restarted **old-build binary**, not the new
+  current build. Assert the executing build identity and bounded completion.
+- **MED / V2 — gap:** no test executes `Card::run`'s `input.resume.take()` restore,
+  `ctx.history_length()` rollover gating, or queued-answer signal splice. The
+  `Resume` wire round trip and synthetic `due()`/Continue-As-New checks are not
+  evidence for those branches. Required follow-up: drive a real Card past the
+  event cap, or unit-test the production restore/gating boundary and splice;
+  assert every restored field, per-run wait baseline, and old-before-new signal
+  order. Deleting the production restore block must fail that test.
+- **V3 — fail-closed prerequisite retained:** `PG_TEMPORAL_CLI` is unset in this
+  worktree environment. The crash acceptance entry point must fail on absence,
+  including in CI; it has no implicit skip or green fallback. No local exemption
+  is added. The `child_worker` no-address return is only the subprocess entry
+  point, not acceptance evidence. No live Temporal or distinct-build result is
+  claimed here.
+
+The two implementation slices above are deferred, not silently declared fixed.
+This round only corrects the misleading crash-test label and records the exact
+remaining acceptance work. It does not enlarge the already oversized production
+workflow module or introduce a file-size exemption.
+
+Checkpoint validation: `cargo test --manifest-path rust/worker/Cargo.toml --lib
+rollover::tests` passed (2 tests). Running the renamed process-death test failed
+as required with `PG_TEMPORAL_CLI ... NotPresent` (1 failed, 0 ignored); this is
+negative prerequisite evidence only, not successful crash/routing evidence.
+
 - Done: mandatory explicit deployment/build identity before connecting;
   `identity_is_mandatory_even_without_versioning_switch` covers absent/invalid
   values with the versioning switch unset and rejects opt-out.
