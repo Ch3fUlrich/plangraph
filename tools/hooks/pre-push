@@ -109,9 +109,25 @@ def changelog_docs_warn(base, head):
 
 
 def main():
+    refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
+    for rec in refs:
+        if len(rec) != 4:
+            continue
+        _, local_sha, remote_ref, remote_sha = rec
+        if local_sha == ZERO:
+            print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
+            return 1
+        if remote_sha == ZERO:
+            continue
+        missing = git("cat-file", "-e", remote_sha).returncode != 0
+        is_commit = git_out("cat-file", "-t", remote_sha) == "commit"
+        if missing or (is_commit and git(
+                "merge-base", "--is-ancestor", remote_sha, local_sha).returncode != 0):
+            print(f"pre-push: refused non-fast-forward update of {remote_ref}",
+                  file=sys.stderr)
+            return 1
     if file_size_gate():
         return 1
-    refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
     remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
@@ -155,8 +171,6 @@ def main():
         if len(rec) != 4:
             continue
         _, local_sha, _, remote_sha = rec
-        if local_sha == ZERO:  # branch deletion: nothing pushed to scan
-            continue
         base = base_commit(remote_sha, local_sha)
         changelog_docs_warn(base, local_sha)
         for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():
