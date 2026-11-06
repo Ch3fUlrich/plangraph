@@ -374,7 +374,7 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
 
 
 def test_no_implement_plan_leg_has_claude_family():
-    # D-3817/D-3763: no claude-family implement leg.
+    # D-3817/D-3763: no claude implement; review needs two families (MiMo requires diff_ref).
     for estimate in (1000, 20000, 100000):
         plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
         assert plan.legs

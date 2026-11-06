@@ -59,7 +59,7 @@ class RoutePolicy:
 
         # D-4280: no policy lift may automatically select a contributor seat.
         # Explicit audited --leg overrides do not use this automatic-route gate.
-        if seat_family(leg.family) == seat_family("muse"):
+        if leg.family == "muse":
             return "off_family"
 
         def listed(families):

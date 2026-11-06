@@ -46,6 +46,14 @@ def test_muse_never_automatic_even_if_lifted(role):
     assert not any(l.family == "muse" for l in (*plan.legs, *plan.review_seats))
 
 
+@pytest.mark.parametrize("family", ["meta", "llama", "llama-4"])
+@pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
+def test_muse_fence_does_not_ban_other_meta_families(family, role):
+    leg = replace(BY_ID[MUSE[0]], family=family, roles=(role,))
+    assert seat_family(family) == "meta"
+    assert RoutePolicy().skip_reason(leg, role) is None
+
+
 @pytest.mark.parametrize("mid", MUSE)
 def test_explicit_muse_requires_reason_and_still_works(tmp_path, mid):
     svc = SpawnService(SpawnerRunner(), state=tmp_path)
@@ -59,10 +67,11 @@ def test_explicit_muse_requires_reason_and_still_works(tmp_path, mid):
     assert "Public material only" in (tmp_path / "spawn-overrides.jsonl").read_text()
 
 
-def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch):
+def test_grok_render_is_scoped_and_preserves_host_refusals(monkeypatch, hermetic_spawner_host):
     # Use the hermetic gateway setting, without embedding any site configuration.
     import os
-    gateway = os.environ["PLANGRAPH_GATEWAY_URL"]
+    gateway = os.environ.get("PLANGRAPH_GATEWAY_URL")
+    assert gateway, "hermetic_spawner_host supplies the gateway setting"
     from plangraph.routing_support import resolver
     monkeypatch.setattr(resolver, "host_probe_env", lambda env: dict(env))
     env = {"PLANGRAPH_GATEWAY_URL": gateway}

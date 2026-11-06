@@ -13,6 +13,18 @@ from plangraph.spawner import CatalogDB, TIER_RUNG
 from plangraph.spawner.catalog_db import SCHEMA_PATH
 
 
+def test_registered_grok_and_console_muse_catalog_derivation():
+    # Runtime admission derives new seats from DEFAULT_LEGS, not AA seed rows.
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.spawner.resolver import DEFAULT_FALLBACK_MODELS
+    rows = {row["id"]: row for row in DEFAULT_FALLBACK_MODELS}
+    legs = {leg.id: leg for leg in DEFAULT_LEGS}
+    for lid in ("omniroute-grok-4.7", "opencode-console-muse-spark"):
+        leg = legs[lid]
+        assert rows[leg.model]["active"]
+        assert rows[leg.model]["family"] == leg.family
+
+
 @pytest.fixture
 def memory_db() -> CatalogDB:
     """Provide an initialized in-memory CatalogDB instance."""
