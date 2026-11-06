@@ -487,11 +487,12 @@ async def host_skip_reason_async(row, *, env=None):
     child = host_probe_env(env)
     models = None
     if row.get('harness') == 'opencode':
-        # List the rendered config, like host_skip_reason and the launch (D-2868).
+        from .served_fresh import served_fresh
         from .opencode_render import render_gateway_providers
         probe_env, model = dict(child), row.get('model') or row.get('id') or row.get('model_id') or ''
         if '/' not in model or not render_gateway_providers(probe_env, model):
             models = await served_models_async(probe_env.get('OPENCODE_CONFIG_CONTENT', '{}'), env=probe_env)
+            models = {model} if await asyncio.to_thread(served_fresh, model, models, probe_env.get('OPENCODE_CONFIG_CONTENT', '{}'), probe_env) else frozenset()
     return host_skip_reason(row, env=child, probe=lambda env: models)
 
 
@@ -556,12 +557,11 @@ def host_skip_reason(row, *, probe=None, env=None):
             return None
     except (ValueError, AttributeError, TypeError):
         pass
-    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child)
-    base = model.lower().split('#', 1)[0]
-    listing = {m.lower() for m in models or ()}
-    variants = {m for m in listing if m.startswith(base + '#')}
-    present = models is None or (base in {m.split('#', 1)[0] for m in listing}
-        and ('#' not in model or not variants or model.lower() in variants))
+    from .served_fresh import served_fresh
+    config = child.get('OPENCODE_CONFIG_CONTENT', '{}')
+    models = probe(child) if probe else served_models(config, env=child)
+    present = served_fresh(model, models, config, child,
+                           probe=probe)
     if present:
         return None
     reason = 'not_served_on_host: ' + model

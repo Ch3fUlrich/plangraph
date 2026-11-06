@@ -6,13 +6,20 @@ use crate::{
 };
 use std::{io, process::ExitStatus};
 
+#[cfg(all(test, unix))]
+#[path = "watch_blind_tests.rs"]
+mod blind_tests;
+#[path = "watch_supervise.rs"]
+#[cfg(unix)]
+mod supervise;
 #[cfg(test)]
 #[path = "watch_tests.rs"]
 mod tests;
 #[path = "watch_unix.rs"]
 #[cfg(unix)]
-#[cfg_attr(not(test), allow(dead_code))] // Owned backend awaits the RL12 supervisor slice.
 mod unix;
+#[cfg(unix)]
+pub use supervise::supervise_events;
 
 pub struct Hooks<'a> {
     pub parser: &'a mut dyn EventParser,
