@@ -242,7 +242,7 @@ def test_leg_eligibility(request_data, monkeypatch, kind):
     from dataclasses import replace
     leg = next(leg for leg in spec.DEFAULT_LEGS if leg.id == request_data['leg']['id'])
     if kind == 'leg_inactive':
-        monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, expires='2000-01-01'),))
+        monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled='policy'),))
         reason = 'leg expired'
     else:
         monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled=None),))

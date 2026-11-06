@@ -1,78 +1,119 @@
-"""Generic leg expiry and Sol role regressions, preserved after D-3817 removal."""
+"""D-4147: OmniRoute alone owns expiry; old config rows are ignored."""
+import ast
+import dataclasses
 import json
-from dataclasses import replace
-from datetime import date
+from pathlib import Path
+
 import pytest
-from plangraph.planner.legs import DEFAULT_LEGS, WRITER_ORDER, leg_active, load_legs
+
+from plangraph.planner.legs import DEFAULT_LEGS, leg_active, load_legs
 from plangraph.planner.routing import plan_spawn
-LEG_ID = "cx-gpt-6.1-sol"
-CARD = {"estimate_tokens": 20000, "risk_tags": []}
-def _leg():
-    return replace(next(leg for leg in DEFAULT_LEGS if leg.id == LEG_ID), expires="2026-11-30")
+
 
 def test_d3605_sol_routes_implement_never_review():
-    assert WRITER_ORDER[0] == 'cx-gpt-6.1-sol'
     card = {"estimate_tokens": 20000, "risk_tags": []}
-    implement = plan_spawn(card, role="implement")
+    assert plan_spawn(card, role="implement").first_leg.id == "cx-gpt-6.1-sol"
     review = plan_spawn(card, role="review", writer_families=("mimo",))
-    assert "cx-gpt-6.1-sol" in [leg.id for leg in implement.legs]
     assert "cx-gpt-6.1-sol" not in [leg.id for leg in review.legs]
-    sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
-    assert leg_active(sol) and not sol.expires   # D-3605: operator implement leg again
-    ids = [leg.id for leg in implement.legs]
-    subscriptions = [l.id for l in DEFAULT_LEGS if l.id in WRITER_ORDER and l.tier == 'subscription']
-    assert set(subscriptions) <= set(ids)
-    assert [i for i in ids if i in subscriptions] == [i for i in WRITER_ORDER if i in subscriptions]
-    for free_id in ('opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free', 'openrouter-free'):
-        for sub_id in WRITER_ORDER:
-            if next(l for l in DEFAULT_LEGS if l.id == sub_id).tier == 'subscription':
-                assert free_id in ids and sub_id in ids
-                assert ids.index(free_id) < ids.index(sub_id) if sub_id != LEG_ID else ids.index(sub_id) == 0
 
 
-def test_leg_active_utc_end_of_day():
-    leg = _leg()
-    assert leg_active(leg, today=date(2026, 11, 30)) is True
-    assert leg_active(leg, today=date(2026, 12, 1)) is False
+@pytest.mark.parametrize("expires", ["2000-01-01", "invalid", None, 123])
+def test_load_legs_ignores_legacy_expires(tmp_path, expires):
+    raw = dataclasses.asdict(next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol"))
+    raw["expires"] = expires
+    path = tmp_path / "legs.json"
+    path.write_text(json.dumps({"legs": [raw]}))
+    leg, = load_legs(path)
+    assert not hasattr(leg, "expires")
+    assert leg_active(leg)
+    assert plan_spawn({"estimate_tokens": 1000}, legs=(leg,), role="implement").first_leg == leg
 
 
-def test_expired_leg_absent_from_routing_candidates():
-    free = next(leg for leg in DEFAULT_LEGS if leg.id == "openrouter-free")
-    expired = replace(_leg(), expires="2020-01-01")
-    plan = plan_spawn(CARD, role="implement", legs=(free, expired))
-    assert [leg.id for leg in plan.legs] == [free.id]
-    assert LEG_ID not in [row["leg"] for row in plan.candidates]
-    assert LEG_ID not in [row["leg"] for row in plan.skipped]
+def test_disabled_leg_stays_inactive():
+    assert not leg_active(dataclasses.replace(DEFAULT_LEGS[0], disabled="policy"))
 
 
-def test_load_legs_accepts_expires_and_rejects_bad_format(tmp_path):
-    raw = {"id": LEG_ID, "tier": "subscription", "harness": "opencode",
-           "model": "omniroute/cx-gpt-6.1-sol", "family": "gpt",
-           "windows": ["128k", "256k", "1m"], "max_request_tokens": 180000,
-           "trains_on_data": False, "claude_family": False, "roles": ["implement"],
-           "tool_mode": "tools", "expires": "2026-11-30"}
-    good = tmp_path / "good.json"
-    good.write_text(json.dumps({"legs": [raw]}), encoding="utf-8")
-    assert load_legs(good)[0].expires == "2026-11-30"
-    bad = tmp_path / "bad.json"
-    bad.write_text(json.dumps({"legs": [dict(raw, expires="30-11-2026")]}),
-                   encoding="utf-8")
-    with pytest.raises(ValueError, match="expires"):
-        load_legs(bad)
-
-
-def test_override_cannot_spawn_an_expired_leg(tmp_path, monkeypatch):
-    """D-3505 override refusal kept after D-3605 un-expired Sol (seat run-932dbd17 LOW)."""
+@pytest.mark.parametrize("state", ["expired", "down"])
+def test_omniroute_expired_or_down_no_route_or_override(tmp_path, state):
     import asyncio
-    from plangraph.planner import legs as legs_mod
-    from plangraph.spawner.leg_state import LegStateStore
-    from plangraph.spawner.runner import SpawnerRunner
-    from plangraph.spawner.service import SpawnService
-    expired = replace(_leg(), expires="2020-01-01")
-    monkeypatch.setattr(legs_mod, "DEFAULT_LEGS",
-                        tuple(expired if leg.id == LEG_ID else leg for leg in legs_mod.DEFAULT_LEGS))
-    svc = SpawnService(SpawnerRunner(), tmp_path, LegStateStore(tmp_path / "legs.sqlite"))
     from plangraph.planner.routing import SpawnRefused
-    with pytest.raises(SpawnRefused, match="^leg expired: " + LEG_ID.replace(".", r"\.") + "$"):
-        asyncio.run(svc.spawn(card=CARD, prompt="x", role="implement", leg=LEG_ID,
-                              override_reason="operator selection", dry_run=True))
+    from plangraph.spawner.service import SpawnService
+    from plangraph.spawner.runner import SpawnerRunner
+
+    leg = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol")
+    def reader(model, **kwargs):
+        return {"state": state if model == leg.model else "ok", "evidence": None}
+    card = {"estimate_tokens": 1000}
+    plan = plan_spawn(card, role="implement", leg_reader=reader)
+    assert leg.id not in {candidate.id for candidate in plan.legs}
+    for selection in ({"leg": leg.id}, {"model": leg.model}):
+        with pytest.raises(SpawnRefused, match=state):
+            asyncio.run(SpawnService(runner=SpawnerRunner(), state=tmp_path, leg_reader=reader).spawn(
+                card=card, prompt="task", role="implement", override_reason="D-4151 hermetic regression",
+                dry_run=True, **selection))
+    assert not (tmp_path / "spawn-overrides.jsonl").exists()
+
+
+def local_state_definitions(source):
+    """CI guard: reject local state fields/keywords/dict literals, not disabled policy.
+
+    Only the exact legacy-row comparison and removal may mention expiry.
+    """
+    forbidden = {"expires", "available", "availability", "active", "unavailable_until"}
+    hits = []
+    tree = ast.parse(source)
+    compatibility = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Compare)
+                and ast.unparse(node) == "key != 'expires'"):
+            compatibility.update(node.comparators)
+        if (isinstance(node, ast.Call)
+                and ast.unparse(node) == "data.pop('expires', None)"):
+            compatibility.add(node.args[0])
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and node.value in forbidden and node not in compatibility):
+            hits.append(node.lineno)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id in forbidden:
+                hits.append(node.lineno)
+        if isinstance(node, ast.Call):
+            hits.extend(k.value.lineno for k in node.keywords if k.arg in forbidden)
+        if isinstance(node, ast.Dict):
+            hits.extend(k.lineno for k in node.keys
+                        if isinstance(k, ast.Constant) and k.value in forbidden)
+    return hits
+
+
+def test_no_local_state_in_leg_definitions():
+    from plangraph.planner import legs
+    assert not local_state_definitions(Path(legs.__file__).read_text())
+
+
+@pytest.mark.parametrize("literal", ["expires='2000-01-01'", "available=True",
+                                    "availability='up'", "active=True"])
+def test_local_state_guard_red_case(literal):
+    assert local_state_definitions(f"Leg('injected', {literal})")
+    key, value = literal.split("=")
+    assert local_state_definitions(f"row = {{{key!r}: {value}}}")
+    assert local_state_definitions(f"class Leg:\n    {key}: str = {value}")
+    assert not local_state_definitions("Leg('retained', disabled='policy')")
+
+
+@pytest.mark.parametrize("source", ['_STR_FIELDS = ("id", "expires")',
+                                    'state_field = "available"'])
+def test_local_state_guard_string_constants(source):
+    assert local_state_definitions(source)
+
+
+def test_config_row_schema_has_no_local_state(tmp_path):
+    from plangraph.planner import legs
+    forbidden = {"expires", "available", "availability", "active", "unavailable_until"}
+    for fields in (legs._FIELDS, legs._REQUIRED, legs._STR_FIELDS):
+        assert not forbidden.intersection(fields)
+    raw = dataclasses.asdict(DEFAULT_LEGS[0])
+    for key in forbidden - {"expires"}:
+        path = tmp_path / "legs.json"
+        path.write_text(json.dumps({"legs": [dict(raw, **{key: "up"})]}))
+        with pytest.raises(ValueError, match="unknown field"):
+            load_legs(path)

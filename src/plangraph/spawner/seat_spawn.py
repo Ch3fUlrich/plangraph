@@ -33,6 +33,37 @@ def _refuse_oversized_diff(exc, leg):
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
+    async def spawn(self, *args, **kwargs):
+        try:
+            import inspect
+            bound = inspect.signature(self._spawn).bind(*args, **kwargs)
+            options = dict(bound.arguments)
+            card = options.get('card')
+            from .prompt_guard import admit_prompt
+            from plangraph.planner.routing import SpawnRefused
+            if options.get('role', 'implement') == 'implement':
+                admit_prompt(options.get('prompt'), SpawnRefused)
+            if card and card.get('findings') and options.get('role', 'implement') == 'implement':
+                from .fixer import split_findings, render_fixer_brief
+                from plangraph.settings import admit_fixer_threshold
+                # No keeper item is held here: the trusted layers are global
+                # and the card's project/phase layers may only tighten (R3).
+                groups = split_findings(card['findings'], limit=admit_fixer_threshold(card=card))
+                briefs = [admit_prompt(render_fixer_brief(g), SpawnRefused) for g in groups]
+                if len(groups) > 1:
+                    async def dispatch(group, brief):
+                        child = dict(card, findings=list(group))
+                        child_options = dict(options, card=child, prompt=brief)
+                        return await self._spawn(**child_options)
+                    return {'writers': await asyncio.gather(*(dispatch(g, b) for g, b in zip(groups, briefs)))}
+                options['prompt'] = briefs[0]
+                return await self._spawn(**options)
+            return await self._spawn(*args, **kwargs)
+        except Exception as exc:
+            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'),
+                              card=kwargs.get('card', args[0] if args else None))
+            raise
+
     def _annotate_spawn(self, record, prompt, card, cwd, plan, explicit):
         """Surface explicit-leg advisories before the first save or launch."""
         from .context_pack import annotate

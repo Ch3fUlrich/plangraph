@@ -1,4 +1,4 @@
-"""Read-only snapshot shaping and validated item filters (S1a)."""
+"""Read-only snapshot shaping and validated item filters (S1)."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -30,12 +30,17 @@ def _bad(name):
 
 
 def _instant(value):
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    stamp = value[:-1]
+    if "." in stamp:
+        whole, fraction = stamp.split(".")
+        stamp = whole + "." + fraction.ljust(6, "0")
+    return datetime.fromisoformat(stamp + "+00:00")
 
 
 def _validate(params):
-    if any(name not in PARAMS for name in params):
-        raise Refused("validation", "snapshot params invalid")
+    for name in params:
+        if name not in PARAMS:
+            _bad(name)
     values = dict.fromkeys(PARAMS)
     for name, value in params.items():
         if value is None or value == "":
@@ -65,24 +70,14 @@ def _validate(params):
 
 
 def build(store, now, **params):
-    """Shape read-only filters; the S2 HTTP adapter owns repeats and fmt.
-
-    S1a deliberately retains full decision_text and progress when requested.
-    """
+    """Shape read-only filters; the S2 HTTP adapter owns repeats and fmt."""
     values = _validate(params)
-    body = _full(store, now)
-    if all(value is None for value in values.values()):
+    active = any(value is not None for value in values.values())
+    body = _full(store, now, values if active else None)
+    if not active:
         return body
     since = _instant(values["since"]) if values["since"] else None
-    selected = []
-    for item in body["items"]:
-        terminal = item["state"] in ("done", "cancelled")
-        if (values["open"] and terminal) or (values["closed"] and not terminal):
-            continue
-        stamps = [_instant(item[n]) for n in ("updated_at", "done_at") if item[n]]
-        if since is not None and (not stamps or max(stamps) < since):
-            continue
-        selected.append(item)
+    selected = body["items"]
     total = len(selected)
     if values["fields"] is not None:
         names = {"key", *values["fields"]}
@@ -99,7 +94,23 @@ def build(store, now, **params):
     return body
 
 
-def _full(store, now):
+PROGRESS_FIELDS = tuple((
+    "key title project kind state track owner claimed_by writer_model operator "
+    "estimate_h updated_at done_at created_at"
+).split())
+
+
+def _selected(item, done_at, values):
+    if values is None:
+        return True
+    terminal = item["state"] in ("done", "cancelled")
+    if (values["open"] and terminal) or (values["closed"] and not terminal):
+        return False
+    stamps = [stamp for stamp in (item["updated_at"], done_at) if stamp]
+    return not values["since"] or bool(stamps) and max(map(_instant, stamps)) >= _instant(values["since"])
+
+
+def _full(store, now, values=None):
     from .store_read import _decode_models, _decode_run_ids
     items = store._all_items()
     corrected, fixed = {}, {}
@@ -112,8 +123,12 @@ def _full(store, now):
     answers = store.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
     evidence = store._evidence_by_key()      # set-based: one query each, not one per item
     verdicts = store._verdicts_by_key()
+    progress_items = [dict({name: item.get(name) for name in PROGRESS_FIELDS},
+                           created_at=item.get("created_at") or created_ts.get(item["key"]),
+                           done_at=done_ts.get(item["key"])) for item in items]
+    selected = [item for item in items if _selected(item, done_ts.get(item["key"]), values)]
     out = []
-    for item in items:
+    for item in selected:
         reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
                    for v in store._current_round(item, verdicts.get(item["key"], []))]
         out.append({
@@ -164,5 +179,5 @@ def _full(store, now):
             "items": out,
             "aliases": {a["old"]: a["new"] for a in store._aliases()},
             "activity": store._activity(now),
-            "decision_text": store._decision_text(items, now, evidence),
-            "progress": progress(out)}   # PROGRESS-PANEL: the page's static panel
+            "decision_text": store._decision_text(selected, now, evidence),
+            "progress": progress(progress_items)}   # PROGRESS-PANEL: the page's static panel
