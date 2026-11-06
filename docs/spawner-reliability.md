@@ -17,8 +17,44 @@ adapter until P-R11. Review seats remain enabled even when evidence is off.
 Only supported complete result frames supply rendered review text; missing or
 unknown output produces HALT, never a manufactured witness or finish reason.
 
-## RL26: exact references
+## RL10b: observation-anchored health deadlines (P-R11 pulled forward)
 
+`health_until::fold_with_provider` is a pure module without a production caller
+or switch. Existing `health::fold` call sites remain source compatible and use
+the legacy class-default deadlines with no provider overlay. Rollback is `git revert`.
+
+Hard reset classes select response resets at their receive timestamp, clamping
+only response values to 24 hours with `reset::clamp_until`. Raw rows remain
+unchanged; stored clamp flags are not authoritative. Integral times outside
+the exact f64 range are unavailable reset evidence; defaults use saturating
+arithmetic. Overlapping incidents retain freshest reset metadata, while their
+replay timestamp remains the latest incident timestamp.
+
+Provider deadlines are literal, including three-day values. `observed_s` is
+first sight/change time, never poll time. Fresher observations win in either
+direction, with response winning ties. No-time provider observations use
+`observed_s + 86400` once. Expired values immediately permit HALF_OPEN; the
+first real outcome at/after both observation and expiry settles that value.
+Success closes, failure uses its own evidence, and explicit neutral outcomes
+retain the two 60-second reprobes followed by exponential OPEN. Only named
+`canary` and `omniroute_*` observations are skipped; other kinds remain outcomes.
+An unchanged provider value is not reapplied after settlement. Clearing a
+provider-only hold closes directly; independent older row failures remain.
+
+Far-future response resets survive failed exception probes: without fresher
+response evidence, reopen to the earlier of the original reset and failed
+probe timestamp plus 24 hours. Provider values are never response-clamped.
+Only requested leg/route/role and nonfuture outcomes enter replay.
+
+RL11 owns family floor/order; RL18 owns usable freshness, cleared/unreachable
+states and no-time episode persistence; RL23 owns probe single flight/canary
+ownership. No HTTP, store, kill, cleanup, argv or signalling path is introduced.
+Fake-clock fixtures are local evidence only: recorded fixtures per harness
+version and oracle parity, green CI/ACCEPT outside writer families, two HIGH
+non-writer families plus judge, and GO per SHA are required before any live
+step. This module enables no live step.
+
+## RL26: exact references and live role admission
 RL26 exact references accept registered ids or unique exact role-eligible models.
 Ambiguous and fuzzy matches refuse, with deterministic bounded suggestions.
 The read-only Python catalog bridge supplies id, model and roles; AdapterCatalog
@@ -31,8 +67,9 @@ On validates references before routing or spawning and canonicalizes args.leg.
 RL26 is admission only: all modes retain the existing planner flow and its choice.
 Selecting a leg by explicit reference belongs to RL20, the override gate.
 Admission refusals retain validation refusal records and local host handling.
-Non-null diff_ref with implement refuses in every mode, including dry runs,
-and names role review. No live switch is enabled by this change.
+Non-null diff_ref on any effective role other than review refuses in every mode,
+including dry runs, and names role review. The role rule is live at merge;
+the reference switch defaults to off.
 
 No external STD ACCEPT or historical live gate is claimed. Synthetic tests do
 not satisfy either gate; independent acceptance remains required.

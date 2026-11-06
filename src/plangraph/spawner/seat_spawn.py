@@ -15,17 +15,20 @@ import uuid
 class SeatSpawnMixin:
     """Needs ``_spawn``, ``_route``, ``save_refusal`` and ``state`` from the service."""
 
-    def _leg_prompt(self, prompt, card, role, leg, pack=None):
+    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
-        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here."""
+        ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
+        ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
+        inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3)."""
         if getattr(leg, 'tool_mode', 'tools') != 'inline-only':
             return prompt
         from . import context_pack
         prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if role == 'review':
             from .inline_diff import inline_diff_prompt
-            prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3)
+            prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
+                                        allow_document=document_review)
         if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1':
             return context_pack.bound_prompt(prompt, leg.max_request_tokens)
         return prompt

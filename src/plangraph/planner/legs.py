@@ -103,7 +103,7 @@ DEFAULT_LEGS = (
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
-    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
+    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),

@@ -2,7 +2,6 @@
 import asyncio
 import codecs
 import logging
-import math
 import os
 from pathlib import Path
 import re
@@ -10,6 +9,7 @@ import subprocess
 import time
 
 from .run_cpu import cpu_seconds, proc_scan  # noqa: F401  re-exported for callers and tests
+from .run_watchdog_limits import thresholds  # noqa: F401  re-exported for callers and tests
 from .run_refusal import REFUSAL_MAX_FRAMES, REFUSAL_MAX_LINES, REFUSAL_WINDOW_S, RefusalGate  # noqa: F401  re-exported for callers and tests
 
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)')
@@ -22,10 +22,15 @@ READER_GRACE_S = 5.0          # bounded drain once the run is gone (M6)
 EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreadable (Q7)
 
 
+def terminal_status(status, role):
+    return 'timed_out' if status == 'timeout' and role == 'review' else status
+
+
 def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
         return False
-    record.update(status=job.status, exit_code=job.exit_code, reason=job.status,
+    status = terminal_status(job.status, record.get('role'))
+    record.update(status=status, exit_code=job.exit_code, reason=job.status,
                   watchdog=next(e for e in job.events if e['event'].startswith('watchdog_')),
                   events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
@@ -33,42 +38,7 @@ def terminal_record(record, job):
 
 def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
-    return thresholds(card), record['live_log']
-
-
-def thresholds(card=None):
-    from plangraph.planner.routing import SpawnRefused
-    card = card or {}
-    result = {}
-    if not isinstance(card.get('hard_first_edit', False), bool): raise SpawnRefused('invalid watchdog threshold: hard_first_edit')
-    if card.get('hard_first_edit'): result['hard_first_edit'] = True
-    for key, default in [('stall_min', 20), ('first_edit_min', 15), ('max_min', 90)]:   # REMOVE-AT-R10 (D-3769): first_edit_min was 45
-        value = card.get(key, default)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-            raise SpawnRefused('invalid watchdog threshold: ' + key)
-        result[key.replace('_min', '_s')] = value * 60
-    result['hard_max'] = False   # table max_min may carry the first-edit hold (M5)
-    timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
-    if timeout and 'max_min' not in card:
-        try:
-            value = float(timeout)
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError
-        except ValueError:
-            # M17: a bad env knob is refused before launch (exit 2), like a bad card.
-            raise SpawnRefused('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
-        result['max_s'] = value
-        # An operator-set run timeout is a wall clock: the first-edit hold
-        # never extends it (M5's hold 'does not extend the max deadline').
-        result['hard_max'] = True
-    interval = os.environ.get('PLANGRAPH_SPAWN_WATCHDOG_INTERVAL')
-    try:
-        result['interval'] = float(interval) if interval else min(120, result['stall_s'] / 4)
-    except ValueError:
-        raise SpawnRefused('invalid watchdog interval') from None
-    if not math.isfinite(result['interval']) or result['interval'] <= 0:
-        raise SpawnRefused('invalid watchdog interval')
-    return result
+    return thresholds(card, role=record.get('role')), record['live_log']
 
 
 def is_activity(line):
@@ -85,11 +55,17 @@ class Watchdog:
         self.progress = dict(edit=start, activity=start, cpu=start)
 
     def budget(self):
+        """Hard deadline in seconds. A pre-edit writer whose edits we can see is owed its first-edit
+        window on top of the table run budget (M5's 'holds while output flows' ends at max_s +
+        first_edit_s); once edited, or when the edit signal is unavailable, or for non-writers,
+        max_s ends the run. Hard caps (including PLANGRAPH_SPAWN_RUN_TIMEOUT and the default
+        review cap) are wall clocks, never extended. The opt-in first-edit stall is separate."""
         if self.limits.get('hard_max'):
             return self.limits['max_s']
         return self.limits['max_s'] + (self.limits['first_edit_s']
                                        if self.writer and not self.edited and self.edit is not None
                                        else 0)
+
     def decide(self, now, edit, activity, cpu):
         if edit is not None:
             if self.edit is None:
@@ -168,10 +144,9 @@ def edit_signature(cwd):
 
 
 async def run_gone(proc):
-    """Resolve once the run has exited. ``Process.wait()`` cannot signal this:
-    asyncio resolves its waiters only after every pipe transport disconnects
-    (CPython base_subprocess._try_finish), so a detached grandchild holding the
-    pipes wedges it forever although the return code is already known (M6)."""
+    """Resolve once the run has exited. ``Process.wait()`` cannot signal this: asyncio resolves
+    its waiters only after every pipe transport disconnects (CPython base_subprocess._try_finish),
+    so a detached grandchild holding the pipes wedges it although the exit code is known (M6)."""
     delay = .05
     while getattr(proc, 'returncode', None) is None:
         await asyncio.sleep(delay)

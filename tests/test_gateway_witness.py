@@ -37,12 +37,14 @@ def _env(job_id):
 
 
 def test_tag_session_sets_header_on_omniroute_provider_only():
-    cfg = {'provider': {'omniroute': {}, 'mimo': {}}}
+    cfg = {'provider': {'omniroute': {}, 'mimo': {}, 'other': {}}}
     gw.tag_session(cfg, 'job-1')
     # Provider-level headers carry the envelope headers to the gateway (build_child_env).
     assert cfg['provider']['omniroute']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
     assert cfg['provider']['omniroute']['options']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
-    assert 'options' not in cfg['provider']['mimo'] and 'headers' not in cfg['provider']['mimo']
+    assert cfg['provider']['mimo']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
+    assert cfg['provider']['mimo']['options']['headers'] == {gw.SESSION_HEADER: 'plangraph-job-1'}
+    assert cfg['provider']['other'] == {}
 
 
 def test_witness_skips_a_leg_not_served_by_the_gateway():

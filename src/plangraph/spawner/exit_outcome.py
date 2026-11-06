@@ -170,7 +170,8 @@ def terminal_reason(record):
         real = [a for a in (record.get('attempts') or ()) if a.get('status') != 'skipped']
         last = real[-1] if real else None
         if last is not None:
-            if last.get('status') == 'timeout':
+            # r3: 'timed_out' is the review wall-cap spelling of 'timeout'
+            if last.get('status') in ('timeout', 'timed_out'):
                 reason = 'timeout'
             elif not (last.get('skip_reason') or '').startswith('harness_limit'):
                 reason = last.get('skip_reason') or reason

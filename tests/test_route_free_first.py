@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import json
 import dataclasses
+from pathlib import Path
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 
-CARD = {"estimate_tokens": 20000, "risk_tags": []}
+# Ordering probes include inline-only review legs, which require diff metadata.
+CARD = {"estimate_tokens": 20000, "risk_tags": [],
+        "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
 FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "openrouter-free"]
 SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"]   # D-3667: Sol heads the subscription tier
 
@@ -95,7 +98,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
     assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
     rev = plan_spawn(CARD, role="review", writer_families=("claude",))
-    assert [leg.id for leg in rev.legs][:2] == ["mimo-v2.6-flash", "agy-gemini-3.8-flash"]
+    assert [leg.id for leg in rev.legs][:2] == ["mimo-v2.6-flash", "mimo-v2.6-pro"]
 
 
 def test_agy_skipped_while_out_of_quota():

@@ -248,8 +248,25 @@ fn canary_timeout_refused() {
     use std::os::unix::fs::PermissionsExt;
     let mut f = Fixture::new();
     let script = f._tmp.path().join("python");
-    fs::write(&script, "#!/bin/sh\ntrap '' TERM\nsleep 30 &\nwait\n").unwrap();
+    let pidfile = f._tmp.path().join("child-pid");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ntrap '' TERM\nsleep 30 &\necho $! > '{}'\nwait\n",
+            pidfile.display()
+        ),
+    )
+    .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
     f.repo.python = Some(script.to_str().unwrap().into());
+    let started = std::time::Instant::now();
     assert!(f.import("sample").is_err());
+    assert!(started.elapsed() >= Duration::from_secs(10));
+    assert!(started.elapsed() < Duration::from_secs(20));
+    let pid = fs::read_to_string(pidfile).unwrap();
+    // A killed descendant can briefly remain a zombie until the host reaps it.
+    let state = fs::read_to_string(format!("/proc/{}/stat", pid.trim()));
+    if let Ok(state) = state {
+        assert_eq!(state.split_whitespace().nth(2), Some("Z"));
+    }
 }

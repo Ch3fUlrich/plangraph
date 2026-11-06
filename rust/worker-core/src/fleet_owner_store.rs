@@ -3,6 +3,11 @@ use crate::fleet_owner_lease::{Identity, Record, Refusal, State};
 use crate::fleet_owner_transition::Transition;
 use std::{io, path::Path};
 
+enum Publish {
+    Create,
+    Replace,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("slot busy")]
@@ -30,7 +35,7 @@ pub fn cas(
     transition: Transition,
     now_s: i64,
 ) -> Result<Record, StoreError> {
-    store(root, slot, |dir, name| {
+    store(root, slot, Publish::Replace, |dir, name| {
         let record = match crate::fleet_owner_lease::read(dir, name, session, run, now_s) {
             crate::fleet_owner_lease::Read::Known(r) => r,
             crate::fleet_owner_lease::Read::Unknown { reason, .. } => {
@@ -58,7 +63,7 @@ pub fn create(
     run: &str,
     now_s: i64,
 ) -> Result<Record, StoreError> {
-    store(root, slot, |dir, name| {
+    store(root, slot, Publish::Create, |dir, name| {
         match std::fs::symlink_metadata(dir.join(name)) {
             Ok(_) => return Err(io::Error::from(io::ErrorKind::AlreadyExists).into()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => (),
@@ -72,6 +77,7 @@ pub fn create(
 fn store(
     root: &Path,
     slot: &Path,
+    publish: Publish,
     next: impl Fn(&Path, &Path) -> Result<Record, StoreError>,
 ) -> Result<Record, StoreError> {
     use std::{
@@ -96,8 +102,15 @@ fn store(
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
         .open(root)?;
-    for part in slot.parent().unwrap().components() {
-        let name = CString::new(part.as_os_str().as_bytes()).unwrap();
+    let slot_parent = slot.parent().ok_or(StoreError::Refused(Refusal::Invalid))?;
+    let name = Path::new(
+        slot.file_name()
+            .ok_or(StoreError::Refused(Refusal::Invalid))?,
+    );
+    CString::new(name.as_os_str().as_bytes()).map_err(|_| StoreError::Refused(Refusal::Invalid))?;
+    for part in slot_parent.components() {
+        let name = CString::new(part.as_os_str().as_bytes())
+            .map_err(|_| StoreError::Refused(Refusal::Invalid))?;
         // SAFETY: live directory descriptor and terminated component name.
         let fd = unsafe {
             libc::openat(
@@ -113,7 +126,6 @@ fn store(
     }
     // The descriptor pins the parent, even if its original pathname is moved.
     let dir = std::path::PathBuf::from(format!("/dev/fd/{}/.", parent.as_raw_fd()));
-    let name = Path::new(slot.file_name().unwrap());
     let locks = dir.join(".owner-locks");
     match std::fs::create_dir(&locks) {
         Ok(()) => (),
@@ -165,9 +177,17 @@ fn store(
     };
     file.write_all(&serde_json::to_vec(&record).map_err(io::Error::other)?)?;
     file.sync_all()?;
-    crash(1)?;
-    std::fs::rename(&temp, dir.join(name))?;
-    crash(2)?;
+    crash(1, &dir.join(name))?;
+    match publish {
+        Publish::Create => {
+            let result = std::fs::hard_link(&temp, dir.join(name));
+            let cleanup = std::fs::remove_file(&temp);
+            result?;
+            cleanup?;
+        }
+        Publish::Replace => std::fs::rename(&temp, dir.join(name))?,
+    }
+    crash(2, &dir.join(name))?;
     parent.sync_all()?;
     Ok(record)
 }
@@ -176,20 +196,36 @@ fn store(
 fn store(
     _: &Path,
     _: &Path,
+    _: Publish,
     _: impl FnOnce(&Path, &Path) -> Result<Record, StoreError>,
 ) -> Result<Record, StoreError> {
     Err(io::Error::from(io::ErrorKind::Unsupported).into())
 }
 
-fn crash(_point: u8) -> io::Result<()> {
+#[cfg(unix)]
+fn crash(_point: u8, _slot: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if _point == 1 {
+        BEFORE_PUBLISH.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(_slot);
+            }
+        });
+    }
     #[cfg(test)]
     if FAIL.with(|f| f.get() == _point) {
         return Err(io::Error::other("injected crash"));
     }
     Ok(())
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 thread_local! { static FAIL: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+#[cfg(all(test, unix))]
+type PublishHook = Box<dyn FnOnce(&Path)>;
+#[cfg(all(test, unix))]
+thread_local! {
+    static BEFORE_PUBLISH: std::cell::RefCell<Option<PublishHook>> = const { std::cell::RefCell::new(None) };
+}
 #[cfg(all(test, unix))]
 #[path = "fleet_owner_store_tests.rs"]
 mod tests;
