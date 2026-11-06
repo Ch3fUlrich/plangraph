@@ -1,4 +1,4 @@
-# L1 card · build-L1-0252 · 2026-11-06T11:31Z
+# L1 card · build-L1-0252 · 2026-11-06T11:33Z
 ## Goal
 - D-4220 stuck watch, D-4239 budget meter, D-4196 opencode-go + D-4193 fallback, D-4177 r2, inventory after keeper GO
 ## Keeper
@@ -11,12 +11,12 @@
 - 11-06T10:07Z D-4179 - fleet keys placed 0600 on 2 hosts, sha prefix match, inventory on 3 hosts
 - 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
 ## In flight
-- D-4253 r1 fixers, seats mimo REQUEST_CHANGES on data PR 25 26 27: run-cf78c832 repoint, run-1bbfb58c s1, run-e4e5c45a s2 since 11:33Z; next: push, delta seat deepseek (not mimo/openai), GO-REQ
-- HANDOFF-MSG-CARRY D-4243 run-8c801660 lane/handoff-msg-carry (plangraph-data), brief b-carry.md, next check 11:35Z; then seat non-mimo, real recycle proof, DONE sha to routing
+- D-4253 r1 fixers, seats mimo REQUEST_CHANGES on data PR 25 26 27: run-8f6e0f65 repoint, run-f9505536 s1, run-38f9e635 s2 since 11:34Z; next: push, delta seat mimo or deepseek (not openai), GO-REQ
+- HANDOFF-MSG-CARRY D-4243 run-76d85b02 lane/handoff-msg-carry (plangraph-data), brief b-carry.md, next check 11:35Z; then seat non-mimo, real recycle proof, DONE sha to routing
 - #436 572e6428e327 CI 42203474824 success, GO-REQ sent 10:43Z, waiting on ruling
-- OPENCODE-STUCK-WATCH run-b4a5255b lane/opencode-stuck-watch since 11:11Z next check 11:35Z; brief job tmp b-stuck.md
-- D-4196 run-baea999e lane/d4196-go-legs since 10:19Z next check 10:45Z
-- D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
+- OPENCODE-STUCK-WATCH run-6d1237b7 lane/opencode-stuck-watch since 11:33Z next check 11:55Z
+- D-4196 run-f5b2c8ed lane/d4196-go-legs since 11:33Z, mimo edits inherited, next check 11:55Z
+- D-4177 r2 run-aa3e71f9 mimo edits inherited lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
 - #528 run-34a2095f since 10:16Z next check 10:40Z, replan-0251 takes over after commit
 ## Planned
 00. D-4257+D-4251 after CARRY, names-only host check, no value read, copy BLOCKED sent (operator OK needed): why only 2/400 runs witnessed (OP-D4-WITNESS-TOKEN, D-2905 refuses verdicts, 68 in_review); fix via gateway log, non-Claude writer; DONE sha + witnessed count on new runs
@@ -29,10 +29,10 @@
 ## Open
 - BLOCKED public push 07e8c39e on origin/build-L1 | default operator deletes branch as OS-219 | deadline none
 - BLOCKED keeper drop-in PLANGRAPH_BUS_INVENTORY + restart GO-REQ | default hold | deadline none
-- BLOCKED OP-D4-WITNESS-TOKEN | default replan proves a gateway seat on ws-build | deadline none
 - BLOCKED D-4195 lane/d4195-caps b2d7c6827beb GO-REQ, dell cap number after D-4198 | default keep 100 | deadline none
 - BLOCKED #451 no GO-REQ possible, r3 used | default lane replan after #436 | deadline 15:17Z
 ## Traps
+- OPERATOR 11:32Z: writers cx-gpt-6.1-sol only, never mimo-pro; overrides no-Sol brief rule
 - D-4227 router is routing-0253; coding.vm at cap/floor: no queue, writers to dell/workstation by route table, Claude via L2-LAUNCH
 - 10:35Z my pkill killed gen-100 writer.sh wait wrappers; runs alive, w-*.res in f3b904c3 are stale, use spawner result
 - git push control build-L1 ONLY, never origin (D-1751)
