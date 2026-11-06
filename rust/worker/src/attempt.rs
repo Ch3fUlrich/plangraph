@@ -1187,15 +1187,15 @@ mod tests {
 
     #[test]
     fn constructed_default_check_kind_runs_red_first_then_writer() {
-        assert_legacy_change_path(false);
+        assert_legacy_change_path("default");
+        assert_legacy_change_path("");
     }
-
     #[test]
     fn legacy_json_without_check_kind_runs_red_first_then_writer() {
-        assert_legacy_change_path(true);
+        assert_legacy_change_path("json");
     }
 
-    fn assert_legacy_change_path(from_json: bool) {
+    fn assert_legacy_change_path(kind: &str) {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let mut c = claim(
@@ -1204,15 +1204,15 @@ mod tests {
             &["out.txt"],
             "if test ! -f out.txt; then echo scratch > marker; exit 1; fi",
         );
-        if from_json {
+        if kind == "json" {
             let mut value = serde_json::to_value(&c).unwrap();
             value.as_object_mut().unwrap().remove("check_kind");
             let json = serde_json::to_string(&value).unwrap();
             c = serde_json::from_str::<Claim>(&json).unwrap();
         } else {
-            c.check_kind = Claim::default().check_kind;
+            c.check_kind = if kind == "" { "".into() } else { Claim::default().check_kind };
         }
-        assert_eq!(c.check_kind, "change");
+        assert_eq!(c.check_kind, if kind == "" { "" } else { "change" });
         let inp = input(c, 1, root.path());
         // The red base check creates scratch; cleanup proves that gate ran.
         let h = Fake::new("test ! -e marker && echo hi > out.txt");

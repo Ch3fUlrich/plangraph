@@ -9,7 +9,7 @@ pub struct Claim {
     pub check_cmd: String,
     /// `change` (the default) requires a red base; `regression` skips that gate.
     /// Recorded legacy claims may omit this or use "": both normalize to `change`.
-    /// All other unknown values are refused; recorded history is never rewritten.
+    /// Unknown strings remain readable; execution rejects them as contract defects.
     #[serde(
         default = "default_check_kind",
         deserialize_with = "deserialize_check_kind"
@@ -38,10 +38,7 @@ fn deserialize_check_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Stri
     let kind = String::deserialize(d)?;
     match kind.as_str() {
         "" => Ok(default_check_kind()),
-        "change" | "regression" => Ok(kind),
-        _ => Err(serde::de::Error::custom(
-            "check_kind must be change or regression",
-        )),
+        _ => Ok(kind),
     }
 }
 

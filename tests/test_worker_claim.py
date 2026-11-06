@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import os
+import subprocess
 import types
 from pathlib import Path
 
@@ -31,14 +31,12 @@ def test_build_claim_preserves_gate_inputs():
     assert got["risk_tagged"] is True
 
 
-@pytest.mark.skipif(
-    not os.environ.get("PG_DSN"),
-    reason="Postgres parity runs in the pytest-postgres lane",
-)
 @pytest.mark.parametrize("metadata", [False, True, "typo", ""])
 def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo, metadata):
-    assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
-    assert _metadata_claim(tmp_path, repo, "sqlite", metadata) == _metadata_claim(tmp_path, repo, "postgres", metadata)
+    sqlite = _metadata_claim(tmp_path, repo, "sqlite", metadata)
+    if os.environ.get("PG_KEEPER_BACKEND") == "postgres" or os.environ.get("PG_DSN"):
+        assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
+        assert sqlite == _metadata_claim(tmp_path, repo, "postgres", metadata)
 
 
 @pytest.mark.parametrize("metadata", [False, True, "typo", ""])
@@ -57,7 +55,11 @@ def _metadata_claim(tmp_path, repo, backend, metadata):
                         smoke_checks=["true"], exports=["api"],
                         heldout_check="heldout", risk_tags=["migration"])
         world.store.put_card(world.p("router"), "demo:C", card)
-        if isinstance(metadata, str):
+        if metadata == "":
+            card["check_kind"] = ""
+            original = world.store.get_card
+            world.store.get_card = lambda *args: dict(original(*args), check_kind="")
+        if metadata == "typo":
             # Model a legacy/hand-written stored card, bypassing card-write validation.
             original = world.store.get_card
             world.store.get_card = lambda *args: dict(original(*args), check_kind=metadata)
