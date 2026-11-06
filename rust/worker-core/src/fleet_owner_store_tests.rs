@@ -263,7 +263,7 @@ fn temp_namespace_is_reserved() {
 #[test]
 fn decisions_run_only_under_slot_lock() {
     let d = setup();
-    store(d.path(), Path::new("slot"), |_, _| {
+    store(d.path(), Path::new("slot"), Publish::Replace, |_, _| {
         assert!(
             crate::lockfile::try_lock(&d.path().join(".owner-locks/slot"))
                 .unwrap()
@@ -272,4 +272,111 @@ fn decisions_run_only_under_slot_lock() {
         lease::bootstrap("session", "run", 0).map_err(StoreError::Refused)
     })
     .unwrap();
+}
+
+#[test]
+fn degenerate_slots_do_not_escape_or_panic() {
+    check_degenerate_slots(false);
+}
+
+#[test]
+fn cas_degenerate_slots_do_not_escape_or_panic() {
+    check_degenerate_slots(true);
+}
+
+fn check_degenerate_slots(replace: bool) {
+    for slot in [
+        "",
+        ".",
+        "..",
+        "/",
+        "a/..",
+        "a/.",
+        "nul\0name",
+        "nul\0dir/slot",
+    ] {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = sandbox.path().join("root");
+        fs::create_dir(&root).unwrap();
+        let result = if replace {
+            if slot == "a/." {
+                create(&root, Path::new(slot), "session", "run", 0).unwrap();
+            }
+            cas(
+                &root,
+                Path::new(slot),
+                "session",
+                "run",
+                0,
+                &State::Free,
+                Transition::Acquire(owner()),
+                0,
+            )
+        } else {
+            create(&root, Path::new(slot), "session", "run", 0)
+        };
+        if slot == "a/." {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(StoreError::Refused(Refusal::Invalid))));
+        }
+        assert_eq!(fs::read_dir(sandbox.path()).unwrap().count(), 1);
+        if slot != "a/." {
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        }
+    }
+}
+
+#[test]
+fn create_loses_to_outside_writer_without_replacing_or_leaking() {
+    let d = tempfile::tempdir().unwrap();
+    BEFORE_PUBLISH.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|path| {
+            assert!(
+                crate::lockfile::try_lock(&path.parent().unwrap().join(".owner-locks/slot"))
+                    .unwrap()
+                    .is_none()
+            );
+            fs::write(path, b"outside writer").unwrap();
+        }));
+    });
+    assert!(matches!(
+        create(d.path(), Path::new("slot"), "session", "run", 0),
+        Err(StoreError::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists
+    ));
+    assert_eq!(bytes(d.path()), b"outside writer");
+    assert!(fs::read_dir(d.path()).unwrap().all(|entry| {
+        let name = entry.unwrap().file_name();
+        name == "slot" || name == ".owner-locks"
+    }));
+}
+
+#[test]
+fn create_crash_after_publish_is_known_and_retry_exists() {
+    let d = tempfile::tempdir().unwrap();
+    FAIL.with(|f| f.set(2));
+    let result = create(d.path(), Path::new("slot"), "session", "run", 0);
+    FAIL.with(|f| f.set(0));
+    assert!(result.is_err());
+    assert!(matches!(
+        lease::read(d.path(), Path::new("slot"), "session", "run", 0),
+        Read::Known(r) if r.epoch == 0
+    ));
+    assert!(matches!(
+        create(d.path(), Path::new("slot"), "session", "run", 0),
+        Err(StoreError::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists
+    ));
+}
+
+#[test]
+fn cas_replaces_created_record_and_advances_once() {
+    let d = setup();
+    let old = bytes(d.path());
+    let record = acquire(d.path(), "slot", 0, &State::Free).unwrap();
+    assert_eq!(record.epoch, 1);
+    assert_ne!(bytes(d.path()), old);
+    assert!(matches!(
+        lease::read(d.path(), Path::new("slot"), "session", "run", 1),
+        Read::Known(r) if r == record
+    ));
 }
