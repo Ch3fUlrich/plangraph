@@ -1,0 +1,1 @@
+- **APPLY-BATCH-TIMEOUT:** Budget mutations at 180 seconds with --timeout override; report uncertain responses with reconciliation fingerprints and no blind retry.

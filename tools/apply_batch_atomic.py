@@ -7,6 +7,7 @@ batch file's own numbering (``--from``).
 """
 import json
 import re
+from apply_batch_transport import uncertain
 
 _OP_PREFIX = re.compile(r"^op (\d+) ")
 
@@ -33,7 +34,8 @@ def parsed(raw):
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, AttributeError, UnicodeDecodeError):
         return None
-    return data.get("result", data) if isinstance(data, dict) else None
+    result = data.get("result", data) if isinstance(data, dict) else None
+    return result if isinstance(result, dict) else None
 
 
 def warnings(reply):
@@ -85,7 +87,7 @@ def refusal_lines(exc, offset, first, batch_label=None):
 
 
 def send(session, ops, start, source, digest, errors, op_key,
-         base_seq=None, dry_run=False, batch_label=None):
+         base_seq=None, dry_run=False, batch_label=None, identity=None, submitted=None):
     """Post the batch as one ``apply_ops`` call; ``(exit_code, report_lines)``.
 
     An unreadable 2xx reply, or one that does not report every op applied, is
@@ -97,6 +99,8 @@ def send(session, ops, start, source, digest, errors, op_key,
                            payload(ops, start, source, digest,
                                    base_seq=base_seq, dry_run=dry_run))
     except errors as exc:
+        if getattr(exc, "code", "") in ("unknown outcome", "unreachable"):
+            return 1, uncertain(identity, submitted)
         first = ops[start - 1]
         return 1, refusal_lines(exc, start - 1,
                                 (first.get("op"), op_key(first)),
@@ -104,7 +108,6 @@ def send(session, ops, start, source, digest, errors, op_key,
     reply = parsed(raw)
     got = reply.get("applied") if reply is not None else None
     if got != sent:
-        return 1, [f"error: unreadable or short keeper reply (applied {got!r} "
-                   f"of {sent}); batch state unknown, check the keeper"]
+        return 1, uncertain(identity, submitted, "unreadable or short keeper reply;")
     lines = dropped_deps(reply, ops, start, op_key) + warnings(reply)
     return 0, lines
