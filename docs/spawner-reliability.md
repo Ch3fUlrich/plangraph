@@ -1,5 +1,21 @@
 # Spawner reliability
 
+## RL27: inline review diff transport
+
+Tools-mode injection defaults off; rollback is off. The operator environment
+`PLANGRAPH_RELIABILITY_INLINE_REVIEW_DIFF` overrides `inline_review_diff` in
+the operator config `plangraph/reliability.json`; `roles.review` overrides the
+global setting. Shadow computes a boolean count without changing the prompt.
+Inline-only review requires diff_ref and the NO-tools header even when off.
+Repositories resolve through the self host in operator-owned hosts.json, never
+adapter cwd. Raw diffs are capped at 262144 bytes before lossy UTF-8 decoding.
+Only exact stdin carriers are injected; multiline .cmd/.bat launchers refuse.
+Prompt persistence and hashing remain the final redaction step. No workspace
+cleanup or verdict classification changes are included.
+
+External ACCEPT and the live tools-mode seat gate remain operator-only checks;
+local synthetic tests do not constitute either gate. Keep the switch off at merge.
+
 ## RL17: derived evidence and review seats
 
 Evidence defaults off. `reliability.json` accepts `evidence` values off/shadow/on,
