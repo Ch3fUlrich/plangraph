@@ -217,3 +217,46 @@ def test_disabled_real_oversized_review_matches_main(review_payload, monkeypatch
     calls = []
     dispatch(seat, root, prompt, card, leg, calls, role='review')
     assert calls == [expected] == [prompt + framing]
+
+
+@pytest.mark.parametrize('enabled', [None, '0', '1'])
+def test_real_oversized_diff_refusal(review_payload, monkeypatch, enabled):
+    from plangraph.spawner import inline_diff
+    root, seat, card, _ = review_payload
+    if enabled is not None:
+        monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', enabled)
+    monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, stdout='private diff' * 100, stderr=''))
+    leg = SimpleNamespace(tool_mode='inline-only', max_request_tokens=200)
+    calls = []
+    error = cp.PromptBoundError if enabled == '1' else inline_diff.InlineDiffError
+    with pytest.raises(error) as exc:
+        dispatch(seat, root, 'tiny', card, leg, calls, role='review')
+    assert calls == []
+    expected = ('inline_diff_oversized: chars 1200 estimated_tokens 400 max_request_tokens 200'
+                if enabled == '1' else 'diff too large for leg: 1200 > 600 chars')
+    assert str(exc.value) == expected
+
+
+def test_launch_maps_real_oversized_diff_refusal(review_payload, monkeypatch):
+    from plangraph.spawner import inline_diff, launch_spec
+    root, seat, card, _ = review_payload
+    monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
+    monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, stdout='private diff' * 100, stderr=''))
+    leg = SimpleNamespace(id='synthetic', roles=('review',), tool_mode='inline-only',
+                          max_request_tokens=200, model='synthetic', harness='synthetic')
+    monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
+    monkeypatch.setattr(launch_spec, 'leg_active', lambda leg: True)
+    seat.state = root / 'state'
+    seat.runner.spawn = lambda **kw: pytest.fail('runner invoked')
+    monkeypatch.setattr(launch_spec, 'SpawnService', lambda **kw: seat)
+    monkeypatch.setattr(launch_spec, '_sweep', lambda *a: None)
+    request = dict(run_id='run-' + '0' * 32, job_id='synthetic', role='review',
+                   dry_run=True, leg={'id': leg.id}, prompt='tiny', card=card,
+                   cwd=str(root), state=str(seat.state))
+    with pytest.raises(launch_spec.LaunchRefused) as exc:
+        launch_spec.build(request)
+    assert exc.value.kind == 'inline_diff_failed'
+    assert str(exc.value) == (
+        'inline_diff_oversized: chars 1200 estimated_tokens 400 max_request_tokens 200')

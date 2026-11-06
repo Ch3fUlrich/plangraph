@@ -9,6 +9,7 @@ import asyncio
 from dataclasses import replace
 import json
 import os
+import re
 import uuid
 
 
@@ -34,9 +35,18 @@ class SeatSpawnMixin:
         from . import context_pack
         prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
         if role == 'review':
-            from .inline_diff import inline_diff_prompt
-            prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
-                                        allow_document=document_review)
+            from .inline_diff import InlineDiffError, inline_diff_prompt
+            try:
+                prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
+                                            allow_document=document_review)
+            except InlineDiffError as exc:
+                size = re.fullmatch(r'diff too large for leg: (\d+) > (\d+) chars', str(exc))
+                if os.environ.get('PLANGRAPH_CONTEXT_STRICT') != '1' or size is None:
+                    raise
+                chars = int(size[1])
+                raise context_pack.PromptBoundError(
+                    f'inline_diff_oversized: chars {chars} estimated_tokens {(chars + 2) // 3} '
+                    f'max_request_tokens {leg.max_request_tokens}') from None
         return prompt
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,
