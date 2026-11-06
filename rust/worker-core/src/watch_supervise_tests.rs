@@ -2,6 +2,83 @@ use super::*;
 use crate::{activity::*, hosts::Role};
 
 #[test]
+fn honored_term_finishes_before_long_grace() {
+    let mut parser = super::super::blind_tests::Parser::default();
+    let (mut monitor, mut channel) = (monitor(), ChannelHealth::new(0, Some(1)));
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "trap 'exit 0' TERM; while :; do :; done"]);
+    let start = Instant::now();
+    let r = supervise_events(
+        cmd,
+        &stall::Opts {
+            timeout: Some(Duration::from_secs(10)),
+            grace: Duration::from_secs(5),
+            ..stall::Opts::default()
+        },
+        Hooks {
+            parser: &mut parser,
+            monitor: &mut monitor,
+            channel: &mut channel,
+            cancelled: &|| false,
+            tree_sample: &Ctx::default,
+            cpu: None,
+            stdin: b"",
+        },
+    )
+    .unwrap();
+    assert_eq!(r.proof, KillProof::Empty);
+    assert!(start.elapsed() < Duration::from_millis(2500)); // F + confirm + 0.5 s.
+}
+
+#[test]
+fn queued_signal_and_bad_ratio_survive_drain_boundaries() {
+    for bad in [false, true] {
+        let mut parser = super::super::blind_tests::Parser::default();
+        let (mut monitor, mut channel) = (monitor(), ChannelHealth::new(0, Some(1)));
+        assert_eq!(monitor.tick(800, Ctx::default()).unwrap().act, Act::Warn);
+        let mut hooks = Hooks {
+            parser: &mut parser,
+            monitor: &mut monitor,
+            channel: &mut channel,
+            cancelled: &|| false,
+            tree_sample: &Ctx::default,
+            cpu: None,
+            stdin: b"",
+        };
+        let mut events = Events {
+            last_byte: 0,
+            output: vec![],
+            eof: 0,
+            provider: false,
+            late: None,
+            blind: None,
+            partial: false,
+        };
+        let (tx, rx) = mpsc::sync_channel(128);
+        if bad {
+            tx.send(Chunk::Data(true, b"bad\n".repeat(20))).unwrap();
+            tx.send(Chunk::Error(io::ErrorKind::BrokenPipe.into()))
+                .unwrap();
+        } else {
+            for _ in 0..69 {
+                tx.send(Chunk::Data(true, b"{}\n".repeat(2730))).unwrap();
+            }
+            tx.send(Chunk::Data(true, b"{\"content\":true}\n".to_vec()))
+                .unwrap();
+        }
+        let result = events.drain(&rx, &mut hooks, if bad { 0 } else { 1999 }, false, 1024);
+        if bad {
+            assert!(result.is_err());
+            assert_eq!(events.blind, Some(BlindReason::BadRatio));
+        } else {
+            result.unwrap();
+            assert_eq!(hooks.monitor.last_strong_ms(), Some(1999));
+            assert!(hooks.monitor.tick(2000, Ctx::default()).is_none());
+        }
+    }
+}
+
+#[test]
 fn writer_error_preserves_watched() {
     let watched = super::super::blind_tests::run("exit 0", false, &vec![0; 1 << 20], false);
     let watched = record_writer_result(watched, Err(io::ErrorKind::WriteZero.into()));

@@ -91,12 +91,12 @@ impl Events {
         stopping: bool,
         max: usize,
     ) -> io::Result<()> {
-        // A bounded snapshot prevents an incessant producer from starving ticks.
+        // Feed all queued signals before allowing a confirm-window decision.
         self.blind = self.blind.or(hooks.channel.blind(now));
         if self.blind.is_some() {
             self.provider = false;
         }
-        for _ in 0..64 {
+        loop {
             match rx.try_recv() {
                 Ok(Chunk::Data(stdout, bytes)) => {
                     self.last_byte = now;
@@ -115,7 +115,13 @@ impl Events {
                         self.feed(hooks, b"\n", now, stopping);
                     }
                 }
-                Ok(Chunk::Error(e)) => return Err(e),
+                Ok(Chunk::Error(e)) => {
+                    self.blind = self.blind.or(hooks.channel.blind(now));
+                    if self.blind.is_some() {
+                        self.provider = false;
+                    }
+                    return Err(e);
+                }
                 Err(_) => break,
             }
         }
@@ -150,7 +156,7 @@ fn supervise_with_writer(
     let mut child = UnixChild::spawn(&mut cmd)?;
     drop(cmd);
     let start = Instant::now();
-    let (tx, rx) = mpsc::sync_channel(64);
+    let (tx, rx) = mpsc::sync_channel(128);
     reader(
         child.child.stdout.take().expect("piped stdout"),
         true,

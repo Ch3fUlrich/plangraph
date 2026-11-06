@@ -83,7 +83,13 @@ impl Stop {
         prove_ms: u64,
     ) -> Option<KillProof> {
         match child.reap() {
-            Ok(status) => self.status = self.status.or(status),
+            Ok(status) => {
+                let exited = self.status.is_none() && status.is_some();
+                self.status = self.status.or(status);
+                if exited && self.term_ms.is_some() && self.empty(child) {
+                    return Some(KillProof::Empty);
+                }
+            }
             Err(error) => self.record(Err(error)),
         }
         if self.term_ms.is_none() {

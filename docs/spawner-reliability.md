@@ -82,6 +82,13 @@ The escalation assertion retains a separate 1.5-second scheduler margin.
 
 ### RL12 supervision fix-round validation
 
+The next reap reporting root exit triggers one group-empty probe during Stop,
+so honored TERM does not wait out grace; surviving descendants still escalate.
+The bounded 128-chunk queue is drained to Empty before monitor decisions.
+Batch I/O failures mirror newly latched Blind health before returning the error.
+Regression fixtures cover five-second grace with F+confirm+0.5-second completion,
+a strong signal in queued chunk 70, and twenty bad lines followed by I/O error.
+
 Stdin writer setup errors now enter the same bounded Stop state machine as
 runtime I/O errors and remain visible in `Watched.io_error`; the monitor does
 not tick after an I/O error. Natural-exit drain checks group emptiness at entry
