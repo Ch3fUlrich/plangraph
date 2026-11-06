@@ -34,6 +34,8 @@ def test_recorded_refusal_books_and_runs_next_leg(tmp_path, monkeypatch, stream,
                  exit_code=1 if name == 'first' else 0, stdout='', stderr='',
                  served_model=name, served_family='synthetic', served_witness_reason='', events=[])
         setattr(job, stream, LINE if name == 'first' else 'review complete')
+        if name != 'first':
+            job.stdout += '\nVERDICT: pass\n'
         runner.jobs[name] = job
         return job
 
