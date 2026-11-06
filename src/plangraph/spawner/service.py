@@ -342,11 +342,12 @@ class SpawnService(SeatSpawnMixin):
                         job.exit_code = job.exit_code or 1
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
+                    stop_status = stop.get('status') if isinstance(stop, dict) else None
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
-                        # planner/measured_down.py:26: only failed or skipped attempts count.
-                        down_reason=(('credit_limit' if stop.get('status') == 402 else
-                                      'usage_limit' if stop.get('status') == 429 else None) if isinstance(stop, dict) else None) if stop else (
-                            unavailable if unavailable in ('not_served_on_host', 'credit_limit', 'usage_limit') else None),
+                        # Only failed/skipped attempts count; only 402/429 override unavailable.
+                        down_reason=('credit_limit' if stop_status == 402 else 'usage_limit' if stop_status == 429 else
+                            unavailable if unavailable in ('not_served_on_host', 'credit_limit', 'usage_limit') else None)
+                            if job.status in ('failed', 'skipped') else None,
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,

@@ -21,11 +21,11 @@ def fake_runner(tmp_path, status='completed', stop=None, text='verdict: pass'):
     calls = []
     async def spawn(**kw):
         calls.append(kw)
-        return SimpleNamespace(job_id='job', status=status, exit_code=0 if status == 'completed' else 1,
+        return SimpleNamespace(job_id='job', status=status, exit_code=0 if status in ('completed', 'dry_run') else 1,
             stdout=text, stderr=text, served_model='unwitnessed', served_family='unwitnessed',
             served_witness_reason='test', events=[], command=[])
     return SimpleNamespace(spawn=spawn, calls=calls, default_cwd=str(tmp_path),
-        _processes={}, _tasks={}, provider_responses={'job': stop} if stop else {})
+        _processes={}, _tasks={}, provider_responses={'job': stop} if stop is not None else {})
 
 
 @pytest.mark.parametrize('harness', ['opencode', 'agy'])
@@ -129,6 +129,19 @@ def test_paid_pin_measured(tmp_path, monkeypatch, one_up):
     ('failed', {'status': 429}, True, 'usage_limit'),
     ('failed', {'status': 402}, False, 'credit_limit'),
     ('failed', {'status': 429}, False, 'usage_limit'),
+    ('failed', {'status': 500}, True, 'not_served_on_host'),
+    ('failed', {'message': 'unexpected'}, True, 'not_served_on_host'),
+    ('failed', 'unexpected', True, 'not_served_on_host'),
+    ('failed', {}, True, 'not_served_on_host'),
+    ('failed', '', True, 'not_served_on_host'),
+    ('failed', {'status': 500}, False, None),
+    ('failed', 'unexpected', False, None),
+    ('skipped', {'status': 402}, False, 'credit_limit'),
+    ('skipped', {'status': 429}, False, 'usage_limit'),
+    ('completed', {'status': 402}, False, None),
+    ('completed', {'status': 429}, False, None),
+    ('dry_run', {'status': 402}, False, None),
+    ('dry_run', {'status': 429}, False, None),
     ('failed', None, True, 'not_served_on_host'),
     ('failed', None, False, None), ('completed', None, False, None)])
 def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expected):
@@ -143,7 +156,7 @@ def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expecte
     service = SpawnService(runner=runner, state=tmp_path,
         leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
     record = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt=text,
-        role='review', writer_families=['gpt'], wait_seconds=None))
+        role='review', writer_families=['gpt'], wait_seconds=None, dry_run=status == 'dry_run'))
     assert runner.calls and record['host']
     assert record['attempts'][0]['down_reason'] == expected
     assert bool(measured_down(tmp_path)) == bool(expected)
