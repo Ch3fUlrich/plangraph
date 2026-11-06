@@ -19,6 +19,7 @@ def host(tmp_path, monkeypatch):
         monkeypatch.setenv(key, str(tmp_path / key))
     monkeypatch.setenv('COMMAND_LOG', str(log))
     monkeypatch.setenv('REAL_PYTHON', sys.executable)
+    monkeypatch.setenv('PYTHONPATH', str(ROOT / 'src'))
     monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path / 'autoos'))
     (tmp_path / 'autoos').mkdir()
     (tmp_path / 'autoos/setup.sh').write_text('echo setup >> "$COMMAND_LOG"\n')
