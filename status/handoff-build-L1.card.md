@@ -27,6 +27,7 @@
 - BLOCKED L1-PLAN-PROMPT finish_reason absent until spawner-main moves | default wait | deadline none
 - BLOCKED OP-D4 Sol and mimo unwitnessed | default BLOCKED, D-4388 gate stays | deadline 16:45Z
 - D-4394 ROUTE-PLAN keys from build-L1-route-0292: phase/route-plan-p5-lite f40a9603, no counting seat, nothing claimed; next phase review 2 counting seats; card /home/s/code/plangraph-data-worktrees/route-plan-briefs/docs/proposals/2026-11-04-routing-planning/HANDOFF-2026-11-06-e.card.md | default take it after the seats queue | deadline none
+- D-4398 seat legs order and L2-PLAN-LOOP f40a9603 no CI no seat, see handoff | default follow it | deadline none
 ## Traps
 - seat() can lose the gate race: retry until the json exists; never run a list script in zsh
 - Use build-L1.token, never router.token
