@@ -32,7 +32,8 @@ def test_list_admission(tmp_path, listed, expected):
     def run(argv, **kw):
         calls.append((argv, kw))
         return SimpleNamespace(returncode=0, stdout=listed)
-    reader = SimpleNamespace(provider_state=lambda identity: None)
+    reader = SimpleNamespace(provider_state=lambda identity:
+                             SimpleNamespace(available=True, stale=False, until=''))
     store = leg_state.LegStateStore(tmp_path / 'state', omni=reader, enabled=True, run=run)
     assert store.leg_status('opencode-go/listed')['state'] == expected
     store.leg_status('opencode-go/listed')
@@ -124,6 +125,49 @@ def test_flag_off_next_tick_baseline(monkeypatch):
                 for r in resolver.rank_candidates(admitted)]
     baseline = tick('ok')
     assert baseline
-    for status in ('unavailable', 'stale', 'unknown', 'unreachable', 'not_listed', 'cooldown'):
-        assert tick(status) == baseline
-    assert tick('limited') == []
+    assert tick('cooldown') == baseline
+    for status in ('limited', 'unavailable', 'stale', 'unknown', 'unreachable', 'not_listed'):
+        assert tick(status) == []
+
+
+def test_catalog_explicit_admission():
+    from plangraph.routing_support import resolver as r
+    row = next(dict(row) for row in r.DEFAULT_FALLBACK_MODELS if row['active'])
+    for extra in ({}, {'note': 'synthetic'}):
+        candidate = dict(row, **extra)
+        assert r.catalog_row_admitted(candidate)
+        assert r.catalog_row_admitted(r._normalize_catalog_row(candidate))
+    row.pop('_catalog_available')
+    assert not r.catalog_row_admitted(row)
+    assert not r.catalog_row_admitted(r._normalize_catalog_row(row))
+
+
+def test_changelog_contract():
+    lines = Path('changelog.d/SPAWNER-LEG-STATE-FROM-OMNIROUTE-leg-adapter.md').read_text().splitlines()
+    assert len(lines) == 1 and lines[0].startswith('- **SPAWNER-LEG-STATE-FROM-OMNIROUTE:**')
+
+
+@pytest.mark.parametrize('health', ['available', 'unavailable', 'unreachable'])
+@pytest.mark.parametrize('served', [True, False])
+def test_enabled_route_matrix(tmp_path, monkeypatch, health, served):
+    from plangraph.routing_support import resolver as r
+    from plangraph.routing_support.omniroute_state import OmniRouteUnreachable
+    monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '1')
+    monkeypatch.setattr(r, 'host_probe_env', lambda env: {})
+    monkeypatch.setattr('plangraph.routing_support.opencode_render.render_gateway_providers',
+                        lambda env, model: None)
+    calls = []
+    def read(identity):
+        calls.append(identity)
+        if health == 'unreachable':
+            raise OmniRouteUnreachable('transport_error')
+        return SimpleNamespace(available=health == 'available' and identity == 'cx-gpt-6-terra',
+                               stale=False, until='')
+    store = leg_state.LegStateStore(tmp_path / 'state', enabled=True,
+                                   omni=SimpleNamespace(provider_state=read))
+    for model in ('cx-gpt-6-terra', 'cx-gpt-6.1-sol'):
+        row = dict(id='omniroute/' + model, active=True, harness='opencode')
+        available = r.is_model_available(row, store.leg_status)
+        reason = r.host_skip_reason(row, probe=lambda env: {row['id']} if served else {'other/model'})
+        assert (available and reason is None) == (health == 'available' and served and model == 'cx-gpt-6-terra')
+    assert calls == ['cx-gpt-6-terra', 'cx-gpt-6.1-sol']
