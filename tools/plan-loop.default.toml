@@ -1,0 +1,27 @@
+planner_family = "anthropic"
+material = "private"
+accept_families = 4
+max_rounds = 6
+size_growth = 1.15
+minor_max_chars = 2000
+max_file_chars = 200000
+budget_fraction = 0.40
+chars_per_token = 3
+seat_max_min = 30
+first_content_min = 10
+max_failed_attempts = 3
+site_words_file = ""
+fact_check_leg = ["opencode-go-qwen3.8-max", "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"]
+# gpt-6-astra is not registered; it has no entry.
+leg = [
+  {id = "mimo-v2.6-pro", rung = 1, training = false},
+  {id = "opencode-go-deepseek-v4-flash", rung = 1, training = false},
+  {id = "opencode-go-qwen3.8-max", rung = 1, training = false},
+  {id = "opencode-go-glm-5.2", rung = 1, training = false},
+  {id = "cx-gpt-6-luna", rung = 2, training = false},
+  {id = "opencode-go-gemini-4-argon", rung = 2, training = true},
+  {id = "cx-gpt-6.1-sol", rung = 3, training = false},
+  {id = "opencode-go-muse-spark", rung = 3, training = true},
+  {id = "opencode-deepseek-v4.1-flash-free", rung = 1, training = true},
+  {id = "opencode-glm-5.3-flash-free", rung = 1, training = true},
+]
