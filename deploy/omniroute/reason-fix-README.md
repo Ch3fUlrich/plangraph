@@ -102,7 +102,7 @@ loaded at runtime:
 ## Applying the Patch
 
 ```powershell
-# From the AutoOS repository root:
+# From the plangraph repository root:
 pwsh -File ./reason-fix-reapply.ps1
 ```
 

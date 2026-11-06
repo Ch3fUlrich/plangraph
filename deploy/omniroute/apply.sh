@@ -222,7 +222,7 @@ if [[ -f "$KEYS_FILE" ]]; then
         # A copied template keeps REPLACE_WITH_* for keys you do not have;
         # registering one would also block the real key later ("already
         # registered"), so a placeholder counts as no key at all.
-        [[ "$val" == REPLACE_WITH_* ]] && continue
+        [[ "$val" == "REPLACE_WITH_"* ]] && continue
         [[ -n "$key" && -n "$val" ]] && KEYS["${key,,}"]="$val"
     done <"$KEYS_FILE"
 fi
