@@ -1126,7 +1126,7 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if stop and not unavailable and job.status != 'cancelled':
                             notify_leg_refused(self, record, chosen, reason or 'provider_stop')
-                        if job.status in ('completed', 'dry_run'):
+                        if job.status in ('completed', 'dry_run') and not stop and not unavailable:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,

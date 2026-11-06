@@ -160,7 +160,7 @@ impl RunRecord {
         }
         if !matches!(
             (from, to),
-            (Queued, Running | Cancelled | Failed | Refused)
+            (Queued, Running | Cancelled | Failed | Refused | NeedsInput)
                 | (
                     Running,
                     Completed | Failed | Cancelled | Stalled | Timeout | NeedsInput

@@ -11,7 +11,7 @@ def publish(directory, record, job):
     """Publish evidence last; never recover evidence from combined run tails."""
     if record.get('role') != 'review' or record.get('ended') is None:
         return
-    if job is None or record.get('job_id') != job.job_id:
+    if job is None or record.get('job_id') not in (None, job.job_id):
         return  # retries without the owning final job cannot invalidate evidence
     directory = Path(directory)
     if directory.is_symlink():
@@ -22,7 +22,7 @@ def publish(directory, record, job):
         review.unlink(missing_ok=True)
     clear()  # unlink entries, never open a stale pair (including symlinks)
     if (job is None or record.get('status') != 'completed' or record.get('exit_code') != 0
-            or record.get('job_id') != job.job_id or job.status != 'completed'
+            or record.get('job_id') not in (None, job.job_id) or job.status != 'completed'
             or job.exit_code != 0):
         return
     model = getattr(job, 'served_model', None)

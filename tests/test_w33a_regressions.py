@@ -28,10 +28,9 @@ def test_stdout_error_is_unavailable(text):
 
 @pytest.mark.parametrize('marker', ['model unavailable', 'NOT SERVED', 'unknown model', 'not_served_on_host'])
 def test_stderr_diagnostics(marker):
-    # Legacy model-unavailable stderr is diagnostic even with a prefix.
+    # Unshaped mentions on stderr are not harness diagnostics.
     text = 'prefix ' + marker
-    expected = text if marker == 'model unavailable' else None
-    assert unavailable_reason(1, '', text) == expected
+    assert unavailable_reason(1, '', text) is None
     assert unavailable_reason(0, '', text) is None
     assert unavailable_reason(1, text, '') is None
 

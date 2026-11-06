@@ -139,11 +139,13 @@ def test_collect_cr_live_probe(tmp_path):
                                returncode=None)
         task = asyncio.create_task(collect(runner, 'j', proc))
         try:
-            for chunk in (b'working\r', b'TOKEN=', b'synthetic-value\r'):
+            for chunk in (b'working\r', b'TOKEN=', b'synthetic-value\r', b'sk-cross', b'chunk-secret\r'):
                 proc.stdout.feed_data(chunk)
                 await asyncio.sleep(.02)
             assert 'working' in job.stdout and 'synthetic-value' not in job.stdout
             assert 'synthetic-value' not in job._live_log.read_text()
+            assert 'sk-cross' not in job._live_log.read_text()
+            assert 'chunk-secret' not in job.stdout
             record = dict(run_id='run-synthetic', status='running', pid=os.getpid(),
                           started=time.time() - 10, card={'stall_min': .01})
             assert probe_run(tmp_path, record, time.time()) is None

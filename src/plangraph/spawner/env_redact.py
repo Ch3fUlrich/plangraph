@@ -203,8 +203,6 @@ def unavailable_reason(exit_code, stdout, stderr):
                 or (is_stderr and re.fullmatch(r'not_served_on_host:\s*\S+(?:\s+\S+)*', text))):
             return text
         if 'model unavailable' in text.lower() and not text.startswith('{'):
-            if is_stderr:
-                return text
             if not _ERROR_SHAPED.match(text):
                 continue
         if not marked(text):
