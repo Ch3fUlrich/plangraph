@@ -1,0 +1,1 @@
+Synchronize the bounded-wait private-record test with an explicit release event instead of a child-side deadline, retaining all bounded-wait, status, privacy and cleanup assertions under host scheduling delays.
