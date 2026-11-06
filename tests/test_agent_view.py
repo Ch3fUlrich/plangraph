@@ -284,7 +284,7 @@ def test_render_malformed_view_is_unknown(home, data):
     assert '"agents_view":null' in document
 
 
-def test_snapshot_producer_reads_private_view(home, monkeypatch):
+def test_snapshot_producer_excludes_private_view(home, monkeypatch):
     from keeper_util import World
     from plangraph.keeper.snapshot_io import write_snapshot
     from plangraph.render import render
@@ -301,14 +301,10 @@ def test_snapshot_producer_reads_private_view(home, monkeypatch):
                                  config=SimpleNamespace(snapshot=home / 'snapshot.json'))
         write_snapshot(server, server.system)
         written = json.loads((home / 'snapshot.json').read_text())
-        assert written['agents_view'] == snapshot['agents_view']
-        row = snapshot['agents_view']['hosts'][0]['agents'][0]
-        assert set(row) == set(av.FIELDS)
-        assert row['name'] == 'live-agent'
-        assert snapshot['agents_view']['hosts'][1]['readable'] is False
+        assert 'agents_view' not in snapshot
+        assert 'agents_view' not in written
         document = render(written, home, cdn=True)
-        assert 'live-agent' in document and 'excluded' not in document
-        (home / '.local/state/plangraph/agents-view.json').write_text('null')
-        assert 'agents_view' not in world.store.snapshot(world.p('reader'))
+        assert 'live-agent' not in document and 'excluded' not in document
+        assert '"agents_view":' not in document
     finally:
         world.close()

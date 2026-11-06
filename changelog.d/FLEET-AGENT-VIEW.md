@@ -1,6 +1,1 @@
-## FLEET-AGENT-VIEW (D-4242, D-4245)
-
-Add a read-only local and SSH fleet agent inventory and an Agents tab. Private
-snapshots are atomically written with mode 0600; only seven agent fields reach
-the rendered page. Unreadable hosts remain unknown, and old snapshots are marked
-stale. Existing host metrics and their running-agent count rule are unchanged.
+Add a read-only local and SSH fleet agent inventory with private mode-0600 snapshots and an Agents tab; keeper snapshots exclude inventory, so the tab remains unknown until serving is authorized by a keeper item. Existing host metrics and their running-agent count rule are unchanged.

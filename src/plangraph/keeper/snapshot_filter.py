@@ -74,10 +74,6 @@ def build(store, now, **params):
     values = _validate(params)
     active = any(value is not None for value in values.values())
     body = _full(store, now, values if active else None)
-    from ..spawner.agent_view_projection import load_view
-    agents_view = load_view()
-    if agents_view is not None:
-        body['agents_view'] = agents_view
     if not active:
         return body
     since = _instant(values["since"]) if values["since"] else None
