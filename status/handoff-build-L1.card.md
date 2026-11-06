@@ -12,7 +12,7 @@
 - 11-06T10:23Z D-4162 62542ed0 md-sync restarted, one run applied, error none, refused 1 untraced
 - 11-06T10:24Z D-4177 49a7f48 writer 291 passed, seats REQUEST_CHANGES, r2 writer started
 ## In flight
-- #436 572e6428e327 main merged D-4109 (runner.py overlap), CI running, then GO-REQ
+- #436 572e6428e327 CI 42203474824 success, GO-REQ sent 10:43Z, waiting on ruling
 - D-4207 lane/terra-review-leg writer job biwkrk6bm since 10:27Z next check 10:45Z
 - D-4196 run-baea999e lane/d4196-go-legs since 10:19Z next check 10:45Z
 - D-4177 r2 writer job bgr54wwi7 lane/d4177-watchdog-seat since 10:26Z next check 10:45Z
