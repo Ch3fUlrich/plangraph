@@ -118,23 +118,25 @@ def stop_worker(worker) -> None:
                     os.killpg(pgid, sig)
                 elif worker.proc.poll() is None:
                     worker.proc.send_signal(sig)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
-        send(signal.SIGTERM)
-        if pgid is not None:
-            # WNOWAIT pins the leader's pid until the last group signal (no pgid reuse).
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                if os.waitid(os.P_PID, worker.proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT):
-                    break
-                time.sleep(0.05)
-        elif worker.proc.poll() is None:
-            try:
-                worker.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
-        send(signal.SIGKILL)  # also kill descendants after the parent has exited
-        worker.proc.wait(timeout=10)
+        try:
+            send(signal.SIGTERM)
+            if pgid is not None:
+                # WNOWAIT pins the leader's pid until the last group signal (no pgid reuse).
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if os.waitid(os.P_PID, worker.proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT):
+                        break
+                    time.sleep(0.05)
+            elif worker.proc.poll() is None:
+                try:
+                    worker.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            send(signal.SIGKILL)  # also kill descendants after the parent has exited
+            worker.proc.wait(timeout=10)
     finally:
         worker.out.close()
 
