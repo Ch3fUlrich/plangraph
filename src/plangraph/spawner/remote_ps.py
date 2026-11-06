@@ -8,6 +8,9 @@ import subprocess
 
 TIMEOUT = 3
 FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code')
+FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
+                   started=(int, float), ended=(int, float, type(None)),
+                   pid=(int, type(None)), exit_code=(int, type(None)))
 
 
 def query_host(host, timeout):
@@ -46,9 +49,10 @@ def _fetch(host, transport):
             raise ValueError()
         clean = []
         for row in rows:
-            if (not isinstance(row, dict) or not isinstance(row.get('run_id'), str)
-                    or not isinstance(row.get('host'), str)
-                    or not isinstance(row.get('status'), str)):
+            if (not isinstance(row, dict)
+                    or not all(k in row for k in ('run_id', 'host', 'status'))
+                    or any(type(row[k]) not in FIELD_TYPES[k]
+                           for k in FIELDS if k in row)):
                 raise ValueError()
             if row['status'] in ('running', 'queued'):
                 clean.append({k: row[k] for k in FIELDS if k in row})
@@ -58,7 +62,11 @@ def _fetch(host, transport):
 
 
 def list_runs(local, *, transport=query_host):
-    hosts = configured_hosts()
+    try:
+        hosts = configured_hosts()
+    except (OSError, ValueError, KeyError, TypeError):
+        # Optional site configuration must never suppress the local listing.
+        return local
     if not hosts:
         return local
     with ThreadPoolExecutor(max_workers=len(hosts)) as pool:

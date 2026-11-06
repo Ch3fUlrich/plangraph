@@ -78,3 +78,54 @@ def test_service_uses_fanout(tmp_path, monkeypatch):
     monkeypatch.setattr(remote_ps, 'list_runs', lambda local: local + [
         dict(host='node-a', status='unknown', reason='host query failed')])
     assert SpawnService(state=tmp_path).ps()['runs'][0]['host'] == 'node-a'
+
+
+@pytest.mark.parametrize('contents', ['not json', '{}', 'null', '[]',
+    '{"hosts": null}', '{"hosts": [null]}',
+    '{"hosts": [{"name": 1, "target": "SECRET"}]}',
+    '{"hosts": [{"name": "node-a", "target": []}]}',
+    '{"hosts": [{"name": "node-a", "target": "-SECRET"}]}', '\udcff'])
+def test_invalid_config_preserves_local_listing(tmp_path, monkeypatch, caplog, contents):
+    from plangraph.spawner.service import SpawnService
+    from plangraph.spawner import stall_watchdog
+    config(tmp_path, monkeypatch, [])
+    path = tmp_path / 'plangraph' / 'ps-hosts.json'
+    path.write_bytes(contents.encode('utf-8', errors='surrogateescape'))
+    local = [dict(run_id='local', status='running', started=1)]
+    monkeypatch.setattr(stall_watchdog, 'read_runs', lambda state: local)
+    assert SpawnService(state=tmp_path).ps() == {'runs': local}
+    assert caplog.text == ''
+
+
+def test_unreadable_config_preserves_local_listing(tmp_path, monkeypatch, caplog):
+    from pathlib import Path
+    from plangraph.spawner.service import SpawnService
+    from plangraph.spawner import stall_watchdog
+    def denied(*args, **kwargs):
+        raise PermissionError('SECRET')
+    monkeypatch.setattr(Path, 'read_text', denied)
+    local = [dict(run_id='local', status='running')]
+    monkeypatch.setattr(stall_watchdog, 'read_runs', lambda state: local)
+    assert SpawnService(state=tmp_path).ps() == {'runs': local}
+    assert caplog.text == ''
+
+
+@pytest.mark.parametrize('field', remote_ps.FIELDS)
+@pytest.mark.parametrize('value', [{ 'SECRET': 1 }, [], True])
+def test_every_remote_field_is_typed(field, value, caplog):
+    row = dict(run_id='run-a', host='node-a', status='running', role='implement',
+               started=1.5, ended=None, pid=123, exit_code=None)
+    row[field] = value
+    payload = json.dumps({'runs': [dict(run_id='valid', host='node-a',
+                                         status='queued'), row]})
+    assert remote_ps._fetch(dict(name='node-a'), lambda *args: payload) == [
+        dict(host='node-a', status='unknown', reason='host query failed')]
+    assert caplog.text == ''
+
+
+@pytest.mark.parametrize('ended,exit_code,pid', [(None, None, None), (2.5, 0, 123)])
+def test_valid_remote_field_types(ended, exit_code, pid):
+    row = dict(run_id='run-a', host='node-a', status='running', role='implement',
+               started=1, ended=ended, pid=pid, exit_code=exit_code)
+    assert remote_ps._fetch(dict(name='node-a'), lambda *args: json.dumps(
+        {'runs': [row]})) == [row]
