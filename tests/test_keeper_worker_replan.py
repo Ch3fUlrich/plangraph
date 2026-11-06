@@ -69,7 +69,43 @@ def test_observer_reopens_authenticated_backend(scoped):
 @pytest.mark.parametrize("role", ["phase-worker", "system"])
 def test_worker_cannot_disable_stored_scope(scoped, role):
     world, principal = scoped
-    principal.worker_scope = False
-    principal.role = role
+    object.__setattr__(principal, "worker_scope", False)
+    object.__setattr__(principal, "role", role)
     with pytest.raises(Refused, match="worker scope|authenticated worker scope"):
         world.store.snapshot(principal)
+
+
+@pytest.mark.parametrize("attribute,value", [("role", "system"), ("worker_scope", False)])
+def test_worker_identity_is_frozen(scoped, attribute, value):
+    from dataclasses import FrozenInstanceError
+
+    _, principal = scoped
+    with pytest.raises(FrozenInstanceError):
+        setattr(principal, attribute, value)
+
+
+@pytest.mark.parametrize("role,scope", [("system", True), ("phase-worker", False),
+                                        ("system", False)])
+def test_corrupted_worker_identity_refused_at_every_gate(scoped, role, scope):
+    from plangraph.keeper.worker_policy import check, check_identity
+
+    world, principal = scoped
+    key, = seed(world, [("A", [])])
+    world.store.claim(world.p("workerA"), key)
+    object.__setattr__(principal, "role", role)
+    object.__setattr__(principal, "worker_scope", scope)
+    row = world.conn.execute("SELECT role FROM principals WHERE name=?",
+                             (principal.name,)).fetchone()
+    for transport in (False, True):
+        with pytest.raises(Refused) as denied:
+            check(principal, "park" if transport else "worker_park", transport=transport)
+        assert denied.value.code == "forbidden"
+    with pytest.raises(Refused):
+        check_identity(principal, row)
+    for method, payload in (("worker_park", {"card": key, "exit_class": "ok"}),
+                            ("worker_complete", {"card": key, "merged_sha": "a" * 40}),
+                            ("worker_alarm", {"card": key, "reason": "test"})):
+        with pytest.raises(Refused) as denied:
+            getattr(world.store, method)(principal, payload)
+        assert denied.value.code == "forbidden"
+    assert world.store.show(world.p("router"), key)["claimed_by"] == world.p("workerA").name

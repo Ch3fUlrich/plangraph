@@ -24,7 +24,7 @@ __all__ = ["Principal", "RunPrincipal", "OversightPrincipal", "RUN_PREFIX",
            "hash_token", "norm_family", "validate_family"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class Principal:
     name: str
     role: str
@@ -32,7 +32,7 @@ class Principal:
     family: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class PhaseWorkerPrincipal(Principal):
     """Distinct worker identity; never admitted by a generic system-role gate."""
 
@@ -48,7 +48,7 @@ RUN_PREFIX = "run:"
 OVERSIGHT_PREFIX = "pgo1_"
 
 
-@dataclass
+@dataclass(frozen=True)
 class RunPrincipal(Principal):
     """M2B-RUN-TOKENS: what a run token authenticates as.
 
@@ -64,7 +64,7 @@ class RunPrincipal(Principal):
     run_id: str = ""
 
 
-@dataclass
+@dataclass(frozen=True)
 class OversightPrincipal(Principal):
     """RT-OVERSIGHT-KEEPER-SCOPE: a short-lived, scoped ``oversight`` identity.
 

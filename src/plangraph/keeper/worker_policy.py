@@ -18,11 +18,15 @@ def check_identity(principal, row):
     stored_worker = row is not None and row["role"] == "phase-worker"
     if scoped or stored_worker or isinstance(principal, PhaseWorkerPrincipal):
         if not scoped or not isinstance(principal, PhaseWorkerPrincipal) \
+                or getattr(principal, "role", None) != "phase-worker" \
                 or row is None or row["role"] != "phase-worker":
             raise Refused("forbidden", "principal changed since authentication: worker scope requires a stored phase-worker identity")
 
 
 def check(principal, action, *, transport=False):
+    if isinstance(principal, PhaseWorkerPrincipal) or getattr(principal, "worker_scope", False):
+        if getattr(principal, "role", None) != "phase-worker" or not getattr(principal, "worker_scope", False):
+            raise Refused("forbidden", "phase worker requires authenticated worker scope and phase-worker role")
     if getattr(principal, "role", None) == "phase-worker" and not getattr(principal, "worker_scope", False):
         raise Refused("forbidden", "phase worker requires authenticated worker scope")
     if getattr(principal, "worker_scope", False):
