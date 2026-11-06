@@ -22,7 +22,7 @@
 3. D-4177 PR#34 witnessed seat, GO-REQ
 4. D-4394 refused reason with own token; take build-L1-route-0292 keys
 ## Open
-- BLOCKED 2a V4 pane relay HIGH not yet sent to routing | default named residual | deadline 16:30Z
+- BLOCKED 2a V4 pane relay HIGH sent to routing 15:48Z | default named residual | deadline 16:30Z
 - D-4377 server-L1 opencode hold, no new spawn | default until its DONE or 16:05Z | deadline 16:05Z
 - BLOCKED L1-PLAN-PROMPT finish_reason absent until spawner-main moves | default wait | deadline none
 - BLOCKED OP-D4 Sol and mimo unwitnessed | default BLOCKED, D-4388 gate stays | deadline 16:45Z
