@@ -6,10 +6,13 @@ macro_rules! wrapped {
         fn $name() {
             let prefix = $prefix;
             let body: String = $body;
-            let (left, right) = body.split_at(body.len() / 2);
-            for newline in ["\n", "\r\n"] {
-                let text = format!("{prefix}{left}{newline}{right}\n!following line survives");
-                assert_eq!(history_text(&text), "[REDACTED]\n!following line survives");
+            for split in [0, 1, body.len() / 2] {
+                let (left, right) = body.split_at(split);
+                for newline in ["\n", "\r\n"] {
+                    let text = format!("{prefix}{left}{newline}{right}\nfollowing line survives");
+                    assert!(text.contains(right));
+                    assert_eq!(history_text(&text), "[REDACTED]\nfollowing line survives");
+                }
             }
         }
     };
@@ -31,7 +34,7 @@ wrapped!(wrapped_aiza, ["AI", "za"].concat(), "f4".repeat(18));
 fn wrapped_token_stops_at_non_token_characters() {
     let text = format!(
         "{}{}\n{}; retained prose\nnext line",
-        "sk", "-abc123", "def456"
+        "sk", "-abc123abc123", "def456def456"
     );
     assert_eq!(history_text(&text), "[REDACTED]; retained prose\nnext line");
 }
@@ -47,4 +50,50 @@ fn question_text_default_and_tags_are_redacted() {
     };
     let json = serde_json::to_string(&question(q)).unwrap();
     assert!(!json.contains("pilotseed"), "{json}");
+}
+
+#[test]
+fn review_wrap_edges() {
+    let prefix = ["gh", "p_"].concat();
+    for body in [
+        format!("\n{}", "c7".repeat(18)),
+        format!(
+            "{}\n{}\n{}",
+            "c7".repeat(3),
+            "c7".repeat(4),
+            "c7".repeat(11)
+        ),
+    ] {
+        let input = format!("{prefix}{body}\nfollowing word");
+        assert!(input.contains("c7"));
+        assert_eq!(history_text(&input), "[REDACTED]\nfollowing word");
+    }
+    let short = format!("{prefix}a\nb");
+    assert_eq!(history_text(&short), short);
+    let complete = format!("{prefix}{}\nis fun", "c7".repeat(18));
+    assert_eq!(history_text(&complete), "[REDACTED]\nis fun");
+    let benign = ["sk", "-word\nvalue"].concat();
+    assert_eq!(history_text(&benign), "[REDACTED]\nvalue");
+}
+
+#[test]
+fn redaction_precedes_byte_boundary_and_questions_keep_head() {
+    let secret = format!(
+        "{}{}\n{}",
+        ["gh", "p_"].concat(),
+        "c7".repeat(4),
+        "c7".repeat(14)
+    );
+    let text = format!("head {} {secret} {}", "é".repeat(32750), "z".repeat(65500));
+    assert!(text.contains("c7"));
+    let out = history_text(&text);
+    assert!(!out.contains("c7"));
+    assert!(out.len() <= pg_worker_core::redact::MAX_TAIL_BYTES);
+    let q = crate::question::Question {
+        text,
+        default: None,
+        deadline_s: None,
+        risk_tags: vec![],
+    };
+    assert!(question(q).text.starts_with("head "));
 }

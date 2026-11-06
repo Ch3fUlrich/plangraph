@@ -45,16 +45,20 @@ directory, removed on drop alongside its private HOME. Only that temporary
 directory is writable in the jail, not the shared system temp root; the child
 receives its path as `TMPDIR` after environment confinement.
 
-Output-redaction helpers apply the check-tail redactor and 64 KiB cap and
-redact question text, defaults, and risk tags; worker integration follows in
-the next pilot slice. Prefixed secrets wrapped onto a second line are removed
-before line trimming. Git/SSH environment credentials are not inherited;
-harness auth staging skips `.git-credentials`, `.gitconfig`, and `.ssh`.
-This is not a network prohibition or a guarantee against credentials supplied
-in arbitrary other auth files. Regression coverage stages the same auth source
-into separate harness and check homes, verifies an ordinary auth file survives
-while Git/SSH files do not, and runs a failing push with no configured remote
-through both environment-confinement helpers.
+S1 supplies bounded output-redaction helpers: history keeps the last 64 KiB;
+question text, defaults, and risk tags keep the first 64 KiB after redaction.
+Incomplete prefixed tokens can continue across multiple lines until their
+minimum token length is reached. S3 wires the helpers to history/projection
+writes; seeded harness secrets never reaching either is the S1+S2+S3 stack's
+end-state invariant, not an S1 end-to-end guarantee.
+
+Auth staging excludes `.git-credentials`, `.gitconfig`, `.ssh`, `.netrc`,
+`.npmrc`, `.pypirc`, `.aws`, `.docker`, `.gnupg`, `hosts.yml`, `credentials`,
+and `.config` at both supported directory levels. Ordinary `agent-auth` and
+`sub/agent-auth` survive. Tests prove parent Git credential lookup succeeds
+with a store helper, while confined harness/check lookup fails for missing
+authentication and credential environment variables are absent. This is not a
+network prohibition or protection from arbitrary other credential filenames.
 
 The local devstack e2e test profile (`tests/e2e/rtp1_local_util.py`) selects a
 built `pg-jail` beside the worker binary when present, otherwise explicitly sets

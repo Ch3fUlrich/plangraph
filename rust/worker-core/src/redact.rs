@@ -54,7 +54,7 @@ fn patterns() -> &'static [regex::Regex] {
             r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
             // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
-            r"\bx?sk-[A-Za-z0-9_-]+(?:\r?\n[A-Za-z0-9_-]+)?|\bgh[pousr]_(?:[A-Za-z0-9]+\r?\n[A-Za-z0-9]+|[A-Za-z0-9]{20,})|\bgithub_pat_(?:[A-Za-z0-9_]+\r?\n[A-Za-z0-9_]+|[A-Za-z0-9_]{20,})|\bxox[abprs]-(?:[A-Za-z0-9-]+\r?\n[A-Za-z0-9-]+|[A-Za-z0-9-]{10,})|\bAKIA(?:[0-9A-Z]{1,15}\r?\n[0-9A-Z]{1,15}\b|[0-9A-Z]{16}\b)|\bAIza(?:[0-9A-Za-z_-]+\r?\n[0-9A-Za-z_-]+|[0-9A-Za-z_-]{30,})",
+            r"\bx?sk-[A-Za-z0-9_-]+|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
             // 7. Long hex — a 40-char git sha is caught too; acceptable, and shas
@@ -70,19 +70,19 @@ fn patterns() -> &'static [regex::Regex] {
     })
 }
 
-/// Replace token-shaped secrets in `text` with `REDACTED`.
+/// Replace token-shaped secrets in `text` with `[REDACTED]`.
 ///
 /// Patterns 1–2 handle multi-line PEM blocks and are applied first, to the
-/// whole text; prefixed tokens can span two lines. Idempotent: running an already
+/// whole text, as are the remaining patterns; wrapped prefixes are handled first. Idempotent: running an already
 /// redacted text through again changes nothing.
 pub fn redact(text: &str) -> String {
     let rs = patterns();
-    // 1–7 in order.
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
     let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
     let out = rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
+    let out = super::redact_wrapped::redact_wrapped(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
     let out = rs[7].replace_all(&out, REDACTED).into_owned();

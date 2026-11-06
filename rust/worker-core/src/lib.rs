@@ -49,6 +49,7 @@ pub mod placement_rule_store;
 pub mod placement_rules;
 pub mod probe;
 pub mod redact;
+mod redact_wrapped;
 pub mod reset;
 pub mod run;
 pub mod sandbox_env;
