@@ -105,16 +105,17 @@ pub fn invoke(args: &[String], env: Option<PathBuf>, raw: u64, wall: i64) -> Res
     run(config, raw, wall)
 }
 fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
-    if c.stale_pair && c.pairs.is_none() {
-        return Err("missing control section".into());
-    }
+    let pairs = if c.stale_pair {
+        Some(c.pairs.as_ref().ok_or("missing control section")?)
+    } else {
+        None
+    };
     let state_path = c.state_path.as_ref().ok_or("state path required")?;
     let outbox = c.outbox_path.as_ref().ok_or("outbox path required")?;
     let ack_path = c.acks_path.as_ref().ok_or("acks path required")?;
     let tolerance = c.wall_jump_tolerance_s.ok_or("clock tolerance required")?;
     // Validate all constructors before creating even the lock file.
-    if c.stale_pair {
-        let p = c.pairs.as_ref().unwrap();
+    if let Some(p) = pairs {
         let mut names = BTreeSet::new();
         for g in &p.groups {
             if g.group.is_empty() || !names.insert(&g.group) {
@@ -194,8 +195,7 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
         }
         result
     };
-    if c.stale_pair {
-        let p = c.pairs.as_ref().unwrap();
+    if let Some(p) = pairs {
         for g in &p.groups {
             let namespace = format!("stale-pair:{}", g.group);
             if !s.pairs.contains_key(&g.group) {
@@ -208,7 +208,7 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
                     },
                 );
             }
-            let state = s.pairs.get_mut(&g.group).unwrap();
+            let state = s.pairs.get_mut(&g.group).ok_or("missing group state")?;
             let finding = state.detector.observe(
                 &p.config,
                 &fs::read(&g.snapshot_path).unwrap_or_default(),
@@ -219,20 +219,20 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
                 },
             );
             diagnostics.extend(finding.diagnostics.clone());
-            if finding.new_alarm {
-                let id = format!("{namespace}:pair:{}", finding.episode.unwrap());
-                opened.push(id.clone());
-                state.active = Some(id);
-            }
+            record_alarm(
+                &finding,
+                &namespace,
+                &mut state.active,
+                &mut opened,
+                &mut diagnostics,
+            );
             let ack = state.active.as_deref().filter(|id| acks.contains(*id));
             let mut sink = |id: &str| send("alarm", id, Some(&g.group));
             state.delivery.tick(Some(&finding), ack, now, &mut sink);
             state.delivery.silence.tick(heartbeat, now, &mut sink);
         }
     }
-    if let Err(e) = send("heartbeat", &format!("heartbeat:{now}"), None) {
-        diagnostics.push(e);
-    }
+    let _ = send("heartbeat", &format!("heartbeat:{now}"), None);
     s.clock = Some(clock);
     diagnostics.extend(send_errors);
     let parent = state_path
@@ -244,8 +244,25 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
     temp.as_file().sync_all().map_err(|_| "state sync")?;
     temp.persist(state_path).map_err(|_| "state rename")?;
     Ok(
-        json!({"enabled":true,"stale_pair":c.stale_pair,"groups":if c.stale_pair { c.pairs.as_ref().unwrap().groups.iter().map(|g| &g.group).collect::<Vec<_>>() } else { vec![] },"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
+        json!({"enabled":true,"stale_pair":c.stale_pair,"groups":pairs.map_or_else(Vec::new, |p| p.groups.iter().map(|g| &g.group).collect::<Vec<_>>()),"alarms_opened":opened,"attempts_sent":attempts,"diagnostics":diagnostics}),
     )
+}
+fn record_alarm(
+    finding: &pair::Finding,
+    namespace: &str,
+    active: &mut Option<String>,
+    opened: &mut Vec<String>,
+    diagnostics: &mut Vec<String>,
+) {
+    if finding.new_alarm {
+        if let Some(episode) = finding.episode {
+            let id = format!("{namespace}:pair:{episode}");
+            opened.push(id.clone());
+            *active = Some(id);
+        } else {
+            diagnostics.push("new alarm missing episode".into());
+        }
+    }
 }
 #[cfg(test)]
 #[path = "fleet_foundation_tick_tests.rs"]

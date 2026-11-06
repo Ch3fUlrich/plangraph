@@ -105,11 +105,7 @@ fn fleet_foundation_files() {
     assert_eq!(failed["attempts_sent"], 2);
     assert_eq!(
         failed["diagnostics"],
-        json!([
-            "outbox append failed",
-            "outbox append failed",
-            "outbox append failed"
-        ])
+        json!(["outbox append failed", "outbox append failed"])
     );
     let saved = state();
     assert_eq!(saved["clock"]["total_ms"], 0);
@@ -121,12 +117,39 @@ fn fleet_foundation_files() {
     c["outbox_path"] = json!(p("out"));
     assert_eq!(tick(&c, 5).unwrap()["attempts_sent"], 2);
     assert_eq!(lines()[0]["id"], "stale-pair:alpha:pair:1");
+    assert_eq!(tick(&c, 10).unwrap()["attempts_sent"], 2);
+    assert_eq!(tick(&c, 15).unwrap()["attempts_sent"], 1);
+    assert_eq!(
+        lines()
+            .iter()
+            .filter(|l| l["id"] == "stale-pair:alpha:pair:1")
+            .count(),
+        2
+    );
     tick(&c, 20).unwrap();
     tick(&c, 21).unwrap();
     assert_eq!(
         fs::read_to_string(p("out"))
             .unwrap()
             .matches("heartbeat:silence:1")
+            .count(),
+        1
+    );
+    fs::write(p("acks"), "stale-pair:alpha:pair:1\nheartbeat:21\n").unwrap();
+    let mut fresh: Value = serde_json::from_slice(&fs::read(p("alpha")).unwrap()).unwrap();
+    for member in fresh["members"].as_array_mut().unwrap() {
+        member["freshness"] = json!(122);
+    }
+    fs::write(p("alpha"), fresh.to_string()).unwrap();
+    assert_eq!(tick(&c, 22).unwrap()["attempts_sent"], 1);
+    assert_eq!(
+        tick(&c, 32).unwrap()["alarms_opened"],
+        json!(["stale-pair:alpha:pair:2"])
+    );
+    assert_eq!(
+        lines()
+            .iter()
+            .filter(|l| l["id"] == "stale-pair:alpha:pair:2")
             .count(),
         1
     );
@@ -170,4 +193,29 @@ fn fleet_foundation_lock() {
     };
     assert_eq!(run(c, 0, 0).unwrap(), json!({"skipped":"locked"}));
     assert!(!state.exists());
+}
+
+#[test]
+fn fleet_foundation_missing_episode() {
+    let finding = pair::Finding {
+        evidence: None,
+        ages: [None; 2],
+        divergence: None,
+        elapsed_compactions: None,
+        diagnostics: vec![],
+        reasons: vec![],
+        episode: None,
+        new_alarm: true,
+    };
+    let (mut active, mut opened, mut diagnostics) = (Some("previous".into()), vec![], vec![]);
+    record_alarm(
+        &finding,
+        "stale-pair:alpha",
+        &mut active,
+        &mut opened,
+        &mut diagnostics,
+    );
+    assert_eq!(active.as_deref(), Some("previous"));
+    assert!(opened.is_empty());
+    assert_eq!(diagnostics, ["new alarm missing episode"]);
 }
