@@ -36,7 +36,6 @@ class OutputLines:
         self.scrub, self.pending, self.discarding = scrub, '', False
 
     def feed(self, text, final=False):
-        withheld = self.discarding and bool(text)
         self.pending += text
         if self.discarding:
             match = re.search(r'[\r\n]', self.pending)
@@ -49,7 +48,7 @@ class OutputLines:
             text += '[autoos:overlong line withheld]\n'
             self.pending, self.discarding = '', True
         if not text:
-            return '[autoos:overlong line withheld]\n' if withheld else ''
+            return ''
         try:
             return self.scrub(text)
         except Exception:
@@ -198,15 +197,17 @@ def unavailable_reason(exit_code, stdout, stderr):
             return any(error_message(item) for item in value)
         return False
 
-    for line in [*stderr.splitlines(), *stdout.splitlines()]:
+    for is_stderr, line in [(True, line) for line in stderr.splitlines()] + [(False, line) for line in stdout.splitlines()]:
         text = line.strip()
         if (_MODEL_UNAVAILABLE.fullmatch(text)
-                or re.fullmatch(r'not_served_on_host:\s*\S+(?:\s+\S+)*', text)):
+                or (is_stderr and re.fullmatch(r'not_served_on_host:\s*\S+(?:\s+\S+)*', text))):
             return text
         if 'model unavailable' in text.lower() and not text.startswith('{'):
             if _ERROR_SHAPED.match(text) and _MODEL_UNAVAILABLE.fullmatch(text):
                 return text
             if not _ERROR_SHAPED.match(text):
+                if is_stderr and marked(text):
+                    return line
                 continue
         if not marked(text):
             continue
@@ -217,7 +218,7 @@ def unavailable_reason(exit_code, stdout, stderr):
                 return line
         except ValueError:
             # A diagnostic may be one line of a pretty-printed JSON error.
-            if re.match(r'^[{\[,]?\s*"error"\s*:', text) and marked(text.split(':', 1)[1]):
+            if is_stderr or (re.match(r'^[{\[,]?\s*"error"\s*:', text) and marked(text.split(':', 1)[1])):
                 return line
     return None
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 
-@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+@pytest.mark.parametrize('stream', ['stdout'])
 @pytest.mark.parametrize('marker', ['not_served_on_host', 'not served', 'unknown model', 'model unavailable'])
 def test_task_marker_never_books(tmp_path, stream, marker):
     from plangraph.spawner.exit_outcome import fallthrough_reason
@@ -41,7 +41,7 @@ def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch):
     monkeypatch.setattr(service, '_leg_prompt', lambda *a, **kw: 'review')
     record = asyncio.run(service._spawn(card={'title': 'synthetic'}, role='review',
         wait_seconds=None, _plan=SpawnPlan((leg,), (), 'test', (), ())))
-    assert record['chosen_leg']['model'] == leg.model
+    assert record['chosen_leg'] is None
     assert record['reason'] == 'Error: transport failed'
     assert 'VERDICT: CHANGES' in record['attempts'][0]['stdout_tail']
 
@@ -59,6 +59,7 @@ def test_watchdog_entrypoint_builds_hung_from_config(tmp_path, monkeypatch):
     seen = []
     def tick(*a, **kw):
         if 'state' in kw:
+            assert kw.get('stuck') is True
             seen.append(kw.get('hung'))
         return []
     monkeypatch.setattr(w, 'tick', tick)

@@ -236,7 +236,10 @@ def terminal_reason(record, job=None):
     if special is not None:
         record['reason'] = special
         return
-    opencode = is_opencode(job) or (record.get('chosen_leg') or {}).get('harness') == 'opencode'
+    real = [a for a in record.get('attempts', ()) if a.get('status') != 'skipped']
+    leg = real[-1].get('leg') if real else None
+    leg = leg if isinstance(leg, dict) else {}
+    opencode = is_opencode(job) or (record.get('chosen_leg') or leg).get('harness') == 'opencode'
     if opencode:
         for field in ('reason', 'error'):
             if record.get(field):
