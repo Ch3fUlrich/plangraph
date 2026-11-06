@@ -117,7 +117,8 @@ def test_service_fixture_never_constructs_live_reader(tmp_path, monkeypatch):
     from plangraph.routing_support import omniroute_state
     monkeypatch.setattr(omniroute_state, 'from_env', lambda: pytest.fail('live provider'))
     s = service(tmp_path)
-    assert s.leg_reader is None  # disabled fixture is identical to main's None
+    assert s.leg_reader is not None and s.leg_reader.enabled
+    assert s.hung.reader is s.runner.leg_reader is s.leg_reader
 
 
 @pytest.mark.parametrize('reason', ['unknown', 'unreachable', 'stale'])
@@ -147,9 +148,11 @@ def test_fixture_disabled_reader_matches_main_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(routing, 'plan_spawn', spy)
     s = service(tmp_path)
     baseline = original(CARD, role='implement', leg_reader=None)
-    s.hung.waiting.add(baseline.legs[0].id)
     assert asdict(s._route(CARD)) == asdict(baseline)
-    assert seen == [None]
+    assert len(seen) == 1 and callable(seen[0])
+    assert seen[0]('sample') == dict(state='ok', evidence=None)
+    s.hung.waiting.add(baseline.legs[0].id)
+    assert s._route(CARD).legs == baseline.legs[1:] + baseline.legs[:1]
 
 
 def test_rank_subset_and_leg_keys(boundary, tmp_path):

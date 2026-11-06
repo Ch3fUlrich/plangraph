@@ -172,7 +172,9 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
     # Services remain default-on, but never construct the production adapter.
     from plangraph.routing_support import leg_state_flag
-    monkeypatch.setattr(leg_state_flag, 'default_reader', lambda: None)
+    from types import SimpleNamespace
+    reader = SimpleNamespace(enabled=True, leg_status=lambda *a, **k: dict(state='ok', evidence=None))
+    monkeypatch.setattr(leg_state_flag, 'default_reader', lambda: reader)
     # Route mechanics tests run under a neutral route policy; the operator's
     # live lists (planner/route_policy.json) are pinned in test_registry_route.py.
     neutral = state / 'route-policy.json'
