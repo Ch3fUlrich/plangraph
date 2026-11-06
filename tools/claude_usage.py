@@ -93,7 +93,7 @@ def read_projects(root, patterns, stats):
                             continue
                         message = record["message"]
                         mid = message["id"]
-                        key = (identity, mid)
+                        key = (sid, mid)
                         usage = message["usage"]
                         counts = [float(usage.get(field, 0)) for field in FIELDS]
                         if any(n < 0 or not math.isfinite(n) for n in counts):
@@ -104,7 +104,8 @@ def read_projects(root, patterns, stats):
                         named = found | pending | (old["keys"] if old else set())
                         requests[key] = dict(session=sid, time=instant(record["timestamp"]),
                                              model=message.get("model", "unknown"),
-                                             counts=counts, keys=named, subagent=path != parent)
+                                             counts=counts, keys=named,
+                                             subagent=bool(record.get("isSidechain")) or path != parent)
                         pending = set()
                     except (ValueError, KeyError, TypeError, AttributeError):
                         stats["malformed_lines"] += 1
@@ -192,10 +193,14 @@ def key_report(args, arms, rows, sessions, policy):
     for name, result in results.items():
         count = len(arms[name]["keys"] & accepted)
         if not count or not result["turns"]:
-            raise ValueError("zero accepted or attributed turns")
+            results[name] = dict(status="no result", reason="zero accepted or attributed turns")
+            continue
+        result["status"] = "ok"
         result.update(accepted=count, tokens_per_accepted_actual=result["actual"] / count,
                       tokens_per_accepted_fixed=result["fixed"] / count)
         result["keys_named"] = sorted(result["keys_named"])
+    if all(result["status"] == "no result" for result in results.values()):
+        raise ValueError("zero accepted or attributed turns")
     return results
 
 

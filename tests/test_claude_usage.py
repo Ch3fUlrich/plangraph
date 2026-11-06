@@ -100,7 +100,7 @@ def test_v3_v5_prorata_whole_token_fixed(tree, tmp_path, capsys):
 def test_session_not_double_counted_includes_subagent(tree, tmp_path, capsys):
     f = inputs(tmp_path)
     write(tree / "owned.jsonl", [assistant(text="THIRD FLEET-LAUNCH")])
-    write(tree / "owned/subagents/agent-x.jsonl", [assistant(text="THIRD")])
+    write(tree / "owned/subagents/agent-x.jsonl", [assistant("sub", text="THIRD")])
     write(tree / "shared.jsonl", [assistant(text="THIRD")])
     report = run(tree, capsys, "keys", "--arm", "A=" + f["a"] + "," + f["sessions"],
                  "--arm", "B=" + f["b"], "--weights", f["fixed"], "--landed", f["landed"])["result"]
@@ -204,3 +204,35 @@ def test_last_record_controls_day_and_usage(tree, capsys):
     result = run(tree, capsys, "daily")["result"]
     assert list(result) == ["2026-11-06"]
     assert result["2026-11-06"]["weighted"] == 100
+
+
+@pytest.mark.parametrize("location", ["parent", "subagent"])
+def test_session_mirrors_last_record_and_sidechain(tree, capsys, location):
+    first = assistant(output=1, timestamp="2026-11-05T23:59:59Z")
+    last = assistant(output=40)
+    last["isSidechain"] = location == "parent"
+    write(tree / "s.jsonl", [first, last] if location == "parent" else [first])
+    if location == "subagent":
+        write(tree / "s/subagents/agent-a.jsonl", [last])
+    # The same message id in a different session remains a separate request.
+    write(tree / "other.jsonl", [assistant(output=10)])
+    report = run(tree, capsys, "roles")["result"]["unnamed"]
+    assert report["requests"] == 2
+    assert report["weighted"] == 170
+    assert report["subagent_share"] == 100 / 170
+    days = run(tree, capsys, "daily")["result"]
+    assert list(days) == ["2026-11-06"]
+
+
+@pytest.mark.parametrize("failure", ["no-turns", "zero-accepted"])
+def test_arm_no_result_preserves_other_arm(tree, tmp_path, capsys, failure):
+    f = inputs(tmp_path)
+    write(tree / "s.jsonl", [assistant(text="FLEET-LAUNCH")])
+    if failure == "zero-accepted":
+        Path(f["landed"]).write_text("FLEET-LAUNCH\n")
+        write(tree / "other.jsonl", [assistant(text="THIRD")])
+    report = run(tree, capsys, "keys", "--arm", "A=" + f["a"],
+                 "--arm", "B=" + f["b"], "--landed", f["landed"])["result"]
+    assert report["A"]["status"] == "ok"
+    assert report["A"]["actual"] == report["A"]["tokens_per_accepted_actual"] == 70
+    assert report["B"] == dict(status="no result", reason="zero accepted or attributed turns")
