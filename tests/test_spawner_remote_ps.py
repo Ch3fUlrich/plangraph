@@ -238,13 +238,20 @@ def test_worker_count_is_capped(monkeypatch):
     assert remote_ps.list_runs([], transport=lambda *a: '{"runs": []}') == []
 
 
-def test_empty_xdg_uses_default(tmp_path, monkeypatch):
+@pytest.mark.parametrize('xdg', ['', None])
+def test_default_config_location(tmp_path, monkeypatch, xdg):
     from pathlib import Path
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     monkeypatch.chdir(tmp_path)
-    config(tmp_path, monkeypatch, [dict(name='node-a', target='target')])
-    monkeypatch.setenv('XDG_CONFIG_HOME', '')
-    assert remote_ps.configured_hosts() == []
+    hosts = [dict(name='node-a', target='target')]
+    default = tmp_path / '.config'
+    default.mkdir()
+    config(default, monkeypatch, hosts)
+    if xdg is None:
+        monkeypatch.delenv('XDG_CONFIG_HOME')
+    else:
+        monkeypatch.setenv('XDG_CONFIG_HOME', xdg)
+    assert remote_ps.configured_hosts() == hosts
 
 
 def test_collect_local_protocol(monkeypatch):
