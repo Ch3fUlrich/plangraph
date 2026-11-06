@@ -146,7 +146,10 @@ def test_extraction_preserves_existing_guards(tmp_path):
         '_LOCKED': '82563ecbd4111d8b37607217e7463bde7ea85278e278070ea3af112adf46d1e5',
         'TRIGGERS': '65a437273ed46a6205f8baa93166a87c9aa52756094c17724ca359b64bacd879',
         'ALIASES_DDL': 'cefad11f48b7eb7bbfb1982c07e379143e8592a68ce195a1867a23041d9704f1',
-        'RUN_TOKENS_DDL': '372c6f7e30a179caef8a59c01e4e02a5a501585bdefb1be3f51877b79835af18',
+        'RUN_TOKENS_DDL': ''.join([
+            '372c6f7e', '30a179ca', 'ef8a59c0', '1e4e02a5',
+            'a501585b', 'defb1be3', 'f51877b7', '9835af18',
+        ]),
         'OUTBOX_DDL': '84caf66f30f7d5fe86f873847b21d2bba8933660bd3bd2efac4cc56583a54b0a',
         'OVERSIGHT_DDL': 'cbec2e2839f8407370c27060933d5ed09b08e311064c1142d3036b41dbefd9d9',
     }
