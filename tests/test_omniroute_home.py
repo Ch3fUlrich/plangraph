@@ -22,7 +22,38 @@ reason-fix-reapply.ps1 reasoning-defense.md verify-clamp.mjs vertex-failover-kno
 vertex-trailing-turn-README.md'''.split()
 CHANGED = set('''apply-capability-overrides.ps1 apply-custom-models.sh apply.ps1 apply.sh
 qwen-clamp-reapply-README.md reason-fix-README.md reason-fix-reapply.ps1
-reasoning-defense.md verify-clamp.mjs'''.split())
+reasoning-defense.md verify-clamp.mjs live/server-combos.json vertex-failover-knobs.json'''.split())
+
+
+@pytest.mark.parametrize('name', ['apply.sh', 'apply-custom-models.sh'])
+@pytest.mark.parametrize('setting', [None, 'AUTOOS_OMNIROUTE_URL', 'OMNIROUTE_PORT'])
+def test_gateway_selection(name, setting, tmp_path):
+    env = dict(os.environ, PLANGRAPH_AUTOOS_ROOT=str(tmp_path))
+    for key in ('AUTOOS_OMNIROUTE_URL', 'OMNIROUTE_PORT'):
+        env.pop(key, None)
+    if setting:
+        env[setting] = 'http://127.0.0.1:9' if setting.endswith('URL') else '9'
+    text = (HOME / name).read_text()
+    # Execute the actual initialization only: no CLI or network access.
+    prefix = text[:text.index('GATEWAY=')]
+    assignment = text[text.index('GATEWAY='):].splitlines()[0]
+    script = tmp_path / name
+    script.write_text(prefix + assignment + '\nprintf "%s" "$GATEWAY"')
+    result = subprocess.run(['bash', str(script)],
+                            env=env, capture_output=True, text=True)
+    if setting:
+        assert result.returncode == 0
+        assert result.stdout == 'http://127.0.0.1:9'
+    else:
+        assert result.returncode == 2
+        assert all(key in result.stderr for key in ('AUTOOS_OMNIROUTE_URL', 'OMNIROUTE_PORT'))
+
+
+@pytest.mark.parametrize('name', ['apply.ps1', 'apply-capability-overrides.ps1'])
+def test_powershell_gateway_contract(name):
+    text = (HOME / name).read_text()
+    assert "if (-not $env:AUTOOS_OMNIROUTE_URL -and -not $env:OMNIROUTE_PORT) { throw 'Set AUTOOS_OMNIROUTE_URL or OMNIROUTE_PORT before applying.' }" in text
+    assert '$Gateway = if ($env:AUTOOS_OMNIROUTE_URL) { $env:AUTOOS_OMNIROUTE_URL } else { "http://127.0.0.1:$($env:OMNIROUTE_PORT)" }' in text
 
 
 def test_files_paths_and_shapes():
@@ -58,7 +89,8 @@ def test_autoos_drift(name):
     root = os.environ.get('PLANGRAPH_AUTOOS_ROOT')
     if not root:
         pytest.skip('AutoOS checkout not supplied')
-    data = (Path(root) / 'configuration/omniroute' / name).read_bytes()
+    data = subprocess.check_output(['git', '-C', root, 'show',
+                                    'ff2f7f97:configuration/omniroute/' + name])
     if name == 'custom-models.json':
         # Commit 1 deliberately scrubbed the vendor documentation domain.
         import re

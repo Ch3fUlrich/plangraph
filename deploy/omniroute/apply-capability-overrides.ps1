@@ -13,7 +13,7 @@
   so it never conflicts with work another lane is doing in those shared scripts.
 
 .PARAMETER Gateway
-  Base URL of the local gateway. Default http://127.0.0.1:20128.
+  Uses AUTOOS_OMNIROUTE_URL or loopback with OMNIROUTE_PORT; no default port.
 
 .PARAMETER DryRun
   Print what would be applied and exit without writing.
@@ -35,7 +35,6 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Gateway = 'http://127.0.0.1:20128',
     [switch]$DryRun,
     [string]$Go = '',
     [string]$GoSha = '',
@@ -44,6 +43,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if (-not $env:AUTOOS_OMNIROUTE_URL -and -not $env:OMNIROUTE_PORT) { throw 'Set AUTOOS_OMNIROUTE_URL or OMNIROUTE_PORT before applying.' }
+$Gateway = if ($env:AUTOOS_OMNIROUTE_URL) { $env:AUTOOS_OMNIROUTE_URL } else { "http://127.0.0.1:$($env:OMNIROUTE_PORT)" }
 
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $env:PLANGRAPH_AUTOOS_ROOT) { throw 'Set PLANGRAPH_AUTOOS_ROOT to the read-only AutoOS checkout' }

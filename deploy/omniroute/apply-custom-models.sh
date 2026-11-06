@@ -20,7 +20,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${PLANGRAPH_AUTOOS_ROOT:?set PLANGRAPH_AUTOOS_ROOT to the read-only AutoOS checkout}" && pwd)"
-GATEWAY="${AUTOOS_OMNIROUTE_URL:-http://127.0.0.1:20128}"
+if [[ -z "${AUTOOS_OMNIROUTE_URL:-}${OMNIROUTE_PORT:-}" ]]; then
+    echo 'Set AUTOOS_OMNIROUTE_URL or OMNIROUTE_PORT before applying.' >&2; exit 2
+fi
+GATEWAY="${AUTOOS_OMNIROUTE_URL:-http://127.0.0.1:${OMNIROUTE_PORT:-}}"
 MODELS_FILE="${AUTOOS_CUSTOM_MODELS_FILE:-$HERE/custom-models.json}"
 DRY=0
 GO_REF=""

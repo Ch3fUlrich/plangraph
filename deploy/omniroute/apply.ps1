@@ -114,8 +114,9 @@ if (-not $DryRun) {
 Import-Module (Join-Path $Root 'lib\windows\AutoOS.Install.psm1') -DisableNameChecking
 # AUTOOS_OMNIROUTE_URL points the run (and the CLI) at another gateway; the
 # tests aim it at a closed port so a dry run never reads the live one.
-$Gateway   = if ($env:AUTOOS_OMNIROUTE_URL) { $env:AUTOOS_OMNIROUTE_URL } else { 'http://127.0.0.1:20128' }
-if ($env:AUTOOS_OMNIROUTE_URL) { $env:OMNIROUTE_BASE_URL = $Gateway }
+if (-not $env:AUTOOS_OMNIROUTE_URL -and -not $env:OMNIROUTE_PORT) { throw 'Set AUTOOS_OMNIROUTE_URL or OMNIROUTE_PORT before applying.' }
+$Gateway = if ($env:AUTOOS_OMNIROUTE_URL) { $env:AUTOOS_OMNIROUTE_URL } else { "http://127.0.0.1:$($env:OMNIROUTE_PORT)" }
+$env:OMNIROUTE_BASE_URL = $Gateway
 $KeysFile  = if ($env:AUTOOS_KEYS_FILE) { $env:AUTOOS_KEYS_FILE } else { Join-Path $Root 'configuration\api-keys.yml' }
 $CombosFile = Join-Path $Here 'combos.json'
 if ($DryRun) { Write-Host 'This is a dry run - nothing is registered, created or started.' }
@@ -157,7 +158,7 @@ function Test-Gateway {
 }
 if (-not (Test-Gateway)) {
     if ($DryRun) {
-        Write-Host 'Gateway is down; dry run continues with the static plan (would start it with: omniroute --no-open --port 20128).'
+        Write-Host 'Gateway is down; dry run continues with the static plan. Set OMNIROUTE_PORT to start a local gateway.'
     } else {
         # Sane skip-on-repeated-429 policy (operator 2026-10-01): the gateway reads
         # these from its own process env at startup (open-sse/services/rotationConfig.ts:84-110;
@@ -205,7 +206,8 @@ if (-not (Test-Gateway)) {
             Write-Host "Could not find omniroute.cmd (the npm shim). Run: .\setup.ps1 -Only omniroute -Yes"
             exit 1
         }
-        Start-Process -FilePath $omnirouteCmd -ArgumentList '--no-open', '--port', '20128' -WindowStyle Hidden
+        if (-not $env:OMNIROUTE_PORT) { throw 'Set OMNIROUTE_PORT to start locally, or AUTOOS_OMNIROUTE_URL to a running gateway' }
+        Start-Process -FilePath $omnirouteCmd -ArgumentList '--no-open', '--port', $env:OMNIROUTE_PORT -WindowStyle Hidden
         $tries = 0
         while ((-not (Test-Gateway)) -and ($tries -lt 24)) { Start-Sleep 5; $tries++ }
         if (-not (Test-Gateway)) { Write-Host 'Gateway did not start - run: omniroute doctor'; exit 1 }

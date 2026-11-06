@@ -1,0 +1,1 @@
+- **PG-OMNIROUTE-CONFIG-HOME (D-4351):** House the AutoOS OmniRoute setup, reusable combo set and safe API exporter under deploy/omniroute; require explicit gateway configuration and keep live authority in AutoOS.

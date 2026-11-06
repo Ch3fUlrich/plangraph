@@ -1787,12 +1787,6 @@ why = "Public model identifier or repository-relative source path or branch quot
 [[scrub.allow_value]]
 path = "deploy/omniroute/README.md"
 rule = "high-entropy"
-value_sha256 = "64d68d63f5f98ad37ce0d2b04166417afba0f6c2156dcf687520ad08f5d9f220"
-why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
-
-[[scrub.allow_value]]
-path = "deploy/omniroute/README.md"
-rule = "high-entropy"
 value_sha256 = "c5da95d85182f9284c697832b69b6df133e980df49b69b654afda18c94f7ee85"
 why = "Public model identifier or repository-relative source path or branch quoted in the audit; not a credential or site value"
 

@@ -70,8 +70,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${PLANGRAPH_AUTOOS_ROOT:?set PLANGRAPH_AUTOOS_ROOT to the read-only AutoOS checkout}" && pwd)"
 # AUTOOS_OMNIROUTE_URL points the run (and the CLI) at another gateway; the
 # tests aim it at a closed port so a dry run never reads the live one.
-GATEWAY="${AUTOOS_OMNIROUTE_URL:-http://127.0.0.1:20128}"
-if [[ -n "${AUTOOS_OMNIROUTE_URL:-}" ]]; then export OMNIROUTE_BASE_URL="$GATEWAY"; fi
+if [[ -z "${AUTOOS_OMNIROUTE_URL:-}${OMNIROUTE_PORT:-}" ]]; then
+    echo 'Set AUTOOS_OMNIROUTE_URL or OMNIROUTE_PORT before applying.' >&2; exit 2
+fi
+GATEWAY="${AUTOOS_OMNIROUTE_URL:-http://127.0.0.1:${OMNIROUTE_PORT:-}}"
+export OMNIROUTE_BASE_URL="$GATEWAY"
 KEYS_FILE="${AUTOOS_KEYS_FILE:-$ROOT/configuration/api-keys.yml}"
 COMBOS_FILE="$HERE/combos.json"
 OVERRIDES_FILE="$HERE/context-overrides.json"
@@ -571,7 +574,7 @@ fi
 
 if ! gateway_up; then
     if [[ $DRY -eq 1 ]]; then
-        echo "Gateway is down; dry run continues with the static plan (would start it with: omniroute --no-open --port 20128)."
+        echo "Gateway is down; dry run continues with the static plan. Set OMNIROUTE_PORT to start a local gateway."
     elif [[ $IN_DOCKER -eq 1 ]]; then
         echo "Starting the gateway container…"
         bash "$AI_STACK" up omniroute
@@ -597,7 +600,8 @@ if ! gateway_up; then
         export OMNIROUTE_ROTATE_429_WINDOW_SECONDS="${OMNIROUTE_ROTATE_429_WINDOW_SECONDS:-120}"
         export OMNIROUTE_ROTATION_RATE_LIMIT_RESET_SECONDS="${OMNIROUTE_ROTATION_RATE_LIMIT_RESET_SECONDS:-300}"
         export OMNIROUTE_PROVIDER_BREAKER_API_KEY_COOLDOWN_MS="${OMNIROUTE_PROVIDER_BREAKER_API_KEY_COOLDOWN_MS:-1800000}"
-        nohup omniroute --no-open --port 20128 >/tmp/omniroute-apply.log 2>&1 &
+        : "${OMNIROUTE_PORT:?Set OMNIROUTE_PORT to start locally, or AUTOOS_OMNIROUTE_URL to a running gateway}"
+        nohup omniroute --no-open --port "$OMNIROUTE_PORT" >/tmp/omniroute-apply.log 2>&1 &
         for _ in $(seq 1 24); do gateway_up && break; sleep 5; done
         gateway_up || { echo "Gateway did not start — run: omniroute doctor"; exit 1; }
     fi
@@ -625,7 +629,7 @@ redact_secrets() {
 
 # print_cli_error <text> [secret...] - the failure's own words on the log, with
 # every secret stripped and the CLI's ANSI banner removed. Swallowing this is
-# what made the meta-api failure undiagnosable (routing-00 04:5xZ): the reason
+# what made an earlier provider failure undiagnosable: the reason
 # went to /dev/null and only "register it in the dashboard" came out.
 print_cli_error() {
     local text="$1"

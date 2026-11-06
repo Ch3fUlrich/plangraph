@@ -1,6 +1,6 @@
 {
   "$comment": "READ-ONLY snapshot of the SERVER OmniRoute combo store (source of truth for live, routing D-1621/D-1624). Not generated from the registry: combos.json is. Normalised: name -> ordered provider/model legs, ids/weights/timestamps dropped. The daily drift check compares live with THIS file; apply.sh must not change a combo whose live state differs from it without a --go naming it. Refresh only from a read-only export.",
-  "source": "prox-L1-main read-only export, Ch3fUlrich/Server@5a1d8690 t6-reports/omniroute/combos-server-20261017.json (sha256 e50e3c128af995b71cc7691c02c63751909f83496a337b5ee317716535c20252), storage.sqlite combos table opened mode=ro",
+  "source": "read-only export of 2026-10-17",
   "omniroute_version": "3.8.50",
   "image": "autoos/omniroute:3.8.50-autoos5",
   "exported": "2026-10-17",
