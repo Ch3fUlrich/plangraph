@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import shutil
+import sys
 
 import pytest
 
@@ -26,6 +27,7 @@ def env(tmp_path, monkeypatch):
             monkeypatch.delenv(key)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -43,7 +45,7 @@ def env(tmp_path, monkeypatch):
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     yield tmp_path
-    shutil.rmtree(tmp_path)
+    shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 def run(capsys, *args):
@@ -273,7 +275,7 @@ def test_empty_credentials_stop_checks(env, monkeypatch, capsys, credential):
     repo = env / 'repo'
     assert run(capsys, 'setup-repo', str(repo))[0] == 0
     marker = env / 'executed'
-    (repo / 'check.sh').write_text(f'#!/bin/sh\ntouch {marker}\n')
+    (repo / 'check.sh').write_text(f'#!/bin/sh\n: > "{marker}"\n')
     if credential == 'empty-file':
         token = env / 'token'
         token.write_text('')
@@ -300,7 +302,7 @@ def test_children_sanitized(env, monkeypatch, capsys):
     for name in ('helper', 'check.sh'):
         target = env / name if name == 'helper' else repo / name
         target.write_text('#!/bin/sh\n[ -d "$HOME" ] && [ -w "$HOME" ] || exit 1\n'
-                          'touch "$HOME/writable" || exit 1\n' +
+                          ': > "$HOME/writable" || exit 1\n' +
                           f'/usr/bin/env > {env / (name + ".env")}\n' +
                           ("echo 'helper 1.0'\n" if name == 'helper' else 'exit 0\n'))
     monkeypatch.setattr(pilot, 'persistent', lambda p: True)
@@ -322,19 +324,18 @@ def test_children_sanitized(env, monkeypatch, capsys):
 @pytest.mark.parametrize('helper', [False, True])
 def test_auth_real_home(env, monkeypatch, capsys, helper):
     home = Path(os.environ['HOME'])
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(home / '.gitconfig'))
     if helper:
         (home / '.gitconfig').write_text(
             '[credential "https://github.com"]\n\thelper = false\n')
     original = pilot.command
     observed = []
-
     def command(argv, *args, **kwargs):
         if argv[0] == 'git':
             result = original(['/usr/bin/env'], *args, **kwargs)
             values = dict(line.split('=', 1) for line in result.stdout.decode().splitlines())
             observed.append(values)
         return original(argv, *args, **kwargs)
-
     # Setup remains isolated; observe only the verification Git calls.
     repo = env / 'repo'
     assert run(capsys, 'setup-repo', str(repo))[0] == 0
@@ -347,8 +348,48 @@ def test_auth_real_home(env, monkeypatch, capsys, helper):
     assert len(observed) == 3
     for values in observed:
         assert values['HOME'] == str(home)
-        assert set(values) <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD'}
+        assert values['GIT_CONFIG_NOSYSTEM'] == '1'
+        assert values['GIT_CONFIG_GLOBAL'] == str(home / '.gitconfig')
+        assert set(values) <= {'PATH', 'LANG', 'HOME', 'TERM', 'PWD',
+                               'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL'}
 
+
+@pytest.mark.parametrize('source', ['global', 'system', 'count', 'xdg'])
+@pytest.mark.parametrize('setting', ['credential.helper', 'remote.origin.url'])
+def test_auth_config_sources(env, monkeypatch, capsys, source, setting):
+    repo = env / 'repo'
+    assert run(capsys, 'setup-repo', str(repo))[0] == 0
+    config = env / 'auth.config'
+    subprocess.run(['git', 'config', '--file', str(config), setting, 'false'], check=True)
+    if source == 'count':
+        for key, value in {'COUNT': '1', 'KEY_0': setting, 'VALUE_0': 'false'}.items():
+            monkeypatch.setenv('GIT_CONFIG_' + key, value)
+    elif source == 'xdg':
+        monkeypatch.delenv('GIT_CONFIG_GLOBAL')
+        xdg = env / 'xdg'
+        (xdg / 'git').mkdir(parents=True)
+        config.rename(xdg / 'git/config')
+        monkeypatch.setenv('XDG_CONFIG_HOME', str(xdg))
+    else:
+        monkeypatch.setenv('GIT_CONFIG_' + source.upper(), str(config))
+        if source == 'system':
+            monkeypatch.delenv('GIT_CONFIG_NOSYSTEM')
+    monkeypatch.setattr(pilot, 'persistent', lambda p: True)
+    code, output = run(capsys, 'verify', '--temporal-db', str(env / 'db'),
+                       '--jail-bin', os.environ['PG_JAIL_BIN'], '--repo', str(repo))
+    assert code == 2
+    assert 'REFUSE auth' in output
+
+@pytest.mark.parametrize('mutation', ['remove', 'chmod', 'symlink'])
+def test_child_home_cleanup(env, mutation):
+    target = env
+    (target / 'marker').touch()
+    code = 'import os; home = os.environ["HOME"]; '
+    code += ('os.chmod(home, 0o555); ' if mutation == 'chmod' else 'os.rmdir(home); ')
+    if mutation == 'symlink':
+        code += f'os.symlink({str(target)!r}, home); '
+    assert pilot.command([sys.executable, '-c', code + 'exit(7)']).returncode == 7
+    assert (target / 'marker').exists()
 
 @pytest.mark.parametrize('fs,expected', [('overlay', False), ('9p', False),
     ('fuse.sshfs', False), ('tmpfs', False), ('ramfs', False), ('nfs', False), ('ext4', True)])

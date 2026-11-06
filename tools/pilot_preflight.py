@@ -23,17 +23,25 @@ def emit(check, good, detail):
     return good
 
 
-def command(argv, cwd=None, timeout=10, home=None):
+def command(argv, cwd=None, timeout=10, home=None, extra_env=None):
     # Never forward subprocess output: child processes can echo sensitive values.
     private_home = tempfile.mkdtemp(prefix="pilot-home-") if home is None else None
     try:
         return subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout,
                               check=False, env={"PATH": os.environ.get("PATH", os.defpath),
                                                 "LANG": "C.UTF-8", "HOME": private_home if home is None else home,
-                                                "TERM": "dumb"})
+                                                "TERM": "dumb", **(extra_env or {})})
     finally:
         if private_home is not None:
-            shutil.rmtree(private_home)
+            # The child may remove, chmod or replace HOME; never follow symlinks
+            # or let cleanup errors mask its result (including a timeout).
+            if os.path.islink(private_home):
+                try:
+                    os.unlink(private_home)
+                except OSError:
+                    pass
+            else:
+                shutil.rmtree(private_home, ignore_errors=True)
 
 
 def pins(value):
@@ -191,12 +199,16 @@ def verify(args):
         card_keys(Path(allow).read_text(encoding="utf-8"))
         repo = Path(args.repo).resolve()
         home = os.environ.get("HOME", str(Path.home()))
-        top = command(["git", "rev-parse", "--show-toplevel"], repo, home=home)
+        git_env = {key: value for key, value in os.environ.items()
+                   if key in {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
+                              "GIT_CONFIG_COUNT", "XDG_CONFIG_HOME"}
+                   or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+        top = command(["git", "rev-parse", "--show-toplevel"], repo, home=home, extra_env=git_env)
         if top.returncode or Path(os.fsdecode(top.stdout).strip()).resolve() != repo:
             return False
         helper = command(["git", "config", "--get-regexp", r"^credential(\..*)?\.helper$"],
-                         repo, home=home)
-        remotes = command(["git", "remote"], repo, home=home)
+                         repo, home=home, extra_env=git_env)
+        remotes = command(["git", "remote"], repo, home=home, extra_env=git_env)
         return helper.returncode == 1 and remotes.returncode == 0 and not remotes.stdout.strip()
 
     check("auth", auth, "token mode checked; no credential helper or remote")
