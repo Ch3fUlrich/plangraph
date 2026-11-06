@@ -180,6 +180,15 @@ def test_fixed_implement_sol_across_tiers():
         assert [leg.id for leg in fallback.legs] == expected[1:]
 
 
+def test_implement_lead_independent_of_writer_order(monkeypatch):
+    from plangraph.planner import legs
+    assert legs.WRITER_ORDER[0] == legs.LEAD_WRITER == "cx-gpt-6.1-sol"
+    monkeypatch.setattr(legs, "WRITER_ORDER", ("openrouter-free", *legs.WRITER_ORDER))
+    plan = plan_spawn(CARD, role="implement",
+                      leg_reader=lambda *a, **k: {"state": "ok", "evidence": None})
+    assert plan.first_leg.id == legs.LEAD_WRITER
+
+
 def test_writer_order_d2683_implement_first_seven():
     # D-3745: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
     c = {"estimate_tokens": 20000, "risk_tags": []}

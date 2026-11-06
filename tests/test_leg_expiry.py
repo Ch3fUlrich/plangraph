@@ -57,11 +57,23 @@ def test_omniroute_expired_or_down_no_route_or_override(tmp_path, state):
 def local_state_definitions(source):
     """CI guard: reject local state fields/keywords/dict literals, not disabled policy.
 
-    Parse definitions rather than grepping compatibility code that accepts old rows.
+    Only the exact legacy-row comparison and removal may mention expiry.
     """
     forbidden = {"expires", "available", "availability", "active", "unavailable_until"}
     hits = []
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    compatibility = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Compare)
+                and ast.unparse(node) == "key != 'expires'"):
+            compatibility.update(node.comparators)
+        if (isinstance(node, ast.Call)
+                and ast.unparse(node) == "data.pop('expires', None)"):
+            compatibility.add(node.args[0])
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and node.value in forbidden and node not in compatibility):
+            hits.append(node.lineno)
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             if node.target.id in forbidden:
                 hits.append(node.lineno)
@@ -86,3 +98,22 @@ def test_local_state_guard_red_case(literal):
     assert local_state_definitions(f"row = {{{key!r}: {value}}}")
     assert local_state_definitions(f"class Leg:\n    {key}: str = {value}")
     assert not local_state_definitions("Leg('retained', disabled='policy')")
+
+
+@pytest.mark.parametrize("source", ['_STR_FIELDS = ("id", "expires")',
+                                    'state_field = "available"'])
+def test_local_state_guard_string_constants(source):
+    assert local_state_definitions(source)
+
+
+def test_config_row_schema_has_no_local_state(tmp_path):
+    from plangraph.planner import legs
+    forbidden = {"expires", "available", "availability", "active", "unavailable_until"}
+    for fields in (legs._FIELDS, legs._REQUIRED, legs._STR_FIELDS):
+        assert not forbidden.intersection(fields)
+    raw = dataclasses.asdict(DEFAULT_LEGS[0])
+    for key in forbidden - {"expires"}:
+        path = tmp_path / "legs.json"
+        path.write_text(json.dumps({"legs": [dict(raw, **{key: "up"})]}))
+        with pytest.raises(ValueError, match="unknown field"):
+            load_legs(path)
