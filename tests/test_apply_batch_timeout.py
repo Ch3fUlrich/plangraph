@@ -178,6 +178,35 @@ def test_snapshot_budget(fake):
     assert fake[0].calls[-1][1] == 60
 
 
+@pytest.mark.parametrize("raw", [b"conflict", b'{"result":{}}'])
+def test_http_refusal_without_error_field(fake, raw):
+    def refuse(req, timeout):
+        if req.method == "GET":
+            return Reply(b'{"name":"router","role":"router"}')
+        raise urllib.error.HTTPError(req.full_url, 409, "", {}, io.BytesIO(raw))
+    fake[0].open = refuse
+    rc, out, err = invoke(fake)
+    assert rc != 0
+    assert "409" in out
+    assert "nothing applied (the whole batch was rolled back)" in out
+    assert "unknown outcome" not in out
+
+
+def test_per_op_apply_ops_without_applied(fake, monkeypatch):
+    original = fake[0].open
+    def without_count(req, timeout):
+        if req.method == "POST":
+            assert req.full_url.endswith("/apply_ops")
+            return Reply(b'{"result":{}}')
+        return original(req, timeout)
+    fake[0].open = without_count
+    monkeypatch.setattr(apply_batch, "build_request", lambda *a: ("apply_ops", {}))
+    rc, out, err = invoke(fake, ["--per-op"])
+    assert rc == 0
+    assert "ok 1 cancel demo:A" in out
+    assert "unknown outcome" not in out
+
+
 def test_per_op_partial_success(fake):
     import yaml
     doc = yaml.safe_load(fake[1].read_text())

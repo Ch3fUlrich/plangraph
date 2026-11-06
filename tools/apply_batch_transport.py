@@ -68,9 +68,6 @@ class Session:
         except urllib.error.HTTPError as exc:
             try:
                 raw = exc.read()
-                reply = json.loads(raw.decode("utf-8"))
-                if not isinstance(reply, dict) or not reply.get("error"):
-                    raise ValueError()
                 code, msg = self._parse_error(raw, exc.code)
             except Exception:
                 raise self.ApiError("unknown outcome" if body is not None else "unreachable", "unreadable refusal") from None

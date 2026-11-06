@@ -475,7 +475,7 @@ def main(argv=None, out=None, err=None):
                 line(f"operation {identity}; {submitted} (reconciliation fingerprint, not an idempotency key)")
                 reply = atomic.parsed(session.post(verb, body, timeout=session.mutation_timeout))
                 for text in atomic.warnings(reply): line(text)
-                if not reply or ("applied" in reply and reply["applied"] != 1) or (verb == "apply_ops" and reply.get("applied") != 1):
+                if reply is None or ("applied" in reply and reply["applied"] != 1):
                     raise ApiError("unknown outcome", "unreadable or short keeper reply "
                                             "(op state unknown)")
         except BatchError as exc:
