@@ -131,6 +131,10 @@ def _book_failure(service, chosen, line):
 
 
 def fallthrough_reason(service, chosen, job, record):
+    if record.get('reason') in (*TERMINAL_REASONS, 'kill_incomplete') or any(
+            e.get('event') in TERMINAL_REASONS
+            for e in (*record.get('events', ()), *getattr(job, 'events', ()))):
+        return None   # terminal verdicts must stop dispatch, not merely keep their name
     if record.get('reason') == 'model_refusal' or any(e.get('event') == 'model_refusal' for e in getattr(job, 'events', ())):
         return None   # safety stops are not provider limits or leg-health evidence
     streams = (job.stdout, job.stderr)
