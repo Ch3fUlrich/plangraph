@@ -46,7 +46,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason
-from .exit_outcome import fallthrough_reason, notify_leg_refused, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill
@@ -734,6 +734,8 @@ class SpawnerRunner:
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
                 job.status = "completed" if exit_code == 0 else "failed"
+            if job.status == 'failed' and is_opencode(job):
+                job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
             await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
 
@@ -913,8 +915,7 @@ def spawn_service(*args, **kwargs):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = (redact(first_reason(job.stderr))
-                            if first_reason(job.stderr) else f'harness exit code {job.exit_code}')
+                        attempt['skip_reason'] = redact(failure_reason(job))
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -1128,7 +1129,7 @@ def spawn_service(*args, **kwargs):
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(first_reason(job.stderr)) if first_reason(job.stderr) else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+                            reason = redact(failure_reason(job, stop))
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
@@ -1188,7 +1189,7 @@ def spawn_service(*args, **kwargs):
                     if record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
-                    terminal_reason(record)
+                    terminal_reason(record, job if record.get('job_id') else None)
                     release_attempts(self, record)
                     self._save(record)
 
