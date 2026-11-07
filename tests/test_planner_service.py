@@ -256,7 +256,7 @@ def test_pack_needs_a_window_class(w, repo):
     assert "FAILED x" in pack.text
 
 
-def test_route_for_card_excludes_qodercli(w):
+def test_route_for_card_prefers_qodercli(w):
     (key,) = seed(w, [("A", [])])
     put(w, key, estimate_tokens=40000, risk_tags=[])
     route = service.route_for_card(w.store, w.p("router"), key)
