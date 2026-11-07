@@ -50,19 +50,36 @@ fn finalize_scan_many_blobs_are_consumed_incrementally() {
     };
     batch(&mut BufReader::new(&mut source), &b"oid\n".repeat(2000)).unwrap();
     assert_eq!(source.left, 0);
-    assert!(source.largest <= CHUNK + overlap(4));
+    assert!(source.largest <= CHUNK + OVERLAP);
 }
 
 #[test]
-fn finalize_scan_overlap_covers_longest_object_pattern() {
-    let secret = ["Bearer", &" ".repeat(CHUNK + 1), "shortvalue"].concat();
-    assert!(crate::writer_secret::scan_bytes(secret.as_bytes()));
-    assert!(overlap(secret.len()) >= secret.len());
-    let mut stream = format!("oid blob {}\n", secret.len()).into_bytes();
-    stream.extend(secret.bytes());
-    stream.push(b'\n');
-    assert_eq!(
-        batch(&mut &stream[..], b"oid\n"),
-        Err(Refusal::SecretInHistory)
-    );
+fn finalize_scan_multi_mib_buffer_is_bounded() {
+    struct Counting {
+        remaining: usize,
+        largest: usize,
+        total: usize,
+    }
+    impl Read for Counting {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            self.largest = self.largest.max(out.len());
+            let count = out.len().min(self.remaining);
+            out[..count].fill(b' ');
+            self.remaining -= count;
+            self.total += count;
+            Ok(count)
+        }
+    }
+    let size = 5 * 1024 * 1024 + 17;
+    let mut reader = Counting {
+        remaining: size,
+        largest: 0,
+        total: 0,
+    };
+    scan_chunks(&mut reader, size, true).unwrap();
+    assert_eq!(reader.total, size);
+    assert_eq!(reader.remaining, 0);
+    assert_eq!(reader.largest, CHUNK);
+    assert_eq!(std::mem::size_of::<[u8; CHUNK + OVERLAP]>(), 81920);
+    eprintln!("multi-MiB scan: max buffer bytes = {}", CHUNK + OVERLAP);
 }

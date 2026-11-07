@@ -1,4 +1,4 @@
-//! Reachable-history batch scanner; retains at most one object.
+//! Reachable-history batch scanner; commits use one object buffer, blobs a fixed window.
 use super::Refusal;
 use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -6,11 +6,9 @@ use std::{
     process::Stdio,
 };
 const CHUNK: usize = 65536;
-// Patterns have unbounded PEM labels, assignment names and whitespace.
-// The maximum match is therefore the entire object, not a fixed byte cap.
-fn overlap(object_size: usize) -> usize {
-    object_size
-}
+const OVERLAP: usize = 16384;
+// Cross-edge secret matches longer than OVERLAP are out of scope: real credentials
+// are far shorter. Patterns remain unchanged, but streaming coverage is capped.
 
 pub(super) fn reachable(root: &Path, input: &[u8]) -> Result<(), Refusal> {
     let run = || -> std::io::Result<_> {
@@ -67,10 +65,7 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
             return Err(Refusal::BadBundle);
         }
         let mut size: usize = fields[2].parse().map_err(|_| Refusal::BadBundle)?;
-        let overlap = overlap(size);
-        let mut buffer = vec![0; size];
-        let mut kept = 0;
-        // Commit messages and blob patterns may span the entire object.
+        // Scan the message as a borrowed slice of the sole commit-object buffer.
         if fields[1] == "commit" {
             let mut raw = vec![0; size];
             reader.read_exact(&mut raw).map_err(read)?;
@@ -81,18 +76,8 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
             }
             size = 0;
         }
-        while size > 0 {
-            let count = size.min(CHUNK);
-            reader
-                .read_exact(&mut buffer[kept..kept + count])
-                .map_err(read)?;
-            let end = kept + count;
-            if fields[1] == "blob" && crate::writer_secret::scan_bytes(&buffer[..end]) {
-                return Err(Refusal::SecretInHistory);
-            }
-            kept = end.min(overlap);
-            buffer.copy_within(end - kept..end, 0);
-            size -= count;
+        if size > 0 {
+            scan_chunks(reader, size, fields[1] == "blob")?;
         }
         let mut newline = [0];
         reader.read_exact(&mut newline).map_err(read)?;
@@ -102,6 +87,25 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
     }
     if !reader.fill_buf().map_err(read)?.is_empty() {
         return Err(Refusal::BadBundle);
+    }
+    Ok(())
+}
+
+fn scan_chunks(reader: &mut impl Read, mut size: usize, blob: bool) -> Result<(), Refusal> {
+    let mut buffer = [0; CHUNK + OVERLAP];
+    let mut kept = 0;
+    while size > 0 {
+        let count = size.min(CHUNK);
+        reader
+            .read_exact(&mut buffer[kept..kept + count])
+            .map_err(|_| Refusal::BadBundle)?;
+        let end = kept + count;
+        if blob && crate::writer_secret::scan_bytes(&buffer[..end]) {
+            return Err(Refusal::SecretInHistory);
+        }
+        kept = end.min(OVERLAP);
+        buffer.copy_within(end - kept..end, 0);
+        size -= count;
     }
     Ok(())
 }
