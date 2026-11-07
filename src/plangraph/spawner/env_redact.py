@@ -119,9 +119,34 @@ def first_reason(text):
     return next((line.strip() for line in normalize(text).splitlines() if line.strip()), '')
 
 
+def opencode_limit(text):
+    """Decode only structured error events, never status mentions in prose."""
+    for line in normalize(text).splitlines():
+        try:
+            event = json.loads(line)
+            error = event.get('error')
+            if event.get('type') != 'error' or not isinstance(error, dict):
+                continue
+            status = error.get('status')
+            if type(status) is not int or status not in (429, 402):
+                continue
+            reason = 'usage_limit' if status == 429 else 'credit_limit'
+            result = f'HTTP {status}: {reason}'
+            delay = error.get('retryAfterMs')
+            if type(delay) in (int, float) and delay >= 0 and delay < float('inf'):
+                result += f' (reset after {delay}ms)'
+            return result
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return None
+
+
 def harness_limit_line(exit_code, stdout, stderr):
     if exit_code in (None, 0):
         return None
+    structured = opencode_limit(stderr) or opencode_limit(stdout)
+    if structured:
+        return structured
     busy = busy_refusal(stderr) or busy_refusal(stdout)
     if busy:
         return busy
@@ -156,6 +181,9 @@ def early_refusal(complete_text):
     quota marker: a start-anchored retry log ('Rate limit reached, retrying')
     or marker prose under an error shape never kills a healthy run (F1).
     """
+    structured = opencode_limit(complete_text)
+    if structured:
+        return structured
     busy = busy_refusal(complete_text)
     if busy:
         return busy
