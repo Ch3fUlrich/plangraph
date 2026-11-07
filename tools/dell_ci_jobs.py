@@ -10,10 +10,10 @@ def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command):
         argv += ["--ro-bind", path, path]
     argv += ["--ro-bind", toolchain, "/toolchain", "--ro-bind", cargo_bin, "/cargo-bin",
              "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
-             "--tmpfs", "/home", "--dir", "/home/ci",
+             "--tmpfs", "/home", "--dir", "/ci-home",
              "--bind", checkout, "/work", "--bind", scratch, "/scratch",
              "--chdir", "/work"]
-    env = {"HOME": "/home/ci", "PATH": "/scratch/bin:/toolchain/bin:/cargo-bin:/usr/bin:/bin",
+    env = {"HOME": "/ci-home", "PATH": "/scratch/bin:/toolchain/bin:/cargo-bin:/usr/bin:/bin",
            "CARGO_HOME": "/scratch/cargo", "CARGO_TARGET_DIR": "/scratch/target",
            "RUSTUP_HOME": "/scratch/rustup", "XDG_CACHE_HOME": "/scratch/cache",
            "PYTHONPATH": "/work/src", "CARGO_BUILD_JOBS": "4", "LANG": "C.UTF-8"}
