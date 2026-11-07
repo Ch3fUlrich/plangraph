@@ -130,16 +130,18 @@ fn git_with_env(
         command.current_dir(remote.root);
     }
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
+        if key.to_string_lossy().starts_with("GIT_") || key.to_string_lossy().starts_with("SSH_") {
             command.env_remove(key);
         }
     }
     command
-        .env_remove("SSH_ASKPASS")
-        .envs(env.iter().copied())
+        .envs(
+            env.iter()
+                .copied()
+                .filter(|(key, _)| !key.starts_with("GIT_") && !key.starts_with("SSH_")),
+        )
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_ALLOW_PROTOCOL", "file:https:ssh")
         .env("GIT_TERMINAL_PROMPT", "0");
     #[cfg(test)]

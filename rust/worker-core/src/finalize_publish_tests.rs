@@ -143,6 +143,7 @@ fn inherited_git_overrides_are_removed() {
         ("GIT_FOO", "untrusted"),
         ("GIT_ASKPASS", "/nonexistent"),
         ("SSH_ASKPASS", "/nonexistent"),
+        ("SSH_FOO", "untrusted"),
     ];
     // Re-execute only this test so injected parent variables cannot race other tests.
     const MARKER: &str = "PUBLISH_ENV_TEST_CHILD";
@@ -161,6 +162,9 @@ fn inherited_git_overrides_are_removed() {
             "{}",
             String::from_utf8_lossy(&out.stdout)
         );
+        let report = String::from_utf8(out.stdout).unwrap();
+        assert!(report.contains("running 1 test"), "{report}");
+        assert!(report.contains("test result: ok. 1 passed;"), "{report}");
         return;
     }
     let f = Fixture::new();
@@ -181,13 +185,39 @@ fn inherited_git_overrides_are_removed() {
     let out = git_with_env(
         &f.remote(),
         &["--test-env-probe"],
-        &[("GIT_FOO", "explicit")],
+        &[
+            ("GIT_DIR", "/nonexistent"),
+            ("GIT_SSH_COMMAND", "untrusted-command"),
+            ("SSH_ASKPASS", "/nonexistent"),
+            ("GIT_FOO", "explicit"),
+            ("SSH_FOO", "explicit"),
+            ("PUBLISH_SAFE_ENV", "explicit"),
+            ("GIT_TERMINAL_PROMPT", "1"),
+        ],
     )
     .unwrap();
-    assert!(String::from_utf8(out.stdout)
-        .unwrap()
+    assert!(out.status.success());
+    let child_env = String::from_utf8(out.stdout).unwrap();
+    for line in child_env.lines() {
+        let (key, _) = line.split_once('=').unwrap();
+        assert!(
+            !(key.starts_with("GIT_") || key.starts_with("SSH_"))
+                || matches!(
+                    key,
+                    "GIT_CONFIG_GLOBAL"
+                        | "GIT_CONFIG_NOSYSTEM"
+                        | "GIT_ALLOW_PROTOCOL"
+                        | "GIT_TERMINAL_PROMPT"
+                ),
+            "unexpected child environment key {key}; GIT_DIR, GIT_SSH_COMMAND, SSH_ASKPASS, GIT_FOO must be absent"
+        );
+    }
+    assert!(child_env
         .lines()
-        .any(|line| line == "GIT_FOO=explicit"));
+        .any(|line| line == "GIT_TERMINAL_PROMPT=0"));
+    assert!(child_env
+        .lines()
+        .any(|line| line == "PUBLISH_SAFE_ENV=explicit"));
     let out = git(&f.remote(), &["config", "--get", "alias.injected"]).unwrap();
     assert_eq!(out.status.code(), Some(1));
     let out = git(&f.remote(), &["rev-parse", "--git-dir"]).unwrap();
