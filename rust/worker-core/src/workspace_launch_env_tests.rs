@@ -4,6 +4,19 @@ use super::{
 };
 
 #[test]
+fn writer_mode_missing_worktrees_root_keeps_io_refusal() {
+    let mut f = Fixture::new();
+    let tree = f.writer();
+    let missing = f.tmp.path().join("missing/trees");
+    f.repo.worktrees_root = missing.to_str().unwrap().into();
+    assert!(matches!(
+        launch(&f, &mut Command::new("unused"), Some(&tree)),
+        Err(ResolveError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(!f.tmp.path().join("missing").exists());
+}
+
+#[test]
 #[cfg(unix)]
 fn none_mode_confines_inherited_dsn() {
     const TEST: &str = "workspace_launch::env_tests::none_mode_confines_inherited_dsn";
