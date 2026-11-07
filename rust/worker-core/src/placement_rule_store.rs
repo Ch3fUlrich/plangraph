@@ -269,6 +269,7 @@ impl RuleSource {
             match fs::read(path) {
                 Ok(bytes) => {
                     for (index, bytes) in bytes.split(|b| *b == b'\n').enumerate() {
+                        let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
                         let line = match std::str::from_utf8(bytes) {
                             Ok(line) => line,
                             Err(_) => {

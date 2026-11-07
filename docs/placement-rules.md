@@ -19,7 +19,7 @@ keeper revision and `keeper`/`lkg` source; report sources identify each winner.
 | Key | Default / seeds | Inclusive range |
 | --- | --- | --- |
 | `PG_RULE_HOST_MEMORY_FLOOR_MIB` | 6144; alarm metadata 3000 | 0–1048576 |
-| `PG_RULE_HOST_WORKER_CAP_COUNT` | 6; trusted host-class seeds 4 or 5 | 0–1024 |
+| `PG_RULE_HOST_WORKER_CAP_COUNT` | 6; trusted host-class seeds a host → 4, a host → 5 | 0–1024 |
 
 Values are unsigned decimal integers; schema allow-lists and ranges remain
 authoritative. Unknown `PG_RULE_` keys are refused with redacted diagnostics;
