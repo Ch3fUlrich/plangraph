@@ -8,6 +8,7 @@ pub(super) fn reason(error: &Error) -> Error {
     match error {
         Error::Refused(r) => Error::Refused(r.clone()),
         Error::Outage => Error::Outage,
+        Error::Unavailable => Error::Unavailable,
         Error::Conflict => Error::Conflict,
         Error::WritesDisabled => Error::WritesDisabled,
         Error::InvalidScope => Error::InvalidScope,
@@ -33,6 +34,7 @@ mod tests {
         for error in [
             Error::Refused(crate::Refusal::UnknownKind),
             Error::Outage,
+            Error::Unavailable,
             Error::Conflict,
             Error::Unknown,
             Error::Unverified,
