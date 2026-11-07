@@ -229,6 +229,14 @@ def fail_unchanged_writer(job, work_dir):
         job.events.append({'event': 'writer_change_unchecked',
                            'reason': 'writer commit lookup failed'})
         return
+    try:
+        status = subprocess.run(['git', '-C', str(work_dir), 'status', '--porcelain=v1', '-uall'],
+                                capture_output=True, timeout=30, check=True)
+        if status.stdout:
+            return  # Existing uncommitted work is not a no-change outcome.
+    except (OSError, subprocess.SubprocessError):
+        job.events.append({'event': 'writer_change_unchecked', 'reason': 'writer status lookup failed'})
+        return
     job.status = 'failed'
     job.exit_code = WRITER_NO_CHANGES_EXIT
     job.events.append({'event': 'writer_no_changes'})

@@ -278,6 +278,12 @@ def terminal_reason(record, job=None):
         stderr = record.get('stderr_tail', '')
         if opencode:
             stderr = without_progress(stderr)
+        stdout = getattr(job, 'stdout', '') if job is not None else (real[-1].get('stdout_tail', '') if real else record.get('stdout_tail', ''))
+        if (record.get('exit_code') == 1 and record.get('status') == 'failed'
+                and stdout.strip() and not stderr.strip() and not reason
+                and not stdout.lstrip().startswith(('{', '['))):
+            record['reason'] = 'exit1_after_stdout'
+            return
         record['reason'] = (reason or record.get('error')
                             or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
