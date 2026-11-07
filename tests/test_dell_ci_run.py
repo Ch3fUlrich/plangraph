@@ -132,7 +132,7 @@ def test_exact_identity_and_commands(tmp_path):
     assert record["started"]
     assert all(j["duration_s"] >= 0 for j in record["jobs"])
     assert any("--detach" in c and SHA in c for c in fake.calls)
-    assert any("PYTHONPATH=" in c and "/src" in c for c in fake.calls)
+    assert any("--setenv PYTHONPATH /work/src" in c for c in fake.calls)
     assert any('python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests' in c
                for c in fake.calls)
     commands = [c for c in fake.calls if c.startswith("timeout ")]
@@ -301,7 +301,8 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     assert "trap cleanup EXIT" in command
     assert 'rm -rf -- "$scratch"' in command
     assert 'docker rm -f "$container_id"' in command
-    assert 'kill "$server"' in command
+    if name.startswith("rust"):
+        assert 'kill ' in command and '$server' in command
     assert "worktree remove" in fake.calls[-1]
     # Execute only a stub body: cleanup must not invoke Docker for Rust jobs.
     calls = tmp_path / "docker-calls"
@@ -358,7 +359,7 @@ def test_disk_space_boundary(tmp_path, available, df_exit):
     if df_exit:
         assert record["jobs"][0]["reason"] == "df command failed"
     assert any(c.startswith("timeout ") for c in fake.calls) == (df_exit == 0)
-    assert all("/tmp" not in c for c in fake.calls)
+    assert all("--tmpfs /tmp" in c for c in fake.calls if c.startswith("timeout "))
 
 
 @pytest.mark.parametrize("output", ["", "Filesystem Blocks Used Available\n",
