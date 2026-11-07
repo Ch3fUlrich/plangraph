@@ -68,7 +68,8 @@ class Registry:
         lookup = dict(self.peers)
         local = status.get('Self') if isinstance(status, dict) else None
         if isinstance(status, dict) and 'Self' in status and not (
-                isinstance(local, dict) and isinstance(local.get('PublicKey'), str)):
+                isinstance(local, dict) and isinstance(local.get('PublicKey'), str)
+                and local['PublicKey']):
             # Malformed Self: the local key is unknown, so a Peer could pose as
             # the local node. Fail closed: resolve nothing this round.
             lookup, local = {}, None

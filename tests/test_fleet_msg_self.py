@@ -60,7 +60,8 @@ def test_self_overrides_stale_peer():
     assert registry.resolve("coding-vm") == "http://127.0.0.1:8765"
 
 
-@pytest.mark.parametrize("local", [None, [], {}, {"PublicKey": 1}])
+@pytest.mark.parametrize("local", [None, [], {}, {"PublicKey": 1},
+                                  {"PublicKey": ""}])
 def test_malformed_self_refuses_peer_twin(local):
     registry = _self_registry()
     status = {"Self": local, "Peer": {"node-self": {
