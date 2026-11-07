@@ -172,7 +172,7 @@ data-format problem above. Two traps:
 > `onboarding`, `write_memory`, `read_memory`, `list_memories`, `edit_memory`, `rename_memory` and
 > `delete_memory` are in `excluded_tools` of the **global** `~/.serena/serena_config.yml`, beside the
 > file tools the host already provides. `replace_in_files` (1.7's multi-file text replace) is excluded too, for the same reason.
-> That file is host-side; the containerised server on `:9121` gets its own `/root/.serena` volume and
+> That file is host-side; the containerised server on `:${SERVICE_PORT}` gets its own `/root/.serena` volume and
 > never reads it, so it is started with a read-only **context** file instead —
 > `infra/mcp-servers/config/serena-context-no-memory.yml` via `--context <path>`. Two things do *not*
 > work there: `--mode no-memories`, because `--mode` activates a mode *dynamically* and a dynamic mode's
@@ -181,7 +181,7 @@ data-format problem above. Two traps:
 > registers a project. Two homes for the list (host config + container context), no `project.yml` needs it.
 > Verified by starting `serena-agent==1.7.0 start-mcp-server --context claude-code` over stdio: 15
 > tools, with no memory or onboarding tool and `find_symbol` present; the container by
-> `python3 tools/check-serena-tools.py --url http://127.0.0.1:9121/sse` (a manual/L1 run after a recreate,
+> `python3 tools/check-serena-tools.py --url http://127.0.0.1:${SERVICE_PORT}/sse` (a manual/L1 run after a recreate,
 > never a CI test). An invalid name in
 > `excluded_tools` can stop Serena starting and take **all** symbol tools down, so re-run that
 > check after every Serena upgrade.

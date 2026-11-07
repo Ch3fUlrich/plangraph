@@ -63,7 +63,7 @@ item key in `plan`/`ok` lines. `--token-file` is required and never printed.
 ## Usage
 
 ```
-python3 tools/apply_batch.py BATCH.yaml --url http://127.0.0.1:8787 \
+python3 tools/apply_batch.py BATCH.yaml --url http://127.0.0.1:${KEEPER_PORT} \
     --token-file PATH [--dry-run] [--preview] [--from N] [--per-op] [--allow-no-whoami]
 ```
 

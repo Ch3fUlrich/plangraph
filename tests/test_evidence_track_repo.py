@@ -1,7 +1,7 @@
 """Per-track fallback evidence repo (plangraph:KEEPER-EVIDENCE-TRACK-REPO).
 
 A phase-0 RIN item is project ``plangraph`` / track ``ROUTING`` while its commit
-lands in the plangraph-data repo: a keeper.json ``repos``/``ci`` entry keyed
+lands in the data repo: a keeper.json ``repos``/``ci`` entry keyed
 ``<project>/<track>`` must act as a FALLBACK repo for exactly that project+track
 and for no other item.  The fakes in ``evidence_fakes`` are extended (never
 edited) with per-key repo paths, commit presence, target refs and CI modes, so

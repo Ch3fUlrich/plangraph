@@ -2394,7 +2394,7 @@ def test_rotating_finding_ids_keep_one_open_alarm(w, monkeypatch):
     """glm MEDIUM: one open ``oversight_denied`` alarm PER PRINCIPAL.
 
     The key used to be the op-supplied finding, so rotating finding ids minted
-    one open row each (unbounded open alarms for routing-00) while the contract
+    one open row each (unbounded open alarms for the router) while the contract
     promises one open row; the finding still rides in the detail.
     """
     _, principal = live(w, monkeypatch)

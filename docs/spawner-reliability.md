@@ -61,8 +61,8 @@ The gate-known override denominator and unknown-gate count are separate metrics;
 missing gates are never inferred as skips.
 Recovery metrics retain full corrected history, and leg metadata is chronological.
 
-The immutable operator baseline lives in private plangraph-data at
-`research/2026-11-02-legs`. Before RL14 on, compare the pinned window
+The immutable operator baseline lives in a dated research directory in the private data repo.
+Before RL14 on, compare the pinned window
 2026-10-30 10:30Z through 2026-11-02 10:30Z: 641 runs, 155 run-hours,
 77.3 unusable hours, 71 hangs, 43.8 hang hours, and every other stored metric.
 Require relative error at most 5% for every nonzero metric and exact zero

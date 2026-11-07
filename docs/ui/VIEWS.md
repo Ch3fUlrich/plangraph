@@ -1,6 +1,6 @@
 # plangraph UI: view spec
 
-Status: draft 2026-10-17 (plangraph-L1-plan2, operator order relayed by routing). Design and items:
+Status: draft 2026-10-17 (the operator, operator order relayed by routing). Design and items:
 `docs/plans/ui/2026-10-17-ui-plan.md`.
 
 This file says what each view must show and do. It does not depend on the framework: the static page
