@@ -14,6 +14,23 @@ SPEC.loader.exec_module(ci)
 SHA = "ab" * 20
 
 
+@pytest.mark.parametrize("content,expected", [
+    ("unrelated", ""), ("keeper_util sqlite3", ""),
+    ("keeper_util", "tests/test_sample.py"),
+])
+def test_postgres_optional_files(tmp_path, content, expected):
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_sample.py").write_text(content)
+    body = ci.service_script.__globals__["POSTGRES"]
+    selection = next(line for line in body.splitlines() if line.startswith("FILES="))
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", selection + '\n' + 'printf "%s" "$FILES"'],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
 class Fake:
     def __init__(self, head=SHA, dirty="", fail=False, timeout=False):
         self.head, self.dirty = head, dirty
