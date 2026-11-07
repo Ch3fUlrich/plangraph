@@ -37,12 +37,14 @@ def test_workflow_archive_runs_guarded_base_checker():
              for step in job.get("steps", [])
              if step.get("name") == "Workflow archive policy")
     run = step["run"]
-    assert 'git show "${BASE_SHA:?}":tests/test_workflow_archive.py' in run
+    assert 'git rev-parse --verify --end-of-options "${BASE_SHA:?}^{commit}"' in run
     commands = shlex.split(run)
     assert commands == [
-        "git", "show", "${BASE_SHA:?}:tests/test_workflow_archive.py",
+        "b=$(git", "rev-parse", "--verify", "--end-of-options",
+        "${BASE_SHA:?}^{commit})", "&&",
+        "git", "show", "$b:tests/test_workflow_archive.py",
         ">", ".git/workflow_archive_base.py", "&&", "python",
-        ".git/workflow_archive_base.py", "$BASE_SHA",
+        ".git/workflow_archive_base.py", "$b",
     ]
     assert "tests/test_workflow_archive.py" not in commands
 
