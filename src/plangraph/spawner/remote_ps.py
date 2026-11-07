@@ -25,10 +25,7 @@ def query_host(host, timeout):
         command = (f"wsl -d {host['wsl_distro']} -- env PYTHONPATH={host['src']} "
                    'python3 -m plangraph.spawner.remote_ps')
     elif 'src' in host:
-        src = host['src'].replace('\\', '/')
-        command = ('python3 -c "import os,sys,runpy;'
-                   f"sys.path.insert(0,os.path.expanduser(r'{src}'));"
-                   "runpy.run_module('plangraph.spawner.remote_ps',run_name='__main__')\"")
+        command = f"PYTHONPATH={host['src']} {command}"
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
@@ -77,8 +74,7 @@ def configured_hosts():
                 or host['target'].startswith('-')
                 or ('src' in host and (
                     not isinstance(host['src'], str)
-                    or not re.fullmatch(r'(?:/|~/|[A-Za-z]:[/\\])[A-Za-z0-9_./\\-]*',
-                                        host['src'])))
+                    or not re.fullmatch(r'(?:/|~/)[A-Za-z0-9_./-]*', host['src'])))
                 or ('wsl_distro' in host and (
                     not isinstance(host['wsl_distro'], str)
                     or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*',

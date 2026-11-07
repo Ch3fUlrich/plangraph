@@ -47,7 +47,7 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('src,distro', [(s, None) for s in [None, '/opt/plangraph/src',
-    '~/code/plangraph/src', r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\']] +
+    '~/code/plangraph/src']] +
     [('/opt/plangraph/src', d) for d in ['Ubuntu-24.04', 'a_B.9-', '.distro', '_distro', '1']])
 def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
     original = subprocess.Popen
@@ -55,9 +55,7 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
     command = 'python3 -m plangraph.spawner.remote_ps'
     if src is not None:
         host['src'] = src
-        command = ('python3 -c "import os,sys,runpy;'
-                   f"sys.path.insert(0,os.path.expanduser(r'{src.replace(chr(92), '/')}'));"
-                    "runpy.run_module('plangraph.spawner.remote_ps',run_name='__main__')\"")
+        command = f'PYTHONPATH={src} {command}'
     if distro is not None:
         host['wsl_distro'] = distro
         command = f'wsl -d {distro} -- env PYTHONPATH={src} python3 -m plangraph.spawner.remote_ps'
@@ -75,10 +73,7 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
 @pytest.mark.parametrize('wsl', [False, True])
 @pytest.mark.parametrize('src', ['/opt/source tree', '/opt/src;id', '$(id)',
                                    '-src', 'relative/src', '~user/src', '', None,
-                                    1, [], '/src\n', '/src$(id)', 'C:relative',
-                                    *['C:\\src' + c + 'bad' for c in
-                                      [' ', "'", '"', ';', '&', '|', '$', '%', '^', '<', '>', '`']],
-                                    '-C:\\src'])
+                                    1, [], '/src\n', '/src$(id)'])
 def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src, wsl):
     host = dict(name='node-a', target='target', src=src)
     if wsl:
@@ -91,7 +86,7 @@ def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src, wsl):
 
 
 @pytest.mark.parametrize('src,wsl', [(s, False) for s in ['/opt/plangraph/src',
-    '~/code/plangraph/src', r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\']] +
+    '~/code/plangraph/src']] +
     [('/opt/plangraph/src', True), ('/', True)])
 def test_config_accepts_src(tmp_path, monkeypatch, src, wsl):
     from unittest.mock import Mock, ANY
