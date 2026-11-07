@@ -1,0 +1,1 @@
+- **VERIFY-RED-PROOF:** Stub new modules and assignment names without executing head code, pin pytest nodeids to the repository root, classify head syntax errors as collection failures, scope exemptions to the head commit, and treat skipped/xfail parameters as neutral beside assertion proof.
