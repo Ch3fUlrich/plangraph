@@ -100,11 +100,11 @@ def test_legs_carry_tool_mode():
 def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
     db = _seeded()
     db.conn.execute("UPDATE catalog_models SET available=1, status='active' WHERE model_id=?",
-                    ("opencode-go/glm-5.2",))
+                    ("opencode-go/gemini-4-argon",))
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
     record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
-                                   model="opencode-go/glm-5.2",
+                                   model="opencode-go/gemini-4-argon",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
     assert record["chosen_leg"]["harness"] == "opencode"
@@ -129,8 +129,8 @@ def test_default_policy_file():
     policy = load_route_policy()
     assert {"kimi", "deepseek"} <= set(policy.banned_families)
     assert "glm" in policy.off_families
-    # D-3552: deepseek/glm lifted for review seats only; kimi never (D-3084).
-    assert policy.review_allowed_families == ("deepseek", "glm")
+    # D-4779/D-3605: only deepseek is lifted; GLM remains off.
+    assert policy.review_allowed_families == ("deepseek",)
     assert "kimi" not in policy.review_allowed_families
     assert not policy.allows("qodercli", "review")
     assert not policy.allows("qodercli", "implement")
@@ -163,8 +163,10 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
     assert "kimi" not in families
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     if role == "review":
-        # D-3552: deepseek/glm lift for review seats only; kimi never (D-3084).
-        assert {"deepseek", "glm"} <= families
+        # D-4779/D-3605: deepseek is lifted, GLM is disabled and off.
+        assert "deepseek" in families
+        assert "glm" not in families
+        assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
         return
     # implement/orchestrate stay banned/off (D-3552).
     assert not families & {"deepseek", "glm"}

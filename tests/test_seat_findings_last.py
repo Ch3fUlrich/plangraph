@@ -31,7 +31,7 @@ def test_disabled_models_still_validated():
 def test_explicit_client_mismatch_refused(tmp_path):
     runner = SpawnerRunner(default_cwd=str(tmp_path))
     with pytest.raises(SpawnRefused, match='client.*harness'):
-        asyncio.run(runner.spawn('review', model_or_combo='opencode-go-glm-5.2',
+        asyncio.run(runner.spawn('review', model_or_combo='opencode-go-gemini-4-argon',
                                  client='claude', dry_run=True))
 
 

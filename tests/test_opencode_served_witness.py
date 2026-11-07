@@ -12,10 +12,13 @@ from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
 from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
-REQUESTED = 'opencode-go/glm-5.2'; pytestmark = pytest.mark.usefixtures('go_credential')
+REQUESTED = 'opencode-go/gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def _store(home, sessions, assistants):
+    # Keep historical store fixtures while launching an enabled review model.
+    assistants = [(session, 'gemini-4-argon' if model == 'glm-5.2' else model)
+                  for session, model in assistants]
     """Build the store: sessions [(id, title)], assistant models [(session_id, model_id)]."""
     db = home / 'opencode' / 'opencode.db'
     db.parent.mkdir(parents=True, exist_ok=True)
