@@ -59,9 +59,9 @@ def main(argv=None, *, runner=subprocess.run):
         parser.error("invalid host")
     run_id = uuid.uuid4().hex
     # A random private directory avoids collisions with other runs and user trees.
-    directory = f"/tmp/dell-ci-{run_id}"
+    directory = f'"$HOME"/.cache/dell-ci/{run_id}'
     tree = directory + "/worktree"
-    qtree = shlex.quote(tree)
+    qtree = tree  # Keep $HOME expansion on the remote, including paths with spaces.
     record = {"sha": args.sha, "host": args.host,
               "started": datetime.now(timezone.utc).isoformat(),
               "jobs": [], "not_requested": [name for name in JOBS if name not in names],
@@ -79,7 +79,7 @@ def main(argv=None, *, runner=subprocess.run):
     try:
         checked("git fetch origin", "origin fetch failed")
         checked(f"git fetch origin {args.sha}", "requested SHA fetch failed")
-        checked(f"mkdir -m 700 {directory} && "
+        checked(f'mkdir -p "$HOME"/.cache/dell-ci && mkdir -m 700 {directory} && '
                 f"git worktree add --detach {qtree} {args.sha}",
                 "worktree setup failed")
         head = checked(f"git -C {qtree} rev-parse HEAD", "HEAD verification failed").strip()
@@ -96,9 +96,9 @@ def main(argv=None, *, runner=subprocess.run):
             start = time.monotonic()
             try:
                 if name.startswith("rust"):
-                    space = call("df -Pk /tmp")
-                    if space.returncode or int(space.stdout.splitlines()[-1].split()[3]) < 2097152:
-                        job["reason"] = "insufficient /tmp space: requires at least 2 GB free"
+                    space = call(f"df -Pk {directory}")
+                    if space.returncode or int(space.stdout.splitlines()[-1].split()[3]) < 20971520:
+                        job["reason"] = "insufficient ~/.cache/dell-ci space: requires at least 20 GB free"
                         job["result"] = "failure"
                         record["result"] = "failure"
                         continue
@@ -133,7 +133,7 @@ def main(argv=None, *, runner=subprocess.run):
     finally:
         try:
             result = call(f"git worktree remove --force {qtree}; "
-                          f"removed=$?; rmdir {directory}; "
+                           f"removed=$?; rm -rf -- {directory}; "
                           'cleaned=$?; test "$removed" -eq 0 && test "$cleaned" -eq 0')
             if result.returncode:
                 record["result"] = "failure"

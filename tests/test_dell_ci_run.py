@@ -28,8 +28,8 @@ class Fake:
             output = self.head + "\n"
         elif "status --porcelain" in command:
             output = self.dirty
-        elif command == "df -Pk /tmp":
-            output = 'Filesystem 1024-blocks Used Available Capacity Mounted\ntmp 9000000 0 9000000 0% /tmp\n'
+        elif command.startswith('df -Pk "$HOME"/.cache/dell-ci/'):
+            output = 'Filesystem 1024-blocks Used Available Capacity Mounted\ndisk 90000000 0 90000000 0% /home\n'
         else:
             output = ""
         if "scrub_check.py" in command:
@@ -126,10 +126,13 @@ def test_failed_worktree_add_still_removes_private_directory(tmp_path):
         command = argv[-1]
         if "worktree add" in command:
             directory.mkdir(mode=0o700)
+            (directory / "leftover-target").mkdir()
+            (directory / "leftover-target" / "artifact").write_text("partial build")
             return subprocess.CompletedProcess(argv, 1, "", "setup failed")
         if "worktree remove" in command:
             # Execute the real cleanup shell with a failing git removal.
-            command = re.sub(r"/tmp/dell-ci-[0-9a-f]+", str(directory), command)
+            command = re.sub(r'"\$HOME"/.cache/dell-ci/[0-9a-f]+',
+                             str(directory), command)
             return subprocess.run(["sh", "-c", "git() { return 1; }; " + command],
                                   capture_output=True, text=True, check=False)
         return result
@@ -216,16 +219,50 @@ def test_service_cleanup(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", ["rust", "rust-worker", "rust-spike"])
-def test_low_space_refuses(tmp_path, name):
+@pytest.mark.parametrize("available", [4194304, 20971519])
+def test_low_space_refuses(tmp_path, name, available):
     fake = Fake()
 
     def runner(argv, **kwargs):
         result = fake(argv, **kwargs)
-        if argv[-1] == "df -Pk /tmp":
-            result.stdout = 'Filesystem Blocks Used Available Capacity Mounted\ntmp 3000000 2000000 1000000 67% /tmp\n'
+        if argv[-1].startswith('df -Pk "$HOME"/.cache/dell-ci/'):
+            result.stdout = f'Filesystem Blocks Used Available Capacity Mounted\ndisk 90000000 0 {available} 67% /home\n'
         return result
 
     code, record = invoke(tmp_path, runner, jobs=name)
     assert code == 1
-    assert record["jobs"][0]["reason"] == "insufficient /tmp space: requires at least 2 GB free"
+    assert record["jobs"][0]["reason"] == "insufficient ~/.cache/dell-ci space: requires at least 20 GB free"
     assert not any(c.startswith("timeout ") for c in fake.calls)
+
+
+@pytest.mark.parametrize("available,df_exit", [(20971520, 0), (90000000, 1)])
+def test_disk_space_boundary(tmp_path, available, df_exit):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1].startswith("df -Pk "):
+            result.stdout = f'Filesystem Blocks Used Available Capacity Mounted\ndisk 90000000 0 {available} 0% /home\n'
+            result.returncode = df_exit
+        return result
+
+    code, _ = invoke(tmp_path, runner, jobs="rust")
+    assert code == df_exit
+    assert any(c.startswith("timeout ") for c in fake.calls) == (df_exit == 0)
+    assert all("/tmp" not in c for c in fake.calls)
+
+
+@pytest.mark.parametrize("exit_code", [0, 7, 143])
+def test_remote_home_expansion_and_scratch_cleanup(tmp_path, monkeypatch, exit_code):
+    home = tmp_path / "remote home"
+    root = home / ".cache/dell-ci/run"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setitem(ci.service_script.__globals__["RUST"], "rust-spike",
+                        'test "$CARGO_TARGET_DIR" = "$scratch/target"\n'
+                        'mkdir "$CARGO_TARGET_DIR"\n'
+                        f'exit {exit_code}')
+    script = ci.service_script("rust-spike", '"$HOME"/.cache/dell-ci/run/rust-spike')
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+    assert result.returncode == exit_code
+    assert not (root / "rust-spike").exists()
