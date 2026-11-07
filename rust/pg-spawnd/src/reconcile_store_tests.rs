@@ -141,13 +141,27 @@ fn reconcile_crashed_daemon_real_child_inventory_is_read_only() {
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
     let diagnostics = crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).unwrap();
-    assert_eq!(
-        diagnostics,
-        vec![crate::reconcile::WouldOrphan {
-            run_id: "run-test".into(),
-            attempt: 1,
-        }]
-    );
+    assert!(diagnostics.is_empty());
     assert_eq!(before, std::fs::read(record.path()).unwrap());
     assert!(!dir.0.join("reconcile.lock").exists());
 }
+
+#[test]
+fn reconcile_missing_identity_is_unknown_and_not_settled() {
+    let dir = StateDir::new();
+    let record = dir.record();
+    let before = std::fs::read(record.path()).unwrap();
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
+    assert!(
+        crate::reconcile::startup(&dir.0, Some("shadow"), &json!({}))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
+}
+
+#[path = "reconcile_store_cgroup_tests.rs"]
+mod cgroup_tests;

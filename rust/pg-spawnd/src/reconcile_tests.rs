@@ -24,9 +24,9 @@ fn reconcile_off_does_not_inventory_or_create_state() {
 }
 
 #[test]
-fn reconcile_on_refuses_until_authority_backend_available() {
+fn reconcile_on_missing_root_is_empty() {
     let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
-    assert!(startup(&root, Some("on"), &json!({})).is_err());
+    assert!(startup(&root, Some("on"), &json!({})).unwrap().is_empty());
     assert!(!root.exists());
 }
 
