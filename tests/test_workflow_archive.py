@@ -28,6 +28,25 @@ def validate_pins(fixtures):
                        for candidate in (fixtures / name, path.parent / name)), name
 
 
+def test_workflow_archive_runs_guarded_base_checker():
+    import shlex
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
+    step, = (step for job in workflow["jobs"].values()
+             for step in job.get("steps", [])
+             if step.get("name") == "Workflow archive policy")
+    run = step["run"]
+    assert 'git show "${BASE_SHA:?}":tests/test_workflow_archive.py' in run
+    commands = shlex.split(run)
+    assert commands == [
+        "git", "show", "${BASE_SHA:?}:tests/test_workflow_archive.py",
+        ">", ".git/workflow_archive_base.py", "&&", "python",
+        ".git/workflow_archive_base.py", "$BASE_SHA",
+    ]
+    assert "tests/test_workflow_archive.py" not in commands
+
+
 def test_released_archive_matches_manifest():
     validate_pins(ROOT / "rust/worker/tests/fixtures")
 
