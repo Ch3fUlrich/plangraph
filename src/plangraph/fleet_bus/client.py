@@ -59,6 +59,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import discovery
+from .client_endpoints import peer_endpoints as _peer_endpoints
 from .contract import BODY_MAX, TEXT_MAX, canonical_post, sign
 from .wake import SessionTarget, WakeHook, WakeState
 from .wake_http import SyntheticSink
@@ -216,30 +217,6 @@ def _health(endpoint, cfg, transport=None, expected=None):
     except (Refused, TransportError):
         return False
     return _identity_ok(data, expected or {})
-
-
-def _peer_endpoints(registry, status):
-    """Bind each provisioned host to the endpoint ``Registry.refresh`` probes.
-
-    The derivation mirrors ``discovery.Registry.refresh`` exactly so the probe
-    pool knows which registry identity every endpoint must claim.
-    """
-    peers = status.get("Peer", {}) if isinstance(status, dict) else {}
-    peers = peers if isinstance(peers, dict) else {}
-    expected = {}
-    for host in registry.hosts.values():
-        peer = peers.get(host.node_id)
-        if not isinstance(peer, dict) or peer.get("Online") is not True:
-            continue
-        name = peer.get("DNSName") or peer.get("HostName")
-        if not isinstance(name, str):
-            continue
-        name = name.rstrip(".")
-        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", name):
-            continue
-        endpoint = f"http://{name}:{registry.port}"
-        expected.setdefault(endpoint, {})[host.host] = host.key_id
-    return expected
 
 
 class _Prober:

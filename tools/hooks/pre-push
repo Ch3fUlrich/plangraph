@@ -3,16 +3,21 @@
 
 Runs the tools/split/scrub_check rules over the files changed in the commits being
 pushed (diff vs the remote sha; for a new branch, vs the merge-base with origin/main).
+When origin/main is available, identical upstream/base blobs and inherited lines
+are excluded; without it the stricter whole-file scan remains in effect.
 PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
 unreadable list refuses every push. Public remotes use the default (chmod 600);
 if absent, warn once. remote.<name>.plangraph-private=true skips private matching.
 Public patterns always run; PLANGRAPH_SCRUB_RULES adds rules. Any hit refuses (exit 1); output
 is file:line and rule id only -- a matched value is never printed, nor the words-file
-path.  Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
+path. Existing tags are immutable, even when the move would fast-forward.
+Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 """
 from __future__ import annotations
 
 import os
+import difflib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,15 +29,17 @@ CHANGELOG_DOCS = TOOLS / "check_changelog_docs.py"
 sys.path.insert(0, str(SPLIT))
 import scrub_check as sc  # noqa: E402
 
-ZERO = "0" * 40
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # Public allow-lists reviewed into the repo; loaded always so pushes of already
 # vetted files behave like the CI tree scan.  Never a place for private words.
 BASE_RULES = ("manifest.toml", "scrub_ci.toml")
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True)
+    return subprocess.run(["git", "--no-replace-objects", *args], capture_output=True)
+
+
+def is_zero(oid):
+    return bool(oid) and set(oid) == {"0"}
 
 
 def git_out(*args):
@@ -44,7 +51,7 @@ def base_commit(remote_sha, local_sha):
     """What the pushed commits add: the remote sha when the push fast-forwards,
     else a merge-base; a new branch diffs against origin/main's merge-base, and
     with no usable base at all, everything in the pushed commits is checked."""
-    if remote_sha != ZERO and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
+    if not is_zero(remote_sha) and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
         if git("merge-base", "--is-ancestor", remote_sha, local_sha).returncode == 0:
             return remote_sha
         mb = git_out("merge-base", remote_sha, local_sha)
@@ -55,16 +62,33 @@ def base_commit(remote_sha, local_sha):
             mb = git_out("merge-base", "origin/main", local_sha)
             if mb:
                 return mb
-    return EMPTY_TREE
+    return git_out("hash-object", "-t", "tree", "--stdin")
 
 
-def scan_blob(rel, local_sha, cfg, find_shapes, hits):
+def main_baselines(local_sha):
+    """Only locally known upstream history can exempt inherited content."""
+    main = git_out("rev-parse", "--verify", "-q", "refs/remotes/origin/main^{commit}")
+    if not main:
+        return []
+    base = git_out("merge-base", main, local_sha)
+    return list(dict.fromkeys(oid for oid in (main, base) if oid))
+
+
+def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
+    entry = git_out("ls-tree", local_sha, "--", rel)
+    baseline_data = []
+    for baseline in baselines:
+        old_entry = git_out("ls-tree", baseline, "--", rel)
+        if entry and entry == old_entry:
+            return
+        old = git("show", f"{baseline}:{rel}")
+        if old.returncode == 0:
+            baseline_data.append(old.stdout)
     skip = sc._allowed(rel, cfg)
     if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:
         pending = sc.pending_value_shas(rel, "private-word", [rel], cfg)
         if pending:
             hits.append(sc.Hit(rel, 0, "private-word", pending[0]))
-    entry = git_out("ls-tree", local_sha, "--", rel)
     if entry.startswith("120000 "):  # a link target is a path leak, never allow-listable
         hits.append(sc.Hit(rel, 0, "symlink"))
         return
@@ -74,7 +98,18 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits):
     data = r.stdout
     if b"\x00" in data[:8192]:
         return  # binary files are not scanned, same as scrub_check
-    for n, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+    lines = data.decode("utf-8", "replace").splitlines()
+    added = set(range(len(lines)))
+    # Compare final trees, not commit patches: merge resolutions must be scanned
+    # too. Matching blocks preserve duplicate-line counts, unlike a set of text.
+    for old in baseline_data:
+        matcher = difflib.SequenceMatcher(
+            None, old.decode("utf-8", "replace").splitlines(), lines, autojunk=False)
+        for block in matcher.get_matching_blocks():
+            added.difference_update(range(block.b, block.b + block.size))
+    for n, line in enumerate(lines, 1):
+        if n - 1 not in added:
+            continue
         for rule, vals in sorted(sc.scan_line_values(line, cfg, find_shapes).items()):
             if rule in skip:
                 continue
@@ -109,9 +144,38 @@ def changelog_docs_warn(base, head):
 
 
 def main():
+    refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
+    for rec in refs:
+        if (len(rec) != 4 or
+                not all(re.fullmatch(r"[0-9a-fA-F]+", rec[i]) for i in (1, 3)) or
+                len(rec[1]) != len(rec[3]) or
+                git("check-ref-format", rec[2]).returncode != 0):
+            print("pre-push: malformed push record: push refused", file=sys.stderr)
+            return 1
+        _, local_sha, remote_ref, remote_sha = rec
+        if is_zero(local_sha):
+            print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
+            return 1
+        if is_zero(remote_sha):
+            continue
+        if git("cat-file", "-e", remote_sha).returncode != 0:
+            print(f"pre-push: remote object unavailable for {remote_ref}: push refused",
+                  file=sys.stderr)
+            return 1
+        if local_sha == remote_sha:
+            continue
+        if remote_ref.startswith("refs/tags/"):
+            print(f"pre-push: refused update of existing tag {remote_ref}: tags are immutable",
+                  file=sys.stderr)
+            return 1
+        is_commit = git_out("cat-file", "-t", remote_sha) == "commit"
+        if (not is_commit or git(
+                "merge-base", "--is-ancestor", remote_sha, local_sha).returncode != 0):
+            print(f"pre-push: refused non-fast-forward update of {remote_ref}",
+                  file=sys.stderr)
+            return 1
     if file_size_gate():
         return 1
-    refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
     remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
@@ -152,18 +216,15 @@ def main():
     find_shapes = sc._shape_finder()
     hits = []
     for rec in refs:
-        if len(rec) != 4:
-            continue
         _, local_sha, _, remote_sha = rec
-        if local_sha == ZERO:  # branch deletion: nothing pushed to scan
-            continue
         base = base_commit(remote_sha, local_sha)
+        baselines = main_baselines(local_sha)
         changelog_docs_warn(base, local_sha)
         for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():
             parts = line.split("\t")
             if len(parts) != 2 or parts[0].startswith("D"):
                 continue
-            scan_blob(parts[1], local_sha, cfg, find_shapes, hits)
+            scan_blob(parts[1], local_sha, cfg, find_shapes, hits, baselines)
     if hits:
         sc.report(hits, words=cfg["_words"])
         print(f"pre-push: {len(hits)} scrub hit(s): push refused "

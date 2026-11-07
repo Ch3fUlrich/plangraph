@@ -99,6 +99,19 @@ def read_status(reader, model, **kw):
     return state if '/' in model or unavailable(state) else reader('agy/' + model, **kw)
 
 
+class DispatchReader:
+    """Preserve adapter metadata while applying dispatch key lookup."""
+    def __init__(self, reader, fallback):
+        self.status = getattr(reader, 'leg_status', reader) or fallback
+        self.enabled = getattr(reader, 'enabled', False)
+        self.store = getattr(reader, 'store', None)
+
+    def leg_status(self, model, **scope):
+        return read_status(self.status, model, **scope)
+
+    __call__ = leg_status
+
+
 def _store_for(runner):
     """The store the planner reads; probe results never land elsewhere (M19)."""
     store = getattr(runner, 'leg_reader', None)

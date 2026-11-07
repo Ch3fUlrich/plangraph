@@ -28,6 +28,23 @@ standalone agent mode.
 | `PG_ATTEMPT_MEMORY_MAX` | Value for the scope's `MemoryMax` property. |
 | `PG_ATTEMPT_TASKS_MAX` | Value for the scope's `TasksMax` property. |
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
+| `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset refuses all cards. Unlisted keys are refused before claim and attempt setup. |
+
+Set `PG_CARD_ALLOWLIST` before deployment. When unset, the worker still starts
+and logs a warning, but terminally refuses every card claim; a healthy poller
+does not imply that cards can run.
+
+Cross-worker exclusivity uses keeper claim arbitration. Each claim sends
+`merge_owner_id()`, the process-stable random worker identity also used for merge
+locks; an empty claim is a non-retryable refusal. A process-global
+drop guard prevents overlapping activity attempts for the same card key and
+releases ownership on return or unwind. Only admission errors are non-retryable;
+filesystem permission errors retain the ordinary retryable attempt failure.
+Typed admission reasons map to terminal `card_not_allowlisted`,
+`card_not_claimable` (empty claim), and `card_attempt_overlap` failures.
+The worker loads the environment allowlist once at startup and passes an immutable
+Config to claim and attempt entry points; unloaded Configs refuse admission.
+Programmatically supplied allowlists take precedence over the environment.
 
 Each attempt creates its own private temporary directory under the system temp
 directory, removed on drop alongside its private HOME. Only that temporary
@@ -124,6 +141,15 @@ from `osrelease`. The worker checks both at startup: on a WSL kernel it reads
   service.
 
 ## Host facts
+
+The admission policy guard runs exactly three production checks per workspace:
+no default features, defaults, and all named features except test-only features
+and their aliases. Metadata rejects defaults that transitively enable a forbidden
+feature; a downstream compile-fail probe verifies the bypass remains unavailable.
+Run `python3 tools/probe_admission_policy_guard.py` for the two negative probes
+(a caller gated on a disabled default feature and a forbidden default alias).
+Missing tools or paths fail rather than skip. The rust-worker job passed in
+235.1 seconds locally; its guard took 85.59 seconds (207.2 seconds standalone).
 
 Bubblewrap is not available and unprivileged user namespaces are blocked on the
 target host. Landlock and `systemd-run --user --scope` work there, so this layer

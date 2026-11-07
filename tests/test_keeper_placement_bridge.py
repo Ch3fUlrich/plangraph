@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,11 +31,15 @@ def rules_binary(tmp_path_factory):
         shared = shared.parent
     with (shared / 'placement-rules-build.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        stamp = shared / 'placement-rules-built'
-        if not stamp.exists():
-            subprocess.run([cargo, 'build', '-p', 'pg-worker-core', '--bin',
+        binary = root / 'rust/target/debug/pg-placement-rules'
+        inputs = [* (root / 'rust').rglob('*.rs'),
+                  * (root / 'rust').rglob('Cargo.toml'), root / 'rust/Cargo.lock',
+                  root / 'setup/placement-rules.schema.toml']
+        if not binary.exists() or any(p.stat().st_mtime > binary.stat().st_mtime
+                                      for p in inputs if 'target' not in p.parts):
+            subprocess.run(['nice', '-n', '10', 'env', 'CARGO_BUILD_JOBS=4', cargo,
+                            'build', '-p', 'pg-worker-core', '--bin',
                             'pg-placement-rules'], cwd=root / 'rust', check=True)
-            stamp.touch()
     return root / 'rust/target/debug/pg-placement-rules'
 
 
@@ -82,8 +87,25 @@ def test_missing_binary_no_secrets(tmp_path, monkeypatch):
 def test_success_after_deadline_during_cleanup(tmp_path, monkeypatch):
     fake(tmp_path, monkeypatch, 'read -r body; printf \'{"ok":{}}\'')
     ticks = iter([0, 0, 6])
-    monkeypatch.setattr(bridge.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(bridge, 'time', SimpleNamespace(monotonic=lambda: next(ticks)))
+    original = bridge.subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        child = original(*args, **kwargs)
+        wait = child.wait
+
+        def cleanup_wait(*args, **kwargs):
+            result = wait(*args, **kwargs)
+            if not kwargs:  # Advance the local clock beyond the deadline in cleanup.
+                assert bridge.time.monotonic() == 6
+            return result
+
+        child.wait = cleanup_wait
+        return child
+
+    monkeypatch.setattr(bridge.subprocess, 'Popen', spawn)
     assert bridge.call_rules({}) == {}
+    assert next(ticks, None) is None
 
 
 def test_fixture_preserves_process_environ(tmp_path, monkeypatch):

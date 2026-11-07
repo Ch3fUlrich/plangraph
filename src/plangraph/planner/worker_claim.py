@@ -51,8 +51,10 @@ def worker_claim(
     repo_root: str | None,
     base_branch: str = "main",
 ) -> dict[str, Any]:
-    if principal.role not in ("worker", "system"):
+    if principal.role not in ("worker", "system") and not getattr(principal, "worker_scope", False):
         raise Refused("forbidden", "worker_claim requires a worker or system principal")
+    from plangraph.keeper.worker_policy import check_project
+    check_project(store, principal, key)
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
 

@@ -56,7 +56,7 @@ RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-s
 JEV_KINDS = ("harness", "window", "budget", "review", "qc_accept")
 JEV_STATUSES = ("ok", "timeout", "unavailable", "error")
 
-ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner", "oversight")
+ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner", "oversight", "phase-worker")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",
