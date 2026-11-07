@@ -144,7 +144,9 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.measured_down import measured_down
         down = measured_down(self.state)
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
-        return replace(plan, legs=tuple(sorted(plan.legs, key=lambda leg: leg.id in down)))
+        required = bool(card and card.get('witness_required'))
+        return replace(plan, legs=tuple(sorted(plan.legs, key=lambda leg: (
+            required and not leg.model.startswith('omniroute/'), leg.id in down))))
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
@@ -294,6 +296,11 @@ class SpawnService(SeatSpawnMixin):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
+        if role == 'review' and card.get('witness_required'):
+            from .gateway_witness import require_witness
+            from .runner import build_child_env
+            witness_env = build_child_env()
+            require_witness(plan.first_leg.model, witness_env)
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
@@ -308,6 +315,8 @@ class SpawnService(SeatSpawnMixin):
                 limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
+                    if role == 'review' and card.get('witness_required'):
+                        require_witness(chosen.model, witness_env)
                     from .inline_diff import InlineDiffError
                     try:
                         leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack,
