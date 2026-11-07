@@ -90,7 +90,7 @@ class SpawnService(SeatSpawnMixin):
         jobs = getattr(self.runner, 'jobs', {})
         job = jobs.get(record.get('job_id'))
         if job is not None:
-            captures[record['job_id']] = clean(job.stderr or '')
+            captures[record['job_id']] = clean(getattr(job, 'stderr', '') or '')
         else:
             text = clean(record.get('stderr_tail', ''))
             previous = captures.get('record', '')
