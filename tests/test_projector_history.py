@@ -22,26 +22,45 @@ def project(name):
     return project_history(history, workflow_id=wf, run_id=run)
 
 
-def test_phase_child_upserted_plan_key():
+@pytest.mark.parametrize("id_type", [str, int])
+def test_phase_child_upserted_plan_key(id_type):
     history, _, run = load("01_ok_single")
     history = copy.deepcopy(history)
+    for event in history["events"]:
+        event["eventId"] = id_type(event["eventId"])
     history["events"][0]["workflowExecutionStartedEventAttributes"].pop("memo", None)
     # Keep IDs and all cross-event references consistent with the inserted event.
     def shift_ids(value):
         if isinstance(value, dict):
             for key, item in value.items():
                 if key.endswith("EventId") or key == "eventId":
-                    if int(item) >= 2:
-                        value[key] = str(int(item) + 1)
+                    if type(item) not in (int, str):
+                        continue
+                    try:
+                        number = int(item)
+                    except ValueError:
+                        continue
+                    if number >= 2:
+                        value[key] = type(item)(number + 1)
                 else:
                     shift_ids(item)
         elif isinstance(value, list):
             for item in value:
                 shift_ids(item)
 
+    mixed = {"eventId": 2, "nested": [{"scheduledEventId": "3"},
+             {"startedEventId": None}, {"eventId": "unknown"}]}
+    shift_ids(mixed)
+    assert mixed == {"eventId": 3, "nested": [{"scheduledEventId": "4"},
+                     {"startedEventId": None}, {"eventId": "unknown"}]}
+    assert type(mixed["eventId"]) is int
+    assert type(mixed["nested"][0]["scheduledEventId"]) is str
+    original = copy.deepcopy(history)
     shift_ids(history)
+    for before, after in zip(original["events"], history["events"]):
+        assert type(after["eventId"]) is type(before["eventId"])
     history["events"].insert(1, {
-        "eventId": 2,
+        "eventId": type(history["events"][0]["eventId"])(2),
         "eventType": "EVENT_TYPE_WORKFLOW_PROPERTIES_MODIFIED",
         "workflowPropertiesModifiedEventAttributes": {"upsertedMemo": {"fields": {
             "plan_key": {
@@ -51,6 +70,7 @@ def test_phase_child_upserted_plan_key():
         }}},
     })
     ids = [int(event["eventId"]) for event in history["events"]]
+    assert all(type(event["eventId"]) is id_type for event in history["events"])
     assert ids == sorted(set(ids))
     p = project_history(history, workflow_id="card:phase:DEMO-1:1", run_id=run)
     assert p.plan_key == "DEMO-1"
