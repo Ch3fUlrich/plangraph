@@ -198,12 +198,18 @@ fn inherited_git_overrides_are_removed() {
     .unwrap();
     assert!(out.status.success());
     let child_env = String::from_utf8(out.stdout).unwrap();
-    for (key, _) in env {
+    for line in child_env.lines() {
+        let (key, _) = line.split_once('=').unwrap();
         assert!(
-            !child_env
-                .lines()
-                .any(|line| line.starts_with(&format!("{key}="))),
-            "{key}"
+            !(key.starts_with("GIT_") || key.starts_with("SSH_"))
+                || matches!(
+                    key,
+                    "GIT_CONFIG_GLOBAL"
+                        | "GIT_CONFIG_NOSYSTEM"
+                        | "GIT_ALLOW_PROTOCOL"
+                        | "GIT_TERMINAL_PROMPT"
+                ),
+            "unexpected child environment key {key}; GIT_DIR, GIT_SSH_COMMAND, SSH_ASKPASS, GIT_FOO must be absent"
         );
     }
     assert!(child_env
