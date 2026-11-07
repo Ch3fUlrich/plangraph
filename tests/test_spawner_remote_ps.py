@@ -52,19 +52,42 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
                if r['status'] == 'unknown')
 
 
-def test_transport_is_bounded_and_noninteractive(monkeypatch):
+@pytest.mark.parametrize('src', [None, '/opt/plangraph/src', '~/code/plangraph/src'])
+def test_transport_is_bounded_and_noninteractive(monkeypatch, src):
     original = subprocess.Popen
+    host = dict(target='private-target')
+    command = 'python3 -m plangraph.spawner.remote_ps'
+    if src is not None:
+        host['src'] = src
+        command = f'PYTHONPATH={src} {command}'
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
-                        '--', 'private-target', 'python3 -m plangraph.spawner.remote_ps']
+                        '--', 'private-target', command]
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
         assert kwargs['stderr'] == subprocess.DEVNULL
         assert kwargs.get('shell', False) is False
         return original(['python3', '-c', 'print(\'{"runs": []}\', end="")'], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', run)
-    assert remote_ps.query_host(dict(target='private-target'), 2) == '{"runs": []}'
+    assert remote_ps.query_host(host, 2) == '{"runs": []}'
 
+
+@pytest.mark.parametrize('src', ['/opt/source tree', '/opt/src;id', '$(id)',
+                                   '-src', 'relative/src', '~user/src', '', None,
+                                   1, [], '/src\n', '/src$(id)'])
+def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src):
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='target', src=src)])
+    def transport(*args):
+        pytest.fail('invalid src must not reach SSH')
+    assert remote_ps.list_runs([], transport=transport) == [
+        dict(host='invalid-config', status='unknown', reason='host query failed')]
+
+
+@pytest.mark.parametrize('src', ['/opt/plangraph/src', '~/code/plangraph/src'])
+def test_config_accepts_src(tmp_path, monkeypatch, src):
+    hosts = [dict(name='node-a', target='target', src=src)]
+    config(tmp_path, monkeypatch, hosts)
+    assert remote_ps.configured_hosts() == hosts
 
 @pytest.mark.parametrize('payload', ['{}', '{"runs": {}}', '{"runs": [null]}',
                                      '{"runs": [{"run_id": "run-a"}]}'])
