@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **SPAWNER-WITNESS-ENV-LOAD (D-4673):** The spawner reads the gateway call-log token from its 0600 file when the env lacks it (never logged, never passed to the child); every early return in the served-model witness records a named `gateway_witness_unavailable` reason; a review card with `witness_required` is refused up front when its leg cannot give a witness, and routes omniroute legs first.
 - **SPAWNER-PROBE-HOST-NOT-READY:** Report missing probe harness binaries as host-not-ready without attempting the leg or recording shared leg events.
 - **KEEPER-SNAP-S1-FILTERS S1b:** Scope decision text to selected evidence before field projection; keep progress over all items with independent columns, preserve legacy snapshots, and close S1a validation/docs LOWs.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.

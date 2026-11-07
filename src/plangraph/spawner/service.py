@@ -1,16 +1,14 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
 from .env_redact import first_reason
+from .gateway_witness import witness_gate
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
-import asyncio
 from dataclasses import asdict
-import hashlib, json
-import os
 from pathlib import Path
-import socket, time, uuid
+import asyncio, hashlib, json, os, socket, time, uuid
 from . import context_pack
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
@@ -144,7 +142,8 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.measured_down import measured_down
         down = measured_down(self.state)
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
-        return replace(plan, legs=tuple(sorted(plan.legs, key=lambda leg: leg.id in down)))
+        need = bool(card and card.get('witness_required'))
+        return replace(plan, legs=tuple(sorted(plan.legs, key=lambda l: (need and not l.model.startswith('omniroute/'), l.id in down))))
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
@@ -308,6 +307,7 @@ class SpawnService(SeatSpawnMixin):
                 limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
+                    witness_gate(card, role, chosen.model)
                     from .inline_diff import InlineDiffError
                     try:
                         leg_prompt = self._leg_prompt(prompt, card, role, chosen, pack,

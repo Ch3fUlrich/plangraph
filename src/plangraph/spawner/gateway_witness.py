@@ -5,13 +5,15 @@ plangraph-<job_id>``; the gateway stores it as the call log's ``sessionTag``.
 After the child exits, the runner (a trusted in-process adapter) reads the
 call log rows with that tag and records the model the gateway served. The
 call-log API needs a management token: the operator provides it as
-``PLANGRAPH_GATEWAY_LOG_TOKEN``; without it the seat stays unwitnessed with an
-explicit event.
+``PLANGRAPH_GATEWAY_LOG_TOKEN`` or a private management-key file; without either
+the seat stays unwitnessed with an explicit event (required seats refuse launch).
 """
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import stat
 import time
 import types
 import urllib.parse
@@ -21,6 +23,7 @@ from plangraph.routing_support.opencode_overlay import _strip_jsonc
 
 SESSION_HEADER = 'x-omniroute-session-id'
 TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
+TOKEN_FILE_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN_FILE'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
 # Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg.
 PROVIDER_ALIASES = types.MappingProxyType({'xiaomi-mimo': 'mimo'})
@@ -111,9 +114,47 @@ def _gateway_mimo(env):
                 endpoints.append(options['baseURL'])
     def normalize(value):
         return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
-    # No baseURL is the template default; a direct leg yields no tagged call-log row, so it stays
-    # unwitnessed. Only an explicit different baseURL is refused here.
-    return seen and all(normalize(e) == normalize(gateway) for e in endpoints)
+    # Require an explicit gateway endpoint: a template default is not routing evidence.
+    return seen and bool(endpoints) and all(normalize(e) == normalize(gateway) for e in endpoints)
+
+
+def load_token(secrets=None):
+    """Load management credentials only in the parent; never expose failure details."""
+    secrets = os.environ if secrets is None else secrets
+    token = secrets.get(TOKEN_ENV)
+    if token:
+        return token
+    path = Path(secrets.get(TOKEN_FILE_ENV) or '~/.config/plangraph/omniroute-mgmt.key').expanduser()
+    try:
+        with path.open() as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+                raise OSError
+            token = stream.read().strip()
+        if token:
+            return token
+    except (OSError, UnicodeError):
+        pass
+    raise LookupError('no gateway token in spawn env')
+
+
+def require_witness(model, env=None):
+    """Fail closed before launching a review whose card requires gateway evidence."""
+    from plangraph.planner.routing import SpawnRefused
+    from .runner import build_child_env
+    env = build_child_env() if env is None else env
+    provider = str(model or '').split('/', 1)[0]
+    reason = (f'not a gateway leg: provider {provider}' if provider not in ('omniroute', 'mimo')
+              else 'mimo leg not routed through gateway' if provider == 'mimo' and not _gateway_mimo(env)
+              else None)
+    try:
+        if reason:
+            raise LookupError(reason)
+        load_token()
+        if not _gateway(os.environ):
+            raise LookupError('gateway endpoint not configured')
+    except LookupError as exc:
+        raise SpawnRefused('witness required: ' + str(exc)) from None
 
 
 def served_models(rows, tag):
@@ -144,9 +185,7 @@ def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=No
     the child's. ``build_child_env`` drops the token.
     """
     secrets = os.environ if secrets is None else secrets
-    token = secrets.get(TOKEN_ENV)
-    if not token:
-        raise LookupError(f'no {TOKEN_ENV}')
+    token = load_token(secrets)
     base = _gateway(secrets)
     if not base:
         raise LookupError('gateway endpoint not configured')
@@ -168,9 +207,16 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     # Only a leg served through the gateway can have rows: build_child_env adds an
     # omniroute block to every config, so the tag alone does not mean a gateway leg.
     provider = str(getattr(job, 'model_or_combo', '') or '').split('/', 1)[0]
-    if provider != 'omniroute' and not (provider == 'mimo' and _gateway_mimo(env)):
+    def unavailable(reason):
+        job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason})
+    if provider not in ('omniroute', 'mimo'):
+        unavailable(f'not a gateway leg: provider {provider}')
+        return
+    if provider == 'mimo' and not _gateway_mimo(env):
+        unavailable('mimo leg not routed through gateway')
         return
     if job.served_model not in (None, '', 'unwitnessed'):
+        unavailable('served_model already set')
         return
     tag = session_tag(job_id)
     reason = 'no call log row for the session tag'
@@ -198,3 +244,9 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
         if attempt + 1 < attempts:
             time.sleep(delay)
     job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason[:200]})
+
+
+def witness_gate(card, role, model):
+    """Refuse before launch a review whose card requires a witness this leg cannot give."""
+    if role == 'review' and card.get('witness_required'):
+        require_witness(model)

@@ -51,7 +51,8 @@ def test_witness_skips_a_leg_not_served_by_the_gateway():
     # Seat finding (qwen run-5ce67bc0): every config holds an omniroute block, so a mimo leg was probed.
     runner, job = _Runner('job-1'), _job('mimo/mimo-v2.6-pro')
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
-    assert not job.events and not runner.calls
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'mimo leg not routed through gateway'}]
+    assert not runner.calls
 
 
 def test_witness_names_ambiguous_rows():
@@ -97,12 +98,13 @@ def test_witness_skips_untagged_or_witnessed_jobs():
     job.events.clear()
     job.served_model = 'cx/gpt-6-luna'
     gw.witness(runner, 'job-1', job, _env('job-1'), fetch=pytest.fail)
-    assert not job.events and not runner.calls
+    assert job.events == [{'event': 'gateway_witness_unavailable', 'reason': 'served_model already set'}]
+    assert not runner.calls
 
 
-def test_fetch_rows_needs_spawner_token_and_sends_it():
-    with pytest.raises(LookupError, match=gw.TOKEN_ENV):
-        gw.fetch_rows('plangraph-job-1', {}, secrets={})
+def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
+    with pytest.raises(LookupError, match='no gateway token in spawn env'):
+        gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
     sent = []
     def opener(request, timeout):
         sent.append(request)
@@ -171,3 +173,10 @@ def test_child_env_never_carries_the_call_log_token(monkeypatch):
     monkeypatch.setenv(gw.TOKEN_ENV, 'tok')
     assert gw.TOKEN_ENV not in build_child_env()
     assert gw.TOKEN_ENV not in build_child_env({gw.TOKEN_ENV: 'tok'})   # extra_env cannot re-add it
+
+
+def test_child_env_never_carries_the_token_file_path(monkeypatch):
+    from plangraph.routing_support.clients import build_child_env
+    monkeypatch.setenv(gw.TOKEN_FILE_ENV, '/x/key')
+    assert gw.TOKEN_FILE_ENV not in build_child_env()
+    assert gw.TOKEN_FILE_ENV not in build_child_env({gw.TOKEN_FILE_ENV: '/x/key'})
