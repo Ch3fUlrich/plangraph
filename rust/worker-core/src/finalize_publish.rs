@@ -14,6 +14,8 @@ pub enum PublishError {
     Git,
     #[error("invalid_step_log")]
     Log,
+    #[error("invalid_step_log_line_{0}")]
+    LogLine(usize),
     #[error("io")]
     Io(#[from] std::io::Error),
 }
@@ -76,8 +78,9 @@ impl StepLog for LocalFileStepLog {
         };
         bytes
             .split_inclusive(|b| *b == b'\n')
-            .filter(|line| line.ends_with(b"\n"))
-            .map(|line| serde_json::from_slice(line).map_err(|_| PublishError::Log))
+            .enumerate()
+            .filter(|(_, line)| line.ends_with(b"\n"))
+            .map(|(i, line)| serde_json::from_slice(line).map_err(|_| PublishError::LogLine(i + 1)))
             .collect()
     }
     fn append(&self, run_id: &str, step: Step) -> Result<()> {
@@ -110,12 +113,84 @@ pub struct Remote<'a> {
     pub name: &'a str,
 }
 fn git(remote: &Remote<'_>, args: &[&str]) -> Result<std::process::Output> {
-    Ok(crate::workspace_resolver::git_command(remote.root)
+    git_with_env(remote, args, &[])
+}
+fn git_with_env(
+    remote: &Remote<'_>,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<std::process::Output> {
+    if !remote.root.is_absolute() || !valid_remote(remote.name) {
+        return Err(PublishError::Invalid);
+    }
+    let mut command = crate::workspace_resolver::git_command(remote.root);
+    command.envs(env.iter().copied());
+    for key in std::env::vars_os()
+        .map(|(key, _)| key)
+        .chain(env.iter().map(|(key, _)| (*key).into()))
+    {
+        let name = key.to_string_lossy();
+        if name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_") {
+            command.env_remove(key);
+        }
+    }
+    for key in [
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_INDEX_FILE",
+    ] {
+        command.env_remove(key);
+    }
+    Ok(command
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_ALLOW_PROTOCOL", "file:https:ssh")
         .args(["--no-replace-objects", "-c", "core.hooksPath="])
         .args(args)
         .output()?)
+}
+fn valid_remote(name: &str) -> bool {
+    if name.is_empty()
+        || name.contains("::")
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-:@%+~".contains(&b))
+    {
+        return false;
+    }
+    if name.starts_with('/') {
+        return true;
+    }
+    if let Some(rest) = name
+        .strip_prefix("https://")
+        .or_else(|| name.strip_prefix("ssh://"))
+    {
+        return rest.split_once('/').is_some_and(|(host, path)| {
+            !host.is_empty() && !host.starts_with('-') && !path.is_empty()
+        });
+    }
+    name.strip_prefix("git@")
+        .and_then(|rest| rest.split_once(':'))
+        .is_some_and(|(host, path)| {
+            !host.is_empty() && !host.starts_with('-') && !host.contains('/') && !path.is_empty()
+        })
+}
+fn validate(head: &str, lane: &str, old: Option<&str>, remote: &Remote<'_>) -> Result<()> {
+    if !crate::writer_result::oid(head) || old.is_some_and(|s| !crate::writer_result::oid(s)) {
+        return Err(PublishError::Invalid);
+    }
+    if !git(remote, &["check-ref-format", &format!("refs/heads/{lane}")])?
+        .status
+        .success()
+    {
+        return Err(PublishError::Invalid);
+    }
+    Ok(())
 }
 fn lane_head(remote: &Remote<'_>, reference: &str) -> Result<Option<String>> {
     let out = git(
@@ -138,20 +213,8 @@ pub fn publish(
     expected_old: Option<&str>,
     remote: &Remote<'_>,
 ) -> Result<Outcome> {
-    if !crate::writer_result::oid(head_sha)
-        || expected_old.is_some_and(|s| !crate::writer_result::oid(s))
-        || remote.name.is_empty()
-        || remote.name.starts_with('-')
-    {
-        return Err(PublishError::Invalid);
-    }
+    validate(head_sha, lane, expected_old, remote)?;
     let reference = format!("refs/heads/{lane}");
-    if !git(remote, &["check-ref-format", &reference])?
-        .status
-        .success()
-    {
-        return Err(PublishError::Invalid);
-    }
     let current = lane_head(remote, &reference)?;
     if current.as_deref() == Some(head_sha) {
         return Ok(Outcome::AlreadyPublished);
@@ -192,12 +255,20 @@ pub fn finalize_publish(
     if !safe_id(run_id) {
         return Err(PublishError::Invalid);
     }
+    validate(head_sha, lane, expected_old, remote)?;
     let steps = log.load(run_id)?;
     let mut outcome = None;
     let mut has_pr = false;
     let mut done = false;
     for step in steps {
         match step {
+            Step::LaneCas {
+                ref head,
+                expected_old: ref old,
+                ..
+            } if head != head_sha || old.as_deref() != expected_old => {
+                return Err(PublishError::Invalid)
+            }
             Step::LaneCas {
                 head,
                 expected_old: old,

@@ -11,13 +11,15 @@ struct Fixture {
     dir: tempfile::TempDir,
     head: String,
     old: String,
+    remote_path: String,
 }
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
+        let remote_path = dir.path().join("remote.git").to_str().unwrap().to_owned();
         let remote = Remote {
             root: dir.path(),
-            name: "./remote.git",
+            name: &remote_path,
         };
         assert!(git(&remote, &["init", "--bare", "remote.git"])
             .unwrap()
@@ -25,27 +27,39 @@ impl Fixture {
             .success());
         assert!(git(&remote, &["init", "."]).unwrap().status.success());
         let commit = |parent: Option<&str>| {
-            let tree = crate::writer_secret::command(dir.path(), &["mktree"], b"", None).unwrap();
-            let tree = std::str::from_utf8(&tree).unwrap().trim();
-            let mut args = vec!["commit-tree", tree];
+            let tree = git(&remote, &["mktree"]).unwrap();
+            assert!(tree.status.success());
+            let tree = std::str::from_utf8(&tree.stdout).unwrap().trim();
+            let mut args = vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit-tree",
+                tree,
+                "-m",
+                "test",
+            ];
             if let Some(parent) = parent {
                 args.extend(["-p", parent]);
             }
-            String::from_utf8(
-                crate::writer_secret::command(dir.path(), &args, b"test\n", None).unwrap(),
-            )
-            .unwrap()
-            .trim()
-            .to_owned()
+            let output = git(&remote, &args).unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
         };
         let old = commit(None);
         let head = commit(Some(&old));
-        Self { dir, head, old }
+        Self {
+            dir,
+            head,
+            old,
+            remote_path,
+        }
     }
     fn remote(&self) -> Remote<'_> {
         Remote {
             root: self.dir.path(),
-            name: "./remote.git",
+            name: &self.remote_path,
         }
     }
     fn log(&self) -> LocalFileStepLog {
@@ -65,6 +79,118 @@ impl Fixture {
         )
         .unwrap()
     }
+}
+#[test]
+fn remote_allowlist_rejects_helpers_and_other_transports() {
+    let f = Fixture::new();
+    for name in [
+        "",
+        "-x",
+        "ext::sh -c evil",
+        "fd::pipe",
+        "https://host/qq::zz",
+        "file:///tmp/r",
+        "http://host/r",
+        "ftp://host/r",
+        "relative/path",
+        "https:///r",
+        "/tmp/a\n",
+    ] {
+        assert!(
+            matches!(
+                publish(
+                    &f.head,
+                    "lane",
+                    None,
+                    &Remote {
+                        root: f.dir.path(),
+                        name
+                    }
+                ),
+                Err(PublishError::Invalid)
+            ),
+            "{name}"
+        );
+    }
+    for name in [
+        "/tmp/remote.git",
+        "https://host/repo.git",
+        "ssh://git@host/repo.git",
+        "git@host:repo.git",
+    ] {
+        assert!(valid_remote(name), "{name}");
+    }
+}
+#[test]
+fn inherited_git_overrides_are_removed() {
+    let f = Fixture::new();
+    let env = [
+        ("GIT_CONFIG_COUNT", "1"),
+        ("GIT_CONFIG_KEY_0", "alias.injected"),
+        ("GIT_CONFIG_VALUE_0", "bad"),
+        ("GIT_CONFIG_KEY_17", "bad"),
+        ("GIT_CONFIG_VALUE_17", "bad"),
+        ("GIT_CONFIG_PARAMETERS", "malformed"),
+        ("GIT_DIR", "/nonexistent"),
+        ("GIT_WORK_TREE", "/nonexistent"),
+        ("GIT_OBJECT_DIRECTORY", "/nonexistent"),
+        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "/nonexistent"),
+        ("GIT_INDEX_FILE", "/nonexistent"),
+    ];
+    let out = git_with_env(&f.remote(), &["config", "--get", "alias.injected"], &env).unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let out = git_with_env(&f.remote(), &["rev-parse", "--git-dir"], &env).unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), ".git");
+    let out = git_with_env(&f.remote(), &["cat-file", "-t", &f.head], &env).unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"commit\n");
+    assert!(git_with_env(&f.remote(), &["read-tree", &f.head], &env)
+        .unwrap()
+        .status
+        .success());
+    assert!(f.dir.path().join(".git/index").exists());
+}
+#[test]
+fn replay_input_drift_is_invalid() {
+    let f = Fixture::new();
+    f.run(&FakePr(Cell::new(0)));
+    for (head, old) in [(&f.old, None), (&f.head, Some(f.old.as_str()))] {
+        assert!(matches!(
+            finalize_publish(
+                "run",
+                head,
+                "lane",
+                old,
+                &f.remote(),
+                &FakePr(Cell::new(0)),
+                &f.log()
+            ),
+            Err(PublishError::Invalid)
+        ));
+    }
+}
+#[test]
+fn corrupt_interior_line_reports_number() {
+    let f = Fixture::new();
+    let log = f.log();
+    log.append("run", Step::Done).unwrap();
+    OpenOptions::new()
+        .append(true)
+        .open(log.path("run").unwrap())
+        .unwrap()
+        .write_all(b"not-json\n\"Done\"\n")
+        .unwrap();
+    let error = log.load("run").unwrap_err();
+    assert!(matches!(error, PublishError::LogLine(2)));
+    assert_eq!(error.to_string(), "invalid_step_log_line_2");
+}
+#[test]
+fn fixture_has_explicit_isolated_ident() {
+    let f = Fixture::new();
+    let out = git(&f.remote(), &["show", "-s", "--format=%an <%ae>", &f.head]).unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"Fixture <fixture@example.invalid>\n");
 }
 #[test]
 fn expected_absent_and_already_published() {
