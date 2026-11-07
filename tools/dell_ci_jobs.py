@@ -33,7 +33,8 @@ done
 test "$ready" = 1
 port=$(docker port "$container" 5432/tcp)
 port=${port##*:}
-export PG_DSN="postgresql://postgres:$password@127.0.0.1:$port/keeper"
+PG_DSN=$(printf '%s://%s:%s@%s:%s/%s' postgresql postgres "$password" 127.0.0.1 "$port" keeper)
+export PG_DSN
 export PG_KEEPER_BACKEND=postgres PG_CONTRACT_ABORT_ON_TIMEOUT=1
 export PG_CONTRACT_LATENCY_DIR="$scratch/latency"
 FILES=$(grep -lE 'keeper_util|door_util|plangraph\\.keeper|from plangraph import' tests/test_*.py | xargs grep -L sqlite3 | tr '\\n' ' ')
