@@ -21,7 +21,10 @@ FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
 
 def query_host(host, timeout):
     command = 'python3 -m plangraph.spawner.remote_ps'
-    if 'wsl_distro' in host:
+    if 'win_src' in host:
+        command = (f'set "PYTHONPATH={host["win_src"]}"&& '
+                   'python -m plangraph.spawner.remote_ps')
+    elif 'wsl_distro' in host:
         command = (f"wsl -d {host['wsl_distro']} -- env PYTHONPATH={host['src']} "
                    'python3 -m plangraph.spawner.remote_ps')
     elif 'src' in host:
@@ -71,7 +74,12 @@ def configured_hosts():
                 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,62}', host.get('name', ''))
                 or not isinstance(host.get('target'), str)
                 or not re.fullmatch(r'[A-Za-z0-9_@.:-]+', host['target'])
-                or host['target'].startswith('-')
+                 or host['target'].startswith('-')
+                 or ('win_src' in host and (
+                     not isinstance(host['win_src'], str)
+                     or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_./\\-]*',
+                                         host['win_src'])
+                     or 'src' in host or 'wsl_distro' in host))
                 or ('src' in host and (
                     not isinstance(host['src'], str)
                     or not re.fullmatch(r'(?:/|~/)[A-Za-z0-9_./-]*', host['src'])))
