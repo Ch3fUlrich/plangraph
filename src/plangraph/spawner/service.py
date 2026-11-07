@@ -1,7 +1,7 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
 from .env_redact import first_reason
-from .gateway_witness import gateway_leg, witness_gate_legs
+from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
@@ -142,8 +142,7 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.measured_down import measured_down
         down = measured_down(self.state)
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
-        need = bool(role == 'review' and card and card.get('witness_required'))
-        return replace(plan, legs=tuple(sorted(plan.legs, key=lambda leg: (need and not gateway_leg(leg.model), leg.id in down))))
+        return replace(plan, legs=witness_order(card, role, plan.legs, down))
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
@@ -293,7 +292,8 @@ class SpawnService(SeatSpawnMixin):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
-        witness_gate_legs(card, role, plan.legs)  # before any run artifact exists
+        from dataclasses import replace
+        plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs))  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,

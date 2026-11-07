@@ -27,6 +27,7 @@ def test_card_schema_and_roundtrip(tmp_path):
 
 
 def test_all_six_rpc_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))  # local-only ps contract
     from plangraph.spawner import leg_state
     def forbidden(*a, **kw):
         raise AssertionError('MCP must not mutate leg state')

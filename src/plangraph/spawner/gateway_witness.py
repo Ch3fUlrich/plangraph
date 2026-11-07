@@ -155,15 +155,17 @@ def require_witness(model, env=None, *, secrets=None):
     env = build_child_env() if env is None else env
     secrets = os.environ if secrets is None else secrets
     provider = str(model or '').split('/', 1)[0]
-    reason = (f'not a gateway leg: provider {provider}' if provider not in ('omniroute', 'mimo')
-              else 'mimo leg not routed through gateway' if provider == 'mimo' and not _gateway_mimo(env)
-              else None)
+    reason = None if gateway_leg(model, env) else (
+        'mimo leg not routed through gateway' if provider == 'mimo'
+        else f'not a gateway leg: provider {provider}')
     try:
         if reason:
             raise LookupError(reason)
         load_token(secrets)
-        if not _gateway(secrets):
+        if not _gateway(env) or not _gateway(secrets):
             raise LookupError('gateway endpoint not configured')
+        if _gateway(env).rstrip('/').removesuffix('/v1') != _gateway(secrets).rstrip('/').removesuffix('/v1'):
+            raise LookupError('child gateway endpoint differs from witness endpoint')
     except LookupError as exc:
         raise SpawnRefused('witness required: ' + str(exc)) from None
 
@@ -220,11 +222,9 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     provider = str(getattr(job, 'model_or_combo', '') or '').split('/', 1)[0]
     def unavailable(reason):
         job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason})
-    if provider not in ('omniroute', 'mimo'):
-        unavailable(f'not a gateway leg: provider {provider}')
-        return
-    if provider == 'mimo' and not _gateway_mimo(env):
-        unavailable('mimo leg not routed through gateway')
+    if not gateway_leg(job.model_or_combo, env):
+        unavailable('mimo leg not routed through gateway' if provider == 'mimo'
+                    else f'not a gateway leg: provider {provider}')
         return
     if job.served_model not in (None, '', 'unwitnessed'):
         unavailable('served_model already set')
@@ -263,9 +263,40 @@ def witness_gate(card, role, model, env=None, *, secrets=None):
         require_witness(model, env, secrets=secrets)
 
 
+def review_child_env():
+    """Mirror runner.spawn's review env (writer_launch returns no review extras).
+
+    The fresh run nonce and later session tag do not affect routing evidence.
+    Use the runner's default envelope, including headers that trigger rendering.
+    """
+    from plangraph.routing_support.clients import build_child_env, build_routing_envelope_headers
+    return build_child_env({}, headers=build_routing_envelope_headers(
+        role='review', risk='normal', min_intelligence=44.0, required_context=32000))
+
+
+def witness_order(card, role, legs, down):
+    """Sort using the same child config and capability predicate as the gate."""
+    need = bool(role == 'review' and card and card.get('witness_required'))
+    env = review_child_env() if need else None
+    return tuple(sorted(legs, key=lambda leg: (
+        need and not gateway_leg(leg.model, env), leg.id in down)))
+
+
 def witness_gate_legs(card, role, legs):
-    """Validate every leg's real child env before any run artifact exists."""
-    from plangraph.routing_support.clients import build_child_env
-    from .git_guard import writer_launch
+    """Keep only witness-capable fallbacks; refuse only if none can witness."""
+    if not (role == 'review' and card and card.get('witness_required')):
+        return legs
+    from plangraph.planner.routing import SpawnRefused
+    env = review_child_env()
+    capable = []
+    refusals = []
     for leg in legs:
-        witness_gate(card, role, leg.model, build_child_env(writer_launch('', role, leg.model, '')[1]))
+        try:
+            witness_gate(card, role, leg.model, env)
+        except SpawnRefused as exc:
+            refusals.append(str(exc))
+        else:
+            capable.append(leg)
+    if not capable:
+        raise SpawnRefused('; '.join(dict.fromkeys(refusals)) or 'witness required: no eligible leg')
+    return tuple(capable)
