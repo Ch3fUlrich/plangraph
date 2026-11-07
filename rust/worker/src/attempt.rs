@@ -1187,15 +1187,14 @@ mod tests {
 
     #[test]
     fn constructed_default_check_kind_runs_red_first_then_writer() {
-        assert_legacy_change_path(false);
+        assert_legacy_change_path("default");
+        assert_legacy_change_path("");
     }
-
     #[test]
     fn legacy_json_without_check_kind_runs_red_first_then_writer() {
-        assert_legacy_change_path(true);
+        assert_legacy_change_path("json");
     }
-
-    fn assert_legacy_change_path(from_json: bool) {
+    fn assert_legacy_change_path(kind: &str) {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let mut c = claim(
@@ -1204,17 +1203,18 @@ mod tests {
             &["out.txt"],
             "if test ! -f out.txt; then echo scratch > marker; exit 1; fi",
         );
-        if from_json {
+        if kind == "json" {
             let mut value = serde_json::to_value(&c).unwrap();
             value.as_object_mut().unwrap().remove("check_kind");
-            let json = serde_json::to_string(&value).unwrap();
-            c = serde_json::from_str::<Claim>(&json).unwrap();
+            c = serde_json::from_value::<Claim>(value).unwrap();
         } else {
             c.check_kind = Claim::default().check_kind;
+            if kind.is_empty() {
+                c.check_kind.clear();
+            }
         }
-        assert_eq!(c.check_kind, "change");
+        assert_eq!(c.check_kind, if kind.is_empty() { "" } else { "change" });
         let inp = input(c, 1, root.path());
-        // The red base check creates scratch; cleanup proves that gate ran.
         let h = Fake::new("test ! -e marker && echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(h.runs(), 1);
@@ -1223,7 +1223,6 @@ mod tests {
             .path()
             .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
         assert!(!dest.join("marker").exists());
-
         // A passing base must park the same legacy claim before the writer.
         let mut passing = inp.clone();
         passing.n += 1;
@@ -1234,14 +1233,15 @@ mod tests {
         assert!(res.check_tail.starts_with("red-first:"));
         assert_eq!(h.runs(), 0);
     }
-
     #[test]
     fn unknown_check_kind_is_a_contract_defect() {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
-        let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], "false");
-        c.check_kind = "typo".into();
-        let inp = input(c, 1, root.path());
+        let path = r.path().to_string_lossy();
+        let c = claim(&path, &base, &["out.txt"], "false");
+        let mut recorded = serde_json::to_value(c).unwrap();
+        recorded["check_kind"] = "typo".into();
+        let inp = input(serde_json::from_value(recorded).unwrap(), 1, root.path());
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::ContractDefect);

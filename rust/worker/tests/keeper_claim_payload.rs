@@ -73,13 +73,15 @@ fn legacy_payload_missing_all_check_metadata_uses_defaults() {
 }
 
 #[test]
-fn invalid_check_kinds_are_refused() {
+fn unknown_check_kinds_remain_readable_in_recorded_claims() {
     let payloads: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/keeper_claim_payload.json")).unwrap();
     for kind in ["typo", "unknown", "CHANGE"] {
         let mut payload = payloads[0].clone();
         payload["check_kind"] = kind.into();
-        assert!(serde_json::from_value::<Claim>(payload).is_err());
+        let claim: Claim = serde_json::from_value(payload).unwrap();
+        assert_eq!(claim.check_kind, kind);
+        assert_eq!(serde_json::to_value(claim).unwrap()["check_kind"], kind);
     }
 }
 
@@ -91,9 +93,30 @@ fn recorded_legacy_empty_check_kind_normalizes_to_change() {
     payload["check_kind"] = "".into();
     let claim: Claim = serde_json::from_value(payload).unwrap();
     assert_eq!(claim.check_kind, "change");
+    assert_eq!(serde_json::to_value(claim).unwrap()["check_kind"], "change");
 }
 
 #[test]
 fn constructed_default_matches_wire_default() {
     assert_eq!(Claim::default().check_kind, "change");
+}
+
+#[test]
+fn non_string_check_kinds_are_not_legacy_strings() {
+    // Boundary guard, not a regression against the pre-change String deserializer:
+    // tolerant recorded-string decoding must not widen to arbitrary JSON values.
+    let payloads: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/keeper_claim_payload.json")).unwrap();
+    for kind in [
+        serde_json::Value::Null,
+        serde_json::json!(true),
+        serde_json::json!(false),
+        serde_json::json!(1),
+        serde_json::json!([]),
+        serde_json::json!({}),
+    ] {
+        let mut payload = payloads[0].clone();
+        payload["check_kind"] = kind;
+        assert!(serde_json::from_value::<Claim>(payload).is_err());
+    }
 }
