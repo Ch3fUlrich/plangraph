@@ -183,7 +183,7 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                 assert!(!body.contains(fragment), "{mode}: leaked short suffix");
             };
             if mode == "split" {
-                assert_eq!(result.output_tail, "[REDACTED]\n[REDACTED]");
+                assert_eq!(result.output_tail, "[REDACTED]");
             }
             safe(&serde_json::to_string(&result).unwrap());
             safe(
