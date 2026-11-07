@@ -305,8 +305,11 @@ def render(
     if cdn:
         # The page is served as a single bind-mounted file, not a JSON API.
         # Read the independent collector output; never add it to keeper snapshots.
-        from .spawner.agent_view_projection import load_view
-        live_agents = load_view()
+        try:
+            live_agents = _project_agents_view(json.loads(
+                (Path.home() / '.local/state/plangraph/agents-view.json').read_text(encoding='utf-8')))
+        except (OSError, ValueError, TypeError):
+            live_agents = None
         if live_agents is not None:
             safe_snapshot['agents_view'] = live_agents
     if 'agents_view' in safe_snapshot:
