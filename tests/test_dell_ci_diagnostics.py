@@ -18,12 +18,24 @@ def test_protoc_path_and_missing_reason(tmp_path):
 
 
 def test_failure_highlights_precede_tail():
+    # No replacement exists after 9170e867 removed output_tail. Keep this
+    # contract visible until the intended diagnostics policy is resolved.
     output = "test core::broken ... FAILED\nthread 'core::broken' panicked at src/lib.rs:1\n"
     tail = ci.output_tail(output + "noise\n" * 4000)
     assert tail.startswith("test core::broken ... FAILED\nthread 'core::broken' panicked")
     assert len(tail) <= ci.OUTPUT_TAIL_LIMIT
 
 
-def test_empty_output_names_command():
-    assert "cargo test" in ci.output_tail("", "", "cargo test")
-    assert "Running: cargo fmt --check" in ci.service_script("rust", "/scratch")
+def test_empty_output_names_command(tmp_path, monkeypatch):
+    # Exercise the remote producer: even a silent failing cargo command must
+    # identify itself before the service script exits and cleans up.
+    monkeypatch.setitem(ci.service_script.__globals__["RUST"], "rust-spike",
+                        "cargo test")
+    script = ci.service_script("rust-spike", str(tmp_path / "scratch"))
+    stubs = "protoc() { :; }; cargo() { return 7; }; "
+    result = subprocess.run(["sh", "-c", stubs + script],
+                            capture_output=True, text=True)
+    assert result.returncode == 7
+    assert result.stdout == ""
+    assert result.stderr == "Running: cargo test\n"
+    assert not (tmp_path / "scratch").exists()
