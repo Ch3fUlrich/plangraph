@@ -50,5 +50,19 @@ fn finalize_scan_many_blobs_are_consumed_incrementally() {
     };
     batch(&mut BufReader::new(&mut source), &b"oid\n".repeat(2000)).unwrap();
     assert_eq!(source.left, 0);
-    assert!(source.largest <= CHUNK + OVERLAP);
+    assert!(source.largest <= CHUNK + overlap(4));
+}
+
+#[test]
+fn finalize_scan_overlap_covers_longest_object_pattern() {
+    let secret = ["Bearer", &" ".repeat(CHUNK + 1), "shortvalue"].concat();
+    assert!(crate::writer_secret::scan_bytes(secret.as_bytes()));
+    assert!(overlap(secret.len()) >= secret.len());
+    let mut stream = format!("oid blob {}\n", secret.len()).into_bytes();
+    stream.extend(secret.bytes());
+    stream.push(b'\n');
+    assert_eq!(
+        batch(&mut &stream[..], b"oid\n"),
+        Err(Refusal::SecretInHistory)
+    );
 }

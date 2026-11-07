@@ -377,6 +377,13 @@ fn finalize_promote_non_exdev_link_failure_has_no_ref() {
     let f = Fixture::new();
     let verified = f.verified();
     let target = f.receiver.path().join(".git/objects/pack/failed.pack");
+    let entries = || {
+        fs::read_dir(target.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let before = entries();
     assert!(matches!(
         super::unix::install_with(&verified.pack, &target, |_, _| {
             Err(std::io::Error::from_raw_os_error(libc::EACCES))
@@ -384,12 +391,6 @@ fn finalize_promote_non_exdev_link_failure_has_no_ref() {
         Err(PromoteError::Install)
     ));
     assert!(!target.exists());
-    assert!(fs::read_dir(target.parent().unwrap())
-        .unwrap()
-        .all(|entry| !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with("failed.pack.")));
+    assert_eq!(entries(), before);
     f.no_ref();
 }

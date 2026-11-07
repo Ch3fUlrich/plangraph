@@ -1,4 +1,4 @@
-//! Bounded-memory reachable-history batch scanner.
+//! Reachable-history batch scanner; retains at most one object.
 use super::Refusal;
 use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -6,7 +6,11 @@ use std::{
     process::Stdio,
 };
 const CHUNK: usize = 65536;
-const OVERLAP: usize = 8192;
+// Patterns have unbounded PEM labels, assignment names and whitespace.
+// The maximum match is therefore the entire object, not a fixed byte cap.
+fn overlap(object_size: usize) -> usize {
+    object_size
+}
 
 pub(super) fn reachable(root: &Path, input: &[u8]) -> Result<(), Refusal> {
     let run = || -> std::io::Result<_> {
@@ -48,7 +52,6 @@ pub(super) fn reachable(root: &Path, input: &[u8]) -> Result<(), Refusal> {
 
 fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
     let read = |_| Refusal::BadBundle;
-    let mut buffer = vec![0; CHUNK + OVERLAP];
     for oid in input.split(|b| *b == b'\n').filter(|s| !s.is_empty()) {
         let mut header = Vec::new();
         reader
@@ -64,8 +67,10 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
             return Err(Refusal::BadBundle);
         }
         let mut size: usize = fields[2].parse().map_err(|_| Refusal::BadBundle)?;
+        let overlap = overlap(size);
+        let mut buffer = vec![0; size];
         let mut kept = 0;
-        // Only commits retain an object; blob storage is fixed regardless of size/count.
+        // Commit messages and blob patterns may span the entire object.
         if fields[1] == "commit" {
             let mut raw = vec![0; size];
             reader.read_exact(&mut raw).map_err(read)?;
@@ -85,7 +90,7 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
             if fields[1] == "blob" && crate::writer_secret::scan_bytes(&buffer[..end]) {
                 return Err(Refusal::SecretInHistory);
             }
-            kept = end.min(OVERLAP);
+            kept = end.min(overlap);
             buffer.copy_within(end - kept..end, 0);
             size -= count;
         }

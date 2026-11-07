@@ -151,7 +151,10 @@ fn inherited_git_overrides_are_removed() {
         let out = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "finalize_publish::tests::inherited_git_overrides_are_removed",
+                concat!(module_path!(), "::inherited_git_overrides_are_removed")
+                    .split_once("::")
+                    .unwrap()
+                    .1,
             ])
             .env(MARKER, "1")
             .envs(env)
@@ -366,12 +369,15 @@ fn ssh_agent_socket_reaches_transport_only() {
     if std::env::var_os(MARKER).is_none() {
         for set in [false, true] {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-            child.args(["--exact", "finalize_publish::tests::ssh_agent_socket_reaches_transport_only"])
+            child.args(["--exact", concat!(module_path!(), "::ssh_agent_socket_reaches_transport_only").split_once("::").unwrap().1])
                 .env(MARKER, "1").env_remove("GIT_SSH_COMMAND");
             if set { child.env("SSH_AUTH_SOCK", "/fixture/agent"); }
             else { child.env_remove("SSH_AUTH_SOCK"); }
             let out = child.output().unwrap();
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+            let report = String::from_utf8(out.stdout).unwrap();
+            assert!(report.contains("running 1 test"), "{report}");
+            assert!(report.contains("test result: ok. 1 passed;"), "{report}");
+            assert!(out.status.success(), "{report}");
         }
         return;
     }
