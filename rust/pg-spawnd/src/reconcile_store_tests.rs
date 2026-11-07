@@ -58,7 +58,10 @@ impl GroupChild {
             .unwrap()
             .parse()
             .unwrap();
-        json!({"pid":self.0.id(), "start_time":start,"group":null})
+        // SAFETY: read-only query of our child's actual process group.
+        let pgid = unsafe { libc::getpgid(self.0.id() as i32) };
+        assert!(pgid > 0);
+        json!({"pid":self.0.id(), "start_time":start,"group":null,"pgid":pgid})
     }
     fn stop(&mut self) {
         self.0.kill().unwrap();
@@ -97,7 +100,7 @@ fn reconcile_on_killed_group_orphaned_once_across_startups() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn reconcile_on_live_group_would_reattach_untouched_shadow_writes_nothing() {
+fn reconcile_on_live_group_unknown_untouched_shadow_writes_nothing() {
     let dir = StateDir::new();
     let mut record = dir.record();
     let mut child = GroupChild::new();
@@ -146,10 +149,22 @@ fn reconcile_named_group_members_override_reused_leader_identity() {
         pid: std::process::id(),
         start_time: Some(1),
         group: Some(group.to_str().unwrap().into()),
+        pgid: None,
     };
+    std::fs::write(group.join("cgroup.events"), "populated 1\nfrozen 0\n").unwrap();
     assert!(!gone(Some(&identity)).unwrap());
     std::fs::write(group.join("cgroup.procs"), "").unwrap();
+    let child = group.join("child");
+    std::fs::create_dir(&child).unwrap();
+    std::fs::write(child.join("cgroup.threads"), "123\n").unwrap();
+    assert!(!gone(Some(&identity)).unwrap());
+    std::fs::write(group.join("cgroup.events"), "populated 0\nfrozen 0\n").unwrap();
     assert!(gone(Some(&identity)).unwrap());
+    std::fs::remove_file(group.join("cgroup.events")).unwrap();
+    assert!(matches!(
+        gone(Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
 }
 
 #[test]
@@ -261,13 +276,7 @@ fn reconcile_crashed_daemon_real_child_inventory_is_read_only() {
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
     let diagnostics = crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).unwrap();
-    assert_eq!(
-        diagnostics,
-        vec![crate::reconcile::WouldOrphan {
-            run_id: "run-test".into(),
-            attempt: 1,
-        }]
-    );
+    assert!(diagnostics.is_empty());
     assert_eq!(before, std::fs::read(record.path()).unwrap());
     assert!(!dir.0.join("reconcile.lock").exists());
 }
@@ -319,6 +328,22 @@ fn reconcile_nonleader_live_pid_group_esrch_is_not_settled() {
     ));
     assert!(child.0.try_wait().unwrap().is_none());
     assert_eq!(before, std::fs::read(record.path()).unwrap());
+    let mut legacy = child.identity();
+    let recorded: Proc = serde_json::from_value(legacy.clone()).unwrap();
+    legacy.as_object_mut().unwrap().remove("pgid");
+    record.set("proc", legacy);
+    record.save().unwrap();
+    let before = std::fs::read(record.path()).unwrap();
+    child.stop();
+    assert!(!std::path::Path::new(&format!("/proc/{}", child.0.id())).exists());
+    assert!(!gone(Some(&recorded)).unwrap());
+    let legacy: Proc = serde_json::from_value(record.get("proc").unwrap().clone()).unwrap();
+    assert!(matches!(gone(Some(&legacy)), Err(ReconcileError::Unknown)));
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
 }
 
 #[cfg(target_os = "linux")]
@@ -336,6 +361,7 @@ fn reconcile_exited_leader_live_member_is_not_gone() {
             .unwrap(),
     );
     leader.stop();
+    assert!(!std::path::Path::new(&format!("/proc/{}", leader.0.id())).exists());
     assert!(!gone(Some(&identity)).unwrap());
     assert!(member.0.try_wait().unwrap().is_none());
 }

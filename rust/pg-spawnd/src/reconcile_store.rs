@@ -11,6 +11,7 @@ pub(crate) struct Proc {
     pub pid: u32,
     pub start_time: Option<u64>,
     pub group: Option<String>,
+    pub pgid: Option<u32>,
 }
 pub(crate) struct Entry {
     pub run_id: String,
@@ -130,6 +131,7 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                     .map_err(|_| ReconcileError::Invalid)?;
                 if proc.pid == 0
                     || proc.start_time == Some(0)
+                    || proc.pgid.is_some_and(|id| id == 0 || id > i32::MAX as u32)
                     || proc.group.as_ref().is_some_and(|g| g.is_empty())
                 {
                     return Err(ReconcileError::Invalid);
@@ -191,22 +193,28 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
             if !group.starts_with('/') {
                 return Err(ReconcileError::Unknown);
             }
-            return match std::fs::read_to_string(Path::new(group).join("cgroup.procs")) {
-                Ok(members) => Ok(members.trim().is_empty()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    match std::fs::symlink_metadata(group) {
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
-                        _ => Err(ReconcileError::Unknown),
-                    }
-                }
-                Err(_) => Err(ReconcileError::Unknown),
+            let events = std::fs::read_to_string(Path::new(group).join("cgroup.events"))
+                .map_err(|_| ReconcileError::Unknown)?;
+            let populated = events
+                .lines()
+                .filter_map(|line| line.strip_prefix("populated "))
+                .collect::<Vec<_>>();
+            return match populated.as_slice() {
+                ["0"] => Ok(true),
+                ["1"] => Ok(false),
+                _ => Err(ReconcileError::Unknown),
             };
         }
-        let pid = i32::try_from(identity.pid).map_err(|_| ReconcileError::Invalid)?;
-        // Legacy records imply pgid == pid: worker-core/src/run/group_unix.rs:38
-        // sets process_group(0) for owned spawns. A live PID above always wins.
+        // Neither a missing PID nor a start mismatch proves a legacy group gone.
+        // Only a PGID recorded at spawn identifies the group to probe; even a
+        // reused leader cannot be distinguished from the original live group.
+        let pgid = identity.pgid.ok_or(ReconcileError::Unknown)?;
+        let pgid = i32::try_from(pgid)
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or(ReconcileError::Unknown)?;
         // SAFETY: signal zero only probes the recorded process group.
-        if unsafe { libc::kill(-pid, 0) } == 0 {
+        if unsafe { libc::kill(-pgid, 0) } == 0 {
             return Ok(false);
         }
         match std::io::Error::last_os_error().raw_os_error() {
