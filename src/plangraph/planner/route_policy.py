@@ -59,7 +59,7 @@ class RoutePolicy:
 
         # D-4280/D-4543/D-4557: Muse and Grok are manual-only, with no policy lift.
         # Explicit audited --leg overrides do not use this automatic-route gate.
-        if leg.family in ("muse", "grok"):
+        if leg.family in ("muse", "grok") or seat_family(leg.family) == "xai":
             return "off_family"
 
         def listed(families):

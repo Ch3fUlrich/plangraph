@@ -109,6 +109,8 @@ def test_grok_never_automatic_even_if_lifted(role):
     leg = replace(BY_ID[GROK], roles=(role,))
     policy = RoutePolicy(review_allowed_families=("grok",))
     assert policy.skip_reason(leg, role) == "off_family"
+    for spelling in ("xai", "grok-4.7"):
+        assert policy.skip_reason(replace(leg, family=spelling), role) == "off_family"
     plan = plan_spawn(CARD, role=role, writer_families=("gpt",), policy=policy)
     assert not any(l.family == "grok" for l in (*plan.legs, *plan.review_seats))
 
