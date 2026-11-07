@@ -1005,7 +1005,8 @@ def spawn_service(*args, **kwargs):
             from .run_watchdog import terminal_status, thresholds
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
-                return dict(status='refused', reason='question_rounds_exhausted', exit_code=2)
+                from plangraph.routing_errors import SpawnRefused
+                raise SpawnRefused('question_rounds_exhausted')
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(

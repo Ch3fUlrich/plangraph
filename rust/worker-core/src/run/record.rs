@@ -32,6 +32,7 @@ pub enum Status {
     Refused,
     Limited,
     DryRun,
+    NeedsInput,
 }
 
 impl Status {
@@ -47,6 +48,7 @@ impl Status {
             Self::Refused => "refused",
             Self::Limited => "limited",
             Self::DryRun => "dry_run",
+            Self::NeedsInput => "needs_input",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -61,6 +63,7 @@ impl Status {
             Self::Refused,
             Self::Limited,
             Self::DryRun,
+            Self::NeedsInput,
         ]
         .into_iter()
         .find(|s| s.as_str() == value)
@@ -157,8 +160,11 @@ impl RunRecord {
         }
         if !matches!(
             (from, to),
-            (Queued, Running | Cancelled | Failed | Refused)
-                | (Running, Completed | Failed | Cancelled | Stalled | Timeout)
+            (Queued, Running | Cancelled | Failed | Refused | NeedsInput)
+                | (
+                    Running,
+                    Completed | Failed | Cancelled | Stalled | Timeout | NeedsInput
+                )
         ) {
             return Err(RecordError::BadTransition);
         }
