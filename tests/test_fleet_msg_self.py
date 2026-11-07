@@ -61,7 +61,7 @@ def test_self_overrides_stale_peer():
 
 
 @pytest.mark.parametrize("local", [None, [], {}, {"PublicKey": 1},
-                                  {"PublicKey": ""}])
+                                  {"PublicKey": ""}, {"PublicKey": " "}])
 def test_malformed_self_refuses_peer_twin(local):
     registry = _self_registry()
     status = {"Self": local, "Peer": {"node-self": {

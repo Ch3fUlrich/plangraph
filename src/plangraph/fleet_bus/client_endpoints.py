@@ -15,7 +15,7 @@ def peer_endpoints(registry, status):
     local = status.get("Self")
     if "Self" in status and not (isinstance(local, dict)
                                  and isinstance(local.get("PublicKey"), str)
-                                 and local["PublicKey"]):
+                                 and local["PublicKey"].strip()):
         lookup, local = {}, None
     elif local is not None:
         lookup[local["PublicKey"]] = local
