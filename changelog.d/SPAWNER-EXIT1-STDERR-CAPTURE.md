@@ -1,0 +1,1 @@
+- **SPAWNER-EXIT1-STDERR-CAPTURE:** Keep each run's capped private stderr.log, give exit 1 after finished stdout its own reason, strip ANSI from skip reasons, and stop flagging writer_no_changes when the worktree has changes.
