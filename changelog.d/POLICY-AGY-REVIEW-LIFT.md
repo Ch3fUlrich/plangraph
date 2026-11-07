@@ -1,0 +1,1 @@
+- **POLICY-AGY-REVIEW-LIFT:** Route policy lets the agy harness (gemini-3.8-flash) take review seats again (OPERATOR D-4699, D-4703); a policy that pauses agy for review still skips it.

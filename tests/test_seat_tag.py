@@ -64,13 +64,28 @@ def test_absent_or_ambiguous_is_unwitnessed(rows):
 def test_direct_mimo_is_not_gateway_backed():
     seat = job()
     gw.witness(SimpleNamespace(), 'seat', seat, config('/direct/v1'), fetch=pytest.fail)
-    assert seat.served_model is None and not seat.events
+    assert seat.served_model is None
+    assert seat.events == [{'event': 'gateway_witness_unavailable',
+                            'reason': 'explicit direct mimo endpoint'}]
 
 
-def test_missing_management_access():
+@pytest.mark.parametrize('endpoint', ['/direct/v1', '/gateway/v1'])
+def test_witness_parses_mimo_endpoints_once(monkeypatch, endpoint):
+    original = gw._mimo_endpoints
+    calls = []
+    def parse(env):
+        calls.append(env)
+        return original(env)
+    monkeypatch.setattr(gw, '_mimo_endpoints', parse)
+    gw.witness(SimpleNamespace(), 'seat', job(), config(endpoint), attempts=0)
+    assert len(calls) == 1
+
+
+def test_missing_management_access(tmp_path):
     seat = job()
     gw.witness(SimpleNamespace(), 'seat', seat, config(),
-               fetch=lambda tag, env: FETCH_ROWS(tag, env, secrets={}, opener=pytest.fail))
+               fetch=lambda tag, env: FETCH_ROWS(tag, env, secrets={
+                   gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')}, opener=pytest.fail))
     assert seat.events == [{'event': 'gateway_witness_unavailable', 'reason': 'no ' + gw.TOKEN_ENV}]
 
 
