@@ -1,29 +1,36 @@
-"""Keep legacy execution and backend coverage wired into the contract suite."""
-import ast
-from pathlib import Path
+"""Behavioral guards for legacy claims and backend-independent validation."""
+import subprocess
+import sys
 
+import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+from plangraph.keeper.errors import Refused
+from plangraph.planner.worker_claim import build_claim
 
 
 def test_claim_import_order():
-    tree = ast.parse((ROOT / "tests/test_worker_claim.py").read_text())
-    imports = [node.names[0].name for node in tree.body if isinstance(node, ast.Import)
-               and node.names[0].name != "pytest"]
-    assert imports == sorted(imports)
+    # Exercise both initialization orders in fresh interpreters, not source order.
+    for modules in [("plangraph.planner.worker_claim", "plangraph.keeper.db_pg"),
+                    ("plangraph.keeper.db_pg", "plangraph.planner.worker_claim")]:
+        subprocess.run([sys.executable, "-c",
+                        "; ".join(f"import {module}" for module in modules)], check=True)
 
 
 def test_raw_empty_red_first_coverage():
-    source = (ROOT / "rust/worker/src/attempt.rs").read_text()
-    assert 'assert_legacy_change_path("");' in source
+    card = dict(check_cmd="false", write_set=[], outcome="fix", check_kind="")
+    payload = build_claim("demo:C", card, repo="repo", base_sha="abc")
+    assert payload["check_kind"] == "change"
+    assert payload["check_cmd"] == "false"
+    assert payload == build_claim("demo:C", dict(card, check_kind="change"),
+                                  repo="repo", base_sha="abc")
 
 
-def test_parity_is_not_skipped_without_postgres():
-    tree = ast.parse((ROOT / "tests/test_worker_claim.py").read_text())
-    test = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                and node.name == "test_claim_metadata_sqlite_postgres_parity")
-    decorators = [ast.unparse(node) for node in test.decorator_list]
-    assert not any("skip" in decorator for decorator in decorators)
-    assert isinstance(test.body[0], ast.Assign)
-    assert '"sqlite"' in ast.get_source_segment(
-        (ROOT / "tests/test_worker_claim.py").read_text(), test.body[0])
+def test_parity_is_not_skipped_without_postgres(monkeypatch):
+    monkeypatch.delenv("PG_DSN", raising=False)
+    monkeypatch.setenv("PG_KEEPER_BACKEND", "sqlite")
+    for kind in (None, True, 1, [], {}, "typo"):
+        with pytest.raises(Refused) as exc:
+            build_claim("demo:C", dict(check_cmd="false", write_set=[],
+                                      outcome="fix", check_kind=kind),
+                        repo="repo", base_sha="abc")
+        assert exc.value.code == "validation"
