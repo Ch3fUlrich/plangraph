@@ -95,7 +95,9 @@ def test_verdict_changes_reviewer_descoped_refused(w):
     store2, conn2 = _second(w)
     try:
         def competitor():
-            reviewer.projects = []
+            # Deliberately bypass the frozen identity to inject this race;
+            # ordinary callers must not be able to mutate authenticated scope.
+            object.__setattr__(reviewer, "projects", [])
 
         _arm(w.store, competitor)
         with pytest.raises(Refused) as exc:

@@ -107,8 +107,10 @@ def _result(key: str, branch: str, head: str, state: str, pr: dict[str, Any],
 def attach_merge_evidence(store, principal, gate: str, merge_sha: str, *,
                           github: GitHub, repo_root: Path | str | None = None) -> None:
     """Atomically attach verified proof of this phase's exact merge, once per card."""
-    if principal.role not in ("router", "system"):
+    if principal.role not in ("router", "system") and not getattr(principal, "worker_scope", False):
         raise Refused("forbidden", "merge evidence requires router or system")
+    from plangraph.keeper.worker_policy import check_project
+    check_project(store, principal, gate)
     if not isinstance(merge_sha, str) or _SHA_RE.fullmatch(merge_sha) is None:
         raise Refused("validation", "merge_sha must be a 40-character lowercase hex sha")
     row = store.conn.execute(
@@ -217,8 +219,10 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
                  pre_patch_phase: str | None = None) -> dict[str, Any]:
     """Land the gate's phase branch after CI is green on exactly ``head``."""
     # Role gate comes first: do not read the store or filesystem before this.
-    if principal.role not in ("router", "system"):
+    if principal.role not in ("router", "system") and not getattr(principal, "worker_scope", False):
         raise Refused("forbidden", "phase_finish requires router or system")
+    from plangraph.keeper.worker_policy import check_project
+    check_project(store, principal, key)
 
     expected_branch = phase_branch(key)
     if branch != expected_branch:

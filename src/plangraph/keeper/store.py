@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from .. import views
 from . import auth, evidence
 from . import db_errors
+from .worker_policy import check_identity
 from .errors import Refused
 from .store_answer import AnswerMixin
 from .store_audit_meta import AuditMetaMixin
@@ -162,17 +163,15 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             (iso(moment), "?", None, "authenticate", None, 0, "forbidden", msg))
 
     def _check_principal(self, principal):
-        """Refuse a principal whose stored row was revoked or changed.
-
-        Re-read at the top of every verb so a token that was valid at
-        authentication cannot keep acting after a revoke or a role/project edit.
-        A principal with no row is refused too, so a stale or forged identity
-        cannot act; the sole exception is the API reaper's synthetic
+        """Refuse a principal whose stored row was revoked or changed:
+        Re-read each verb so a token valid at authentication cannot keep acting
+        after a revoke or role/project edit; refuse a stale or forged identity
+        with no row too. The sole exception is the API reaper's synthetic
         ``system``/``system`` identity, which has no row of its own.
         """
-        row = self.conn.execute(
-            "SELECT role,projects,active FROM principals WHERE name=?",
+        row = self.conn.execute("SELECT role,projects,active FROM principals WHERE name=?",
             (getattr(principal, "name", None),)).fetchone()
+        check_identity(principal, row)
         if row is None:
             if (getattr(principal, "name", None) == "system"
                     and getattr(principal, "role", None) == "system"):
@@ -202,6 +201,9 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                 self._record_oversight_refusal(principal, action, key, exc, now)
 
         try:
+            from .worker_policy import check, check_project
+            check(principal, action)
+            check_project(self, principal, key)
             if isinstance(principal, auth.RunPrincipal):
                 self._check_run_principal(principal, action, key, now)
             elif isinstance(principal, auth.OversightPrincipal):
