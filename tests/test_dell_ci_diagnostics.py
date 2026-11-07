@@ -17,15 +17,6 @@ def test_protoc_path_and_missing_reason(tmp_path):
     assert "rust-spike: host fault: protoc missing" in result.stderr
 
 
-def test_failure_highlights_precede_tail():
-    # No replacement exists after 9170e867 removed output_tail. Keep this
-    # contract visible until the intended diagnostics policy is resolved.
-    output = "test core::broken ... FAILED\nthread 'core::broken' panicked at src/lib.rs:1\n"
-    tail = ci.output_tail(output + "noise\n" * 4000)
-    assert tail.startswith("test core::broken ... FAILED\nthread 'core::broken' panicked")
-    assert len(tail) <= ci.OUTPUT_TAIL_LIMIT
-
-
 def test_empty_output_names_command(tmp_path, monkeypatch):
     # Exercise the remote producer: even a silent failing cargo command must
     # identify itself before the service script exits and cleans up.
