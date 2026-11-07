@@ -116,7 +116,7 @@ DEFAULT_LEGS = (
         False, roles=("review",)),
     Leg("opencode-go-glm-5.2", "subscription", "opencode",
         "opencode-go/glm-5.2", "glm", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review",), disabled="D-3605 operator: glm not acceptable"),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
         roles=("review",), disabled="D-3605 operator: not acceptable"),

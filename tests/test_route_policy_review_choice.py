@@ -21,7 +21,7 @@ def test_disabled_leg_never_a_route_option():
 
 
 def test_large_review_falls_through_small_window_with_reason():
-    small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-glm-5.2')
+    small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-gemini-4-argon')
     large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash')
     route = route_card({'estimate_tokens': 200000, 'window_class': '128k'},
                        legs=(small, large), role='review')
@@ -33,3 +33,10 @@ def test_large_review_falls_through_small_window_with_reason():
 def test_review_route_never_offers_qwen_max():
     route = route_card({'estimate_tokens': 1000}, role='review')
     assert 'opencode-go-qwen3.8-max' not in [leg.id for leg in route.legs]
+
+
+def test_glm_never_a_review_option():
+    policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
+    assert 'glm' not in policy.review_allowed_families
+    route = route_card({'estimate_tokens': 1000}, role='review')
+    assert 'glm' not in {leg.family for leg in route.legs}
