@@ -1,0 +1,1 @@
+- **REDACT-WRAPPED-SK-SECOND-LINE (D-4612):** Redact whole allowed-byte wrapped token lines, including short letter-only tails, with a 4096-byte join budget; preserve lines containing spaces or other disallowed bytes.

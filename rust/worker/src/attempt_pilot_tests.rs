@@ -31,15 +31,15 @@ fn pilot_leak_guard_rejects_full_prefix_and_suffix_leaks() {
 }
 
 #[test]
-fn pilot_complete_token_preserves_repeated_suffix_line() {
-    for prefix in ["ghp_", "sk-"] {
-        let secret = [prefix, &random_body()].concat();
+fn pilot_complete_token_redacts_repeated_suffix_line() {
+    for prefix in [["gh", "p_"].concat(), ["s", "k-"].concat()] {
+        let secret = [prefix.as_str(), &random_body()].concat();
         let suffix = &secret[secret.len() - 16..];
         for newline in ["\n", "\r\n"] {
             let text = format!("{secret}{newline}{suffix}");
             assert_eq!(
                 crate::output_redact::history_text(&text),
-                format!("[REDACTED]\n{suffix}")
+                "[REDACTED]"
             );
         }
     }
@@ -123,8 +123,8 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
     use crate::keeper::AttemptReport;
     use pg_worker_core::packet::ParkPacket;
     let floor = pg_worker_core::GITHUB_TOKEN_BODY_FLOOR;
-    for prefix in ["ghp_", "sk-"] {
-        let secret = [prefix, &random_body()].concat();
+    for prefix in [["gh", "p_"].concat(), ["s", "k-"].concat()] {
+        let secret = [prefix.as_str(), &random_body()].concat();
         let fragment = &secret[secret.len() - 16..];
         assert!(floor <= secret.len(), "family floor exceeds fixture length");
         for (mode, ending, expected) in [
@@ -183,7 +183,7 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                 assert!(!body.contains(fragment), "{mode}: leaked short suffix");
             };
             if mode == "split" {
-                assert_eq!(result.output_tail, "[REDACTED]\n[REDACTED]");
+                assert_eq!(result.output_tail, "[REDACTED]");
             }
             safe(&serde_json::to_string(&result).unwrap());
             safe(

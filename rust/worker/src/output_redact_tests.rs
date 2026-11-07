@@ -24,16 +24,7 @@ macro_rules! wrapped {
                 for newline in ["\n", "\r\n"] {
                     let text = format!("{prefix}{left}{newline}{right}\nfollowing line survives");
                     assert!(text.contains(right));
-                    // The shared sk floor is one: a nonempty first line is
-                    // already complete, so subsequent prose is not joined.
-                    let expected = if (prefix == ["s", "k-"].concat()
-                        || prefix == ["xs", "k-"].concat())
-                        && split > 0
-                    {
-                        format!("[REDACTED]\n{right}\nfollowing line survives")
-                    } else {
-                        "[REDACTED]\nfollowing line survives".to_string()
-                    };
+                    let expected = "[REDACTED]\nfollowing line survives";
                     assert_eq!(history_text(&text), expected);
                 }
             }
@@ -52,6 +43,58 @@ wrapped!(
 wrapped!(wrapped_xox, ["xo", "xb-"].concat(), "e5".repeat(8));
 wrapped!(wrapped_akia, ["AK", "IA"].concat(), "AB".repeat(8));
 wrapped!(wrapped_aiza, ["AI", "za"].concat(), "f4".repeat(18));
+
+#[test]
+fn wrapped_complete_first_lines_consume_all_digit_shaped_continuations() {
+    for (prefix, floor, unit) in [
+        (["s", "k-"].concat(), 1, "a9"),
+        (["xs", "k-"].concat(), 1, "b8"),
+        (["gh", "p_"].concat(), 20, "c7"),
+        (["github", "_pat_"].concat(), 20, "d6"),
+        (["xo", "xb-"].concat(), 10, "e5"),
+        (["AK", "IA"].concat(), 16, "A9"),
+        (["AI", "za"].concat(), 30, "f4"),
+    ] {
+        for len in [floor, floor + 4] {
+            let left: String = unit.chars().cycle().take(len).collect();
+            for newline in ["\n", "\r\n"] {
+                let eof = format!("{prefix}{left}{newline}{}", unit.repeat(6));
+                assert_eq!(history_text(&eof), "[REDACTED]");
+                for suffix in ["", &format!("{newline}{}", unit.repeat(5))] {
+                    let text = format!(
+                        "{prefix}{left}{newline}{}{suffix}{newline}following line survives",
+                        unit.repeat(6)
+                    );
+                    assert_eq!(history_text(&text), "[REDACTED]\nfollowing line survives");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn wrapped_letter_only_mixed_case_tail_is_redacted() {
+    for newline in ["\n", "\r\n"] {
+        let text = format!("{}a{newline}aBcDef", ["s", "k-"].concat());
+        assert_eq!(history_text(&text), "[REDACTED]");
+    }
+}
+
+#[test]
+fn wrapped_sixteen_byte_lowercase_tail_is_redacted() {
+    for newline in ["\n", "\r\n"] {
+        let text = format!("{}a{newline}{}", ["s", "k-"].concat(), "a".repeat(16));
+        assert_eq!(history_text(&text), "[REDACTED]");
+    }
+}
+
+#[test]
+fn wrapped_short_lowercase_word_is_redacted() {
+    for newline in ["\n", "\r\n"] {
+        let text = format!("{}a{newline}value", ["s", "k-"].concat());
+        assert_eq!(history_text(&text), "[REDACTED]");
+    }
+}
 
 #[test]
 fn wrapped_token_stops_at_non_token_characters() {
@@ -79,6 +122,16 @@ fn question_text_default_and_tags_are_redacted() {
 
 #[test]
 fn review_wrap_edges() {
+    for newline in ["\n", "\r\n"] {
+        for prose in ["ordinary prose", "abc123 prose", "abc123; prose", "abcé123"] {
+            let text = format!(
+                "{}{}{newline}{prose}",
+                ["s", "k-"].concat(),
+                "a9".repeat(12)
+            );
+            assert_eq!(history_text(&text), format!("[REDACTED]\n{prose}"));
+        }
+    }
     let prefix = ["gh", "p_"].concat();
     for body in [
         format!("\n{}", "c7".repeat(18)),
@@ -98,7 +151,7 @@ fn review_wrap_edges() {
     let complete = format!("{prefix}{}\nis fun", "c7".repeat(18));
     assert_eq!(history_text(&complete), "[REDACTED]\nis fun");
     let benign = ["sk", "-word\nvalue"].concat();
-    assert_eq!(history_text(&benign), "[REDACTED]\nvalue");
+    assert_eq!(history_text(&benign), "[REDACTED]");
 }
 
 #[test]
