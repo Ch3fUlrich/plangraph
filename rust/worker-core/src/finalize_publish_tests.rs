@@ -202,15 +202,14 @@ fn inherited_git_overrides_are_removed() {
         let (key, _) = line.split_once('=').unwrap();
         assert!(
             !(key.starts_with("GIT_") || key.starts_with("SSH_"))
-                || matches!(
-                    key,
-                    "GIT_CONFIG_GLOBAL"
-                        | "GIT_CONFIG_NOSYSTEM"
-                        | "GIT_ALLOW_PROTOCOL"
-                        | "GIT_TERMINAL_PROMPT"
-                ),
-            "unexpected child environment key {key}; GIT_DIR, GIT_SSH_COMMAND, SSH_ASKPASS, GIT_FOO must be absent"
+                || GIT_FIXED_ENV.iter().any(|(fixed, _)| *fixed == key),
+            "unexpected child environment key {key}; only helper-set GIT_FIXED_ENV keys are allowed"
         );
+    }
+    for (key, value) in GIT_FIXED_ENV {
+        assert!(child_env
+            .lines()
+            .any(|line| line == format!("{key}={value}")));
     }
     assert!(child_env
         .lines()
