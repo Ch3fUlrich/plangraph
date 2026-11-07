@@ -1,5 +1,45 @@
 # Placement rule loader (R8B A)
 
+## Operator view: local Rust rule source
+
+`placement_rule_store::RuleSource` accepts a configured env-file path (or None),
+private cache path, opaque host ID and trusted registry host class. `load` reads
+the real process environment afresh; `load_with_env` injects a map for tests.
+Neither local layer is persisted. `LoadedRules` exposes the effective report,
+keeper revision and `keeper`/`lkg` source; report sources identify each winner.
+
+| Priority (highest first) | Input |
+| --- | --- |
+| 1 | Current process `PG_RULE_` environment |
+| 2 | Current configured env file |
+| 3 | Keeper override for the exact host ID |
+| 4 | Keeper fleet override |
+| 5 | Schema default, including trusted class seed |
+
+| Key | Default / seeds | Inclusive range |
+| --- | --- | --- |
+| `PG_RULE_HOST_MEMORY_FLOOR_MIB` | 6144; alarm metadata 3000 | 0–1048576 |
+| `PG_RULE_HOST_WORKER_CAP_COUNT` | 6; trusted host-class seeds a host → 4, a host → 5 | 0–1024 |
+
+Values are unsigned decimal integers; schema allow-lists and ranges remain
+authoritative. Unknown `PG_RULE_` keys are refused with redacted diagnostics;
+unrelated environment keys are ignored. Invalid overrides fall to the next layer.
+For a local override put `PG_RULE_HOST_WORKER_CAP_COUNT=7` in the configured file
+or process environment. This adapter parses each file line independently: blanks
+and comments are ignored, malformed or non-UTF-8 lines are reported/skipped, and the first
+duplicate wins with a diagnostic. It does not run shell syntax or interpolate.
+Missing files are empty; unreadable files are reported and treated as empty.
+The standalone strict `parse_env_file` API below retains whole-file rejection.
+
+For a durable per-host override, use the authenticated keeper edit surface with
+`scope={"Host":"worker-a"}`, the schema key, string value and current
+`expected_revision`. Fleet uses `scope="Fleet"`; null value removes an override.
+Edits require authorization and atomically append audit history. Rollback appends
+a new revision, never rewrites history. Local overrides still take precedence.
+Only keeper Unavailable enables validated LKG; other keeper errors fail closed.
+Current process/file changes still apply during an outage with a valid LKG. No valid LKG means
+Unavailable, not silent defaults. This adapter does not wire admission or deploy.
+
 ## C5 keeper specs and report projection (rulings 1–3)
 
 `placement_rules_report` and `placement_rule_specs` use C4's persistent read
@@ -107,6 +147,7 @@ revision; `None` removes an override, including rollback of an initial insert.
 The hermetic test store demonstrates the contract, not production durability.
 
 `load_cached` validates keeper snapshots through A before atomic cache replace.
+Cache-write failure logs a redacted diagnostic and returns the valid keeper snapshot.
 Only Unavailable permits validated version-1 LKG fallback, without offline expiry.
 The private adapter-owned cache is bounded to 1 MiB, excludes process/env-file
 layers, rejects symlinks/nonregular files and uses a sibling lock/temp plus sync

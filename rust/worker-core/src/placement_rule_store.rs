@@ -1,5 +1,5 @@
 //! Adapter boundary only: durable keeper transactions are an integration dependency.
-use crate::placement_rules::{resolve, schema, RuleLayers};
+use crate::placement_rules::{parse_env_file, resolve, schema, RuleLayers, RuleReport};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -194,17 +194,145 @@ fn replace_cache(path: &Path, snapshot: &RuleSnapshot) -> Result<(), StoreError>
 /// Adapter exposes online/offline source and revision; offline LKG has no expiry.
 /// Cache directory must be private to the adapter, not writable by other users.
 pub fn load_cached(store: &impl RuleStore, path: &Path) -> Result<RuleSnapshot, StoreError> {
+    load_snapshot(store, path).map(|(snapshot, _)| snapshot)
+}
+fn load_snapshot(
+    store: &impl RuleStore,
+    path: &Path,
+) -> Result<(RuleSnapshot, &'static str), StoreError> {
     match store.read() {
         Ok(snapshot) => {
             validate_snapshot(&snapshot)?;
-            replace_cache(path, &snapshot)?;
-            Ok(snapshot)
+            if replace_cache(path, &snapshot).is_err() {
+                eprintln!("placement_rules cache_write_failed");
+            }
+            Ok((snapshot, "keeper"))
         }
-        Err(StoreError::Unavailable) => read_cache(path).map_err(|_| StoreError::Unavailable),
+        Err(StoreError::Unavailable) => read_cache(path)
+            .map(|snapshot| (snapshot, "lkg"))
+            .map_err(|_| StoreError::Unavailable),
         Err(error) => Err(error),
+    }
+}
+
+/// Local configuration only; host class must come from the trusted registry.
+pub struct RuleSource {
+    pub cache_path: PathBuf,
+    pub env_file: Option<PathBuf>,
+    pub host_id: String,
+    pub host_class: String,
+}
+pub struct LoadedRules {
+    pub report: RuleReport,
+    pub revision: u64,
+    pub source: &'static str,
+}
+fn filter_process_env(
+    entries: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> (BTreeMap<String, String>, Vec<String>) {
+    let mut process = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for (key, value) in entries {
+        if !key.as_encoded_bytes().starts_with(b"PG_RULE_") {
+            continue;
+        }
+        match (key.into_string(), value.into_string()) {
+            (Ok(key), Ok(value)) => {
+                process.insert(key, value);
+            }
+            (Err(_), _) => diagnostics.push("PG_RULE_<unknown> process invalid_key_utf8".into()),
+            (_, Err(_)) => diagnostics.push("PG_RULE_<unknown> process invalid_value_utf8".into()),
+        }
+    }
+    (process, diagnostics)
+}
+impl RuleSource {
+    /// Read the current process environment on every call, never from the cache.
+    pub fn load(&self, store: &impl RuleStore) -> Result<LoadedRules, StoreError> {
+        let (process, diagnostics) = filter_process_env(std::env::vars_os());
+        let mut loaded = self.load_with_env(store, &process)?;
+        loaded.report.diagnostics.extend(diagnostics);
+        Ok(loaded)
+    }
+
+    /// Injectable process snapshot for hermetic callers; unrelated keys are ignored.
+    pub fn load_with_env(
+        &self,
+        store: &impl RuleStore,
+        process: &BTreeMap<String, String>,
+    ) -> Result<LoadedRules, StoreError> {
+        let specs = schema().map_err(|_| StoreError::Invalid)?;
+        let (snapshot, source) = load_snapshot(store, &self.cache_path)?;
+        let mut diagnostics = Vec::new();
+        let mut env_file = BTreeMap::new();
+        if let Some(path) = &self.env_file {
+            match fs::read(path) {
+                Ok(bytes) => {
+                    for (index, bytes) in bytes.split(|b| *b == b'\n').enumerate() {
+                        let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+                        let line = match std::str::from_utf8(bytes) {
+                            Ok(line) => line,
+                            Err(_) => {
+                                diagnostics
+                                    .push(format!("env_file line {} invalid_utf8", index + 1));
+                                continue;
+                            }
+                        };
+                        match parse_env_file(line) {
+                            Ok(entries) => {
+                                for (key, value) in entries {
+                                    if key.starts_with("PG_RULE_") {
+                                        if let std::collections::btree_map::Entry::Vacant(entry) =
+                                            env_file.entry(key)
+                                        {
+                                            entry.insert(value);
+                                        } else {
+                                            diagnostics.push(format!(
+                                                "env_file line {} duplicate_key",
+                                                index + 1
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                diagnostics.push(format!("env_file line {} malformed", index + 1))
+                            }
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => diagnostics.push("env_file unreadable".into()),
+            }
+        }
+        let layers = RuleLayers {
+            process: process
+                .iter()
+                .filter(|(k, _)| k.starts_with("PG_RULE_"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            env_file,
+            keeper_host: snapshot
+                .hosts
+                .get(&self.host_id)
+                .cloned()
+                .unwrap_or_default(),
+            keeper_fleet: snapshot.fleet,
+        };
+        let mut report = resolve(&specs, &self.host_class, &layers);
+        report.diagnostics.extend(diagnostics);
+        Ok(LoadedRules {
+            report,
+            revision: snapshot.revision,
+            source,
+        })
     }
 }
 
 #[cfg(test)]
 #[path = "placement_rule_store_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "placement_rule_source_tests.rs"]
+mod source_tests;
