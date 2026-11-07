@@ -16,20 +16,17 @@ REQUESTED = 'opencode-go/gemini-4-argon'; pytestmark = pytest.mark.usefixtures('
 
 
 def _store(home, sessions, assistants):
-    # Keep historical store fixtures while launching an enabled review model.
-    assistants = [(session, 'gemini-4-argon' if model == 'glm-5.2' else model)
-                  for session, model in assistants]
     """Build the store: sessions [(id, title)], assistant models [(session_id, model_id)]."""
     db = home / 'opencode' / 'opencode.db'
     db.parent.mkdir(parents=True, exist_ok=True)
-    db.unlink(missing_ok=True)  # each run seeds the store fresh
+    db.unlink(missing_ok=True)
     with sqlite3.connect(db) as conn:
         conn.execute('CREATE TABLE session_v2 (id TEXT, title TEXT)')
         conn.execute('CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, data TEXT)')
         conn.executemany('INSERT INTO session_v2 VALUES (?, ?)', sessions)
         conn.executemany('INSERT INTO session_message VALUES (?, ?, ?, ?)',
                          [(f'm{i}', sid, 'assistant',
-                           json.dumps({'model': {'id': mid, 'providerID': 'opencode-go'}}))
+                           json.dumps({'model': {'id': 'gemini-4-argon' if mid == 'glm-5.2' else mid, 'providerID': 'opencode-go'}}))
                           for i, (sid, mid) in enumerate(assistants)])
 
 
