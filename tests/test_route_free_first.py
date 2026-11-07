@@ -21,7 +21,7 @@ SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-fl
 
 def test_default_qwen_disabled_and_gpt_review_families():
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == "qodercli-qwen3.8-flash")
-    assert leg.disabled == "D-4744 operator disabled: no login/credit; not a route option"
+    assert leg.disabled == "D-4744 operator disabled, not a route option"
     assert leg.roles == ("review",)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",))
     assert leg.id not in {candidate.id for candidate in plan.legs}
@@ -34,7 +34,7 @@ def test_explicit_disabled_qwen_refused(tmp_path):
     import pytest
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.routing import SpawnRefused
-    with pytest.raises(SpawnRefused, match=r"^leg disabled: qodercli-qwen3\.8-flash: D-4744 operator disabled: no login/credit; not a route option; override cannot enable a disabled leg$"):
+    with pytest.raises(SpawnRefused, match=r"^leg disabled: qodercli-qwen3\.8-flash: D-4744 operator disabled, not a route option; override cannot enable a disabled leg$"):
         asyncio.run(SpawnService(state=tmp_path).spawn(
             card=CARD, leg="qodercli-qwen3.8-flash",
             override_reason="test disabled leg", dry_run=True))
