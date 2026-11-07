@@ -3,12 +3,14 @@ use crate::{validate, Capabilities, Envelope, Refusal, Validated};
 
 #[path = "ledger.rs"]
 mod ledger;
+#[cfg(any(test, feature = "mock"))]
 #[path = "mock_transport.rs"]
 mod mock_transport;
 #[path = "readback.rs"]
 mod readback;
 pub use ledger::Blocked;
 use ledger::{BLOCKED_LIMIT, INVALID_SCOPE};
+#[cfg(any(test, feature = "mock"))]
 pub use mock_transport::MockTransport;
 use readback::matching;
 
@@ -107,12 +109,7 @@ impl<T: Transport> Memory<T> {
                 } else {
                     INVALID_SCOPE.to_owned()
                 },
-                reason: match reason {
-                    Error::Refused(r) => Error::Refused(r.clone()),
-                    Error::WritesDisabled => Error::WritesDisabled,
-                    Error::InvalidScope => Error::InvalidScope,
-                    _ => Error::Unverified,
-                },
+                reason: ledger::reason(reason),
             });
         }
         result
@@ -167,6 +164,7 @@ mod tests {
         assert_eq!(m.remember(&e.project, &e, &c), Err(Error::Outage));
         assert!(matches!(m.recall("global"), Err(Error::Outage)));
         assert_eq!(m.transport.writes, 0);
+        assert_eq!(m.blocked[0].reason, Error::Outage);
     }
     #[test]
     fn explicit_scope_and_superseded_filtering() {
@@ -222,6 +220,7 @@ mod tests {
             inner: MockTransport::default(),
         });
         assert_eq!(m.remember(&e.project, &e, &c), Err(Error::Conflict));
+        assert_eq!(m.blocked[0].reason, Error::Conflict);
         assert_eq!((m.transport.inner.reads, m.transport.inner.writes), (3, 3));
         assert!(m.transport.inner.facts.is_empty());
         assert!(m.transport.inner.edges.is_empty());
