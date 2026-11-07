@@ -35,6 +35,8 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
                 end += 1;
             }
             if count >= floor {
+                // A complete token does not authorize consuming the next line,
+                // even if that line repeats a suffix of its body.
                 break;
             }
             let next = if bytes.get(end..end + 2) == Some(b"\r\n") {

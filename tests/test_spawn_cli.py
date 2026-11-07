@@ -5,13 +5,12 @@ import time
 import uuid
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
-from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo
-from plangraph.spawner.runner import spawn_service
+from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo, spawn_service
 from plangraph.spawner.leg_state import LegStateStore
 import pytest, sys, os
 from fake_pid import FAKE_PID
 from pathlib import Path
-from historical_legs import historical_zen_legs  # noqa: F401
+from mechanics_legs import install_fallthrough_legs
 pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owned via the fake provider, never live host pids
 
 
@@ -100,6 +99,7 @@ def test_bounded_wait_and_private_record(tmp_path, wait):
 
 
 def test_harness_quota_falls_through(tmp_path, monkeypatch):
+    install_fallthrough_legs(monkeypatch)
     from plangraph.spawner import resolver
     from test_spawner_exit_outcome import QUOTA
     rows = resolver.get_catalog_models()
@@ -132,10 +132,10 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-def test_replan_and_all_limited(tmp_path, monkeypatch, historical_zen_legs):
+def test_replan_and_all_limited(tmp_path, monkeypatch):
+    install_fallthrough_legs(monkeypatch)
     from plangraph.spawner import resolver
     rows = resolver.get_catalog_models()
-    # Exercise quota fallback independently of the host catalog's admission state.
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
         dict(row, available=1, active=True) for row in rows])
     async def run():
@@ -191,7 +191,6 @@ def test_cancel_injected_windows_killer(tmp_path):
 
 @pytest.mark.parametrize('wait', ['0', '0.05'])
 def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
-    # Fake the supervisor process, but keep its real sleeping child and monitor.
     import plangraph.spawner.cli as cli
     import threading
     import io
@@ -233,7 +232,6 @@ def test_cli_wait_detaches_sleeping_child(tmp_path, monkeypatch, capsys, wait):
         self.stdin = Input()
     Supervisor.__init__ = init
     monkeypatch.setattr(cli, '_start_supervisor', Supervisor)
-    import time
     started = time.monotonic()
     assert main(['--state', str(tmp_path), 'spawn', 'task', '--card',
                  '{"estimate_tokens":1000}', '--wait', wait]) == 0
@@ -259,7 +257,8 @@ def test_records_and_review(tmp_path):
 
 
 @pytest.mark.parametrize('provider_stop', [True, False])
-def test_transport_only_fallthrough(tmp_path, provider_stop, historical_zen_legs):
+def test_transport_only_fallthrough(tmp_path, provider_stop, monkeypatch):
+    install_fallthrough_legs(monkeypatch)
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()
@@ -359,7 +358,7 @@ def test_override_and_unknown_review(tmp_path):
         service = SpawnService(state=tmp_path)
         with pytest.raises(ValueError, match='unknown run'):
             await service.spawn(card={'estimate_tokens': 1000}, review_of='run-unknown', dry_run=True)
-        await service.spawn(card={'estimate_tokens': 1000}, model='mimo/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
+        await service.spawn(card={'estimate_tokens': 1000}, role='review', writer_families=('gpt',), model='mimo/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
         assert json.loads((tmp_path / 'spawn-overrides.jsonl').read_text())['reason'] == 'explicit test override'
         with pytest.raises(ValueError):
             await service.spawn(model='omniroute/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)

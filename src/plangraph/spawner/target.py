@@ -1,5 +1,5 @@
 """Resolve explicit spawn targets before admission or provider rendering."""
-from plangraph.planner.legs import DEFAULT_LEGS, leg_active
+from plangraph.planner.legs import leg_active
 from plangraph.routing_errors import SpawnRefused
 
 
@@ -12,6 +12,7 @@ def admit_leg(leg):
 
 def resolve_target(target, *, chosen=None):
     """Resolve and admit a target; override cannot enable a disabled leg."""
+    from plangraph.planner.legs import DEFAULT_LEGS
     if chosen is not None and target != chosen.model:
         raise SpawnRefused('model and leg disagree')
     admit_leg(chosen)

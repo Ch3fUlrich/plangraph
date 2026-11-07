@@ -121,7 +121,7 @@ def test_windows_process_cmd_resolution(tmp_path, monkeypatch):
         with monkeypatch.context() as patch:
             from plangraph.spawner import runner as runner_module
             patch.setattr(runner_module, 'os', SimpleNamespace(name='nt', environ=os.environ, getcwd=os.getcwd))
-            job = await runner.spawn(prompt='fixture', model_or_combo='openrouter/free', client='opencode')
+            job = await runner.spawn(prompt='fixture', model_or_combo='cx-gpt-6.1-sol', client='opencode')
         await runner._tasks[job.job_id]
         assert unavailable_reason(job.exit_code, job.stdout, job.stderr)
         assert job.stderr

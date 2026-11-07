@@ -2,18 +2,31 @@
 use pg_worker_core::git::{GitError, git};
 use std::path::Path;
 
-pub(crate) fn ensure(repo: &Path, base: &str, head: &str) -> Result<(), String> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AncestryError {
+    Diverged,
+    CheckFailed,
+}
+
+impl std::fmt::Display for AncestryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Diverged => "phase branch does not contain the base head",
+            Self::CheckFailed => "phase branch ancestry check failed",
+        })
+    }
+}
+
+pub(crate) fn ensure(repo: &Path, base: &str, head: &str) -> Result<(), AncestryError> {
     classify(git(repo, &["merge-base", "--is-ancestor", base, head]))
 }
 
-fn classify(result: Result<String, GitError>) -> Result<(), String> {
+fn classify(result: Result<String, GitError>) -> Result<(), AncestryError> {
     match result {
         Ok(_) => Ok(()),
-        Err(GitError::Failed { code: Some(1), .. }) => {
-            Err("phase branch does not contain the base head".to_string())
-        }
+        Err(GitError::Failed { code: Some(1), .. }) => Err(AncestryError::Diverged),
         // Never forward stderr, argv or paths into activity history.
-        Err(_) => Err("phase branch ancestry check failed".to_string()),
+        Err(_) => Err(AncestryError::CheckFailed),
     }
 }
 
@@ -30,16 +43,16 @@ mod tests {
                 stderr: "private-diagnostic".into(),
             };
             let expected = if code == Some(1) {
-                "phase branch does not contain the base head"
+                AncestryError::Diverged
             } else {
-                "phase branch ancestry check failed"
+                AncestryError::CheckFailed
             };
             assert_eq!(classify(Err(error)).unwrap_err(), expected);
         }
         assert!(classify(Ok(String::new())).is_ok());
         assert_eq!(
             classify(Err(GitError::Io(std::io::Error::other("private-io")))).unwrap_err(),
-            "phase branch ancestry check failed"
+            AncestryError::CheckFailed
         );
     }
 }

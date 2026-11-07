@@ -17,8 +17,8 @@ def request_data(tmp_path, monkeypatch):
     monkeypatch.setattr(spec, 'DEFAULT_LEGS', tuple(
         replace(leg, disabled=None) if leg.id in ('qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free') else leg
         for leg in spec.DEFAULT_LEGS))
-    from plangraph.spawner import target
-    monkeypatch.setattr(target, 'DEFAULT_LEGS', spec.DEFAULT_LEGS)
+    from plangraph.planner import legs
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', spec.DEFAULT_LEGS)
     monkeypatch.setattr(opencode_overlay, 'overlay_env', lambda env: env)
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: None)
     monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
@@ -71,7 +71,7 @@ def test_unknown(request_data):
 @pytest.mark.parametrize('explicit', [False, True])
 def test_tools(request_data, role, tmp_path, explicit):
     from plangraph.spawner.runner import IMPLEMENT_HEADER
-    leg_id = 'mimo-v2.6-flash' if role == 'implement' else request_data['leg']['id']
+    leg_id = 'cx-gpt-6.1-sol' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
     exe.chmod(0o700)

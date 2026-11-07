@@ -67,7 +67,7 @@ def test_review_ended_on_quota_leg():
     assert record == before
 
 
-@pytest.mark.parametrize('selection', [dict(model='mimo/mimo-v2.6-flash'), dict(leg='mimo-v2.6-flash')])
+@pytest.mark.parametrize('selection', [dict(model='omniroute/cx-gpt-6.1-sol'), dict(leg='cx-gpt-6.1-sol')])
 def test_live_implement_initial_chosen_leg_none(tmp_path, monkeypatch, selection):
     from plangraph.spawner.service import SpawnService
     saves = []

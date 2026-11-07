@@ -2,9 +2,36 @@ use super::*;
 
 #[test]
 fn startup_loads_env_policy_and_unloaded_config_refuses() {
+    // A subprocess isolates the real environment loader from parallel tests.
+    if std::env::var_os("PG_PILOT_ALLOWLIST_CHILD").is_some() {
+        let loaded = Config::default().with_card_allowlist_env().unwrap();
+        assert!(allow(&loaded, "startup-listed").is_ok());
+        assert!(allow(&loaded, "unlisted").is_err());
+        return;
+    }
+    let cfg = Config::default();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cards");
     std::fs::write(&path, "startup-listed\n").unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "card_admit::tests::startup_loads_env_policy_and_unloaded_config_refuses",
+        ])
+        .env("PG_PILOT_ALLOWLIST_CHILD", "1")
+        .env("PG_CARD_ALLOWLIST", &path)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "child failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.lines().any(|line| line == "running 1 test"),
+        "expected exactly one child test to run: {stdout}"
+    );
     let loaded = Config::default().with_card_allowlist(Some(&path)).unwrap();
     assert!(allow(&loaded, "startup-listed").is_ok());
     assert!(allow(&loaded, "unlisted").is_err());
@@ -13,7 +40,6 @@ fn startup_loads_env_policy_and_unloaded_config_refuses() {
             .with_card_allowlist(Some(dir.path()))
             .is_err()
     );
-    let cfg = Config::default().with_card_allowlist(None).unwrap();
     assert_failure(
         allow(&cfg, "unloaded").unwrap_err(),
         Some("card_not_allowlisted"),
