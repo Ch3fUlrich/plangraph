@@ -1,17 +1,54 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 
 import pytest
-
-
 SPEC = importlib.util.spec_from_file_location(
     "dell_ci_run", Path(__file__).parents[1] / "tools/dell_ci_run.py")
 ci = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ci)
 SHA = "ab" * 20
+def test_explicit_base_and_main_first_parent(tmp_path):
+    fake = Fake()
+    assert ci.main(["--sha", SHA, "--base", "origin/custom", "--jobs",
+                    "file-size,changelog-docs", "--out", str(tmp_path)], runner=fake) == 0
+    commands = [c for c in fake.calls if c.startswith("timeout ")]
+    assert len(commands) == 2
+    for command in commands:
+        assert "origin/custom" in command
+        assert 'base=$(git rev-parse HEAD^)' in command
+        assert '"$base" = "$(git rev-parse HEAD)"' in command
+
+
+@pytest.mark.parametrize("name", ["pytest", "pytest-postgres", "browser"])
+def test_python_jobs_private_venv(tmp_path, name):
+    fake = Fake()
+    invoke(tmp_path, fake, jobs=name)
+    command = next(c for c in fake.calls if c.startswith("timeout "))
+    assert "python3 -m venv" in command
+    assert "/venv/bin/python -m pip install -r requirements-ci.txt" in command
+    assert "export PATH=" in command
+    assert f"{name}: venv setup or job failed" in command
+
+
+@pytest.mark.parametrize("content,expected", [
+    ("unrelated", ""), ("keeper_util sqlite3", ""),
+    ("keeper_util", "tests/test_sample.py"),
+])
+def test_postgres_optional_files(tmp_path, content, expected):
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_sample.py").write_text(content)
+    body = ci.service_script.__globals__["POSTGRES"]
+    selection = next(line for line in body.splitlines() if line.startswith("FILES="))
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", selection + '\n' + 'printf "%s" "$FILES"'],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
 
 
 class Fake:
@@ -28,6 +65,8 @@ class Fake:
             output = self.head + "\n"
         elif "status --porcelain" in command:
             output = self.dirty
+        elif command.startswith('df -Pk "$HOME"/.cache/dell-ci/'):
+            output = 'Filesystem 1024-blocks Used Available Capacity Mounted\ndisk 90000000 0 90000000 0% /home\n'
         else:
             output = ""
         if "scrub_check.py" in command:
@@ -71,6 +110,7 @@ def test_failure_record_and_cleanup(tmp_path, capsys):
     assert code != 0 and record["result"] == "failure"
     assert record["jobs"][0]["result"] == "failure"
     assert record["jobs"][0]["exit"] == 7
+    assert "secret" not in json.dumps(record)
     assert "worktree remove" in fake.calls[-1]
     assert "secret" not in capsys.readouterr().out
 
@@ -86,17 +126,20 @@ def test_exact_identity_and_commands(tmp_path):
     fake = Fake()
     code, record = invoke(tmp_path, fake, jobs="select,scrub,file-size,changelog-docs,pytest")
     assert code == 0
-    assert fake.calls[:2] == ["git fetch origin", f"git fetch origin {SHA}"]
+    assert fake.calls[:2] == ['git -C "$HOME"/code/plangraph fetch origin',
+                              f'git -C "$HOME"/code/plangraph fetch origin {SHA}']
     assert record["sha"] == SHA and record["host"] == "test-host"
     assert record["started"]
     assert all(j["duration_s"] >= 0 for j in record["jobs"])
     assert any("--detach" in c and SHA in c for c in fake.calls)
     assert any("PYTHONPATH=" in c and "/src" in c for c in fake.calls)
-    assert any('python3 tools/affected_tests.py --base origin/main --run -n auto' in c
+    assert any('python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests' in c
                for c in fake.calls)
     commands = [c for c in fake.calls if c.startswith("timeout ")]
     assert len(commands) == 5
-    assert all("python3 " in c and "python " not in c for c in commands)
+    assert all("python3 " in c for c in commands)
+    assert all(not re.search(r"(?<!/bin/)\bpython ", c) for c in commands)
+    assert all("/bin/python -m pip" in c for c in commands if "pytest" in c)
 
 
 def test_requested_sha_fetch_failure(tmp_path):
@@ -104,7 +147,7 @@ def test_requested_sha_fetch_failure(tmp_path):
 
     def runner(argv, **kwargs):
         result = fake(argv, **kwargs)
-        if argv[-1] == f"git fetch origin {SHA}":
+        if argv[-1] == f'git -C "$HOME"/code/plangraph fetch origin {SHA}':
             return subprocess.CompletedProcess(argv, 1, "", "secret")
         return result
 
@@ -113,6 +156,27 @@ def test_requested_sha_fetch_failure(tmp_path):
     assert record["reason"] == "requested SHA fetch failed"
     assert not any("worktree add" in command for command in fake.calls)
     assert not record["jobs"]
+
+
+@pytest.mark.parametrize("repo", ["~/code/custom", "/srv/plangraph"])
+def test_explicit_repository(tmp_path, repo):
+    fake = Fake()
+    assert ci.main(["--sha", SHA, "--repo", repo, "--jobs", "select",
+                    "--out", str(tmp_path)], runner=fake) == 0
+    prefix = 'git -C ' + (repo.replace("~/", '"$HOME"/') if repo.startswith("~/") else repo)
+    for operation in ["fetch origin", f"fetch origin {SHA}",
+                      "worktree add --detach", "worktree remove --force"]:
+        assert any(prefix + " " + operation in command for command in fake.calls)
+    assert all("git -C " in command for command in fake.calls if "git " in command)
+
+
+@pytest.mark.parametrize("repo", ["relative/path", "~other/repo", "/repo;true",
+                                 "~/repo$(id)", "/repo\ntrue", "--help", ""])
+def test_invalid_repository_refused(tmp_path, repo):
+    fake = Fake()
+    with pytest.raises(SystemExit):
+        ci.main(["--sha", SHA, "--repo=" + repo, "--out", str(tmp_path)], runner=fake)
+    assert not fake.calls
 
 
 def test_failed_worktree_add_still_removes_private_directory(tmp_path):
@@ -124,10 +188,13 @@ def test_failed_worktree_add_still_removes_private_directory(tmp_path):
         command = argv[-1]
         if "worktree add" in command:
             directory.mkdir(mode=0o700)
+            (directory / "leftover-target").mkdir()
+            (directory / "leftover-target" / "artifact").write_text("partial build")
             return subprocess.CompletedProcess(argv, 1, "", "setup failed")
         if "worktree remove" in command:
             # Execute the real cleanup shell with a failing git removal.
-            command = re.sub(r"/tmp/dell-ci-[0-9a-f]+", str(directory), command)
+            command = re.sub(r'"\$HOME"/.cache/dell-ci/[0-9a-f]+',
+                             str(directory), command)
             return subprocess.run(["sh", "-c", "git() { return 1; }; " + command],
                                   capture_output=True, text=True, check=False)
         return result
@@ -143,19 +210,19 @@ def test_failed_worktree_add_still_removes_private_directory(tmp_path):
 def test_slice_two_skipped(tmp_path):
     fake = Fake()
     code, record = invoke(tmp_path, fake, jobs="pytest-postgres,rust,rust-worker,rust-spike")
-    assert code == 2
-    assert record["result"] == "partial"
+    assert code == 0
+    assert record["result"] == "success"
     assert [j["job"] for j in record["jobs"]] == [
         "pytest-postgres", "rust", "rust-worker", "rust-spike"]
-    assert all(j["result"] == "skipped" and j["reason"] == "slice 2"
+    assert all(j["result"] == "success"
                for j in record["jobs"])
-    assert not any(c.startswith("timeout ") for c in fake.calls)
+    assert sum(c.startswith("timeout ") for c in fake.calls) == 4
 
 
 @pytest.mark.parametrize("jobs", ["rust", "scrub,rust", "rust,scrub"])
 def test_partial_requested_jobs(tmp_path, jobs):
     code, record = invoke(tmp_path, Fake(), jobs=jobs)
-    assert code == 2 and record["result"] == "partial"
+    assert code == 0 and record["result"] == "success"
     assert [j["job"] for j in record["jobs"]] == jobs.split(",")
 
 
@@ -170,14 +237,160 @@ def test_default_jobs_success_lists_omissions(tmp_path):
     code = ci.main(["--sha", SHA, "--out", str(tmp_path)], runner=fake)
     record = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert code == 0 and record["result"] == "success"
-    assert [j["job"] for j in record["jobs"]] == [
-        "scrub", "file-size", "changelog-docs", "pytest"]
-    assert record["not_requested"] == [
-        "select", "pytest-postgres", "rust", "rust-worker", "rust-spike"]
+    assert [j["job"] for j in record["jobs"]] == list(ci.JOBS)
+    assert record["not_requested"] == []
     commands = [c for c in fake.calls if c.startswith("timeout ")]
-    assert len(commands) == 4
-    for command, script in zip(commands, [
-            "tools/split/scrub_check.py", "tools/check_file_size.py",
-            "tools/check_changelog_docs.py", "tools/affected_tests.py"]):
-        assert "python3 " + script in command
+    assert len(commands) == len(ci.JOBS)
+    expected = {
+        "select": "python3 tools/ci_select.py select --full",
+        "scrub": "python3 tools/split/scrub_check.py .",
+        "file-size": "python3 tools/check_file_size.py",
+        "changelog-docs": "python3 tools/check_changelog_docs.py",
+        "pytest": "python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests",
+        "pytest-postgres": "tests/contract tests/test_keeper_pg_unit.py",
+        "rust": "cargo check --target x86_64-pc-windows-gnu",
+        "rust-worker": "PG_TEMPORAL_ADDR=http://127.0.0.1:$port",
+        "rust-spike": "cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
+        "browser": "python3 -m pytest -q tests/browser -m browser",
+        "ci-gate": "python3 tools/ci_select.py gate --needs",
+    }
+    assert set(expected) == set(ci.JOBS)
+    for name, command in zip(ci.JOBS, commands):
+        assert expected[name] in command, name
     assert all(j["result"] == "success" and j["exit"] == 0 for j in record["jobs"])
+
+
+def test_subset_jobs_lists_omissions(tmp_path):
+    fake = Fake()
+    code, record = invoke(tmp_path, fake, jobs="select,browser")
+    assert code == 0 and record["result"] == "success"
+    assert [job["job"] for job in record["jobs"]] == ["select", "browser"]
+    assert record["not_requested"] == [
+        "scrub", "file-size", "changelog-docs", "pytest", "pytest-postgres",
+        "rust", "rust-worker", "rust-spike", "ci-gate"]
+    commands = [c for c in fake.calls if c.startswith("timeout ")]
+    assert len(commands) == 2
+    assert "python3 tools/ci_select.py select --full" in commands[0]
+    assert "python3 -m pytest -q tests/browser -m browser" in commands[1]
+
+
+@pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_service_result(tmp_path, name, exit_code):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1].startswith("timeout "):
+            return subprocess.CompletedProcess(argv, exit_code, "password-secret", "password-secret")
+        return result
+
+    code, record = invoke(tmp_path, runner, jobs=name)
+    assert code == bool(exit_code)
+    assert record["jobs"][0]["result"] == ("failure" if exit_code else "success")
+    assert set(record) == {"sha", "host", "started", "jobs", "not_requested", "result"}
+    assert "password-secret" not in json.dumps(record)
+    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit"}
+
+
+@pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])
+def test_service_cleanup(tmp_path, monkeypatch, name):
+    fake = Fake()
+    invoke(tmp_path, fake, jobs=name)
+    command = next(c for c in fake.calls if c.startswith("timeout "))
+    assert "trap cleanup EXIT" in command
+    assert 'rm -rf -- "$scratch"' in command
+    assert 'docker rm -f "$container_id"' in command
+    assert 'kill "$server"' in command
+    assert "worktree remove" in fake.calls[-1]
+    # Execute only a stub body: cleanup must not invoke Docker for Rust jobs.
+    calls = tmp_path / "docker-calls"
+    docker = tmp_path / "docker"
+    docker.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\n')
+    docker.chmod(0o755)
+    (tmp_path / "protoc").write_text("#!/bin/sh\nexit 0\n")
+    (tmp_path / "protoc").chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
+    namespace = ci.service_script.__globals__
+    if name == "pytest-postgres":
+        monkeypatch.setitem(namespace, "POSTGRES", "container_id=owned-id")
+    else:
+        monkeypatch.setitem(namespace["RUST"], name, ":")
+    scratch = tmp_path / name
+    result = subprocess.run(["sh", "-c", ci.service_script(name, str(scratch))],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert not scratch.exists()
+    if name == "pytest-postgres":
+        assert calls.read_text() == "rm -f owned-id\n"
+    else:
+        assert not calls.exists()
+@pytest.mark.parametrize("name", ["rust", "rust-worker", "rust-spike"])
+@pytest.mark.parametrize("available", [4194304, 20971519])
+def test_low_space_refuses(tmp_path, name, available):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1].startswith('df -Pk "$HOME"/.cache/dell-ci/'):
+            result.stdout = f'Filesystem Blocks Used Available Capacity Mounted\ndisk 90000000 0 {available} 67% /home\n'
+        return result
+
+    code, record = invoke(tmp_path, runner, jobs=name)
+    assert code == 1
+    assert record["jobs"][0]["reason"] == "insufficient ~/.cache/dell-ci space: requires at least 20 GB free"
+    assert not any(c.startswith("timeout ") for c in fake.calls)
+
+
+@pytest.mark.parametrize("available,df_exit", [(20971520, 0), (90000000, 1)])
+def test_disk_space_boundary(tmp_path, available, df_exit):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1].startswith("df -Pk "):
+            result.stdout = f'Filesystem Blocks Used Available Capacity Mounted\ndisk 90000000 0 {available} 0% /home\n'
+            result.returncode = df_exit
+        return result
+
+    code, record = invoke(tmp_path, runner, jobs="rust")
+    assert code == df_exit
+    if df_exit:
+        assert record["jobs"][0]["reason"] == "df command failed"
+    assert any(c.startswith("timeout ") for c in fake.calls) == (df_exit == 0)
+    assert all("/tmp" not in c for c in fake.calls)
+
+
+@pytest.mark.parametrize("output", ["", "Filesystem Blocks Used Available\n",
+                                    "disk 90000000 0 invalid 0% /home\n"])
+def test_malformed_disk_space_output(tmp_path, output):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1].startswith("df -Pk "):
+            result.stdout = output
+        return result
+
+    code, record = invoke(tmp_path, runner, jobs="rust")
+    assert code == 1
+    assert record["jobs"][0]["reason"] == "cannot parse df output"
+    assert not any(c.startswith("timeout ") for c in fake.calls)
+@pytest.mark.parametrize("exit_code", [0, 7, 143])
+def test_remote_home_expansion_and_scratch_cleanup(tmp_path, monkeypatch, exit_code):
+    protoc = tmp_path / "protoc"
+    protoc.write_text("#!/bin/sh\nexit 0\n")
+    protoc.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
+    home = tmp_path / "remote home"
+    root = home / ".cache/dell-ci/run"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setitem(ci.service_script.__globals__["RUST"], "rust-spike",
+                        'test "$CARGO_TARGET_DIR" = "$scratch/target"\n'
+                        'mkdir "$CARGO_TARGET_DIR"\n'
+                        f'exit {exit_code}')
+    script = ci.service_script("rust-spike", '"$HOME"/.cache/dell-ci/run/rust-spike')
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+    assert result.returncode == exit_code
+    assert not (root / "rust-spike").exists()
