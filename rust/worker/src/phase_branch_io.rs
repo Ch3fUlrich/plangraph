@@ -5,13 +5,14 @@ use super::*;
 pub(crate) enum BranchError {
     Refusal(String),
     Io,
-    Ancestry(String),
+    Ancestry(crate::phase_ancestry::AncestryError),
 }
 
 impl std::fmt::Display for BranchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Refusal(message) | Self::Ancestry(message) => f.write_str(message),
+            Self::Refusal(message) => f.write_str(message),
+            Self::Ancestry(error) => error.fmt(f),
             Self::Io => f.write_str("phase branch IO failed"),
         }
     }
@@ -99,10 +100,10 @@ pub(super) fn branch_git_error(error: pg_worker_core::git::GitError) -> BranchEr
 
 pub(super) fn phase_branch_error(error: BranchError) -> ActivityError {
     match error {
-        BranchError::Ancestry(message)
-            if message == "phase branch does not contain the base head" =>
-        {
-            ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(message))
+        BranchError::Ancestry(error @ crate::phase_ancestry::AncestryError::Diverged) => {
+            ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(
+                error.to_string(),
+            ))
         }
         BranchError::Refusal(message) => {
             ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(message))
@@ -192,7 +193,7 @@ mod tests {
     fn phase_branch_io_retries_but_refusal_does_not() {
         for error in [
             BranchError::Io,
-            BranchError::Ancestry("phase branch ancestry check failed".into()),
+            BranchError::Ancestry(crate::phase_ancestry::AncestryError::CheckFailed),
         ] {
             if let ActivityError::Application(f) = phase_branch_error(error) {
                 assert!(!f.is_non_retryable());
@@ -229,5 +230,30 @@ mod tests {
             panic!("expected application failure");
         };
         assert!(!failure.is_non_retryable());
+    }
+
+    #[test]
+    fn phase_ancestry_variants_decide_retryability_and_sanitized_messages() {
+        use crate::phase_ancestry::AncestryError;
+        for (error, permanent, message) in [
+            (
+                AncestryError::Diverged,
+                true,
+                "phase branch does not contain the base head",
+            ),
+            (
+                AncestryError::CheckFailed,
+                false,
+                "phase branch ancestry check failed",
+            ),
+        ] {
+            assert_eq!(error.to_string(), message);
+            let ActivityError::Application(failure) =
+                phase_branch_error(BranchError::Ancestry(error))
+            else {
+                panic!("expected application failure");
+            };
+            assert_eq!(failure.is_non_retryable(), permanent);
+        }
     }
 }
