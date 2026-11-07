@@ -10,23 +10,30 @@ cargo build -p pg-jail
 PG_JAIL_BIN="$CARGO_TARGET_DIR/debug/pg-jail" cargo test""",
     "rust-worker": """cd rust/worker
 command -v temporal >/dev/null 2>&1 || { echo 'rust-worker: host fault: Temporal CLI missing' >&2; exit 1; }
-temporal server start-dev --ip 127.0.0.1 --port 17233 > "$scratch/temporal.log" 2>&1 &
+ports=$(python3 -c 'import socket
+sockets = [socket.socket() for _ in range(3)]
+for sock in sockets: sock.bind(("127.0.0.1", 0))
+print(*(sock.getsockname()[1] for sock in sockets))')
+set -- $ports
+port=$1
+temporal server start-dev --headless --ip 127.0.0.1 --port "$port" --http-port "$2" --metrics-port "$3" > "$scratch/temporal.log" 2>&1 &
 server=$!
 ready=0
 for i in $(seq 1 30); do
-    if temporal operator cluster health --address 127.0.0.1:17233 >/dev/null 2>&1; then ready=1; break; fi
+    kill -0 "$server" 2>/dev/null || exit 1
+    if temporal operator cluster health --address "127.0.0.1:$port" >/dev/null 2>&1; then ready=1; break; fi
     sleep 1
 done
 test "$ready" = 1
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-PG_TEMPORAL_ADDR=http://127.0.0.1:17233 PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 cargo test""",
+PG_TEMPORAL_ADDR=http://127.0.0.1:$port PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 cargo test""",
     "rust-spike": "cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
 }
 
 POSTGRES = """password=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 export POSTGRES_PASSWORD="$password"
-docker run -d --name "$container" -e POSTGRES_PASSWORD -e POSTGRES_DB=keeper -p 127.0.0.1:0:5432 postgres:16 >/dev/null
+container_id=$(docker run -d --name "$container" -e POSTGRES_PASSWORD -e POSTGRES_DB=keeper -p 127.0.0.1:0:5432 postgres:16)
 ready=0
 for i in $(seq 1 50); do
     if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then ready=1; break; fi
@@ -58,21 +65,23 @@ def script(name, scratch):
     return f"""set -eu
 set +x
 scratch={scratch}
-container=dell-ci-${{scratch##*/}}
+run=${{scratch%/*}}
+container=dell-ci-${{run##*/}}-${{scratch##*/}}
+container_id=
 server=
 cleanup() {{
     code=$?
     trap - EXIT HUP INT TERM
     if [ -n "$server" ]; then kill "$server" 2>/dev/null || :; wait "$server" 2>/dev/null || :; fi
-    if [ '{name}' = pytest-postgres ]; then
-        docker rm -f "$container" >/dev/null 2>&1 || code=1
+    if [ -n "$container_id" ]; then
+        docker rm -f "$container_id" >/dev/null 2>&1 || code=1
     fi
     rm -rf -- "$scratch" || code=1
     exit "$code"
 }}
+mkdir -m 700 "$scratch"
 trap cleanup EXIT
 trap 'exit 143' HUP INT TERM
-mkdir -m 700 "$scratch"
 export CARGO_TARGET_DIR="$scratch/target" CARGO_BUILD_JOBS=4
 {body}
 """

@@ -110,7 +110,7 @@ def test_failure_record_and_cleanup(tmp_path, capsys):
     assert code != 0 and record["result"] == "failure"
     assert record["jobs"][0]["result"] == "failure"
     assert record["jobs"][0]["exit"] == 7
-    assert record["jobs"][0]["output_tail"] == "\nsecret"
+    assert "secret" not in json.dumps(record)
     assert "worktree remove" in fake.calls[-1]
     assert "secret" not in capsys.readouterr().out
 
@@ -138,6 +138,7 @@ def test_exact_identity_and_commands(tmp_path):
     commands = [c for c in fake.calls if c.startswith("timeout ")]
     assert len(commands) == 5
     assert all("python3 " in c for c in commands)
+    assert all(not re.search(r"(?<!/bin/)\bpython ", c) for c in commands)
     assert all("/bin/python -m pip" in c for c in commands if "pytest" in c)
 
 
@@ -248,7 +249,7 @@ def test_default_jobs_success_lists_omissions(tmp_path):
         "pytest": "python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests",
         "pytest-postgres": "tests/contract tests/test_keeper_pg_unit.py",
         "rust": "cargo check --target x86_64-pc-windows-gnu",
-        "rust-worker": "PG_TEMPORAL_ADDR=http://127.0.0.1:17233",
+        "rust-worker": "PG_TEMPORAL_ADDR=http://127.0.0.1:$port",
         "rust-spike": "cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
         "browser": "python3 -m pytest -q tests/browser -m browser",
         "ci-gate": "python3 tools/ci_select.py gate --needs",
@@ -288,13 +289,8 @@ def test_service_result(tmp_path, name, exit_code):
     assert code == bool(exit_code)
     assert record["jobs"][0]["result"] == ("failure" if exit_code else "success")
     assert set(record) == {"sha", "host", "started", "jobs", "not_requested", "result"}
-    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit", "output_tail"}
-
-
-def test_output_tail_is_bounded():
-    assert ci.output_tail("x" * 20000, "last error").endswith("last error")
-    assert len(ci.output_tail("x" * 20000, "last error")) == ci.OUTPUT_TAIL_LIMIT
-    assert ci.output_tail(b"partial", b"error") == "partial\nerror"
+    assert "password-secret" not in json.dumps(record)
+    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit"}
 
 
 @pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])
@@ -304,7 +300,7 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     command = next(c for c in fake.calls if c.startswith("timeout "))
     assert "trap cleanup EXIT" in command
     assert 'rm -rf -- "$scratch"' in command
-    assert 'docker rm -f "$container"' in command
+    assert 'docker rm -f "$container_id"' in command
     assert 'kill "$server"' in command
     assert "worktree remove" in fake.calls[-1]
     # Execute only a stub body: cleanup must not invoke Docker for Rust jobs.
@@ -317,7 +313,7 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
     namespace = ci.service_script.__globals__
     if name == "pytest-postgres":
-        monkeypatch.setitem(namespace, "POSTGRES", ":")
+        monkeypatch.setitem(namespace, "POSTGRES", "container_id=owned-id")
     else:
         monkeypatch.setitem(namespace["RUST"], name, ":")
     scratch = tmp_path / name
@@ -326,7 +322,7 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     assert result.returncode == 0, result.stderr
     assert not scratch.exists()
     if name == "pytest-postgres":
-        assert calls.read_text() == f"rm -f dell-ci-{name}\n"
+        assert calls.read_text() == "rm -f owned-id\n"
     else:
         assert not calls.exists()
 @pytest.mark.parametrize("name", ["rust", "rust-worker", "rust-spike"])
