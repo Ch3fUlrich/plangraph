@@ -105,7 +105,7 @@ def verify(repo, base, head):
             return 0
         print("Red-Exempt requires a D-id: " + "; ".join(exemptions))
         return 1
-    paths = git(repo, "diff", "--name-only", "--diff-filter=AM", base, head).decode().splitlines()
+    paths = git(repo, "diff", "-M", "--name-only", "--diff-filter=AMR", base, head).decode().splitlines()
     selected = []
     overlays = {}
     for path in paths:

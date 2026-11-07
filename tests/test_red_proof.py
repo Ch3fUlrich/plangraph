@@ -152,3 +152,23 @@ def test_parameter_id_with_brackets(repo):
     assert repo("import pytest\n\x40pytest.mark.parametrize('n', [0], ids=['a[b]'])\n"
                 "def test_value(n):\n    assert False\n") == 0
 
+
+@pytest.mark.parametrize("assertion,code", [("False", 0), ("True", 1)])
+def test_renamed_test_file(repo, tmp_path, capsys, assertion, code):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(tmp_path), *args]).decode().strip()
+
+    # Keep contents identical across the rename so Git reports R100, not A/D.
+    original = tmp_path / "test_app.py"
+    original.write_text(f"def test_value():\n    assert {assertion}\n")
+    git("add", ".")
+    git("commit", "-m", "prepare rename base")
+    base = git("rev-parse", "HEAD")
+    original.rename(tmp_path / "test_renamed.py")
+    git("add", ".")
+    git("commit", "-m", "rename test")
+    assert git("diff", "-M", "--name-status", base, "HEAD").startswith("R100")
+    assert proof.main(["--repo", str(tmp_path), "--base", base]) == code
+    output = capsys.readouterr().out
+    assert "test_renamed.py::test_value" in output
+    assert "n/a" not in output
