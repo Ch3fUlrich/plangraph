@@ -1,6 +1,6 @@
 # Omnigraph fleet usage — operator decision proposal
 
-Status: proposed; approval authorizes later scoped work, not deployment or writes.
+Status: draft incorporating operator ruling D-4635 (2026-11-07T08:33Z); no deployment or writes here.
 Extends `2026-11-05-omnigraph-memory/plan.md` and `batch.yaml`; does not replace them.
 No batch, keeper, skill, service, access grant or graph is changed by this document.
 
@@ -33,11 +33,13 @@ No batch, keeper, skill, service, access grant or graph is changed by this docum
 ## Named amendments to the existing plan and batch
 
 1. **U-HOMES** extends CONTRACT/IMPORT: graph is durable why/how, not a keeper mirror.
-   Keeper alone owns state; handoff cards are disposable keeper-derived projections.
+   Rule book for planners, router and orchestrators: general intent, goals, behaviours
+   and links to files; no task state. Keeper alone owns state; handoff cards are
+   disposable keeper-derived projections.
    Resolve baseline IMPORT's `reference -> Component` mismatch: current v1 rejects
    Component; retain blocked references until an explicit schema/mapping extension.
 2. **U-READ** extends IO/LEGS: commit-pinned bounded recall and shared feed invalidation,
-   retaining the baseline 8 KiB recall default; no full startup graph or ledger export.
+    using a larger recall budget, number after IO profiling; no full startup graph or ledger export.
 3. **U-WRITE** extends IO/SYNC: batch, dedupe, conditional commit and durable ambiguous
    outcome reconciliation through the existing single facade; no second writer service.
 4. **U-TRANSMIT** extends LEGS/E2E: durable fact plus small wake hint, not graph-as-bus.
@@ -49,25 +51,42 @@ No batch, keeper, skill, service, access grant or graph is changed by this docum
    finish the existing actor access lane; acceptance still requires workstation and
    18-de-2053 authenticated read evidence, not just currently readable seats.
    Do not claim ACCESS complete from configuration or an old baseline inventory.
-   Retain explicit OP-ACCESS login approval and custodian authorization, plus
-   Q-OMNIGRAPH-WS placement action and retirement review.
+    Agent places scoped credentials after mock tests pass and D-3895 freeze clearance,
+    mode 0600, reporting the host list; retain custodian authorization and
+    Q-OMNIGRAPH-WS placement action and operator retirement review.
 7. **U-GATES** preserves IO's mock-first independence from ACCESS and the acyclic
    SYNC -> OP-GO -> E2E activation sequence; adds freeze clearance to live write gates.
    Baseline plan says skill briefs released while batch retains OP-SKILL: reconcile
    the recorded ruling before SKILL-COMPRESS, never infer permission from this proposal.
    Keep ACCESS and live E2E independently reversible; retain HOST-NAMESPACE-MIGRATE and
-   server sync coordination gates, with explicit operator decisions before activation.
+    server sync coordination gates, with recorded evidence and owners before activation.
+    D-4635 pre-approves decisions 8, 9 and 12 after their gates; scanner activation
+    and sync retirement still require the operator.
 8. **U-LAYOUT** leaves graph folding/aliases to MEM-OMNIGRAPH-MERGE; retain per-repo
    layout pending that decision. Resolve baseline compression's contradictory ban on
    per-project instructions before editing skill text. No fold, deletion or restore here.
    Retain the baseline hub `plangraph` in `autoos` fallback until a live existence/read
    check or recorded operator confirmation verifies graph `plangraph`; the configuration
-   pin alone does not retire that fallback. Folding stays deferred; no writes authorized here.
+    pin alone does not retire that fallback. Decision 7 proposes numeric retention
+    and folding for operator yes/no; no writes authorized here.
 
-These are proposed acceptance-criteria amendments to the named items, not new parallel
+These are operator-approved amendments for later item updates, not new parallel
 items. Cost: focused Rust facade/launcher tests and operator review; no new persistent LLM.
 
+Keeper edit keys (CONTRACT/IO/etc. above abbreviate the `OG-MEM-` prefix):
+`MEM-OMNIGRAPH-MERGE`, `OG-MEM-CONTRACT`, `OG-MEM-IMPORT`, `OG-MEM-IO`,
+`OG-MEM-LEGS`, `OG-MEM-SYNC`, `OG-MEM-E2E`, `OG-MEM-ACCESS`,
+`OG-MEM-OP-ACCESS`, `Q-OMNIGRAPH-WS`, `OG-MEM-OP-GO`, `OG-MEM-OP-SKILL`,
+`OG-MEM-SKILL-COMPRESS`, `HOST-NAMESPACE-MIGRATE`, `server:OG-DELTA-IMPORT`,
+`server:AO-SYNC-PARTIAL-PULL-RESTORE` and `PH-M2C-KG` (U-LAYOUT follow-up).
+The external JSON contains changed fields only; existing unrelated criteria and
+dependency edges remain requirements, not superseded by these scoped amendments.
+
 ## 1. Information homes
+
+Purpose: a persistent rule book for planners, router and orchestrators, containing
+general intent, goals, behaviours and links to relevant files, never task state.
+Workers receive only the relevant mediated context, not a separate task memory.
 
 Recommendation: store reusable, evidenced knowledge once; use references everywhere else.
 Cost: relevance/provenance review per new fact and an extra authoritative lookup for state.
@@ -90,10 +109,11 @@ that v1 refuses. Durable actor/source metadata must survive transport, not just 
 
 ## 2. Reading efficiently
 
-Recommendation: launcher requests project + task topics + applicable approved globals,
+Recommendation: launcher requests project + reusable rule-book topics + applicable approved globals,
 selected fields, current revisions, source references and graph commit. Filter authorization
 before ranking; bound traversal depth, result count, query time and rendered bytes.
-Use the baseline 8 KiB output cap, including provenance/status; select whole facts rather
+Use a larger recall budget than baseline 8 KiB, number after IO profiling, including
+provenance/status; select whole facts rather
 than cutting safety qualifiers. Return omitted-count/continuation and fetch details on demand.
 Numeric traversal/time limits require IO profiling and operator acceptance under decision 11,
 not invented defaults.
@@ -113,7 +133,7 @@ default concerns source-file discovery, not a justified feed/polling latency tar
 
 Estimate (unmeasured): saving = replaced startup memory tokens minus recall/invalidation tokens;
 the 50–80k restart load is only reduced by the portion actually removed, not by its entire size.
-8 KiB is bytes, not a token estimate. Measure matched tasks/restarts with and without recall:
+The prior 8 KiB baseline is bytes, not a token estimate. Measure matched tasks/restarts with and without recall:
 tokenizer-count startup, recall, follow-ups and repairs; record wall time, relevance misses,
 stale decisions and successful outcomes. Keep rollout off if net context cost or correctness worsens.
 Cost: cursor/cache bookkeeping, extra targeted reads and relevance evaluation; benefit is
@@ -260,48 +280,87 @@ all flags default off. Rollback disables integration, never deletes shared facts
     Before D2/E2 sync writes, HOST-NAMESPACE-MIGRATE supplies stable host IDs; coordinate
    server:OG-DELTA-IMPORT and server:AO-SYNC-PARTIAL-PULL-RESTORE, never a new restore loop.
 - **F — compression/layout follow-up.** SKILL-COMPRESS remains after E2E and reconciled
-  OP-SKILL ruling; PH-M2C-KG retains its baseline gates. Done: evaluations and baseline
+   OP-SKILL ruling; PH-M2C-KG retains its baseline gates. Done: evaluations and baseline
   line/forbidden-instruction checks reflect an explicit layout ruling. Replaces obsolete
   skill instructions only; MEM-OMNIGRAPH-MERGE owns any later folding/aliases separately.
 
-## Operator decisions (defaults)
+## Operator decisions — answered by D-4635
 
-1. Approve these named amendments for later item updates? **Default: proposal only; no apply.**
-2. Knowledge ownership? **Default: keeper alone owns state; cards are disposable projections;
-   graph owns why/how, git owns artifact bytes; no activation.**
-3. Read budget/transmission? **Default: baseline 8 KiB bounded recall, coalesced head checks
-   only at explicit recall/task boundaries; no feed activation.** Decisions 11–12 gate limits,
-   timers and feed use; messages still carry urgency/acknowledgment.
-4. Writer/no-MCP integration? **Default: one Rust facade, credentialed mediation and verified
-   receipts as design only; routing exception unchanged; workers gain neither MCP nor access.
-   Host-runtime credential placement requires decision 8; no activation by default.**
-5. Import trust/type gap? **Default: quarantine uncertain content; Component retained blocked;
-   no global fan-out or secret override.**
-6. Live activation/freeze? **Default: blocked pending E1 ACCESS, decision 8 OP-ACCESS,
-   decisions 9–10, explicit OP-GO and freeze clearance; mock-first only;
-   no local replica, fold, compaction, deployment or new schedule authorized here.**
-7. Retention/layout/skill ruling? **Default: preserve safe history and originals; defer numeric
-   retention and graph folding; reconcile existing operator ruling before skill edits.**
-8. Place scoped runtime credentials (OP-ACCESS) on every named participating host, including
-   workstation and 18-de-2053? Operator approves host login and obtains custodian
-   authorization; only operator places credentials, opaque to agents. **Default: none placed;
-   mock work only, no live writes.** Existing access is evidence, not placement permission.
-   Q-OMNIGRAPH-WS owns the workstation placement/configuration action; no placement by default.
-9. Approve OP-GO named-host canary and later scanner activation? Record the host list,
-   scoped access evidence, reviewed import manifests and rollback owner after doctor/mock
-   tests pass. **Default: no GO, no live writes or activation.**
-   Retire workstation sync via Q-OMNIGRAPH-WS after comparison? **Default: defer retirement;
-   old device sync stays disabled, no replacement activation.** Record comparison and owner.
-10. Accept HOST-NAMESPACE-MIGRATE IDs and server:OG-DELTA-IMPORT /
-    server:AO-SYNC-PARTIAL-PULL-RESTORE coordination? Operator records stable-ID evidence,
-    server-owner approval and rollback owner before scanner activation. **Default: defer;
-     no sync-write or scanner activation.** Neither dependency is replaced by this proposal.
-11. Accept profiled traversal/query-time limits and a freshness requirement for any timer?
-    Record IO measurements and operator acceptance before adopting numeric limits or cadence.
-    **Default: limits unset until IO profiling; head-checks-only at explicit recall/task
-    boundaries, no timer and no activation.**
-12. Enable the host-runtime feed consumer and server change-feed access? Record participating
-    hosts, service owner, scoped read/feed access grant, verified feed/cursor contract and
-    rollback owner before live use; decision 8 placement alone does not authorize the service.
-    Rollback stops the consumer and returns to coalesced head checks at recall/task boundaries.
-    **Default: feed consumer off, no new feed access grant or activation; coalesced head checks only.**
+1. **Answer — apply amendments to plan items.** The named amendments above are approved
+   for item updates; the external keeper JSON is a draft edit only, not a keeper call.
+2. **Answer — operator's own text, verbatim:**
+
+   > Omnigrav should have a persistent knowledge across agents, so repeated information can be stored there, which could be general intent in goals and behaviors, but not for specific tasks. Only planning agents should mainly use this knowledge graph as well as the Rutta agent and everything that's orchestrating and should navigate a more complex environment. It should be basically a fast way to have access to documentation and so on that can also link important needed files where to look for and how to act. Basically a rule book
+
+   Purpose: rule book for planners, router and orchestrators; general intent, goals,
+   behaviours and links to files; no task state. Keeper remains authoritative for state.
+3. **Answer — larger recall budget, number after IO profiling.** Bounded recall remains;
+   no fixed 8 KiB cap. Messages still carry urgency and acknowledgment; decision 12 gates feed use.
+4. **Answer — one Rust facade, design.** Credentialed mediation and verified receipts;
+   routing exception unchanged; workers gain neither MCP nor access. No implementation here.
+5. **Answer — quarantine uncertain.** Component remains blocked pending schema/mapping
+   resolution; no secret override, unreviewed publication or automatic global fan-out.
+6. **Answer — blocked, mock-first.** D-3895 freeze clearance and successful mocks are
+   required before anything live; preserve ACCESS and dependency gates. See the tension below.
+7. **Answer — set retention now: an agent proposes numeric retention and folding for a yes or no.**
+   The table below is the requested proposal, not an approved retention policy or a fold.
+   Reconcile the existing skill ruling before any skill edits.
+8. **Answer — agent places scoped credentials when mock tests pass, 0600, host list reported.**
+   Subject also to D-3895 clearance; no credentials placed here. OP-ACCESS retains scoped
+   custodian authorization; Q-OMNIGRAPH-WS owns workstation placement/configuration.
+   Report every participating host, including workstation and 18-de-2053 where applicable.
+9. **Answer — canary on one named host when doctor and mock pass, host list and rollback
+   owner reported; scanner and sync retirement still need the operator.** Also requires
+   freeze clearance and recorded scoped access/reviewed import evidence. No canary here;
+   old device sync remains disabled pending its separate operator retirement decision.
+10. **Answer — accept on recorded evidence, server-owner approval, rollback owner.** Applies
+    to HOST-NAMESPACE-MIGRATE stable IDs and server:OG-DELTA-IMPORT /
+    server:AO-SYNC-PARTIAL-PULL-RESTORE coordination; neither dependency is replaced.
+11. **Answer — limits unset until profiled, no timer.** Record IO measurements before
+    numeric traversal/query-time limits; coalesced head checks at explicit recall boundaries.
+12. **Answer — feed consumer after a clean canary, hosts, service owner, rollback owner
+    reported.** Also requires mock/freeze clearance, scoped read/feed access and verified
+    cursor/continuity contracts. Rollback stops the consumer and returns to boundary head checks.
+
+### Named tension: (6) against (8), (9), (12)
+
+D-4635 names the tension: (6) still blocks activation while (8), (9), (12)
+pre-approve steps after mock. Read together: **nothing live before mock and freeze
+clearance (D-3895), then those steps need no new question.** Credential placement,
+the one-named-host canary and the post-clean-canary feed consumer still require their
+recorded evidence and host/owner reports. Scanner activation and sync retirement
+remain separate operator decisions. This draft performs none of those actions.
+
+### Decision 7 — proposed numeric retention and folding (pending yes/no)
+
+Retention starts at supersession, quarantine or closure as specified; current approved
+rule-book knowledge has no expiry. These are policy categories, not claims that such
+graphs exist. Server capabilities, scoped export/read-back and rollback verification
+must precede any implementation; retain originals and safe provenance, no automatic deletion.
+
+| Graph type | Retention | Fold rule | One-line reason |
+| --- | --- | --- | --- |
+| Per-repo rule book | Current facts indefinitely; superseded revisions 365 days online, then safe archive indefinitely | After 90 days without a unique active rule, fold duplicate facts into the verified canonical project scope; retain alias/provenance indefinitely | Keep project rules findable without duplicate bodies. |
+| Shared planner/router/orchestrator rule book | Current facts indefinitely; superseded revisions 730 days online, then safe archive indefinitely | Fold only exact scoped duplicates after 30 days of read-back comparison; never widen authorization | Shared behaviour needs longer correction traceability. |
+| Quarantine/import-review graph, if separately implemented | Review within 30 days; safe disposition metadata 365 days, then archive indefinitely | Never fold uncertain bodies into approved knowledge; promote only reviewed rule-book facts | Uncertainty must not become trusted recall by age. |
+| Temporary migration/comparison graph | 30 days after verified comparison and rollback clearance; safe manifest archived indefinitely | Fold verified reusable facts once through the facade; retire temporary view only after alias/read checks | Bound staging lifetime without losing source or recovery evidence. |
+| Legacy task/state graph, if encountered | 0 days in rule-book recall; preserve original pending keeper-authorized reconciliation | Never fold task state into knowledge; extract only reviewed general rules with references | Keeper, not Omnigraph, owns task state. |
+
+**Question to the operator: Approve this retention/folding table (365/730-day history,
+90/30-day fold checks, 30-day quarantine/staging review, no task-state recall), yes or no?**
+
+### Removed or replaced contradictions
+
+- Replaced proposal-only/no-apply decision 1 with approved plan-item amendments.
+- Replaced generic why/how and task-topic framing with the planner/router/orchestrator
+  rule-book purpose; removed any implication that graph recall is a task-state home.
+- Removed the baseline 8 KiB default/cap in U-READ, reading guidance and decision 3;
+  the larger number follows IO profiling, not an invented limit.
+- Removed decision 7's blanket deferral of numeric retention/folding; supplied a pending
+  yes/no table, without authorizing deletion, compaction or folding.
+- Removed operator-only credential placement and blanket no-placement default;
+  replaced them with gated agent placement, 0600 and host reporting.
+- Removed blanket deferred/no-GO defaults for the canary, dependency acceptance and
+  feed consumer; substituted D-4635's evidence/owner gates and conditional pre-approval.
+- Removed the implication of a new operator question for steps 8, 9 and 12 after
+  mock/freeze clearance; retained separate scanner/sync-retirement approval.
