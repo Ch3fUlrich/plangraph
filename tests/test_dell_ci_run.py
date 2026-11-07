@@ -315,6 +315,7 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     if 'server=$!' in command:
         assert 'kill "$server"' in command
     if name == "pytest-postgres":
+        original_postgres = namespace["POSTGRES"]
         monkeypatch.setitem(namespace, "POSTGRES", "container_id=owned-id")
     else:
         monkeypatch.setitem(namespace["RUST"], name, ":")
@@ -327,6 +328,7 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
         assert calls.read_text() == "rm -f owned-id\n"
         # Execute the actual outer lifecycle used by the driver, not just the
         # legacy service helper. Stub setup only; retain its cleanup verbatim.
+        monkeypatch.setitem(namespace, "POSTGRES", original_postgres)
         isolated = ci.isolated_script(':', tmp_path, tmp_path / 'isolated', postgres=True)
         prefix = isolated.split('mkdir "$scratch/checkout"', 1)[0]
         calls.unlink()

@@ -33,17 +33,31 @@ def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=Non
 
 def isolated_script(command, source, job, *, postgres=False, browser=False):
     """Trusted outer lifecycle; only the inner command sees PR-controlled files."""
-    setup = POSTGRES.split('FILES=', 1)[0]
+    marker = 'port=$(docker port'
+    if marker not in POSTGRES:
+        raise ValueError("Postgres template missing required marker: " + marker)
+    setup = POSTGRES.split(marker, 1)[0]
+    setup = setup[:setup.index('ready=0')]
     setup = setup.replace('-p 127.0.0.1:0:5432 postgres:16',
-                          '-v "$scratch/data/pgsocket:/var/run/postgresql" postgres:16 '
-                          '-c listen_addresses=')
-    # The container has no published TCP port. Only this job's scratch bind
-    # exposes its socket; unshare-net keeps Temporal's loopback job-private.
-    setup = setup.split('port=$(docker port', 1)[0] + '''PG_DSN="postgresql://postgres@/keeper?host=/scratch/pgsocket"
+                          '--user "$(id -u):$(id -g)" -e PGDATA=/tmp/pgdata '
+                           '-e POSTGRES_HOST_AUTH_METHOD="scram-sha-256" '
+                           '-e POSTGRES_INITDB_ARGS="--auth-local=scram-sha-256" '
+                          '--tmpfs /var/run/postgresql:uid=$(id -u),gid=$(id -g),mode=0700 '
+                          '-v "$scratch/data/pgsocket:/job-socket" postgres:16 '
+                          '-c listen_addresses= -c unix_socket_directories=/job-socket,/var/run/postgresql '
+                          '-c unix_socket_permissions=0700')
+    # Run as the job UID so neither initdb nor the entrypoint needs to relax
+    # ownership or permissions on the private socket mount.
+    setup = 'mkdir -m 700 "$scratch/data/pgsocket"\n' + setup + '''ready=0
+for i in $(seq 1 50); do
+    if docker exec "$container" sh -c 'test "$(cat /proc/1/comm)" = postgres && pg_isready -h /job-socket -U postgres -d keeper' >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+done
+[ "$ready" = 1 ] || { echo 'job PostgreSQL socket readiness timed out' >&2; exit 1; }
+PG_DSN="postgresql://postgres@/keeper?host=/scratch/pgsocket"
 export PG_DSN
 '''
-    setup = 'mkdir -m 777 "$scratch/data/pgsocket"\n' + setup
-    needs_temporal = 'temporal ' in command
+    needs_temporal = 'temporal' in shlex.split(command)
     if postgres:
         command = ('export PG_DSN="$1" PGPASSWORD="$2" PG_KEEPER_BACKEND=postgres '
                    'PG_CONTRACT_ABORT_ON_TIMEOUT=1 PG_CONTRACT_LATENCY_DIR=/scratch/latency\n'
