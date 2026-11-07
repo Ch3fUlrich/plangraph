@@ -280,7 +280,7 @@ def test_service_result(tmp_path, name, exit_code):
     assert record["jobs"][0]["result"] == ("failure" if exit_code else "success")
     assert set(record) == {"sha", "host", "started", "jobs", "not_requested", "result"}
     assert "password-secret" not in json.dumps(record)
-    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit"}
+    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit", "stdout_tail", "stderr_tail"}
 
 
 @pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])

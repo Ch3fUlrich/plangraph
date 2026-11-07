@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import subprocess
+import socket
+import pytest
 
 SPEC = importlib.util.spec_from_file_location(
     "dell_ci_run", Path(__file__).parents[1] / "tools/dell_ci_run.py")
@@ -33,3 +35,42 @@ def test_empty_output_names_command(tmp_path, monkeypatch):
     assert result.stdout == ""
     assert result.stderr == "Running: cargo test\n"
     assert not (tmp_path / "scratch").exists()
+
+
+@pytest.mark.parametrize("host", ["local", socket.gethostname()])
+def test_local_runner(host):
+    def runner(argv, **kwargs):
+        assert argv == ["bash", "-c", "true"]
+        assert kwargs["timeout"] == 17 and kwargs["capture_output"]
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    assert ci.remote(host, "true", 17, runner).returncode == 0
+
+
+def test_bounded_scrubbed_tail():
+    output = "\n".join(str(n) for n in range(60))
+    assert ci.output_tail(output).splitlines() == output.splitlines()[-40:]
+    assert ci.output_tail(str(Path.home()) + "/cache") == "$HOME/cache"
+    assert "secret" not in ci.output_tail("password=secret")
+    assert len(ci.output_tail("x" * 3000)) == 2000
+
+
+@pytest.mark.parametrize("prefix", ["Authorization: Bearer ", "Bearer ", "bearer "],
+                         ids=["header", "standalone", "lowercase"])
+def test_bearer_tail_redaction(prefix):
+    value = "opaque" + "x" * 20
+    assert ci.output_tail(prefix + value) == prefix + "[REDACTED]"
+
+
+@pytest.mark.parametrize("prefix", ["s" + "k-", "gh" + "p_", "github" + "_pat_"])
+def test_token_tail_redaction(prefix):
+    value = prefix + "x" * 20
+    assert ci.output_tail("credential=" + value + "\nfinished") == (
+        "credential=[REDACTED]\nfinished")
+    assert ci.output_tail(value.encode()) == "[REDACTED]"
+
+
+def test_outer_paths_expand_once():
+    script = ci.isolated_script(":", '"$HOME"/cache/source', '"$HOME"/cache/job')
+    assert 'scratch="$HOME"/cache/job\n' in script
+    assert 'cp -a "$HOME"/cache/source/.' in script
+    assert 'init -q --initial-branch=dell-ci-private' in script

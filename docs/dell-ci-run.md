@@ -13,8 +13,8 @@ Worktrees, scratch, Rust build targets and Temporal logs live under remote
 `~/.cache/dell-ci/<id>` on disk, with cleanup attempted on every exit path.
 Rust refuses execution with fewer than 20 GiB available on that filesystem,
 reporting `insufficient ~/.cache/dell-ci space: requires at least 20 GB free`.
-Records contain status, timing and exit codes, not captured command output,
-output tails or exception messages, even on failure or timeout.
+Records contain status, timing, exit codes and bounded 40-line, `$HOME`-scrubbed
+stdout/stderr tails per job, with sensitive values redacted, even on failure or timeout.
 
 The local gate evaluates suite results; it does not reproduce GitHub's
 base-copy commit-trailer step or hosted setup actions. A setup failure can
