@@ -182,12 +182,10 @@ def test_child_env_never_carries_the_token_file_path(monkeypatch):
     assert gw.TOKEN_FILE_ENV not in build_child_env({gw.TOKEN_FILE_ENV: '/x/key'})
 
 
-def test_key_file_owner_only_check_refuses_windows_modes(tmp_path):
-    path = tmp_path / 'key'
-    path.write_text('synthetic')
-    path.chmod(0o600)
-    info = path.stat()
+def test_key_file_owner_only_check_refuses_windows_modes():
+    import stat
+    info = SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
     assert gw._owner_only(info, windows=False)
     assert not gw._owner_only(info, windows=True)  # Windows reports 0o666: never trust the mode there
-    path.chmod(0o644)
-    assert not gw._owner_only(path.stat(), windows=False)
+    info = SimpleNamespace(st_mode=stat.S_IFREG | 0o644)
+    assert not gw._owner_only(info, windows=False)

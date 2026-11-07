@@ -95,11 +95,11 @@ def _gateway(env):
     return None
 
 
-def _gateway_mimo(env):
+def _gateway_mimo(env, mimo_endpoints=None):
     gateway = _gateway(env)
     if not gateway:
         return False
-    seen, endpoints = _mimo_endpoints(env)
+    seen, endpoints = _mimo_endpoints(env) if mimo_endpoints is None else mimo_endpoints
     def normalize(value):
         return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
     # No explicit endpoint means the template default routes through the gateway.
@@ -124,7 +124,8 @@ def _mimo_endpoints(env):
 
 
 def _owner_only(info, windows=None):
-    """Regular file readable by its owner only; Windows reports chmod 600 as 0o666, so a key file is refused there."""
+    """Regular file readable by its owner only."""
+    # Windows mode bits cannot verify owner-only access; silently refuse key files there.
     if windows is None:
         windows = os.name == 'nt'
     return stat.S_ISREG(info.st_mode) and not windows and stat.S_IMODE(info.st_mode) == 0o600
@@ -147,16 +148,16 @@ def load_token(secrets=None):
             return token
     except (OSError, UnicodeError):
         pass
-    raise LookupError('no ' + TOKEN_ENV + (' (a key file cannot be verified owner-only on Windows: set the variable)' if os.name == 'nt' else ''))
+    raise LookupError('no ' + TOKEN_ENV)
 
 
-def gateway_leg(model, env=None):
+def gateway_leg(model, env=None, *, mimo_endpoints=None):
     """Whether the selected provider is routed through the gateway."""
     if env is None:
         from plangraph.routing_support.clients import build_child_env
         env = build_child_env()
     provider = str(model or '').split('/', 1)[0]
-    return provider == 'omniroute' or (provider == 'mimo' and _gateway_mimo(env))
+    return provider == 'omniroute' or (provider == 'mimo' and _gateway_mimo(env, mimo_endpoints))
 
 
 def require_witness(model, env=None, *, secrets=None):
@@ -233,8 +234,10 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     provider = str(getattr(job, 'model_or_combo', '') or '').split('/', 1)[0]
     def unavailable(reason):
         job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason})
-    if not gateway_leg(job.model_or_combo, env):
-        if provider == 'mimo' and _mimo_endpoints(env)[1]:
+    mimo_endpoints = _mimo_endpoints(env) if provider == 'mimo' else None
+    if not gateway_leg(job.model_or_combo, env, mimo_endpoints=mimo_endpoints):
+        if provider == 'mimo' and mimo_endpoints[1]:
+            unavailable('explicit direct mimo endpoint')
             return
         unavailable('mimo leg not routed through gateway' if provider == 'mimo'
                     else f'not a gateway leg: provider {provider}')
