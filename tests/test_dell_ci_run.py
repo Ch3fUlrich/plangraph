@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -111,6 +112,31 @@ def test_requested_sha_fetch_failure(tmp_path):
     assert code == 1
     assert record["reason"] == "requested SHA fetch failed"
     assert not any("worktree add" in command for command in fake.calls)
+    assert not record["jobs"]
+
+
+def test_failed_worktree_add_still_removes_private_directory(tmp_path):
+    directory = tmp_path / "private"
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        command = argv[-1]
+        if "worktree add" in command:
+            directory.mkdir(mode=0o700)
+            return subprocess.CompletedProcess(argv, 1, "", "setup failed")
+        if "worktree remove" in command:
+            # Execute the real cleanup shell with a failing git removal.
+            command = re.sub(r"/tmp/dell-ci-[0-9a-f]+", str(directory), command)
+            return subprocess.run(["sh", "-c", "git() { return 1; }; " + command],
+                                  capture_output=True, text=True, check=False)
+        return result
+
+    code, record = invoke(tmp_path, runner)
+    assert code == 1
+    assert record["reason"] == "worktree setup failed"
+    assert record["cleanup"] == "failure"
+    assert not directory.exists()
     assert not record["jobs"]
 
 

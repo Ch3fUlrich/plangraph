@@ -119,7 +119,9 @@ def main(argv=None, *, runner=subprocess.run):
         record["reason"] = "remote setup or verification failed"
     finally:
         try:
-            result = call(f"git worktree remove --force {qtree} && rmdir {directory}")
+            result = call(f"git worktree remove --force {qtree}; "
+                          f"removed=$?; rmdir {directory}; "
+                          'cleaned=$?; test "$removed" -eq 0 && test "$cleaned" -eq 0')
             if result.returncode:
                 record["result"] = "failure"
                 record["cleanup"] = "failure"
