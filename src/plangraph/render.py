@@ -254,12 +254,40 @@ def build_sha(pkg_dir: Path | None = None) -> str:
     return sha if _SHA_SAFE.fullmatch(sha) else "unknown"
 
 
+def _project_agents_view(data: dict) -> dict | None:
+    """Enforce the public schema without depending on the spawner runtime."""
+    if not isinstance(data, dict) or not isinstance(data.get('hosts'), list):
+        return None
+    schema = json.loads(_read(ASSETS_DIR / 'agents_schema.json'))
+    fields = schema['fields']
+    hosts = []
+    for entry in data['hosts']:
+        entry = entry if isinstance(entry, dict) else {}
+        host = entry.get('host') if isinstance(entry.get('host'), str) else 'unknown'
+        rows = entry.get('agents')
+        readable = entry.get('readable') is True and isinstance(rows, list)
+        agents = []
+        for source in rows if readable else []:
+            source = source if isinstance(source, dict) else {}
+            row = {k: source.get(k) if isinstance(source.get(k), (str, int, float))
+                   and not isinstance(source.get(k), bool) else None for k in fields}
+            row['host'] = host
+            if row['runtime'] not in schema['runtimes']:
+                row['runtime'] = None
+            agents.append(row)
+        hosts.append(dict(host=host, readable=readable,
+                          reason=None if readable else 'unreadable', agents=agents))
+    return dict(generated_at=data.get('generated_at') if isinstance(
+        data.get('generated_at'), str) else None, hosts=hosts)
+
+
 def render(
     snapshot: dict,
     vendor_dir: Path,
     *,
     title: str | None = None,
     cdn: bool = False,
+    live_agents: bool = False,
 ) -> str:
     """Return the complete HTML page for *snapshot* as a single string.
 
@@ -275,6 +303,16 @@ def render(
         items = []
     # Always give the page JS an `items` array, even for a malformed/empty snapshot.
     safe_snapshot = dict(snapshot)
+    safe_snapshot.pop('agents_view', None)
+    if live_agents:
+        # The page is served as a single bind-mounted file, not a JSON API.
+        # Read the independent collector output; never add it to keeper snapshots.
+        try:
+            private_agents = _project_agents_view(json.loads(
+                (Path.home() / '.local/state/plangraph/agents-view.json').read_text(encoding='utf-8')))
+        except (OSError, ValueError, TypeError):
+            private_agents = None
+        safe_snapshot['agents_view'] = private_agents
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)
@@ -283,11 +321,20 @@ def render(
     vendor_dir = Path(vendor_dir)
     vendor_scripts = _vendor_scripts(vendor_dir, bool(cdn))
 
-    page_js = _strip_line_comments("\n;\n".join(_read(ASSETS_DIR / name) for name in JS_FILES))
+    scripts = JS_FILES + (("page_agents.js",) if live_agents else ())
+    page_js = _strip_line_comments("\n;\n".join(_read(ASSETS_DIR / name) for name in scripts))
     page_css = "\n".join(_read(ASSETS_DIR / name) for name in CSS_FILES)
+    if live_agents:
+        page_js = ('globalThis.PlanAgentsSchema = ' +
+                   _safe_json(json.loads(_read(ASSETS_DIR / 'agents_schema.json'))) + ';\n' + page_js)
 
     doc = _read(ASSETS_DIR / "page_template.html")
     replacements = {
+        "@@AGENTS_UI@@": ('<button id="tab-agents" data-page="agents" type="button" role="tab" '
+                          'aria-selected="false" aria-controls="panel-agents">Agents</button>'
+                          '<section id="panel-agents" class="tabpanel pg" role="tabpanel" '
+                          'aria-labelledby="tab-agents" hidden><div id="sb-panel-agents" '
+                          'class="pg-body"></div></section>') if live_agents else '',
         "@@PAGE_TITLE@@": html.escape(title or _default_title(items), quote=True),
         "@@PAGE_CSS@@": page_css,
         "@@VENDOR_SCRIPTS@@": vendor_scripts,

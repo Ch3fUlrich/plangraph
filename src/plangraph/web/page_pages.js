@@ -12,8 +12,8 @@
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
 
-  var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", hosts: "panel-hosts", knowledge: "panel-knowledge", settings: "panel-settings" };
-  var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", hosts: "tab-hosts", knowledge: "tab-knowledge", settings: "tab-settings" };
+  var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", hosts: "panel-hosts", agents: "panel-agents", knowledge: "panel-knowledge", settings: "panel-settings" };
+  var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", hosts: "tab-hosts", agents: "tab-agents", knowledge: "tab-knowledge", settings: "tab-settings" };
   var SBW_KEY = "plangraph.ui.sbw.v1", SBW_MIN = 180, SBW_MAX = 560;
   var ui = null, cur = "graph";
 
@@ -21,7 +21,7 @@
 
   function show(name) {
     if (name === "qa") name = "needs";
-    if (!PANELS[name] || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
+    if (!PANELS[name] || !$(PANELS[name]) || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
     cur = name;
     var PP = global.PlanPage;
     if (name === "graph" || name === "table") {
@@ -42,6 +42,7 @@
     if (name === "graph" && PP && PP.state && PP.state.cy) { try { PP.state.cy.resize(); } catch (e) { /* not ready */ } }
     if (name === "activity" && PlanUI.ActivityPage && PlanUI.ActivityPage.render) PlanUI.ActivityPage.render();
     if (name === "progress" && PlanUI.ProgressPage && PlanUI.ProgressPage.render) PlanUI.ProgressPage.render();
+    if (name === "agents" && PlanUI.AgentsPage) PlanUI.AgentsPage.render();
     if (name === "hosts" && PlanUI.HostsPage) PlanUI.HostsPage.render();
     if (name === "knowledge" && PlanUI.KnowledgePage) PlanUI.KnowledgePage.render();
     if (PlanUI.Pages.onChange) PlanUI.Pages.onChange(name);

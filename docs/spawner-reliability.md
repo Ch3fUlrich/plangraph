@@ -313,3 +313,15 @@ opt-in and the operational live gate.
 and exact run scope name. Missing scopes are gone independently of leader PID;
 CPU usage is a weak signal only and cannot satisfy first activity. Windows
 startup remains fail-closed pending portable worker-core watch support. -->
+# Windows recorded Job recovery
+
+Explicit restart reconciliation can adopt the exact recorded `Local\pg-<run-id>`
+Job Object after checking the recorded process creation time and membership.
+Missing Jobs and nonmember processes follow the ORPHANED recovery path; access
+or query errors remain unknown and hold slots. Termination targets only the
+retained Job handle. Windows has no graceful Job signal, so both termination
+stages use Job termination and still require proof of emptiness.
+Job accounting user plus kernel time feeds the existing CPU sampler and recovery
+activity clock; unavailable accounting never fabricates activity. Off does no
+recovery work; shadow only reports adoption without signals or durable writes.
+This does not authorize enabling reconciliation on a live host.
