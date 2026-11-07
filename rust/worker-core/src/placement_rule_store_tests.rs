@@ -13,6 +13,128 @@ fn placement_rule_docs_use_production_only_budget() {
     assert!(docs.contains("Dependencies before item closure:"));
 }
 const KEY: &str = "PG_RULE_HOST_WORKER_CAP_COUNT";
+#[test]
+fn adapter_current_sources_precedence_and_lkg() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = RuleSource {
+        cache_path: dir.path().join("cache"),
+        env_file: Some(dir.path().join("env")),
+        host_id: "fixture".into(),
+        host_class: String::new(),
+    };
+    let mut store = populated();
+    store
+        .snapshot
+        .hosts
+        .insert("fixture".into(), [(KEY.into(), "8".into())].into());
+    let process = [
+        (KEY.into(), "10".into()),
+        ("OTHER".into(), "ignored".into()),
+    ]
+    .into();
+    fs::write(source.env_file.as_ref().unwrap(), format!("{KEY}=9\n")).unwrap();
+    let loaded = source.load_with_env(&store, &process).unwrap();
+    assert_eq!(
+        (
+            loaded.report.values[KEY],
+            loaded.report.sources[KEY].as_str()
+        ),
+        (10, "process")
+    );
+    assert!(loaded.report.diagnostics.is_empty());
+    assert_eq!((loaded.source, loaded.revision), ("keeper", 1));
+    let empty = BTreeMap::new();
+    let loaded = source.load_with_env(&store, &empty).unwrap();
+    assert_eq!(
+        (
+            loaded.report.values[KEY],
+            loaded.report.sources[KEY].as_str()
+        ),
+        (9, "env_file")
+    );
+    fs::remove_file(source.env_file.as_ref().unwrap()).unwrap();
+    let loaded = source.load_with_env(&store, &empty).unwrap();
+    assert_eq!(
+        (
+            loaded.report.values[KEY],
+            loaded.report.sources[KEY].as_str()
+        ),
+        (8, "keeper_host")
+    );
+    store.snapshot.hosts.clear();
+    let loaded = source.load_with_env(&store, &empty).unwrap();
+    assert_eq!(
+        (
+            loaded.report.values[KEY],
+            loaded.report.sources[KEY].as_str()
+        ),
+        (7, "keeper_fleet")
+    );
+    store.failure = Some(StoreError::Unavailable);
+    let loaded = source.load_with_env(&store, &empty).unwrap();
+    assert_eq!((loaded.source, loaded.report.values[KEY]), ("lkg", 7));
+    fs::write(source.env_file.as_ref().unwrap(), format!("{KEY}=11\n")).unwrap();
+    assert_eq!(
+        source.load_with_env(&store, &empty).unwrap().report.values[KEY],
+        11
+    );
+    assert_eq!(
+        source
+            .load_with_env(&store, &process)
+            .unwrap()
+            .report
+            .values[KEY],
+        10
+    );
+    store.failure = None;
+    store.snapshot.fleet.clear();
+    fs::remove_file(source.env_file.as_ref().unwrap()).unwrap();
+    let loaded = source.load_with_env(&store, &empty).unwrap();
+    assert_eq!(
+        (
+            loaded.report.values[KEY],
+            loaded.report.sources[KEY].as_str()
+        ),
+        (6, "default")
+    );
+}
+#[test]
+fn adapter_malformed_lines_unknown_keys_and_unreadable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = RuleSource {
+        cache_path: dir.path().join("cache"),
+        env_file: Some(dir.path().join("env")),
+        host_id: "fixture".into(),
+        host_class: String::new(),
+    };
+    fs::write(
+        source.env_file.as_ref().unwrap(),
+        format!("broken\n{KEY}=9\n{KEY}=10\nPG_RULE_UNKNOWN_COUNT=1\n"),
+    )
+    .unwrap();
+    let process = [("PG_RULE_UNKNOWN_COUNT".into(), "2".into())].into();
+    let loaded = source.load_with_env(&Fake::default(), &process).unwrap();
+    assert_eq!(loaded.report.values[KEY], 9);
+    assert!(!loaded.report.values.contains_key("PG_RULE_UNKNOWN_COUNT"));
+    for expected in [
+        "env_file line 1 malformed",
+        "env_file line 3 duplicate_key",
+        "PG_RULE_<unknown> process unknown_key",
+        "PG_RULE_<unknown> env_file unknown_key",
+    ] {
+        assert!(loaded.report.diagnostics.iter().any(|d| d == expected));
+    }
+    fs::remove_file(source.env_file.as_ref().unwrap()).unwrap();
+    fs::create_dir(source.env_file.as_ref().unwrap()).unwrap();
+    let loaded = source
+        .load_with_env(&Fake::default(), &BTreeMap::new())
+        .unwrap();
+    assert!(loaded
+        .report
+        .diagnostics
+        .contains(&"env_file unreadable".into()));
+    assert_eq!(loaded.report.values[KEY], 6);
+}
 #[derive(Default)]
 struct Fake {
     snapshot: RuleSnapshot,

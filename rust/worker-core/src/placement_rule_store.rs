@@ -1,5 +1,5 @@
 //! Adapter boundary only: durable keeper transactions are an integration dependency.
-use crate::placement_rules::{resolve, schema, RuleLayers};
+use crate::placement_rules::{parse_env_file, resolve, schema, RuleLayers, RuleReport};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -194,14 +194,112 @@ fn replace_cache(path: &Path, snapshot: &RuleSnapshot) -> Result<(), StoreError>
 /// Adapter exposes online/offline source and revision; offline LKG has no expiry.
 /// Cache directory must be private to the adapter, not writable by other users.
 pub fn load_cached(store: &impl RuleStore, path: &Path) -> Result<RuleSnapshot, StoreError> {
+    load_snapshot(store, path).map(|(snapshot, _)| snapshot)
+}
+fn load_snapshot(
+    store: &impl RuleStore,
+    path: &Path,
+) -> Result<(RuleSnapshot, &'static str), StoreError> {
     match store.read() {
         Ok(snapshot) => {
             validate_snapshot(&snapshot)?;
             replace_cache(path, &snapshot)?;
-            Ok(snapshot)
+            Ok((snapshot, "keeper"))
         }
-        Err(StoreError::Unavailable) => read_cache(path).map_err(|_| StoreError::Unavailable),
+        Err(StoreError::Unavailable) => read_cache(path)
+            .map(|snapshot| (snapshot, "lkg"))
+            .map_err(|_| StoreError::Unavailable),
         Err(error) => Err(error),
+    }
+}
+
+/// Local configuration only; host class must come from the trusted registry.
+pub struct RuleSource {
+    pub cache_path: PathBuf,
+    pub env_file: Option<PathBuf>,
+    pub host_id: String,
+    pub host_class: String,
+}
+pub struct LoadedRules {
+    pub report: RuleReport,
+    pub revision: u64,
+    pub source: &'static str,
+}
+impl RuleSource {
+    /// Read the current process environment on every call, never from the cache.
+    pub fn load(&self, store: &impl RuleStore) -> Result<LoadedRules, StoreError> {
+        let process = std::env::vars_os()
+            .filter_map(|(key, value)| {
+                let key = key.into_string().ok()?;
+                key.starts_with("PG_RULE_")
+                    .then(|| (key, value.into_string().unwrap_or_default()))
+            })
+            .collect();
+        self.load_with_env(store, &process)
+    }
+
+    /// Injectable process snapshot for hermetic callers; unrelated keys are ignored.
+    pub fn load_with_env(
+        &self,
+        store: &impl RuleStore,
+        process: &BTreeMap<String, String>,
+    ) -> Result<LoadedRules, StoreError> {
+        let specs = schema().map_err(|_| StoreError::Invalid)?;
+        let (snapshot, source) = load_snapshot(store, &self.cache_path)?;
+        let mut diagnostics = Vec::new();
+        let mut env_file = BTreeMap::new();
+        if let Some(path) = &self.env_file {
+            match fs::read_to_string(path) {
+                Ok(text) => {
+                    for (index, line) in text.lines().enumerate() {
+                        match parse_env_file(line) {
+                            Ok(entries) => {
+                                for (key, value) in entries {
+                                    if key.starts_with("PG_RULE_") {
+                                        if let std::collections::btree_map::Entry::Vacant(entry) =
+                                            env_file.entry(key)
+                                        {
+                                            entry.insert(value);
+                                        } else {
+                                            diagnostics.push(format!(
+                                                "env_file line {} duplicate_key",
+                                                index + 1
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                diagnostics.push(format!("env_file line {} malformed", index + 1))
+                            }
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => diagnostics.push("env_file unreadable".into()),
+            }
+        }
+        let layers = RuleLayers {
+            process: process
+                .iter()
+                .filter(|(k, _)| k.starts_with("PG_RULE_"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            env_file,
+            keeper_host: snapshot
+                .hosts
+                .get(&self.host_id)
+                .cloned()
+                .unwrap_or_default(),
+            keeper_fleet: snapshot.fleet,
+        };
+        let mut report = resolve(&specs, &self.host_class, &layers);
+        report.diagnostics.extend(diagnostics);
+        Ok(LoadedRules {
+            report,
+            revision: snapshot.revision,
+            source,
+        })
     }
 }
 
