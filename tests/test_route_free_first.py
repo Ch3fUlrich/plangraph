@@ -202,13 +202,17 @@ def test_implement_lead_independent_of_writer_order(monkeypatch):
     assert plan.first_leg.id == legs.LEAD_WRITER
 
 
-def test_writer_order_d2683_implement_first_seven():
+def test_writer_order_d2683_implement_first_seven(monkeypatch):
+    from mechanics_legs import install_fallthrough_legs
+    install_fallthrough_legs(monkeypatch)
     # D-3745: eligible Sol leads; remaining writers retain tier/WRITER_ORDER.
-    # Explicit historical table tests all seven ordering slots; production
+    # Explicit mechanics table tests all eight ordering slots; production
     # disabled-leg eligibility is independently asserted above and in Go tests.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="implement")
-    expected = ["cx-gpt-6.1-sol"]
+    expected = ['cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
+                'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
+                'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek']
     assert [leg.id for leg in plan.legs] == expected
 
 

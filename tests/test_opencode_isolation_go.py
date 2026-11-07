@@ -174,6 +174,8 @@ def test_disabled_and_fallback_routes():
                 assert leg.id not in [l.id for l in plan.legs]
                 if 'implement' in leg.roles or plan is plans[0]:
                     assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
+                else:
+                    assert not any(s['leg'] == leg.id for s in plan.skipped)
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[0].legs]
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[1].legs]
 
