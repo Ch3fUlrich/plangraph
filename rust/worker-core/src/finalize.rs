@@ -29,7 +29,7 @@ pub struct QuarantinedResult {
 }
 
 /// Import bytes bound to the expected digest and head, retaining only a quarantine ref.
-/// Existing refs are never overwritten. Refusals may retain quarantine objects/refs.
+/// Existing refs are never overwritten. Refusals retain only unreachable objects.
 /// The receiver must already have the bundle's origin prerequisites locally.
 pub fn import_result(
     repo: &RepoEntry,
@@ -70,9 +70,9 @@ pub fn import_result(
         "unbundle",
         path,
     ])?;
-    git(&["cat-file", "-e", &format!("{head_sha}^{{commit}}")])?;
-    let reference = format!("refs/spawner/quarantine/{run_id}");
-    git(&["update-ref", &reference, head_sha, &"0".repeat(40)])?;
+    if git(&["cat-file", "-t", head_sha])? != b"commit\n" {
+        return Err(Refusal::BadBundle);
+    }
     git(&["merge-base", "--is-ancestor", base_sha, head_sha])
         .map_err(|_| Refusal::NotDescendant)?;
     let range = format!("{base_sha}..{head_sha}");
@@ -105,6 +105,8 @@ pub fn import_result(
     {
         return Err(Refusal::SecretInHistory);
     }
+    let reference = format!("refs/spawner/quarantine/{run_id}");
+    git(&["update-ref", &reference, head_sha, &"0".repeat(40)])?;
     Ok(QuarantinedResult {
         reference,
         head_sha: head_sha.into(),

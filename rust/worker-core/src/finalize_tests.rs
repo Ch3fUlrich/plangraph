@@ -21,6 +21,8 @@ impl Fixture {
         let source = tempfile::tempdir().unwrap();
         let root = source.path();
         git(root, &["init"]);
+        git(root, &["config", "user.name", "Finalize test"]);
+        git(root, &["config", "user.email", "finalize@example.invalid"]);
         git(root, &["commit", "--allow-empty", "-m", "base"]);
         let base = git(root, &["rev-parse", "HEAD"]);
         let receiver = tempfile::tempdir().unwrap();
@@ -52,7 +54,7 @@ impl Fixture {
             git(root, &["add", "payload"]);
         }
         git(root, &["commit", "--allow-empty", "-m", &message]);
-        if mode == "blob" || mode == "message" {
+        if mode == "blob" || mode == "message" || mode == "multi" {
             // The receiver must detect secrets even when absent from the final tip.
             if mode == "blob" {
                 git(root, &["rm", "payload"]);
@@ -62,12 +64,25 @@ impl Fixture {
                 &["commit", "--allow-empty", "-m", "clean\n\nWriter: test"],
             );
         }
-        let head = git(root, &["rev-parse", "HEAD"]);
+        if mode == "empty" {
+            git(root, &["reset", "--soft", &base]);
+        }
+        if mode == "tag" {
+            git(root, &["tag", "-a", "result", "-m", "annotated"]);
+        }
+        let tip = if mode == "tag" {
+            "refs/tags/result"
+        } else {
+            "HEAD"
+        };
+        let head = git(root, &["rev-parse", tip]);
         let bundle = root.join("result.bundle");
-        git(
-            root,
-            &["bundle", "create", bundle.to_str().unwrap(), "HEAD"],
-        );
+        let mut args = vec!["bundle", "create", bundle.to_str().unwrap(), tip];
+        if mode == "refs" {
+            git(root, &["branch", "extra"]);
+            args.push("refs/heads/extra");
+        }
+        git(root, &args);
         let bytes = std::fs::read(bundle).unwrap();
         let repo = RepoEntry {
             root: receiver.path().to_str().unwrap().into(),
@@ -106,6 +121,17 @@ impl Fixture {
         .collect::<Vec<_>>()
         .join("\n")
     }
+    fn assert_refusal(&self, expected: Refusal) {
+        let root = Path::new(&self.repo.root);
+        let refs = || git(root, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+        let before = refs();
+        let reachable = git(root, &["rev-list", "--objects", "--all"]);
+        assert_eq!(self.import(), Err(expected));
+        assert_eq!(refs(), before);
+        assert_eq!(git(root, &["rev-list", "--objects", "--all"]), reachable);
+        assert!(git(root, &["for-each-ref", "refs/spawner/quarantine/test"]).is_empty());
+        assert!(!root.join(".git/FETCH_HEAD").exists());
+    }
 }
 
 #[test]
@@ -132,43 +158,51 @@ fn refuses_hash_mismatch() {
 fn refuses_bad_bundle() {
     let mut f = Fixture::new("safe");
     f.bytes = b"not a bundle".to_vec();
-    assert_eq!(f.import(), Err(Refusal::BadBundle));
+    f.assert_refusal(Refusal::BadBundle);
 }
 #[test]
 fn refuses_not_descendant() {
     let f = Fixture::new("unrelated");
-    assert_eq!(f.import(), Err(Refusal::NotDescendant));
+    f.assert_refusal(Refusal::NotDescendant);
 }
 #[test]
 fn refuses_missing_trailer() {
     let f = Fixture::new("trailer");
-    assert_eq!(f.import(), Err(Refusal::MissingTrailer));
+    f.assert_refusal(Refusal::MissingTrailer);
 }
 #[test]
 fn refuses_secret_in_history_blobs_and_messages() {
     for mode in ["blob", "message"] {
         let f = Fixture::new(mode);
-        assert_eq!(f.import(), Err(Refusal::SecretInHistory));
+        f.assert_refusal(Refusal::SecretInHistory);
     }
 }
 #[test]
-fn refusals_never_change_refs_outside_quarantine() {
-    for mode in ["safe", "unrelated", "trailer", "blob", "message", "bad"] {
-        let mut f = Fixture::new(mode);
-        let before = f.public_refs();
-        if mode == "safe" {
-            f.bytes.push(0);
-        }
-        if mode == "bad" {
-            f.bytes.clear();
-        }
-        let result = if mode == "safe" {
-            import_result(&f.repo, &f.bytes, "wrong", &f.base, &f.head, "test")
-        } else {
-            f.import()
-        };
-        assert!(result.is_err());
-        assert_eq!(f.public_refs(), before);
-        assert!(!Path::new(&f.repo.root).join(".git/FETCH_HEAD").exists());
-    }
+fn refuses_annotated_tag_head() {
+    Fixture::new("tag").assert_refusal(Refusal::BadBundle);
+}
+#[test]
+fn refuses_multi_ref_bundle() {
+    Fixture::new("refs").assert_refusal(Refusal::BadBundle);
+}
+#[test]
+fn refuses_empty_range() {
+    Fixture::new("empty").assert_refusal(Refusal::BadBundle);
+}
+#[test]
+fn passing_multi_commit_import() {
+    let f = Fixture::new("multi");
+    let result = f.import().unwrap();
+    assert_eq!(result.head_sha, f.head);
+    assert_eq!(
+        git(
+            Path::new(&f.repo.root),
+            &[
+                "rev-list",
+                "--count",
+                &format!("{}..{}", f.base, result.reference)
+            ]
+        ),
+        "2"
+    );
 }
