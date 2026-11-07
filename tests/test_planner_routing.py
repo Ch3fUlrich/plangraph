@@ -17,7 +17,7 @@ D25_IDS = [
     "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-    "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek",
+    "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "deepseek",
     "claude-haiku-5.5",  # D-3605 Haiku leg
 ]
 #: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
@@ -159,7 +159,7 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 3 legs: trains_on_data" in r.reasons
+        assert "excluded 4 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -312,7 +312,6 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
     with pytest.raises(ValueError):
         next_after_failure(route, [], "weird", 1)
 
-
 def test_writer_order_d2683_implement_first_seven():
     from test_route_free_first import test_writer_order_d2683_implement_first_seven as check
     check()
@@ -331,17 +330,17 @@ def test_writer_order_d2683_unavailable_skipped():
 
 
 def test_writer_order_d2683_review_order_unchanged():
-    # D-3950: the first eligible free review leg now leads.
+    # D-4196: without a diff, disabled Zen and inline-only Go cannot lead.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan.first_leg.id == "agy-gemini-3.8-flash"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     # D-3745: Sol leads implement; family exclusions still apply for both roles.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    assert plan_rev.first_leg.id == "agy-gemini-3.8-flash"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
@@ -363,14 +362,21 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
         return {"state": "available", "evidence": None}
 
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader)
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    # Historical six-slot ordering contract, independent of production disable policy.
+    legs = tuple(replace(leg, disabled=None) if leg.id in {
+        "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"} else leg
+        for leg in DEFAULT_LEGS)
+    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader, legs=legs)
     assert plan.first_leg.id == "cx-gpt-6.1-sol"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
     expected_writers = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free",  # D-3745: lead first,
                         "opencode-glm-5.3-flash-free", "openrouter-free", "agy-gemini-3.8-flash",  # then tier/order
                         "mimo-v2.6-flash"]
-    assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
+    assert len(expected_writers) == 6
+    assert [l.id for l in plan.legs[:6]] == expected_writers
 
 
 def test_no_implement_plan_leg_has_claude_family():
@@ -450,13 +456,3 @@ def test_alternate_limit_lookup_restricted_to_agy_harness():
     )
     assert nxt_agy is not None
     assert nxt_agy.id == "mimo-v2.6-pro"
-
-
-def test_writer_order_sol_family_excluded():
-    from test_route_free_first import test_writer_order_sol_family_excluded as check
-    check()
-
-
-def test_writer_order_privacy_excludes_training_sol():
-    from test_route_free_first import test_writer_order_privacy_excludes_training_sol as check
-    check()

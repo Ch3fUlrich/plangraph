@@ -109,7 +109,7 @@ def test_opencode_go_qwen_never_a_seat(tmp_path, monkeypatch):
     from plangraph.planner import routing
     from plangraph.planner.legs import Leg
     from plangraph.planner.routing import SpawnRefused, plan_spawn
-    monkeypatch.setattr(routing, 'validate_model', lambda model: None)
+    monkeypatch.setattr(routing, 'validate_model', lambda model, **kwargs: None)
     bad = Leg('og-qwen', 'subscription', 'opencode', 'opencode-go/qwen3.8-flash', 'qwen',
               ('128k',), 100000, False, roles=('review',))
     plan = plan_spawn({'estimate_tokens': 1000}, role='review', writer_families=('claude',), legs=(bad,),

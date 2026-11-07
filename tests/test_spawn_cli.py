@@ -3,7 +3,6 @@ import json
 import subprocess
 import time
 import uuid
-
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
 from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo
@@ -12,6 +11,7 @@ from plangraph.spawner.leg_state import LegStateStore
 import pytest, sys, os
 from fake_pid import FAKE_PID
 from pathlib import Path
+from historical_legs import historical_zen_legs  # noqa: F401
 pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owned via the fake provider, never live host pids
 
 
@@ -132,7 +132,7 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-def test_replan_and_all_limited(tmp_path, monkeypatch):
+def test_replan_and_all_limited(tmp_path, monkeypatch, historical_zen_legs):
     from plangraph.spawner import resolver
     rows = resolver.get_catalog_models()
     # Exercise quota fallback independently of the host catalog's admission state.
@@ -259,7 +259,7 @@ def test_records_and_review(tmp_path):
 
 
 @pytest.mark.parametrize('provider_stop', [True, False])
-def test_transport_only_fallthrough(tmp_path, provider_stop):
+def test_transport_only_fallthrough(tmp_path, provider_stop, historical_zen_legs):
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()
