@@ -18,6 +18,7 @@ pub(crate) struct Entry {
     pub role: String,
     pub attempt: u32,
     pub identity: Option<Proc>,
+    pub deadline_ms: u64,
 }
 fn check(path: &Path, directory: bool) -> Result<(), ReconcileError> {
     let meta = std::fs::symlink_metadata(path).map_err(|_| ReconcileError::Io)?;
@@ -144,6 +145,7 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                 role: role.into(),
                 attempt: u32::try_from(index + 1).map_err(|_| ReconcileError::Invalid)?,
                 identity,
+                deadline_ms: started + limit,
             });
         }
     }
@@ -369,6 +371,10 @@ pub(crate) fn settle(
     entry["outcome"] = serde_json::to_value(row).map_err(|_| invalid())?;
     entry["how"] = json!(how);
     entry["status"] = json!("orphaned");
+    if how == "ended_unobserved" {
+        entry["reason"] = json!("reattached_group_exited");
+    }
+    entry["exit_code"] = Value::Null;
     record
         .transition(Status::Orphaned, now_ms as f64 / 1000.0)
         .map_err(|_| invalid())?;

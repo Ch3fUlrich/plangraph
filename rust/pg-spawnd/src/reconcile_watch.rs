@@ -10,6 +10,7 @@ pub(crate) struct Watch {
     stop: Option<Stop>,
     how: &'static str,
     deadline: u64,
+    warning_pending: bool,
 }
 pub(crate) enum Step {
     Held,
@@ -17,6 +18,53 @@ pub(crate) enum Step {
     Ended(&'static str),
 }
 impl Watch {
+    /// Persist attachment before observing or signalling the adopted child.
+    pub(crate) fn attach(
+        &self,
+        record: &mut pg_worker_core::run::record::RunRecord,
+        attempt: u32,
+    ) -> Result<(), crate::reconcile::ReconcileError> {
+        crate::reconcile_attach::attach(record, attempt)
+    }
+
+    /// Caller serializes recovery under the state and record locks. A failed
+    /// durable warning prevents an activity-driven signal on this invocation.
+    pub(crate) fn advance(
+        &mut self,
+        child: &mut dyn Child,
+        state: &std::path::Path,
+        record: &mut pg_worker_core::run::record::RunRecord,
+        attempt: u32,
+        now: u64,
+    ) -> Result<Step, crate::reconcile::ReconcileError> {
+        if record.status() == Some(pg_worker_core::run::record::Status::Running) {
+            self.attach(record, attempt)?;
+        }
+        let step = if self.warning_pending {
+            Step::Warn
+        } else {
+            self.tick(child, now)
+        };
+        match step {
+            Step::Ended(how) => {
+                crate::reconcile_store::settle(state, record, attempt, how, now)?;
+            }
+            Step::Warn => {
+                self.warning_pending = true;
+                record
+                    .push_event(serde_json::json!({"event":"ACTIVITY_WARN",
+                        "attempt":attempt,"reason":"recovery_activity"}))
+                    .map_err(|_| crate::reconcile::ReconcileError::Invalid)?;
+                record
+                    .save()
+                    .map_err(|_| crate::reconcile::ReconcileError::Io)?;
+                self.warning_pending = false;
+            }
+            Step::Held => {}
+        }
+        Ok(step)
+    }
+
     pub(crate) fn new(
         role: Role,
         mut limits: Limits,
@@ -50,6 +98,7 @@ impl Watch {
             stop: None,
             how: "ended_unobserved",
             deadline,
+            warning_pending: false,
         }
     }
     pub(crate) fn tick(&mut self, child: &mut dyn Child, now: u64) -> Step {

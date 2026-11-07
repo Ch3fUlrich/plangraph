@@ -280,3 +280,7 @@ may produce the semantic ORPHANED result; an exit status is never invented.
 These callable primitives are not yet connected to daemon startup. Verified
 scope/Job Object adoption, CPU sampling, shadow diagnostics, and durable watcher
 settlement remain incomplete. Reconciliation-gated reclaim is a separate slice.
+Recovery watcher advancement persists attachment and warnings and settles only
+proven-empty groups as orphaned with null exit status. Shadow diagnostics can
+classify verified live no-scope leaders without signalling. Scope/Job adoption,
+CPU sampling, and startup adoption/reclaim integration remain deferred.
