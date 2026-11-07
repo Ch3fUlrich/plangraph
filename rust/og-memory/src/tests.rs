@@ -6,7 +6,7 @@ fn refused(e: &Envelope, schema: &str, want: Refusal) {
         want
     );
 }
-fn fact() -> Envelope {
+pub(super) fn fact() -> Envelope {
     Envelope {
         version: 1,
         project: "global".into(),
