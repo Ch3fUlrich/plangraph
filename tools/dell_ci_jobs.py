@@ -8,6 +8,7 @@ cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-
 cargo build -p pg-jail
 PG_JAIL_BIN="$CARGO_TARGET_DIR/debug/pg-jail" cargo test""",
     "rust-worker": """cd rust/worker
+command -v temporal >/dev/null 2>&1 || { echo 'rust-worker: host fault: Temporal CLI missing' >&2; exit 1; }
 temporal server start-dev --ip 127.0.0.1 --port 17233 > "$scratch/temporal.log" 2>&1 &
 server=$!
 ready=0
@@ -45,6 +46,10 @@ python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract test
 def script(name, scratch):
     """All exits (including TERM from timeout) release owned resources."""
     body = POSTGRES if name == "pytest-postgres" else RUST[name]
+    if name.startswith("rust"):
+        body = ('export PATH="$HOME/.local/bin:$PATH"\n'
+                'command -v protoc >/dev/null 2>&1 || { '
+                f"echo '{name}: host fault: protoc missing' >&2; exit 1; }}\n" + body)
     return f"""set -eu
 set +x
 scratch={scratch}
