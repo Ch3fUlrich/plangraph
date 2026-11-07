@@ -312,3 +312,8 @@ fn gate_failure_creates_no_bundle() {
     ));
     assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
 }
+#[test]
+fn writer_result_oid_remains_sha1_only() {
+    assert!(oid(&"a".repeat(40)));
+    assert!(!oid(&"a".repeat(64)));
+}
