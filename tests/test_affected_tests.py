@@ -416,10 +416,10 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
     assert pg_checkout["with"]["fetch-depth"] == 0
     pg_cmd = next(s["run"] for s in pg_steps if s.get("name", "").startswith("pytest"))
     assert 'pull_request' in pg_cmd
-    assert '--within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES' in pg_cmd
+    assert '--within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES' in pg_cmd
     assert 'tools/affected_tests.py --base "$BASE_SHA"' in pg_cmd
-    # on push to main, full PG set is unchanged
-    assert 'tests/test_projector_ddl.py $FILES' in pg_cmd
+    # On push to main, the full PG set also includes claim contract coverage.
+    assert 'tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES' in pg_cmd
     assert 'python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py' in pg_cmd
 
     # PyYAML's YAML 1.1 loader treats the GitHub key `on` as boolean True.
