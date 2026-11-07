@@ -2,7 +2,7 @@
 """Run pinned CI commands on an SSH host with preinstalled CI prerequisites.
 
 The remote repository is selected explicitly. origin/main is the PR comparison
-base. No dependencies are installed and no remote output/environment is printed.
+base. Python dependencies use a private venv; no remote environment is printed.
 Services and build products are disposable; failures yield exit 1.
 """
 import argparse
@@ -143,6 +143,12 @@ def main(argv=None, *, runner=subprocess.run):
                     command = ("python3 tools/ci_select.py gate --needs " +
                                shlex.quote(json.dumps(needs)))
                 # GNU timeout kills the remote job even if the SSH client disconnects.
+                if name in {"pytest", "pytest-postgres", "browser"}:
+                    venv = directory + "/venv"
+                    command = (f"(python3 -m venv {venv} && "
+                               f"{venv}/bin/python -m pip install -r requirements-ci.txt "
+                               f") || {{ echo '{name}: venv setup or job failed' >&2; exit 1; }}; "
+                               f"export PATH={venv}/bin:$PATH; {command}")
                 script = f"cd {qtree} && export PYTHONPATH={qtree}/src && {command}"
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
                               f"{shlex.quote(script)}", timeout + 30)

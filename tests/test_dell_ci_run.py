@@ -6,15 +6,11 @@ import re
 import subprocess
 
 import pytest
-
-
 SPEC = importlib.util.spec_from_file_location(
     "dell_ci_run", Path(__file__).parents[1] / "tools/dell_ci_run.py")
 ci = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ci)
 SHA = "ab" * 20
-
-
 def test_explicit_base_and_main_first_parent(tmp_path):
     fake = Fake()
     assert ci.main(["--sha", SHA, "--base", "origin/custom", "--jobs",
@@ -25,6 +21,17 @@ def test_explicit_base_and_main_first_parent(tmp_path):
         assert "origin/custom" in command
         assert 'base=$(git rev-parse HEAD^)' in command
         assert '"$base" = "$(git rev-parse HEAD)"' in command
+
+
+@pytest.mark.parametrize("name", ["pytest", "pytest-postgres", "browser"])
+def test_python_jobs_private_venv(tmp_path, name):
+    fake = Fake()
+    invoke(tmp_path, fake, jobs=name)
+    command = next(c for c in fake.calls if c.startswith("timeout "))
+    assert "python3 -m venv" in command
+    assert "/venv/bin/python -m pip install -r requirements-ci.txt" in command
+    assert "export PATH=" in command
+    assert f"{name}: venv setup or job failed" in command
 
 
 @pytest.mark.parametrize("content,expected", [
@@ -130,7 +137,8 @@ def test_exact_identity_and_commands(tmp_path):
                for c in fake.calls)
     commands = [c for c in fake.calls if c.startswith("timeout ")]
     assert len(commands) == 5
-    assert all("python3 " in c and "python " not in c for c in commands)
+    assert all("python3 " in c for c in commands)
+    assert all("/bin/python -m pip" in c for c in commands if "pytest" in c)
 
 
 def test_requested_sha_fetch_failure(tmp_path):
