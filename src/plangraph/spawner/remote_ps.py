@@ -21,7 +21,10 @@ FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
 
 def query_host(host, timeout):
     command = 'python3 -m plangraph.spawner.remote_ps'
-    if 'src' in host:
+    if 'wsl_distro' in host:
+        command = (f"wsl -d {host['wsl_distro']} -- env PYTHONPATH={host['src']} "
+                   'python3 -m plangraph.spawner.remote_ps')
+    elif 'src' in host:
         src = host['src'].replace('\\', '/')
         command = ('python3 -c "import os,sys,runpy;'
                    f"sys.path.insert(0,os.path.expanduser(r'{src}'));"
@@ -75,7 +78,13 @@ def configured_hosts():
                 or ('src' in host and (
                     not isinstance(host['src'], str)
                     or not re.fullmatch(r'(?:/|~/|[A-Za-z]:[/\\])[A-Za-z0-9_./\\-]*',
-                                        host['src'])))):
+                                        host['src'])))
+                or ('wsl_distro' in host and (
+                    not isinstance(host['wsl_distro'], str)
+                    or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*',
+                                        host['wsl_distro'])
+                    or not isinstance(host.get('src'), str)
+                    or not re.fullmatch(r'/[A-Za-z0-9_./-]*', host['src'])))):
             validated.append(dict(name='invalid-config', invalid=True))
         else:
             validated.append(host)

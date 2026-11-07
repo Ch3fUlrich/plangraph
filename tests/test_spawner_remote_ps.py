@@ -46,9 +46,10 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
                if r['status'] == 'unknown')
 
 
-@pytest.mark.parametrize('src', [None, '/opt/plangraph/src', '~/code/plangraph/src',
-                                 r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\'])
-def test_transport_is_bounded_and_noninteractive(monkeypatch, src):
+@pytest.mark.parametrize('src,distro', [(s, None) for s in [None, '/opt/plangraph/src',
+    '~/code/plangraph/src', r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\']] +
+    [('/opt/plangraph/src', d) for d in ['Ubuntu-24.04', 'a_B.9-', '.distro', '_distro', '1']])
+def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
     original = subprocess.Popen
     host = dict(target='private-target')
     command = 'python3 -m plangraph.spawner.remote_ps'
@@ -56,7 +57,10 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src):
         host['src'] = src
         command = ('python3 -c "import os,sys,runpy;'
                    f"sys.path.insert(0,os.path.expanduser(r'{src.replace(chr(92), '/')}'));"
-                   "runpy.run_module('plangraph.spawner.remote_ps',run_name='__main__')\"")
+                    "runpy.run_module('plangraph.spawner.remote_ps',run_name='__main__')\"")
+    if distro is not None:
+        host['wsl_distro'] = distro
+        command = f'wsl -d {distro} -- env PYTHONPATH={src} python3 -m plangraph.spawner.remote_ps'
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'private-target', command]
@@ -68,29 +72,49 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src):
     monkeypatch.setattr(subprocess, 'Popen', run)
     assert remote_ps.query_host(host, 2) == '{"runs": []}'
 
+@pytest.mark.parametrize('wsl', [False, True])
 @pytest.mark.parametrize('src', ['/opt/source tree', '/opt/src;id', '$(id)',
                                    '-src', 'relative/src', '~user/src', '', None,
                                     1, [], '/src\n', '/src$(id)', 'C:relative',
                                     *['C:\\src' + c + 'bad' for c in
                                       [' ', "'", '"', ';', '&', '|', '$', '%', '^', '<', '>', '`']],
                                     '-C:\\src'])
-def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src):
-    config(tmp_path, monkeypatch, [dict(name='node-a', target='target', src=src)])
+def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src, wsl):
+    host = dict(name='node-a', target='target', src=src)
+    if wsl:
+        host['wsl_distro'] = 'Ubuntu'
+    config(tmp_path, monkeypatch, [host])
     def transport(*args):
         pytest.fail('invalid src must not reach SSH')
     assert remote_ps.list_runs([], transport=transport) == [
         dict(host='invalid-config', status='unknown', reason='host query failed')]
 
 
-@pytest.mark.parametrize('src', ['/opt/plangraph/src', '~/code/plangraph/src',
-                                 r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\'])
-def test_config_accepts_src(tmp_path, monkeypatch, src):
+@pytest.mark.parametrize('src,wsl', [(s, False) for s in ['/opt/plangraph/src',
+    '~/code/plangraph/src', r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\']] +
+    [('/opt/plangraph/src', True), ('/', True)])
+def test_config_accepts_src(tmp_path, monkeypatch, src, wsl):
     from unittest.mock import Mock, ANY
     host = dict(name='node-a', target='target', src=src)
+    if wsl:
+        host['wsl_distro'] = 'Ubuntu'
     config(tmp_path, monkeypatch, [host])
     transport = Mock(return_value='{"runs": []}')
     assert remote_ps.list_runs([], transport=transport) == []
     transport.assert_called_once_with(host, ANY)
+@pytest.mark.parametrize('distro,src', [(d, '/src') for d in
+    ['', '-Ubuntu', None, 1, True, [], {}, 'é', 'Ubuntu\n', 'a\r', 'a\t',
+     *['a' + c + 'b' for c in ' /\\\'";&|$%^<>`()=:!']]] +
+    [('Ubuntu', s) for s in [None, '~/src', 'C:/src', r'C:\src', '/src\\bad']])
+def test_invalid_wsl_is_invalid_config(tmp_path, monkeypatch, distro, src):
+    host = dict(name='node-a', target='target', wsl_distro=distro)
+    if src is not None:
+        host['src'] = src
+    config(tmp_path, monkeypatch, [host])
+    def transport(*args):
+        pytest.fail('invalid WSL config must not reach SSH')
+    assert remote_ps.list_runs([], transport=transport) == [
+        dict(host='invalid-config', status='unknown', reason='host query failed')]
 @pytest.mark.parametrize('payload', ['{}', '{"runs": {}}', '{"runs": [null]}',
                                      '{"runs": [{"run_id": "run-a"}]}'])
 def test_malformed_is_named_unknown(payload):
@@ -101,8 +125,6 @@ def test_unreachable_does_not_log_secrets(caplog):
         raise OSError('private-address secret-token')
     assert remote_ps._fetch(dict(name='node-a'), fail)[0]['status'] == 'unknown'
     assert caplog.text == ''
-
-
 def test_overflow_counts_only_local_with_hosts(tmp_path, monkeypatch):
     from plangraph.spawner import cli, overflow, stall_watchdog
     from plangraph.spawner.service import SpawnService
@@ -119,8 +141,6 @@ def test_overflow_counts_only_local_with_hosts(tmp_path, monkeypatch):
     assert len(remote_ps.list_runs(local)) == 3
     assert overflow.local_resources()[0] == 1
     assert SpawnService(state=tmp_path).ps() == {'runs': local}
-
-
 @pytest.mark.parametrize('surface', ['cli', 'mcp'])
 def test_ps_surfaces_use_fanout(tmp_path, monkeypatch, capsys, surface):
     import asyncio
@@ -144,8 +164,6 @@ def test_ps_surfaces_use_fanout(tmp_path, monkeypatch, capsys, surface):
     assert calls == [[local]]
     assert [row.get('run_id') for row in result['runs']] == ['local', 'remote', None]
     assert result['runs'][-1] == dict(host='node-b', status='unknown', reason='host query failed')
-
-
 @pytest.mark.parametrize('contents', ['not json', '{}', 'null', '[]',
     '{"hosts": null}', '\udcff',
     '{"hosts": [{"name": "node-a", "target": "SECRET"}]}!'])
@@ -157,8 +175,6 @@ def test_invalid_config_file_preserves_local_listing(tmp_path, monkeypatch, capl
     assert remote_ps.list_runs(local) == local + [
         dict(host='invalid-config', status='unknown', reason='host query failed')]
     assert caplog.text == ''
-
-
 @pytest.mark.parametrize('contents', ['{"hosts": [null]}',
     '{"hosts": [{"name": 1, "target": "SECRET"}]}',
     '{"hosts": [{"name": "node-a", "target": []}]}',
@@ -172,8 +188,6 @@ def test_invalid_config_preserves_local_listing(tmp_path, monkeypatch, caplog, c
     assert rows == local + [
         dict(host='invalid-config', status='unknown', reason='host query failed')]
     assert caplog.text == ''
-
-
 def test_unreadable_config_preserves_local_listing(tmp_path, monkeypatch, caplog):
     from pathlib import Path
     def denied(*args, **kwargs):
@@ -183,8 +197,6 @@ def test_unreadable_config_preserves_local_listing(tmp_path, monkeypatch, caplog
     assert remote_ps.list_runs(local) == local + [
         dict(host='invalid-config', status='unknown', reason='host query failed')]
     assert caplog.text == ''
-
-
 @pytest.mark.parametrize('field', ['host', 'run_id', 'role', 'status'])
 @pytest.mark.parametrize('value', ['a\nFAKE', 'a\rFAKE', 'a\tFAKE',
                                    'a\x1b[31mFAKE', 'a\x00FAKE', 'a\x7fFAKE',
@@ -196,8 +208,6 @@ def test_remote_identifiers_reject_controls(field, value, caplog):
     assert rows == [dict(host='node-a', status='unknown', reason='host query failed')]
     assert ps_reply(rows)['runs'] == rows
     assert caplog.text == ''
-
-
 @pytest.mark.parametrize('field', remote_ps.FIELDS)
 @pytest.mark.parametrize('value', [{ 'SECRET': 1 }, [], True])
 def test_every_remote_field_is_typed(field, value, caplog):
@@ -209,25 +219,17 @@ def test_every_remote_field_is_typed(field, value, caplog):
     assert remote_ps._fetch(dict(name='node-a'), lambda *args: payload) == [
         dict(host='node-a', status='unknown', reason='host query failed')]
     assert caplog.text == ''
-
-
 @pytest.mark.parametrize('ended,exit_code,pid', [(None, None, None), (2.5, 0, 123)])
 def test_valid_remote_field_types(ended, exit_code, pid):
     row = dict(run_id='run-a', host='node-a', status='running', role='implement',
                started=1, ended=ended, pid=pid, exit_code=exit_code)
     assert remote_ps._fetch(dict(name='node-a'), lambda *args: json.dumps(
         {'runs': [row]})) == [row]
-
-
 def test_long_identifiers():
     row = dict(run_id='r' * 256, host='h' * 253, status='running')
     assert remote_ps._fetch(dict(name='node-a'), lambda *a: json.dumps({'runs': [row]})) == [row]
-
-
 def test_local_reason_is_private():
     assert 'reason' not in ps_reply([dict(status='failed', reason='private')])['runs'][0]
-
-
 def test_mixed_config(tmp_path, monkeypatch):
     config(tmp_path, monkeypatch, [dict(name='node-a', target='target'),
                                    dict(name='node-b', target='-invalid')])
@@ -238,8 +240,6 @@ def test_mixed_config(tmp_path, monkeypatch):
     rows = remote_ps.list_runs([], transport=transport)
     assert calls == ['node-a']
     assert rows == [dict(host='invalid-config', status='unknown', reason='host query failed')]
-
-
 @pytest.mark.parametrize('script, budget, error', [
     ('import sys; sys.stdout.write("x" * 2097152)', 10, ValueError),
     ('raise SystemExit(1)', 10, ValueError),
@@ -251,8 +251,6 @@ def test_transport_rejects_overflow_exit_and_timeout(monkeypatch, script, budget
                         lambda argv, **kw: original(['python3', '-c', script], **kw))
     with pytest.raises(error):
         remote_ps.query_host(dict(target='target'), budget)
-
-
 def test_transport_overflow_names_host(monkeypatch):
     """Error-path contract guard, not fix coverage: base already names the host."""
     original = subprocess.Popen
@@ -262,8 +260,6 @@ def test_transport_overflow_names_host(monkeypatch):
     rows = remote_ps._fetch(dict(name='node-a', target='target'),
                            lambda host, _: remote_ps.query_host(host, 10))
     assert rows == [dict(host='node-a', status='unknown', reason='host query failed')]
-
-
 def test_worker_count_is_capped(monkeypatch):
     hosts = [dict(name='node-a') for _ in range(100)]
     monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: hosts)
@@ -273,8 +269,6 @@ def test_worker_count_is_capped(monkeypatch):
         return original(**kwargs)
     monkeypatch.setattr(remote_ps, 'ThreadPoolExecutor', pool)
     assert remote_ps.list_runs([], transport=lambda *a: '{"runs": []}') == []
-
-
 @pytest.mark.parametrize('xdg', ['', None])
 def test_default_config_location(tmp_path, monkeypatch, xdg):
     from pathlib import Path
@@ -289,8 +283,6 @@ def test_default_config_location(tmp_path, monkeypatch, xdg):
     else:
         monkeypatch.setenv('XDG_CONFIG_HOME', xdg)
     assert remote_ps.configured_hosts() == hosts
-
-
 def test_collect_local_protocol(monkeypatch):
     from plangraph.spawner import stall_watchdog
     state = object()
@@ -299,8 +291,6 @@ def test_collect_local_protocol(monkeypatch):
         return [dict(run_id='r', host='h', status='running', private='omitted')]
     monkeypatch.setattr(stall_watchdog, 'read_runs', read_runs)
     assert remote_ps.collect_local(state) == {'runs': [dict(run_id='r', host='h', status='running')]}
-
-
 @pytest.mark.parametrize('status,terminal', [
     ('running', False), ('queued', False), ('needs_input', False),
     ('stalled', False), ('future_status', False), ('unknown', False),
