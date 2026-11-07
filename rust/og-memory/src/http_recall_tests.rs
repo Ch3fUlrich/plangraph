@@ -104,10 +104,11 @@ fn recall(fault: &str) -> Result<crate::io::Snapshot, Error> {
             };
             let mut response = json!({"graph_commit_id":if index == 2 && fault == "commit" {"different"} else {"before"},
                 "row_count":if index == 2 && fault == "count" {2} else {rows.len()}, "rows":rows});
-            if index == 2 && fault == "unpinned" {
+            if (index == 2 && fault == "unpinned") || (index == 0 && fault == "resolve-unpinned") {
                 response.as_object_mut().unwrap().remove("graph_commit_id");
             }
-            if index == 2 && fault == "empty-pin" {
+            if (index == 2 && fault == "empty-pin") || (index == 0 && fault == "resolve-empty-pin")
+            {
                 response["graph_commit_id"] = json!("");
             }
             let response = response.to_string();
@@ -118,10 +119,21 @@ fn recall(fault: &str) -> Result<crate::io::Snapshot, Error> {
                 response
             )
             .unwrap();
+            if index == 0 && matches!(fault.as_str(), "resolve-unpinned" | "resolve-empty-pin") {
+                // No companion query or retry may follow an invalid RESOLVE pin.
+                listener.set_nonblocking(true).unwrap();
+                return listener;
+            }
         }
+        listener
     });
     let result = client.read("global");
-    server.join().unwrap();
+    let listener = server.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
     result
 }
 
@@ -151,8 +163,8 @@ fn recall_rejects_incomplete_mismatched_and_unpinned_companions() {
 }
 
 #[test]
-fn recall_rejects_missing_and_empty_pins_and_extra_states() {
-    for fault in ["unpinned", "empty-pin", "extra"] {
+fn recall_rejects_missing_and_empty_resolve_pins_before_companion_queries() {
+    for fault in ["resolve-unpinned", "resolve-empty-pin"] {
         assert!(matches!(recall(fault), Err(Error::Unverified)));
     }
 }
