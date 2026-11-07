@@ -44,7 +44,8 @@ def bound_names(node):
         return {n.id for target in targets for n in ast.walk(target)
                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
     if isinstance(node, (ast.Import, ast.ImportFrom)):
-        return {alias.asname or alias.name.split(".")[0] for alias in node.names}
+        names = {alias.asname or alias.name.split(".")[0] for alias in node.names}
+        return {name for name in names if name.isidentifier()}
     return set()
 
 
@@ -80,7 +81,7 @@ def pytest_runtest_makereport(item, call):
     report = outcome.get_result()
     key = item.parent.nodeid + "::" + getattr(item, "originalname", item.name)
     status = "pass"
-    if getattr(report, "wasxfail", False):
+    if hasattr(report, "wasxfail"):
         status = "skip"
     elif report.failed:
         status = "assertion" if report.when == "call" and call.excinfo and call.excinfo.errisinstance(AssertionError) else "error"

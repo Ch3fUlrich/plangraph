@@ -83,6 +83,8 @@ def test_broken_base(repo):
     ("new_module", "ANSWER = 42\n", "assert new_module.ANSWER == 42", 0),
     ("app", "ANSWER = 42\n", "assert app.ANSWER == 42", 0),
     ("app", "A, B = (1, 2)\nC: int = 3\n", "assert app.B == 2 and app.C == 3", 0),
+    ("app", "from nonexistent_head_module import *\n", "assert app.value() == 1", 0),
+    ("new_module", "from nonexistent_head_module import *\n", "assert new_module is None", 0),
 ])
 def test_assignment_and_empty_module_stubs(repo, tmp_path, module, body, statement, code):
     if module == "new_module":
@@ -117,16 +119,18 @@ def test_old_exemption_does_not_exempt_head(repo, capsys):
     assert "Red-Exempt:" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("marker", ["skip", "xfail"])
-def test_neutral_parameter_beside_assertion(repo, marker):
+@pytest.mark.parametrize("marker,assertion", [("skip", "False"), ("xfail", "False"),
+                                              ("xfail(reason='')", "n == 1")])
+def test_neutral_parameter_beside_assertion(repo, marker, assertion):
     text = ("import pytest\n\x40pytest.mark.parametrize('n', [0, pytest.param(1, marks=pytest.mark."
-            + marker + ")])\ndef test_value(n):\n    assert False\n")
+            + marker + ")])\ndef test_value(n):\n    assert " + assertion + "\n")
     assert repo(text) == 0
 
 
-@pytest.mark.parametrize("marker", ["skip", "xfail"])
-def test_only_neutral_is_labelled(repo, capsys, marker):
-    assert repo("import pytest\n\x40pytest.mark." + marker + "\ndef test_value():\n    assert False\n") == 1
+@pytest.mark.parametrize("marker,assertion", [("skip", "False"), ("xfail", "False"),
+                                              ("xfail", "True"), ("xfail(reason='')", "True")])
+def test_only_neutral_is_labelled(repo, capsys, marker, assertion):
+    assert repo("import pytest\n\x40pytest.mark." + marker + "\ndef test_value():\n    assert " + assertion + "\n") == 1
     assert "neutral(skip/xfail)" in capsys.readouterr().out
 
 
