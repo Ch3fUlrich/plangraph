@@ -123,6 +123,13 @@ def _mimo_endpoints(env):
     return seen, endpoints
 
 
+def _owner_only(info, windows=None):
+    """Regular file readable by its owner only; Windows reports chmod 600 as 0o666, so a key file is refused there."""
+    if windows is None:
+        windows = os.name == 'nt'
+    return stat.S_ISREG(info.st_mode) and not windows and stat.S_IMODE(info.st_mode) == 0o600
+
+
 def load_token(secrets=None):
     """Load management credentials only in the parent; never expose failure details."""
     secrets = os.environ if secrets is None else secrets
@@ -133,14 +140,14 @@ def load_token(secrets=None):
     try:
         with path.open() as stream:
             info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+            if not _owner_only(info):
                 raise OSError
             token = stream.read().strip()
         if token:
             return token
     except (OSError, UnicodeError):
         pass
-    raise LookupError('no ' + TOKEN_ENV)
+    raise LookupError('no ' + TOKEN_ENV + (' (a key file cannot be verified owner-only on Windows: set the variable)' if os.name == 'nt' else ''))
 
 
 def gateway_leg(model, env=None):
