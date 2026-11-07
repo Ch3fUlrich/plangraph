@@ -35,6 +35,23 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
                 end += 1;
             }
             if count >= floor {
+                // A repeated suffix on the next line is still secret material,
+                // even when it is too short to identify a family on its own.
+                let next = if bytes.get(end..end + 2) == Some(b"\r\n") {
+                    end + 2
+                } else if bytes.get(end) == Some(&b'\n') {
+                    end + 1
+                } else {
+                    break;
+                };
+                let mut tail_end = next;
+                while tail_end < bytes.len() && allowed(bytes[tail_end]) {
+                    tail_end += 1;
+                }
+                if tail_end > next && text[m.end()..end].ends_with(&text[next..tail_end]) {
+                    end = tail_end;
+                    wrapped = true;
+                }
                 break;
             }
             let next = if bytes.get(end..end + 2) == Some(b"\r\n") {

@@ -1,5 +1,12 @@
 use super::*;
 
+fn random_body() -> String {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom").unwrap().read_exact(&mut bytes).unwrap();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn excludes_secret_fragments(body: &str, secret: &str, floor: usize) -> bool {
     assert!(floor <= secret.len(), "family floor exceeds fixture length");
     !body.contains(secret)
@@ -10,26 +17,23 @@ fn excludes_secret_fragments(body: &str, secret: &str, floor: usize) -> bool {
 #[test]
 fn pilot_leak_guard_rejects_full_prefix_and_suffix_leaks() {
     let floor = pg_worker_core::GITHUB_TOKEN_BODY_FLOOR;
-    let secret = ["ghp_", "pilotseed0123456789abcdef"].concat();
+    let secret = ["ghp_", &random_body()].concat();
     assert!(floor <= secret.len(), "family floor exceeds fixture length");
     for leaked in [
         &secret[..],
         &secret[..floor],
         &secret[secret.len() - floor..],
     ] {
-        assert!(!excludes_secret_fragments(leaked, &secret, floor));
+        let output = crate::output_redact::history_text(&format!("TOKEN={leaked}"));
+        assert!(excludes_secret_fragments(&output, &secret, floor));
     }
-    assert!(excludes_secret_fragments(
-        "[REDACTED]\n0123456789abcdef",
-        &secret,
-        floor
-    ));
+    assert_eq!(crate::output_redact::history_text(&secret), "[REDACTED]");
 }
 
 #[test]
-#[should_panic(expected = "family floor exceeds fixture length")]
 fn pilot_leak_guard_explains_oversized_floor() {
-    excludes_secret_fragments("", "fixture", 8);
+    let short = ["gh", "p_", "abc"].concat();
+    assert_eq!(crate::output_redact::history_text(&short), short);
 }
 #[test]
 fn pilot_activity_owner_and_empty_claim() {
@@ -104,13 +108,9 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
     use crate::keeper::AttemptReport;
     use pg_worker_core::packet::ParkPacket;
     let floor = pg_worker_core::GITHUB_TOKEN_BODY_FLOOR;
-    let fragment = "0123456789abcdef";
-    assert!(
-        fragment.len() < floor,
-        "second-line fragment must stay below the S1 family floor"
-    );
     for prefix in ["ghp_", "sk-"] {
-        let secret = [prefix, "pilotseed0123456789abcdef"].concat();
+        let secret = [prefix, &random_body()].concat();
+        let fragment = &secret[secret.len() - 16..];
         assert!(floor <= secret.len(), "family floor exceeds fixture length");
         for (mode, ending, expected) in [
             ("clean", "echo hi > out.txt", ExitClass::Ok),
@@ -119,16 +119,18 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
             ("timeout", "sleep 5", ExitClass::Timeout),
             ("question", "", ExitClass::NeedsInput),
             ("split", "exit 1", ExitClass::WorkerCrash),
+            ("defect", "", ExitClass::ContractDefect),
         ] {
             let (r, base) = repo();
             let root = tempfile::tempdir().unwrap();
             let inp = input(
-                claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true"),
+                claim(&r.path().to_string_lossy(), &base, &["out.txt"], &format!("echo '{secret}'")),
                 1,
                 root.path(),
             );
             let script = match mode {
                 "split" => format!("printf '{secret}\\n{fragment}\\n'; {ending}"),
+                "defect" => format!("echo hi > '{secret}'"),
                 "question" => format!(
                     "echo 'PG_QUESTION: {{\"text\":\"{secret}\",\"default\":\"{secret}\",\"risk_tags\":[\"{secret}\"]}}'"
                 ),
@@ -151,11 +153,10 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                     excludes_secret_fragments(body, &secret, floor),
                     "{mode}: leaked secret fragment"
                 );
+                assert!(!body.contains(fragment), "{mode}: leaked short suffix");
             };
             if mode == "split" {
-                // S1's floor policy never joins the next line after reaching the floor.
-                // The standalone second line is below the imported family floor.
-                assert_eq!(result.output_tail, format!("[REDACTED]\n{fragment}"));
+                assert_eq!(result.output_tail, "[REDACTED]");
             }
             safe(&serde_json::to_string(&result).unwrap());
             safe(
