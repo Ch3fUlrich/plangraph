@@ -1,9 +1,12 @@
 //! Omnigraph 0.13 HTTP boundary; no retries or redirect following.
-//! GQ-to-envelope mapping must be supplied before enabling the binary adapter.
+//! Companion recall is available; publication and binary activation remain disabled.
 use crate::{credentials::read_token, io::Error};
 use serde::Serialize;
 use serde_json::Value;
 use std::{path::Path, time::Duration};
+
+#[path = "http_recall.rs"]
+mod recall;
 
 pub struct Http {
     agent: ureq::Agent,
@@ -17,7 +20,25 @@ pub struct Request<'a, P: Serialize> {
     pub params: P,
 }
 
+#[derive(Serialize)]
+struct PinnedRequest<'a> {
+    query: &'a str,
+    params: Value,
+    snapshot: &'a str,
+}
+
 impl Http {
+    fn post_snapshot(&self, query: &str, project: &str, snapshot: &str) -> Result<Value, Error> {
+        self.post(
+            "query",
+            &PinnedRequest {
+                query,
+                params: serde_json::json!({"project": project}),
+                snapshot,
+            },
+            None,
+        )
+    }
     /// `base` includes the graph route. Only TLS or loopback HTTP is accepted.
     pub fn new(base: &str, token_file: &Path, timeout: Duration) -> Result<Self, Error> {
         let uri: ureq::http::Uri = base.parse().map_err(|_| Error::Outage)?;
@@ -62,7 +83,7 @@ impl Http {
     fn post<P: Serialize>(
         &self,
         route: &str,
-        body: &Request<'_, P>,
+        body: &P,
         expected: Option<&str>,
     ) -> Result<Value, Error> {
         let failure = || {
@@ -111,3 +132,7 @@ fn loopback(host: &str) -> bool {
 #[cfg(all(test, unix))]
 #[path = "http_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "http_recall_tests.rs"]
+mod recall_tests;
