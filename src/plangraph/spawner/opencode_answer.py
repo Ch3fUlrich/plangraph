@@ -1,0 +1,64 @@
+"""Transport completion evidence; deliberately knows nothing about seat verdicts."""
+import json
+
+from .env_redact import normalize
+
+
+def final_answer(stdout, *, allow_unfinished=False):
+    """Keep the last stop-completed text, never a length/tool-call partial.
+
+    A later empty step does not revoke an already completed answer. A later
+    text part does: it must itself reach a stop before it can be published.
+    Plain terminal output has no completion framing and is not evidence.
+    Review verdicts may opt into pending text, but never an explicit non-stop finish.
+    """
+    pending, complete = [], None
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return None
+        if not isinstance(event, dict):
+            return None
+        part = event.get('part')
+        if not isinstance(part, dict):
+            continue
+        if event.get('type') == 'text':
+            text = part.get('text')
+            if isinstance(text, str) and text.strip():
+                pending.append(text)
+                complete = None
+        elif event.get('type') == 'step_finish':
+            if part.get('reason') == 'stop' and pending:
+                complete = '\n'.join(pending)
+            pending = []
+    return '\n'.join(pending) if allow_unfinished and pending else complete
+
+
+def answer_text(stdout):
+    """Decode display text without treating unframed/unfinished text as completion."""
+    complete = final_answer(stdout)
+    if complete is not None:
+        return complete
+    texts = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return stdout
+        if not isinstance(event, dict):
+            return stdout
+        part = event.get('part')
+        if event.get('type') == 'text' and isinstance(part, dict):
+            text = part.get('text')
+            if isinstance(text, str):
+                texts.append(text)
+    return '\n'.join(texts) if texts else stdout
+
+
+def terminated_after_answer(job, stdout, stderr, exit_code):
+    from .exit_outcome import is_opencode
+    return (is_opencode(job) and exit_code == 1
+            and any(normalize(line).strip() == 'Error: terminated'
+                    for line in stderr.splitlines())
+            and final_answer(stdout) is not None)
