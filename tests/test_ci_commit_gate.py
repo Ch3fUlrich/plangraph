@@ -86,11 +86,16 @@ def _commit(
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    path = tmp_path / "repo"
-    path.mkdir()
+    (path := tmp_path / "repo").mkdir()
     _git(path, "init", "-q")
     _commit(path, BASE_MSG)
     return path
+
+
+@pytest.mark.parametrize("path,expected", [("rust/Cargo.lock", 0), ("Cargo.lock", 2), ("other/Cargo.lock", 2)])
+def test_changed_lines_exempts_only_rust_lockfile(repo: Path, path: str, expected: int):
+    sha = _commit(repo, OK_MSG, files={path: "# generated lockfile\nversion = 4\n"})
+    assert ci_commit_gate._changed_lines(sha, cwd=repo) == expected
 
 
 def test_missing_writer_trailer_fails(repo: Path):
@@ -1019,16 +1024,11 @@ def test_hand_edit_auth_path_rename_refused(repo):
     assert f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py' in violations
 
 
-def test_hand_edit_fifty_changed_lines_passes(repo):
+@pytest.mark.parametrize("lines", [50, 51])
+def test_hand_edit_changed_lines_limit(repo, lines):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 50})
-    assert check(base, sha, cwd=repo) == []
-
-
-def test_hand_edit_fifty_one_changed_lines_refused(repo):
-    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 51})
-    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 50 changed lines']
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * lines})
+    assert check(base, sha, cwd=repo) == ([] if lines == 50 else [f'{sha}: hand-edit exceeds 50 changed lines'])
 
 
 def test_hand_edit_deleted_lines_count(repo):

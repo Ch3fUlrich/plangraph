@@ -350,9 +350,9 @@ def _changed_lines(sha: str, cwd: str | Path | None = None) -> int | None:
     total = 0
     for line in out.splitlines():
         added, _, rest = line.partition('\t')
-        deleted = rest.partition('\t')[0]
-        if added == '-' or deleted == '-':
-            return None
+        deleted, _, path = rest.partition('\t')
+        if path == 'rust/Cargo.lock': continue  # Generated dependency resolution.
+        if added == '-' or deleted == '-': return None
         total += int(added) + int(deleted)
     return total
 
