@@ -138,9 +138,11 @@ def load_token(secrets=None):
     raise LookupError('no gateway token in spawn env')
 
 
-def require_witness(model, env):
+def require_witness(model, env=None):
     """Fail closed before launching a review whose card requires gateway evidence."""
     from plangraph.planner.routing import SpawnRefused
+    from .runner import build_child_env
+    env = build_child_env() if env is None else env
     provider = str(model or '').split('/', 1)[0]
     reason = (f'not a gateway leg: provider {provider}' if provider not in ('omniroute', 'mimo')
               else 'mimo leg not routed through gateway' if provider == 'mimo' and not _gateway_mimo(env)
@@ -242,3 +244,9 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
         if attempt + 1 < attempts:
             time.sleep(delay)
     job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason[:200]})
+
+
+def witness_gate(card, role, model):
+    """Refuse before launch a review whose card requires a witness this leg cannot give."""
+    if role == 'review' and card.get('witness_required'):
+        require_witness(model)
