@@ -12,7 +12,7 @@ from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
 from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
-REQUESTED = 'opencode-go/gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential')
+REQUESTED = 'opencode-go/' + 'gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def _store(home, sessions, assistants):
