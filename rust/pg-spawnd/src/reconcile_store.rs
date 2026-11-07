@@ -1,4 +1,4 @@
-//! Read-only, bounded startup inventory; never skip an unreadable run.
+//! Bounded startup inventory and atomic orphan settlement.
 use crate::reconcile::ReconcileError;
 use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
@@ -148,9 +148,121 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     Ok(result)
 }
 
-/// Durable record-only settlement bridge. Caller must hold reconciliation lock
-/// and an emptiness proof; startup does not expose this until authority is wired.
-#[allow(dead_code)] // Authority-gated caller follows in the adoption slice.
+pub(crate) fn lock(
+    root: &Path,
+    path: &Path,
+) -> Result<pg_worker_core::lockfile::LockGuard, ReconcileError> {
+    check(root, true)?;
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        _ => check(path, false)?,
+    }
+    pg_worker_core::lockfile::try_lock(path)
+        .map_err(|_| ReconcileError::Io)?
+        .ok_or(ReconcileError::Unknown)
+}
+
+/// Named confinement groups are authoritative, even after the leader exits.
+/// Without one, a reused leader is gone; a missing leader alone is not proof.
+fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
+    let Some(identity) = identity else {
+        return Ok(true);
+    };
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(group) = &identity.group {
+            if !group.starts_with('/') {
+                return Err(ReconcileError::Unknown);
+            }
+            return match std::fs::read_to_string(Path::new(group).join("cgroup.procs")) {
+                Ok(members) => Ok(members.trim().is_empty()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    match std::fs::symlink_metadata(group) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                        _ => Err(ReconcileError::Unknown),
+                    }
+                }
+                Err(_) => Err(ReconcileError::Unknown),
+            };
+        }
+        match std::fs::read_to_string(format!("/proc/{}/stat", identity.pid)) {
+            Ok(stat) => {
+                let start = stat
+                    .rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().nth(19)?.parse::<u64>().ok())
+                    .ok_or(ReconcileError::Unknown)?;
+                if identity
+                    .start_time
+                    .is_some_and(|expected| expected != start)
+                {
+                    return Ok(true);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(ReconcileError::Unknown),
+        }
+        let pid = i32::try_from(identity.pid).map_err(|_| ReconcileError::Invalid)?;
+        // SAFETY: signal zero only probes the recorded process group.
+        if unsafe { libc::kill(-pid, 0) } == 0 {
+            return Ok(false);
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => Ok(true),
+            Some(libc::EPERM) => Ok(false),
+            _ => Err(ReconcileError::Unknown),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = identity;
+        Err(ReconcileError::Unknown)
+    }
+}
+
+/// Caller holds the state lock; re-read under the record lock before proving gone.
+pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileError> {
+    use pg_worker_core::run::record::{RunRecord, Status};
+    let dir = root.join("runs").join(&row.run_id);
+    let _lock = lock(&dir, &dir.join("record.lock"))?;
+    let Some(current) = inventory(root)?
+        .into_iter()
+        .find(|entry| entry.run_id == row.run_id && entry.attempt == row.attempt)
+    else {
+        return Ok(true);
+    };
+    if !gone(current.identity.as_ref())? {
+        return Ok(false);
+    }
+    let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
+    if record.status() != Some(Status::Running) {
+        return Ok(true);
+    }
+    if record
+        .get("attempts")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        record.set(
+            "attempts",
+            json!([{"status":"running", "started":record.get("started"),
+            "leg":record.get("plan").and_then(|plan| plan.get("first_leg"))}]),
+        );
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| ReconcileError::Invalid)?
+        .as_millis();
+    settle(
+        root,
+        &mut record,
+        row.attempt,
+        "gone",
+        u64::try_from(now).map_err(|_| ReconcileError::Invalid)?,
+    )?;
+    Ok(true)
+}
+
+/// Durable record-only settlement bridge, under state and record locks.
 pub(crate) fn settle(
     state: &Path,
     record: &mut pg_worker_core::run::record::RunRecord,
@@ -160,7 +272,14 @@ pub(crate) fn settle(
 ) -> Result<(), ReconcileError> {
     use pg_worker_core::run::record::Status;
     let invalid = || ReconcileError::Invalid;
-    if !["ended_unobserved", "killed_max_s", "reattach_timeout"].contains(&how) {
+    if ![
+        "gone",
+        "ended_unobserved",
+        "killed_max_s",
+        "reattach_timeout",
+    ]
+    .contains(&how)
+    {
         return Err(invalid());
     }
     let run = record
@@ -222,7 +341,7 @@ pub(crate) fn settle(
         .map_err(|_| invalid())?;
     record.set("attempts", json!(attempts));
     record
-        .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,
+        .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,"how":how,
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
     record.save().map_err(|_| ReconcileError::Io)

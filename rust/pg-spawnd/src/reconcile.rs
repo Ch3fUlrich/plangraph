@@ -1,4 +1,4 @@
-//! Restart inventory. Mutating recovery remains unavailable until adoption is wired.
+//! Restart inventory and settlement of proven-gone execution groups.
 use serde_json::Value;
 use std::path::Path;
 
@@ -61,16 +61,32 @@ pub(crate) fn startup(
 ) -> Result<Vec<WouldOrphan>, ReconcileError> {
     let modes = ["implement", "review", "orchestrate"].map(|role| mode(env, config, role));
     let modes: Vec<_> = modes.into_iter().collect::<Result<_, _>>()?;
-    // Never offer a partially enabled mutating implementation.
-    if modes.contains(&Mode::On) {
-        return Err(ReconcileError::Unknown);
-    }
     if modes.iter().all(|m| *m == Mode::Off) {
         return Ok(Vec::new());
     }
+    let _lock = if modes.contains(&Mode::On) && root.exists() {
+        Some(crate::reconcile_store::lock(
+            root,
+            &root.join("reconcile.lock"),
+        )?)
+    } else {
+        None
+    };
     let mut diagnostics = Vec::new();
+    let mut unavailable = false;
     for row in crate::reconcile_store::inventory(root)? {
-        if mode(env, config, &row.role)? != Mode::Shadow {
+        let mode = mode(env, config, &row.role)?;
+        if mode == Mode::Off {
+            continue;
+        }
+        if mode == Mode::On {
+            match crate::reconcile_store::orphan_gone(root, &row)? {
+                true => (),
+                false => {
+                    eprintln!("would_reattach {} {}", row.run_id, row.attempt);
+                    unavailable = true;
+                }
+            }
             continue;
         }
         // A recorded identity is not proof of liveness. Do not infer would_kill
@@ -89,7 +105,11 @@ pub(crate) fn startup(
             });
         }
     }
-    Ok(diagnostics)
+    if unavailable {
+        Err(ReconcileError::Unknown)
+    } else {
+        Ok(diagnostics)
+    }
 }
 
 pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {

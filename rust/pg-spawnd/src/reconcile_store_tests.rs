@@ -32,6 +32,119 @@ impl Drop for StateDir {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct GroupChild(std::process::Child);
+#[cfg(target_os = "linux")]
+impl GroupChild {
+    fn new() -> Self {
+        use std::os::unix::process::CommandExt;
+        Self(
+            std::process::Command::new("sh")
+                .args(["-c", "read token"])
+                .stdin(std::process::Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        )
+    }
+    fn identity(&self) -> Value {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", self.0.id())).unwrap();
+        let start: u64 = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap();
+        json!({"pid":self.0.id(), "start_time":start,"group":null})
+    }
+    fn stop(&mut self) {
+        self.0.kill().unwrap();
+        self.0.wait().unwrap();
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for GroupChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_on_killed_group_orphaned_once_across_startups() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    let mut child = GroupChild::new();
+    record.set("proc", child.identity());
+    record.save().unwrap();
+    child.stop();
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    let before = std::fs::read(record.path()).unwrap();
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
+    let value: Value = serde_json::from_slice(&before).unwrap();
+    assert_eq!(value["status"], "orphaned");
+    assert_eq!(value["attempts"][0]["outcome"]["outcome"], "orphaned");
+    assert_eq!(value["events"].as_array().unwrap().len(), 1);
+    assert_eq!(value["events"][0]["event"], "RUN_ORPHANED");
+    assert_eq!(value["events"][0]["how"], "gone");
+    assert!(value["exit_code"].is_null());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_on_live_group_would_reattach_untouched_shadow_writes_nothing() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    let child = GroupChild::new();
+    record.set("proc", child.identity());
+    record.save().unwrap();
+    let before = std::fs::read(record.path()).unwrap();
+    crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).unwrap();
+    assert!(!dir.0.join("reconcile.lock").exists());
+    assert!(crate::reconcile::startup(&dir.0, Some("on"), &json!({})).is_err());
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_on_pid_reuse_start_mismatch_is_gone_without_signalling() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    let mut child = GroupChild::new();
+    let mut identity = child.identity();
+    identity["start_time"] = json!(identity["start_time"].as_u64().unwrap() + 1);
+    record.set("proc", identity);
+    record.save().unwrap();
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    assert!(child.0.try_wait().unwrap().is_none());
+    assert_eq!(
+        RunRecord::read(&dir.0, "run-test").unwrap().status(),
+        Some(Status::Orphaned)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_named_group_members_override_reused_leader_identity() {
+    let dir = StateDir::new();
+    let group = dir.0.join("scope");
+    std::fs::create_dir(&group).unwrap();
+    std::fs::write(group.join("cgroup.procs"), "123\n").unwrap();
+    let identity = Proc {
+        pid: std::process::id(),
+        start_time: Some(1),
+        group: Some(group.to_str().unwrap().into()),
+    };
+    assert!(!gone(Some(&identity)).unwrap());
+    std::fs::write(group.join("cgroup.procs"), "").unwrap();
+    assert!(gone(Some(&identity)).unwrap());
+}
+
 #[test]
 fn reconcile_inventory_legacy_missing_proc_and_limits() {
     let dir = StateDir::new();
