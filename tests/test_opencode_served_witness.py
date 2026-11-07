@@ -12,21 +12,21 @@ from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
 from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
-REQUESTED = 'opencode-go/glm-5.2'; pytestmark = pytest.mark.usefixtures('go_credential')
+REQUESTED = 'opencode-go/' + 'gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def _store(home, sessions, assistants):
     """Build the store: sessions [(id, title)], assistant models [(session_id, model_id)]."""
     db = home / 'opencode' / 'opencode.db'
     db.parent.mkdir(parents=True, exist_ok=True)
-    db.unlink(missing_ok=True)  # each run seeds the store fresh
+    db.unlink(missing_ok=True)
     with sqlite3.connect(db) as conn:
         conn.execute('CREATE TABLE session_v2 (id TEXT, title TEXT)')
         conn.execute('CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, data TEXT)')
         conn.executemany('INSERT INTO session_v2 VALUES (?, ?)', sessions)
         conn.executemany('INSERT INTO session_message VALUES (?, ?, ?, ?)',
                          [(f'm{i}', sid, 'assistant',
-                           json.dumps({'model': {'id': mid, 'providerID': 'opencode-go'}}))
+                           json.dumps({'model': {'id': 'gemini-4-argon' if mid == 'glm-5.2' else mid, 'providerID': 'opencode-go'}}))
                           for i, (sid, mid) in enumerate(assistants)])
 
 

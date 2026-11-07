@@ -88,10 +88,11 @@ impl Fixture {
         if mode == "tag" {
             git(root, &["tag", "-a", "result", "-m", "annotated"]);
         }
+        let branch = git(root, &["symbolic-ref", "HEAD"]);
         let tip = if mode == "tag" || mode == "lightweight" {
             "refs/tags/result"
         } else {
-            "HEAD"
+            &branch
         };
         let head = git(root, &["rev-parse", tip]);
         let bundle = root.join("result.bundle");
@@ -206,11 +207,11 @@ fn refuses_unreachable_pack_blob() {
         let pack = command(root, &["pack-objects", "--stdout"], &objects, None).unwrap();
         f.bytes = if format == "sha256" {
             format!(
-                "# v3 git bundle\n@object-format=sha256\n{} HEAD\n\n",
+                "# v3 git bundle\n@object-format=sha256\n{} refs/heads/result\n\n",
                 f.head
             )
         } else {
-            format!("# v2 git bundle\n{} HEAD\n\n", f.head)
+            format!("# v2 git bundle\n{} refs/heads/result\n\n", f.head)
         }
         .into_bytes();
         f.bytes.extend(pack);
@@ -262,7 +263,7 @@ fn refuses_loose_extra_objects() {
         )
         .unwrap();
         assert_eq!(
-            validate_objects(stage.path(), &f.base, &f.base),
+            validate_objects(stage.path(), receiver, &f.base, &f.base),
             Err(Refusal::UnexpectedObjects)
         );
         assert_eq!(snapshot(receiver), before);
@@ -317,4 +318,69 @@ fn requires_both_trailers() {
     for mode in ["plan", "writer"] {
         Fixture::new(mode).assert_refusal(Refusal::MissingTrailer);
     }
+}
+
+#[test]
+fn refuses_non_branch_namespaces() {
+    for name in [
+        "refs/notes/result",
+        "refs/replace/result",
+        "arbitrary",
+        "HEAD",
+    ] {
+        let mut f = Fixture::new("safe");
+        let split = f.bytes.windows(2).position(|w| w == b"\n\n").unwrap();
+        let header = std::str::from_utf8(&f.bytes[..split]).unwrap();
+        let old = header
+            .lines()
+            .last()
+            .unwrap()
+            .split_whitespace()
+            .last()
+            .unwrap();
+        let header = header.replace(old, name);
+        f.bytes = [header.as_bytes(), &f.bytes[split..]].concat();
+        f.assert_refusal(Refusal::BadBundle);
+    }
+}
+
+#[test]
+fn refuses_missing_base_before_ancestry() {
+    let mut f = Fixture::new("safe");
+    f.base = "0".repeat(40);
+    f.assert_refusal(Refusal::BadBundle);
+}
+
+#[test]
+fn receiver_linked_worktree_and_relative_alternates() {
+    let mut f = Fixture::new("safe");
+    let root = PathBuf::from(&f.repo.root);
+    let linked = f._receiver.path().join("linked");
+    git(
+        &root,
+        &["worktree", "add", linked.to_str().unwrap(), "lane/test"],
+    );
+    f.repo.root = linked.to_str().unwrap().into();
+    f.import().unwrap();
+    let stage = tempfile::tempdir().unwrap();
+    init_scratch(&linked, stage.path()).unwrap();
+    // Relative alternate paths are relative to the scratch object directory.
+    let local = stage.path().join("receiver-objects");
+    std::os::unix::fs::symlink(root.join(".git/objects"), local).unwrap();
+    std::fs::write(
+        stage.path().join("objects/info/alternates"),
+        "../receiver-objects",
+    )
+    .unwrap();
+    validate_objects(stage.path(), &linked, &f.base, &f.base).unwrap();
+}
+
+#[test]
+fn format_width_is_explicit() {
+    for width in [40, 64] {
+        assert!(oid_any(&"a".repeat(width), width));
+        assert!(!oid_any(&"a".repeat(width), 104 - width));
+        assert!(!oid_any(&"G".repeat(width), width));
+    }
+    assert!(!oid_any("", 0));
 }

@@ -86,7 +86,7 @@ from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
 DEFAULT_LEGS = (
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",),
-             disabled="D-3950 credits out; re-enable after one passing probe seat, one try per day"),
+             disabled="D-4744 operator disabled, not a route option"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
         roles=("review", "implement"),
@@ -116,10 +116,10 @@ DEFAULT_LEGS = (
         False, roles=("review",)),
     Leg("opencode-go-glm-5.2", "subscription", "opencode",
         "opencode-go/glm-5.2", "glm", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review",), disabled="D-3605 operator: glm not acceptable"),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review",), disabled="D-3605 operator: not acceptable"),
     Leg("omniroute-grok-4.7", "subscription", "opencode", "omniroute/gc/grok-4.7",
         "grok", ("128k", "256k"), 120000, False, roles=("review",), tool_mode="tools",
         note="D-3701: grok review seat via OmniRoute gc"),

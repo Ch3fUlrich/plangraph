@@ -21,7 +21,7 @@ SUBS = ["cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-fl
 
 def test_default_qwen_disabled_and_gpt_review_families():
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == "qodercli-qwen3.8-flash")
-    assert leg.disabled == "D-3950 credits out; re-enable after one passing probe seat, one try per day"
+    assert leg.disabled == "D-4744 operator disabled, not a route option"
     assert leg.roles == ("review",)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",))
     assert leg.id not in {candidate.id for candidate in plan.legs}
@@ -34,7 +34,7 @@ def test_explicit_disabled_qwen_refused(tmp_path):
     import pytest
     from plangraph.spawner.service import SpawnService
     from plangraph.planner.routing import SpawnRefused
-    with pytest.raises(SpawnRefused, match=r"^leg disabled: qodercli-qwen3\.8-flash: D-3950 credits out; re-enable after one passing probe seat, one try per day; override cannot enable a disabled leg$"):
+    with pytest.raises(SpawnRefused, match=r"^leg disabled: qodercli-qwen3\.8-flash: D-4744 operator disabled, not a route option; override cannot enable a disabled leg$"):
         asyncio.run(SpawnService(state=tmp_path).spawn(
             card=CARD, leg="qodercli-qwen3.8-flash",
             override_reason="test disabled leg", dry_run=True))
@@ -105,7 +105,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert [leg.id for leg in rev.legs][:2] == ["mimo-v2.6-flash", "mimo-v2.6-pro"]
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
-    assert reasons["opencode-go-glm-5.2"] == "off_family"
+    assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
 
 
 def test_agy_skipped_while_out_of_quota():
@@ -184,8 +184,8 @@ def test_fixed_implement_sol_across_tiers():
     from plangraph.planner.routing import route_card
     table = {leg.id: leg for leg in DEFAULT_LEGS}
     for tier in TIERS:
-        legs = (table[FREE[2]], replace(table[SUBS[0]], tier=tier),
-                table[FREE[0]], table[SUBS[2]])
+        legs = (replace(table[FREE[2]], disabled=None), replace(table[SUBS[0]], tier=tier),
+                replace(table[FREE[0]], disabled=None), table[SUBS[2]])
         # route_card is a low-level ordering probe; plan_spawn filters roles.
         expected = [SUBS[0], FREE[2], FREE[0], SUBS[2]]
         assert [leg.id for leg in route_card(CARD, legs=legs, role="implement").legs] == expected
@@ -230,7 +230,8 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert not {leg.family for leg in review.review_seats} & set(writers)
         # D-4196: the Zen deepseek leg is disabled, so mimo writers fall to the next family.
         assert review.first_leg.family == {("mimo",): "gpt", ("gpt", "mimo"): "gemini"}.get(writers, "mimo")
-        assert {"deepseek", "glm"} <= {leg.family for leg in review.legs}
+        assert "deepseek" in {leg.family for leg in review.legs}
+        assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
         "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",

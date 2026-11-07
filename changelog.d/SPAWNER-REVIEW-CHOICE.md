@@ -1,0 +1,1 @@
+- **SPAWNER-REVIEW-CHOICE (D-4744, 4.03a):** Disabled legs are never route options (qodercli off), and a review whose request exceeds a leg window falls through to a larger window class instead of failing with window_class.

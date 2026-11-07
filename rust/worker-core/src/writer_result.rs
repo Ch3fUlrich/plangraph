@@ -48,7 +48,7 @@ pub(crate) fn safe_id(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
 }
 pub(crate) fn oid(s: &str) -> bool {
-    matches!(s.len(), 40 | 64)
+    s.len() == 40
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
