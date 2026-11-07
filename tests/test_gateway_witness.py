@@ -103,7 +103,7 @@ def test_witness_skips_untagged_or_witnessed_jobs():
 
 
 def test_fetch_rows_needs_spawner_token_and_sends_it(tmp_path):
-    with pytest.raises(LookupError, match='no gateway token in spawn env'):
+    with pytest.raises(LookupError, match='no ' + gw.TOKEN_ENV):
         gw.fetch_rows('plangraph-job-1', {}, secrets={gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')})
     sent = []
     def opener(request, timeout):

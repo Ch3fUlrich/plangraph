@@ -67,10 +67,11 @@ def test_direct_mimo_is_not_gateway_backed():
     assert seat.served_model is None and not seat.events
 
 
-def test_missing_management_access():
+def test_missing_management_access(tmp_path):
     seat = job()
     gw.witness(SimpleNamespace(), 'seat', seat, config(),
-               fetch=lambda tag, env: FETCH_ROWS(tag, env, secrets={}, opener=pytest.fail))
+               fetch=lambda tag, env: FETCH_ROWS(tag, env, secrets={
+                   gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')}, opener=pytest.fail))
     assert seat.events == [{'event': 'gateway_witness_unavailable', 'reason': 'no ' + gw.TOKEN_ENV}]
 
 

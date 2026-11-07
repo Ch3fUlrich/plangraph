@@ -11,7 +11,7 @@ from plangraph.spawner import gateway_witness as gw
     ('mimo', None, True, 'mimo leg not routed through gateway'),
     ('omniroute', 'other/model', True, 'served_model already set'),
     ('omniroute', None, False, 'final config carries no session tag'),
-    ('omniroute', None, True, 'no gateway token in spawn env'),
+    ('omniroute', None, True, 'no ' + gw.TOKEN_ENV),
     ('omniroute', None, True, 'gateway endpoint not configured'),
 ])
 def test_unavailable(provider, served, tagged, reason):
@@ -38,17 +38,17 @@ def test_token_file(tmp_path):
             return b'[]'
     assert gw.fetch_rows('job', {}, secrets=secrets, opener=lambda *a, **k: Response()) == []
     path.chmod(0o644)
-    with pytest.raises(LookupError, match='no gateway token in spawn env'):
+    with pytest.raises(LookupError, match='no ' + gw.TOKEN_ENV):
         gw.load_token(secrets)
     path.unlink()
-    with pytest.raises(LookupError, match='no gateway token in spawn env'):
+    with pytest.raises(LookupError, match='no ' + gw.TOKEN_ENV):
         gw.load_token(secrets)
 
 
 @pytest.mark.parametrize('model,reason', [
     ('direct/model', 'not a gateway leg: provider direct'),
     ('mimo/model', 'mimo leg not routed through gateway'),
-    ('omniroute/model', 'no gateway token in spawn env'),
+    ('omniroute/model', 'no ' + gw.TOKEN_ENV),
 ])
 def test_required_refusal(monkeypatch, tmp_path, model, reason):
     from plangraph.planner.routing import SpawnRefused

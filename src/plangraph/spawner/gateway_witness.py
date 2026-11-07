@@ -99,6 +99,14 @@ def _gateway_mimo(env):
     gateway = _gateway(env)
     if not gateway:
         return False
+    seen, endpoints = _mimo_endpoints(env)
+    def normalize(value):
+        return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
+    # No explicit endpoint means the template default routes through the gateway.
+    return seen and all(normalize(e) == normalize(gateway) for e in endpoints)
+
+
+def _mimo_endpoints(env):
     cfg = _config(env.get('OPENCODE_CONFIG_CONTENT'))
     endpoints = []
     seen = False   # a mimo block must exist; no config is not evidence
@@ -112,11 +120,7 @@ def _gateway_mimo(env):
             options = block.get(name)
             if isinstance(options, dict) and 'baseURL' in options:
                 endpoints.append(options['baseURL'])
-    def normalize(value):
-        return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
-    # The MiMo template has no direct endpoint; rendering supplies the gateway
-    # URL. An explicit different endpoint is not gateway routing evidence.
-    return seen and all(normalize(e) == normalize(gateway) for e in endpoints)
+    return seen, endpoints
 
 
 def load_token(secrets=None):
@@ -136,7 +140,7 @@ def load_token(secrets=None):
             return token
     except (OSError, UnicodeError):
         pass
-    raise LookupError('no gateway token in spawn env')
+    raise LookupError('no ' + TOKEN_ENV)
 
 
 def gateway_leg(model, env=None):
@@ -223,6 +227,8 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
     def unavailable(reason):
         job.events.append({'event': 'gateway_witness_unavailable', 'reason': reason})
     if not gateway_leg(job.model_or_combo, env):
+        if provider == 'mimo' and _mimo_endpoints(env)[1]:
+            return
         unavailable('mimo leg not routed through gateway' if provider == 'mimo'
                     else f'not a gateway leg: provider {provider}')
         return
