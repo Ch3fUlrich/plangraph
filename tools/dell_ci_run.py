@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run pinned CI commands on an SSH host with preinstalled CI prerequisites.
 
-The remote login starts in the repository. origin/main is the PR comparison
+The remote repository is selected explicitly. origin/main is the PR comparison
 base. No dependencies are installed and no remote output/environment is printed.
 Services and build products are disposable; failures yield exit 1.
 """
@@ -47,6 +47,7 @@ def main(argv=None, *, runner=subprocess.run):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--host", default="dell-build")
+    parser.add_argument("--repo", default="~/code/plangraph")
     parser.add_argument("--jobs", default=",".join(JOBS))
     parser.add_argument("--out", type=Path, default=Path("out/dell-ci"))
     args = parser.parse_args(argv)
@@ -57,6 +58,11 @@ def main(argv=None, *, runner=subprocess.run):
         parser.error("unknown job")
     if not re.fullmatch(r"[a-zA-Z0-9_.@-]+", args.host) or args.host.startswith("-"):
         parser.error("invalid host")
+    if not re.fullmatch(r"(?:~/|/)[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_.-]+)*", args.repo):
+        parser.error("invalid repository path")
+    repo = ('"$HOME"/' + shlex.quote(args.repo[2:])
+            if args.repo.startswith("~/") else shlex.quote(args.repo))
+    git = f"git -C {repo}"
     run_id = uuid.uuid4().hex
     # A random private directory avoids collisions with other runs and user trees.
     directory = f'"$HOME"/.cache/dell-ci/{run_id}'
@@ -77,10 +83,10 @@ def main(argv=None, *, runner=subprocess.run):
         return result.stdout
 
     try:
-        checked("git fetch origin", "origin fetch failed")
-        checked(f"git fetch origin {args.sha}", "requested SHA fetch failed")
+        checked(f"{git} fetch origin", "origin fetch failed")
+        checked(f"{git} fetch origin {args.sha}", "requested SHA fetch failed")
         checked(f'mkdir -p "$HOME"/.cache/dell-ci && mkdir -m 700 {directory} && '
-                f"git worktree add --detach {qtree} {args.sha}",
+                f"{git} worktree add --detach {qtree} {args.sha}",
                 "worktree setup failed")
         head = checked(f"git -C {qtree} rev-parse HEAD", "HEAD verification failed").strip()
         if head != args.sha.lower():
@@ -141,7 +147,7 @@ def main(argv=None, *, runner=subprocess.run):
         record["reason"] = "remote setup or verification failed"
     finally:
         try:
-            result = call(f"git worktree remove --force {qtree}; "
+            result = call(f"{git} worktree remove --force {qtree}; "
                            f"removed=$?; rm -rf -- {directory}; "
                           'cleaned=$?; test "$removed" -eq 0 && test "$cleaned" -eq 0')
             if result.returncode:

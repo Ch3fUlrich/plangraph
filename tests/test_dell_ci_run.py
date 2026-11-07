@@ -106,7 +106,8 @@ def test_exact_identity_and_commands(tmp_path):
     fake = Fake()
     code, record = invoke(tmp_path, fake, jobs="select,scrub,file-size,changelog-docs,pytest")
     assert code == 0
-    assert fake.calls[:2] == ["git fetch origin", f"git fetch origin {SHA}"]
+    assert fake.calls[:2] == ['git -C "$HOME"/code/plangraph fetch origin',
+                              f'git -C "$HOME"/code/plangraph fetch origin {SHA}']
     assert record["sha"] == SHA and record["host"] == "test-host"
     assert record["started"]
     assert all(j["duration_s"] >= 0 for j in record["jobs"])
@@ -124,7 +125,7 @@ def test_requested_sha_fetch_failure(tmp_path):
 
     def runner(argv, **kwargs):
         result = fake(argv, **kwargs)
-        if argv[-1] == f"git fetch origin {SHA}":
+        if argv[-1] == f'git -C "$HOME"/code/plangraph fetch origin {SHA}':
             return subprocess.CompletedProcess(argv, 1, "", "secret")
         return result
 
@@ -133,6 +134,27 @@ def test_requested_sha_fetch_failure(tmp_path):
     assert record["reason"] == "requested SHA fetch failed"
     assert not any("worktree add" in command for command in fake.calls)
     assert not record["jobs"]
+
+
+@pytest.mark.parametrize("repo", ["~/code/custom", "/srv/plangraph"])
+def test_explicit_repository(tmp_path, repo):
+    fake = Fake()
+    assert ci.main(["--sha", SHA, "--repo", repo, "--jobs", "select",
+                    "--out", str(tmp_path)], runner=fake) == 0
+    prefix = 'git -C ' + (repo.replace("~/", '"$HOME"/') if repo.startswith("~/") else repo)
+    for operation in ["fetch origin", f"fetch origin {SHA}",
+                      "worktree add --detach", "worktree remove --force"]:
+        assert any(prefix + " " + operation in command for command in fake.calls)
+    assert all("git -C " in command for command in fake.calls if "git " in command)
+
+
+@pytest.mark.parametrize("repo", ["relative/path", "~other/repo", "/repo;true",
+                                 "~/repo$(id)", "/repo\ntrue", "--help", ""])
+def test_invalid_repository_refused(tmp_path, repo):
+    fake = Fake()
+    with pytest.raises(SystemExit):
+        ci.main(["--sha", SHA, "--repo=" + repo, "--out", str(tmp_path)], runner=fake)
+    assert not fake.calls
 
 
 def test_failed_worktree_add_still_removes_private_directory(tmp_path):
