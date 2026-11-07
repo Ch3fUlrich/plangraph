@@ -77,6 +77,7 @@ JS_FILES = (
     "page_activity.js",
     "page_progress.js",
     "page_hosts.js",
+    "page_agents.js",
     "page_boot.js",  # T2: boot must be last — it wires the components it finds.
 )
 
@@ -254,6 +255,32 @@ def build_sha(pkg_dir: Path | None = None) -> str:
     return sha if _SHA_SAFE.fullmatch(sha) else "unknown"
 
 
+def _project_agents_view(data: dict) -> dict:
+    """Enforce the public schema without depending on the spawner runtime."""
+    if not isinstance(data, dict) or not isinstance(data.get('hosts'), list):
+        return None
+    fields = ('host', 'name', 'runtime', 'model', 'state', 'item', 'age_s')
+    hosts = []
+    for entry in data['hosts']:
+        entry = entry if isinstance(entry, dict) else {}
+        host = entry.get('host') if isinstance(entry.get('host'), str) else 'unknown'
+        rows = entry.get('agents')
+        readable = entry.get('readable') is True and isinstance(rows, list)
+        agents = []
+        for source in rows if readable else []:
+            source = source if isinstance(source, dict) else {}
+            row = {k: source.get(k) if isinstance(source.get(k), (str, int, float))
+                   and not isinstance(source.get(k), bool) else None for k in fields}
+            row['host'] = host
+            if row['runtime'] not in ('claude', 'opencode', 'spawner-run'):
+                row['runtime'] = None
+            agents.append(row)
+        hosts.append(dict(host=host, readable=readable,
+                          reason=None if readable else 'unreadable', agents=agents))
+    return dict(generated_at=data.get('generated_at') if isinstance(
+        data.get('generated_at'), str) else None, hosts=hosts)
+
+
 def render(
     snapshot: dict,
     vendor_dir: Path,
@@ -275,6 +302,15 @@ def render(
         items = []
     # Always give the page JS an `items` array, even for a malformed/empty snapshot.
     safe_snapshot = dict(snapshot)
+    if cdn:
+        # The page is served as a single bind-mounted file, not a JSON API.
+        # Read the independent collector output; never add it to keeper snapshots.
+        from .spawner.agent_view_projection import load_view
+        live_agents = load_view()
+        if live_agents is not None:
+            safe_snapshot['agents_view'] = live_agents
+    if 'agents_view' in safe_snapshot:
+        safe_snapshot['agents_view'] = _project_agents_view(safe_snapshot['agents_view'])
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)
@@ -283,7 +319,8 @@ def render(
     vendor_dir = Path(vendor_dir)
     vendor_scripts = _vendor_scripts(vendor_dir, bool(cdn))
 
-    page_js = _strip_line_comments("\n;\n".join(_read(ASSETS_DIR / name) for name in JS_FILES))
+    page_js = _strip_line_comments("\n;\n".join(_read(ASSETS_DIR / name) for name in JS_FILES
+                                                if cdn or name != "page_agents.js"))
     page_css = "\n".join(_read(ASSETS_DIR / name) for name in CSS_FILES)
 
     doc = _read(ASSETS_DIR / "page_template.html")
