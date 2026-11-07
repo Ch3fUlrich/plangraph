@@ -379,8 +379,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         return SpawnPlan((), tuple(skipped), "operator-order", (),
                          tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details))
     ordered = list(route.legs)
-    reasons = [*route.reasons, *bench_reasons]
-    source = "operator-order"
+    reasons, source = [*route.reasons, *bench_reasons], "operator-order"
     if benchmark is not None and role != "implement":
         from plangraph.routing_support.resolver import rank_candidates
         for tier in TIERS:
@@ -413,6 +412,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         table_order = {leg.id: i for i, leg in enumerate(ordered)}
         ordered.sort(key=lambda leg: review_key(
             leg, TIERS.index(leg.tier), table_order[leg.id]))
+    ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []
     if role == "review":
         high = ranking_risk in ("high", "critical") or bool(card.get('risk_tags'))
