@@ -301,7 +301,7 @@ def test_bogus_pg_mode_exits_2(stack):
 def test_help_does_not_launch_services(stack):
     result = stack.run("--help")
     assert result.returncode == 0
-    assert "start|stop [--purge]|status|keeper|set-current" in result.stdout
+    assert "start|stop [--purge]|status|keeper|worker|set-current" in result.stdout
     assert stack.lines() == []
 
 
