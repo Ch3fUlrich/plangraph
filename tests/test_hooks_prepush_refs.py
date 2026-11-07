@@ -5,8 +5,61 @@ import subprocess
 import pytest
 
 from test_hooks_prepush import (
-    HOOK, ZERO, commit_file, fake_ip, git, push_line, repo, run_hook,
+    HOOK, ZERO, commit_file, fake_ip, fake_word, git, push_line, repo, run_hook,
 )
+
+
+@pytest.mark.parametrize("case", ["main-only", "branch-hit", "resolution-hit",
+                                 "touched-clean", "unknown-main", "base-only"])
+def test_merge_main_scrubs_only_branch_additions(repo, tmp_path, case):
+    r, base = repo
+    words = tmp_path / "words.txt"
+    words.write_text(fake_word() + "\n")
+    git(r, "checkout", "-q", "-b", "lane")
+    remote = commit_file(r, "app/lane.txt", "clean lane\n")
+    git(r, "checkout", "-q", "main")
+    main = commit_file(r, "app/shared.txt", fake_word() + "\n")
+    git(r, "update-ref", "refs/remotes/origin/main", main)
+    git(r, "checkout", "-q", "lane")
+    if case == "resolution-hit":
+        commit_file(r, "app/shared.txt", "clean branch\n")
+        merge = subprocess.run(
+            ["git", "merge", "--no-ff", "main", "-m", "merge main"],
+            cwd=r, capture_output=True, text=True)
+        assert merge.returncode == 1, "expected an add/add conflict"
+        # Neither parent contains this added line; only the resolution does.
+        commit_file(r, "app/shared.txt", "clean resolution\n")
+        git(r, "checkout", "-q", "main")
+        main = commit_file(r, "app/shared.txt", "clean upstream\n")
+        git(r, "update-ref", "refs/remotes/origin/main", main)
+        git(r, "checkout", "-q", "lane")
+        # Recreate a conflict whose parents are both clean.
+        merge = subprocess.run(
+            ["git", "merge", "--no-ff", "main", "-m", "merge again"],
+            cwd=r, capture_output=True, text=True)
+        assert merge.returncode == 1, "expected a content conflict"
+        head = commit_file(r, "app/shared.txt", fake_word() + " resolution\n")
+    else:
+        git(r, "merge", "--no-ff", "main", "-m", "merge main")
+        head = git(r, "rev-parse", "HEAD").strip()
+        if case == "branch-hit":
+            head = commit_file(r, "app/added.txt", fake_word() + "\n")
+        elif case in ("touched-clean", "unknown-main"):
+            head = commit_file(r, "app/shared.txt", fake_word() + "\nclean addition\n")
+        elif case == "base-only":
+            git(r, "checkout", "-q", "main")
+            main = commit_file(r, "app/shared.txt", "clean upstream\n")
+            git(r, "update-ref", "refs/remotes/origin/main", main)
+        if case == "unknown-main":
+            git(r, "update-ref", "-d", "refs/remotes/origin/main")
+    res = run_hook(r, [push_line("lane", head, remote)],
+                   {"PLANGRAPH_SCRUB_WORDS": str(words)})
+    out = res.stdout + res.stderr
+    assert fake_word() not in out, "private fixture leaked"
+    expected = 1 if case in ("branch-hit", "resolution-hit", "unknown-main") else 0
+    assert res.returncode == expected, out
+    if expected:
+        assert "private-word" in out
 
 
 @pytest.mark.parametrize("remote_ref", ["refs/heads/main", "refs/tags/release",
