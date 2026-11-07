@@ -1,4 +1,5 @@
 //! V1 durable-fact contract and transport-independent memory operations.
+pub mod adapters;
 pub mod io;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

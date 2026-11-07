@@ -430,6 +430,7 @@ version = "0.1.0"
 dependencies = [
  "pg-worker-core",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
