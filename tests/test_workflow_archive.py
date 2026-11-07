@@ -37,16 +37,32 @@ def test_workflow_archive_runs_guarded_base_checker():
              for step in job.get("steps", [])
              if step.get("name") == "Workflow archive policy")
     run = step["run"]
-    assert 'git rev-parse --verify --end-of-options "${BASE_SHA:?}^{commit}"' in run
+    assert 'git rev-parse --verify --end-of-options "HEAD^1^{commit}"' in run
     commands = shlex.split(run)
     assert commands == [
         "b=$(git", "rev-parse", "--verify", "--end-of-options",
-        "${BASE_SHA:?}^{commit})", "&&",
+        "HEAD^1^{commit})", "&&",
         "git", "show", "$b:tests/test_workflow_archive.py",
         ">", ".git/workflow_archive_base.py", "&&", "python",
         ".git/workflow_archive_base.py", "$b",
     ]
     assert "tests/test_workflow_archive.py" not in commands
+
+
+def test_workflow_archive_never_uses_stale_pr_base_sha():
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
+    steps = workflow["jobs"]["pytest"]["steps"]
+    checkout, = (step for step in steps
+                 if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["fetch-depth"] == 0
+    step, = (step for step in steps
+             if step.get("name") == "Workflow archive policy")
+    assert step["if"] == "github.event_name == 'pull_request'"
+    assert "BASE_SHA" not in step["run"]
+    assert "base.sha" not in step["run"]
+    assert '"HEAD^1^{commit}"' in step["run"]
 
 
 def test_released_archive_matches_manifest():

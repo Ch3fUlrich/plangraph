@@ -134,7 +134,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: b=$(git rev-parse --verify --end-of-options "${BASE_SHA:?}^{commit}") && git show "$b":tests/test_workflow_archive.py > .git/workflow_archive_base.py && python .git/workflow_archive_base.py "$b"
+        run: b=$(git rev-parse --verify --end-of-options "HEAD^1^{commit}") && git show "$b":tests/test_workflow_archive.py > .git/workflow_archive_base.py && python .git/workflow_archive_base.py "$b"
       - name: pytest
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
