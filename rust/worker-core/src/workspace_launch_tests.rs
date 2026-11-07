@@ -4,18 +4,44 @@ use tempfile::{tempdir, TempDir};
 fn none_missing_worktrees_root() {
     let mut f = Fixture::new();
     f.repo.worktrees_root = f.tmp.path().join("missing/trees").to_str().unwrap().into();
-    f.ws = Workspace {
-        repo_id: "fixture".into(),
-        mode: Mode::None,
-        base_sha: None,
-        revision_sha: None,
-        branch: None,
-    };
+    f.ws = none_workspace();
+    assert!(matches!(
+        launch(&f, &mut Command::new("unused"), None),
+        Err(ResolveError::Verify("worktrees_root"))
+    ));
+    assert!(!f.tmp.path().join("missing").exists());
+}
+#[test]
+fn none_file_worktrees_root() {
+    let mut f = Fixture::new();
+    let file = f.tmp.path().join("not-a-directory");
+    fs::write(&file, "unchanged").unwrap();
+    f.repo.worktrees_root = file.to_str().unwrap().into();
+    f.ws = none_workspace();
+    assert!(matches!(
+        launch(&f, &mut Command::new("unused"), None),
+        Err(ResolveError::Verify("worktrees_root"))
+    ));
+    assert_eq!(fs::read_to_string(file).unwrap(), "unchanged");
+}
+#[test]
+fn none_existing_worktrees_root() {
+    let mut f = Fixture::new();
+    f.ws = none_workspace();
     assert!(launch(&f, &mut Command::new("unused"), None)
         .unwrap()
         .is_none());
     f.repo.worktrees_root = f.tmp.path().to_str().unwrap().into();
     assert!(launch(&f, &mut Command::new("unused"), None).is_err());
+}
+fn none_workspace() -> Workspace {
+    Workspace {
+        repo_id: "fixture".into(),
+        mode: Mode::None,
+        base_sha: None,
+        revision_sha: None,
+        branch: None,
+    }
 }
 fn apply(f: &Fixture, tree: &Path) -> Result<(), ResolveError> {
     let mut cmd = Command::new("unused");
