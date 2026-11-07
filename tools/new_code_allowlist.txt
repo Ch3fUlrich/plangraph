@@ -1,0 +1,3 @@
+# Exceptions for Python regression tests of existing modules and the thin gate.
+tests/test_*.py | Regression tests for existing Python modules
+tools/check_new_code_lang.py | D-4691 gate script, thin
