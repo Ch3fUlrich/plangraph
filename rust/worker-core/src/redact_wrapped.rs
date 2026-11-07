@@ -34,11 +34,6 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
                 count += 1;
                 end += 1;
             }
-            if count >= floor {
-                // A complete token does not authorize consuming the next line,
-                // even if that line repeats a suffix of its body.
-                break;
-            }
             let next = if bytes.get(end..end + 2) == Some(b"\r\n") {
                 end + 2
             } else if bytes.get(end) == Some(&b'\n') {
@@ -46,6 +41,28 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
             } else {
                 break;
             };
+            if count >= floor {
+                let mut line_end = next;
+                while line_end < bytes.len() && allowed(bytes[line_end]) {
+                    line_end += 1;
+                }
+                let line = &bytes[next..line_end];
+                // After the floor, join whole allowed-byte lines with a digit,
+                // mixed case, or at least 16 bytes (LF/CRLF/EOF), repeatedly.
+                // Limit: short lowercase words such as `value` survive, including
+                // indistinguishable tails; prose matching the shape is consumed.
+                let continuation = line.iter().any(u8::is_ascii_digit)
+                    || (line.iter().any(u8::is_ascii_lowercase)
+                        && line.iter().any(u8::is_ascii_uppercase))
+                    || line.len() >= 16;
+                if !continuation
+                    || !(line_end == bytes.len()
+                        || bytes.get(line_end) == Some(&b'\n')
+                        || bytes.get(line_end..line_end + 2) == Some(b"\r\n"))
+                {
+                    break;
+                }
+            }
             if !bytes.get(next).is_some_and(|b| allowed(*b)) {
                 break;
             }

@@ -4,9 +4,10 @@
 //! `-`; AIza accepts the same alphabet, while AKIA accepts uppercase and digits.
 //! Plain and wrapped paths share each family's minimum body length below.
 //! LF/CRLF continuations consume the full contiguous body on each joined line;
-//! only further line continuations stop once the family floor is met.
+//! after the floor, further continuations require whole allowed-byte lines
+//! with a digit, mixed case, or at least 16 bytes (see redact_wrapped).
 //! Below-floor bodies and prose
-//! after a complete first line are preserved. AKIA retains its exact plain
+//! after a complete first line without that shape are preserved. AKIA retains its exact plain
 //! length and word boundary; wrapped joining uses its 16-character floor.
 pub(crate) struct TokenSpec {
     pub prefix: &'static str,
