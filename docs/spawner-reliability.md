@@ -253,3 +253,14 @@ Invalid report windows are rejected before resolving or reading the state store.
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
+
+Restart inventory now runs before listener acceptance when configured `shadow`.
+Mode precedence is environment, role configuration, top-level configuration,
+then `off`. Explicit `off` bypasses configuration and inventory. Inventory is
+read-only and refuses malformed identities, timestamps and symlinked records.
+Only missing-process `would_orphan` diagnostics are currently emitted; recorded
+identities are not treated as verified liveness. `on` refuses startup until the
+authority-checked backend, watcher, evidence replay and reclaim capability land.
+The record settlement bridge writes semantic ORPHANED as lowercase `orphaned`,
+with null exit status and a stable RUN_ORPHANED key; it is not yet called by
+startup. No slot reclaim or process signalling is enabled by this partial slice.
