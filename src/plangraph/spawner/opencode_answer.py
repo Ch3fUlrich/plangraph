@@ -4,12 +4,13 @@ import json
 from .env_redact import normalize
 
 
-def final_answer(stdout):
+def final_answer(stdout, *, allow_unfinished=False):
     """Keep the last stop-completed text, never a length/tool-call partial.
 
     A later empty step does not revoke an already completed answer. A later
     text part does: it must itself reach a stop before it can be published.
     Plain terminal output has no completion framing and is not evidence.
+    Review verdicts may opt into pending text, but never an explicit non-stop finish.
     """
     pending, complete = [], None
     for line in stdout.splitlines():
@@ -31,7 +32,7 @@ def final_answer(stdout):
             if part.get('reason') == 'stop' and pending:
                 complete = '\n'.join(pending)
             pending = []
-    return complete
+    return '\n'.join(pending) if allow_unfinished and pending else complete
 
 
 def answer_text(stdout):

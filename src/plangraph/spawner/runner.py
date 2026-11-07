@@ -726,7 +726,7 @@ class SpawnerRunner:
             if job.status not in ('stalled', 'timeout', 'cancelled'):
                 # Preserve the existing denied-review terminal verdict contract.
                 tails = [text.rstrip('\r\n').splitlines()
-                         for text in (stdout_text, final_answer(stdout_text) or '')]
+                         for text in (stdout_text, final_answer(stdout_text, allow_unfinished=True) or '')]
                 review_verdict = (
                     exit_code == 1 and is_opencode(job) and job.role == 'review'
                     and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
