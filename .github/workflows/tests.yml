@@ -1,4 +1,4 @@
-# Only ci-gate is required; selected suites must pass. Main/nightly/manual run all.
+# Only ci-gate required; selected must pass; unselected suites skip. Main/nightly/manual run all.
 
 name: tests
 
@@ -115,7 +115,7 @@ jobs:
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
-      # D-2557: pinned official gitleaks for F4; verify release checksums and fail closed.
+      # D-2557: pinned gitleaks; verify checksums; digest never hard-coded, never curl | sh.
       - name: Install gitleaks 8.30.1
         run: |
           set -euo pipefail
@@ -374,7 +374,7 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: python3 tools/ci_select.py gate --needs "$NEEDS_JSON"
-      # Use the BASE gate; L1 requires a green ci-gate at merge to catch job removal.
+      # Use BASE: a PR cannot weaken the gate that judges it; L1 needs green ci-gate at merge.
       - name: Commit trailers
         if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
         env:
