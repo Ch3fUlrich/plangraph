@@ -52,6 +52,25 @@ def test_missing_ranked_last_in_tier(as_list, monkeypatch):
     assert not review_plan(benchmark=rows(reviewers)).gaps
 
 
+@pytest.mark.parametrize('as_list', [False, True])
+def test_equal_score_review_siblings_preserve_input_order(as_list, monkeypatch):
+    reviewers = tuple(replace(WRITERS[0], id=f'review-{i}', model=f'test/review-{i}',
+                              family='claude', roles=('review',), tier='subscription')
+                      for i in range(2))
+    monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', reviewers)
+    data = rows(reviewers)
+    # Equal intelligence scores, but the speed tiebreak prefers row order;
+    # same-family seats must still retain the reversed operator input order.
+    data[reviewers[0].model]['verified_tok_per_s'] = 100
+    p = routing.plan_spawn(
+        {'estimate_tokens': 1000}, role='review', writer_families=('gpt',),
+        legs=reviewers[::-1], benchmark=list(data.values()) if as_list else data,
+        leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
+    assert not p.gaps
+    assert p.p_source == 'benchmark'
+    assert p.legs == reviewers[::-1]
+
+
 def test_absent_explicit_operator_order():
     p = plan()
     assert p.legs == WRITERS
