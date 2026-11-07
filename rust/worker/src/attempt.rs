@@ -1209,11 +1209,11 @@ mod tests {
             c = serde_json::from_value::<Claim>(value).unwrap();
         } else {
             c.check_kind = Claim::default().check_kind;
-            if kind == "" {
+            if kind.is_empty() {
                 c.check_kind.clear();
             }
         }
-        assert_eq!(c.check_kind, if kind == "" { "" } else { "change" });
+        assert_eq!(c.check_kind, if kind.is_empty() { "" } else { "change" });
         let inp = input(c, 1, root.path());
         let h = Fake::new("test ! -e marker && echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();

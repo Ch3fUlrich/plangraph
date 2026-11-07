@@ -1,5 +1,6 @@
 """Exercise parity dispatch without requiring a local Postgres service."""
 import os
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -37,7 +38,13 @@ def test_metadata_queries_bind_backend_placeholder(monkeypatch, tmp_path, backen
     class World:
         def __init__(self, *args, **kwargs):
             self.store = self
-            self.conn = Probe()
+            if backend == "postgres":
+                raw = MagicMock()
+                raw.broken = raw.closed = False
+                raw.cursor.return_value.__enter__.return_value = Probe()
+                self.conn = claims.PgConnection(raw, "test")
+            else:
+                self.conn = Probe()
 
         def p(self, *args):
             return None
