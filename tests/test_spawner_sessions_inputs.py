@@ -135,7 +135,7 @@ def test_spec_defaults_ctx_cap_and_compact_window(site):
     s = make(site, run, config_path=cfg2)
     go(site, s)
     argv, kw = run.calls[0]
-    assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "330000"
+    assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "400000"
     tdir = site.home / ".claude" / "projects" / "".join(ch if ch.isalnum() else "-" for ch in str(site.proj.resolve()))
     tdir.mkdir(parents=True)
     (tdir / f"{UUID1}.jsonl").write_text(json.dumps({"type": "assistant", "message": {"usage": {

@@ -22,7 +22,7 @@ def test_argv_linux_is_list_no_shell(site):
     assert kw.get("shell") in (None, False)
     assert kw["cwd"] == str(site.proj.resolve())
     assert kw["env"]["FLEET_SESSION_NAME"] == "alpha"
-    assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "330000"
+    assert kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "400000"
     # style_text is appended via --append-system-prompt when configured
     cfg2 = site.tmp_path / "sessions2.json"
     write_config(cfg2, json.dumps({**json.loads(site.cfg.read_text()), "style_text": "be terse"}))
