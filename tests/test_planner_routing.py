@@ -17,7 +17,7 @@ D25_IDS = [
     "agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5",
     # D-3552 opencode-go review legs
     "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-    "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek",
+    "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek",
     "claude-haiku-5.5",  # D-3605 Haiku leg
 ]
 #: Route order: tiers ascending, so the subscription Haiku leg precedes paid deepseek.
@@ -145,7 +145,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "cx-gpt-6.1-sol", "cx-gpt-6-luna",
                       "agy-gemini-3.8-flash",
-                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
+                      "mimo-v2.6-flash", "mimo-v2.6-pro", "agy-sonnet-5.5", "omniroute-grok-4.7", "claude-haiku-5.5", "deepseek"]  # D-3605 Haiku leg
     assert all("256k" in leg.windows for leg in r.legs)
 
 

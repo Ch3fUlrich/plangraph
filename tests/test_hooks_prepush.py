@@ -84,7 +84,8 @@ def run_hook(repo, lines, env_extra=None):
     env.pop("PLANGRAPH_SCRUB_RULES", None)
     env.update(env_extra or {})
     stdin = "".join(l + "\n" for l in lines)
-    return subprocess.run([sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"],
+    command = [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"]
+    return subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
 

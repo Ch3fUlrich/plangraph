@@ -51,14 +51,14 @@ def test_seats_and_impossible_fence():
     assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
     assert all(l.family != "claude" for l in p.legs if l.id != "claude-haiku-5.5")  # D-3605 Haiku leg
     assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
-    # D-3084 per-part: with six writer parts a qwen seat covers the five others
-    # and a deepseek seat covers the qwen part.
+    # With all automatic families fenced, only Haiku remains; Grok is manual-only.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
-    assert [l.family for l in p.review_seats] == ["muse", "claude"] and not p.error
+    assert [l.family for l in p.review_seats] == ["claude"]
+    assert p.error == "two distinct review families unavailable"
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
-                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude"))  # D-3605 Haiku leg
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))  # D-3605 Haiku leg
     assert not p.review_seats and p.error
 
 
@@ -72,7 +72,8 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
+        "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark",
+        "opencode-go-deepseek-v4-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
     assert load_legs(path) == DEFAULT_LEGS

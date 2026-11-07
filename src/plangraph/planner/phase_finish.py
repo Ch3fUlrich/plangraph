@@ -45,6 +45,15 @@ def merge_message(gate: str, cards: list[str]) -> str:
 
 def phase_branch(key: str) -> str:
     """Return the worker-compatible branch name for phase ``key``."""
+    _legacy_phase_branch(key)
+    # FNV-1a 64 over original UTF-8 bytes, exactly as on the Rust worker.
+    digest = 0xcbf29ce484222325
+    for byte in key.encode("utf-8"):
+        digest = ((digest ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+    return f"phase/h/{digest:016x}"
+
+def _legacy_phase_branch(key: str) -> str:
+    """Validate the pre-patch name using the same rules as the worker."""
     clean = _BRANCH_BAD_RE.sub("-", key)
     if not clean:
         raise Refused("validation", "phase key is empty")
@@ -98,8 +107,10 @@ def _result(key: str, branch: str, head: str, state: str, pr: dict[str, Any],
 def attach_merge_evidence(store, principal, gate: str, merge_sha: str, *,
                           github: GitHub, repo_root: Path | str | None = None) -> None:
     """Atomically attach verified proof of this phase's exact merge, once per card."""
-    if principal.role not in ("router", "system"):
+    if principal.role not in ("router", "system") and not getattr(principal, "worker_scope", False):
         raise Refused("forbidden", "merge evidence requires router or system")
+    from plangraph.keeper.worker_policy import check_project
+    check_project(store, principal, gate)
     if not isinstance(merge_sha, str) or _SHA_RE.fullmatch(merge_sha) is None:
         raise Refused("validation", "merge_sha must be a 40-character lowercase hex sha")
     row = store.conn.execute(
@@ -204,15 +215,32 @@ def _finish_locked(key: str, branch: str, head: str, root: Path,
 
 def finish_phase(store, principal, key: str, branch: str, head: str, *,
                  repo_root: Path | str, github: GitHub, base: str = "main",
-                 lock_path: Path | str | None = None) -> dict[str, Any]:
+                 lock_path: Path | str | None = None,
+                 pre_patch_phase: str | None = None) -> dict[str, Any]:
     """Land the gate's phase branch after CI is green on exactly ``head``."""
     # Role gate comes first: do not read the store or filesystem before this.
-    if principal.role not in ("router", "system"):
+    if principal.role not in ("router", "system") and not getattr(principal, "worker_scope", False):
         raise Refused("forbidden", "phase_finish requires router or system")
+    from plangraph.keeper.worker_policy import check_project
+    check_project(store, principal, key)
 
     expected_branch = phase_branch(key)
     if branch != expected_branch:
-        raise Refused("validation", f"branch must be {expected_branch}")
+        # Legacy workflow retries must carry the original key: the sanitised
+        # branch spelling alone cannot distinguish colliding phase keys.
+        # Provenance is necessary, but checkout and ancestry checks still apply.
+        if pre_patch_phase != key:
+            raise Refused("validation", f"branch must be {expected_branch}")
+        current = None
+        if branch == _legacy_phase_branch(key) and Path(repo_root).is_dir():
+            proc = subprocess.run(
+                ["git", "-C", str(repo_root), "symbolic-ref", "--quiet", "HEAD"],
+                capture_output=True, text=True, timeout=30, check=False,
+                env=gitenv.git_env())
+            if proc.returncode == 0:
+                current = proc.stdout.strip()
+        if current != f"refs/heads/{branch}":
+            raise Refused("validation", f"branch must be {expected_branch}")
     if _SHA_RE.fullmatch(head) is None:
         raise Refused("validation", "head must be a 40-character lowercase hex sha")
 
@@ -246,6 +274,13 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
 
     root = Path(repo_root)
     _check_local_tip(root, branch, head)
+    if branch != expected_branch:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor",
+             f"refs/heads/{base}", head], capture_output=True, text=True,
+            timeout=30, check=False, env=gitenv.git_env())
+        if proc.returncode != 0:
+            raise Refused("conflict", "legacy phase head does not descend from base")
 
     # Serialise keeper-side merges per repository; the lock is advisory only.
     lock_file = _acquire_lock(root, lock_path)

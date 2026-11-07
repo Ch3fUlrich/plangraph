@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from plangraph.planner.phase_finish import phase_branch
+
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.planner import gitenv
@@ -103,11 +105,11 @@ def make_repo(tmp_path: Path):
     _git(root, "add", ".")
     _git(root, "commit", "-m", "A")
     main_tip = gitenv.rev_parse(root, "refs/heads/main")
-    _git(root, "checkout", "-b", "phase/demo-PH-X")
+    _git(root, "checkout", "-b", phase_branch("demo:PH-X"))
     (root / "b.txt").write_text("B")
     _git(root, "add", ".")
     _git(root, "commit", "-m", "B")
-    phase_tip = gitenv.rev_parse(root, "refs/heads/phase/demo-PH-X")
+    phase_tip = gitenv.rev_parse(root, f"refs/heads/{phase_branch('demo:PH-X')}")
     _git(root, "checkout", "main")
     return root, main_tip, phase_tip
 
@@ -175,7 +177,7 @@ def test_system_claims_like_a_worker(w, repo, gate):
 
 def test_falls_back_to_main_tip(w, repo, gate):
     root, main_tip, _phase_tip = repo
-    _git(root, "branch", "-D", "phase/demo-PH-X")
+    _git(root, "branch", "-D", phase_branch("demo:PH-X"))
     got = worker_claim(w.store, w.p("workerA"), "demo:C1", repo_root=str(root))
     assert got["base_sha"] == main_tip
 

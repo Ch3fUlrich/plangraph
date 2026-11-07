@@ -358,7 +358,8 @@ raise SystemExit(code)
                     runs[:] = [service.result(r['run_id']) if r.get('status') == 'running' else r for r in runs]
                 result = result if 'seats' in result else runs[0]
         elif args.verb == 'ps':
-            result = service.ps()
+            from .remote_ps import list_runs
+            result = {'runs': list_runs(service.ps()['runs'])}
         elif args.verb == 'cancel':
             result = asyncio.run(service.cancel(args.run_id))
         elif args.verb == 'wait':
