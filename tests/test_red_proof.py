@@ -45,7 +45,7 @@ def test_pass_named_even_beside_red(repo, capsys, extra):
 @pytest.mark.parametrize("text,label", [
     ("import missing_red_proof_module\ndef test_value():\n    assert False\n", "red(collection)"),
     ("def test_value():\n    raise RuntimeError('not assertion')\n", "red(error)"),
-    ("import pytest\n@pytest.fixture\ndef broken():\n    assert False\ndef test_value(broken):\n    assert False\n", "red(error)"),
+    ("import pytest\n\x40pytest.fixture\ndef broken():\n    assert False\ndef test_value(broken):\n    assert False\n", "red(error)"),
 ])
 def test_errors_not_proof(repo, capsys, text, label):
     assert repo(text) == 1
@@ -53,7 +53,7 @@ def test_errors_not_proof(repo, capsys, text, label):
 
 
 def test_parametrized_counts_as_one(repo, capsys):
-    assert repo("import pytest\n@pytest.mark.parametrize('n', [0, 1])\ndef test_value(n):\n    assert n == 0\n") == 0
+    assert repo("import pytest\n\x40pytest.mark.parametrize('n', [0, 1])\ndef test_value(n):\n    assert n == 0\n") == 0
     assert capsys.readouterr().out.count("red(assertion):") == 1
 
 
