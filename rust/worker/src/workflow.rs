@@ -6,9 +6,8 @@
 //! A pass runs one attempt on a fresh worktree, records it, then either merges
 //! an `ok` result or asks the budget for the next move: retry, re-route, wait,
 //! promote, upgrade the context class, quarantine or park.
-use crate::activities::AskInput;
 use crate::activities::{
-    CardActivities, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput, GateResult,
+    AskInput, CardActivities, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput, GateResult,
     JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick, park_json_with_attempt,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
@@ -188,7 +187,8 @@ impl Card {
         ctx: &mut WorkflowContext<Self>,
         mut input: CardInput,
     ) -> WorkflowResult<CardOutput> {
-        // A constant: the policy and the activity options must not vary per run.
+        crate::card_memo::upsert(ctx, &input.claim.card)?;
+        // Constant policy/options, rebuilt like all local state on replay.
         let cfg = Config::default();
         // A child of the workflow token, so native cancel and the signal both reach
         // the activity.
