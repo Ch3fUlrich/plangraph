@@ -171,38 +171,7 @@ fn verify_unix(
     // Include inherited history too: neither a clean tip nor a clean range
     // excuses a secret in an older reachable message or blob.
     let reachable = git(&["rev-list", "--objects", "--no-object-names", head_sha])?;
-    let batch = run(root, &["cat-file", "--batch"], &reachable)?;
-    let mut remaining = batch.as_slice();
-    for sha in reachable.split(|b| *b == b'\n').filter(|s| !s.is_empty()) {
-        let end = remaining
-            .iter()
-            .position(|b| *b == b'\n')
-            .ok_or(Refusal::BadBundle)?;
-        let header = std::str::from_utf8(&remaining[..end]).map_err(|_| Refusal::BadBundle)?;
-        let fields: Vec<_> = header.split(' ').collect();
-        if fields.len() != 3 || fields[0].as_bytes() != sha {
-            return Err(Refusal::BadBundle);
-        }
-        let size: usize = fields[2].parse().map_err(|_| Refusal::BadBundle)?;
-        remaining = &remaining[end + 1..];
-        let raw = remaining.get(..size).ok_or(Refusal::BadBundle)?;
-        if remaining.get(size) != Some(&b'\n') {
-            return Err(Refusal::BadBundle);
-        }
-        let kind = fields[1];
-        remaining = &remaining[size + 1..];
-        let content = match kind {
-            "commit" => message(raw).map_err(|_| Refusal::BadBundle)?,
-            "blob" => raw,
-            _ => continue,
-        };
-        if crate::writer_secret::scan_bytes(content) {
-            return Err(Refusal::SecretInHistory);
-        }
-    }
-    if !remaining.is_empty() {
-        return Err(Refusal::BadBundle);
-    }
+    scan::reachable(root, &reachable)?;
     let objects = git(&["rev-list", "--objects", "--no-object-names", &range])?;
     let pack = run(root, &["pack-objects", "--stdout"], &objects)?;
     let installed = run(root, &["index-pack", "--stdin"], &pack)?;
@@ -365,3 +334,7 @@ fn finalize_refuses_unsupported_platform() {
         Refusal::Unsupported
     );
 }
+
+#[cfg(unix)]
+#[path = "finalize_scan.rs"]
+mod scan;
