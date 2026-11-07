@@ -28,3 +28,8 @@ def test_large_review_falls_through_small_window_with_reason():
     assert route.legs == (large,)
     assert route.window_class == '1m'
     assert 'excluded 1 legs: window_class' in route.reasons
+
+
+def test_review_route_never_offers_qwen_max():
+    route = route_card({'estimate_tokens': 1000}, role='review')
+    assert 'opencode-go-qwen3.8-max' not in [leg.id for leg in route.legs]

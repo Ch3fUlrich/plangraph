@@ -100,11 +100,11 @@ def test_legs_carry_tool_mode():
 def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
     db = _seeded()
     db.conn.execute("UPDATE catalog_models SET available=1, status='active' WHERE model_id=?",
-                    ("opencode-go/qwen3.8-max",))
+                    ("opencode-go/glm-5.2",))
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
     record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
-                                   model="opencode-go/qwen3.8-max",
+                                   model="opencode-go/glm-5.2",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
     assert record["chosen_leg"]["harness"] == "opencode"

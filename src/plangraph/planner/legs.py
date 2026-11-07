@@ -119,7 +119,7 @@ DEFAULT_LEGS = (
         roles=("review",)),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
-        roles=("review",)),
+        roles=("review",), disabled="D-3605 operator: not acceptable"),
     Leg("omniroute-grok-4.7", "subscription", "opencode", "omniroute/gc/grok-4.7",
         "grok", ("128k", "256k"), 120000, False, roles=("review",), tool_mode="tools",
         note="D-3701: grok review seat via OmniRoute gc"),
