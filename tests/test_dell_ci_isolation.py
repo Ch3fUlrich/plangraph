@@ -1,8 +1,12 @@
 """Ownership and output disclosure regression probes for Dell CI."""
 import json
 import subprocess
+import os
+from pathlib import Path
+import shutil
 
 from test_dell_ci_run import Fake, ci, invoke
+from dell_ci_jobs import sandbox_argv
 import pytest
 
 
@@ -77,3 +81,79 @@ def test_existing_scratch_is_not_removed(tmp_path):
     result = subprocess.run(["sh", "-c", ci.service_script("rust-spike", str(scratch))])
     assert result.returncode != 0
     assert scratch.is_dir()
+
+
+def test_sandbox_capabilities(tmp_path):
+    commands = [sandbox_argv(str(tmp_path / job / "checkout"),
+                            str(tmp_path / job / "scratch"),
+                            "/opt/rust", "/opt/cargo/bin", "true")
+                for job in ("one", "two")]
+    for argv in commands:
+        assert "--clearenv" in argv
+        assert all(flag in argv for flag in ("--unshare-user", "--unshare-pid",
+                                            "--unshare-ipc", "--proc"))
+        sources = [argv[i + 1] for i, value in enumerate(argv)
+                   if value in {"--bind", "--ro-bind"}]
+        for forbidden in ("/var/run", "/run/docker.sock", str(Path.home() / ".ssh"),
+                          str(Path.home() / ".cache"), str(Path.home() / ".local/bin"),
+                          str(Path.home() / "code/plangraph")):
+            assert forbidden not in sources
+        keys = [argv[i + 1] for i, value in enumerate(argv) if value == "--setenv"]
+        assert set(keys) == {"HOME", "PATH", "CARGO_HOME", "CARGO_TARGET_DIR",
+                             "RUSTUP_HOME", "XDG_CACHE_HOME", "PYTHONPATH",
+                             "CARGO_BUILD_JOBS", "LANG"}
+        assert ".local/bin" not in " ".join(argv)
+    assert commands[0] != commands[1]
+    assert set(commands[0]) & {str(tmp_path / "two/scratch")} == set()
+
+
+def test_every_job_uses_fresh_sandbox(tmp_path):
+    fake = Fake()
+    code, _ = invoke(tmp_path, fake, jobs=",".join(ci.JOBS))
+    assert code == 0
+    commands = [c for c in fake.calls if c.startswith("timeout ")]
+    assert len(commands) == len(ci.JOBS)
+    for name, command in zip(ci.JOBS, commands):
+        assert "/usr/bin/bwrap --unshare-user --unshare-pid" in command
+        assert "--clearenv" in command
+        assert f"/{name}" in command
+        assert 'cp -a ' in command and '"$scratch/checkout/"' in command
+        assert "bundle create" in command and "--all HEAD" in command
+        assert "$HOME/.local/bin" not in command
+
+
+@pytest.fixture
+def real_sandbox(tmp_path):
+    if not shutil.which("bwrap"):
+        pytest.skip("bwrap unavailable")
+    checkout, scratch = tmp_path / "checkout", tmp_path / "scratch"
+    checkout.mkdir()
+    scratch.mkdir()
+    def run(command):
+        return subprocess.run(sandbox_argv(str(checkout), str(scratch),
+                                          "/usr", "/usr/bin", command),
+                              capture_output=True, text=True, timeout=20)
+    probe = run("true")
+    if probe.returncode:
+        pytest.skip("bwrap cannot create user namespace: " + probe.stderr)
+    return run
+
+
+@pytest.mark.parametrize("attack", ["other-job", "checkout", "ssh", "docker", "env", "proc"])
+def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeypatch):
+    other = tmp_path / "other-job"
+    other.mkdir()
+    host = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("DELL_CI_SECRET_CANARY", "host-secret")
+    commands = {
+        "other-job": f"touch {other}/poison",
+        "checkout": f"touch {host}/sandbox-escape-probe",
+        "ssh": 'cat "$HOME/.ssh/id_ed25519"',
+        "docker": "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"/var/run/docker.sock\")'",
+        "env": 'test -n "$DELL_CI_SECRET_CANARY"',
+        "proc": f"cat /proc/{os.getpid()}/environ",
+    }
+    result = real_sandbox(commands[attack])
+    assert result.returncode != 0, result.stdout
+    assert not (other / "poison").exists()
+    assert not (host / "sandbox-escape-probe").exists()

@@ -18,6 +18,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dell_ci_jobs import script as service_script
+from dell_ci_jobs import isolated_script, POSTGRES
 
 
 JOBS = {
@@ -118,7 +119,9 @@ def main(argv=None, *, runner=subprocess.run):
                         record["result"] = "failure"
                         continue
                 if command == "service":
-                    command = service_script(name, directory + "/" + name)
+                    command = ("FILES=" + POSTGRES.split("FILES=", 1)[1]
+                               if name == "pytest-postgres" else
+                               service_script(name, "/scratch/job"))
                 if name in {"file-size", "changelog-docs"}:
                     variable = "FILESIZE_REQUIRE_BASE" if name == "file-size" else "CHANGELOG_BASE"
                     command = (f"base=$(git rev-parse --verify {shlex.quote(args.base + '^{commit}')}) && "
@@ -132,12 +135,13 @@ def main(argv=None, *, runner=subprocess.run):
                                shlex.quote(json.dumps(needs)))
                 # GNU timeout kills the remote job even if the SSH client disconnects.
                 if name in {"pytest", "pytest-postgres", "browser"}:
-                    venv = directory + "/venv"
+                    venv = "/scratch/venv"
                     command = (f"(python3 -m venv {venv} && "
                                f"{venv}/bin/python -m pip install -r requirements-ci.txt "
                                f") || {{ echo '{name}: venv setup or job failed' >&2; exit 1; }}; "
                                f"export PATH={venv}/bin:$PATH; {command}")
-                script = f"cd {qtree} && export PYTHONPATH={qtree}/src && {command}"
+                script = isolated_script(command, qtree, directory + "/" + name,
+                                         postgres=name == "pytest-postgres")
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
                               f"{shlex.quote(script)}", timeout + 30)
                 job["exit"] = result.returncode

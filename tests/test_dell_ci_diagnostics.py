@@ -10,7 +10,7 @@ SPEC.loader.exec_module(ci)
 
 def test_protoc_path_and_missing_reason(tmp_path):
     script = ci.service_script("rust-spike", str(tmp_path / "scratch"))
-    assert 'export PATH="$HOME/.local/bin:$PATH"' in script
+    assert "$HOME/.local/bin" not in script
     script = script.replace("command -v protoc", "command -v nonexistent_protoc_test")
     result = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
     assert result.returncode == 1

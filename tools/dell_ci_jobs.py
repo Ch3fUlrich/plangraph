@@ -1,6 +1,71 @@
 """Private, disposable service and build scripts for the Dell CI driver."""
 import shlex
 
+
+def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command):
+    """Pure capability list: no inherited environment or host home mounts."""
+    argv = ["/usr/bin/bwrap", "--unshare-user", "--unshare-pid",
+            "--unshare-ipc", "--die-with-parent", "--new-session", "--clearenv"]
+    for path in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
+        argv += ["--ro-bind", path, path]
+    argv += ["--ro-bind", toolchain, "/toolchain", "--ro-bind", cargo_bin, "/cargo-bin",
+             "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+             "--tmpfs", "/home", "--dir", "/home/ci",
+             "--bind", checkout, "/work", "--bind", scratch, "/scratch",
+             "--chdir", "/work"]
+    env = {"HOME": "/home/ci", "PATH": "/scratch/bin:/toolchain/bin:/cargo-bin:/usr/bin:/bin",
+           "CARGO_HOME": "/scratch/cargo", "CARGO_TARGET_DIR": "/scratch/target",
+           "RUSTUP_HOME": "/scratch/rustup", "XDG_CACHE_HOME": "/scratch/cache",
+           "PYTHONPATH": "/work/src", "CARGO_BUILD_JOBS": "4", "LANG": "C.UTF-8"}
+    for key, value in env.items():
+        argv += ["--setenv", key, value]
+    return argv + ["sh", "-c", command]
+
+
+def isolated_script(command, source, job, *, postgres=False):
+    """Trusted outer lifecycle; only the inner command sees PR-controlled files."""
+    setup = POSTGRES.split('FILES=', 1)[0]
+    if postgres:
+        command = ('export PG_DSN="$1" PG_KEEPER_BACKEND=postgres '
+                   'PG_CONTRACT_ABORT_ON_TIMEOUT=1 PG_CONTRACT_LATENCY_DIR=/scratch/latency\n'
+                   + command)
+    argv = sandbox_argv("CHECKOUT", "SCRATCH", "TOOLCHAIN", "CARGOBIN", command)
+    invocation = shlex.join(argv)
+    for token, expression in {"CHECKOUT": '"$scratch/checkout"',
+                              "SCRATCH": '"$scratch/data"',
+                              "TOOLCHAIN": '"$toolchain"',
+                              "CARGOBIN": '"$HOME/.cargo/bin"'}.items():
+        invocation = invocation.replace(token, expression)
+    if postgres:
+        invocation += ' sh "$PG_DSN"'
+    return f'''set -eu
+scratch={job}
+container=dell-ci-${{scratch##*/}}-${{scratch%/*}}
+container=$(printf '%s' "$container" | tr / -)
+container_id=
+cleanup() {{
+    code=$?
+    trap - EXIT HUP INT TERM
+    if [ -n "$container_id" ]; then docker rm -f "$container_id" >/dev/null 2>&1 || code=1; fi
+    rm -rf -- "$scratch" || code=1
+    exit "$code"
+}}
+mkdir -m 700 "$scratch"
+trap cleanup EXIT
+trap 'exit 143' HUP INT TERM
+mkdir "$scratch/checkout" "$scratch/data"
+cp -a {source}/. "$scratch/checkout/"
+rm -f "$scratch/checkout/.git"
+git -C "$scratch/checkout" init -q
+git -C {source} bundle create "$scratch/history.bundle" --all HEAD
+git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" '+refs/*:refs/*'
+git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" HEAD
+git -C "$scratch/checkout" reset --mixed FETCH_HEAD
+toolchain=$(rustc --print sysroot)
+{setup if postgres else ''}
+{invocation}
+'''
+
 RUST = {
     "rust": """cd rust
 cargo fmt --check
@@ -59,8 +124,7 @@ def script(name, scratch):
         if line.startswith(('cargo ', 'PG_JAIL_BIN=', 'PG_TEMPORAL_ADDR=', 'test "$ready"'))
         else line for line in body.splitlines())
     if name.startswith("rust"):
-        body = ('export PATH="$HOME/.local/bin:$PATH"\n'
-                'command -v protoc >/dev/null 2>&1 || { '
+        body = ('command -v protoc >/dev/null 2>&1 || { '
                 f"echo '{name}: host fault: protoc missing' >&2; exit 1; }}\n" + body)
     return f"""set -eu
 set +x
