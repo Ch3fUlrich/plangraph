@@ -6,6 +6,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from fake_pid import FAKE_PID
 
 
 @pytest.mark.parametrize("answer_status", ["sent", "failed"])
@@ -33,7 +34,7 @@ def test_opencode_run_requires_question_answer_and_merge(tmp_path, monkeypatch, 
         assert "stub-bin" not in env["PATH"]
         assert env.get("HOME") == os.environ.get("HOME")
         events.append("worker")
-        return SimpleNamespace(proc=SimpleNamespace(pid=123))
+        return SimpleNamespace(proc=SimpleNamespace(pid=FAKE_PID))
     monkeypatch.setattr(driver.u, "WorkerProc", worker)
     monkeypatch.setattr(driver, "stop_worker", lambda *a: events.append("stopped"))
     def call(keeper, method, path, **kw):
