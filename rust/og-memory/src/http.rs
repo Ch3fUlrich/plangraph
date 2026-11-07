@@ -10,6 +10,11 @@ mod publish;
 #[path = "http_recall.rs"]
 mod recall;
 
+/// Approved V1 capabilities shared by the binary and HTTP reconstruction.
+pub fn capabilities() -> crate::Capabilities {
+    recall::capabilities()
+}
+
 pub struct Http {
     agent: ureq::Agent,
     base: String,

@@ -10,6 +10,9 @@ use std::{collections::BTreeSet, sync::OnceLock};
 #[path = "approved_schema.rs"]
 mod approved_schema;
 const SCHEMA: &str = approved_schema::SCHEMA;
+pub(super) fn capabilities() -> crate::Capabilities {
+    crate::Capabilities::from_schema(SCHEMA)
+}
 static CAPS: OnceLock<crate::Capabilities> = OnceLock::new();
 const RESOLVE: &str = "query memorySnapshot { match { $n: Project } return { $n.slug } }";
 

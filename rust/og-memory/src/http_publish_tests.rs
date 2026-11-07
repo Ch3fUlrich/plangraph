@@ -75,6 +75,9 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                         .unwrap()
                         .contains("insert MemoryRecord"));
                     record = request["params"].clone();
+                    if fault == "extra-column" {
+                        record["serverColumn"] = json!(42);
+                    }
                     assert_eq!(
                         record["content"],
                         if updated {
@@ -87,6 +90,9 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                 }
                 1 => {
                     assert_eq!(request["snapshot"], "publication");
+                    if fault == "changed-value" {
+                        record["version"] = json!("1");
+                    }
                     json!({"graph_commit_id":"publication","row_count":1,"rows":[record]})
                 }
                 2 => {
@@ -124,7 +130,7 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                 response
             )
             .unwrap();
-            if step == 3 && fault == "snapshot" {
+            if (step == 3 && fault == "snapshot") || (step == 1 && fault == "changed-value") {
                 return;
             }
         }
@@ -153,6 +159,14 @@ fn remember_upserts_then_stores_real_receipt_and_verifies_followup() {
 #[test]
 fn update_upserts_with_if_graph_commit() {
     assert!(publish(true, "").is_ok());
+}
+#[test]
+fn extra_live_column_is_ignored() {
+    assert!(publish(false, "extra-column").is_ok());
+}
+#[test]
+fn changed_written_value_is_refused() {
+    partial("changed-value", Error::Unverified);
 }
 #[test]
 fn publication_412_returns_conflict_without_replay() {

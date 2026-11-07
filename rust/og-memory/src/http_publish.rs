@@ -72,7 +72,14 @@ impl Http {
             .iter()
             .filter(|r| r["project"] == e.project && r["kind"] == e.kind && r["slug"] == e.slug)
             .collect();
-        if read_commit != commit || matches.len() != 1 || matches[0] != params {
+        if read_commit != commit
+            || matches.len() != 1
+            || !params
+                .as_object()
+                .ok_or(Error::Unverified)?
+                .iter()
+                .all(|(key, value)| matches[0].get(key) == Some(value))
+        {
             return Err(Error::Unverified);
         }
         let state = self.mutate(
@@ -91,9 +98,12 @@ impl Http {
             .iter()
             .find(|f| f.envelope.kind == e.kind && f.envelope.slug == e.slug)
             .ok_or(Error::Unverified)?;
+        let saved_envelope =
+            serde_json::to_value(&saved.envelope).map_err(|_| Error::Unverified)?;
+        let written_envelope = serde_json::to_value(e).map_err(|_| Error::Unverified)?;
         if saved.superseded
             || saved.receipt.0 != saved_receipt
-            || serde_json::to_value(&saved.envelope).ok() != serde_json::to_value(e).ok()
+            || saved_envelope != written_envelope
         {
             return Err(Error::Unverified);
         }
