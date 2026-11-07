@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- **RT-P1-WF-VERSIONING:** Load the trusted workflow archive checker from the PR merge ref's first parent so older PR branches do not fail on a missing checker.
 - **SPAWNER-PROBE-HOST-NOT-READY:** Report missing probe harness binaries as host-not-ready without attempting the leg or recording shared leg events.
 - **KEEPER-SNAP-S1-FILTERS S1b:** Scope decision text to selected evidence before field projection; keep progress over all items with independent columns, preserve legacy snapshots, and close S1a validation/docs LOWs.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.
