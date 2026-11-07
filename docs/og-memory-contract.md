@@ -65,7 +65,7 @@ receipt, timestamp, superseded flag, or project property may be written.
 Bind `$project: String` to the validated caller scope, never interpolate it.
 These are exact scalar projection blocks using the repository's GQ
 `match`/`where`/`return` form. They return candidates, **not complete
-Envelopes**: O1–O5 prevent implementing `Transport::read` with them alone.
+Envelopes**: O1–O4 prevent implementing `Transport::read` with them alone.
 Hub-linked candidates must not be assumed to belong exclusively to that hub.
 
 ```gq
@@ -111,7 +111,7 @@ Do not silently truncate a snapshot; fail closed on incomplete responses.
 There is **no fixture-backed, lossless remember or update GQ block**.
 Publishing an executable mutate block now would silently drop source/actor
 and relations information or invent properties/types. Therefore none is
-authorized by V1; this is OPEN O1–O6, not an empty/no-op mutation.
+authorized by V1; this is OPEN O1–O4, not an empty/no-op mutation.
 The next lane must resolve these questions before enabling transport writes,
 then add exact `query name($p: T) { ... }` mutate blocks with every parameter
 declared. Query names do not imply read-only execution: HTTP route selects
@@ -162,12 +162,174 @@ receipt. `Unverified` may mean committed; it is not rollback.
    from for every fact, including non-Decisions? Does Decision's
    `status = superseded` or the `Supersedes` edge participate, and if so how?
    Neither alone defines the transport's per-fact saved state.
-5. **O5 — snapshot:** Which HTTP response fields provide `graph_commit` and
-   receipt, and how do the four recall queries observe one consistent,
-   exhaustive snapshot? The boundary returns untyped JSON; the fixture
-   cannot answer response shape, pagination, or snapshot consistency.
-6. **O6 — atomic mutation grammar:** What verified Omnigraph 0.13 GQ syntax
-   performs keyed node upsert, edge replacement/deduplication, enum binding,
-   and receipt return in one transaction? A schema declaration does not
-   establish mutation grammar. Supply an offline parser/fixture example and
-   the resolved O1–O5 mapping before publishing remember/update blocks.
+5. **O5 — ANSWERED:** SDK response fields and snapshot pinning are documented
+   below; implementing them is separate from this docs-only contract.
+6. **O6 — ANSWERED (grammar and limits):** Verified examples below establish
+   keyed insert/upsert and edge operations, but disprove atomic delete plus
+   insert in one mutation. The required lossless remember/update remains
+   blocked by O1–O4 and that transaction limitation; no write authorization.
+
+### Primary-source evidence for O5/O6 (offline, round 2)
+
+Source roots (read-only cached packages; no server called, D-3895):
+`SDK = the npm-cached Omnigraph 0.13 SDK package (path under the npm cache; cite files relative to the package root)`
+and sibling `MCP = ../omnigraph-mcp` relative to SDK.
+SDK `package.json:1-3` identifies version 0.13.0; `README.md:3-4`
+identifies the HTTP 0.13 contract. Citations below are relative to these roots.
+The installed packages contain dist/README files, not standalone tests or
+grammar sources; MCP bundles the upstream authoring examples as strings.
+
+#### O5 — exact response fields, completeness, consistent reads
+
+* Query wire response: `graph_commit_id?: string | null`, `query_name`,
+  `row_count`, `rows`, `target`, optional `columns`; **no receipt field**
+  (`SDK/dist/index.d.ts:842-856`). The ID and rows come from one pinned
+  version (`:845-849`). Public SDK result is `graphCommitId`, `queryName`,
+  `rowCount`, `rows`, `target`, `columns` via `Camelize` (`:1008-1011`,
+  `:1028-1029`; `SDK/README.md:41-43`). Reject missing/null commit IDs for
+  the memory read-modify-write boundary rather than fabricating one.
+* Mutate wire response: `commit: null | CommitOutput`, `affected_nodes`,
+  `affected_edges`, `branch`, `query_name`, optional `actor_id`/`outcome`
+  (`SDK/dist/index.d.ts:265-289`). The receipt is **the `commit` object**,
+  not a field named `receipt`. It contains `graph_commit_id`, `created_at`
+  (Unix microseconds), `graph_manifest_version`, optional `actor_id`,
+  `graph_branch`, `parent_commit_id`, `merged_parent_commit_id`
+  (`:335-346`). SDK spelling is `commit.graphCommitId`, `createdAt`,
+  `graphManifestVersion`, etc. (`:1016-1018`). For data mutations,
+  `commit: null` means successful no-op (`:1575-1589`); affected counts
+  are not a receipt. Mapping this operation receipt to per-fact saved state
+  is still O4, not something returned by recall.
+* QueryRequest/ReadOutput have **no pagination/page-token fields**
+  (`SDK/dist/index.d.ts:809-856`); do not invent query continuation.
+  Change-diff pages instead use wire `next_page_token` (`:323-331`),
+  public `nextPageToken`, and request `pageToken` (`:1304-1309`). Feed
+  durable `cursor` is different: follow all tokens with unchanged filters
+  and branch, omit `start`/`cursor`, and save only the terminal cursor
+  (`SDK/README.md:110-123`). These are not recall-query page tokens.
+  Exhaustive recall must consume the full unbounded scalar query response
+  or fail closed; large full-graph inspection should use export instead
+  (MCP bundled authoring guidance, final inspection section).
+* Read the first recall query on the intended branch, retain its nonempty
+  `graphCommitId`, then send **`snapshot: thatId` and no `branch`** for
+  every subsequent recall query. Request `snapshot` and `branch` are
+  exclusive (`SDK/dist/index.d.ts:809-840`); snapshot means graph commit ID,
+  not the opaque response header (`:1423-1426`; `SDK/README.md:133-136`).
+  Require matching response commit IDs throughout. If a pinned read fails,
+  abandon the partial set; never fall back to current head. Use the first
+  read's ID as `ifGraphCommit` on the eventual conditional mutation
+  (`SDK/README.md:65-71`), not a separate branch-head lookup.
+
+#### O6 — verified mutation examples, not approved memory writes
+
+MCP's bundled `QUERIES_MD` export contains sections
+“Parameterization”, “Mutations / Insert”, “Insert edge”, “Update”,
+“Delete”, and “Multi-statement” are the primary examples below.
+All are named `query` blocks, dispatched through mutate, not GraphQL
+`mutation` wrappers. Typed values go in `params`, never interpolation.
+
+```gq
+query add_signal($slug: String, $name: String, $brief: String,
+                 $stagingTimestamp: DateTime, $createdAt: DateTime, $updatedAt: DateTime) {
+    insert Signal {
+        slug: $slug, name: $name, brief: $brief,
+        stagingTimestamp: $stagingTimestamp,
+        createdAt: $createdAt, updatedAt: $updatedAt
+    }
+}
+query link_signal_forms_pattern($signal: String, $pattern: String) {
+    insert FormsPattern { from: $signal, to: $pattern }
+}
+```
+
+The same source explicitly says there is **no `upsert` keyword**:
+`insert` on a node/edge with `@key` upserts the derived identity.
+Without an edge key, repeated inserts create parallel edges; the memory
+fixture's hub edges are unkeyed, so endpoint pairs do not imply deduplication.
+Edge removal spelling shown there is
+`delete FormsPattern where @src = $signal` (all outgoing matching edges),
+inside a named `query` declaring `$signal: String`. This is not a verified
+single-pair deletion example; do not silently narrow or expand its scope.
+Exact multi-statement example from that same source:
+
+```gq
+query add_and_link($slug: String, $pattern: String, $createdAt: DateTime, $updatedAt: DateTime) {
+    insert Signal { slug: $slug, name: $slug, brief: $slug,
+                    stagingTimestamp: $createdAt, createdAt: $createdAt, updatedAt: $updatedAt }
+    insert FormsPattern { from: $slug, to: $pattern }
+}
+```
+
+This is constructive and atomic (`SDK/dist/index.d.ts:1575-1576`).
+The MCP “D₂ rule” explicitly refuses mixing delete with insert/update
+before any effects, even if lint passes. Delete/reinsert requires **two
+separate mutations**, not an atomic replacement. Edge update is unsupported;
+keyed edge reinsert can update non-key properties. Receipt return is the
+HTTP envelope described in O5, not a GQ `return` clause. The cached examples
+verify String/DateTime typed binding but do not establish a named enum
+parameter type; do not invent one for memory status/severity. Inline enum
+schema syntax is documented in MCP's bundled schema authoring examples.
+
+### Operator decision packet — O1–O4 remain OPEN
+
+All blocks below are **PROPOSAL — operator approval required**, not deployed
+schema, fixture edits, migration approval, or write authorization. One
+operator decision can accept/reject this additive companion representation;
+existing keyed fact types and hub edges remain unchanged. New types avoid
+unsupported in-place key changes (MCP bundled schema authoring examples, “Keep
+@key stable”). Names are proposed schema identifiers, never caller values.
+
+**O2 PROPOSAL — identity:** introduce a companion authoritative record;
+retain caller slug separately from its composite derived identity. `kind`
+must be validated to the four allowed kinds; project targets use Project.slug.
+Existing fact nodes become projections, not authoritative cross-project keys.
+
+```pg
+node MemoryRecord {
+  project: String
+  kind: String
+  slug: String
+  content: String
+  @key(project, kind, slug)
+}
+```
+
+**O1 PROPOSAL — provenance/version:** include these nullable additions on
+MemoryRecord; enforce complete presence for new V1 records and reject legacy
+records missing metadata rather than synthesizing provenance.
+
+```pg
+// Properties inside MemoryRecord
+version: I32?
+sourceType: String?
+sourcePath: String?
+sourceHash: String?
+actor: String?
+```
+
+**O3 PROPOSAL — scope/relations:** owner scope is MemoryRecord.project;
+automatic hub links are projections only. Store the exact ordered relation
+pair vector as canonical JSON in one scalar, preserving duplicates and empty
+vectors; decode/validate before recall. No extra target changes owner scope.
+
+```pg
+// Property inside MemoryRecord; canonical array of {edge, target_slug}
+relationsJson: String?
+```
+
+**O4 PROPOSAL — saved state:** a companion keyed state record can store an
+explicit superseded flag and a serialized exact commit receipt per record.
+It must not be populated with a guessed future receipt: publication returns
+the receipt only afterward. Operator must approve a conditional follow-up
+state write/reconciliation protocol; this is not an atomic saved-state claim.
+Decision.status and Supersedes remain unrelated unless separately approved.
+
+```pg
+node MemorySavedState {
+  project: String
+  kind: String
+  slug: String
+  receiptJson: String
+  superseded: Bool
+  @key(project, kind, slug)
+}
+```
