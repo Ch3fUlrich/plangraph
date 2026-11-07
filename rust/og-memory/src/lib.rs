@@ -19,8 +19,9 @@ let _ = MockTransport::default();
 "#
 )]
 pub mod adapters;
-pub mod io;
 pub mod credentials;
+pub mod http;
+pub mod io;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
