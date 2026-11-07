@@ -244,7 +244,8 @@ def _phase_finish(store, principal, body, need):
     if github is None:
         raise Refused("unavailable", "phase_finish GitHub access is not configured")
     # repo_root, the repo slug and the token file come from the server environment only, never the body.
-    return finish_phase(store, principal, key, branch, head, repo_root=repo_root, github=github)
+    return finish_phase(store, principal, key, branch, head, repo_root=repo_root,
+                        github=github, pre_patch_phase=body.get("pre_patch_phase"))
 
 def _worker_claim(store, principal, body, need):
     # Role first: a non-worker principal gets 403 before key or env access checks.

@@ -18,6 +18,10 @@
 
 #![cfg(unix)]
 
+#[path = "support/history.rs"]
+mod history;
+use history::decoded_payloads;
+
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::redact::REDACTED;
 use std::path::{Path, PathBuf};
@@ -479,32 +483,6 @@ fn b64_decode(s: &str) -> Vec<u8> {
         }
     }
     out
-}
-
-/// Every payload in a history, base64-decoded: the claim input, activity
-/// inputs and activity results all travel as payloads, which the `to_json`
-/// form stores base64-encoded — a raw substring search cannot see into them.
-fn decoded_payloads(v: &serde_json::Value) -> Vec<String> {
-    match v {
-        serde_json::Value::Object(map) => {
-            let mut out = Vec::new();
-            for (k, x) in map {
-                if k == "payloads"
-                    && let Some(items) = x.as_array()
-                {
-                    for p in items {
-                        if let Some(data) = p.get("data").and_then(|d| d.as_str()) {
-                            out.push(String::from_utf8_lossy(&b64_decode(data)).into_owned());
-                        }
-                    }
-                }
-                out.extend(decoded_payloads(x));
-            }
-            out
-        }
-        serde_json::Value::Array(a) => a.iter().flat_map(decoded_payloads).collect(),
-        _ => Vec::new(),
-    }
 }
 
 /// The workflow id for card `<id>`: the projector derives `plan_key` from it.
@@ -2097,7 +2075,7 @@ async fn phase_runs_two_cards_into_the_phase_branch() {
         let k = |s: &str| format!("e2e-{s}-{}", unique());
         let a = k("phase-a");
         let b = k("phase-b");
-        let phase_key = format!("phase-{}", unique());
+        let phase_key = "demo:PH-X".to_string();
         env.keeper.push_plan(plan_json(
             &phase_key,
             &[(a.as_str(), false), (b.as_str(), false)],
@@ -2134,7 +2112,19 @@ async fn phase_runs_two_cards_into_the_phase_branch() {
         assert_eq!(merged, expected, "{out:?}");
         assert!(out.not_merged.is_empty(), "{out:?}");
         assert_eq!(out.waves, 1, "{out:?}");
-        assert_eq!(out.branch, format!("phase/{}", phase_key));
+        assert_eq!(out.branch, "phase/h/4095fd20aa975021");
+        let bytes = handle
+            .fetch_history(WorkflowFetchHistoryOptions::default())
+            .to_json()
+            .await
+            .expect("fetch fresh Phase history");
+        let history: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            decoded_payloads(&history)
+                .join("\n")
+                .contains("phase-branch-hash-v1"),
+            "fresh Phase history must record phase-branch-hash-v1"
+        );
         assert_eq!(
             git(&env.repo, &["rev-parse", "refs/heads/main"]),
             env.base_sha
