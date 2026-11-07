@@ -32,6 +32,8 @@ impl Http {
         }
         Ok(Self {
             agent: ureq::Agent::config_builder()
+                // ureq 3.5.1 defaults to Proxy::try_from_env(); never forward credentials.
+                .proxy(None)
                 .max_redirects(0)
                 .timeout_global(Some(timeout))
                 .build()
