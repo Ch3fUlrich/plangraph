@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 pg-worker-core = { path = "../worker-core" }
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }

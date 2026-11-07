@@ -345,17 +345,17 @@ def _resolve_exempt(
 
 
 def _changed_lines(sha: str, cwd: str | Path | None = None) -> int | None:
-    '''Added plus deleted lines of sha; None when a binary file is touched.'''
+    '''Hand-written added/deleted lines; None when a binary file is touched.'''
     out = _git_text(['diff-tree', '--no-commit-id', '--numstat', '-r', '--root', sha], cwd=cwd)
     total = 0
     for line in out.splitlines():
         added, _, rest = line.partition('\t')
-        deleted = rest.partition('\t')[0]
+        deleted, _, path = rest.partition('\t')
+        if Path(path).name == 'Cargo.lock': continue  # Generated dependency resolution.
         if added == '-' or deleted == '-':
             return None
         total += int(added) + int(deleted)
     return total
-
 
 def hand_edit_commits(
     base: str, head: str, cwd: str | Path | None = None
