@@ -38,7 +38,7 @@ impl Fixture {
         let source = tempfile::tempdir().unwrap();
         let receiver = tempfile::tempdir().unwrap();
         let root = source.path();
-        git(root, &["init"]);
+        git(root, &["init", "--initial-branch=promotion-test"]);
         git(root, &["config", "user.name", "Promotion test"]);
         git(root, &["config", "user.email", "promotion@example.invalid"]);
         git(root, &["commit", "--allow-empty", "-m", "base"]);
@@ -64,7 +64,7 @@ impl Fixture {
                 "bundle",
                 "create",
                 root.join("result.bundle").to_str().unwrap(),
-                "HEAD",
+                "refs/heads/promotion-test",
             ],
         );
         let repo = RepoEntry {
@@ -85,6 +85,14 @@ impl Fixture {
     }
     fn verified(&self) -> VerifiedBundle {
         let path = self.source.path().join("result.bundle");
+        // RESULT verification accepts one named branch tip, not the HEAD pseudo-ref.
+        assert_eq!(
+            git(
+                self.source.path(),
+                &["bundle", "list-heads", path.to_str().unwrap()]
+            ),
+            format!("{} refs/heads/promotion-test", self.head)
+        );
         let bytes = fs::read(&path).unwrap();
         verify_bundle(
             &self.repo,
