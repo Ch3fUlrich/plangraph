@@ -30,16 +30,18 @@ def isolated_script(command, source, job, *, postgres=False):
                    'PG_CONTRACT_ABORT_ON_TIMEOUT=1 PG_CONTRACT_LATENCY_DIR=/scratch/latency\n'
                    + command)
     argv = sandbox_argv("CHECKOUT", "SCRATCH", "TOOLCHAIN", "CARGOBIN", command)
-    invocation = shlex.join(argv)
-    for token, expression in {"CHECKOUT": '"$scratch/checkout"',
+    expressions = {"CHECKOUT": '"$scratch/checkout"',
                               "SCRATCH": '"$scratch/data"',
                               "TOOLCHAIN": '"$toolchain"',
-                              "CARGOBIN": '"$HOME/.cargo/bin"'}.items():
-        invocation = invocation.replace(token, expression)
+                   "CARGOBIN": '"$HOME/.cargo/bin"'}
+    invocation = " ".join(
+        expressions[arg] if i > 0 and argv[i - 1] in {"--bind", "--ro-bind"}
+        and arg in expressions else shlex.quote(arg)
+        for i, arg in enumerate(argv))
     if postgres:
         invocation += ' sh "$PG_DSN"'
     return f'''set -eu
-scratch={job}
+scratch={shlex.quote(str(job))}
 container=dell-ci-${{scratch##*/}}-${{scratch%/*}}
 container=$(printf '%s' "$container" | tr / -)
 container_id=
@@ -54,10 +56,10 @@ mkdir -m 700 "$scratch"
 trap cleanup EXIT
 trap 'exit 143' HUP INT TERM
 mkdir "$scratch/checkout" "$scratch/data"
-cp -a {source}/. "$scratch/checkout/"
+cp -a {shlex.quote(str(source))}/. "$scratch/checkout/"
 rm -f "$scratch/checkout/.git"
 git -C "$scratch/checkout" init -q
-git -C {source} bundle create "$scratch/history.bundle" --all HEAD
+git -C {shlex.quote(str(source))} bundle create "$scratch/history.bundle" --all HEAD
 git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" '+refs/*:refs/*'
 git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" HEAD
 git -C "$scratch/checkout" reset --mixed FETCH_HEAD

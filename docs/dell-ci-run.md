@@ -30,4 +30,5 @@ are private to each job. PATH never includes the host's `~/.local/bin`.
 The trusted outer driver owns Docker creation/removal and passes only PG_DSN;
 no Docker socket is mounted. Temporal runs inside the sandbox.
 Networking is shared for localhost services; this is not network isolation.
+Without a host-loopback bridge, an unshared network cannot reach Docker Postgres; shared networking retains cross-job connection/DoS and unauthenticated Temporal tampering risk, while fresh per-job random Postgres passwords prevent cross-job DB authentication.
 Missing bwrap/user-namespace support fails closed; there is no unsandboxed fallback.

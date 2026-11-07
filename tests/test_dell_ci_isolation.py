@@ -4,9 +4,10 @@ import subprocess
 import os
 from pathlib import Path
 import shutil
+import shlex
 
 from test_dell_ci_run import Fake, ci, invoke
-from dell_ci_jobs import sandbox_argv
+from dell_ci_jobs import sandbox_argv, isolated_script
 import pytest
 
 
@@ -75,12 +76,50 @@ def test_temporal_ports_and_liveness():
     assert "PG_TEMPORAL_ADDR=http://127.0.0.1:$port" in body
 
 
+def test_postgres_password_is_fresh_and_job_private():
+    script = isolated_script('true', '/driver', '/scratch/job', postgres=True)
+    assert 'secrets.token_hex(32)' in script
+    assert '-e POSTGRES_PASSWORD' in script
+    assert ' sh "$PG_DSN"' in script
+    argv = sandbox_argv('/checkout', '/scratch', '/rust', '/cargo', 'true')
+    assert 'POSTGRES_PASSWORD' not in argv
+    assert 'PG_DSN' not in argv
+
+
 def test_existing_scratch_is_not_removed(tmp_path):
     scratch = tmp_path / "owned-by-other-run"
     scratch.mkdir()
     result = subprocess.run(["sh", "-c", ci.service_script("rust-spike", str(scratch))])
     assert result.returncode != 0
     assert scratch.is_dir()
+
+
+def test_isolated_script_quotes_paths_and_preserves_command(tmp_path, monkeypatch):
+    source = tmp_path / 'source space $(touch injected)'
+    job = tmp_path / 'job space $(touch injected)'
+    command = 'git diff SCRATCH CHECKOUT TOOLCHAIN CARGOBIN'
+    script = isolated_script(command, source, job)
+    assignment = next(line for line in script.splitlines() if line.startswith('scratch='))
+    result = subprocess.run(['sh', '-c', assignment + '\nprintf "%s" "$scratch"'],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout == str(job)
+    copy = next(line for line in script.splitlines() if line.startswith('cp -a '))
+    bundle = next(line for line in script.splitlines() if line.startswith('git -C ') and 'bundle create' in line)
+    assert shlex.split(copy)[2] == str(source) + '/.'
+    assert shlex.split(bundle)[2] == str(source)
+    invocation = script.splitlines()[-1]
+    # Evaluate the generated shell quoting without launching a sandbox.
+    capture = 'capture() { python3 -c \'import json,sys; print(json.dumps(sys.argv[1:]))\' "$@"; }; '
+    monkeypatch.setenv('scratch', str(job))
+    monkeypatch.setenv('toolchain', str(tmp_path / 'rust space'))
+    result = subprocess.run(['sh', '-c', capture + invocation.replace('/usr/bin/bwrap', 'capture', 1)],
+                            capture_output=True, text=True, check=True)
+    argv = json.loads(result.stdout)
+    assert argv[-1] == command
+    assert str(job / 'checkout') in argv
+    assert str(job / 'data') in argv
+    assert str(tmp_path / 'rust space') in argv
+    assert not (tmp_path / 'injected').exists()
 
 
 def test_sandbox_capabilities(tmp_path):
@@ -97,7 +136,9 @@ def test_sandbox_capabilities(tmp_path):
         for forbidden in ("/var/run", "/run/docker.sock", str(Path.home() / ".ssh"),
                           str(Path.home() / ".cache"), str(Path.home() / ".local/bin"),
                           str(Path.home() / "code/plangraph")):
-            assert forbidden not in sources
+            for source in sources:
+                assert not Path(forbidden).resolve().is_relative_to(
+                    Path(source).expanduser().resolve()), (source, forbidden)
         keys = [argv[i + 1] for i, value in enumerate(argv) if value == "--setenv"]
         assert set(keys) == {"HOME", "PATH", "CARGO_HOME", "CARGO_TARGET_DIR",
                              "RUSTUP_HOME", "XDG_CACHE_HOME", "PYTHONPATH",
@@ -135,7 +176,7 @@ def real_sandbox(tmp_path):
                               capture_output=True, text=True, timeout=20)
     probe = run("true")
     if probe.returncode:
-        pytest.skip("bwrap cannot create user namespace: " + probe.stderr)
+        pytest.fail("bwrap probe failed: " + probe.stderr)
     return run
 
 
