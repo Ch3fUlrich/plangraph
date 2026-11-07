@@ -3,8 +3,7 @@
 
 The remote login starts in the repository. origin/main is the PR comparison
 base. No dependencies are installed and no remote output/environment is printed.
-Postgres and Rust table entries intentionally defer to slice 2.
-Requested deferred jobs yield partial (exit 2); failures yield exit 1.
+Services and build products are disposable; failures yield exit 1.
 """
 import argparse
 from datetime import datetime, timezone
@@ -15,20 +14,25 @@ import shlex
 import subprocess
 import time
 import uuid
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dell_ci_jobs import script as service_script
 
 
 JOBS = {
-    "select": ("python3 tools/ci_select.py select --base origin/main --head HEAD", 600),
+    "select": ("python3 tools/ci_select.py select --full", 600),
     "scrub": ("python3 tools/split/scrub_check.py . --rules tools/split/manifest.toml "
               "--rules tools/split/scrub_ci.toml", 900),
     "file-size": ("FILESIZE_REQUIRE_BASE=origin/main python3 tools/check_file_size.py", 600),
     "changelog-docs": ("CHANGELOG_BASE=origin/main python3 tools/check_changelog_docs.py", 600),
-    "pytest": ("python3 tools/affected_tests.py --base origin/main --run -n auto", 1200),
-    # Service provisioning and Rust setup belong to slice 2.
-    "pytest-postgres": (None, 0),
-    "rust": (None, 0),
-    "rust-worker": (None, 0),
-    "rust-spike": (None, 0),
+    "pytest": ("python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests", 1200),
+    "pytest-postgres": ("service", 2400),
+    "rust": ("service", 2700),
+    "rust-worker": ("service", 2700),
+    "rust-spike": ("service", 1800),
+    "browser": ("python3 -m pytest -q tests/browser -m browser", 900),
+    "ci-gate": ("gate", 120),
 }
 
 
@@ -43,7 +47,7 @@ def main(argv=None, *, runner=subprocess.run):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--host", default="dell-build")
-    parser.add_argument("--jobs", default="scrub,file-size,changelog-docs,pytest")
+    parser.add_argument("--jobs", default=",".join(JOBS))
     parser.add_argument("--out", type=Path, default=Path("out/dell-ci"))
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[0-9a-fA-F]{40}", args.sha):
@@ -89,13 +93,22 @@ def main(argv=None, *, runner=subprocess.run):
             command, timeout = JOBS[name]
             job = {"job": name, "result": "skipped", "duration_s": 0, "exit": None}
             record["jobs"].append(job)
-            if command is None:
-                job["reason"] = "slice 2"
-                if record["result"] == "success":
-                    record["result"] = "partial"
-                continue
             start = time.monotonic()
             try:
+                if name.startswith("rust"):
+                    space = call("df -Pk /tmp")
+                    if space.returncode or int(space.stdout.splitlines()[-1].split()[3]) < 2097152:
+                        job["reason"] = "insufficient /tmp space: requires at least 2 GB free"
+                        job["result"] = "failure"
+                        record["result"] = "failure"
+                        continue
+                if command == "service":
+                    command = service_script(name, directory + "/" + name)
+                if command == "gate":
+                    needs = {j["job"]: {"result": j["result"]}
+                             for j in record["jobs"] if j["job"] != "ci-gate"}
+                    command = ("python3 tools/ci_select.py gate --needs " +
+                               shlex.quote(json.dumps(needs)))
                 # GNU timeout kills the remote job even if the SSH client disconnects.
                 script = f"cd {qtree} && export PYTHONPATH={qtree}/src && {command}"
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
@@ -105,7 +118,7 @@ def main(argv=None, *, runner=subprocess.run):
                                  "success" if result.returncode == 0 else "failure")
             except subprocess.TimeoutExpired:
                 job["result"] = "timeout"
-            except OSError:
+            except (OSError, ValueError, IndexError):
                 job["result"] = "failure"
             finally:
                 job["duration_s"] = round(time.monotonic() - start, 3)

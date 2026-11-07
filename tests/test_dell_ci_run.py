@@ -28,6 +28,8 @@ class Fake:
             output = self.head + "\n"
         elif "status --porcelain" in command:
             output = self.dirty
+        elif command == "df -Pk /tmp":
+            output = 'Filesystem 1024-blocks Used Available Capacity Mounted\ntmp 9000000 0 9000000 0% /tmp\n'
         else:
             output = ""
         if "scrub_check.py" in command:
@@ -92,7 +94,7 @@ def test_exact_identity_and_commands(tmp_path):
     assert all(j["duration_s"] >= 0 for j in record["jobs"])
     assert any("--detach" in c and SHA in c for c in fake.calls)
     assert any("PYTHONPATH=" in c and "/src" in c for c in fake.calls)
-    assert any('python3 tools/affected_tests.py --base origin/main --run -n auto' in c
+    assert any('python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests' in c
                for c in fake.calls)
     commands = [c for c in fake.calls if c.startswith("timeout ")]
     assert len(commands) == 5
@@ -143,19 +145,19 @@ def test_failed_worktree_add_still_removes_private_directory(tmp_path):
 def test_slice_two_skipped(tmp_path):
     fake = Fake()
     code, record = invoke(tmp_path, fake, jobs="pytest-postgres,rust,rust-worker,rust-spike")
-    assert code == 2
-    assert record["result"] == "partial"
+    assert code == 0
+    assert record["result"] == "success"
     assert [j["job"] for j in record["jobs"]] == [
         "pytest-postgres", "rust", "rust-worker", "rust-spike"]
-    assert all(j["result"] == "skipped" and j["reason"] == "slice 2"
+    assert all(j["result"] == "success"
                for j in record["jobs"])
-    assert not any(c.startswith("timeout ") for c in fake.calls)
+    assert sum(c.startswith("timeout ") for c in fake.calls) == 4
 
 
 @pytest.mark.parametrize("jobs", ["rust", "scrub,rust", "rust,scrub"])
 def test_partial_requested_jobs(tmp_path, jobs):
     code, record = invoke(tmp_path, Fake(), jobs=jobs)
-    assert code == 2 and record["result"] == "partial"
+    assert code == 0 and record["result"] == "success"
     assert [j["job"] for j in record["jobs"]] == jobs.split(",")
 
 
@@ -167,17 +169,63 @@ def test_failure_takes_precedence_over_partial(tmp_path, jobs):
 
 def test_default_jobs_success_lists_omissions(tmp_path):
     fake = Fake()
-    code = ci.main(["--sha", SHA, "--out", str(tmp_path)], runner=fake)
+    code = ci.main(["--sha", SHA, "--out", str(tmp_path), "--jobs",
+                    "scrub,file-size,changelog-docs,pytest"], runner=fake)
     record = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert code == 0 and record["result"] == "success"
     assert [j["job"] for j in record["jobs"]] == [
         "scrub", "file-size", "changelog-docs", "pytest"]
     assert record["not_requested"] == [
-        "select", "pytest-postgres", "rust", "rust-worker", "rust-spike"]
+        "select", "pytest-postgres", "rust", "rust-worker", "rust-spike", "browser", "ci-gate"]
     commands = [c for c in fake.calls if c.startswith("timeout ")]
     assert len(commands) == 4
     for command, script in zip(commands, [
             "tools/split/scrub_check.py", "tools/check_file_size.py",
-            "tools/check_changelog_docs.py", "tools/affected_tests.py"]):
+            "tools/check_changelog_docs.py", "-m pytest"]):
         assert "python3 " + script in command
     assert all(j["result"] == "success" and j["exit"] == 0 for j in record["jobs"])
+
+
+@pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_service_result(tmp_path, name, exit_code):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1].startswith("timeout "):
+            return subprocess.CompletedProcess(argv, exit_code, "password-secret", "password-secret")
+        return result
+
+    code, record = invoke(tmp_path, runner, jobs=name)
+    assert code == bool(exit_code)
+    assert record["jobs"][0]["result"] == ("failure" if exit_code else "success")
+    assert "password-secret" not in json.dumps(record)
+
+
+@pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])
+def test_service_cleanup(tmp_path, name):
+    fake = Fake()
+    invoke(tmp_path, fake, jobs=name)
+    command = next(c for c in fake.calls if c.startswith("timeout "))
+    assert "trap cleanup EXIT" in command
+    assert 'rm -rf -- "$scratch"' in command
+    assert 'docker rm -f "$container"' in command
+    assert 'kill "$server"' in command
+    assert "worktree remove" in fake.calls[-1]
+
+
+@pytest.mark.parametrize("name", ["rust", "rust-worker", "rust-spike"])
+def test_low_space_refuses(tmp_path, name):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1] == "df -Pk /tmp":
+            result.stdout = 'Filesystem Blocks Used Available Capacity Mounted\ntmp 3000000 2000000 1000000 67% /tmp\n'
+        return result
+
+    code, record = invoke(tmp_path, runner, jobs=name)
+    assert code == 1
+    assert record["jobs"][0]["reason"] == "insufficient /tmp space: requires at least 2 GB free"
+    assert not any(c.startswith("timeout ") for c in fake.calls)
