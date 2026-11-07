@@ -94,13 +94,15 @@ def test_exact_identity_and_commands(tmp_path):
 
 
 def test_slice_two_skipped(tmp_path):
-    code, record = invoke(tmp_path, Fake(), jobs="pytest-postgres,rust,rust-worker,rust-spike")
+    fake = Fake()
+    code, record = invoke(tmp_path, fake, jobs="pytest-postgres,rust,rust-worker,rust-spike")
     assert code == 2
     assert record["result"] == "partial"
     assert [j["job"] for j in record["jobs"]] == [
         "pytest-postgres", "rust", "rust-worker", "rust-spike"]
     assert all(j["result"] == "skipped" and j["reason"] == "slice 2"
                for j in record["jobs"])
+    assert not any(c.startswith("timeout ") for c in fake.calls)
 
 
 @pytest.mark.parametrize("jobs", ["rust", "scrub,rust", "rust,scrub"])
@@ -117,10 +119,18 @@ def test_failure_takes_precedence_over_partial(tmp_path, jobs):
 
 
 def test_default_jobs_success_lists_omissions(tmp_path):
-    code = ci.main(["--sha", SHA, "--out", str(tmp_path)], runner=Fake())
+    fake = Fake()
+    code = ci.main(["--sha", SHA, "--out", str(tmp_path)], runner=fake)
     record = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert code == 0 and record["result"] == "success"
     assert [j["job"] for j in record["jobs"]] == [
         "scrub", "file-size", "changelog-docs", "pytest"]
     assert record["not_requested"] == [
         "select", "pytest-postgres", "rust", "rust-worker", "rust-spike"]
+    commands = [c for c in fake.calls if c.startswith("timeout ")]
+    assert len(commands) == 4
+    for command, script in zip(commands, [
+            "tools/split/scrub_check.py", "tools/check_file_size.py",
+            "tools/check_changelog_docs.py", "tools/affected_tests.py"]):
+        assert "python3 " + script in command
+    assert all(j["result"] == "success" and j["exit"] == 0 for j in record["jobs"])
