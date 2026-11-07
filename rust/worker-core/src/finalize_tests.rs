@@ -18,15 +18,21 @@ struct Fixture {
 }
 impl Fixture {
     fn new(mode: &str) -> Self {
+        Self::with_format(mode, "sha1")
+    }
+    fn with_format(mode: &str, format: &str) -> Self {
         let source = tempfile::tempdir().unwrap();
         let root = source.path();
-        git(root, &["init"]);
+        git(root, &["init", &format!("--object-format={format}")]);
         git(root, &["config", "user.name", "Finalize test"]);
         git(root, &["config", "user.email", "finalize@example.invalid"]);
         git(root, &["commit", "--allow-empty", "-m", "base"]);
         let base = git(root, &["rev-parse", "HEAD"]);
         let receiver = tempfile::tempdir().unwrap();
-        git(receiver.path(), &["init"]);
+        git(
+            receiver.path(),
+            &["init", &format!("--object-format={format}")],
+        );
         // Seed prerequisites via a local bundle, never a network or user repository.
         let seed = root.join("seed.bundle");
         git(root, &["bundle", "create", seed.to_str().unwrap(), "HEAD"]);
@@ -203,6 +209,59 @@ fn refuses_hash_mismatch() {
     assert_eq!(
         import_result(&f.repo, &f.bytes, "wrong", &f.base, &f.head, "test"),
         Err(Refusal::HashMismatch)
+    );
+}
+
+#[test]
+fn refuses_loose_extra_object() {
+    let f = Fixture::new("safe");
+    let root = f._source.path();
+    assert_eq!(validate_objects(root, &f.head, &f.base), Ok(()));
+    command(
+        root,
+        &["hash-object", "-w", "--stdin"],
+        b"loose extra",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        validate_objects(root, &f.head, &f.base),
+        Err(Refusal::UnexpectedObjects)
+    );
+}
+
+#[test]
+fn refused_create_only_ref_rolls_back_pack() {
+    let f = Fixture::new("safe");
+    let root = Path::new(&f.repo.root);
+    let reference = "refs/spawner/quarantine/test";
+    git(root, &["update-ref", reference, &f.base]);
+    let before = all_objects(root);
+    assert_eq!(f.import(), Err(Refusal::BadBundle));
+    assert_eq!(all_objects(root), before);
+    assert_eq!(git(root, &["rev-parse", reference]), f.base);
+}
+
+#[test]
+fn sha256_objects() {
+    let probe = tempfile::tempdir().unwrap();
+    if command(probe.path(), &["init", "--object-format=sha256"], &[], None).is_err() {
+        eprintln!("SKIP sha256_objects: host Git lacks SHA-256 init support");
+        return;
+    }
+    let f = Fixture::with_format("safe", "sha256");
+    assert!(f.import().is_ok());
+    let root = f._source.path();
+    command(
+        root,
+        &["hash-object", "-w", "--stdin"],
+        b"sha256 extra",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        validate_objects(root, &f.head, &f.base),
+        Err(Refusal::UnexpectedObjects)
     );
 }
 #[test]

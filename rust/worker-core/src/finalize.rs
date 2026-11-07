@@ -66,7 +66,15 @@ pub fn import_result(
         ],
         &[],
     )?;
-    run(scratch.path(), &["init", "--bare"], &[])?;
+    let format = run(root, &["rev-parse", "--show-object-format"], &[])?;
+    let format = std::str::from_utf8(&format)
+        .map_err(|_| Refusal::BadBundle)?
+        .trim();
+    run(
+        scratch.path(),
+        &["init", "--bare", &format!("--object-format={format}")],
+        &[],
+    )?;
     std::fs::write(scratch.path().join("objects/info/alternates"), objects)
         .map_err(|_| Refusal::BadBundle)?;
     let receiver = root;
@@ -130,41 +138,77 @@ pub fn import_result(
         return Err(Refusal::SecretInHistory);
     }
     let reference = format!("refs/spawner/quarantine/{run_id}");
-    if !run(receiver, &["for-each-ref", &reference], &[])?.is_empty() {
-        return Err(Refusal::BadBundle);
-    }
     let objects = git(&["rev-list", "--objects", "--no-object-names", &range])?;
     let pack = run(root, &["pack-objects", "--stdout"], &objects)?;
-    run(receiver, &["index-pack", "--stdin"], &pack)?;
-    run(
-        receiver,
-        &["update-ref", &reference, head_sha, &"0".repeat(40)],
-        &[],
-    )?;
+    promote(receiver, &pack, &reference, head_sha)?;
     Ok(QuarantinedResult {
         reference,
         head_sha: head_sha.into(),
     })
 }
 
+fn promote(root: &Path, pack: &[u8], reference: &str, head: &str) -> Result<(), Refusal> {
+    let git = |args: &[&str], input: &[u8]| {
+        command(root, args, input, None).map_err(|_| Refusal::BadBundle)
+    };
+    let objects = git(
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects/pack",
+        ],
+        &[],
+    )?;
+    let directory = Path::new(
+        std::str::from_utf8(&objects)
+            .map_err(|_| Refusal::BadBundle)?
+            .trim(),
+    );
+    // Do not remove a pack that was already present before this import.
+    let existing: std::collections::BTreeSet<_> = std::fs::read_dir(directory)
+        .map_err(|_| Refusal::BadBundle)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<Result<_, _>>()
+        .map_err(|_| Refusal::BadBundle)?;
+    let installed = git(&["index-pack", "--stdin"], pack)?;
+    let name = std::str::from_utf8(&installed)
+        .map_err(|_| Refusal::BadBundle)?
+        .split_whitespace()
+        .last()
+        .ok_or(Refusal::BadBundle)?;
+    if name.len() != head.len() || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Refusal::BadBundle);
+    }
+    if git(
+        &["update-ref", reference, head, &"0".repeat(head.len())],
+        &[],
+    )
+    .is_err()
+    {
+        for extension in ["idx", "pack"] {
+            let path = directory.join(format!("pack-{name}.{extension}"));
+            if !existing.contains(&path) {
+                std::fs::remove_file(path).map_err(|_| Refusal::BadBundle)?;
+            }
+        }
+        return Err(Refusal::BadBundle);
+    }
+    Ok(())
+}
+
 fn validate_objects(root: &Path, head: &str, base: &str) -> Result<(), Refusal> {
     let git = |args: &[&str]| command(root, args, &[], None).map_err(|_| Refusal::BadBundle);
     let allowed = git(&["rev-list", "--objects", "--no-object-names", head, base])?;
     let allowed: std::collections::BTreeSet<_> = allowed.split(|b| *b == b'\n').collect();
-    for entry in std::fs::read_dir(root.join("objects/pack")).map_err(|_| Refusal::BadBundle)? {
-        let path = entry.map_err(|_| Refusal::BadBundle)?.path();
-        if path.extension().is_some_and(|ext| ext == "idx") {
-            let listing = git(&[
-                "verify-pack",
-                "-v",
-                path.to_str().ok_or(Refusal::BadBundle)?,
-            ])?;
-            for line in listing.split(|b| *b == b'\n') {
-                let sha = line.split(|b| *b == b' ').next().unwrap_or_default();
-                if sha.len() == 40 && !allowed.contains(sha) {
-                    return Err(Refusal::UnexpectedObjects);
-                }
-            }
+    let listing = git(&[
+        "cat-file",
+        "--batch-all-objects",
+        "--batch-check=%(objectname)",
+    ])?;
+    for sha in listing.split(|b| *b == b'\n').filter(|sha| !sha.is_empty()) {
+        if !allowed.contains(sha) {
+            return Err(Refusal::UnexpectedObjects);
         }
     }
     Ok(())
