@@ -91,6 +91,7 @@ def test_failure_record_and_cleanup(tmp_path, capsys):
     assert code != 0 and record["result"] == "failure"
     assert record["jobs"][0]["result"] == "failure"
     assert record["jobs"][0]["exit"] == 7
+    assert record["jobs"][0]["output_tail"] == "\nsecret"
     assert "worktree remove" in fake.calls[-1]
     assert "secret" not in capsys.readouterr().out
 
@@ -267,7 +268,13 @@ def test_service_result(tmp_path, name, exit_code):
     assert code == bool(exit_code)
     assert record["jobs"][0]["result"] == ("failure" if exit_code else "success")
     assert set(record) == {"sha", "host", "started", "jobs", "not_requested", "result"}
-    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit"}
+    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit", "output_tail"}
+
+
+def test_output_tail_is_bounded():
+    assert ci.output_tail("x" * 20000, "last error").endswith("last error")
+    assert len(ci.output_tail("x" * 20000, "last error")) == ci.OUTPUT_TAIL_LIMIT
+    assert ci.output_tail(b"partial", b"error") == "partial\nerror"
 
 
 @pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])

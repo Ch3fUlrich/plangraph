@@ -35,6 +35,16 @@ JOBS = {
     "ci-gate": ("gate", 120),
 }
 
+OUTPUT_TAIL_LIMIT = 8192
+
+
+def output_tail(stdout=None, stderr=None):
+    """Retain bounded diagnostics, including partial output on SSH timeout."""
+    def text(value):
+        return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+    return (text(stdout)[-OUTPUT_TAIL_LIMIT:] + "\n" +
+            text(stderr)[-OUTPUT_TAIL_LIMIT:])[-OUTPUT_TAIL_LIMIT:]
+
 
 def remote(host, command, timeout=120, runner=subprocess.run):
     """The single SSH boundary; a subprocess-compatible runner is injectable."""
@@ -97,7 +107,8 @@ def main(argv=None, *, runner=subprocess.run):
         record["result"] = "success"
         for name in names:
             command, timeout = JOBS[name]
-            job = {"job": name, "result": "skipped", "duration_s": 0, "exit": None}
+            job = {"job": name, "result": "skipped", "duration_s": 0, "exit": None,
+                   "output_tail": ""}
             record["jobs"].append(job)
             start = time.monotonic()
             try:
@@ -129,11 +140,14 @@ def main(argv=None, *, runner=subprocess.run):
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
                               f"{shlex.quote(script)}", timeout + 30)
                 job["exit"] = result.returncode
+                job["output_tail"] = output_tail(result.stdout, result.stderr)
                 job["result"] = ("timeout" if result.returncode == 124 else
                                  "success" if result.returncode == 0 else "failure")
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
+                job["output_tail"] = output_tail(exc.stdout, exc.stderr)
                 job["result"] = "timeout"
-            except OSError:
+            except OSError as exc:
+                job["output_tail"] = str(exc)[-OUTPUT_TAIL_LIMIT:]
                 job["result"] = "failure"
             finally:
                 job["duration_s"] = round(time.monotonic() - start, 3)
