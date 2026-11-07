@@ -17,6 +17,7 @@ from plangraph.planner.routing import plan_spawn
 from plangraph.planner.seats import seat_family
 
 from registry_route_util import CARD, live_policy  # noqa: F401
+from historical_legs import without_d4196
 
 NEW_IDS = ("opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
            "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash")

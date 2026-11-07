@@ -48,6 +48,23 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
     assert calls == []
 
 
+def test_free_zen_legs_are_exactly_the_disabled_set():
+    free = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
+    assert set(free) == {'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'}
+    assert all(free.values())
+
+
+@pytest.mark.parametrize('leg_id', ['opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'])
+def test_explicit_disabled_zen_leg_refused(tmp_path, leg_id):
+    leg = next(l for l in DEFAULT_LEGS if l.id == leg_id)  # D-3828: disabled, never removed
+    from plangraph.planner.routing import SpawnRefused
+    service = spawn_service(state=tmp_path)
+    with pytest.raises(SpawnRefused, match='leg disabled: .*D-4196.*D-3828'):
+        asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',
+            leg=leg.id, override_reason='disabled leg must not launch', dry_run=True))
+    assert not service.runner.jobs
+
+
 def test_real_launch_plan_skips_unserved(monkeypatch):
     # Pin a present (empty) root config so the reason does not depend on the host's AUTOOS_ROOT.
     from plangraph.routing_support import opencode_overlay

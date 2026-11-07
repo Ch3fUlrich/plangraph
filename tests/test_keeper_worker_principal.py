@@ -91,6 +91,7 @@ def test_scoped_worker_claim_show_and_locks(scoped):
 
 
 def test_scoped_phase_routes(scoped, tmp_path, monkeypatch):
+    from plangraph.planner.phase_finish import phase_branch
     from plangraph.keeper import api_routes
     from plangraph.keeper.api import KeeperHandler
     from test_phase_finish import FakeGitHub, finish_cards, gate, git_repo
@@ -121,7 +122,7 @@ def test_scoped_phase_routes(scoped, tmp_path, monkeypatch):
     finish_cards(world, "demo:C1", "demo:C2")
     run_gate(principal, "phase_finish")
     result = api_routes._phase_finish(world.store, principal, {
-        "key": "demo:PH-X", "branch": "phase/demo-PH-X", "head": head}, need)
+        "key": "demo:PH-X", "branch": phase_branch("demo:PH-X"), "head": head}, need)
     assert result["state"] == "merged"
     assert result["merge_sha"] == fake.merge_sha
     assert "attach_merge_evidence" in actions

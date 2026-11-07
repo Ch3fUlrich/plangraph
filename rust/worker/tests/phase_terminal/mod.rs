@@ -2,7 +2,7 @@ use super::*;
 use pg_worker::phase::PhaseOutput;
 use temporalio_workflow::workflow_interceptors::*;
 
-struct AssertTerminal(PhaseOutput);
+pub(super) struct AssertTerminal(pub(super) PhaseOutput);
 
 impl WorkflowInterceptor for AssertTerminal {
     fn execute<'a>(
@@ -23,7 +23,7 @@ impl WorkflowInterceptor for AssertTerminal {
     }
 }
 
-fn terminal_output(doc: &serde_json::Value) -> PhaseOutput {
+pub(super) fn terminal_output(doc: &serde_json::Value) -> PhaseOutput {
     let completed = doc["events"]
         .as_array()
         .unwrap()

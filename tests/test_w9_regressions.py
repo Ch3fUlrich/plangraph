@@ -8,6 +8,7 @@ from fake_pid import FAKE_PID
 import pytest
 
 from plangraph.spawner.runner import JobInfo, SpawnerRunner, spawn_service
+from historical_legs import historical_zen_legs  # noqa: F401
 
 
 

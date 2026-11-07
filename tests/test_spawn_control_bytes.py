@@ -67,7 +67,7 @@ def test_launch_spec(tmp_path, monkeypatch):
         assert prompt == 'clean' and card['context'] == '\x0c'
         raise ContextReached
     monkeypatch.setattr(spec.context_pack, 'annotate', annotate)
-    monkeypatch.setattr(spec, 'leg_active', lambda leg: True)
+    monkeypatch.setattr('plangraph.spawner.target.admit_leg', lambda leg: None)
     req.update(prompt='clean', card={'context': '\x0c'})
     with pytest.raises(ContextReached):
         spec.build(req)

@@ -89,10 +89,12 @@ DEFAULT_LEGS = (
              disabled="D-3950 credits out; re-enable after one passing probe seat, one try per day"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
         "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
-        roles=("review", "implement")),
+        roles=("review", "implement"),
+        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
-        roles=("review", "implement")),
+        roles=("review", "implement"),
+        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
@@ -131,6 +133,13 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
+    # D-4193: one gateway review leg, placed after the opencode-go review
+    # legs as the fallback seat; its upstream route is not verified.
+    Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
+        "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
+        roles=("review",),
+        disabled="D-4193 upstream route not verified",
+        note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     # D-3605 Haiku leg: last, so it sorts after every non-claude review leg.
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",

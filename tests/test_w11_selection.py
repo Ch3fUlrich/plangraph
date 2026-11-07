@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+from historical_legs import without_d4196
 
 from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
 from plangraph.planner.routing import plan_spawn
@@ -8,14 +9,27 @@ from plangraph.spawner.cli import main
 from plangraph.spawner.mcp import MCPSpawnerServer
 
 CARD = {'estimate_tokens': 1000}
-WRITERS = tuple(l for l in DEFAULT_LEGS if 'implement' in l.roles)
+WRITERS = tuple(l for l in without_d4196() if 'implement' in l.roles)
 LEAD = next(l for l in WRITERS if l.id == LEAD_WRITER)
+
+
+def test_historical_writers_keep_other_disables():
+    assert next(l for l in without_d4196() if l.id == 'qodercli-qwen3.8-flash').disabled
+    assert not any(l.disabled is None and 'D-3950' in (original.disabled or '')
+                   for l in WRITERS for original in DEFAULT_LEGS if original.id == l.id)
 
 
 def rows():
     return {l.model: {'aa_intelligence': 40 + i * 10,
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(WRITERS)}
+
+
+def test_disabled_writer_never_routed():
+    disabled = {l.id for l in DEFAULT_LEGS if l.disabled and 'implement' in l.roles}
+    assert disabled
+    plan = plan_spawn(CARD, role='implement', benchmark=rows())
+    assert plan.legs and not disabled & {l.id for l in plan.legs}
 
 
 def test_tier_first_and_swap(monkeypatch):

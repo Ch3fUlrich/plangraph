@@ -1,0 +1,1 @@
+- **SPAWNER-LEGS-D3605 (D-4196, D-4193):** isolate opencode-go review credentials, retain disabled Zen free legs, and reserve the gateway Gemini review leg (disabled, route unverified). Pin historical routing tests to explicit fixture legs and account for the added catalog row.

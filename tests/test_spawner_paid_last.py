@@ -67,7 +67,7 @@ def test_only_sol_writes():
     'Free usage limit reached', 'not_served_on_host'])
 def test_recorded_down_route(tmp_path, monkeypatch, reason):
     import time
-    free = replace(legs.DEFAULT_LEGS[1], id='free-test', tool_mode='tools')
+    free = replace(legs.DEFAULT_LEGS[1], id='free-test', tool_mode='tools', disabled=None)
     other = replace(free, id='other', model='test/other', tier='paid', family='glm')
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', (free, other))
     import plangraph.planner.routing as routing
@@ -125,7 +125,7 @@ def test_no_cooldown(tmp_path, monkeypatch, mode):
 def test_paid_pin_measured(tmp_path, monkeypatch, one_up):
     import time
     from plangraph.planner.measured_down import measured_down
-    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='test/paid', tier='paid', family='paid', tool_mode='tools')
+    paid = replace(legs.DEFAULT_LEGS[1], id='paid', model='test/paid', tier='paid', family='paid', tool_mode='tools', disabled=None)
     free = replace(paid, id='dead-free', model='test/free', tier='free', family='glm')
     up = replace(free, id='up-free', model='test/up')
     use_table(monkeypatch, (paid, free, up) if one_up else (paid, free))
