@@ -1,9 +1,8 @@
 //! Receiver-side RESULT verification. No lane updates, fetches, or publication.
-use crate::{
-    hosts::RepoEntry,
-    writer_result::oid,
-    writer_secret::{command, findings, message, object},
-};
+use crate::hosts::RepoEntry;
+#[cfg(unix)]
+use crate::writer_secret::{command, message};
+#[cfg(unix)]
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -21,6 +20,8 @@ pub enum Refusal {
     HashMismatch,
     #[error("unexpected_objects")]
     UnexpectedObjects,
+    #[error("unsupported")]
+    Unsupported,
 }
 
 /// Expected immutable bundle identity.
@@ -46,6 +47,21 @@ pub fn verify_bundle(
     bundle_path: &Path,
     expected: &ExpectedBundle<'_>,
 ) -> Result<VerifiedBundle, Refusal> {
+    #[cfg(not(unix))]
+    {
+        let _ = (repo, bundle_path, expected);
+        Err(Refusal::Unsupported)
+    }
+    #[cfg(unix)]
+    verify_unix(repo, bundle_path, expected)
+}
+
+#[cfg(unix)]
+fn verify_unix(
+    repo: &RepoEntry,
+    bundle_path: &Path,
+    expected: &ExpectedBundle<'_>,
+) -> Result<VerifiedBundle, Refusal> {
     let bytes = std::fs::read(bundle_path).map_err(|_| Refusal::BadBundle)?;
     let ExpectedBundle {
         sha256,
@@ -55,7 +71,18 @@ pub fn verify_bundle(
     if format!("{:x}", Sha256::digest(&bytes)) != sha256 {
         return Err(Refusal::HashMismatch);
     }
-    if bytes.len() as u64 > crate::writer_blob::MAX_BYTES || !oid(base_sha) || !oid(head_sha) {
+    let receiver = Path::new(&repo.root);
+    let format = command(receiver, &["rev-parse", "--show-object-format"], &[], None)
+        .map_err(|_| Refusal::BadBundle)?;
+    let width = match format.as_slice() {
+        b"sha1\n" => 40,
+        b"sha256\n" => 64,
+        _ => return Err(Refusal::BadBundle),
+    };
+    if bytes.len() as u64 > crate::writer_blob::MAX_BYTES
+        || !oid_any(base_sha, width)
+        || !oid_any(head_sha, width)
+    {
         return Err(Refusal::BadBundle);
     }
     let root = Path::new(&repo.root);
@@ -63,13 +90,16 @@ pub fn verify_bundle(
     let run = |root: &Path, args: &[&str], input: &[u8]| {
         command(root, args, input, None).map_err(|_| Refusal::BadBundle)
     };
-    let objects = run(root, &["rev-parse", "--git-path", "objects"], &[])?;
+    let objects = run(root, &["rev-parse", "--git-common-dir"], &[])?;
     let objects = root.join(
         std::str::from_utf8(&objects)
             .map_err(|_| Refusal::BadBundle)?
             .trim(),
     );
-    let objects = objects.canonicalize().map_err(|_| Refusal::BadBundle)?;
+    let objects = objects
+        .join("objects")
+        .canonicalize()
+        .map_err(|_| Refusal::BadBundle)?;
     init_scratch(root, scratch.path())?;
     std::fs::write(
         scratch.path().join("objects/info/alternates"),
@@ -90,7 +120,7 @@ pub fn verify_bundle(
     if lines.len() != 1
         || fields.len() != 2
         || fields[0] != head_sha
-        || fields[1].starts_with("refs/tags/")
+        || !fields[1].starts_with("refs/heads/")
     {
         return Err(Refusal::BadBundle);
     }
@@ -102,12 +132,13 @@ pub fn verify_bundle(
         "unbundle",
         path,
     ])?;
-    validate_objects(root, head_sha, base_sha)?;
+    git(&["cat-file", "-e", base_sha])?;
     if git(&["cat-file", "-t", head_sha])? != b"commit\n" {
         return Err(Refusal::BadBundle);
     }
     git(&["merge-base", "--is-ancestor", base_sha, head_sha])
         .map_err(|_| Refusal::NotDescendant)?;
+    validate_objects(root, receiver, head_sha, base_sha)?;
     let range = format!("{base_sha}..{head_sha}");
     let commits = git(&["rev-list", &range])?;
     if commits.is_empty() {
@@ -115,7 +146,7 @@ pub fn verify_bundle(
     }
     for commit in commits.split(|b| *b == b'\n').filter(|s| !s.is_empty()) {
         let commit = std::str::from_utf8(commit).map_err(|_| Refusal::BadBundle)?;
-        let (_, raw) = object(root, commit).map_err(|_| Refusal::BadBundle)?;
+        let (_, raw) = object(root, commit, width)?;
         let trailers = command(
             root,
             &["interpret-trailers", "--parse"],
@@ -137,20 +168,12 @@ pub fn verify_bundle(
             return Err(Refusal::MissingTrailer);
         }
     }
-    let mut scratch_repo = repo.clone();
-    scratch_repo.root = root.to_str().ok_or(Refusal::BadBundle)?.into();
-    if !findings(&scratch_repo, base_sha, head_sha)
-        .map_err(|_| Refusal::BadBundle)?
-        .is_empty()
-    {
-        return Err(Refusal::SecretInHistory);
-    }
     // Include inherited history too: neither a clean tip nor a clean range
     // excuses a secret in an older reachable message or blob.
     let reachable = git(&["rev-list", "--objects", "--no-object-names", head_sha])?;
     for sha in reachable.split(|b| *b == b'\n').filter(|s| !s.is_empty()) {
         let sha = std::str::from_utf8(sha).map_err(|_| Refusal::BadBundle)?;
-        let (kind, raw) = object(root, sha).map_err(|_| Refusal::BadBundle)?;
+        let (kind, raw) = object(root, sha, width)?;
         let content = match kind.as_str() {
             "commit" => message(&raw).map_err(|_| Refusal::BadBundle)?,
             "blob" => &raw,
@@ -175,17 +198,13 @@ pub fn verify_bundle(
     })
 }
 
-fn validate_objects(root: &Path, head: &str, base: &str) -> Result<(), Refusal> {
+#[cfg(unix)]
+fn validate_objects(root: &Path, receiver: &Path, head: &str, base: &str) -> Result<(), Refusal> {
     let git = |args: &[&str]| command(root, args, &[], None).map_err(|_| Refusal::BadBundle);
     let range = format!("{base}..{head}");
     let mut allowed = git(&["rev-list", "--objects", "--no-object-names", &range])?;
-    let alternates =
-        std::fs::read_to_string(root.join("objects/info/alternates")).unwrap_or_default();
-    if !alternates.trim().is_empty() {
-        // Receiver inventory is read-only and excludes unrelated supplied objects.
-        let receiver = Path::new(alternates.trim())
-            .parent()
-            .ok_or(Refusal::BadBundle)?;
+    {
+        // Query the actual receiver, including linked worktrees and alternates.
         allowed.extend(
             command(
                 receiver,
@@ -236,18 +255,43 @@ fn validate_objects(root: &Path, head: &str, base: &str) -> Result<(), Refusal> 
     Ok(())
 }
 
+#[cfg(unix)]
 fn pack_name(installed: &[u8], width: usize) -> Result<&str, Refusal> {
     let name = std::str::from_utf8(installed)
         .map_err(|_| Refusal::BadBundle)?
         .split_whitespace()
         .last()
         .ok_or(Refusal::BadBundle)?;
-    if name.len() != width || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !oid_any(name, width) {
         return Err(Refusal::BadBundle);
     }
     Ok(name)
 }
 
+#[cfg(unix)]
+fn oid_any(value: &str, width: usize) -> bool {
+    matches!(width, 40 | 64)
+        && value.len() == width
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+#[cfg(unix)]
+fn object(root: &Path, sha: &str, width: usize) -> Result<(String, Vec<u8>), Refusal> {
+    if !oid_any(sha, width) {
+        return Err(Refusal::BadBundle);
+    }
+    let kind =
+        command(root, &["cat-file", "-t", sha], &[], None).map_err(|_| Refusal::BadBundle)?;
+    let kind = std::str::from_utf8(&kind)
+        .map_err(|_| Refusal::BadBundle)?
+        .trim();
+    let raw = command(root, &["cat-file", kind, sha], &[], None).map_err(|_| Refusal::BadBundle)?;
+    Ok((kind.into(), raw))
+}
+
+#[cfg(unix)]
 fn init_scratch(receiver: &Path, scratch: &Path) -> Result<(), Refusal> {
     let format =
         command(receiver, &["rev-parse", "--show-object-format"], &[], None).unwrap_or_default();
@@ -272,6 +316,32 @@ fn init_scratch(receiver: &Path, scratch: &Path) -> Result<(), Refusal> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "finalize_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(unix)))]
+#[test]
+fn finalize_refuses_unsupported_platform() {
+    let repo = RepoEntry {
+        root: String::new(),
+        worktrees_root: String::new(),
+        remote: String::new(),
+        python: None,
+        import_roots: vec![],
+        cache_env: Default::default(),
+    };
+    assert_eq!(
+        verify_bundle(
+            &repo,
+            Path::new("unused"),
+            &ExpectedBundle {
+                sha256: "",
+                base: "",
+                head: "",
+            }
+        )
+        .unwrap_err(),
+        Refusal::Unsupported
+    );
+}

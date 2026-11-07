@@ -68,14 +68,6 @@ pub(crate) fn command(
     cmd.args(["--no-replace-objects", "-c", "core.hooksPath="])
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
-        .env(
-            "GIT_CONFIG_SYSTEM",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
         .env("GIT_AUTHOR_NAME", "Secret gate")
         .env("GIT_AUTHOR_EMAIL", "gate@example.invalid")
         .env("GIT_COMMITTER_NAME", "Secret gate")
@@ -84,6 +76,12 @@ pub(crate) fn command(
         .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .stdin(file)
         .stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    #[cfg(not(unix))]
+    cmd.env("GIT_CONFIG_GLOBAL", "NUL")
+        .env("GIT_CONFIG_SYSTEM", "NUL");
     if let Some(index) = index {
         cmd.env("GIT_INDEX_FILE", index);
     }
