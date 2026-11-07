@@ -24,6 +24,7 @@ The nonzero exit and stderr remain available; stdout exposes the completed
 answer to callers. A later unfinished text answer invalidates the earlier
 completion. Plain text, truncated JSON, and length/tool-call finishes provide
 no completion evidence for the new outcome. The existing denied-review exact
-trailing verdict exception is preserved for plain text and stop-completed
-JSON answers; unfinished JSON verdict text is not promoted. The new
+trailing verdict exception is preserved for plain text, stop-completed JSON
+answers, and pending JSON text without a stop frame; text after an explicit
+non-stop finish is not promoted. The new
 structured-answer classifier does not interpret seat verdicts or exact-head validity.

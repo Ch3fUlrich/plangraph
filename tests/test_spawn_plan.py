@@ -52,11 +52,11 @@ def test_seats_and_impossible_fence():
     assert [l.family for l in p.review_seats] == ["qwen", "gemini"]
     assert all(l.family != "claude" for l in p.legs if l.id != "claude-haiku-5.5")  # D-3605 Haiku leg
     assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
-    # D-3084 per-part: with six writer parts a qwen seat covers the five others
-    # and a deepseek seat covers the qwen part.
+    # With all automatic families fenced, only Haiku remains; Grok is manual-only.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
-    assert [l.family for l in p.review_seats] == ["grok", "claude"] and not p.error
+    assert [l.family for l in p.review_seats] == ["claude"]
+    assert p.error == "two distinct review families unavailable"
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
                    exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))  # D-3605 Haiku leg
