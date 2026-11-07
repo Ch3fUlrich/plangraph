@@ -2,6 +2,10 @@ use super::*;
 #[test]
 fn finalize_scan_chunk_edge_and_truncation() {
     let secret = ["Bear", "er ", &"z9".repeat(16)].concat();
+    assert!(secret.len() <= OVERLAP);
+    assert!(crate::writer_secret::scan_bytes(secret.as_bytes()));
+    assert!(!crate::writer_secret::scan_bytes(&secret.as_bytes()[..3]));
+    assert!(!crate::writer_secret::scan_bytes(&secret.as_bytes()[3..]));
     let mut content = vec![b' '; CHUNK - 3];
     content.extend(secret.bytes());
     let mut stream = format!("oid blob {}\n", content.len()).into_bytes();
@@ -18,6 +22,26 @@ fn finalize_scan_chunk_edge_and_truncation() {
     ] {
         assert_eq!(batch(&mut &stream[..], b"oid\n"), Err(Refusal::BadBundle));
     }
+}
+#[test]
+fn finalize_scan_oversized_commit_refused_before_body_read() {
+    struct UnreadBody;
+    impl Read for UnreadBody {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            panic!("oversized commit body must not be read");
+        }
+    }
+    for size in [MAX_COMMIT_BYTES + 1, usize::MAX] {
+        let header = format!("oid commit {size}\n");
+        let mut stream = BufReader::new(header.as_bytes().chain(UnreadBody));
+        assert_eq!(batch(&mut stream, b"oid\n"), Err(Refusal::BadBundle));
+    }
+    let mut body = vec![b' '; MAX_COMMIT_BYTES];
+    body[0] = b'\n';
+    let mut stream = format!("oid commit {}\n", body.len()).into_bytes();
+    stream.extend(body);
+    stream.push(b'\n');
+    assert_eq!(batch(&mut &stream[..], b"oid\n"), Ok(()));
 }
 #[test]
 fn finalize_scan_many_blobs_are_consumed_incrementally() {
