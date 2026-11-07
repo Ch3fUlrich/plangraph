@@ -147,12 +147,12 @@ and an option whose id differs from its label slug is written `label {id}` and p
 a generated file back plans no choices edits on unchanged items. Cells are single-line and credential-masked. Status file: `{ts, mode: "archive",
 archived, written, error}`. Turning the switch on in the timer unit is a later live step.
 
-The following examples assume the data checkout is `$HOME/plan-data`; substitute
-the deployed checkout path consistently in the command, service, and path unit.
+Substitute the deployed checkout path consistently in the following command,
+service, and path unit examples.
 
-    python3 tools/md_sync.py --questions $HOME/plan-data/QUESTIONS.md \
-        --answers $HOME/plan-data/ANSWERS.md \
-        --decisions $HOME/plan-data/docs/decisions-log.md \
+    python3 tools/md_sync.py --questions /path/to/data-checkout/QUESTIONS.md \
+        --answers /path/to/data-checkout/ANSWERS.md \
+        --decisions /path/to/data-checkout/docs/decisions-log.md \
         --url http://127.0.0.1:8765 --token-file ~/keeper/router.token \
         [--dry-run | --apply] [--status-file /path/md-sync.status.json]
 
@@ -183,8 +183,8 @@ directory for the status file:
     [Service]
     Type=oneshot
     ExecStart=/usr/bin/python3 %h/code/plangraph/tools/md_sync.py \
-      --questions %h/plan-data/QUESTIONS.md --answers %h/plan-data/ANSWERS.md \
-      --decisions %h/plan-data/docs/decisions-log.md \
+      --questions /path/to/data-checkout/QUESTIONS.md --answers /path/to/data-checkout/ANSWERS.md \
+      --decisions /path/to/data-checkout/docs/decisions-log.md \
       --url http://127.0.0.1:8765 --token-file %h/keeper/router.token --apply \
       --status-file %h/.local/share/plangraph/md-sync.status.json
 
@@ -201,9 +201,9 @@ directory for the status file:
     [Unit]
     Description=plangraph markdown import on change
     [Path]
-    PathChanged=%h/plan-data/QUESTIONS.md
-    PathChanged=%h/plan-data/ANSWERS.md
-    PathChanged=%h/plan-data/docs/decisions-log.md
+    PathChanged=/path/to/data-checkout/QUESTIONS.md
+    PathChanged=/path/to/data-checkout/ANSWERS.md
+    PathChanged=/path/to/data-checkout/docs/decisions-log.md
     [Install]
     WantedBy=default.target
 
