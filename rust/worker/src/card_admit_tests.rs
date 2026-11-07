@@ -2,15 +2,22 @@ use super::*;
 
 #[test]
 fn startup_loads_env_policy_and_unloaded_config_refuses() {
-    // Pin the production construction site without mutating process-global env
-    // while the parallel library suite is running.
-    let startup = include_str!("bin/worker.rs");
-    assert!(startup.contains("Config::default().with_card_allowlist_env()?"));
-    assert!(!startup.contains("allow_all_for_tests"));
+    // A subprocess isolates the real environment loader from parallel tests.
+    if std::env::var_os("PG_PILOT_ALLOWLIST_CHILD").is_some() {
+        let loaded = Config::default().with_card_allowlist_env().unwrap();
+        assert!(allow(&loaded, "startup-listed").is_ok());
+        assert!(allow(&loaded, "unlisted").is_err());
+        return;
+    }
     let cfg = Config::default();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cards");
     std::fs::write(&path, "startup-listed\n").unwrap();
+    assert!(std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "card_admit::tests::startup_loads_env_policy_and_unloaded_config_refuses"])
+        .env("PG_PILOT_ALLOWLIST_CHILD", "1")
+        .env("PG_CARD_ALLOWLIST", &path)
+        .status().unwrap().success());
     let loaded = Config::default().with_card_allowlist(Some(&path)).unwrap();
     assert!(allow(&loaded, "startup-listed").is_ok());
     assert!(allow(&loaded, "unlisted").is_err());
