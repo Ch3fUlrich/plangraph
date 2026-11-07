@@ -15,6 +15,18 @@ SPEC.loader.exec_module(ci)
 SHA = "ab" * 20
 
 
+def test_explicit_base_and_main_first_parent(tmp_path):
+    fake = Fake()
+    assert ci.main(["--sha", SHA, "--base", "origin/custom", "--jobs",
+                    "file-size,changelog-docs", "--out", str(tmp_path)], runner=fake) == 0
+    commands = [c for c in fake.calls if c.startswith("timeout ")]
+    assert len(commands) == 2
+    for command in commands:
+        assert "origin/custom" in command
+        assert 'base=$(git rev-parse HEAD^)' in command
+        assert '"$base" = "$(git rev-parse HEAD)"' in command
+
+
 @pytest.mark.parametrize("content,expected", [
     ("unrelated", ""), ("keeper_util sqlite3", ""),
     ("keeper_util", "tests/test_sample.py"),

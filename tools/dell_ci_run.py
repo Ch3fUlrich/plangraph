@@ -56,6 +56,7 @@ def remote(host, command, timeout=120, runner=subprocess.run):
 def main(argv=None, *, runner=subprocess.run):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
+    parser.add_argument("--base", default="origin/main")
     parser.add_argument("--host", default="dell-build")
     parser.add_argument("--repo", default="~/code/plangraph")
     parser.add_argument("--jobs", default=",".join(JOBS))
@@ -130,6 +131,12 @@ def main(argv=None, *, runner=subprocess.run):
                         continue
                 if command == "service":
                     command = service_script(name, directory + "/" + name)
+                if name in {"file-size", "changelog-docs"}:
+                    variable = "FILESIZE_REQUIRE_BASE" if name == "file-size" else "CHANGELOG_BASE"
+                    command = (f"base=$(git rev-parse --verify {shlex.quote(args.base + '^{commit}')}) && "
+                               'if [ "$base" = "$(git rev-parse HEAD)" ]; then '
+                               'base=$(git rev-parse HEAD^); fi && '
+                               f'{variable}="$base" python3 tools/check_{name.replace("-", "_")}.py')
                 if command == "gate":
                     needs = {j["job"]: {"result": j["result"]}
                              for j in record["jobs"] if j["job"] != "ci-gate"}
