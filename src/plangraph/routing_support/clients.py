@@ -238,7 +238,7 @@ def build_child_env(
                 env.pop(key, None)   # None removes the inherited variable (D-3465)
             else:
                 env[key] = value
-    env.pop("PLANGRAPH_GATEWAY_LOG_TOKEN", None)  # spawner-only call-log credential, extra_env included
+    for name in ("PLANGRAPH_GATEWAY_LOG_TOKEN", "PLANGRAPH_GATEWAY_LOG_TOKEN_FILE"): env.pop(name, None)  # spawner-only, after extra_env
 
     return env
 
