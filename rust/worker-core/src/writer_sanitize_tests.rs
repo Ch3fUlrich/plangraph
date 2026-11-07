@@ -47,7 +47,7 @@ fn token_in_path_found_and_dropped() {
     assert!(!entries(dir.path(), &clean.tip)
         .unwrap()
         .iter()
-        .any(|e| e.2 == token));
+        .any(|e| e.2 == token.as_bytes()));
     assert!(!format!("{found:?}{:?}", clean.dropped_paths).contains(&token));
 }
 
@@ -72,7 +72,7 @@ fn gitlink_survives_rebuild() {
     assert!(entries(dir.path(), &clean.tip).unwrap().contains(&(
         "160000".into(),
         base,
-        "submodule".into()
+        b"submodule".to_vec()
     )));
     assert!(!clean.dropped_paths.contains(&"submodule".into()));
 }
@@ -84,7 +84,7 @@ fn sanitized_objects_no_original_secret() {
     assert!(findings(&repo, &base, &clean).unwrap().is_empty());
     let tree = entries(dir.path(), &clean).unwrap();
     assert_eq!(tree.len(), 1);
-    assert_eq!(tree[0].2, "safe");
+    assert_eq!(tree[0].2, b"safe");
     let history = command(
         dir.path(),
         &["rev-list", &format!("{base}..{clean}")],
@@ -270,6 +270,63 @@ fn nested_secret_path_dropped() {
         .contains(&"nested/dir/secret".to_owned()));
     assert!(findings(&repo, &base, &clean.tip).unwrap().is_empty());
     let tree = entries(dir.path(), &clean.tip).unwrap();
-    assert!(!tree.iter().any(|e| e.2 == "nested/dir/secret"));
-    assert!(tree.iter().any(|e| e.2 == "nested/dir/safe"));
+    assert!(!tree.iter().any(|e| e.2 == b"nested/dir/secret"));
+    assert!(tree.iter().any(|e| e.2 == b"nested/dir/safe"));
+}
+
+#[test]
+fn distinct_secret_paths_remain_distinct_records() {
+    let (dir, repo, base, _) = fixture();
+    for suffix in ["one", "two"] {
+        let name = ["gh", "p_", &"q".repeat(25), suffix].concat();
+        std::fs::write(dir.path().join(name), "safe").unwrap();
+    }
+    command(dir.path(), &["add", "."], &[], None).unwrap();
+    command(dir.path(), &["commit", "-m", "names"], &[], None).unwrap();
+    let head = command(dir.path(), &["rev-parse", "HEAD"], &[], None).unwrap();
+    let clean = sanitize_history(&repo, &base, std::str::from_utf8(&head).unwrap().trim()).unwrap();
+    assert_eq!(
+        clean
+            .dropped_paths
+            .iter()
+            .filter(|p| p.as_str() == "<path removed by secret gate>")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn bounded_real_repository_probe() {
+    let (dir, repo, base, tip) = fixture();
+    let start = std::time::Instant::now();
+    sanitize_history(&repo, &base, &tip).unwrap();
+    eprintln!("real Git salvage probe: {:?}", start.elapsed());
+    let tree = command(
+        dir.path(),
+        &["rev-parse", &format!("{base}^{{tree}}")],
+        &[],
+        None,
+    )
+    .unwrap();
+    let tree = std::str::from_utf8(&tree).unwrap().trim();
+    let root_base = base;
+    let mut parent = root_base.clone();
+    for _ in 0..257 {
+        parent = String::from_utf8(
+            command(
+                dir.path(),
+                &["commit-tree", tree, "-p", &parent],
+                b"bounded\n",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .trim()
+        .into();
+    }
+    assert!(matches!(
+        sanitize_history(&repo, &root_base, &parent),
+        Err(WriterError::Verify)
+    ));
 }
