@@ -22,6 +22,9 @@ pub(crate) enum Step {
     Ended(&'static str),
 }
 impl Watch {
+    pub(crate) fn cpu(&mut self, signal: Signal) {
+        self.monitor.feed(signal);
+    }
     /// Persist attachment before observing or signalling the adopted child.
     pub(crate) fn attach(
         &self,

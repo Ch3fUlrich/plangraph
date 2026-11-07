@@ -175,6 +175,30 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     };
     #[cfg(target_os = "linux")]
     {
+        if let Some(group) = &identity.group {
+            let run = Path::new(group)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.strip_prefix("pg-"))
+                .and_then(|s| s.strip_suffix(".scope"))
+                .ok_or(ReconcileError::Unknown)?;
+            let path = crate::reconcile_backend::native::scope(run, group)
+                .map_err(|_| ReconcileError::Unknown)?;
+            return match std::fs::read_to_string(path.join("cgroup.events")) {
+                Ok(text) => match text.lines().find_map(|s| s.strip_prefix("populated ")) {
+                    Some("0") => Ok(true),
+                    Some("1") => Ok(false),
+                    _ => Err(ReconcileError::Unknown),
+                },
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::NotFound
+                        && !path.try_exists().map_err(|_| ReconcileError::Unknown)? =>
+                {
+                    Ok(true)
+                }
+                Err(_) => Err(ReconcileError::Unknown),
+            };
+        }
         match std::fs::read_to_string(format!("/proc/{}/stat", identity.pid)) {
             Ok(stat) => {
                 let start = stat
@@ -192,44 +216,6 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
             Err(_) => return Err(ReconcileError::Unknown),
-        }
-        if let Some(group) = &identity.group {
-            if !group.starts_with('/') {
-                return Err(ReconcileError::Unknown);
-            }
-            let events = match std::fs::read_to_string(Path::new(group).join("cgroup.events")) {
-                Ok(events) => Some(events),
-                Err(_) => match std::fs::metadata(group) {
-                    // Only absence of the directory proves cgroup cleanup. A
-                    // missing events file or any other error is not evidence.
-                    Err(e) if e.raw_os_error() == Some(libc::ENOENT) => None,
-                    _ => return Err(ReconcileError::Unknown),
-                },
-            };
-            if let Some(events) = events {
-                let populated = events
-                    .lines()
-                    .filter_map(|line| line.strip_prefix("populated "))
-                    .collect::<Vec<_>>();
-                return match populated.as_slice() {
-                    ["0"] => Ok(true),
-                    ["1"] => Ok(false),
-                    _ => Err(ReconcileError::Unknown),
-                };
-            }
-            if identity.pgid.is_none() {
-                return Err(ReconcileError::Unknown);
-            }
-            // A removed scope must also agree with the recorded PGID probe.
-            return match gone(Some(&Proc {
-                pid: identity.pid,
-                start_time: identity.start_time,
-                group: None,
-                pgid: identity.pgid,
-            })) {
-                Ok(true) => Ok(true),
-                _ => Err(ReconcileError::Unknown),
-            };
         }
         // Neither a missing PID nor a start mismatch proves a legacy group gone.
         // Only a PGID recorded at spawn identifies the group to probe; even a

@@ -138,6 +138,21 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     // mutating startup authority in this rollout; off never enters reclaim.
     if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() != Ok("on") {
         crate::reconcile::configured_startup(root)?;
+        #[cfg(target_os = "linux")]
+        if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() == Ok("shadow") {
+            for row in crate::reconcile_store::inventory(root).unwrap_or_else(|error| {
+                eprintln!("shadow adoption unavailable: {error}");
+                Vec::new()
+            }) {
+                if crate::reconcile_store::gone(row.identity.as_ref()).ok() == Some(false)
+                    && row.identity.is_some_and(|identity| {
+                        crate::reconcile_backend::native::Group::open(&row.run_id, identity).is_ok()
+                    })
+                {
+                    eprintln!("would_adopt {} {}", row.run_id, row.attempt);
+                }
+            }
+        }
         return Ok(guard);
     }
     std::fs::create_dir_all(root).map_err(|_| ReconcileError::Io.to_string())?;
@@ -152,7 +167,7 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
 #[cfg(target_os = "linux")]
 fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     use crate::{
-        reconcile_backend::{Adopted, Leader},
+        reconcile_backend::native::Group,
         reconcile_watch::{Step, StopPolicy, Watch},
     };
     use pg_worker_core::{activity::Limits, run::record::RunRecord};
@@ -206,6 +221,10 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     let mut watched = Vec::new();
     let mut gone = Vec::new();
     for row in rows {
+        if let Some(group) = row.identity.as_ref().and_then(|p| p.group.as_deref()) {
+            crate::reconcile_backend::native::scope(&row.run_id, group)
+                .map_err(|_| ReconcileError::Unknown)?;
+        }
         if crate::reconcile_store::orphan_gone(root, &row)? {
             if let Some(identity) = row.identity {
                 if let Some(start) = identity.start_time {
@@ -217,7 +236,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             }
             continue;
         }
-        let leader = Leader::open(row.identity.ok_or(ReconcileError::Unknown)?)
+        let leader = Group::open(&row.run_id, row.identity.ok_or(ReconcileError::Unknown)?)
             .map_err(|_| ReconcileError::Unknown)?;
         let dir = root.join("runs").join(&row.run_id);
         let _record_lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock"))?;
@@ -235,10 +254,16 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             record.get("first_activity").is_some_and(|v| !v.is_null()),
         );
         watch.attach(&mut record, row.attempt)?;
-        watched.push((row.run_id, row.attempt, Adopted::new(leader), watch));
+        watched.push((
+            row.run_id,
+            row.attempt,
+            leader,
+            watch,
+            pg_worker_core::cpu::Sampler::new(1),
+        ));
     }
     // No capability is issued on any earlier error, even after partial progress.
-    gone.retain(|(id, _, _, _)| !watched.iter().any(|(run, _, _, _)| run == id));
+    gone.retain(|(id, _, _, _)| !watched.iter().any(|(run, _, _, _, _)| run == id));
     replay(root, &store)?;
     reclaim_after(
         root,
@@ -253,7 +278,10 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     guard.thread = Some(std::thread::spawn(move || {
         while !stop.load(Ordering::Acquire) {
             if let Ok(now) = now() {
-                watched.retain_mut(|(run, attempt, child, watch)| {
+                watched.retain_mut(|(run, attempt, child, watch, sampler)| {
+                    if let Some(signal) = sampler.poll(now, &mut || child.cpu()) {
+                        watch.cpu(signal);
+                    }
                     let dir = root.join("runs").join(&*run);
                     let Ok(_record_lock) =
                         crate::reconcile_store::lock(&dir, &dir.join("record.lock"))

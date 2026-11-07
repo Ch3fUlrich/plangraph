@@ -293,13 +293,23 @@ its named pipe. There is no TCP serve variant in this tree. Recovery itself neve
 binds or listens. Acceptance starts only after recovery succeeds.
 The watcher holds one record lock at a time, not the reconciliation lock.
 Errors refuse startup without issuing
-the private reclaim capability. Off performs no reclaim; shadow remains read-only.
+the private reclaim capability. Off performs no reclaim; shadow remains read-only. Neither off nor shadow
+acquires the daemon owner lock or attaches a watcher; shadow logs would_adopt
+without modifying records, scopes, or children.
 
 Only durably settled, proven-gone identities matching the slot's run, PID, start
 time and group are eligible for startup reclaim. Live, unknown, pending and queued
 entries remain pinned. Adopted no-scope Linux leaders use the existing identity
 checks and watcher deadlines; watcher ownership ends with the daemon and normal
-guard destruction joins without killing children. Scope/Job Object adoption and
-CPU sampling remain separate work. Shared configuration retains the existing
+guard destruction joins without killing children. Linux scope adoption samples
+cumulative `cpu.stat` usage_usec, falling back to summed member `/proc` CPU ticks.
+Only increased CPU time advances weak activity (not first activity); unreadable
+sources and counter resets do not count as activity. Windows Job Object adoption
+is deferred to adopt-3, which needs Windows `pg-worker-core::watch` support;
+Windows startup remains fail-closed. Shared configuration retains the existing
 advisory rollout behavior; enabling mutation still requires explicit environment
 opt-in and the operational live gate.
+<!-- RL29 adopt-2: Linux scopes are confined to the current user's cgroup tree
+and exact run scope name. Missing scopes are gone independently of leader PID;
+CPU usage is a weak signal only and cannot satisfy first activity. Windows
+startup remains fail-closed pending portable worker-core watch support. -->

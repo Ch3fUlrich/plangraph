@@ -116,9 +116,19 @@ fn reconcile_real_child_restart_locked_before_reclaim() {
                 .expect("watcher must not hold the sweep lock");
             drop(probe);
             let record_dir = state.join("runs").join(&id);
-            let _record_lock = pg_worker_core::lockfile::try_lock(&record_dir.join("record.lock"))
-                .unwrap()
-                .expect("record lock available between advances");
+            let deadline = Instant::now() + Duration::from_millis(50);
+            let _record_lock = loop {
+                if let Some(lock) =
+                    pg_worker_core::lockfile::try_lock(&record_dir.join("record.lock")).unwrap()
+                {
+                    break lock;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "record lock unavailable between advances"
+                );
+                std::thread::yield_now();
+            };
             let record = RunRecord::read(&state, &id).unwrap();
             assert_eq!(
                 record.status(),
