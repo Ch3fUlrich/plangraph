@@ -1,5 +1,3 @@
-//! End-to-end tests for the `card` workflow against a real Temporal dev server.
-//!
 //! These tests need a server reachable at `PG_TEMPORAL_ADDR` (for example
 //! `http://127.0.0.1:17233`). When that variable is unset every test returns
 //! early, so a checkout without a server still passes (under `CI` a missing address panics, D6); CI
@@ -136,7 +134,7 @@ impl Env {
             heartbeat_timeout: Duration::from_secs(30),
             start_to_close: Duration::from_secs(300),
             stall: Duration::from_secs(30),
-            ..Config::default()
+            ..Config::allow_all_for_tests()
         };
         // `Deps` wants a trait object; name the coercion explicitly so the
         // concrete `Arc<StubKeeper>` widens to `Arc<dyn Keeper>` here.
@@ -2883,3 +2881,5 @@ fn ci_without_temporal_addr_panics_instead_of_skipping() {
     );
     temporal_addr_of(Some("1"), None);
 }
+
+mod phase_cancel;

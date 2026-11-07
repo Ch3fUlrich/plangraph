@@ -108,10 +108,27 @@ def test_fetch_rows_needs_spawner_token_and_sends_it():
         sent.append(request)
         return io.BytesIO(b'[{"sessionTag": "plangraph-job-1"}]')
     rows = gw.fetch_rows('plangraph-job-1', {'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'},
-                         opener=opener, secrets={gw.TOKEN_ENV: 'tok'})
+                         opener=opener, secrets={gw.TOKEN_ENV: 'tok', 'OMNIROUTE_BASE_URL': 'http://gw:20128/v1'})
     assert rows == [{'sessionTag': 'plangraph-job-1'}]
     assert sent[0].full_url.startswith('http://gw:20128/api/usage/call-logs?sessionTag=plangraph-job-1')
     assert sent[0].get_header('Authorization') == 'Bearer tok'
+
+
+def test_management_url_is_parent_only(monkeypatch):
+    monkeypatch.setenv(gw.TOKEN_ENV, 'parent-token')
+    monkeypatch.setenv('OMNIROUTE_BASE_URL', 'https://parent.example/v1')
+    sent = []
+
+    def opener(request, timeout):
+        sent.append(request)
+        return io.BytesIO(b'[]')
+
+    child = {'OMNIROUTE_BASE_URL': 'https://child.example/v1', gw.TOKEN_ENV: 'child-token'}
+    assert gw.fetch_rows('tag', child, opener=opener) == []
+    assert sent[0].full_url.startswith('https://parent.example/api/usage/call-logs?')
+    assert sent[0].get_header('Authorization') == 'Bearer parent-token'
+    with pytest.raises(LookupError, match='endpoint'):
+        gw.fetch_rows('tag', child, secrets={gw.TOKEN_ENV: 'parent-token'}, opener=pytest.fail)
 
 
 @pytest.mark.parametrize('returncode', [0, 1])   # r2 seat (mimo-pro): a failed seat is witnessed too
@@ -133,7 +150,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     async def factory(*args, **kwargs):
         seen['cfg'] = json.loads(kwargs['env'].get('OPENCODE_CONFIG_CONTENT') or '{}')
         async def communicate():
-            return b'VERDICT: ACCEPT', b''
+            return (b'VERDICT: ACCEPT' if returncode == 0 else b'seat died, no verdict line'), b''   # D-4430: a final verdict at rc 1 completes
         return SimpleNamespace(pid=FAKE_PID, returncode=returncode, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     async def run():

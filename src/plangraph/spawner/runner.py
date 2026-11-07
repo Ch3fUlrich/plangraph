@@ -91,6 +91,11 @@ def _resolve_launch(
     return exe, None
 
 
+def is_terminal(status):
+    """Only known final run states are terminal; unknown states remain visible."""
+    return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped')
+
+
 @dataclass
 class JobInfo:
     """Execution state of a spawned agent task."""
@@ -719,7 +724,14 @@ class SpawnerRunner:
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
-                job.status = "completed" if exit_code == 0 else "failed"
+                # No-tools review seats can emit a complete verdict before rc 1 termination.
+                lines = stdout_text.rstrip('\r\n').splitlines()
+                review_verdict = (
+                    exit_code == 1 and is_opencode(job) and job.role == 'review'
+                    and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
+                    and bool(lines) and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES')
+                )
+                job.status = "completed" if exit_code == 0 or review_verdict else "failed"
             if job.status == 'failed' and is_opencode(job):
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
             from .opencode_isolation import fail_unchanged_writer
@@ -973,10 +985,9 @@ def spawn_service(*args, **kwargs):
 
         def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
-            reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
             original = self.leg_reader
-            from .leg_probe import read_status
-            self.leg_reader = lambda model, **kw: read_status(reader, model, **kw)
+            from .leg_probe import DispatchReader
+            self.leg_reader = DispatchReader(original, leg_state.leg_status)
             try:
                 return super()._route(card, role, writer_families, review_of, **options)
             finally:
@@ -990,7 +1001,8 @@ def spawn_service(*args, **kwargs):
             from .run_watchdog import terminal_status, thresholds
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
-                return dict(status='refused', reason='question_rounds_exhausted', exit_code=2)
+                from plangraph.routing_errors import SpawnRefused
+                raise SpawnRefused('question_rounds_exhausted')
             # Let the base service handle audited overrides, which never fall through.
             if seats or model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -1125,7 +1137,7 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=job.stdout, stderr_tail=job.stderr))
                         if stop and not unavailable and job.status != 'cancelled':
                             notify_leg_refused(self, record, chosen, reason or 'provider_stop')
-                        if job.status in ('completed', 'dry_run') and not unavailable and not stop:
+                        if job.status in ('completed', 'dry_run') and not stop and not unavailable:
                             record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,

@@ -76,19 +76,20 @@ def test_non_evidence(stderr):
 @pytest.mark.parametrize('wait', [0, .05])
 def test_bounded_wait_and_private_record(tmp_path, wait):
     async def run():
+        release = asyncio.Event()
         async def factory(*args, **kwargs):
+            # Keep the job pending until spawn returns, regardless of host load.
+            # A child-side deadline can expire while the parent is descheduled,
+            # turning the expected running record into a completed one.
+            await release.wait()
             return await asyncio.create_subprocess_exec(sys.executable, '-c',
-                'import time; from pathlib import Path\n'
-                f'go = Path({str(tmp_path / "go")!r})\n'
-                'deadline = time.monotonic() + 20\n'
-                'while not go.exists() and time.monotonic() < deadline: time.sleep(.02)\n'
                 'print("sk-plantedsecret API_KEY=hidden")', **kwargs)
         service = spawn_service(SpawnerRunner(process_factory=factory), tmp_path)
         started = asyncio.get_running_loop().time()
-        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait)
+        record = await asyncio.wait_for(service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait), 5)
         assert asyncio.get_running_loop().time() - started < 5
         assert record['status'] == 'running'
-        (tmp_path / 'go').touch()
+        release.set()
         await service.tasks[record['run_id']]
         path = service._path(record['run_id'])
         assert path.stat().st_mode & 0o777 == 0o600

@@ -24,12 +24,19 @@ __all__ = ["Principal", "RunPrincipal", "OversightPrincipal", "RUN_PREFIX",
            "hash_token", "norm_family", "validate_family"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class Principal:
     name: str
     role: str
     projects: list = field(default_factory=list)
     family: str | None = None
+
+
+@dataclass(frozen=True)
+class PhaseWorkerPrincipal(Principal):
+    """Distinct worker identity; never admitted by a generic system-role gate."""
+
+    worker_scope: bool = field(default=True, init=False)
 
 
 #: Synthetic run-token principals are named ``run:<run_id>``; no stored
@@ -41,7 +48,7 @@ RUN_PREFIX = "run:"
 OVERSIGHT_PREFIX = "pgo1_"
 
 
-@dataclass
+@dataclass(frozen=True)
 class RunPrincipal(Principal):
     """M2B-RUN-TOKENS: what a run token authenticates as.
 
@@ -57,7 +64,7 @@ class RunPrincipal(Principal):
     run_id: str = ""
 
 
-@dataclass
+@dataclass(frozen=True)
 class OversightPrincipal(Principal):
     """RT-OVERSIGHT-KEEPER-SCOPE: a short-lived, scoped ``oversight`` identity.
 
@@ -123,6 +130,9 @@ def _as_principal(row) -> Principal:
         projects = json.loads(row["projects"] or "[]")
     except (ValueError, TypeError):
         projects = []
+    if row["role"] == "phase-worker":
+        return PhaseWorkerPrincipal(row["name"], "phase-worker", projects,
+                                    norm_family(row["family"]))
     return Principal(row["name"], row["role"], projects,
                      norm_family(row["family"]))
 

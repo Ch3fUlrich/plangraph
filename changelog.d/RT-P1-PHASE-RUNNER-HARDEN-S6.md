@@ -1,0 +1,1 @@
+- Add an opt-in, verb-scoped phase-worker principal without provisioning or selecting any live token.

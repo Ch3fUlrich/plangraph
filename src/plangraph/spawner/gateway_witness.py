@@ -13,12 +13,17 @@ from __future__ import annotations
 import json
 import os
 import time
+import types
 import urllib.parse
 import urllib.request
+
+from plangraph.routing_support.opencode_overlay import _strip_jsonc
 
 SESSION_HEADER = 'x-omniroute-session-id'
 TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
+# Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg.
+PROVIDER_ALIASES = types.MappingProxyType({'xiaomi-mimo': 'mimo'})
 WITNESS_KIND = 'response-side-gateway-call-log'
 
 
@@ -51,33 +56,40 @@ def _tag_block(block, job_id):
 def tagged(config_content, job_id, provider=None):
     """True when the child's final config carries this job's session header."""
     cfg = _config(config_content)
+    matches = []
     for key in ('provider', 'providers'):
         providers = cfg.get(key)
         if not isinstance(providers, dict):
             continue
         for name in ((provider,) if provider else ('omniroute', 'mimo')):
             block = providers.get(name)
-            if not isinstance(block, dict):
+            if not isinstance(block, dict) or block.get('disabled') is True:
                 continue
             options = block.get('options')
+            block_tagged = False
             for target in (block, options if isinstance(options, dict) else {}):
                 headers = target.get('headers')
                 if isinstance(headers, dict) and headers.get(SESSION_HEADER) == session_tag(job_id):
-                    return True
-    return False
+                    block_tagged = True
+            matches.append(block_tagged)
+    return bool(matches) and all(matches)
 
 
 def _config(content):
     try:
-        cfg = json.loads(content or '{}')
+        cfg = json.loads(_strip_jsonc(content or '{}'))
         return cfg if isinstance(cfg, dict) else {}
     except (TypeError, ValueError):
         return {}
 
 
 def _gateway(env):
-    return next((env[n].strip().rstrip('/') for n in URL_ENVS
-                 if isinstance(env.get(n), str) and env[n].strip()), None)
+    for name in URL_ENVS:
+        value = env.get(name)
+        normalized = value.strip().rstrip('/') if isinstance(value, str) else ''
+        if normalized:
+            return normalized
+    return None
 
 
 def _gateway_mimo(env):
@@ -86,18 +98,22 @@ def _gateway_mimo(env):
         return False
     cfg = _config(env.get('OPENCODE_CONFIG_CONTENT'))
     endpoints = []
+    seen = False   # a mimo block must exist; no config is not evidence
     for key in ('provider', 'providers'):
         providers = cfg.get(key)
         block = providers.get('mimo') if isinstance(providers, dict) else None
-        if not isinstance(block, dict):
+        if not isinstance(block, dict) or block.get('disabled') is True:
             continue
+        seen = True
         for name in ('options', 'settings'):
             options = block.get(name)
             if isinstance(options, dict) and 'baseURL' in options:
                 endpoints.append(options['baseURL'])
     def normalize(value):
         return value.rstrip('/').removesuffix('/v1') if isinstance(value, str) else None
-    return bool(endpoints) and all(normalize(e) == normalize(gateway) for e in endpoints)
+    # No baseURL is the template default; a direct leg yields no tagged call-log row, so it stays
+    # unwitnessed. Only an explicit different baseURL is refused here.
+    return seen and all(normalize(e) == normalize(gateway) for e in endpoints)
 
 
 def served_models(rows, tag):
@@ -113,20 +129,25 @@ def served_models(rows, tag):
         model = str(row.get('model') or '').strip()
         if ok and model:
             provider = str(row.get('provider') or '').strip()
+            provider = PROVIDER_ALIASES.get(provider, provider)
+            head, sep, rest = model.partition('/')
+            if sep and head in PROVIDER_ALIASES:
+                model = PROVIDER_ALIASES[head] + '/' + rest
             served.add(model if '/' in model or not provider else f'{provider}/{model}')
     return served
 
 
-def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=os.environ):
+def fetch_rows(tag, env, *, timeout=5, opener=urllib.request.urlopen, secrets=None):
     """Call-log rows for ``tag``; raises LookupError naming why they are unreadable.
 
-    The token comes from the spawner's own env (``secrets``), never the child's:
-    ``build_child_env`` drops it.
+    Both URL and token come from the spawner's own env (``secrets``), never
+    the child's. ``build_child_env`` drops the token.
     """
+    secrets = os.environ if secrets is None else secrets
     token = secrets.get(TOKEN_ENV)
     if not token:
         raise LookupError(f'no {TOKEN_ENV}')
-    base = _gateway(env)
+    base = _gateway(secrets)
     if not base:
         raise LookupError('gateway endpoint not configured')
     if base.endswith('/v1'):
