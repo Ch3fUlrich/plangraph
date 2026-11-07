@@ -86,8 +86,11 @@ def test_exact_identity_and_commands(tmp_path):
     assert all(j["duration_s"] >= 0 for j in record["jobs"])
     assert any("--detach" in c and SHA in c for c in fake.calls)
     assert any("PYTHONPATH=" in c and "/src" in c for c in fake.calls)
-    assert any('python tools/affected_tests.py --base origin/main --run -n auto' in c
+    assert any('python3 tools/affected_tests.py --base origin/main --run -n auto' in c
                for c in fake.calls)
+    commands = [c for c in fake.calls if c.startswith("timeout ")]
+    assert len(commands) == 5
+    assert all("python3 " in c and "python " not in c for c in commands)
 
 
 def test_slice_two_skipped(tmp_path):

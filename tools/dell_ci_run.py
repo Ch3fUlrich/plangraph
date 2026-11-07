@@ -19,11 +19,11 @@ import uuid
 
 JOBS = {
     "select": ("python3 tools/ci_select.py select --base origin/main --head HEAD", 600),
-    "scrub": ("python tools/split/scrub_check.py . --rules tools/split/manifest.toml "
+    "scrub": ("python3 tools/split/scrub_check.py . --rules tools/split/manifest.toml "
               "--rules tools/split/scrub_ci.toml", 900),
     "file-size": ("FILESIZE_REQUIRE_BASE=origin/main python3 tools/check_file_size.py", 600),
     "changelog-docs": ("CHANGELOG_BASE=origin/main python3 tools/check_changelog_docs.py", 600),
-    "pytest": ("python tools/affected_tests.py --base origin/main --run -n auto", 1200),
+    "pytest": ("python3 tools/affected_tests.py --base origin/main --run -n auto", 1200),
     # Service provisioning and Rust setup belong to slice 2.
     "pytest-postgres": (None, 0),
     "rust": (None, 0),
