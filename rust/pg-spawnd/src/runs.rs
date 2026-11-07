@@ -97,9 +97,11 @@ impl Runs {
             .map_err(|e| internal(&e.to_string()))?;
 
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
-            "max_s":max_s,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        if !dry {
+            base["max_s"] = json!(max_s);
+        }
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
@@ -292,22 +294,18 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
-    let mut attempts = record
-        .get("attempts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let mut attempts = match record.get("attempts") {
+        None => Vec::new(),
+        Some(Value::Array(attempts)) => attempts.clone(),
+        Some(_) => {
+            record.set("attempts_error", json!("attempts must be an array"));
+            return;
+        }
+    };
     let mut attempt = attempts
         .pop()
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
-    for key in ["proc", "started", "max_s"] {
-        if attempt.get(key).is_none() {
-            if let Some(value) = record.get(key) {
-                attempt[key] = value.clone();
-            }
-        }
-    }
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },

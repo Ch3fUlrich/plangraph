@@ -40,7 +40,6 @@ fn reconcile_inventory_legacy_missing_proc_and_limits() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].attempt, 1);
     assert!(rows[0].identity.is_none());
-    assert_eq!(rows[0]._deadline_ms, 1_801_000);
     record.set("max_s", json!(-1));
     record.save().unwrap();
     assert!(inventory(&dir.0).is_err());
@@ -90,7 +89,7 @@ fn reconcile_inventory_refuses_symlink_record() {
     assert!(inventory(&dir.0).is_err());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn reconcile_crashed_daemon_real_child_inventory_is_read_only() {
     use std::io::{BufRead, BufReader};
@@ -119,7 +118,14 @@ fn reconcile_crashed_daemon_real_child_inventory_is_read_only() {
     );
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
-    assert!(crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).is_ok());
+    let diagnostics = crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).unwrap();
+    assert_eq!(
+        diagnostics,
+        vec![crate::reconcile::WouldOrphan {
+            run_id: "run-test".into(),
+            attempt: 1,
+        }]
+    );
     assert_eq!(before, std::fs::read(record.path()).unwrap());
     assert!(!dir.0.join("reconcile.lock").exists());
 }

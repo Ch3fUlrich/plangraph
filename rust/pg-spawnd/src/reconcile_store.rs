@@ -17,7 +17,6 @@ pub(crate) struct Entry {
     pub role: String,
     pub attempt: u32,
     pub identity: Option<Proc>,
-    pub _deadline_ms: u64,
 }
 fn check(path: &Path, directory: bool) -> Result<(), ReconcileError> {
     let meta = std::fs::symlink_metadata(path).map_err(|_| ReconcileError::Io)?;
@@ -65,7 +64,10 @@ fn read(path: &Path) -> Result<Value, ReconcileError> {
     serde_json::from_slice(&bytes).map_err(|_| ReconcileError::Invalid)
 }
 pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
-    check(root, true)?;
+    match std::fs::symlink_metadata(root) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        _ => check(root, true)?,
+    }
     let runs = root.join("runs");
     match std::fs::symlink_metadata(&runs) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -134,12 +136,12 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                 }
                 Some(proc)
             };
+            started.checked_add(limit).ok_or(ReconcileError::Invalid)?;
             result.push(Entry {
                 run_id: id.into(),
                 role: role.into(),
                 attempt: u32::try_from(index + 1).map_err(|_| ReconcileError::Invalid)?,
                 identity,
-                _deadline_ms: started.checked_add(limit).ok_or(ReconcileError::Invalid)?,
             });
         }
     }

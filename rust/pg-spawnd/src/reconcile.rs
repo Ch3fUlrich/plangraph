@@ -48,11 +48,17 @@ pub(crate) fn mode(env: Option<&str>, config: &Value, role: &str) -> Result<Mode
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct WouldOrphan {
+    pub run_id: String,
+    pub attempt: u32,
+}
+
 pub(crate) fn startup(
     root: &Path,
     env: Option<&str>,
     config: &Value,
-) -> Result<(), ReconcileError> {
+) -> Result<Vec<WouldOrphan>, ReconcileError> {
     let modes = ["implement", "review", "orchestrate"].map(|role| mode(env, config, role));
     let modes: Vec<_> = modes.into_iter().collect::<Result<_, _>>()?;
     // Never offer a partially enabled mutating implementation.
@@ -60,19 +66,30 @@ pub(crate) fn startup(
         return Err(ReconcileError::Unknown);
     }
     if modes.iter().all(|m| *m == Mode::Off) {
-        return Ok(());
+        return Ok(Vec::new());
     }
+    let mut diagnostics = Vec::new();
     for row in crate::reconcile_store::inventory(root)? {
         if mode(env, config, &row.role)? != Mode::Shadow {
             continue;
         }
         // A recorded identity is not proof of liveness. Do not infer would_kill
         // or would_reattach from an unverified PID or arbitrary group string.
-        if row.identity.is_none() {
+        let mut gone = row.identity.is_none();
+        #[cfg(target_os = "linux")]
+        if let Some(identity) = &row.identity {
+            gone = matches!(std::fs::symlink_metadata(format!("/proc/{}", identity.pid)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        }
+        if gone {
             eprintln!("would_orphan {} {}", row.run_id, row.attempt);
+            diagnostics.push(WouldOrphan {
+                run_id: row.run_id,
+                attempt: row.attempt,
+            });
         }
     }
-    Ok(())
+    Ok(diagnostics)
 }
 
 pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {
@@ -106,7 +123,9 @@ pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {
         }
         Some(Err(_)) => return Err(ReconcileError::Io.to_string()),
     };
-    startup(root, env.as_deref(), &config).map_err(|e| e.to_string())
+    startup(root, env.as_deref(), &config)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

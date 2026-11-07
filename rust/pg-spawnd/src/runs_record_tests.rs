@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn finish_reports_malformed_attempts_without_dropping_them() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let mut record = create(
+        &dir,
+        "run-invalid",
+        "fixture",
+        json!({"attempts":{"invalid":true}}),
+        Status::Running,
+    )
+    .unwrap_or_else(|_| panic!("fixture record creation failed"));
+    finish(&mut record, Status::Failed, &json!({}));
+    assert_eq!(record.get("attempts"), Some(&json!({"invalid":true})));
+    assert_eq!(
+        record.get("attempts_error"),
+        Some(&json!("attempts must be an array"))
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn finish_preserves_proc_and_outcome() {
     let dir = std::env::temp_dir().join(new_run_id());
     let prior = json!({"status":"failed", "outcome":{"how":"prior"}});
@@ -12,7 +32,7 @@ fn finish_preserves_proc_and_outcome() {
         "fixture",
         json!({
             "proc":proc,"started":12,"max_s":1800,
-            "attempts":[prior,{"outcome":outcome,"custom":true,"started":13}]
+            "attempts":[prior,{"outcome":outcome,"custom":true,"started":13,"proc":proc,"max_s":1800}]
         }),
         Status::Running,
     )

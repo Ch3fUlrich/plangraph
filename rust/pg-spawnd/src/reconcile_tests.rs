@@ -26,3 +26,12 @@ fn reconcile_on_refuses_until_authority_backend_available() {
     assert!(startup(&root, Some("on"), &json!({})).is_err());
     assert!(!root.exists());
 }
+
+#[test]
+fn reconcile_shadow_missing_root_is_empty_without_creating_state() {
+    let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    assert!(startup(&root, Some("shadow"), &json!({}))
+        .unwrap()
+        .is_empty());
+    assert!(!root.exists());
+}
