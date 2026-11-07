@@ -74,6 +74,7 @@ pub(crate) fn startup(
     };
     let mut diagnostics = Vec::new();
     let mut unavailable = false;
+    let now = epoch_ms().ok();
     for row in crate::reconcile_store::inventory(root)? {
         let mode = mode(env, config, &row.role)?;
         if mode == Mode::Off {
@@ -100,7 +101,7 @@ pub(crate) fn startup(
                 run_id: row.run_id,
                 attempt: row.attempt,
             });
-        } else if let Some(kind) = shadow_live(&row, epoch_ms()?) {
+        } else if let Some(kind) = now.and_then(|now| shadow_live(&row, now)) {
             eprintln!("{kind} {} {}", row.run_id, row.attempt);
         }
     }
@@ -142,12 +143,12 @@ pub(crate) fn shadow_live(row: &crate::reconcile_store::Entry, now: u64) -> Opti
 }
 
 fn shadow_decision(
-    deadline: u64,
+    deadline: Option<u64>,
     now: u64,
     verify: impl FnOnce() -> Option<()>,
 ) -> Option<&'static str> {
     verify()?;
-    Some(if now >= deadline {
+    Some(if deadline.is_some_and(|deadline| now >= deadline) {
         "would_kill"
     } else {
         "would_reattach"

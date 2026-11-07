@@ -96,9 +96,25 @@ impl Leader {
 #[cfg(target_os = "linux")]
 impl Authority for Leader {
     fn empty(&mut self) -> io::Result<bool> {
-        Self::verify(&self.identity)?;
-        // A leader-only observation cannot prove group emptiness.
-        Ok(false)
+        for entry in std::fs::read_dir("/proc")? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                continue;
+            }
+            let stat = match std::fs::read_to_string(entry.path().join("stat")) {
+                Ok(stat) => stat,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            let pgid = stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().nth(2)?.parse::<u32>().ok())
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+            if Some(pgid) == self.identity.pgid {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     fn signal(&mut self, force: bool) -> io::Result<()> {
         use std::os::fd::AsRawFd;
@@ -120,3 +136,7 @@ impl Authority for Leader {
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "reconcile_backend_tests.rs"]
+mod tests;

@@ -41,12 +41,12 @@ fn reconcile_shadow_missing_root_is_empty_without_creating_state() {
 #[test]
 fn reconcile_shadow_decisions_require_authority_and_preserve_deadline() {
     assert_eq!(
-        super::shadow_decision(100, 99, || Some(())),
+        super::shadow_decision(Some(100), 99, || Some(())),
         Some("would_reattach")
     );
     assert_eq!(
-        super::shadow_decision(100, 100, || Some(())),
+        super::shadow_decision(Some(100), 100, || Some(())),
         Some("would_kill")
     );
-    assert_eq!(super::shadow_decision(100, 101, || None), None);
+    assert_eq!(super::shadow_decision(Some(100), 101, || None), None);
 }

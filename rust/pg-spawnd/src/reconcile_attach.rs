@@ -28,12 +28,16 @@ pub(crate) fn attach(record: &mut RunRecord, attempt: u32) -> Result<(), Reconci
         .get_mut(attempt.checked_sub(1).ok_or_else(invalid)? as usize)
         .filter(|v| v["status"] == "running" && v["proc"].is_object())
         .ok_or_else(invalid)?;
+    let initialized = entry["recovery_initialization"] == true;
     entry["recovery_initialization"] = json!(true);
     let key = json!([run, attempt, "RUN_REATTACHED"]);
     let exists = record
         .get("events")
         .and_then(Value::as_array)
         .is_some_and(|events| events.iter().any(|e| e["idempotency_key"] == key));
+    if exists && initialized {
+        return Ok(());
+    }
     record.set("attempts", json!(attempts));
     if !exists {
         record
