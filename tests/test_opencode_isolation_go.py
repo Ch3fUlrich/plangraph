@@ -26,7 +26,7 @@ def source_store(path):
 
 @pytest.mark.usefixtures('fake_ownership')
 @pytest.mark.parametrize('present', [True, False])
-@pytest.mark.parametrize('model', ['opencode-go/glm-5.2', 'opencode-go-glm-5.2',
+@pytest.mark.parametrize('model', ['opencode-go/gemini-4-argon', 'opencode-go-gemini-4-argon',
                                    'go-test-combo', 'aliases/go-test-combo'])
 def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
     source = tmp_path / 'source.db'
@@ -38,7 +38,7 @@ def test_review_provider_only(tmp_path, monkeypatch, caplog, present, model):
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
     if model in ('go-test-combo', 'aliases/go-test-combo'):
         monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-            {'id': 'opencode-go/glm-5.2', 'combos': [model]}])
+            {'id': 'opencode-go/gemini-4-argon', 'combos': [model]}])
         monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     seen = []
     async def factory(*args, **kwargs):

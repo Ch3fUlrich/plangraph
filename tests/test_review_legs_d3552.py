@@ -1,8 +1,8 @@
-"""OPERATOR D-3552: opencode-go review legs; deepseek/glm lifted for review seats only.
+"""D-3552 review legs, updated for D-3605/D-4779: GLM is not a review leg.
 
 * ``review_allowed_families`` loads, validates like ``banned_families``, refuses kimi;
 * the lift applies to the review role only: implement/orchestrate stay banned/off;
-* the five opencode-go review legs carry the catalog models and route review seats.
+* the five opencode-go legs retain catalog metadata; GLM stays disabled.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _clear_limiter(model, **kwargs):
 # --- policy: the key loads, kimi is refused, the lift is review-only ----------
 
 def test_policy_loads_review_allowed_families():
-    assert load_route_policy().review_allowed_families == ("deepseek", "glm")
+    assert load_route_policy().review_allowed_families == ("deepseek",)
 
 
 def test_review_allowed_families_validates_like_banned_families(tmp_path):
@@ -73,7 +73,7 @@ def test_deepseek_glm_skipped_for_implement_but_not_review():
         assert policy.skip_reason(by_id[leg_id], "implement") == "banned_family"
         assert policy.skip_reason(by_id[leg_id], "orchestrate") == "banned_family"
     for leg_id in ("opencode-go-glm-5.2", "opencode-glm-5.3-flash-free"):
-        assert policy.skip_reason(by_id[leg_id], "review") is None
+        assert policy.skip_reason(by_id[leg_id], "review") == "off_family"
         assert policy.skip_reason(by_id[leg_id], "implement") == "off_family"
         assert policy.skip_reason(by_id[leg_id], "orchestrate") == "off_family"
 
@@ -101,7 +101,8 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
     assert reasons == {}  # Review-only legs never enter implement skip accounting.
     assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
     for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
-        with pytest.raises(SpawnRefused, match=r"writer disabled \(D-3828\)"):
+        expected = r"leg disabled: .*D-3605" if "glm" in leg_id else r"writer disabled \(D-3828\)"
+        with pytest.raises(SpawnRefused, match=expected):
             asyncio.run(SpawnService(state=tmp_path).spawn(
                 card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
     assert not {leg.family for leg in plan.legs} & {"deepseek", "glm", "kimi"}
@@ -111,9 +112,11 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
 def test_review_route_keeps_lifted_families():
     plan = plan_spawn(CARD, role="review", writer_families=("xiaomi",), leg_reader=_clear_limiter)
     ids = {leg.id for leg in plan.legs}
-    assert {"opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"} <= ids
+    assert "opencode-go-deepseek-v4-flash" in ids
+    assert not {leg.family for leg in plan.legs} & {"glm"}
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert not (set(NEW_IDS) - {"opencode-go-muse-spark", "opencode-go-qwen3.8-max"}) & set(reasons)
+    assert not (set(NEW_IDS) - {"opencode-go-muse-spark", "opencode-go-qwen3.8-max", "opencode-go-glm-5.2"}) & set(reasons)
+    assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
     assert reasons["opencode-go-qwen3.8-max"].startswith("disabled")
     assert reasons["opencode-go-muse-spark"] == "off_family"
 

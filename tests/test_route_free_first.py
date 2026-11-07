@@ -105,7 +105,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert [leg.id for leg in rev.legs][:2] == ["mimo-v2.6-flash", "mimo-v2.6-pro"]
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
-    assert reasons["opencode-go-glm-5.2"] == "off_family"
+    assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
 
 
 def test_agy_skipped_while_out_of_quota():
@@ -230,7 +230,8 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert not {leg.family for leg in review.review_seats} & set(writers)
         # D-4196: the Zen deepseek leg is disabled, so mimo writers fall to the next family.
         assert review.first_leg.family == {("mimo",): "gpt", ("gpt", "mimo"): "gemini"}.get(writers, "mimo")
-        assert {"deepseek", "glm"} <= {leg.family for leg in review.legs}
+        assert "deepseek" in {leg.family for leg in review.legs}
+        assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
         "qodercli-qwen3.8-flash", *FREE, *SUBS, "cx-gpt-6-luna", "agy-sonnet-5.5",
         "opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
