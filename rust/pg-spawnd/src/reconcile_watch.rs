@@ -4,7 +4,6 @@ use pg_worker_core::{
     hosts::Role,
     watch::{Child, KillProof, Stop},
 };
-
 pub(crate) struct Watch {
     monitor: Monitor,
     stop: Option<Stop>,
@@ -79,7 +78,6 @@ impl Watch {
         }
         Ok(step)
     }
-
     pub(crate) fn new(
         role: Role,
         mut limits: Limits,

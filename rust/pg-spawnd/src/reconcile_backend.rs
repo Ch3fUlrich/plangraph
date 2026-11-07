@@ -2,14 +2,12 @@
 use crate::reconcile_store::Proc;
 use pg_worker_core::watch::Child;
 use std::{io, process::ExitStatus};
-
 /// Authority is supplied by the validated inventory/slot backend, never by a
 /// signal caller. Implementations must revalidate membership before each signal.
 pub(crate) trait Authority: Send {
     fn empty(&mut self) -> io::Result<bool>;
     fn signal(&mut self, force: bool) -> io::Result<()>;
 }
-
 pub(crate) struct Adopted<A> {
     authority: A,
     gone: bool,
@@ -48,7 +46,6 @@ impl<A: Authority> Child for Adopted<A> {
         Ok(())
     }
 }
-
 /// Conservative no-scope Linux fallback: pin the verified leader with a pidfd.
 /// A missing leader is ambiguous, not proof that its descendants are gone.
 #[cfg(target_os = "linux")]
@@ -96,6 +93,10 @@ impl Leader {
 #[cfg(target_os = "linux")]
 impl Authority for Leader {
     fn empty(&mut self) -> io::Result<bool> {
+        let pgid = self
+            .identity
+            .pgid
+            .ok_or_else(|| io::Error::other("Unknown"))?;
         for entry in std::fs::read_dir("/proc")? {
             let entry = entry?;
             if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
@@ -106,11 +107,11 @@ impl Authority for Leader {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(e),
             };
-            let pgid = stat
+            let observed = stat
                 .rsplit_once(')')
                 .and_then(|(_, rest)| rest.split_whitespace().nth(2)?.parse::<u32>().ok())
                 .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-            if Some(pgid) == self.identity.pgid {
+            if observed == pgid {
                 return Ok(false);
             }
         }
@@ -136,7 +137,6 @@ impl Authority for Leader {
         }
     }
 }
-
 #[cfg(all(test, target_os = "linux"))]
 #[path = "reconcile_backend_tests.rs"]
 mod tests;
