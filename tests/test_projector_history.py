@@ -26,6 +26,20 @@ def test_phase_child_upserted_plan_key():
     history, _, run = load("01_ok_single")
     history = copy.deepcopy(history)
     history["events"][0]["workflowExecutionStartedEventAttributes"].pop("memo", None)
+    # Keep IDs and all cross-event references consistent with the inserted event.
+    def shift_ids(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key.endswith("EventId") or key == "eventId":
+                    if int(item) >= 2:
+                        value[key] = str(int(item) + 1)
+                else:
+                    shift_ids(item)
+        elif isinstance(value, list):
+            for item in value:
+                shift_ids(item)
+
+    shift_ids(history)
     history["events"].insert(1, {
         "eventId": 2,
         "eventType": "EVENT_TYPE_WORKFLOW_PROPERTIES_MODIFIED",
@@ -36,9 +50,12 @@ def test_phase_child_upserted_plan_key():
             }
         }}},
     })
+    ids = [int(event["eventId"]) for event in history["events"]]
+    assert ids == sorted(set(ids))
     p = project_history(history, workflow_id="card:phase:DEMO-1:1", run_id=run)
     assert p.plan_key == "DEMO-1"
     assert p.attempts and all(a.plan_key == "DEMO-1" for a in p.attempts)
+    assert attempts(p) == [("1", 1, 6, 8, "ok")]
 
 
 def attempts(p):

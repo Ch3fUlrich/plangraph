@@ -69,8 +69,14 @@ pub(super) fn ensure_phase_branch_with(
             head: base_head,
             created: true,
         }),
-        Err(_) => {
-            let head = run(repo, &["rev-parse", branch_ref.as_str()]).map_err(branch_git_error)?;
+        Err(original_error) => {
+            let head = match run(repo, &["rev-parse", "--verify", "-q", branch_ref.as_str()]) {
+                Ok(head) => head,
+                Err(pg_worker_core::git::GitError::Failed { code: Some(1), .. }) => {
+                    return Err(branch_git_error(original_error));
+                }
+                Err(error) => return Err(branch_git_error(error)),
+            };
             let base_head =
                 run(repo, &["rev-parse", base_ref.as_str()]).map_err(branch_git_error)?;
             crate::phase_ancestry::ensure(repo, &base_head, &head)
@@ -85,13 +91,19 @@ pub(super) fn ensure_phase_branch_with(
 
 pub(super) fn branch_git_error(error: pg_worker_core::git::GitError) -> BranchError {
     match error {
-        pg_worker_core::git::GitError::Io(_) => BranchError::Io,
+        pg_worker_core::git::GitError::Io(_)
+        | pg_worker_core::git::GitError::Failed { code: None, .. } => BranchError::Io,
         _ => BranchError::Refusal("phase branch git command refused".into()),
     }
 }
 
 pub(super) fn phase_branch_error(error: BranchError) -> ActivityError {
     match error {
+        BranchError::Ancestry(message)
+            if message == "phase branch does not contain the base head" =>
+        {
+            ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(message))
+        }
         BranchError::Refusal(message) => {
             ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(message))
         }
@@ -122,7 +134,7 @@ mod tests {
 
     #[test]
     fn failed_git_commands_are_sanitized_non_retryable_refusals() {
-        for code in [Some(1), Some(128), None] {
+        for code in [Some(1), Some(128)] {
             let error = branch_git_error(pg_worker_core::git::GitError::Failed {
                 args: "private args".into(),
                 code,
@@ -134,6 +146,46 @@ mod tests {
             };
             assert!(failure.is_non_retryable());
         }
+    }
+
+    #[test]
+    fn signal_killed_git_is_retryable() {
+        let error = branch_git_error(pg_worker_core::git::GitError::Failed {
+            args: "private args".into(),
+            code: None,
+            stderr: "private diagnostic".into(),
+        });
+        assert!(matches!(error, BranchError::Io));
+    }
+
+    #[test]
+    fn missing_ref_after_failed_creation_preserves_io_error() {
+        let input = PhaseBranchInput {
+            repo: ".".into(),
+            base_branch: "main".into(),
+            branch: "phase/test".into(),
+        };
+        let mut calls = 0;
+        let error = ensure_phase_branch_with(&input, |_, args| {
+            calls += 1;
+            match calls {
+                1 => Ok("base-head".into()),
+                3 => {
+                    assert_eq!(args[0], "update-ref");
+                    Err(pg_worker_core::git::GitError::Io(std::io::Error::other(
+                        "lock contention",
+                    )))
+                }
+                _ => Err(pg_worker_core::git::GitError::Failed {
+                    args: "private".into(),
+                    code: Some(1),
+                    stderr: "missing ref".into(),
+                }),
+            }
+        })
+        .unwrap_err();
+        assert_eq!(calls, 4);
+        assert!(matches!(error, BranchError::Io));
     }
 
     #[test]

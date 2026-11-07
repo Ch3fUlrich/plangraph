@@ -3406,7 +3406,7 @@ mod tests {
             let ActivityError::Application(failure) = phase_branch_error(error) else {
                 panic!("expected application failure");
             };
-            assert!(!failure.is_non_retryable(), "race={race}");
+            assert!(failure.is_non_retryable(), "race={race}");
         }
     }
 
