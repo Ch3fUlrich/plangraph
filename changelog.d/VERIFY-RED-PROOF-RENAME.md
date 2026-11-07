@@ -1,0 +1,1 @@
+- **VERIFY-RED-PROOF:** Include renamed test files at their new paths in red-proof verification, with regression tests for assertion-red and passing renamed tests.
