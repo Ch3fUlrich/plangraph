@@ -367,12 +367,12 @@ fn cache_replace_failure_preserves_old() {
     edit(&mut store, "operator", request(1, Some("8"))).unwrap();
     let temp = sibling(&path, &format!(".{}.tmp", std::process::id()));
     fs::write(&temp, b"owned by another attempt").unwrap();
-    assert_eq!(load_cached(&store, &path), Err(StoreError::Io));
+    assert_eq!(load_cached(&store, &path).unwrap(), store.snapshot);
     assert_eq!(fs::read(&path).unwrap(), old);
     fs::remove_file(&temp).unwrap();
     let _guard = crate::lockfile::try_lock(&sibling(&path, ".lock"))
         .unwrap()
         .unwrap();
-    assert_eq!(load_cached(&store, &path), Err(StoreError::Io));
+    assert_eq!(load_cached(&store, &path).unwrap(), store.snapshot);
     assert_eq!(fs::read(&path).unwrap(), old);
 }

@@ -203,7 +203,9 @@ fn load_snapshot(
     match store.read() {
         Ok(snapshot) => {
             validate_snapshot(&snapshot)?;
-            replace_cache(path, &snapshot)?;
+            if replace_cache(path, &snapshot).is_err() {
+                eprintln!("placement_rules cache_write_failed");
+            }
             Ok((snapshot, "keeper"))
         }
         Err(StoreError::Unavailable) => read_cache(path)
@@ -225,17 +227,32 @@ pub struct LoadedRules {
     pub revision: u64,
     pub source: &'static str,
 }
+fn filter_process_env(
+    entries: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> (BTreeMap<String, String>, Vec<String>) {
+    let mut process = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for (key, value) in entries {
+        if !key.as_encoded_bytes().starts_with(b"PG_RULE_") {
+            continue;
+        }
+        match (key.into_string(), value.into_string()) {
+            (Ok(key), Ok(value)) => {
+                process.insert(key, value);
+            }
+            (Err(_), _) => diagnostics.push("PG_RULE_<unknown> process invalid_key_utf8".into()),
+            (_, Err(_)) => diagnostics.push("PG_RULE_<unknown> process invalid_value_utf8".into()),
+        }
+    }
+    (process, diagnostics)
+}
 impl RuleSource {
     /// Read the current process environment on every call, never from the cache.
     pub fn load(&self, store: &impl RuleStore) -> Result<LoadedRules, StoreError> {
-        let process = std::env::vars_os()
-            .filter_map(|(key, value)| {
-                let key = key.into_string().ok()?;
-                key.starts_with("PG_RULE_")
-                    .then(|| (key, value.into_string().unwrap_or_default()))
-            })
-            .collect();
-        self.load_with_env(store, &process)
+        let (process, diagnostics) = filter_process_env(std::env::vars_os());
+        let mut loaded = self.load_with_env(store, &process)?;
+        loaded.report.diagnostics.extend(diagnostics);
+        Ok(loaded)
     }
 
     /// Injectable process snapshot for hermetic callers; unrelated keys are ignored.
@@ -249,9 +266,17 @@ impl RuleSource {
         let mut diagnostics = Vec::new();
         let mut env_file = BTreeMap::new();
         if let Some(path) = &self.env_file {
-            match fs::read_to_string(path) {
-                Ok(text) => {
-                    for (index, line) in text.lines().enumerate() {
+            match fs::read(path) {
+                Ok(bytes) => {
+                    for (index, bytes) in bytes.split(|b| *b == b'\n').enumerate() {
+                        let line = match std::str::from_utf8(bytes) {
+                            Ok(line) => line,
+                            Err(_) => {
+                                diagnostics
+                                    .push(format!("env_file line {} invalid_utf8", index + 1));
+                                continue;
+                            }
+                        };
                         match parse_env_file(line) {
                             Ok(entries) => {
                                 for (key, value) in entries {
@@ -306,3 +331,7 @@ impl RuleSource {
 #[cfg(test)]
 #[path = "placement_rule_store_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "placement_rule_source_tests.rs"]
+mod source_tests;

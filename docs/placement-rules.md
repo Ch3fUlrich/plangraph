@@ -26,7 +26,7 @@ authoritative. Unknown `PG_RULE_` keys are refused with redacted diagnostics;
 unrelated environment keys are ignored. Invalid overrides fall to the next layer.
 For a local override put `PG_RULE_HOST_WORKER_CAP_COUNT=7` in the configured file
 or process environment. This adapter parses each file line independently: blanks
-and comments are ignored, malformed lines are reported/skipped, and the first
+and comments are ignored, malformed or non-UTF-8 lines are reported/skipped, and the first
 duplicate wins with a diagnostic. It does not run shell syntax or interpolate.
 Missing files are empty; unreadable files are reported and treated as empty.
 The standalone strict `parse_env_file` API below retains whole-file rejection.
@@ -37,7 +37,7 @@ For a durable per-host override, use the authenticated keeper edit surface with
 Edits require authorization and atomically append audit history. Rollback appends
 a new revision, never rewrites history. Local overrides still take precedence.
 Only keeper Unavailable enables validated LKG; other keeper errors fail closed.
-Current process/file changes still apply during an outage. No valid LKG means
+Current process/file changes still apply during an outage with a valid LKG. No valid LKG means
 Unavailable, not silent defaults. This adapter does not wire admission or deploy.
 
 ## C5 keeper specs and report projection (rulings 1–3)
@@ -147,6 +147,7 @@ revision; `None` removes an override, including rollback of an initial insert.
 The hermetic test store demonstrates the contract, not production durability.
 
 `load_cached` validates keeper snapshots through A before atomic cache replace.
+Cache-write failure logs a redacted diagnostic and returns the valid keeper snapshot.
 Only Unavailable permits validated version-1 LKG fallback, without offline expiry.
 The private adapter-owned cache is bounded to 1 MiB, excludes process/env-file
 layers, rejects symlinks/nonregular files and uses a sibling lock/temp plus sync
