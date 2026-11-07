@@ -1,5 +1,5 @@
 """Hermetic default-on, fallback and next-tick ordering proofs."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import subprocess
 from types import SimpleNamespace
@@ -15,6 +15,14 @@ _production_reader = flag.default_reader
 
 @pytest.fixture
 def boundary(tmp_path, monkeypatch):
+    from plangraph.planner import legs
+    # Ordering needs multiple eligible writers, independent of operator policy.
+    writers = tuple(replace(legs.DEFAULT_LEGS[0], id=f'writer-{i}',
+                            model=f'test/writer-{i}', roles=('implement',),
+                            disabled=None) for i in range(3))
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', writers)
+    monkeypatch.setattr(plan_spawn, '__kwdefaults__',
+                        dict(plan_spawn.__kwdefaults__, legs=writers))
     monkeypatch.setattr(flag, 'default_reader', _production_reader)
     flag.default_reader.cache_clear()
     monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
