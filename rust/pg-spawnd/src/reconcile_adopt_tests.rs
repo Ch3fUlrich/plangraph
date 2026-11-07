@@ -33,6 +33,29 @@ fn foreign_and_traversal_scopes_refused() {
     assert!(scope("../run-test", "/sys/fs/cgroup/pg-run-test.scope").is_err());
 }
 #[test]
+fn vanished_member_does_not_abort_cpu_and_thread_only_scope_refuses_silent_signal() {
+    let path = std::env::temp_dir().join(format!("pg-member-source-{}", std::process::id()));
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(
+        path.join("cgroup.procs"),
+        format!("{}\n2147483647\n", std::process::id()),
+    )
+    .unwrap();
+    assert!(cpu(&path).is_ok());
+    std::fs::write(path.join("cgroup.procs"), "").unwrap();
+    std::fs::write(path.join("cgroup.threads"), "2147483647\n").unwrap();
+    let mut pids = Vec::new();
+    members(&path, &mut pids).unwrap();
+    assert_eq!(pids, vec![2147483647]);
+    std::fs::write(path.join("cgroup.threads"), "").unwrap();
+    std::fs::write(path.join("cgroup.events"), "populated 1\n").unwrap();
+    assert!(Scope(path.clone()).signal(false).is_err());
+    for name in ["cgroup.procs", "cgroup.threads", "cgroup.events"] {
+        std::fs::remove_file(path.join(name)).unwrap();
+    }
+    std::fs::remove_dir(path).unwrap();
+}
+#[test]
 fn cpu_requires_real_delta_and_errors_reset_baseline() {
     let mut sampler = pg_worker_core::cpu::Sampler::new(100);
     assert!(sampler

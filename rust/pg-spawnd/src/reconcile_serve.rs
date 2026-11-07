@@ -138,6 +138,21 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     // mutating startup authority in this rollout; off never enters reclaim.
     if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() != Ok("on") {
         crate::reconcile::configured_startup(root)?;
+        #[cfg(target_os = "linux")]
+        if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() == Ok("shadow") {
+            for row in crate::reconcile_store::inventory(root).unwrap_or_else(|error| {
+                eprintln!("shadow adoption unavailable: {error}");
+                Vec::new()
+            }) {
+                if crate::reconcile_store::gone(row.identity.as_ref()).ok() == Some(false)
+                    && row.identity.is_some_and(|identity| {
+                        crate::reconcile_backend::native::Group::open(&row.run_id, identity).is_ok()
+                    })
+                {
+                    eprintln!("would_adopt {} {}", row.run_id, row.attempt);
+                }
+            }
+        }
         return Ok(guard);
     }
     std::fs::create_dir_all(root).map_err(|_| ReconcileError::Io.to_string())?;
@@ -196,23 +211,8 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     })
     .map_err(|_| ReconcileError::Io)??;
     // Replay uses daemon-level evidence configuration, never a record's role.
-    let evidence_config = std::fs::read(root.join("reliability.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    let daemon_evidence = std::env::var("PLANGRAPH_RELIABILITY_EVIDENCE")
-        .ok()
-        .or_else(|| {
-            evidence_config
-                .as_ref()?
-                .get("evidence")?
-                .as_str()
-                .map(str::to_owned)
-        });
-    let store = crate::evidence::EvidenceStore::open(
-        root,
-        matches!(daemon_evidence.as_deref(), Some("on" | "shadow")),
-    )
-    .map_err(|_| ReconcileError::Io)?;
+    let store = crate::evidence::EvidenceStore::open(root, crate::evidence::enabled(root, ""))
+        .map_err(|_| ReconcileError::Io)?;
     replay(root, &store)?;
     let restart = now()?;
     let horizon = restart

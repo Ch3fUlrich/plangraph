@@ -13,6 +13,7 @@ use std::{
 pub(crate) struct Group {
     child: Box<dyn Child + Send>,
     scope: Option<PathBuf>,
+    pid: u32,
 }
 impl Group {
     pub(crate) fn open(run: &str, identity: Proc) -> io::Result<Self> {
@@ -21,17 +22,21 @@ impl Group {
             Ok(Self {
                 child: Box::new(Adopted::new(Scope(path.clone()))),
                 scope: Some(path),
+                pid: identity.pid,
             })
         } else {
             Ok(Self {
+                pid: identity.pid,
                 child: Box::new(Adopted::new(Leader::open(identity)?)),
                 scope: None,
             })
         }
     }
     pub(crate) fn cpu(&mut self) -> io::Result<CpuSample> {
-        let path = self.scope.as_ref().ok_or_else(unknown)?;
-        cpu(path)
+        match &self.scope {
+            Some(path) => cpu(path),
+            None => ticks_sample(proc_ticks(self.pid)?),
+        }
     }
 }
 fn cpu(path: &Path) -> io::Result<CpuSample> {
@@ -51,27 +56,43 @@ fn cpu(path: &Path) -> io::Result<CpuSample> {
     members(path, &mut pids)?;
     pids.sort_unstable();
     pids.dedup();
+    if pids.is_empty() {
+        return Err(unknown());
+    }
     let mut ticks = 0u64;
     for pid in pids {
-        let text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
-        let fields: Vec<_> = text
-            .rsplit_once(')')
-            .ok_or_else(unknown)?
-            .1
-            .split_whitespace()
-            .collect();
-        for index in [11, 12] {
-            ticks = ticks
-                .checked_add(
-                    fields
-                        .get(index)
-                        .ok_or_else(unknown)?
-                        .parse::<u64>()
-                        .map_err(|_| unknown())?,
-                )
-                .ok_or_else(unknown)?;
-        }
+        let value = match proc_ticks(pid) {
+            Ok(value) => value,
+            Err(e) if vanished(&e) => continue,
+            Err(e) => return Err(e),
+        };
+        ticks = ticks.checked_add(value).ok_or_else(unknown)?;
     }
+    ticks_sample(ticks)
+}
+fn proc_ticks(pid: u32) -> io::Result<u64> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let fields: Vec<_> = text
+        .rsplit_once(')')
+        .ok_or_else(unknown)?
+        .1
+        .split_whitespace()
+        .collect();
+    let mut ticks = 0u64;
+    for index in [11, 12] {
+        ticks = ticks
+            .checked_add(
+                fields
+                    .get(index)
+                    .ok_or_else(unknown)?
+                    .parse::<u64>()
+                    .map_err(|_| unknown())?,
+            )
+            .ok_or_else(unknown)?;
+    }
+    Ok(ticks)
+}
+fn ticks_sample(ticks: u64) -> io::Result<CpuSample> {
     let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if hz <= 0 {
         return Err(unknown());
@@ -81,16 +102,42 @@ fn cpu(path: &Path) -> io::Result<CpuSample> {
     })
 }
 fn members(path: &Path, out: &mut Vec<u32>) -> io::Result<()> {
-    for pid in std::fs::read_to_string(path.join("cgroup.procs"))?.split_whitespace() {
-        out.push(pid.parse().map_err(|_| unknown())?);
+    for name in ["cgroup.procs", "cgroup.threads"] {
+        match std::fs::read_to_string(path.join(name)) {
+            Ok(text) => {
+                for pid in text.split_whitespace() {
+                    out.push(pid.parse().map_err(|_| unknown())?);
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e),
+        }
     }
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
-            members(&entry.path(), out)?;
+            if let Err(e) = members(&entry.path(), out) {
+                if !vanished(&e) {
+                    return Err(e);
+                }
+            }
         }
     }
     Ok(())
+}
+fn vanished(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ESRCH)
+}
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+fn cgroup_root() -> PathBuf {
+    #[cfg(test)]
+    if let Some(root) = TEST_ROOT.with(|root| root.borrow().clone()) {
+        return root;
+    }
+    PathBuf::from("/sys/fs/cgroup")
 }
 fn unknown() -> io::Error {
     io::Error::from(io::ErrorKind::PermissionDenied)
@@ -100,10 +147,10 @@ pub(crate) fn scope(run: &str, recorded: &str) -> io::Result<PathBuf> {
         return Err(unknown());
     }
     let path = Path::new(recorded);
-    let prefix = format!("/sys/fs/cgroup/user.slice/user-{}.slice/", unsafe {
+    let prefix = cgroup_root().join(format!("user.slice/user-{}.slice", unsafe {
         libc::geteuid()
-    });
-    if !recorded.starts_with(&prefix)
+    }));
+    if !path.starts_with(&prefix)
         || path.file_name().and_then(|s| s.to_str()) != Some(&format!("pg-{run}.scope"))
     {
         return Err(unknown());
@@ -144,21 +191,31 @@ impl Authority for Scope {
         use std::os::fd::{AsRawFd, FromRawFd};
         let mut pids = Vec::new();
         members(&self.0, &mut pids)?;
+        pids.sort_unstable();
+        pids.dedup();
+        if pids.is_empty() && !self.empty()? {
+            return Err(unknown());
+        }
         for pid in pids {
             let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
             if fd < 0 {
-                return Err(io::Error::last_os_error());
+                let error = io::Error::last_os_error();
+                if vanished(&error) {
+                    continue;
+                }
+                return Err(error);
             }
             let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) };
-            let membership = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))?;
-            let relative = self
-                .0
-                .strip_prefix("/sys/fs/cgroup")
-                .map_err(|_| unknown())?;
+            let membership = match std::fs::read_to_string(format!("/proc/{pid}/cgroup")) {
+                Ok(text) => text,
+                Err(e) if vanished(&e) => continue,
+                Err(e) => return Err(e),
+            };
+            let relative = self.0.strip_prefix(cgroup_root()).map_err(|_| unknown())?;
             let member = membership
                 .lines()
                 .filter_map(|s| s.splitn(3, ':').nth(2))
-                .any(|s| Path::new(s).starts_with(relative));
+                .any(|s| Path::new(s.trim_start_matches('/')).starts_with(relative));
             if !member {
                 return Err(unknown());
             }
@@ -172,7 +229,10 @@ impl Authority for Scope {
                 )
             } < 0
             {
-                return Err(io::Error::last_os_error());
+                let error = io::Error::last_os_error();
+                if !vanished(&error) {
+                    return Err(error);
+                }
             }
         }
         Ok(())

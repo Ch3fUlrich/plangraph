@@ -293,7 +293,9 @@ its named pipe. There is no TCP serve variant in this tree. Recovery itself neve
 binds or listens. Acceptance starts only after recovery succeeds.
 The watcher holds one record lock at a time, not the reconciliation lock.
 Errors refuse startup without issuing
-the private reclaim capability. Off performs no reclaim; shadow remains read-only.
+the private reclaim capability. Off performs no reclaim; shadow remains read-only. Neither off nor shadow
+acquires the daemon owner lock or attaches a watcher; shadow logs would_adopt
+without modifying records, scopes, or children.
 
 Only durably settled, proven-gone identities matching the slot's run, PID, start
 time and group are eligible for startup reclaim. Live, unknown, pending and queued
@@ -310,6 +312,4 @@ opt-in and the operational live gate.
 <!-- RL29 adopt-2: Linux scopes are confined to the current user's cgroup tree
 and exact run scope name. Missing scopes are gone independently of leader PID;
 CPU usage is a weak signal only and cannot satisfy first activity. Windows
-startup remains fail-closed pending portable worker-core watch support.
-configured performs no bind/listen: Unix socket and Windows pipe creation follow
-its successful return. There is no TCP serve variant in this implementation. -->
+startup remains fail-closed pending portable worker-core watch support. -->

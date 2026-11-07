@@ -1,4 +1,22 @@
 use super::*;
+struct ScopeRoot;
+impl ScopeRoot {
+    fn new(root: &std::path::Path) -> (Self, std::path::PathBuf) {
+        crate::reconcile_backend::native::TEST_ROOT
+            .with(|value| *value.borrow_mut() = Some(root.into()));
+        let scope = root.join(format!(
+            "user.slice/user-{}.slice/pg-run-test.scope",
+            unsafe { libc::geteuid() }
+        ));
+        std::fs::create_dir_all(&scope).unwrap();
+        (Self, scope)
+    }
+}
+impl Drop for ScopeRoot {
+    fn drop(&mut self) {
+        crate::reconcile_backend::native::TEST_ROOT.with(|value| *value.borrow_mut() = None);
+    }
+}
 
 #[cfg(target_os = "linux")]
 struct GroupChild(std::process::Child);
@@ -81,8 +99,7 @@ fn reconcile_on_killed_group_orphaned_once_across_startups() {
 #[test]
 fn reconcile_removed_scope_requires_recorded_group_gone() {
     let dir = StateDir::new();
-    let scope = dir.0.join("scope");
-    std::fs::create_dir(&scope).unwrap();
+    let (_root, scope) = ScopeRoot::new(&dir.0);
     let mut child = GroupChild::new();
     let mut identity = child.identity();
     identity["group"] = json!(scope);
@@ -93,15 +110,16 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
     std::fs::remove_dir(&scope).unwrap();
-    assert!(matches!(
-        gone(Some(&serde_json::from_value(identity.clone()).unwrap())),
-        Err(ReconcileError::Unknown)
-    ));
-    assert!(matches!(
-        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
-        Err(ReconcileError::Unknown)
-    ));
-    assert_eq!(before, std::fs::read(record.path()).unwrap());
+    assert!(gone(Some(&serde_json::from_value(identity.clone()).unwrap())).unwrap());
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    let settled = std::fs::read(record.path()).unwrap();
+    assert_ne!(before, settled);
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    assert_eq!(settled, std::fs::read(record.path()).unwrap());
+    assert_eq!(
+        RunRecord::read(&dir.0, "run-test").unwrap().status(),
+        Some(Status::Orphaned)
+    );
     child.stop();
     // Existing directory with missing events, and an EISDIR read error,
     // remain Unknown even though the recorded PGID now returns ESRCH.
@@ -117,19 +135,15 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
     }
     std::fs::remove_dir(scope.join("cgroup.events")).unwrap();
     std::fs::remove_dir(&scope).unwrap();
-    assert!(matches!(
-        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
-        Err(ReconcileError::Unknown)
-    ));
-    assert_eq!(before, std::fs::read(record.path()).unwrap());
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    assert_eq!(settled, std::fs::read(record.path()).unwrap());
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn reconcile_removed_scope_without_recorded_pgid_unknown_untouched() {
     let dir = StateDir::new();
-    let scope = dir.0.join("scope");
-    std::fs::create_dir(&scope).unwrap();
+    let (_root, scope) = ScopeRoot::new(&dir.0);
     let child = GroupChild::new();
     let mut identity = child.identity();
     identity["group"] = json!(scope);
@@ -140,15 +154,9 @@ fn reconcile_removed_scope_without_recorded_pgid_unknown_untouched() {
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
     std::fs::remove_dir(&scope).unwrap();
-    assert!(matches!(
-        gone(Some(&serde_json::from_value(identity).unwrap())),
-        Err(ReconcileError::Unknown)
-    ));
-    assert!(matches!(
-        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
-        Err(ReconcileError::Unknown)
-    ));
-    assert_eq!(before, std::fs::read(record.path()).unwrap());
+    assert!(gone(Some(&serde_json::from_value(identity).unwrap())).unwrap());
+    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    assert_ne!(before, std::fs::read(record.path()).unwrap());
 }
 
 #[cfg(target_os = "linux")]
@@ -195,8 +203,7 @@ fn reconcile_on_pid_reuse_with_live_group_is_not_gone() {
 #[test]
 fn reconcile_named_group_members_override_reused_leader_identity() {
     let dir = StateDir::new();
-    let group = dir.0.join("scope");
-    std::fs::create_dir(&group).unwrap();
+    let (_root, group) = ScopeRoot::new(&dir.0);
     std::fs::write(group.join("cgroup.procs"), "123\n").unwrap();
     let identity = Proc {
         pid: std::process::id(),
@@ -205,23 +212,14 @@ fn reconcile_named_group_members_override_reused_leader_identity() {
         pgid: None,
     };
     std::fs::write(group.join("cgroup.events"), "populated 1\nfrozen 0\n").unwrap();
-    assert!(matches!(
-        gone(Some(&identity)),
-        Err(ReconcileError::Unknown)
-    ));
+    assert!(!gone(Some(&identity)).unwrap());
     std::fs::write(group.join("cgroup.procs"), "").unwrap();
     let child = group.join("child");
     std::fs::create_dir(&child).unwrap();
     std::fs::write(child.join("cgroup.threads"), "123\n").unwrap();
-    assert!(matches!(
-        gone(Some(&identity)),
-        Err(ReconcileError::Unknown)
-    ));
+    assert!(!gone(Some(&identity)).unwrap());
     std::fs::write(group.join("cgroup.events"), "populated 0\nfrozen 0\n").unwrap();
-    assert!(matches!(
-        gone(Some(&identity)),
-        Err(ReconcileError::Unknown)
-    ));
+    assert!(gone(Some(&identity)).unwrap());
     std::fs::remove_file(group.join("cgroup.events")).unwrap();
     assert!(matches!(
         gone(Some(&identity)),

@@ -11,12 +11,15 @@ fn scope_child_is_adopted_then_orphaned_once() {
     let tmp = TempDir::new();
     let state = tmp.path().join("state");
     let id = pg_worker_core::run::record::new_run_id();
-    let scope = std::path::PathBuf::from(format!(
-        "/sys/fs/cgroup/user.slice/user-{}.slice/pg-{id}.scope",
-        unsafe { libc::geteuid() }
-    ));
+    let membership = std::fs::read_to_string("/proc/self/cgroup").unwrap();
+    let relative = membership
+        .lines()
+        .find_map(|line| line.strip_prefix(concat!("0:", ":")))
+        .unwrap();
+    let parent = std::path::Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+    let scope = parent.join(format!("pg-{id}.scope"));
     if let Err(error) = std::fs::create_dir(&scope) {
-        eprintln!("SKIP real scope: host cannot create cgroup: {error}");
+        skip_privilege(error);
         return;
     }
     struct Scope(std::path::PathBuf);
@@ -41,7 +44,7 @@ fn scope_child_is_adopted_then_orphaned_once() {
     };
     let pid = child.child.id();
     if let Err(error) = std::fs::write(scope.join("cgroup.procs"), pid.to_string()) {
-        eprintln!("SKIP real scope: host cannot populate cgroup: {error}");
+        skip_privilege(error);
         return;
     }
     std::fs::write(&ready, "ready").unwrap();
@@ -67,12 +70,34 @@ fn scope_child_is_adopted_then_orphaned_once() {
         1.0,
     )
     .unwrap();
-    let mut old = ChildGuard {
-        child: Command::new("sleep").arg("60").spawn().unwrap(),
-    };
-    old.child.kill().unwrap();
-    old.child.wait().unwrap();
     let socket = tmp.path().join("socket");
+    let before = std::fs::read(state.join("runs").join(&id).join("record.json")).unwrap();
+    let events = std::fs::read(scope.join("cgroup.events")).unwrap();
+    let log = tmp.path().join("shadow.log");
+    let mut shadow = ChildGuard {
+        child: Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            .args(["serve", "--state"])
+            .arg(&state)
+            .arg("--socket")
+            .arg(&socket)
+            .env("PLANGRAPH_RELIABILITY_RECONCILE", "shadow")
+            .stderr(std::fs::File::create(&log).unwrap())
+            .spawn()
+            .unwrap(),
+    };
+    drop(common::wait_connect(&socket, Duration::from_secs(3)));
+    assert!(std::fs::read_to_string(&log)
+        .unwrap()
+        .contains("would_adopt"));
+    assert_eq!(
+        before,
+        std::fs::read(state.join("runs").join(&id).join("record.json")).unwrap()
+    );
+    assert_eq!(events, std::fs::read(scope.join("cgroup.events")).unwrap());
+    assert!(child.child.try_wait().unwrap().is_none());
+    assert!(!state.join("reconcile.owner.lock").exists());
+    shadow.child.kill().unwrap();
+    shadow.child.wait().unwrap();
     for pass in 0..3 {
         let mut daemon = ChildGuard {
             child: Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
@@ -119,4 +144,15 @@ fn scope_child_is_adopted_then_orphaned_once() {
             child.child.wait().unwrap();
         }
     }
+}
+
+fn skip_privilege(error: std::io::Error) {
+    assert!(
+        matches!(
+            error.raw_os_error(),
+            Some(libc::EACCES | libc::EPERM | libc::EROFS | libc::ENOSYS)
+        ),
+        "unexpected cgroup failure: {error}"
+    );
+    eprintln!("SKIP real scope: {error}");
 }
