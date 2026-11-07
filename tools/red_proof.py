@@ -36,9 +36,22 @@ def tests(text):
     return result
 
 
+def bound_names(node):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return {n.id for target in targets for n in ast.walk(target)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        names = {alias.asname or alias.name.split(".")[0] for alias in node.names}
+        return {name for name in names if name.isidentifier()}
+    return set()
+
+
 def stubs(old, new):
     """Only copy names/signatures as inert placeholders, never head bodies."""
-    old_names = {n.name for n in ast.parse(old).body if hasattr(n, "name")}
+    old_names = set().union(*(bound_names(n) for n in ast.parse(old).body))
     additions = []
     for node in ast.parse(new).body:
         if getattr(node, "name", None) in old_names:
@@ -48,6 +61,9 @@ def stubs(old, new):
             additions.append(f"{prefix}def {node.name}(*args, **kwargs):\n    pass\n")
         elif isinstance(node, ast.ClassDef):
             additions.append(f"class {node.name}:\n    def __init__(self, *args, **kwargs):\n        pass\n")
+        else:
+            additions.extend(f"{name} = None\n" for name in sorted(bound_names(node) - old_names))
+        old_names |= bound_names(node)
     return "\n".join(additions)
 
 
@@ -63,9 +79,11 @@ def pytest_collectreport(report):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    key = item.nodeid.split("[", 1)[0]
+    key = item.parent.nodeid + "::" + getattr(item, "originalname", item.name)
     status = "pass"
-    if report.failed:
+    if hasattr(report, "wasxfail"):
+        status = "skip"
+    elif report.failed:
         status = "assertion" if report.when == "call" and call.excinfo and call.excinfo.errisinstance(AssertionError) else "error"
     elif report.skipped:
         status = "skip"
@@ -80,17 +98,24 @@ def pytest_sessionfinish(session, exitstatus):
 def verify(repo, base, head):
     git(repo, "rev-parse", "--verify", base + "^{commit}")
     git(repo, "rev-parse", "--verify", head + "^{commit}")
-    message = git(repo, "log", "--format=%B", f"{base}..{head}").decode()
-    exemptions = re.findall(r"^Red-Exempt:\s*(.+)$", message, re.M)
+    message = git(repo, "show", "-s", "--format=%B", head).decode()
+    exemptions = re.findall(r"^Red-Exempt:[ \t]*(.*)$", message, re.M)
     if exemptions:
         if all(re.search(r"\bD-\d+\b", reason) for reason in exemptions):
             print("Red-Exempt: " + "; ".join(exemptions))
             return 0
         print("Red-Exempt requires a D-id: " + "; ".join(exemptions))
         return 1
-    paths = git(repo, "diff", "--name-only", "--diff-filter=AM", base, head).decode().splitlines()
+    paths = git(repo, "diff", "-M", "--name-only", "--diff-filter=AMR", base, head).decode().splitlines()
     selected = []
     overlays = {}
+    for path in paths:
+        if path.endswith(".py"):
+            try:
+                ast.parse(source(repo, head, path))
+            except SyntaxError as error:
+                print(f"red(collection): {path}: {error.msg}")
+                return 1
     for path in paths:
         if path.endswith(".py") and (Path(path).name.startswith("test_") or Path(path).name.endswith("_test.py")):
             old, new = source(repo, base, path), source(repo, head, path)
@@ -116,7 +141,7 @@ def verify(repo, base, head):
         for path in paths:
             if path.endswith(".py") and path not in overlays:
                 addition = stubs(source(repo, base, path), source(repo, head, path))
-                if addition:
+                if addition or not (checkout / path).exists():
                     target = checkout / path
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with target.open("a") as handle:
@@ -127,7 +152,7 @@ def verify(repo, base, head):
                    PYTHONPATH=os.pathsep.join([str(root), str(checkout), str(checkout / "src")]),
                    RED_PROOF_REPORT=str(report))
         completed = subprocess.run([sys.executable, "-m", "pytest", "-p", "red_proof_plugin",
-                                    "-q", *selected], cwd=checkout, env=env,
+                                    "--rootdir", str(checkout), "-q", *(f"./{node}" for node in selected)], cwd=checkout, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180)
         if not report.exists():
             print("red(error): pytest did not produce a report\n" + completed.stdout)
@@ -140,9 +165,10 @@ def verify(repo, base, head):
             outcomes = data["outcomes"].get(node, [])
             # Parametrizations are one test: at least one assertion is required,
             # while collection/setup/teardown errors never establish red proof.
-            valid = "assertion" in outcomes and not ({"error", "skip"} & set(outcomes))
+            valid = "assertion" in outcomes and "error" not in outcomes
             label = "red(assertion)" if valid else (
-                "red(error)" if "error" in outcomes else "not red (pass/error/missing)")
+                "red(error)" if "error" in outcomes else
+                "neutral(skip/xfail)" if "skip" in outcomes else "not red (pass/error/missing)")
             print(f"{label}: {node}")
             failed |= not valid
         return int(failed)
