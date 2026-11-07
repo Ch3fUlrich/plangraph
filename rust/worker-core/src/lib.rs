@@ -16,6 +16,7 @@ pub mod diffscan;
 pub mod events;
 pub mod exit_class;
 pub mod exports;
+pub mod finalize;
 pub mod fleet_alarm_delivery;
 pub mod fleet_cap_resolver;
 pub mod fleet_foundation_tick;
