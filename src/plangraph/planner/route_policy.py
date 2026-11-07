@@ -57,9 +57,9 @@ class RoutePolicy:
         # Keeper families too: "zhipu" bans glm legs, "deepseek" every deepseek spelling.
         from .seats import seat_family
 
-        # D-4280: no policy lift may automatically select a contributor seat.
+        # D-4280/D-4543/D-4557: Muse and Grok are manual-only, with no policy lift.
         # Explicit audited --leg overrides do not use this automatic-route gate.
-        if leg.family == "muse":
+        if leg.family in ("muse", "grok"):
             return "off_family"
 
         def listed(families):
