@@ -116,7 +116,7 @@ reports — while `effective_gateway_base_url()` resolves the environment source
 | environment (provider-level override, wins when set) | `OMNIROUTE_BASE_URL` |
 | environment (gateway default) | `PLANGRAPH_GATEWAY_URL` |
 
-On hosts without a root config (such as Windows workst), launch the spawner CLI with `PLANGRAPH_GATEWAY_URL=http://127.0.0.1:${GATEWAY_PORT}/v1` to point to the local gateway.
+On hosts without a root config (such as a Windows host), launch the spawner CLI with `PLANGRAPH_GATEWAY_URL=http://127.0.0.1:${GATEWAY_PORT}/v1` to point to the local gateway.
 
 A gateway-keyed model (provider `mimo`/`omniroute`) with no base URL from any source
 now fails closed on every platform — a Linux host with neither the root overlay nor a

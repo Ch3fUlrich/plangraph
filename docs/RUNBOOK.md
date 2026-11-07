@@ -147,6 +147,9 @@ and an option whose id differs from its label slug is written `label {id}` and p
 a generated file back plans no choices edits on unchanged items. Cells are single-line and credential-masked. Status file: `{ts, mode: "archive",
 archived, written, error}`. Turning the switch on in the timer unit is a later live step.
 
+The following examples assume the data checkout is `$HOME/plan-data`; substitute
+the deployed checkout path consistently in the command, service, and path unit.
+
     python3 tools/md_sync.py --questions $HOME/plan-data/QUESTIONS.md \
         --answers $HOME/plan-data/ANSWERS.md \
         --decisions $HOME/plan-data/docs/decisions-log.md \
@@ -157,7 +160,8 @@ archived, written, error}`. Turning the switch on in the timer unit is a later l
 ONE atomic `apply_ops` call (all or nothing; a second run emits zero ops).  Exit codes as
 `apply_batch.py`: 0 ok, 1 refused (also when an ANSWERS entry was refused), 2 usage/token/IO.
 `close_on_decision` needs the router checkout in the keeper config `batch_roots`
-(`$HOME/plan-data`).  The principal in the batch is `--principal` (default `router`)
+(the configured checkout path, not necessarily the example data directory above).
+The principal in the batch is `--principal` (default `router`)
 and must match the token's name.
 
 `--status-file PATH` records the run for the router as one JSON object, written atomically

@@ -7,8 +7,8 @@ Scanned: Claude settings, hooks, skills and instruction files; OpenCode
 config; systemd user units; plangraph launch specs; MCP configs; ~/.local/bin;
 the routing launch records (``--launch-dir``, default
 ``<home>/.local/state/routing/launch``, ``*.json``); the routing checkout's
-``ops/*.mcp.json`` and ``bin/`` (``--routing-root``, default
-``<home>/plan-data``); tracked repo symlinks (``--repo``). A symlinked file
+``ops/*.mcp.json`` and ``bin/`` (``--routing-root``; see ``--help`` for its
+default); tracked repo symlinks (``--repo``). A symlinked file
 is followed to its content. Detail lines are masked by
 tools/hooks/redact_common.py before they are printed.
 

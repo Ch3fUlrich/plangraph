@@ -10,7 +10,7 @@ snapshot.fleet integration. Specs and every resolved value come from Rust.
 
 The shape is `{snapshot,specs,fleet,classes,hosts,context,source,revision}` with
 `context="keeper_only"` and `source="keeper"`. Fleet has no class or host layer;
-The dispatch and restricted classes have no host layer. Each stored host ID uses an
+Class projections have no host layer. Each stored host ID uses an
 empty class: its worker seed is fleet default 6 unless overridden, even if its
 ID happens to equal a class label. Class labels are not machines. C1 currently
 requires a nonblank transport host ID, so fleet/class calls use a fixed sentinel
@@ -91,7 +91,8 @@ file: callers report `env_file_invalid` and use an empty env-file layer.
 Error Display codes are `rules_schema`, `rules_io`, and `rules_override`.
 
 Memory floor defaults to 6144 MiB; 3000 MiB is alarm metadata, not an admission
-floor. Worker cap defaults to 6, with seeds of 4 for the dispatch class and 5 for the restricted class.
+floor. Worker cap defaults to 6; semantic class overrides and their worker seeds
+are defined by the Rust policy and placement-rule schema.
 Only a trusted host-registry adapter may supply the semantic class. These policy
 defaults cannot widen explicit hosts `Caps`; admission integration is deferred.
 
