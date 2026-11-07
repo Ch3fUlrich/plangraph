@@ -3373,7 +3373,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_branch_adoption_rechecks_base_and_lost_creation_race() {
+    fn phase_branch_divergence_is_non_retryable_with_or_without_creation_race() {
         for race in [false, true] {
             let (dir, base) = repo();
             let input = PhaseBranchInput {
@@ -3407,6 +3407,37 @@ mod tests {
                 panic!("expected application failure");
             };
             assert!(failure.is_non_retryable(), "race={race}");
+        }
+    }
+
+    #[test]
+    fn phase_branch_exit_one_retries_absent_ref_but_adopts_base_head() {
+        for appears in [false, true] {
+            let (dir, base) = repo();
+            let input = PhaseBranchInput {
+                repo: dir.path().to_str().unwrap().into(),
+                base_branch: "main".into(),
+                branch: "phase/race".into(),
+            };
+            let result = ensure_phase_branch_with(&input, |path, args| {
+                if args[0] == "update-ref" {
+                    if appears {
+                        git(path, &["branch", "phase/race", &base]);
+                    }
+                    return Err(pg_worker_core::git::GitError::Failed {
+                        args: String::new(),
+                        code: Some(1),
+                        stderr: String::new(),
+                    });
+                }
+                pg_worker_core::git::git(path, args)
+            });
+            if appears {
+                assert_eq!(result.map(|r| (r.created, r.head)).unwrap(), (false, base));
+            } else {
+                assert!(matches!(phase_branch_error(result.unwrap_err()),
+                    ActivityError::Application(failure) if !failure.is_non_retryable()));
+            }
         }
     }
 
