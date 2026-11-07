@@ -38,14 +38,8 @@ def test_seats_use_review_route(monkeypatch):
 
 
 def test_changelog_fragment_only():
-    baseline = subprocess.check_output(
+    assert Path("CHANGELOG.md").read_bytes() == subprocess.check_output(
         ["git", "show", "origin/main:CHANGELOG.md"])
-    lines = baseline.splitlines(keepends=True)
-    prefix = b"  page (8c18e56). md-sync fetches all keeper repos first; "
-    assert lines[264].startswith(prefix)
-    assert lines[264].endswith(b" repo registered.\n")
-    lines[264] = prefix + b"the data repo registered.\n"
-    assert Path("CHANGELOG.md").read_bytes() == b"".join(lines)
 
 
 def test_top_level_definition_spacing():
