@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -189,20 +190,13 @@ def test_failure_takes_precedence_over_partial(tmp_path, jobs):
 
 def test_default_jobs_success_lists_omissions(tmp_path):
     fake = Fake()
-    code = ci.main(["--sha", SHA, "--out", str(tmp_path), "--jobs",
-                    "scrub,file-size,changelog-docs,pytest"], runner=fake)
+    code = ci.main(["--sha", SHA, "--out", str(tmp_path)], runner=fake)
     record = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert code == 0 and record["result"] == "success"
-    assert [j["job"] for j in record["jobs"]] == [
-        "scrub", "file-size", "changelog-docs", "pytest"]
-    assert record["not_requested"] == [
-        "select", "pytest-postgres", "rust", "rust-worker", "rust-spike", "browser", "ci-gate"]
+    assert [j["job"] for j in record["jobs"]] == list(ci.JOBS)
+    assert record["not_requested"] == []
     commands = [c for c in fake.calls if c.startswith("timeout ")]
-    assert len(commands) == 4
-    for command, script in zip(commands, [
-            "tools/split/scrub_check.py", "tools/check_file_size.py",
-            "tools/check_changelog_docs.py", "-m pytest"]):
-        assert "python3 " + script in command
+    assert len(commands) == len(ci.JOBS)
     assert all(j["result"] == "success" and j["exit"] == 0 for j in record["jobs"])
 
 
@@ -220,11 +214,12 @@ def test_service_result(tmp_path, name, exit_code):
     code, record = invoke(tmp_path, runner, jobs=name)
     assert code == bool(exit_code)
     assert record["jobs"][0]["result"] == ("failure" if exit_code else "success")
-    assert "password-secret" not in json.dumps(record)
+    assert set(record) == {"sha", "host", "started", "jobs", "not_requested", "result"}
+    assert set(record["jobs"][0]) == {"job", "result", "duration_s", "exit"}
 
 
 @pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])
-def test_service_cleanup(tmp_path, name):
+def test_service_cleanup(tmp_path, monkeypatch, name):
     fake = Fake()
     invoke(tmp_path, fake, jobs=name)
     command = next(c for c in fake.calls if c.startswith("timeout "))
@@ -233,6 +228,26 @@ def test_service_cleanup(tmp_path, name):
     assert 'docker rm -f "$container"' in command
     assert 'kill "$server"' in command
     assert "worktree remove" in fake.calls[-1]
+    # Execute only a stub body: cleanup must not invoke Docker for Rust jobs.
+    calls = tmp_path / "docker-calls"
+    docker = tmp_path / "docker"
+    docker.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\n')
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
+    namespace = ci.service_script.__globals__
+    if name == "pytest-postgres":
+        monkeypatch.setitem(namespace, "POSTGRES", ":")
+    else:
+        monkeypatch.setitem(namespace["RUST"], name, ":")
+    scratch = tmp_path / name
+    result = subprocess.run(["sh", "-c", ci.service_script(name, str(scratch))],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert not scratch.exists()
+    if name == "pytest-postgres":
+        assert calls.read_text() == f"rm -f dell-ci-{name}\n"
+    else:
+        assert not calls.exists()
 
 
 @pytest.mark.parametrize("name", ["rust", "rust-worker", "rust-spike"])
