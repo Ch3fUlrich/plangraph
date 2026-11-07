@@ -143,3 +143,105 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
     assert seat.served_model == 'mimo/mimo-v2.6-pro'
     assert seat.witness_kind == gw.WITNESS_KIND
     assert gw.TOKEN_ENV not in seen
+
+
+def test_mimo_without_baseurl_is_gateway_backed_and_alias_is_mapped():
+    cfg = json.dumps({'provider': {'mimo': {'options': {}}}})
+    assert gw._gateway_mimo({'OMNIROUTE_BASE_URL': '/gateway/v1', 'OPENCODE_CONFIG_CONTENT': cfg})
+    assert not gw._gateway_mimo({'OPENCODE_CONFIG_CONTENT': cfg})
+    gate = {'OMNIROUTE_BASE_URL': '/gateway/v1'}
+    assert not gw._gateway_mimo(dict(gate))
+    assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT='not json'))
+    assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=json.dumps({'provider': {'omniroute': {}}})))
+    direct = json.dumps({'provider': {'mimo': {'options': {'baseURL': '/direct/v1'}}}})
+    assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=direct))
+    off = json.dumps({'provider': {'mimo': {'disabled': True}}})
+    assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=off))
+    both = json.dumps({'provider': {'mimo': {'options': {}}}, 'providers': {'mimo': {'settings': {'baseURL': '/direct/v1'}}}})
+    assert not gw._gateway_mimo(dict(gate, OPENCODE_CONFIG_CONTENT=both))
+
+
+def test_xiaomi_alias_with_bare_and_prefixed_model():
+    rows = [{'sessionTag': 't', 'status': 200, 'provider': 'xiaomi-mimo', 'model': 'mimo-v2.6-pro'},
+            {'sessionTag': 't', 'status': 200, 'provider': 'xiaomi-mimo', 'model': 'xiaomi-mimo/mimo-v2.6-pro'}]
+    assert gw.served_models(rows, 't') == {'mimo/mimo-v2.6-pro'}
+
+
+def test_no_baseurl_mimo_without_a_tagged_row_stays_unwitnessed():
+    cfg = {'provider': {'mimo': {'options': {}}}}
+    gw.tag_session(cfg, 'seat')
+    env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg), 'OMNIROUTE_BASE_URL': '/gateway/v1'}
+    seat = job()
+    gw.witness(SimpleNamespace(), 'seat', seat, env, fetch=lambda *a: [])
+    assert seat.served_model is None and seat.events
+
+
+@pytest.mark.parametrize('decoy', ['provider', 'providers'])
+@pytest.mark.parametrize('failure', ['untagged', 'direct'])
+def test_both_maps_require_every_active_mimo_block(decoy, failure):
+    cfg = {key: {'mimo': {'settings': {'baseURL': '/gateway/v1'}}}
+           for key in ('provider', 'providers')}
+    gw.tag_session(cfg, 'seat')
+    block = cfg[decoy]['mimo']
+    if failure == 'untagged':
+        del block['headers'][gw.SESSION_HEADER]
+        del block['options']['headers'][gw.SESSION_HEADER]
+    else:
+        block['settings']['baseURL'] = '/direct/v1'
+    env = {'OMNIROUTE_BASE_URL': '/gateway/v1', 'OPENCODE_CONFIG_CONTENT': json.dumps(cfg)}
+    seat = job()
+    gw.witness(SimpleNamespace(), 'seat', seat, env, fetch=pytest.fail)
+    assert seat.served_model is None
+    if failure == 'untagged':
+        assert not gw.tagged(env['OPENCODE_CONFIG_CONTENT'], 'seat', 'mimo')
+        assert seat.events
+    else:
+        assert not gw._gateway_mimo(env)
+
+
+def test_jsonc_comments_and_trailing_commas_are_witnessed(tmp_path):
+    from plangraph.spawner.runner import SpawnerRunner
+    content = '''{
+        // The URL's slashes are not comments.
+        "providers": {"mimo": {
+            "settings": {"baseURL": "https://gateway.example/v1",},
+            /* provider-level session header */
+            "headers": {"x-omniroute-session-id": "plangraph-seat",},
+        },},
+    }'''
+    env = {'OMNIROUTE_BASE_URL': 'https://gateway.example/v1', 'OPENCODE_CONFIG_CONTENT': content}
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+    seat = job()
+    runner.jobs['seat'] = seat
+    runner._adapter_tokens['seat'] = object()
+    assert gw.tagged(content, 'seat', 'mimo')
+    assert gw._gateway_mimo(env)
+    gw.witness(runner, 'seat', seat, env, fetch=lambda *a: [
+        {'sessionTag': 'plangraph-seat', 'status': 200, 'model': 'mimo/mimo-v2.6-pro'}])
+    assert seat.served_model == 'mimo/mimo-v2.6-pro'
+    assert seat.witness_kind == gw.WITNESS_KIND
+
+
+def test_real_renderer_mimo_is_tagged_and_recognised(tmp_path):
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+    from plangraph.spawner.runner import SpawnerRunner
+    env = {'OPENCODE_CONFIG_CONTENT': '{}', 'OMNIROUTE_BASE_URL': 'https://gateway.example/'}
+    assert render_gateway_providers(env, 'mimo/mimo-v2.6-pro') is None
+    cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+    assert cfg['providers']['mimo']['settings']['baseURL'] == 'https://gateway.example/v1'
+    gw.tag_session(cfg, 'seat')
+    env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg)
+    assert gw.tagged(env['OPENCODE_CONFIG_CONTENT'], 'seat', 'mimo')
+    assert gw._gateway_mimo(env)
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+    seat = job()
+    runner.jobs['seat'] = seat
+    runner._adapter_tokens['seat'] = object()
+    gw.witness(runner, 'seat', seat, env, fetch=lambda *a: [
+        {'sessionTag': 'plangraph-seat', 'status': 200, 'model': 'mimo/mimo-v2.6-pro'}])
+    assert seat.served_model == 'mimo/mimo-v2.6-pro'
+    assert seat.witness_kind == gw.WITNESS_KIND
+
+
+def test_gateway_normalizes_before_fallback():
+    assert gw._gateway({'OMNIROUTE_BASE_URL': ' / ', 'PLANGRAPH_GATEWAY_URL': ' https://gw/v1/ '}) == 'https://gw/v1'

@@ -40,7 +40,8 @@ class HungBoundary:
                     or not math.isfinite(started) or not math.isfinite(now)
                     or now - started < self.seconds):
                 return event
-            pid, ident = record.get('pid'), record.get('root_identity')
+            pid = record.get('pid')
+            ident = record.get('pid_start', record.get('root_identity'))
             def owned():
                 return type(pid) is int and pid > 1 and ident is not None and self.identity(pid, ident)
             if not owned():
