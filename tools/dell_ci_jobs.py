@@ -2,38 +2,47 @@
 import shlex
 
 
-def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command):
+def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=None,
+                 browsers=None):
     """Pure capability list: no inherited environment or host home mounts."""
     argv = ["/usr/bin/bwrap", "--unshare-user", "--unshare-pid",
             "--unshare-ipc", "--die-with-parent", "--new-session", "--clearenv"]
     for path in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
         argv += ["--ro-bind", path, path]
-    argv += ["--ro-bind", toolchain, "/toolchain", "--ro-bind", cargo_bin, "/cargo-bin",
+    argv += ["--ro-bind", toolchain, "/toolchain/rust", "--ro-bind", cargo_bin, "/cargo-bin",
              "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
              "--tmpfs", "/home", "--dir", "/ci-home",
              "--bind", checkout, "/work", "--bind", scratch, "/scratch",
              "--chdir", "/work"]
-    env = {"HOME": "/ci-home", "PATH": "/scratch/bin:/toolchain/bin:/cargo-bin:/usr/bin:/bin",
+    if protoc:
+        argv += ["--ro-bind", protoc, "/toolchain/protoc-bin/protoc"]
+    if browsers:
+        argv += ["--ro-bind", browsers, "/browser-cache"]
+    env = {"HOME": "/ci-home", "PATH": "/scratch/bin:/toolchain/protoc-bin:/toolchain/rust/bin:/cargo-bin:/usr/bin:/bin",
            "CARGO_HOME": "/scratch/cargo", "CARGO_TARGET_DIR": "/scratch/target",
            "RUSTUP_HOME": "/scratch/rustup", "XDG_CACHE_HOME": "/scratch/cache",
            "PYTHONPATH": "/work/src", "CARGO_BUILD_JOBS": "4", "LANG": "C.UTF-8"}
+    if browsers:
+        env["PLAYWRIGHT_BROWSERS_PATH"] = "/browser-cache"
     for key, value in env.items():
         argv += ["--setenv", key, value]
     return argv + ["sh", "-c", command]
 
 
-def isolated_script(command, source, job, *, postgres=False):
+def isolated_script(command, source, job, *, postgres=False, browser=False):
     """Trusted outer lifecycle; only the inner command sees PR-controlled files."""
     setup = POSTGRES.split('FILES=', 1)[0]
     if postgres:
         command = ('export PG_DSN="$1" PG_KEEPER_BACKEND=postgres '
                    'PG_CONTRACT_ABORT_ON_TIMEOUT=1 PG_CONTRACT_LATENCY_DIR=/scratch/latency\n'
                    + command)
-    argv = sandbox_argv("CHECKOUT", "SCRATCH", "TOOLCHAIN", "CARGOBIN", command)
+    argv = sandbox_argv("CHECKOUT", "SCRATCH", "TOOLCHAIN", "CARGOBIN", command,
+                        protoc="PROTOC", browsers="BROWSERS" if browser else None)
     expressions = {"CHECKOUT": '"$scratch/checkout"',
                               "SCRATCH": '"$scratch/data"',
                               "TOOLCHAIN": '"$toolchain"',
-                   "CARGOBIN": '"$HOME/.cargo/bin"'}
+                    "CARGOBIN": '"$cargo_bin"', "PROTOC": '"$protoc"',
+                    "BROWSERS": '"$browsers"'}
     invocation = " ".join(
         expressions[arg] if i > 0 and argv[i - 1] in {"--bind", "--ro-bind"}
         and arg in expressions else shlex.quote(arg)
@@ -64,6 +73,10 @@ git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" '+refs/*:refs/*'
 git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" HEAD
 git -C "$scratch/checkout" reset --mixed FETCH_HEAD
 toolchain=$(rustc --print sysroot)
+cargo_bin=$(dirname "$(command -v cargo)")
+protoc=$(command -v protoc) || {{ echo 'host fault: protoc missing' >&2; exit 1; }}
+protoc=$(readlink -f "$protoc")
+{('browsers=$(readlink -f "${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}")' + chr(10) + 'test -d "$browsers"') if browser else ''}
 {setup if postgres else ''}
 {invocation}
 '''

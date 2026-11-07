@@ -141,7 +141,8 @@ def main(argv=None, *, runner=subprocess.run):
                                f") || {{ echo '{name}: venv setup or job failed' >&2; exit 1; }}; "
                                f"export PATH={venv}/bin:$PATH; {command}")
                 script = isolated_script(command, qtree, directory + "/" + name,
-                                         postgres=name == "pytest-postgres")
+                                         postgres=name == "pytest-postgres",
+                                         browser=name == "browser")
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
                               f"{shlex.quote(script)}", timeout + 30)
                 job["exit"] = result.returncode

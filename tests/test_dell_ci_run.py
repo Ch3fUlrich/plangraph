@@ -301,8 +301,6 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     assert "trap cleanup EXIT" in command
     assert 'rm -rf -- "$scratch"' in command
     assert 'docker rm -f "$container_id"' in command
-    if name.startswith("rust"):
-        assert 'kill ' in command and '$server' in command
     assert "worktree remove" in fake.calls[-1]
     # Execute only a stub body: cleanup must not invoke Docker for Rust jobs.
     calls = tmp_path / "docker-calls"
@@ -313,6 +311,9 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     (tmp_path / "protoc").chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
     namespace = ci.service_script.__globals__
+    assert 'kill "$server"' in ci.service_script(name, '/scratch/job')
+    if 'server=$!' in command:
+        assert 'kill "$server"' in command
     if name == "pytest-postgres":
         monkeypatch.setitem(namespace, "POSTGRES", "container_id=owned-id")
     else:
@@ -324,6 +325,16 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     assert not scratch.exists()
     if name == "pytest-postgres":
         assert calls.read_text() == "rm -f owned-id\n"
+        # Execute the actual outer lifecycle used by the driver, not just the
+        # legacy service helper. Stub setup only; retain its cleanup verbatim.
+        isolated = ci.isolated_script(':', tmp_path, tmp_path / 'isolated', postgres=True)
+        prefix = isolated.split('mkdir "$scratch/checkout"', 1)[0]
+        calls.unlink()
+        result = subprocess.run(['sh', '-c', prefix + '\ncontainer_id=isolated-owned-id\n'],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert calls.read_text() == 'rm -f isolated-owned-id\n'
+        assert not (tmp_path / 'isolated').exists()
     else:
         assert not calls.exists()
 @pytest.mark.parametrize("name", ["rust", "rust-worker", "rust-spike"])

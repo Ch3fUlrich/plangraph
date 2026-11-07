@@ -112,6 +112,7 @@ def test_isolated_script_quotes_paths_and_preserves_command(tmp_path, monkeypatc
     capture = 'capture() { python3 -c \'import json,sys; print(json.dumps(sys.argv[1:]))\' "$@"; }; '
     monkeypatch.setenv('scratch', str(job))
     monkeypatch.setenv('toolchain', str(tmp_path / 'rust space'))
+    monkeypatch.setenv('cargo_bin', '/usr/bin')
     result = subprocess.run(['sh', '-c', capture + invocation.replace('/usr/bin/bwrap', 'capture', 1)],
                             capture_output=True, text=True, check=True)
     argv = json.loads(result.stdout)
@@ -135,10 +136,12 @@ def test_sandbox_capabilities(tmp_path):
                    if value in {"--bind", "--ro-bind"}]
         for forbidden in ("/var/run", "/run/docker.sock", str(Path.home() / ".ssh"),
                           str(Path.home() / ".cache"), str(Path.home() / ".local/bin"),
-                          str(Path.home() / "code/plangraph")):
+                          str(Path(__file__).resolve().parents[1])):
             for source in sources:
                 assert not Path(forbidden).resolve().is_relative_to(
                     Path(source).expanduser().resolve()), (source, forbidden)
+                assert not Path(source).expanduser().resolve().is_relative_to(
+                    Path(forbidden).resolve()), (source, forbidden)
         keys = [argv[i + 1] for i, value in enumerate(argv) if value == "--setenv"]
         assert set(keys) == {"HOME", "PATH", "CARGO_HOME", "CARGO_TARGET_DIR",
                              "RUSTUP_HOME", "XDG_CACHE_HOME", "PYTHONPATH",
@@ -170,13 +173,15 @@ def real_sandbox(tmp_path):
     checkout, scratch = tmp_path / "checkout", tmp_path / "scratch"
     checkout.mkdir()
     scratch.mkdir()
-    def run(command):
+    def run(command, **capabilities):
         return subprocess.run(sandbox_argv(str(checkout), str(scratch),
-                                          "/usr", "/usr/bin", command),
+                                          subprocess.check_output(['rustc', '--print', 'sysroot'], text=True).strip(),
+                                          "/usr/bin", command, **capabilities),
                               capture_output=True, text=True, timeout=20)
     probe = run("true")
     if probe.returncode:
         pytest.fail("bwrap probe failed: " + probe.stderr)
+    run.argv = sandbox_argv(str(checkout), str(scratch), '/usr', '/usr/bin', 'true')
     return run
 
 
@@ -185,16 +190,49 @@ def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeyp
     other = tmp_path / "other-job"
     other.mkdir()
     host = Path(__file__).resolve().parents[1]
+    host_pid = next(line.split()[1] for line in Path('/proc/self/status').read_text().splitlines()
+                    if line.startswith('NSpid:'))
     monkeypatch.setenv("DELL_CI_SECRET_CANARY", "host-secret")
     commands = {
         "other-job": f"touch {other}/poison",
         "checkout": f"touch {host}/sandbox-escape-probe",
-        "ssh": 'cat "$HOME/.ssh/id_ed25519"',
+        "ssh": f"ls {shlex.quote(str((Path.home() / '.ssh').resolve()))}",
         "docker": "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"/var/run/docker.sock\")'",
         "env": 'test -n "$DELL_CI_SECRET_CANARY"',
-        "proc": f"cat /proc/{os.getpid()}/environ",
+        "proc": f"cat /proc/{host_pid}/environ || cat /proc/1/root/proc/{host_pid}/environ",
     }
     result = real_sandbox(commands[attack])
     assert result.returncode != 0, result.stdout
+    if attack == 'checkout':
+        argv = real_sandbox.argv
+        for i, flag in enumerate(argv):
+            if flag in {'--bind', '--ro-bind'}:
+                source = Path(argv[i + 1]).resolve()
+                if host.is_relative_to(source):
+                    destination = Path(argv[i + 2]) / host.relative_to(source)
+                    assert real_sandbox(f'touch {shlex.quote(str(destination / "sandbox-escape-probe"))}').returncode != 0
     assert not (other / "poison").exists()
     assert not (host / "sandbox-escape-probe").exists()
+
+
+def test_real_sandbox_protoc_and_cargo(real_sandbox, monkeypatch):
+    protoc = shutil.which('protoc')
+    assert protoc, 'trusted driver requires protoc'
+    monkeypatch.setitem(ci.service_script.__globals__['RUST'], 'rust-spike',
+                        'command -v protoc && cargo --version && protoc --version')
+    result = real_sandbox(ci.service_script('rust-spike', '/scratch/rust-probe'),
+                          protoc=str(Path(protoc).resolve()))
+    assert result.returncode == 0, result.stderr
+    assert '/toolchain/protoc-bin/protoc' in result.stdout
+    assert 'libprotoc ' in result.stdout
+    assert 'cargo ' in result.stdout
+    print(result.stdout)
+
+
+def test_real_sandbox_browser_cache(real_sandbox):
+    cache = Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH',
+                                Path.home() / '.cache/ms-playwright')).resolve()
+    assert cache.is_dir(), 'trusted driver requires installed Playwright browsers'
+    result = real_sandbox('test -n "$(find "$PLAYWRIGHT_BROWSERS_PATH" -name chrome -type f)" '
+                          '&& ! touch "$PLAYWRIGHT_BROWSERS_PATH/poison"', browsers=str(cache))
+    assert result.returncode == 0, result.stderr
