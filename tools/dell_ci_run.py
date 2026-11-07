@@ -38,12 +38,18 @@ JOBS = {
 OUTPUT_TAIL_LIMIT = 8192
 
 
-def output_tail(stdout=None, stderr=None):
+def output_tail(stdout=None, stderr=None, command="unknown command"):
     """Retain bounded diagnostics, including partial output on SSH timeout."""
     def text(value):
         return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
-    return (text(stdout)[-OUTPUT_TAIL_LIMIT:] + "\n" +
-            text(stderr)[-OUTPUT_TAIL_LIMIT:])[-OUTPUT_TAIL_LIMIT:]
+    output = text(stdout) + "\n" + text(stderr)
+    if not output.strip():
+        return f"No output from command: {command}"[-OUTPUT_TAIL_LIMIT:]
+    important = [line for line in output.splitlines()
+                 if re.search(r"FAILED|panicked at|^failures:|^    \S+::", line)]
+    highlights = "\n".join(important)[-OUTPUT_TAIL_LIMIT // 2:]
+    prefix = highlights + "\n" if highlights else ""
+    return prefix + output[-(OUTPUT_TAIL_LIMIT - len(prefix)):]
 
 
 def remote(host, command, timeout=120, runner=subprocess.run):
@@ -153,11 +159,11 @@ def main(argv=None, *, runner=subprocess.run):
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
                               f"{shlex.quote(script)}", timeout + 30)
                 job["exit"] = result.returncode
-                job["output_tail"] = output_tail(result.stdout, result.stderr)
+                job["output_tail"] = output_tail(result.stdout, result.stderr, command)
                 job["result"] = ("timeout" if result.returncode == 124 else
                                  "success" if result.returncode == 0 else "failure")
             except subprocess.TimeoutExpired as exc:
-                job["output_tail"] = output_tail(exc.stdout, exc.stderr)
+                job["output_tail"] = output_tail(exc.stdout, exc.stderr, command)
                 job["result"] = "timeout"
             except OSError as exc:
                 job["output_tail"] = str(exc)[-OUTPUT_TAIL_LIMIT:]

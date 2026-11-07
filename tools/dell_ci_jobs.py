@@ -1,4 +1,5 @@
 """Private, disposable service and build scripts for the Dell CI driver."""
+import shlex
 
 RUST = {
     "rust": """cd rust
@@ -46,6 +47,10 @@ python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract test
 def script(name, scratch):
     """All exits (including TERM from timeout) release owned resources."""
     body = POSTGRES if name == "pytest-postgres" else RUST[name]
+    body = '\n'.join(
+        f"printf '%s\\n' {shlex.quote('Running: ' + line)} >&2\n{line}"
+        if line.startswith(('cargo ', 'PG_JAIL_BIN=', 'PG_TEMPORAL_ADDR=', 'test "$ready"'))
+        else line for line in body.splitlines())
     if name.startswith("rust"):
         body = ('export PATH="$HOME/.local/bin:$PATH"\n'
                 'command -v protoc >/dev/null 2>&1 || { '
