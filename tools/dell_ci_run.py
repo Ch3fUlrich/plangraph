@@ -28,7 +28,7 @@ JOBS = {
               "--rules tools/split/scrub_ci.toml", 900),
     "file-size": ("FILESIZE_REQUIRE_BASE=origin/main python3 tools/check_file_size.py", 600),
     "changelog-docs": ("CHANGELOG_BASE=origin/main python3 tools/check_changelog_docs.py", 600),
-    "pytest": ("python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests", 1200),
+    "pytest": ("PG_DELL_CI_HOST=1 python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests", 1200),
     "pytest-postgres": ("service", 2400),
     "rust": ("service", 2700),
     "rust-worker": ("service", 2700),
