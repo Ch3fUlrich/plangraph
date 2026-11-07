@@ -2,29 +2,23 @@ import json
 import subprocess
 from threading import Barrier
 import pytest
-
 from plangraph.spawner import remote_ps
 from plangraph.spawner.mcp_limits import ps_reply
-
-
 def config(tmp_path, monkeypatch, hosts):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     path = tmp_path / 'plangraph' / 'ps-hosts.json'
     path.parent.mkdir()
     path.write_text(json.dumps({'hosts': hosts}))
 
-
 def test_no_config_is_local_only(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     local = [{'run_id': 'run-local', 'host': 'original'}]
     assert remote_ps.list_runs(local) == local
 
-
 def test_empty_config_is_local_only(tmp_path, monkeypatch):
     config(tmp_path, monkeypatch, [])
     local = [dict(run_id='run-local', host='original')]
     assert remote_ps.list_runs(local) == local
-
 
 def test_parallel_partial_and_private(tmp_path, monkeypatch):
     config(tmp_path, monkeypatch, [dict(name=f'node-{i}', target=f'private-{i}')
@@ -52,14 +46,17 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
                if r['status'] == 'unknown')
 
 
-@pytest.mark.parametrize('src', [None, '/opt/plangraph/src', '~/code/plangraph/src'])
+@pytest.mark.parametrize('src', [None, '/opt/plangraph/src', '~/code/plangraph/src',
+                                 r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\'])
 def test_transport_is_bounded_and_noninteractive(monkeypatch, src):
     original = subprocess.Popen
     host = dict(target='private-target')
     command = 'python3 -m plangraph.spawner.remote_ps'
     if src is not None:
         host['src'] = src
-        command = f'PYTHONPATH={src} {command}'
+        command = ('python3 -c "import os,sys,runpy;'
+                   f"sys.path.insert(0,os.path.expanduser(r'{src.replace(chr(92), '/')}'));"
+                   "runpy.run_module('plangraph.spawner.remote_ps',run_name='__main__')\"")
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'private-target', command]
@@ -71,10 +68,12 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src):
     monkeypatch.setattr(subprocess, 'Popen', run)
     assert remote_ps.query_host(host, 2) == '{"runs": []}'
 
-
 @pytest.mark.parametrize('src', ['/opt/source tree', '/opt/src;id', '$(id)',
                                    '-src', 'relative/src', '~user/src', '', None,
-                                   1, [], '/src\n', '/src$(id)'])
+                                    1, [], '/src\n', '/src$(id)', 'C:relative',
+                                    *['C:\\src' + c + 'bad' for c in
+                                      [' ', "'", '"', ';', '&', '|', '$', '%', '^', '<', '>', '`']],
+                                    '-C:\\src'])
 def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src):
     config(tmp_path, monkeypatch, [dict(name='node-a', target='target', src=src)])
     def transport(*args):
@@ -83,7 +82,8 @@ def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src):
         dict(host='invalid-config', status='unknown', reason='host query failed')]
 
 
-@pytest.mark.parametrize('src', ['/opt/plangraph/src', '~/code/plangraph/src'])
+@pytest.mark.parametrize('src', ['/opt/plangraph/src', '~/code/plangraph/src',
+                                 r'C:\code\plangraph\src', 'D:/code/src', 'C:\\src\\'])
 def test_config_accepts_src(tmp_path, monkeypatch, src):
     from unittest.mock import Mock, ANY
     host = dict(name='node-a', target='target', src=src)

@@ -22,7 +22,10 @@ FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
 def query_host(host, timeout):
     command = 'python3 -m plangraph.spawner.remote_ps'
     if 'src' in host:
-        command = f"PYTHONPATH={host['src']} {command}"
+        src = host['src'].replace('\\', '/')
+        command = ('python3 -c "import os,sys,runpy;'
+                   f"sys.path.insert(0,os.path.expanduser(r'{src}'));"
+                   "runpy.run_module('plangraph.spawner.remote_ps',run_name='__main__')\"")
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
@@ -71,7 +74,8 @@ def configured_hosts():
                 or host['target'].startswith('-')
                 or ('src' in host and (
                     not isinstance(host['src'], str)
-                    or not re.fullmatch(r'(?:/|~/)[A-Za-z0-9_./-]*', host['src'])))):
+                    or not re.fullmatch(r'(?:/|~/|[A-Za-z]:[/\\])[A-Za-z0-9_./\\-]*',
+                                        host['src'])))):
             validated.append(dict(name='invalid-config', invalid=True))
         else:
             validated.append(host)
