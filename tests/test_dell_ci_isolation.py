@@ -51,8 +51,14 @@ def test_failed_container_creation_does_not_remove_other_run(tmp_path, monkeypat
     namespace = ci.service_script.__globals__
     monkeypatch.setitem(namespace, "POSTGRES", "container_id=$(false)")
     script = ci.service_script("pytest-postgres", str(tmp_path / "scratch"))
-    result = subprocess.run(["sh", "-c", 'docker() { exit 99; }; ' + script])
+    calls = tmp_path / "calls"
+    docker_stub = ('calls_log=$1; docker() { '
+                   'printf "%s\\n" "$*" >> "$calls_log"; exit 99; }; ')
+    result = subprocess.run(
+        ["sh", "-c", docker_stub + script, "sh", str(calls)])
     assert result.returncode == 1
+    assert not calls.exists() or not any(
+        line.startswith("rm -f ") for line in calls.read_text().splitlines())
 
 
 def test_temporal_ports_and_liveness():
