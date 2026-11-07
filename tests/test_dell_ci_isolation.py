@@ -216,7 +216,7 @@ def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeyp
 
 
 def test_real_sandbox_protoc_and_cargo(real_sandbox, monkeypatch):
-    protoc = shutil.which('protoc')
+    protoc = shutil.which('protoc', path=os.environ.get('PATH', '') + os.pathsep + str(Path.home() / '.local/bin'))
     assert protoc, 'trusted driver requires protoc'
     monkeypatch.setitem(ci.service_script.__globals__['RUST'], 'rust-spike',
                         'command -v protoc && cargo --version && protoc --version')

@@ -74,7 +74,7 @@ git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" HEAD
 git -C "$scratch/checkout" reset --mixed FETCH_HEAD
 toolchain=$(rustc --print sysroot)
 cargo_bin=$(dirname "$(command -v cargo)")
-protoc=$(command -v protoc) || {{ echo 'host fault: protoc missing' >&2; exit 1; }}
+protoc=$(command -v protoc || command -v "${{HOME}}/.local/bin/protoc") || {{ echo 'host fault: protoc missing' >&2; exit 1; }}
 protoc=$(readlink -f "$protoc")
 {('browsers=$(readlink -f "${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}")' + chr(10) + 'test -d "$browsers"') if browser else ''}
 {setup if postgres else ''}
