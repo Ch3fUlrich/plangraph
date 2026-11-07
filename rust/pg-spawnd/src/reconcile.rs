@@ -121,9 +121,16 @@ pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {
         Some(Ok(bytes)) => serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         Some(Err(_)) => Value::Null,
     };
-    startup(root, env.as_deref(), &config)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    match startup(root, env.as_deref(), &config) {
+        Ok(_) => Ok(()),
+        // Shared configuration is advisory: no inventory or mode error from
+        // file-enabled shadow may prevent the daemon from binding (D-4659).
+        Err(error) if env.is_none() => {
+            eprintln!("reconciliation startup skipped: {error}");
+            Ok(())
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[cfg(test)]

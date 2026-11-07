@@ -13,6 +13,8 @@ fn configured_reconcile_through_serve() {
         "{not json",
         r#"{"reconcile":true}"#,
         r#"{"reconcile":"on"}"#,
+        r#"{"reconcile":"shadow"}"#,
+        r#"{"roles":{"review":{"reconcile":"shadow"}}}"#,
     ] {
         for explicit_on in [false, true] {
             let tmp = TempDir::new();
@@ -21,6 +23,7 @@ fn configured_reconcile_through_serve() {
             std::fs::write(config_dir.join("reliability.json"), config).unwrap();
             let socket = tmp.path().join("socket");
             let state = tmp.path().join("state");
+            std::fs::create_dir_all(state.join("runs/not-a-run-id")).unwrap();
             let mut command = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
             command
                 .arg("serve")
@@ -39,7 +42,7 @@ fn configured_reconcile_through_serve() {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 if let Some(status) = guard.child.try_wait().unwrap() {
-                    assert!(explicit_on, "default off refused {config}");
+                    assert!(explicit_on, "advisory config refused {config}");
                     assert_eq!(status.code(), Some(2));
                     assert!(!socket.exists());
                     break;
