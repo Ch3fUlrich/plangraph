@@ -15,9 +15,11 @@ import subprocess
 import time
 import uuid
 import sys
+import socket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dell_ci_jobs import script as service_script
+from dell_ci_jobs import isolated_script, POSTGRES
 
 
 JOBS = {
@@ -26,7 +28,7 @@ JOBS = {
               "--rules tools/split/scrub_ci.toml", 900),
     "file-size": ("FILESIZE_REQUIRE_BASE=origin/main python3 tools/check_file_size.py", 600),
     "changelog-docs": ("CHANGELOG_BASE=origin/main python3 tools/check_changelog_docs.py", 600),
-    "pytest": ("python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests", 1200),
+    "pytest": ("PG_DELL_CI_HOST=1 python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests", 1200),
     "pytest-postgres": ("service", 2400),
     "rust": ("service", 2700),
     "rust-worker": ("service", 2700),
@@ -36,10 +38,24 @@ JOBS = {
 }
 
 def remote(host, command, timeout=120, runner=subprocess.run):
-    """The single SSH boundary; a subprocess-compatible runner is injectable."""
-    return runner(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                   "--", host, command], capture_output=True, text=True,
-                  timeout=timeout, check=False)
+    """Local or SSH boundary; a subprocess-compatible runner is injectable."""
+    argv = (["bash", "-c", command] if host in {"local", socket.gethostname(), socket.getfqdn()}
+            else ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", host, command])
+    return runner(argv, capture_output=True, text=True,
+                   timeout=timeout, check=False)
+
+
+def output_tail(output):
+    """Bound diagnostics and redact home paths and common credential forms."""
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    output = (output or "").replace(str(Path.home()), "$HOME")
+    output = re.sub(r"/(?:home|Users)/[^/\s]+", "$HOME", output)
+    output = re.sub(r"(?i)(\bBearer[ \t]+)[^\s]+", r"\1[REDACTED]", output)
+    output = re.sub(r"\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]+", "[REDACTED]", output)
+    output = re.sub(r"(?i)\b\S*(?:secret|password|token)\S*", "[REDACTED]", output)
+    output = re.sub(r"(://[^\s:/]+:)[^@\s]+@", r"\1[REDACTED]@", output)
+    return "\n".join(line[-2000:] for line in output.splitlines()[-40:])
 
 
 def main(argv=None, *, runner=subprocess.run):
@@ -97,7 +113,8 @@ def main(argv=None, *, runner=subprocess.run):
         record["result"] = "success"
         for name in names:
             command, timeout = JOBS[name]
-            job = {"job": name, "result": "skipped", "duration_s": 0, "exit": None}
+            job = {"job": name, "result": "skipped", "duration_s": 0, "exit": None,
+                   "stdout_tail": "", "stderr_tail": ""}
             record["jobs"].append(job)
             start = time.monotonic()
             try:
@@ -118,7 +135,9 @@ def main(argv=None, *, runner=subprocess.run):
                         record["result"] = "failure"
                         continue
                 if command == "service":
-                    command = service_script(name, directory + "/" + name)
+                    command = ("FILES=" + POSTGRES.split("FILES=", 1)[1]
+                               if name == "pytest-postgres" else
+                               service_script(name, "/scratch/job"))
                 if name in {"file-size", "changelog-docs"}:
                     variable = "FILESIZE_REQUIRE_BASE" if name == "file-size" else "CHANGELOG_BASE"
                     command = (f"base=$(git rev-parse --verify {shlex.quote(args.base + '^{commit}')}) && "
@@ -132,19 +151,27 @@ def main(argv=None, *, runner=subprocess.run):
                                shlex.quote(json.dumps(needs)))
                 # GNU timeout kills the remote job even if the SSH client disconnects.
                 if name in {"pytest", "pytest-postgres", "browser"}:
-                    venv = directory + "/venv"
+                    venv = "/scratch/venv"
                     command = (f"(python3 -m venv {venv} && "
-                               f"{venv}/bin/python -m pip install -r requirements-ci.txt "
+                                f"{venv}/bin/python -m pip install --no-index --find-links /scratch/wheels -r requirements-ci.txt "
                                f") || {{ echo '{name}: venv setup or job failed' >&2; exit 1; }}; "
                                f"export PATH={venv}/bin:$PATH; {command}")
-                script = f"cd {qtree} && export PYTHONPATH={qtree}/src && {command}"
+                script = isolated_script(command, qtree, directory + "/" + name,
+                                         postgres=name == "pytest-postgres",
+                                          browser=name == "browser",
+                                          python_deps=name in {"pytest", "pytest-postgres", "browser"},
+                                          cargo_deps=name.startswith("rust"))
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
                               f"{shlex.quote(script)}", timeout + 30)
                 job["exit"] = result.returncode
+                job["stdout_tail"] = output_tail(result.stdout)
+                job["stderr_tail"] = output_tail(result.stderr)
                 job["result"] = ("timeout" if result.returncode == 124 else
                                  "success" if result.returncode == 0 else "failure")
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
                 job["result"] = "timeout"
+                job["stdout_tail"] = output_tail(exc.stdout)
+                job["stderr_tail"] = output_tail(exc.stderr)
             except OSError:
                 job["result"] = "failure"
             finally:
