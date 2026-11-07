@@ -21,6 +21,7 @@ mod reconcile_attach;
 #[cfg(unix)]
 #[allow(dead_code)] // Callable bridges; locked startup ownership follows separately.
 mod reconcile_backend;
+mod reconcile_serve;
 mod reconcile_store;
 mod reconcile_time;
 #[cfg(unix)]

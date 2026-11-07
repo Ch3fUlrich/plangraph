@@ -7,6 +7,152 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_real_child_restart_locked_before_reclaim() {
+    use pg_worker_core::{
+        run::record::{RunRecord, Status},
+        slots,
+    };
+    use serde_json::json;
+    use std::os::unix::process::CommandExt;
+    for live in [true, false] {
+        let tmp = TempDir::new();
+        let state = tmp.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let mut child = ChildGuard {
+            child: Command::new("sleep")
+                .arg("60")
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        };
+        let pid = child.child.id();
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let start: u64 = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let id = pg_worker_core::run::record::new_run_id();
+        let leg = json!({"leg_key":"test-leg", "route_key":"test-route"});
+        let fields = json!({"role":"implement", "started":1, "max_s":u32::MAX,
+            "plan":{"first_leg":leg}, "proc":{"pid":pid,"start_time":start,"pgid":pid},
+            "attempts":[]});
+        RunRecord::create(
+            &state,
+            &id,
+            "local",
+            fields.as_object().unwrap().clone(),
+            Status::Running,
+            1.0,
+        )
+        .unwrap();
+        slots::with_table(&state, Duration::from_secs(1), |table| {
+            table.active.push(slots::ActiveSlot {
+                run_id: id.clone(),
+                pid,
+                start_time: start,
+                role: pg_worker_core::hosts::Role::Implement,
+                class: slots::SlotClass::Other,
+                repo_id: "test".into(),
+                seat_slot: None,
+                group: None,
+                reservation_mb: 0,
+                created_ms: 0,
+                bound: true,
+            });
+        })
+        .unwrap();
+        // A real daemon stand-in is killed, not gracefully shut down.
+        let mut old = ChildGuard {
+            child: Command::new("sleep").arg("60").spawn().unwrap(),
+        };
+        if !live {
+            child.child.kill().unwrap();
+            child.child.wait().unwrap();
+        }
+        old.child.kill().unwrap();
+        assert!(!old.child.wait().unwrap().success());
+        let socket = tmp.path().join("socket");
+        let start_daemon = || ChildGuard {
+            child: Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+                .args(["serve", "--state"])
+                .arg(&state)
+                .arg("--socket")
+                .arg(&socket)
+                .env("PLANGRAPH_RELIABILITY_RECONCILE", "on")
+                .spawn()
+                .unwrap(),
+        };
+        // Block reconciliation: listener and reclaim must both remain blocked.
+        let lock = pg_worker_core::lockfile::try_lock(&state.join("reconcile.lock"))
+            .unwrap()
+            .unwrap();
+        let mut blocked = start_daemon();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            assert!(blocked.child.try_wait().unwrap().is_none());
+            assert!(!socket.exists());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(blocked.child.try_wait().unwrap().is_none());
+        blocked.child.kill().unwrap();
+        blocked.child.wait().unwrap();
+        slots::with_table(&state, Duration::from_secs(1), |t| {
+            assert_eq!(t.active.len(), 1)
+        })
+        .unwrap();
+        drop(lock);
+        for _ in 0..2 {
+            let mut daemon = start_daemon();
+            drop(common::wait_connect(&socket, Duration::from_secs(3)));
+            let probe = pg_worker_core::lockfile::try_lock(&state.join("reconcile.lock"))
+                .unwrap()
+                .expect("watcher must not hold the sweep lock");
+            drop(probe);
+            let record_dir = state.join("runs").join(&id);
+            let _record_lock = pg_worker_core::lockfile::try_lock(&record_dir.join("record.lock"))
+                .unwrap()
+                .expect("record lock available between advances");
+            let record = RunRecord::read(&state, &id).unwrap();
+            assert_eq!(
+                record.status(),
+                Some(if live {
+                    Status::Running
+                } else {
+                    Status::Orphaned
+                })
+            );
+            let events = record.get("events").unwrap().as_array().unwrap();
+            let kind = if live {
+                "RUN_REATTACHED"
+            } else {
+                "RUN_ORPHANED"
+            };
+            assert_eq!(events.iter().filter(|e| e["event"] == kind).count(), 1);
+            drop(_record_lock);
+            slots::with_table(&state, Duration::from_secs(1), |t| {
+                assert_eq!(t.active.len(), usize::from(live))
+            })
+            .unwrap();
+            if live {
+                assert!(child.child.try_wait().unwrap().is_none());
+            }
+            daemon.child.kill().unwrap();
+            daemon.child.wait().unwrap();
+        }
+        if live {
+            child.child.kill().unwrap();
+            child.child.wait().unwrap();
+        }
+    }
+}
+
 #[test]
 fn configured_reconcile_through_serve() {
     for config in [
@@ -24,6 +170,7 @@ fn configured_reconcile_through_serve() {
             let socket = tmp.path().join("socket");
             let state = tmp.path().join("state");
             std::fs::create_dir_all(state.join("runs/not-a-run-id")).unwrap();
+            std::fs::write(state.join("runs/stray-artifact"), "ignored").unwrap();
             let mut command = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
             command
                 .arg("serve")
@@ -42,12 +189,9 @@ fn configured_reconcile_through_serve() {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 if let Some(status) = guard.child.try_wait().unwrap() {
-                    assert!(explicit_on, "advisory config refused {config}");
-                    assert_eq!(status.code(), Some(2));
-                    assert!(!socket.exists());
-                    break;
+                    panic!("serve exited before binding: {status} ({config})");
                 }
-                if !explicit_on && socket.exists() {
+                if socket.exists() {
                     break;
                 }
                 assert!(

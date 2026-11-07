@@ -7,9 +7,16 @@ fn reconcile_missing_pgid_is_unknown_and_never_settles_max_s() {
         hosts::Role,
         run::record::{RunRecord, Status},
     };
-    let root = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let cleanup = Cleanup(std::env::temp_dir().join(pg_worker_core::run::record::new_run_id()));
+    let root = &cleanup.0;
     let mut record = RunRecord::create(
-        &root,
+        root,
         "run-test",
         "local",
         serde_json::json!({"proc":{"pid":123}})
@@ -44,14 +51,13 @@ fn reconcile_missing_pgid_is_unknown_and_never_settles_max_s() {
     for now in [1000, 11_000, 13_000] {
         assert!(matches!(
             watch
-                .advance(&mut child, &root, &mut record, 1, now)
+                .advance(&mut child, root, &mut record, 1, now)
                 .unwrap(),
             Step::Held
         ));
         assert_eq!(std::fs::read(record.path()).unwrap(), before);
         assert_eq!(record.status(), Some(Status::Running));
     }
-    std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
 fn reconcile_leader_proves_empty_after_reaping() {

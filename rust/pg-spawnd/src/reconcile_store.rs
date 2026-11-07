@@ -41,7 +41,7 @@ fn seconds(value: &Value) -> Result<u64, ReconcileError> {
     }
     Ok(n as u64)
 }
-fn read(path: &Path) -> Result<Value, ReconcileError> {
+pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
     check(path, false)?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -82,6 +82,9 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     paths.sort();
     let mut result = Vec::new();
     for path in paths {
+        if !path.join("record.json").is_file() {
+            continue;
+        }
         let id = path
             .file_name()
             .and_then(|s| s.to_str())
