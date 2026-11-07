@@ -6,7 +6,7 @@ from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from . import context_pack
@@ -138,14 +138,11 @@ class SpawnService(SeatSpawnMixin):
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-        from dataclasses import replace
         from plangraph.planner.measured_down import measured_down
-        down = measured_down(self.state)
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
         from plangraph.planner.legs import leg_active
-        return replace(plan, legs=witness_order(
-            card, role, tuple(leg for leg in plan.legs if leg_active(leg)), down),
-            review_seats=tuple(leg for leg in plan.review_seats if leg_active(leg)))
+        live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
+        return replace(plan, legs=witness_order(card, role, live(plan.legs), measured_down(self.state)), review_seats=live(plan.review_seats))
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief

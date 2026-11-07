@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 
 import pytest
@@ -11,16 +12,8 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
                                         plan_spawn, route_card)
 
-# These legacy mechanics probes exercise every tier independent of live policy.
-# Production disabled-leg exclusion is covered by test_route_policy_review_choice.
-DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)
-_route_card = route_card
-
-
-def route_card(card, **kwargs):
-    kwargs.setdefault('legs', DEFAULT_LEGS)
-    return _route_card(card, **kwargs)
-
+DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)  # mechanics probes ignore live policy
+route_card = functools.partial(route_card, legs=DEFAULT_LEGS)
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
