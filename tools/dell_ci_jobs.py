@@ -3,10 +3,10 @@ import shlex
 
 
 def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=None,
-                 browsers=None):
+                 browsers=None, temporal=None):
     """Pure capability list: no inherited environment or host home mounts."""
     argv = ["/usr/bin/bwrap", "--unshare-user", "--unshare-pid",
-            "--unshare-ipc", "--die-with-parent", "--new-session", "--clearenv"]
+            "--unshare-ipc", "--unshare-net", "--die-with-parent", "--new-session", "--clearenv"]
     for path in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
         argv += ["--ro-bind", path, path]
     argv += ["--ro-bind", toolchain, "/toolchain/rust", "--ro-bind", cargo_bin, "/cargo-bin",
@@ -16,9 +16,11 @@ def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=Non
              "--chdir", "/work"]
     if protoc:
         argv += ["--ro-bind", protoc, "/toolchain/protoc-bin/protoc"]
+    if temporal:
+        argv += ["--ro-bind", temporal, "/toolchain/temporal-bin/temporal"]
     if browsers:
         argv += ["--ro-bind", browsers, "/browser-cache"]
-    env = {"HOME": "/ci-home", "PATH": "/scratch/bin:/toolchain/protoc-bin:/toolchain/rust/bin:/cargo-bin:/usr/bin:/bin",
+    env = {"HOME": "/ci-home", "PATH": "/scratch/bin:/toolchain/temporal-bin:/toolchain/protoc-bin:/toolchain/rust/bin:/cargo-bin:/usr/bin:/bin",
            "CARGO_HOME": "/scratch/cargo", "CARGO_TARGET_DIR": "/scratch/target",
            "RUSTUP_HOME": "/scratch/rustup", "XDG_CACHE_HOME": "/scratch/cache",
            "PYTHONPATH": "/work/src", "CARGO_BUILD_JOBS": "4", "LANG": "C.UTF-8"}
@@ -32,23 +34,34 @@ def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=Non
 def isolated_script(command, source, job, *, postgres=False, browser=False):
     """Trusted outer lifecycle; only the inner command sees PR-controlled files."""
     setup = POSTGRES.split('FILES=', 1)[0]
+    setup = setup.replace('-p 127.0.0.1:0:5432 postgres:16',
+                          '-v "$scratch/data/pgsocket:/var/run/postgresql" postgres:16 '
+                          '-c listen_addresses=')
+    # The container has no published TCP port. Only this job's scratch bind
+    # exposes its socket; unshare-net keeps Temporal's loopback job-private.
+    setup = setup.split('port=$(docker port', 1)[0] + '''PG_DSN="postgresql://postgres@/keeper?host=/scratch/pgsocket"
+export PG_DSN
+'''
+    setup = 'mkdir -m 777 "$scratch/data/pgsocket"\n' + setup
+    needs_temporal = 'temporal ' in command
     if postgres:
-        command = ('export PG_DSN="$1" PG_KEEPER_BACKEND=postgres '
+        command = ('export PG_DSN="$1" PGPASSWORD="$2" PG_KEEPER_BACKEND=postgres '
                    'PG_CONTRACT_ABORT_ON_TIMEOUT=1 PG_CONTRACT_LATENCY_DIR=/scratch/latency\n'
                    + command)
     argv = sandbox_argv("CHECKOUT", "SCRATCH", "TOOLCHAIN", "CARGOBIN", command,
-                        protoc="PROTOC", browsers="BROWSERS" if browser else None)
+                        protoc="PROTOC", browsers="BROWSERS" if browser else None,
+                        temporal="TEMPORAL" if needs_temporal else None)
     expressions = {"CHECKOUT": '"$scratch/checkout"',
                               "SCRATCH": '"$scratch/data"',
                               "TOOLCHAIN": '"$toolchain"',
                     "CARGOBIN": '"$cargo_bin"', "PROTOC": '"$protoc"',
-                    "BROWSERS": '"$browsers"'}
+                     "BROWSERS": '"$browsers"', "TEMPORAL": '"$temporal"'}
     invocation = " ".join(
         expressions[arg] if i > 0 and argv[i - 1] in {"--bind", "--ro-bind"}
         and arg in expressions else shlex.quote(arg)
         for i, arg in enumerate(argv))
     if postgres:
-        invocation += ' sh "$PG_DSN"'
+        invocation += ' sh "$PG_DSN" "$password"'
     return f'''set -eu
 scratch={shlex.quote(str(job))}
 container=dell-ci-${{scratch##*/}}-${{scratch%/*}}
@@ -76,6 +89,7 @@ toolchain=$(rustc --print sysroot)
 cargo_bin=$(dirname "$(command -v cargo)")
 protoc=$(command -v protoc || command -v "${{HOME}}/.local/bin/protoc") || {{ echo 'host fault: protoc missing' >&2; exit 1; }}
 protoc=$(readlink -f "$protoc")
+{('temporal=$(command -v temporal || command -v "${HOME}/.local/bin/temporal") || { echo "host fault: Temporal CLI missing" >&2; exit 1; }' + chr(10) + 'temporal=$(readlink -f "$temporal")') if needs_temporal else ''}
 {('browsers=$(readlink -f "${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}")' + chr(10) + 'test -d "$browsers"') if browser else ''}
 {setup if postgres else ''}
 {invocation}
@@ -96,7 +110,7 @@ for sock in sockets: sock.bind(("127.0.0.1", 0))
 print(*(sock.getsockname()[1] for sock in sockets))')
 set -- $ports
 port=$1
-temporal server start-dev --headless --ip 127.0.0.1 --port "$port" --http-port "$2" --metrics-port "$3" > "$scratch/temporal.log" 2>&1 &
+temporal server start-dev --headless --ip 127.0.0.1 --port "$port" --http-port "$2" --metrics-port "$3" > "${scratch:-/scratch}/temporal.log" 2>&1 &
 server=$!
 ready=0
 for i in $(seq 1 30); do

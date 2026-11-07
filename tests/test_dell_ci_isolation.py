@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import shutil
 import shlex
+import socket
+import uuid
+import time
 
 from test_dell_ci_run import Fake, ci, invoke
 from dell_ci_jobs import sandbox_argv, isolated_script
@@ -80,7 +83,13 @@ def test_postgres_password_is_fresh_and_job_private():
     script = isolated_script('true', '/driver', '/scratch/job', postgres=True)
     assert 'secrets.token_hex(32)' in script
     assert '-e POSTGRES_PASSWORD' in script
-    assert ' sh "$PG_DSN"' in script
+    assert ' sh "$PG_DSN" "$password"' in script
+    assert 'PGPASSWORD="$2"' in script
+    assert 'PG_DSN="postgresql://postgres@/keeper?host=/scratch/pgsocket"' in script
+    assert 'postgres:$password@' not in script
+    assert '-p 127.0.0.1' not in script
+    assert '-v "$scratch/data/pgsocket:/var/run/postgresql"' in script
+    assert 'host=/scratch/pgsocket' in script
     argv = sandbox_argv('/checkout', '/scratch', '/rust', '/cargo', 'true')
     assert 'POSTGRES_PASSWORD' not in argv
     assert 'PG_DSN' not in argv
@@ -131,7 +140,7 @@ def test_sandbox_capabilities(tmp_path):
     for argv in commands:
         assert "--clearenv" in argv
         assert all(flag in argv for flag in ("--unshare-user", "--unshare-pid",
-                                            "--unshare-ipc", "--proc"))
+                                            "--unshare-ipc", "--unshare-net", "--proc"))
         sources = [argv[i + 1] for i, value in enumerate(argv)
                    if value in {"--bind", "--ro-bind"}]
         for forbidden in ("/var/run", "/run/docker.sock", str(Path.home() / ".ssh"),
@@ -169,7 +178,7 @@ def test_every_job_uses_fresh_sandbox(tmp_path):
 @pytest.fixture
 def real_sandbox(tmp_path):
     if not shutil.which("bwrap"):
-        pytest.skip("bwrap unavailable")
+        pytest.fail("bwrap unavailable: isolation probes must execute on the Dell host")
     checkout, scratch = tmp_path / "checkout", tmp_path / "scratch"
     checkout.mkdir()
     scratch.mkdir()
@@ -182,27 +191,50 @@ def real_sandbox(tmp_path):
     if probe.returncode:
         pytest.fail("bwrap probe failed: " + probe.stderr)
     run.argv = sandbox_argv(str(checkout), str(scratch), '/usr', '/usr/bin', 'true')
+    run.scratch = scratch
     return run
 
 
+def test_real_sandbox_requires_bwrap(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, 'which', lambda _: None)
+    with pytest.raises(pytest.fail.Exception, match='bwrap unavailable'):
+        real_sandbox.__wrapped__(tmp_path)
+
+
 @pytest.mark.parametrize("attack", ["other-job", "checkout", "ssh", "docker", "env", "proc"])
-def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeypatch):
+def test_real_sandbox_denies_host_access(tmp_path, real_sandbox, attack, monkeypatch, request):
     other = tmp_path / "other-job"
     other.mkdir()
     host = Path(__file__).resolve().parents[1]
     host_pid = next(line.split()[1] for line in Path('/proc/self/status').read_text().splitlines()
                     if line.startswith('NSpid:'))
     monkeypatch.setenv("DELL_CI_SECRET_CANARY", "host-secret")
+    ssh = tmp_path / '.ssh'
+    ssh.mkdir()
+    (ssh / 'canary').write_text('private-key-canary')
+    docker = socket.socket(socket.AF_UNIX)
+    docker_path = tmp_path / 'docker.sock'
+    docker.bind(str(docker_path))
+    docker.listen()
+    # Prove that the target exists and accepts host connections before probing.
+    with socket.socket(socket.AF_UNIX) as client:
+        client.connect(str(docker_path))
+    request.addfinalizer(docker.close)
     commands = {
         "other-job": f"touch {other}/poison",
         "checkout": f"touch {host}/sandbox-escape-probe",
-        "ssh": f"ls {shlex.quote(str((Path.home() / '.ssh').resolve()))}",
-        "docker": "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"/var/run/docker.sock\")'",
+        "ssh": f"cat {shlex.quote(str(ssh / 'canary'))}",
+        "docker": 'python3 -c ' + shlex.quote(
+            f'import socket; s=socket.socket(socket.AF_UNIX); s.connect({str(docker_path)!r})'),
         "env": 'test -n "$DELL_CI_SECRET_CANARY"',
         "proc": f"cat /proc/{host_pid}/environ || cat /proc/1/root/proc/{host_pid}/environ",
     }
     result = real_sandbox(commands[attack])
     assert result.returncode != 0, result.stdout
+    if attack in {'ssh', 'docker'}:
+        assert 'No such file or directory' in result.stderr, result.stderr
+        assert 'bwrap:' not in result.stderr
+        assert 'private-key-canary' not in result.stdout
     if attack == 'checkout':
         argv = real_sandbox.argv
         for i, flag in enumerate(argv):
@@ -236,3 +268,96 @@ def test_real_sandbox_browser_cache(real_sandbox):
     result = real_sandbox('test -n "$(find "$PLAYWRIGHT_BROWSERS_PATH" -name chrome -type f)" '
                           '&& ! touch "$PLAYWRIGHT_BROWSERS_PATH/poison"', browsers=str(cache))
     assert result.returncode == 0, result.stderr
+
+
+def test_real_sandbox_network_and_job_services(real_sandbox, tmp_path):
+    temporal = shutil.which('temporal', path=os.environ.get('PATH', '') + os.pathsep + str(Path.home() / '.local/bin'))
+    assert temporal, 'trusted Temporal CLI required (set PATH for the test)'
+    temporal = str(Path(temporal).resolve())
+    script = isolated_script('temporal --version', '/driver', '/job')
+    assert '"$temporal" /toolchain/temporal-bin/temporal' in script
+    assert 'command -v "${HOME}/.local/bin/temporal"' in script
+    with socket.socket() as listener, socket.socket(socket.AF_UNIX) as abstract:
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        address = '\0dell-ci-' + uuid.uuid4().hex
+        abstract.bind(address)
+        abstract.listen()
+        probe = f'''import socket
+for family, address in [(socket.AF_INET, ('127.0.0.1', {listener.getsockname()[1]})),
+                        (socket.AF_UNIX, {address!r})]:
+    with socket.socket(family) as s:
+        s.settimeout(1)
+        assert s.connect_ex(address) != 0, 'host service reachable'
+print('host network denied')
+'''
+        pg_socket = real_sandbox.scratch / 'pgsocket'
+        pg_socket.mkdir(mode=0o777)
+        pg_socket.chmod(0o777)
+        container = subprocess.check_output([
+            'docker', 'run', '-d', '--rm', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust',
+            '-v', f'{pg_socket}:/var/run/postgresql', 'postgres:16',
+            '-c', 'listen_addresses='], text=True).strip()
+        pg_probe = r"""import socket, struct, time
+for attempt in range(100):
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect('/scratch/pgsocket/.s.PGSQL.5432')
+        break
+    except OSError:
+        s.close()
+        time.sleep(.1)
+else:
+    raise AssertionError('job PostgreSQL socket unavailable')
+payload = b'user\0postgres\0database\0postgres\0\0'
+s.sendall(struct.pack('!II', len(payload)+8, 196608) + payload)
+def message():
+    kind = s.recv(1)
+    assert kind, 'PostgreSQL disconnected'
+    length = struct.unpack('!I', s.recv(4))[0] - 4
+    data = b''
+    while len(data) < length:
+        data += s.recv(length-len(data))
+    assert kind != b'E', data
+    return kind, data
+while message()[0] != b'Z': pass
+s.sendall(b'Q' + struct.pack('!I', 13) + b'select 1\0')
+rows = []
+while True:
+    kind, data = message()
+    if kind == b'D': rows.append(data)
+    if kind == b'Z': break
+assert rows == [b'\0\1\0\0\0\1' + b'1'], rows
+print('job PostgreSQL query passed')
+"""
+        command = 'set -eu\npython3 -c ' + shlex.quote(probe) + '\n' + 'python3 -c ' + shlex.quote(pg_probe) + '''
+command -v temporal
+temporal --version
+temporal server start-dev --headless --ip 127.0.0.1 --port 17233 --http-port 18233 --metrics-port 19233 >/scratch/temporal.log 2>&1 &
+server=$!
+trap 'kill "$server"' EXIT
+ready=0
+for i in $(seq 1 50); do
+    if temporal operator cluster health --address 127.0.0.1:17233; then ready=1; break; fi
+    sleep 0.2
+done
+test "$ready" = 1
+'''
+        try:
+            for _ in range(100):
+                # The entrypoint's temporary initialization server also reports
+                # ready; wait until postgres replaces the entrypoint as PID 1.
+                ready = subprocess.run(['docker', 'exec', container, 'sh', '-c',
+                                        'test "$(cat /proc/1/comm)" = postgres && pg_isready -U postgres'],
+                                       capture_output=True, timeout=5)
+                if ready.returncode == 0:
+                    break
+                time.sleep(.1)
+            assert ready.returncode == 0, ready.stderr
+            result = real_sandbox(command, temporal=temporal)
+        finally:
+            subprocess.run(['docker', 'rm', '-f', container], check=True,
+                           capture_output=True, timeout=10)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'host network denied' in result.stdout
+        assert '/toolchain/temporal-bin/temporal' in result.stdout
