@@ -5,7 +5,13 @@ use crate::{
     Envelope, Source, Validated,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::OnceLock};
+
+#[path = "approved_schema.rs"]
+mod approved_schema;
+const SCHEMA: &str = approved_schema::SCHEMA;
+static CAPS: OnceLock<crate::Capabilities> = OnceLock::new();
+const RESOLVE: &str = "query memorySnapshot { match { $n: Project } return { $n.slug } }";
 
 pub(super) const RECORDS: &str = "query memoryRecallRecords($project: String) {
   match { $n: MemoryRecord }
@@ -61,16 +67,22 @@ impl Http {
         if !crate::slug_ok(project) || project.starts_with("routing-") {
             return Err(Error::InvalidScope);
         }
-        let records = if let Some(commit) = pinned {
-            self.post_snapshot(RECORDS, project, commit)?
+        let resolved;
+        let commit = if let Some(commit) = pinned {
+            commit
         } else {
-            self.query(&Request {
-                query: RECORDS,
-                params: json!({"project": project}),
-            })?
+            resolved = self.query(&Request {
+                query: RESOLVE,
+                params: json!({}),
+            })?;
+            rows(&resolved)?.0
         };
-        let (commit, records) = rows(&records)?;
         // snapshot is a top-level HTTP request field, never a GQ parameter.
+        let records = self.post_snapshot(RECORDS, project, commit)?;
+        let (record_commit, records) = rows(&records)?;
+        if record_commit != commit {
+            return Err(Error::Unverified);
+        }
         let states = self.post_snapshot(STATES, project, commit)?;
         let (state_commit, states) = rows(&states)?;
         if pinned.is_some_and(|p| p != commit)
@@ -79,9 +91,7 @@ impl Http {
         {
             return Err(Error::Unverified);
         }
-        let caps = crate::Capabilities::from_schema(include_str!(
-            "../tests/fixtures/memory-v1-approved.pg"
-        ));
+        let caps = CAPS.get_or_init(|| crate::Capabilities::from_schema(SCHEMA));
         let mut seen = BTreeSet::new();
         let mut facts = Vec::new();
         for row in records {
@@ -115,7 +125,7 @@ impl Http {
                 actor: text(row, "actor")?.into(),
                 relations: serde_json::from_str(relations_text).map_err(|_| Error::Unverified)?,
             };
-            crate::validate(&envelope, &caps).map_err(|_| Error::Unverified)?;
+            crate::validate(&envelope, caps).map_err(|_| Error::Unverified)?;
             if serde_json::to_string(&envelope.relations).map_err(|_| Error::Unverified)?
                 != relations_text
             {

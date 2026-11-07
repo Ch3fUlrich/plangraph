@@ -12,7 +12,7 @@ impl Transport for Unavailable {
         Err(Error::Outage)
     }
     fn commit(&mut self, _: &Validated, _: &str) -> Result<Receipt, Error> {
-        Err(Error::Outage)
+        Err(Error::Unavailable)
     }
 }
 fn main() {
