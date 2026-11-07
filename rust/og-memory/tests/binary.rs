@@ -65,7 +65,7 @@ fn binary_scope_binding_and_routing_reasons() {
     }
 }
 #[test]
-fn binary_default_transport_is_unavailable_even_with_mock_feature() {
+fn binary_default_transport_is_unavailable() {
     refused(&["recall", "--scope", "global"], b"", "Outage");
     // The unconfigured binary has no schema capabilities and cannot save.
     refused(

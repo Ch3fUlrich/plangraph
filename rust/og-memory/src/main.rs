@@ -37,19 +37,9 @@ fn main() {
             }
             if line.len() as u64 > MAX_INPUT {
                 println!("{}", parse_error("InputTooLarge"));
-                if line.last() != Some(&b'\n') {
-                    loop {
-                        let chunk = stdin.fill_buf().unwrap_or_default();
-                        if chunk.is_empty() {
-                            break;
-                        }
-                        let end = chunk.iter().position(|b| *b == b'\n');
-                        let consumed = end.map_or(chunk.len(), |i| i + 1);
-                        stdin.consume(consumed);
-                        if end.is_some() {
-                            break;
-                        }
-                    }
+                if line.last() != Some(&b'\n') && drain_line(&mut stdin).is_err() {
+                    eprintln!("StdinUnavailable");
+                    std::process::exit(1);
                 }
                 continue;
             }
@@ -97,4 +87,65 @@ fn main() {
 }
 fn parse_error(message: &str) -> serde_json::Value {
     serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":message}})
+}
+
+fn drain_line(input: &mut impl BufRead) -> io::Result<()> {
+    loop {
+        let chunk = input.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        let end = chunk.iter().position(|b| *b == b'\n');
+        let consumed = end.map_or(chunk.len(), |i| i + 1);
+        input.consume(consumed);
+        if end.is_some() {
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct InterruptedLine {
+        remaining: usize,
+    }
+    impl Read for InterruptedLine {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            let chunk = self.fill_buf()?;
+            let count = output.len().min(chunk.len());
+            output[..count].copy_from_slice(&chunk[..count]);
+            self.consume(count);
+            Ok(count)
+        }
+    }
+    impl BufRead for InterruptedLine {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.remaining == 0 {
+                Err(io::Error::other("injected stdin failure"))
+            } else {
+                Ok(b"x")
+            }
+        }
+        fn consume(&mut self, count: usize) {
+            self.remaining -= count;
+        }
+    }
+    #[test]
+    fn oversized_line_drain_propagates_read_error() {
+        let mut input = InterruptedLine {
+            remaining: MAX_INPUT as usize + 4,
+        };
+        let mut line = Vec::new();
+        (&mut input)
+            .take(MAX_INPUT + 1)
+            .read_until(b'\n', &mut line)
+            .unwrap();
+        assert!(line.len() as u64 > MAX_INPUT);
+        assert_eq!(
+            drain_line(&mut input).unwrap_err().kind(),
+            io::ErrorKind::Other
+        );
+    }
 }

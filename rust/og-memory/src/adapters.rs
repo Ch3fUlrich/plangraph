@@ -105,7 +105,14 @@ pub fn mcp<T: Transport>(m: &mut Memory<T>, c: &Capabilities, request: Value) ->
             json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"og-memory","version":"0.1.0"}})
         }
         Some("tools/list") => {
-            json!({"tools":(["memory_remember","memory_recall"].map(|name| json!({"name":name,"inputSchema":{"type":"object","properties":{"scope":{"enum":["global","project"]},"project":{"type":"string"},"envelope":{"type":"object"},"query":{"type":"string"}},"required":["scope"]}})))})
+            let tools = ["memory_remember", "memory_recall"].map(|name| {
+                let mut properties = json!({"scope":{"enum":["global","project"]},"project":{"type":"string"},"query":{"type":"string"}});
+                if name == "memory_remember" {
+                    properties["envelope"] = json!({"type":"object"});
+                }
+                json!({"name":name,"inputSchema":{"type":"object","properties":properties,"required":["scope"]}})
+            });
+            json!({"tools":tools})
         }
         Some("tools/call") => {
             let p = &request["params"];
@@ -136,6 +143,22 @@ mod tests {
     }
     fn args(op: &str) -> Vec<String> {
         [op, "--scope", "global"].map(String::from).to_vec()
+    }
+    #[test]
+    fn recall_schema_does_not_advertise_rejected_envelope() {
+        let mut m = Memory::new(MockTransport::default());
+        let response = mcp(&mut m, &caps(), json!({"id":1,"method":"tools/list"})).unwrap();
+        let tools = response["result"]["tools"].as_array().unwrap();
+        for tool in tools {
+            let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+            assert_eq!(
+                properties.contains_key("envelope"),
+                tool["name"] == "memory_remember"
+            );
+        }
+        let response = mcp(&mut m, &caps(), json!({"id":2,"method":"tools/call","params":{"name":"memory_recall","arguments":{"scope":"global","envelope":crate::tests::fact()}}})).unwrap();
+        assert_eq!(response["result"]["isError"], true);
+        assert_eq!((m.transport.reads, m.transport.writes), (0, 0));
     }
     #[test]
     fn cli_exit_codes_success_outage_recall_outage_refusal_unverified() {

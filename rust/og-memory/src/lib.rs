@@ -266,4 +266,6 @@ pub fn validate(e: &Envelope, caps: &Capabilities) -> Result<Validated, Refusal>
 }
 
 #[cfg(test)]
+mod gate_tests;
+#[cfg(test)]
 mod tests;
