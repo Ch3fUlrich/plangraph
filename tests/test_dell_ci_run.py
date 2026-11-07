@@ -312,6 +312,8 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
     docker = tmp_path / "docker"
     docker.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\n')
     docker.chmod(0o755)
+    (tmp_path / "protoc").write_text("#!/bin/sh\nexit 0\n")
+    (tmp_path / "protoc").chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
     namespace = ci.service_script.__globals__
     if name == "pytest-postgres":
@@ -327,8 +329,6 @@ def test_service_cleanup(tmp_path, monkeypatch, name):
         assert calls.read_text() == f"rm -f dell-ci-{name}\n"
     else:
         assert not calls.exists()
-
-
 @pytest.mark.parametrize("name", ["rust", "rust-worker", "rust-spike"])
 @pytest.mark.parametrize("available", [4194304, 20971519])
 def test_low_space_refuses(tmp_path, name, available):
@@ -380,10 +380,12 @@ def test_malformed_disk_space_output(tmp_path, output):
     assert code == 1
     assert record["jobs"][0]["reason"] == "cannot parse df output"
     assert not any(c.startswith("timeout ") for c in fake.calls)
-
-
 @pytest.mark.parametrize("exit_code", [0, 7, 143])
 def test_remote_home_expansion_and_scratch_cleanup(tmp_path, monkeypatch, exit_code):
+    protoc = tmp_path / "protoc"
+    protoc.write_text("#!/bin/sh\nexit 0\n")
+    protoc.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
     home = tmp_path / "remote home"
     root = home / ".cache/dell-ci/run"
     root.mkdir(parents=True)
