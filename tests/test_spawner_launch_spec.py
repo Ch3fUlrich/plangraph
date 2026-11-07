@@ -17,8 +17,8 @@ def request_data(tmp_path, monkeypatch):
     monkeypatch.setattr(spec, 'DEFAULT_LEGS', tuple(
         replace(leg, disabled=None) if leg.id in ('qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free') else leg
         for leg in spec.DEFAULT_LEGS))
-    from plangraph.spawner import target
-    monkeypatch.setattr(target, 'DEFAULT_LEGS', spec.DEFAULT_LEGS)
+    from plangraph.planner import legs
+    monkeypatch.setattr(legs, 'DEFAULT_LEGS', spec.DEFAULT_LEGS)
     monkeypatch.setattr(opencode_overlay, 'overlay_env', lambda env: env)
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: None)
     monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
