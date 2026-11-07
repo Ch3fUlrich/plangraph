@@ -1,0 +1,1 @@
+- Added opt-in Windows restart adoption of identity-checked recorded Job Objects with Job CPU accounting; fixed the fabricated Linux scope test on cgroup-v1 hosts.

@@ -1,6 +1,13 @@
 //! Daemon-owned startup: durable reconciliation, capability-gated reclaim, serve.
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#![cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+#[cfg(windows)]
+use crate::reconcile::job as native;
 use crate::reconcile::ReconcileError;
+#[cfg(target_os = "linux")]
+use crate::reconcile_backend::native;
+#[cfg(windows)]
+#[path = "reconcile_watch.rs"]
+mod reconcile_watch;
 use pg_worker_core::{lockfile::LockGuard, slots};
 use std::{
     path::{Path, PathBuf},
@@ -101,7 +108,7 @@ fn now() -> Result<u64, ReconcileError> {
         .ok_or(ReconcileError::Invalid)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn replay(root: &Path, store: &crate::evidence::EvidenceStore) -> Result<(), ReconcileError> {
     let runs = root.join("runs");
     if !runs.exists() {
@@ -138,16 +145,16 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     // mutating startup authority in this rollout; off never enters reclaim.
     if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() != Ok("on") {
         crate::reconcile::configured_startup(root)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() == Ok("shadow") {
             for row in crate::reconcile_store::inventory(root).unwrap_or_else(|error| {
                 eprintln!("shadow adoption unavailable: {error}");
                 Vec::new()
             }) {
                 if crate::reconcile_store::gone(row.identity.as_ref()).ok() == Some(false)
-                    && row.identity.is_some_and(|identity| {
-                        crate::reconcile_backend::native::Group::open(&row.run_id, identity).is_ok()
-                    })
+                    && row
+                        .identity
+                        .is_some_and(|identity| native::Group::open(&row.run_id, identity).is_ok())
                 {
                     eprintln!("would_adopt {} {}", row.run_id, row.attempt);
                 }
@@ -164,12 +171,13 @@ pub(crate) fn configured(root: &Path) -> Result<Guard, String> {
     Ok(guard)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
-    use crate::{
-        reconcile_backend::native::Group,
-        reconcile_watch::{Step, StopPolicy, Watch},
-    };
+    #[cfg(windows)]
+    use self::reconcile_watch::{Step, StopPolicy, Watch};
+    #[cfg(target_os = "linux")]
+    use crate::reconcile_watch::{Step, StopPolicy, Watch};
+    use native::Group;
     use pg_worker_core::{activity::Limits, run::record::RunRecord};
     let lock_deadline = std::time::Instant::now() + Duration::from_secs(10);
     let _lock = loop {
@@ -222,8 +230,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     let mut gone = Vec::new();
     for row in rows {
         if let Some(group) = row.identity.as_ref().and_then(|p| p.group.as_deref()) {
-            crate::reconcile_backend::native::scope(&row.run_id, group)
-                .map_err(|_| ReconcileError::Unknown)?;
+            native::scope(&row.run_id, group).map_err(|_| ReconcileError::Unknown)?;
         }
         if crate::reconcile_store::orphan_gone(root, &row)? {
             if let Some(identity) = row.identity {
@@ -302,7 +309,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
     }));
     Ok(())
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn start(_: &Path, _: &mut Guard) -> Result<(), ReconcileError> {
     Err(ReconcileError::Unknown)
 }
