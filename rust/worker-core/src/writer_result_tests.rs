@@ -41,8 +41,14 @@ fn writer_none_launch_missing_root_stays_confined() {
             None,
         )
     };
-    assert!(launch(&f.repo, temp).unwrap().is_none());
+    assert!(matches!(
+        launch(&f.repo, temp),
+        Err(crate::workspace_resolver::ResolveError::Verify(
+            "worktrees_root"
+        ))
+    ));
     assert!(!missing.exists());
+    assert!(!temp.join("missing").exists());
     let nested = temp.join("existing/trees");
     std::fs::create_dir_all(&nested).unwrap();
     f.repo.worktrees_root = nested.to_str().unwrap().into();

@@ -321,6 +321,7 @@ pub fn prepare_launch(
         .map_err(|_| ResolveError::Invalid("workspace"))?;
     if workspace.mode == Mode::None {
         require(checkout.is_none(), "none_checkout")?;
+        require(Path::new(&repo.worktrees_root).is_dir(), "worktrees_root")?;
         let trees = resolved(Path::new(&repo.worktrees_root))?;
         require(temp.is_absolute() && !temp.starts_with(&trees), "temp")?;
         require(!temp.canonicalize()?.starts_with(&trees), "temp_escape")?;
