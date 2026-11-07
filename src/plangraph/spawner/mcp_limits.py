@@ -12,12 +12,14 @@ PS_FIELDS = (
 
 def ps_reply(runs):
     """Keep all live runs and the newest ended runs, without record payloads."""
-    live = [run for run in runs if run.get('status') in ('running', 'queued')]
-    ended = [run for run in runs if run.get('status') not in ('running', 'queued')]
+    live = [run for run in runs if run.get('status') in ('running', 'queued', 'unknown')]
+    ended = [run for run in runs if run.get('status') not in ('running', 'queued', 'unknown')]
     selected = live + ended[:PS_ENDED_LIMIT]
     compact = []
     for run in selected:
         row = {key: run[key] for key in PS_FIELDS if key in run}
+        if run.get('status') == 'unknown':
+            row['reason'] = 'host query failed'
         leg = run.get('chosen_leg')
         if isinstance(leg, dict) and 'id' in leg:
             row['leg'] = leg['id']

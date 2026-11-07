@@ -91,6 +91,11 @@ def _resolve_launch(
     return exe, None
 
 
+def is_terminal(status):
+    """Only known final run states are terminal; unknown states remain visible."""
+    return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped')
+
+
 @dataclass
 class JobInfo:
     """Execution state of a spawned agent task."""

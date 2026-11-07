@@ -194,7 +194,8 @@ class MCPSpawnerServer:
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
                 arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
         if name == 'plangraph_agent_ps':
-            return ps_reply(self.service.ps()['runs'])
+            from .remote_ps import list_runs
+            return ps_reply(await asyncio.to_thread(list_runs, self.service.ps()['runs']))
         if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
             return self.service.result(arguments['run_id'])
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
