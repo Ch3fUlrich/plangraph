@@ -226,10 +226,10 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
 
     expected_branch = phase_branch(key)
     if branch != expected_branch:
-        # Old scheduled activities have no provenance field. Infer the v0 path
-        # from its exact spelling and checked-out ref, then verify ancestry below.
-        # A supplied field is only a consistency check, never authorization.
-        if pre_patch_phase not in (None, key):
+        # Legacy workflow retries must carry the original key: the sanitised
+        # branch spelling alone cannot distinguish colliding phase keys.
+        # Provenance is necessary, but checkout and ancestry checks still apply.
+        if pre_patch_phase != key:
             raise Refused("validation", f"branch must be {expected_branch}")
         current = None
         if branch == _legacy_phase_branch(key) and Path(repo_root).is_dir():

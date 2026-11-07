@@ -48,7 +48,7 @@ def test_legacy_ref_without_checkout_is_not_trusted(w, tmp_path, detached):
     assert not github.calls
 
 
-@pytest.mark.parametrize("provenance", ["demo-PH-X"])
+@pytest.mark.parametrize("provenance", [None, "demo-PH-X"])
 def test_checked_out_legacy_requires_original_key_provenance(w, tmp_path, provenance):
     gate(w)
     finish_cards(w, "demo:C1", "demo:C2")
@@ -63,7 +63,8 @@ def test_checked_out_legacy_requires_original_key_provenance(w, tmp_path, proven
     with pytest.raises(Refused, match="branch must be"):
         phase_finish.finish_phase(w.store, w.p("router"), "demo:PH-X",
                                   branch, head, repo_root=root, github=github,
-                                  pre_patch_phase=provenance)
+                                  **({} if provenance is None else
+                                     {"pre_patch_phase": provenance}))
     assert not github.calls
 
 
@@ -84,10 +85,12 @@ def test_old_payload_retry_requires_base_ancestry(w, tmp_path, ancestry):
     github = FakeGitHub(ci=True)
     if ancestry:
         result = phase_finish.finish_phase(w.store, w.p("router"), "demo:PH-X",
-                                          branch, head, repo_root=root, github=github)
+                                          branch, head, repo_root=root, github=github,
+                                          pre_patch_phase="demo:PH-X")
         assert result["state"] == "merged"
     else:
         with pytest.raises(Refused, match="does not descend from base"):
             phase_finish.finish_phase(w.store, w.p("router"), "demo:PH-X",
-                                      branch, head, repo_root=root, github=github)
+                                      branch, head, repo_root=root, github=github,
+                                      pre_patch_phase="demo:PH-X")
         assert not github.calls
