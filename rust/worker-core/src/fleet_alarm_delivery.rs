@@ -67,7 +67,7 @@ impl Deliveries {
         });
         if record.acknowledged
             || record.attempts >= self.maximum_attempts
-            || !record.next_retry.is_some_and(|due| now >= due)
+            || record.next_retry.is_none_or(|due| now < due)
         {
             return false;
         }
