@@ -1,6 +1,88 @@
 use super::*;
 #[cfg(windows)]
 #[test]
+fn watch_recorder_start_matches_creation_filetime() {
+    use crate::run::{record::RunRecord, supervise::*};
+    use std::{os::windows::io::FromRawHandle, time::Duration};
+    use windows_sys::Win32::System::Threading::*;
+
+    let dir = tempfile::tempdir().unwrap();
+    let rt = Runtime::new(Config {
+        state_dir: dir.path().into(),
+        grace: Duration::ZERO,
+        ..Default::default()
+    });
+    struct Guard(Option<RunHandle>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if let Some(handle) = self.0.take() {
+                handle.cancel();
+                handle.join().unwrap();
+            }
+        }
+    }
+    let _guard = Guard(Some(
+        start(
+            &rt,
+            RunSpec {
+                run_id: "run-watchfiletime".into(),
+                job_id: "job-watchfiletime".into(),
+                program: "cmd.exe".into(),
+                args: vec!["/C".into(), "ping -n 60 127.0.0.1 >NUL".into()],
+                cwd: dir.path().into(),
+                env: ["SystemRoot", "PATH"]
+                    .into_iter()
+                    .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), value)))
+                    .collect(),
+                stdin: None,
+                base: Default::default(),
+                events: vec![],
+                finish: None,
+            },
+        )
+        .unwrap(),
+    ));
+    let path = dir.path().join("runs/run-watchfiletime/record.json");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let record = loop {
+        let record = RunRecord::read_path(&path).unwrap().to_value();
+        if record["status"] == "running" {
+            break record;
+        }
+        assert_eq!(record["status"], "queued", "launch failed: {record}");
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let pid = u32::try_from(record["proc"]["pid"].as_u64().unwrap()).unwrap();
+    // SAFETY: query-only handle for the live recorded child, owned below.
+    let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    assert!(!raw.is_null());
+    let process = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw) };
+    use std::os::windows::io::AsRawHandle;
+    let (mut created, mut exit, mut kernel, mut user) = Default::default();
+    // SAFETY: live owned process handle and writable FILETIME outputs.
+    assert_ne!(
+        unsafe {
+            GetProcessTimes(
+                process.as_raw_handle(),
+                &mut created,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        },
+        0
+    );
+    let creation = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    assert_eq!(record["proc"]["start_time"].as_u64(), Some(creation));
+    assert_eq!(record["pid_start"].as_u64(), Some(creation));
+    let mut job = NativeJob::open(record["proc"]["group"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(job.member(pid, creation).unwrap());
+}
+#[cfg(windows)]
+#[test]
 fn native_membership_and_accounting() {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::System::{JobObjects::*, Threading::*};

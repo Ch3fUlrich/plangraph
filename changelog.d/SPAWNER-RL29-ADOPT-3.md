@@ -1,1 +1,2 @@
 - Added opt-in Windows restart adoption of identity-checked recorded Job Objects with Job CPU accounting; fixed the fabricated Linux scope test on cgroup-v1 hosts.
+- Added a Windows recorder-to-adoption regression asserting persisted process start identity equals the spawned child's creation FILETIME. Reviewed Job scope/open pre-checks: exact per-run names and nonzero start identities deliberately fail closed as unknown, never gone, when invalid.
