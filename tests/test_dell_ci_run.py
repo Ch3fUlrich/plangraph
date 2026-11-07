@@ -52,10 +52,14 @@ def test_prefix_and_refs_refused(tmp_path, sha):
     assert not fake.calls
 
 
-@pytest.mark.parametrize("fake", [Fake(head="cd" * 20), Fake(dirty="?? dirty\n")])
-def test_moved_or_dirty_refused(tmp_path, fake):
+@pytest.mark.parametrize("fake,reason", [
+    (Fake(head="cd" * 20), "HEAD mismatch"),
+    (Fake(dirty="?? dirty\n"), "dirty worktree"),
+])
+def test_moved_or_dirty_refused(tmp_path, fake, reason):
     code, record = invoke(tmp_path, fake)
     assert code != 0 and record["result"] == "failure"
+    assert record["reason"] == reason
     assert not any("scrub_check.py" in c for c in fake.calls)
     assert any("worktree remove" in c for c in fake.calls)
 
@@ -81,6 +85,7 @@ def test_exact_identity_and_commands(tmp_path):
     fake = Fake()
     code, record = invoke(tmp_path, fake, jobs="select,scrub,file-size,changelog-docs,pytest")
     assert code == 0
+    assert fake.calls[:2] == ["git fetch origin", f"git fetch origin {SHA}"]
     assert record["sha"] == SHA and record["host"] == "test-host"
     assert record["started"]
     assert all(j["duration_s"] >= 0 for j in record["jobs"])
@@ -91,6 +96,22 @@ def test_exact_identity_and_commands(tmp_path):
     commands = [c for c in fake.calls if c.startswith("timeout ")]
     assert len(commands) == 5
     assert all("python3 " in c and "python " not in c for c in commands)
+
+
+def test_requested_sha_fetch_failure(tmp_path):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1] == f"git fetch origin {SHA}":
+            return subprocess.CompletedProcess(argv, 1, "", "secret")
+        return result
+
+    code, record = invoke(tmp_path, runner)
+    assert code == 1
+    assert record["reason"] == "requested SHA fetch failed"
+    assert not any("worktree add" in command for command in fake.calls)
+    assert not record["jobs"]
 
 
 def test_slice_two_skipped(tmp_path):

@@ -66,19 +66,23 @@ def main(argv=None, *, runner=subprocess.run):
     def call(command, timeout=120):
         return remote(args.host, command, timeout, runner)
 
-    def checked(command):
+    def checked(command, reason):
         result = call(command)
         if result.returncode:
-            raise RuntimeError("remote setup failed")
+            raise RuntimeError(reason)
         return result.stdout
 
     try:
-        checked(f"git fetch origin && mkdir -m 700 {directory} && "
-                f"git worktree add --detach {qtree} {args.sha}")
-        head = checked(f"git -C {qtree} rev-parse HEAD").strip()
+        checked("git fetch origin", "origin fetch failed")
+        checked(f"git fetch origin {args.sha}", "requested SHA fetch failed")
+        checked(f"mkdir -m 700 {directory} && "
+                f"git worktree add --detach {qtree} {args.sha}",
+                "worktree setup failed")
+        head = checked(f"git -C {qtree} rev-parse HEAD", "HEAD verification failed").strip()
         if head != args.sha.lower():
             raise RuntimeError("HEAD mismatch")
-        if checked(f"git -C {qtree} status --porcelain --untracked-files=all"):
+        if checked(f"git -C {qtree} status --porcelain --untracked-files=all",
+                   "worktree status failed"):
             raise RuntimeError("dirty worktree")
         record["result"] = "success"
         for name in names:
@@ -107,7 +111,10 @@ def main(argv=None, *, runner=subprocess.run):
                 job["duration_s"] = round(time.monotonic() - start, 3)
             if job["result"] != "success":
                 record["result"] = "failure"
-    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+    except RuntimeError as exc:
+        record["result"] = "failure"
+        record["reason"] = str(exc)
+    except (OSError, subprocess.TimeoutExpired):
         record["result"] = "failure"
         record["reason"] = "remote setup or verification failed"
     finally:
