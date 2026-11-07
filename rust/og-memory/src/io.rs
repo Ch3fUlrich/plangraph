@@ -18,6 +18,8 @@ use readback::matching;
 pub enum Error {
     Refused(Refusal),
     Outage,
+    /// Terminal refusal: this transport does not support publication; do not retry.
+    Unavailable,
     Conflict,
     Unknown,
     /// Verification failed after a possible upstream commit; this is not a rollback.
