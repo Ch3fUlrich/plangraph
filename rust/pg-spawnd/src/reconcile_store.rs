@@ -41,7 +41,7 @@ fn seconds(value: &Value) -> Result<u64, ReconcileError> {
     }
     Ok(n as u64)
 }
-fn read(path: &Path) -> Result<Value, ReconcileError> {
+pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
     check(path, false)?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);

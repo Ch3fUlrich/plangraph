@@ -282,3 +282,20 @@ advancement persists attachment and keyed warnings and settles proven-empty grou
 as orphaned with null exit status. Shadow diagnostics classify verified live
 no-scope leaders without signalling. Scope/Job adoption, CPU sampling, and startup
 adoption/reclaim integration remain deferred.
+### Locked restart startup
+
+With an explicit `PLANGRAPH_RELIABILITY_RECONCILE=on`, the daemon takes a
+state-root ownership lock before inventory and retains it through serving.
+A separate reconciliation lock covers inventory, durable orphan or attachment
+decisions, evidence replay and the initial slot-reclaim pass. Listener acceptance
+starts only after that sequence succeeds. Errors refuse startup without issuing
+the private reclaim capability. Off performs no reclaim; shadow remains read-only.
+
+Only durably settled, proven-gone identities matching the slot's run, PID, start
+time and group are eligible for startup reclaim. Live, unknown, pending and queued
+entries remain pinned. Adopted no-scope Linux leaders use the existing identity
+checks and watcher deadlines; watcher ownership ends with the daemon and normal
+guard destruction joins without killing children. Scope/Job Object adoption and
+CPU sampling remain separate work. Shared configuration retains the existing
+advisory rollout behavior; enabling mutation still requires explicit environment
+opt-in and the operational live gate.
