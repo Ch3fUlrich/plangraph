@@ -163,7 +163,8 @@ def test_paid_pin_measured(tmp_path, monkeypatch, one_up):
     ('dry_run', {'status': 429}, False, None),
     ('failed', None, True, 'not_served_on_host'),
     ('failed', None, False, None), ('completed', None, False, None)])
-def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expected):
+@pytest.mark.parametrize('detail', ['', ': node busy'])
+def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expected, detail):
     from plangraph.planner.measured_down import measured_down
     free = replace(legs.DEFAULT_LEGS[1], id='free', model='test/free', family='glm',
                    tier='free', tool_mode='tools', disabled=None, roles=('review',))
@@ -171,7 +172,7 @@ def test_live_evidence(tmp_path, monkeypatch, status, stop, unavailable, expecte
     text = 'prompt: usage limit; credit usage limit; not_served_on_host; model not available'
     runner = fake_runner(tmp_path, status, stop, text)
     if unavailable:
-        runner = fake_runner(tmp_path, status, stop, 'not_served_on_host')
+        runner = fake_runner(tmp_path, status, stop, 'not_served_on_host' + detail)
     service = SpawnService(runner=runner, state=tmp_path,
         leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
     record = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt=text,
@@ -236,12 +237,13 @@ def test_record_window_and_corruption(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('status', ['failed', 'skipped', 'completed'])
-def test_saved_structured_skip(tmp_path, status):
+@pytest.mark.parametrize('reason', ['not_served_on_host', 'not_served_on_host: free-test'])
+def test_saved_structured_skip(tmp_path, status, reason):
     import time
     from plangraph.planner.measured_down import measured_down
     service = SpawnService(state=tmp_path)
     record = dict(run_id='run-skip', ended=time.time(), status='failed',
-        plan={'skipped': [{'leg': 'free', 'reason': 'not_served_on_host'}]})
+        plan={'skipped': [{'leg': 'free', 'reason': reason}]})
     service._save(record)
     saved = service.result(record['run_id'])
     assert saved['host'] and measured_down(tmp_path)['free']['reason'] == 'not_served_on_host'

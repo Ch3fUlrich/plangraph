@@ -64,7 +64,7 @@ class SpawnService(SeatSpawnMixin):
                 leg = candidate.get('leg')
                 if leg not in attempted:
                     record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
-                        down_reason='not_served_on_host' if candidate.get('reason') == 'not_served_on_host' else None,
+                        down_reason='not_served_on_host' if (candidate.get('reason') or '').split(':', 1)[0].strip() == 'not_served_on_host' else None,
                         skip_reason=candidate.get('skip_reason') or candidate.get('reason'),
                         served_model='unwitnessed', served_family='unwitnessed',
                         served_witness_reason='leg skipped before launch'))
@@ -343,10 +343,11 @@ class SpawnService(SeatSpawnMixin):
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
+                    down_token = (unavailable or '').split(':', 1)[0].strip()
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                         # Only failed/skipped attempts count; only 402/429 override unavailable.
                         down_reason=('credit_limit' if stop_status == 402 else 'usage_limit' if stop_status == 429 else
-                            unavailable if unavailable in ('not_served_on_host', 'credit_limit', 'usage_limit') else None)
+                            down_token if down_token in ('not_served_on_host', 'credit_limit', 'usage_limit') else None)
                             if job.status in ('failed', 'skipped') else None,
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
