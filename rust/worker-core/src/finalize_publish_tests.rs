@@ -160,14 +160,10 @@ fn inherited_git_overrides_are_removed() {
             .envs(env)
             .output()
             .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stdout)
-        );
         let report = String::from_utf8(out.stdout).unwrap();
         assert!(report.contains("running 1 test"), "{report}");
         assert!(report.contains("test result: ok. 1 passed;"), "{report}");
+        assert!(out.status.success(), "{report}");
         return;
     }
     let f = Fixture::new();

@@ -7,6 +7,7 @@ use std::{
 };
 const CHUNK: usize = 65536;
 const OVERLAP: usize = 16384;
+const MAX_COMMIT_BYTES: usize = 1024 * 1024;
 // Cross-edge secret matches longer than OVERLAP are out of scope: real credentials
 // are far shorter. Patterns remain unchanged, but streaming coverage is capped.
 
@@ -67,6 +68,9 @@ fn batch(reader: &mut impl BufRead, input: &[u8]) -> Result<(), Refusal> {
         let mut size: usize = fields[2].parse().map_err(|_| Refusal::BadBundle)?;
         // Scan the message as a borrowed slice of the sole commit-object buffer.
         if fields[1] == "commit" {
+            if size > MAX_COMMIT_BYTES {
+                return Err(Refusal::BadBundle);
+            }
             let mut raw = vec![0; size];
             reader.read_exact(&mut raw).map_err(read)?;
             if crate::writer_secret::scan_bytes(
