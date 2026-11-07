@@ -1,0 +1,1 @@
+- Added prerequisite orphaned record semantics and preservation of attempt recovery identity and deadlines. Startup reconciliation, adoption, recovery persistence and gated reclaim remain unimplemented and disabled.

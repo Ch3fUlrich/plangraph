@@ -56,6 +56,13 @@ impl Runs {
         let run_id = new_run_id();
         let job_id = new_job_id();
         let dry = args.get("dry_run") == Some(&json!(true));
+        let max_s = match args["card"].get("max_s") {
+            None => 1800,
+            Some(value) => value
+                .as_u64()
+                .filter(|seconds| seconds.checked_mul(1000).is_some())
+                .ok_or_else(|| internal("invalid max_s"))?,
+        };
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
@@ -90,6 +97,7 @@ impl Runs {
             .map_err(|e| internal(&e.to_string()))?;
 
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
+            "max_s":max_s,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
@@ -284,13 +292,35 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
-    record.set("attempts", json!([{"leg":leg,"status":status.as_str(),
+    let mut attempts = record
+        .get("attempts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut attempt = attempts
+        .pop()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    for key in ["proc", "started", "max_s"] {
+        if attempt.get(key).is_none() {
+            if let Some(value) = record.get(key) {
+                attempt[key] = value.clone();
+            }
+        }
+    }
+    let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
         "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
         "request_side_model":null,"witness_kind":null,
         "skip_reason":if status == Status::Completed || dry { None } else { record.get("reason") },
-        "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")} ]));
+        "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")});
+    attempt
+        .as_object_mut()
+        .unwrap()
+        .extend(completion.as_object().unwrap().clone());
+    attempts.push(attempt);
+    record.set("attempts", json!(attempts));
     record.set(
         "chosen_leg",
         if status == Status::Completed || dry {

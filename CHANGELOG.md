@@ -3,6 +3,7 @@
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
+- Added prerequisite record bridges for opt-in daemon restart reconciliation; adoption and reconciliation-gated slot reclaim remain disabled pending implementation.
 - **KEEPER-SNAP-S1-FILTERS S1b:** Scope decision text to selected evidence before field projection; keep progress over all items with independent columns, preserve legacy snapshots, and close S1a validation/docs LOWs.
 - **PG-CHANGELOG-FRAGMENTS (D-3732):** Add changelog fragments and a fold tool so open PRs no longer conflict on CHANGELOG.md.
 - **SPAWNER-CANCEL-KILLS (register 42):** a cancel from another process kills a run started on a named leg: its record now keeps the root's start token.

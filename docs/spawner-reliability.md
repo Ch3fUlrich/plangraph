@@ -1,5 +1,19 @@
 # Spawner reliability
 
+## RL29: prerequisite record bridges (partial)
+
+Run records recognize terminal `orphaned` status (semantic class ORPHANED),
+with a null exit code rather than a manufactured failure code. Normal launch
+records retain validated card `max_s` (1800 seconds when absent); finishing a
+run preserves prior attempts and current process identity, start time, deadline
+and outcome fields. Attempt-specific values take precedence over legacy fields.
+
+This prerequisite does not implement startup reconciliation, adoption, inventory,
+recovery events/evidence replay, watchers or slot reclaim. It enables no switch
+and must not be treated as RL29 completion or C5 evidence. Those behaviors need
+a follow-up production-line allocation, independent HIGH acceptance and live GO.
+Rollback of these record bridges is `git revert`.
+
 ## RL13: weak CPU activity (P-R6)
 
 `cpu::Sampler` is a pure thirty-second sampler with no daemon caller or switch.
