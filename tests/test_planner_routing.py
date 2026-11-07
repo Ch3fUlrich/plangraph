@@ -9,7 +9,18 @@ import pytest
 from plangraph.planner.legs import DEFAULT_LEGS, TIERS, Leg, WRITER_ORDER, load_legs, with_measured
 from plangraph.planner.routing import (RouteError, effective_estimate,
                                        next_after_failure, pick_window_class,
-                                       plan_spawn, route_card)
+                                        plan_spawn, route_card)
+
+# These legacy mechanics probes exercise every tier independent of live policy.
+# Production disabled-leg exclusion is covered by test_route_policy_review_choice.
+DEFAULT_LEGS = tuple(dataclasses.replace(leg, disabled=None) for leg in DEFAULT_LEGS)
+_route_card = route_card
+
+
+def route_card(card, **kwargs):
+    kwargs.setdefault('legs', DEFAULT_LEGS)
+    return _route_card(card, **kwargs)
+
 
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free",
@@ -56,7 +67,8 @@ def test_default_legs_exact_d25_order():
 
 
 def test_load_legs_none_is_default():
-    assert load_legs(None) is DEFAULT_LEGS
+    from plangraph.planner.legs import DEFAULT_LEGS as production_legs
+    assert load_legs(None) is production_legs
 
 
 def test_load_legs_good_file_replaces(tmp_path):

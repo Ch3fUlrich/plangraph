@@ -142,7 +142,10 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.measured_down import measured_down
         down = measured_down(self.state)
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
-        return replace(plan, legs=witness_order(card, role, plan.legs, down))
+        from plangraph.planner.legs import leg_active
+        return replace(plan, legs=witness_order(
+            card, role, tuple(leg for leg in plan.legs if leg_active(leg)), down),
+            review_seats=tuple(leg for leg in plan.review_seats if leg_active(leg)))
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief

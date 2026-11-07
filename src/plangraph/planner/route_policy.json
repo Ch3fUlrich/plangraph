@@ -4,7 +4,7 @@
   "off_families": ["glm"],
   "review_allowed_families": ["deepseek", "glm"],
   "paused_harnesses": {
-    "qodercli": {"allowed_roles": ["review"]},
+    "qodercli": {"allowed_roles": []},
     "agy": {"allowed_roles": ["implement", "orchestrate", "review"]}
   }
 }
