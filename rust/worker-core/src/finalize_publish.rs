@@ -124,32 +124,29 @@ fn git_with_env(
         return Err(PublishError::Invalid);
     }
     let mut command = crate::workspace_resolver::git_command(remote.root);
-    command.envs(env.iter().copied());
-    for key in std::env::vars_os()
-        .map(|(key, _)| key)
-        .chain(env.iter().map(|(key, _)| (*key).into()))
-    {
-        let name = key.to_string_lossy();
-        if name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_") {
+    #[cfg(test)]
+    if args == ["--test-env-probe"] {
+        command = std::process::Command::new("env");
+        command.current_dir(remote.root);
+    }
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
             command.env_remove(key);
         }
     }
-    for key in [
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_INDEX_FILE",
-    ] {
-        command.env_remove(key);
-    }
-    Ok(command
+    command
+        .env_remove("SSH_ASKPASS")
+        .envs(env.iter().copied())
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_ALLOW_PROTOCOL", "file:https:ssh")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    #[cfg(test)]
+    if args == ["--test-env-probe"] {
+        return Ok(command.output()?);
+    }
+    Ok(command
         .args(["--no-replace-objects", "-c", "core.hooksPath="])
         .args(args)
         .output()?)

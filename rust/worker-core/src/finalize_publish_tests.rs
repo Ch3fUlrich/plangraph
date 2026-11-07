@@ -123,7 +123,6 @@ fn remote_allowlist_rejects_helpers_and_other_transports() {
 }
 #[test]
 fn inherited_git_overrides_are_removed() {
-    let f = Fixture::new();
     let env = [
         ("GIT_CONFIG_COUNT", "1"),
         ("GIT_CONFIG_KEY_0", "alias.injected"),
@@ -136,16 +135,68 @@ fn inherited_git_overrides_are_removed() {
         ("GIT_OBJECT_DIRECTORY", "/nonexistent"),
         ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "/nonexistent"),
         ("GIT_INDEX_FILE", "/nonexistent"),
+        ("GIT_EXEC_PATH", "/nonexistent"),
+        ("GIT_SSH_COMMAND", "untrusted-command"),
+        ("GIT_SSH", "/nonexistent"),
+        ("GIT_COMMON_DIR", "/nonexistent"),
+        ("GIT_NAMESPACE", "untrusted"),
+        ("GIT_FOO", "untrusted"),
+        ("GIT_ASKPASS", "/nonexistent"),
+        ("SSH_ASKPASS", "/nonexistent"),
     ];
-    let out = git_with_env(&f.remote(), &["config", "--get", "alias.injected"], &env).unwrap();
+    // Re-execute only this test so injected parent variables cannot race other tests.
+    const MARKER: &str = "PUBLISH_ENV_TEST_CHILD";
+    if std::env::var_os(MARKER).is_none() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "finalize_publish::tests::inherited_git_overrides_are_removed",
+            ])
+            .env(MARKER, "1")
+            .envs(env)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        return;
+    }
+    let f = Fixture::new();
+    let out = git_with_env(&f.remote(), &["--test-env-probe"], &[]).unwrap();
+    assert!(out.status.success());
+    let child_env = String::from_utf8(out.stdout).unwrap();
+    for (key, _) in env {
+        assert!(
+            !child_env
+                .lines()
+                .any(|line| line.starts_with(&format!("{key}="))),
+            "{key}"
+        );
+    }
+    assert!(child_env
+        .lines()
+        .any(|line| line == "GIT_TERMINAL_PROMPT=0"));
+    let out = git_with_env(
+        &f.remote(),
+        &["--test-env-probe"],
+        &[("GIT_FOO", "explicit")],
+    )
+    .unwrap();
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .any(|line| line == "GIT_FOO=explicit"));
+    let out = git(&f.remote(), &["config", "--get", "alias.injected"]).unwrap();
     assert_eq!(out.status.code(), Some(1));
-    let out = git_with_env(&f.remote(), &["rev-parse", "--git-dir"], &env).unwrap();
+    let out = git(&f.remote(), &["rev-parse", "--git-dir"]).unwrap();
     assert!(out.status.success());
     assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), ".git");
-    let out = git_with_env(&f.remote(), &["cat-file", "-t", &f.head], &env).unwrap();
+    let out = git(&f.remote(), &["cat-file", "-t", &f.head]).unwrap();
     assert!(out.status.success());
     assert_eq!(out.stdout, b"commit\n");
-    assert!(git_with_env(&f.remote(), &["read-tree", &f.head], &env)
+    assert!(git(&f.remote(), &["read-tree", &f.head])
         .unwrap()
         .status
         .success());
