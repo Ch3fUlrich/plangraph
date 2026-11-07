@@ -123,12 +123,7 @@ fn question_text_default_and_tags_are_redacted() {
 #[test]
 fn review_wrap_edges() {
     for newline in ["\n", "\r\n"] {
-        for prose in [
-            "ordinary prose",
-            "abc123 prose",
-            "abc123; prose",
-            "abcé123",
-        ] {
+        for prose in ["ordinary prose", "abc123 prose", "abc123; prose", "abcé123"] {
             let text = format!(
                 "{}{}{newline}{prose}",
                 ["s", "k-"].concat(),
