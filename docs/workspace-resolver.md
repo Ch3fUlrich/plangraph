@@ -50,7 +50,7 @@ and ASCII secret boundaries. Git object identifiers are metadata, not text to
 redact. Sanitized history reconstruction preserves mapped merge parents and safe
 messages, replaces secret-bearing messages, and appends `Sanitized: secret-gate`.
 It returns the rebuilt tip, SHA mapping and dropped paths, and refuses secret-bearing
-prerequisite history through the same gate. Salvage export is outside this slice.
+prerequisite history through the same gate. Failed-writer export is described below.
 
 Neither transport pushes. R5 must scan reachable blobs and commit messages,
 then re-scan imported content; serialized bundle scanning is insufficient.
@@ -118,3 +118,35 @@ attempt completion. This slice performs no garbage collection. Referenced
 pending/conflicted results must not expire; finalized results receive salvage
 retention (seven days or acknowledgment), and only unreferenced orphan blobs
 use a 24-hour retention period.
+
+## Failed-writer salvage (R5B2)
+
+`writer_salvage::export_salvage` is a separate, explicitly sanitized export, not
+result publication. It verifies R4 ownership and captures committed HEAD without
+requiring terminal Writer trailers. NUL-delimited HEAD-relative modifications,
+deletions and nonignored untracked regular files form a private-index snapshot.
+Candidate bytes are scanned before snapshot objects are written; matching files
+are omitted and recorded by name only. Unchanged committed secrets are handled
+by history reconstruction, not mistaken for dirty snapshot inputs. Symlink
+snapshot inputs and gitlinks fail closed. The actual index, lane and owned files
+remain untouched; private indexes and temporary export refs are cleaned up.
+Same-user filesystem races retain the R4 trust limitation above.
+
+The sealed bundle contains replacement commits and safe snapshot content, with
+an old-to-new SHA map and dropped-path records. Original secret objects do not
+travel. Secret-bearing path text remains a fixed placeholder rather than leaking
+credentials through records; distinct removed names retain distinct entries even
+when their placeholders are equal. Non-UTF-8 committed paths are scanned as raw
+bytes and rendered as hex only for safe name records. ASCII and UTF-16 LE/BE
+content use the same SecretGate policy, not a second upload scanner. `diffscan`
+is a test-weakening heuristic, not a secret scanner. Git metadata is never redacted.
+The receiver must reapply SecretGate after quarantine import.
+
+History walks fail closed above 256 commits (including prerequisite ancestors),
+using a 257-entry probe; repeated blobs are scanned once per gate invocation.
+A real temporary Git repository probe measured 791 ms for a one-commit rebuild
+with a one-commit prerequisite under the writer test workload; this is a measured
+smoke probe, not a latency guarantee for large repositories. Oversized histories
+require operator handling rather than an unbounded per-commit blob walk.
+A failed result remains failed; this API neither publishes nor converts it to a
+result. C owns failed-tree removal/24-hour retention and D owns finalization.
