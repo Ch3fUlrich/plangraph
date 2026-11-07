@@ -31,16 +31,66 @@ impl Group {
     }
     pub(crate) fn cpu(&mut self) -> io::Result<CpuSample> {
         let path = self.scope.as_ref().ok_or_else(unknown)?;
-        let text = std::fs::read_to_string(path.join("cpu.stat"))?;
-        let total = text
-            .lines()
-            .find_map(|line| line.strip_prefix("usage_usec "))
-            .and_then(|v| v.parse::<u64>().ok())
-            .ok_or_else(unknown)?;
-        Ok(CpuSample {
-            total_ms: total / 1000,
-        })
+        cpu(path)
     }
+}
+fn cpu(path: &Path) -> io::Result<CpuSample> {
+    let usage = std::fs::read_to_string(path.join("cpu.stat"))
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("usage_usec "))
+                .and_then(|v| v.parse::<u64>().ok())
+        });
+    if let Some(total) = usage {
+        return Ok(CpuSample {
+            total_ms: total / 1000,
+        });
+    }
+    let mut pids = Vec::new();
+    members(path, &mut pids)?;
+    pids.sort_unstable();
+    pids.dedup();
+    let mut ticks = 0u64;
+    for pid in pids {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        let fields: Vec<_> = text
+            .rsplit_once(')')
+            .ok_or_else(unknown)?
+            .1
+            .split_whitespace()
+            .collect();
+        for index in [11, 12] {
+            ticks = ticks
+                .checked_add(
+                    fields
+                        .get(index)
+                        .ok_or_else(unknown)?
+                        .parse::<u64>()
+                        .map_err(|_| unknown())?,
+                )
+                .ok_or_else(unknown)?;
+        }
+    }
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if hz <= 0 {
+        return Err(unknown());
+    }
+    Ok(CpuSample {
+        total_ms: ticks.checked_mul(1000).ok_or_else(unknown)? / hz as u64,
+    })
+}
+fn members(path: &Path, out: &mut Vec<u32>) -> io::Result<()> {
+    for pid in std::fs::read_to_string(path.join("cgroup.procs"))?.split_whitespace() {
+        out.push(pid.parse().map_err(|_| unknown())?);
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            members(&entry.path(), out)?;
+        }
+    }
+    Ok(())
 }
 fn unknown() -> io::Error {
     io::Error::from(io::ErrorKind::PermissionDenied)
@@ -92,18 +142,6 @@ impl Authority for Scope {
     }
     fn signal(&mut self, force: bool) -> io::Result<()> {
         use std::os::fd::{AsRawFd, FromRawFd};
-        fn members(path: &Path, out: &mut Vec<u32>) -> io::Result<()> {
-            for pid in std::fs::read_to_string(path.join("cgroup.procs"))?.split_whitespace() {
-                out.push(pid.parse().map_err(|_| unknown())?);
-            }
-            for entry in std::fs::read_dir(path)? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    members(&entry.path(), out)?;
-                }
-            }
-            Ok(())
-        }
         let mut pids = Vec::new();
         members(&self.0, &mut pids)?;
         for pid in pids {

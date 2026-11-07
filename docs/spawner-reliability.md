@@ -299,8 +299,12 @@ Only durably settled, proven-gone identities matching the slot's run, PID, start
 time and group are eligible for startup reclaim. Live, unknown, pending and queued
 entries remain pinned. Adopted no-scope Linux leaders use the existing identity
 checks and watcher deadlines; watcher ownership ends with the daemon and normal
-guard destruction joins without killing children. Scope/Job Object adoption and
-CPU sampling remain separate work. Shared configuration retains the existing
+guard destruction joins without killing children. Linux scope adoption samples
+cumulative `cpu.stat` usage_usec, falling back to summed member `/proc` CPU ticks.
+Only increased CPU time advances weak activity (not first activity); unreadable
+sources and counter resets do not count as activity. Windows Job Object adoption
+is deferred to adopt-3, which needs Windows `pg-worker-core::watch` support;
+Windows startup remains fail-closed. Shared configuration retains the existing
 advisory rollout behavior; enabling mutation still requires explicit environment
 opt-in and the operational live gate.
 <!-- RL29 adopt-2: Linux scopes are confined to the current user's cgroup tree

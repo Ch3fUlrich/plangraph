@@ -259,7 +259,7 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
             row.attempt,
             leader,
             watch,
-            pg_worker_core::cpu::Sampler::new(100),
+            pg_worker_core::cpu::Sampler::new(1),
         ));
     }
     // No capability is issued on any earlier error, even after partial progress.
