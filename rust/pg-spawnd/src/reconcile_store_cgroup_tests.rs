@@ -97,6 +97,10 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
         gone(Some(&serde_json::from_value(identity.clone()).unwrap())),
         Err(ReconcileError::Unknown)
     ));
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
     assert_eq!(before, std::fs::read(record.path()).unwrap());
     child.stop();
     // Existing directory with missing events, and an EISDIR read error,
@@ -120,6 +124,33 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
     assert_eq!(value["events"].as_array().unwrap().len(), 1);
     crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
     assert_eq!(settled, std::fs::read(record.path()).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_removed_scope_without_recorded_pgid_unknown_untouched() {
+    let dir = StateDir::new();
+    let scope = dir.0.join("scope");
+    std::fs::create_dir(&scope).unwrap();
+    let child = GroupChild::new();
+    let mut identity = child.identity();
+    identity["group"] = json!(scope);
+    identity["start_time"] = json!(identity["start_time"].as_u64().unwrap() + 1);
+    identity.as_object_mut().unwrap().remove("pgid");
+    let mut record = dir.record();
+    record.set("proc", identity.clone());
+    record.save().unwrap();
+    let before = std::fs::read(record.path()).unwrap();
+    std::fs::remove_dir(&scope).unwrap();
+    assert!(matches!(
+        gone(Some(&serde_json::from_value(identity).unwrap())),
+        Err(ReconcileError::Unknown)
+    ));
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
 }
 
 #[cfg(target_os = "linux")]

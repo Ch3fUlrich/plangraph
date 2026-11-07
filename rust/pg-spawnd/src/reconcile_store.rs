@@ -214,7 +214,7 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
                 };
             }
             if identity.pgid.is_none() {
-                return Ok(true);
+                return Err(ReconcileError::Unknown);
             }
             // A removed scope must also agree with the recorded PGID probe.
             return match gone(Some(&Proc {
