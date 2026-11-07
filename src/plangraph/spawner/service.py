@@ -3,6 +3,7 @@ from __future__ import annotations
 from .env_redact import first_reason
 from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
 from .git_guard import writer_launch
+from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 import asyncio
 from dataclasses import asdict
@@ -27,8 +28,7 @@ class SpawnService(SeatSpawnMixin):
         leg_reader = initialize(self, leg_reader, HungBoundary)
         if leg_reader is not None and hasattr(self.runner, '__dict__') and not hasattr(self.runner, 'leg_reader'):  # probes share the planner cache
             self.runner.leg_reader = leg_reader
-        self.tasks, self._running_records = {}, {}   # run tasks; job id -> record (Q13/M8)
-        self._stderr_captures = {}
+        self.tasks, self._running_records, self._stderr_captures = {}, {}, {}   # run tasks; job id -> record (Q13/M8)
     def _path(self, run_id):
         if not isinstance(run_id, str) or not run_id.startswith('run-') or not run_id[4:].isalnum():
             raise ValueError('unknown run id')
@@ -85,24 +85,7 @@ class SpawnService(SeatSpawnMixin):
             if isinstance(value, dict):
                 return {k: v if k in IDENTIFIER_KEYS else clean(v) for k, v in value.items()}
             return value
-        # Keep diagnostics independently of the repeatedly shortened JSON tail.
-        captures = self._stderr_captures.setdefault(record['run_id'], {})
-        jobs = getattr(self.runner, 'jobs', {})
-        job = jobs.get(record.get('job_id'))
-        if job is not None:
-            captures[record['job_id']] = clean(getattr(job, 'stderr', '') or '')
-        else:
-            text = clean(record.get('stderr_tail', ''))
-            previous = captures.get('record', '')
-            if not previous.endswith(text):
-                captures['record'] = previous + text
-            elif not captures:
-                captures['record'] = text
-        data = ''.join(captures.values()).encode('utf-8')
-        marker = b'\n[stderr truncated]\n'
-        if len(data) > 1024 * 1024:
-            data = data[:1024 * 1024 - len(marker)].decode('utf-8', errors='ignore').encode() + marker
-        atomic_write_private(self._path(record['run_id']).with_name('stderr.log'), data.decode('utf-8'))
+        write_stderr_log(self._stderr_captures.setdefault(record['run_id'], {}), getattr(self.runner, 'jobs', {}), record, self._path(record['run_id']).with_name('stderr.log'), clean)
         host, item_key = record.get('host'), record.get('item_key')
         if record.get('ended') is not None:
             terminal_reason(record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
@@ -110,12 +93,7 @@ class SpawnService(SeatSpawnMixin):
         if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
         if host is not None:
             record['host'] = host   # top-level run host is an identifier (D-2960); nested 'host' keys stay redacted
-        for attempt in record.get('attempts', []):
-            if attempt.get('skip_reason'):
-                from .env_redact import normalize
-                attempt['skip_reason'] = normalize(clean(attempt['skip_reason']))[:300]
-            if 'stderr_tail' in attempt:
-                attempt['stderr_tail'] = clean(attempt['stderr_tail']).encode()[-4096:].decode('utf-8', errors='ignore')
+        clean_attempts(record, clean)
         if record.get('status') == 'failed':
             if not record.get('exit_code'):
                 record['exit_code'] = 1
