@@ -15,16 +15,16 @@ def test_parity_compares_and_visits_backend(monkeypatch, tmp_path, postgres):
 
     def claim(path, repo, backend, metadata):
         calls.append(backend)
-        return backend
+        return "validation" if backend == "sqlite" else "unexpected-postgres-result"
 
     monkeypatch.setattr(claims, "_metadata_claim", claim)
     if postgres or os.environ.get("PG_DSN") or os.environ.get("PG_KEEPER_BACKEND") == "postgres":
         with pytest.raises(AssertionError):
-            claims.test_claim_metadata_sqlite_postgres_parity(tmp_path, None, False)
+            claims.test_claim_metadata_sqlite_postgres_parity(tmp_path, None, "typo")
         assert calls == ["sqlite", "postgres"]
     else:
-        claims.test_claim_metadata_sqlite_postgres_parity(tmp_path, None, False)
-        assert calls == ["sqlite", "sqlite"]
+        claims.test_claim_metadata_sqlite_postgres_parity(tmp_path, None, "typo")
+        assert calls == ["sqlite"]
 
 
 @pytest.mark.parametrize("backend,placeholder", [("sqlite", "?"), ("postgres", "%s")])
