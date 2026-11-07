@@ -93,13 +93,17 @@ pub(crate) fn startup(
 }
 
 pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {
-    let env = std::env::var("PLANGRAPH_RELIABILITY_RECONCILE")
-        .map(Some)
-        .or_else(|e| match e {
-            std::env::VarError::NotPresent => Ok(None),
-            _ => Err(ReconcileError::Invalid),
-        })
-        .map_err(|e| e.to_string())?;
+    let env = match std::env::var("PLANGRAPH_RELIABILITY_RECONCILE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!(
+                "reconciliation startup skipped: {}",
+                ReconcileError::Invalid
+            );
+            return Ok(());
+        }
+    };
     // An explicit off must not inspect state or configuration files.
     if env.as_deref() == Some("off") {
         return Ok(());
@@ -123,9 +127,9 @@ pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {
     };
     match startup(root, env.as_deref(), &config) {
         Ok(_) => Ok(()),
-        // Shared configuration is advisory: no inventory or mode error from
-        // file-enabled shadow may prevent the daemon from binding (D-4659).
-        Err(error) if env.is_none() => {
+        // Only explicit env `on` may refuse startup; all other inventory
+        // and mode errors are advisory (D-4659, D-4671).
+        Err(error) if env.as_deref() != Some("on") => {
             eprintln!("reconciliation startup skipped: {error}");
             Ok(())
         }
