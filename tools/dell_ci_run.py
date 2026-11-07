@@ -97,8 +97,17 @@ def main(argv=None, *, runner=subprocess.run):
             try:
                 if name.startswith("rust"):
                     space = call(f"df -Pk {directory}")
-                    if space.returncode or int(space.stdout.splitlines()[-1].split()[3]) < 20971520:
-                        job["reason"] = "insufficient ~/.cache/dell-ci space: requires at least 20 GB free"
+                    if space.returncode:
+                        job["reason"] = "df command failed"
+                    else:
+                        try:
+                            available = int(space.stdout.splitlines()[-1].split()[3])
+                        except (ValueError, IndexError):
+                            job["reason"] = "cannot parse df output"
+                        else:
+                            if available < 20971520:
+                                job["reason"] = "insufficient ~/.cache/dell-ci space: requires at least 20 GB free"
+                    if "reason" in job:
                         job["result"] = "failure"
                         record["result"] = "failure"
                         continue
@@ -118,7 +127,7 @@ def main(argv=None, *, runner=subprocess.run):
                                  "success" if result.returncode == 0 else "failure")
             except subprocess.TimeoutExpired:
                 job["result"] = "timeout"
-            except (OSError, ValueError, IndexError):
+            except OSError:
                 job["result"] = "failure"
             finally:
                 job["duration_s"] = round(time.monotonic() - start, 3)

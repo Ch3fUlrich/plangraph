@@ -246,10 +246,29 @@ def test_disk_space_boundary(tmp_path, available, df_exit):
             result.returncode = df_exit
         return result
 
-    code, _ = invoke(tmp_path, runner, jobs="rust")
+    code, record = invoke(tmp_path, runner, jobs="rust")
     assert code == df_exit
+    if df_exit:
+        assert record["jobs"][0]["reason"] == "df command failed"
     assert any(c.startswith("timeout ") for c in fake.calls) == (df_exit == 0)
     assert all("/tmp" not in c for c in fake.calls)
+
+
+@pytest.mark.parametrize("output", ["", "Filesystem Blocks Used Available\n",
+                                    "disk 90000000 0 invalid 0% /home\n"])
+def test_malformed_disk_space_output(tmp_path, output):
+    fake = Fake()
+
+    def runner(argv, **kwargs):
+        result = fake(argv, **kwargs)
+        if argv[-1].startswith("df -Pk "):
+            result.stdout = output
+        return result
+
+    code, record = invoke(tmp_path, runner, jobs="rust")
+    assert code == 1
+    assert record["jobs"][0]["reason"] == "cannot parse df output"
+    assert not any(c.startswith("timeout ") for c in fake.calls)
 
 
 @pytest.mark.parametrize("exit_code", [0, 7, 143])
