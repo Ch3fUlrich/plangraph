@@ -13,9 +13,7 @@ def measured_down(state, *, now=None):
     now = time.time() if now is None else now
     host = os.environ.get('PLANGRAPH_HOST') or socket.gethostname()
     down = {}
-    from types import SimpleNamespace
     from plangraph.routing_support.leg_state import leg_status, RESET_CAP_S, _default_store
-    from plangraph.spawner.leg_probe import key
     window = max(RESET_CAP_S, LEG_DOWN_WINDOW_S) if _default_store().path.exists() else LEG_DOWN_WINDOW_S
     for path in (state / 'runs').glob('run-*/record.json'):
         try:
@@ -31,9 +29,10 @@ def measured_down(state, *, now=None):
                     continue
                 reason = attempt.get('down_reason')
                 leg = attempt.get('leg')
-                booking_key = (key(SimpleNamespace(**leg)) if isinstance(leg, dict)
-                               and isinstance(leg.get('model'), str) else
-                               leg.get('id') if isinstance(leg, dict) else leg)
+                model = leg.get('model') if isinstance(leg, dict) else None
+                # Same key as spawner.leg_probe.key (the planner must not import the spawner).
+                booking_key = (('agy/' + model if leg.get('harness') == 'agy' and '/' not in model else model)
+                               if isinstance(model, str) else leg.get('id') if isinstance(leg, dict) else leg)
                 leg = leg.get('id') if isinstance(leg, dict) else leg
                 if not isinstance(leg, str) or not leg or reason not in DOWN_REASONS:
                     continue
