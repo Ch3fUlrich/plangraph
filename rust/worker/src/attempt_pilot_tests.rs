@@ -31,6 +31,21 @@ fn pilot_leak_guard_rejects_full_prefix_and_suffix_leaks() {
 }
 
 #[test]
+fn pilot_complete_token_preserves_repeated_suffix_line() {
+    for prefix in ["ghp_", "sk-"] {
+        let secret = [prefix, &random_body()].concat();
+        let suffix = &secret[secret.len() - 16..];
+        for newline in ["\n", "\r\n"] {
+            let text = format!("{secret}{newline}{suffix}");
+            assert_eq!(
+                crate::output_redact::history_text(&text),
+                format!("[REDACTED]\n{suffix}")
+            );
+        }
+    }
+}
+
+#[test]
 fn pilot_leak_guard_explains_oversized_floor() {
     let short = ["gh", "p_", "abc"].concat();
     assert_eq!(crate::output_redact::history_text(&short), short);
