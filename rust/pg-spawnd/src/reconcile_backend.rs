@@ -2,6 +2,9 @@
 use crate::reconcile_store::Proc;
 use pg_worker_core::watch::Child;
 use std::{io, process::ExitStatus};
+#[cfg(target_os = "linux")]
+#[path = "reconcile_adopt.rs"]
+pub(crate) mod native;
 /// Authority is supplied by the validated inventory/slot backend, never by a
 /// signal caller. Implementations must revalidate membership before each signal.
 pub(crate) trait Authority: Send {

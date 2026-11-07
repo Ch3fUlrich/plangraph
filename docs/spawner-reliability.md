@@ -303,3 +303,9 @@ guard destruction joins without killing children. Scope/Job Object adoption and
 CPU sampling remain separate work. Shared configuration retains the existing
 advisory rollout behavior; enabling mutation still requires explicit environment
 opt-in and the operational live gate.
+<!-- RL29 adopt-2: Linux scopes are confined to the current user's cgroup tree
+and exact run scope name. Missing scopes are gone independently of leader PID;
+CPU usage is a weak signal only and cannot satisfy first activity. Windows
+startup remains fail-closed pending portable worker-core watch support.
+configured performs no bind/listen: Unix socket and Windows pipe creation follow
+its successful return. There is no TCP serve variant in this implementation. -->

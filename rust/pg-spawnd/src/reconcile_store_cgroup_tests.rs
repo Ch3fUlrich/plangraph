@@ -117,13 +117,11 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
     }
     std::fs::remove_dir(scope.join("cgroup.events")).unwrap();
     std::fs::remove_dir(&scope).unwrap();
-    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
-    let settled = std::fs::read(record.path()).unwrap();
-    let value: Value = serde_json::from_slice(&settled).unwrap();
-    assert_eq!(value["status"], "orphaned");
-    assert_eq!(value["events"].as_array().unwrap().len(), 1);
-    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
-    assert_eq!(settled, std::fs::read(record.path()).unwrap());
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
 }
 
 #[cfg(target_os = "linux")]
@@ -207,14 +205,23 @@ fn reconcile_named_group_members_override_reused_leader_identity() {
         pgid: None,
     };
     std::fs::write(group.join("cgroup.events"), "populated 1\nfrozen 0\n").unwrap();
-    assert!(!gone(Some(&identity)).unwrap());
+    assert!(matches!(
+        gone(Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
     std::fs::write(group.join("cgroup.procs"), "").unwrap();
     let child = group.join("child");
     std::fs::create_dir(&child).unwrap();
     std::fs::write(child.join("cgroup.threads"), "123\n").unwrap();
-    assert!(!gone(Some(&identity)).unwrap());
+    assert!(matches!(
+        gone(Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
     std::fs::write(group.join("cgroup.events"), "populated 0\nfrozen 0\n").unwrap();
-    assert!(gone(Some(&identity)).unwrap());
+    assert!(matches!(
+        gone(Some(&identity)),
+        Err(ReconcileError::Unknown)
+    ));
     std::fs::remove_file(group.join("cgroup.events")).unwrap();
     assert!(matches!(
         gone(Some(&identity)),
