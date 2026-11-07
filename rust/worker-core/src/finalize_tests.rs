@@ -180,6 +180,62 @@ fn all_objects(root: &Path) -> std::collections::BTreeSet<String> {
 }
 
 #[test]
+fn unrelated_receiver_objects_are_not_bundle_content() {
+    let f = Fixture::new("safe");
+    let root = Path::new(&f.repo.root);
+    let blob = command(root, &["hash-object", "-w", "--stdin"], b"other run", None).unwrap();
+    let pack = command(root, &["pack-objects", "--stdout"], &blob, None).unwrap();
+    command(root, &["index-pack", "--stdin"], &pack, None).unwrap();
+    let before = all_objects(root);
+    f.import().unwrap();
+    assert!(before.is_subset(&all_objects(root)));
+}
+
+#[test]
+fn bad_staged_pack_name_preserves_receiver() {
+    let f = Fixture::new("safe");
+    let root = Path::new(&f.repo.root);
+    let before = all_objects(root);
+    let stage = tempfile::tempdir().unwrap();
+    init_scratch(root, stage.path()).unwrap();
+    let objects = command(
+        f._source.path(),
+        &["rev-list", "--objects", "--no-object-names", &f.head],
+        &[],
+        None,
+    )
+    .unwrap();
+    let pack = command(
+        f._source.path(),
+        &["pack-objects", "--stdout"],
+        &objects,
+        None,
+    )
+    .unwrap();
+    command(stage.path(), &["index-pack", "--stdin"], &pack, None).unwrap();
+    assert_eq!(
+        pack_name(b"pack invalid\n", f.head.len()),
+        Err(Refusal::BadBundle)
+    );
+    drop(stage);
+    assert_eq!(all_objects(root), before);
+}
+
+#[test]
+fn packed_existing_ref_preserves_objects() {
+    let f = Fixture::new("safe");
+    let root = Path::new(&f.repo.root);
+    git(
+        root,
+        &["update-ref", "refs/spawner/quarantine/test", &f.base],
+    );
+    git(root, &["pack-refs", "--all"]);
+    let before = all_objects(root);
+    assert_eq!(f.import(), Err(Refusal::BadBundle));
+    assert_eq!(all_objects(root), before);
+}
+
+#[test]
 fn refuses_unreachable_pack_blob() {
     let mut f = Fixture::new("safe");
     let root = f._source.path();

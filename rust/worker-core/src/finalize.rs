@@ -66,15 +66,7 @@ pub fn import_result(
         ],
         &[],
     )?;
-    let format = run(root, &["rev-parse", "--show-object-format"], &[])?;
-    let format = std::str::from_utf8(&format)
-        .map_err(|_| Refusal::BadBundle)?
-        .trim();
-    run(
-        scratch.path(),
-        &["init", "--bare", &format!("--object-format={format}")],
-        &[],
-    )?;
+    init_scratch(root, scratch.path())?;
     std::fs::write(scratch.path().join("objects/info/alternates"), objects)
         .map_err(|_| Refusal::BadBundle)?;
     let receiver = root;
@@ -165,34 +157,54 @@ fn promote(root: &Path, pack: &[u8], reference: &str, head: &str) -> Result<(), 
             .map_err(|_| Refusal::BadBundle)?
             .trim(),
     );
-    // Do not remove a pack that was already present before this import.
-    let existing: std::collections::BTreeSet<_> = std::fs::read_dir(directory)
-        .map_err(|_| Refusal::BadBundle)?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<Result<_, _>>()
+    // A private bare repository owns every staged file; refusal never unlinks
+    // live receiver objects (including packs installed by concurrent imports).
+    let stage = tempfile::tempdir_in(directory).map_err(|_| Refusal::BadBundle)?;
+    init_scratch(root, stage.path())?;
+    let receiver_objects = directory.parent().ok_or(Refusal::BadBundle)?;
+    std::fs::write(
+        stage.path().join("objects/info/alternates"),
+        receiver_objects.as_os_str().as_encoded_bytes(),
+    )
+    .map_err(|_| Refusal::BadBundle)?;
+    let installed = command(stage.path(), &["index-pack", "--stdin"], pack, None)
         .map_err(|_| Refusal::BadBundle)?;
-    let installed = git(&["index-pack", "--stdin"], pack)?;
-    let name = std::str::from_utf8(&installed)
+    let name = pack_name(&installed, head.len())?;
+    // Share only the receiver's refs. Git validates the new target against the
+    // staged ODB and takes the receiver's normal create-only ref lock.
+    let refs = git(
+        &["rev-parse", "--path-format=absolute", "--git-path", "refs"],
+        &[],
+    )?;
+    let refs = std::str::from_utf8(&refs)
         .map_err(|_| Refusal::BadBundle)?
-        .split_whitespace()
-        .last()
-        .ok_or(Refusal::BadBundle)?;
-    if name.len() != head.len() || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(Refusal::BadBundle);
-    }
-    if git(
+        .trim();
+    std::fs::remove_dir(stage.path().join("refs/heads")).map_err(|_| Refusal::BadBundle)?;
+    std::fs::remove_dir(stage.path().join("refs/tags")).map_err(|_| Refusal::BadBundle)?;
+    std::fs::remove_dir(stage.path().join("refs")).map_err(|_| Refusal::BadBundle)?;
+    std::os::unix::fs::symlink(refs, stage.path().join("refs")).map_err(|_| Refusal::BadBundle)?;
+    std::os::unix::fs::symlink(
+        Path::new(refs).with_file_name("packed-refs"),
+        stage.path().join("packed-refs"),
+    )
+    .map_err(|_| Refusal::BadBundle)?;
+    command(
+        stage.path(),
         &["update-ref", reference, head, &"0".repeat(head.len())],
         &[],
+        None,
     )
-    .is_err()
-    {
-        for extension in ["idx", "pack"] {
-            let path = directory.join(format!("pack-{name}.{extension}"));
-            if !existing.contains(&path) {
-                std::fs::remove_file(path).map_err(|_| Refusal::BadBundle)?;
-            }
+    .map_err(|_| Refusal::BadBundle)?;
+    for extension in ["pack", "idx"] {
+        let file = format!("pack-{name}.{extension}");
+        match std::fs::hard_link(
+            stage.path().join("objects/pack").join(&file),
+            directory.join(file),
+        ) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(_) => return Err(Refusal::BadBundle),
         }
-        return Err(Refusal::BadBundle);
     }
     Ok(())
 }
@@ -201,15 +213,73 @@ fn validate_objects(root: &Path, head: &str, base: &str) -> Result<(), Refusal> 
     let git = |args: &[&str]| command(root, args, &[], None).map_err(|_| Refusal::BadBundle);
     let allowed = git(&["rev-list", "--objects", "--no-object-names", head, base])?;
     let allowed: std::collections::BTreeSet<_> = allowed.split(|b| *b == b'\n').collect();
+    // Disable alternates only for inventory: inherited receiver objects are
+    // prerequisites, not objects supplied by this bundle.
+    let path = command(
+        root,
+        &["rev-parse", "--git-path", "objects/info/alternates"],
+        &[],
+        None,
+    )
+    .map_err(|_| Refusal::BadBundle)?;
+    let path = root.join(
+        std::str::from_utf8(&path)
+            .map_err(|_| Refusal::BadBundle)?
+            .trim(),
+    );
+    let saved = std::fs::read(&path).ok();
+    if saved.is_some() {
+        std::fs::write(&path, []).map_err(|_| Refusal::BadBundle)?;
+    }
     let listing = git(&[
         "cat-file",
         "--batch-all-objects",
         "--batch-check=%(objectname)",
-    ])?;
+    ]);
+    if let Some(saved) = saved {
+        std::fs::write(path, saved).map_err(|_| Refusal::BadBundle)?;
+    }
+    let listing = listing?;
     for sha in listing.split(|b| *b == b'\n').filter(|sha| !sha.is_empty()) {
         if !allowed.contains(sha) {
             return Err(Refusal::UnexpectedObjects);
         }
+    }
+    Ok(())
+}
+
+fn pack_name(installed: &[u8], width: usize) -> Result<&str, Refusal> {
+    let name = std::str::from_utf8(installed)
+        .map_err(|_| Refusal::BadBundle)?
+        .split_whitespace()
+        .last()
+        .ok_or(Refusal::BadBundle)?;
+    if name.len() != width || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Refusal::BadBundle);
+    }
+    Ok(name)
+}
+
+fn init_scratch(receiver: &Path, scratch: &Path) -> Result<(), Refusal> {
+    let format =
+        command(receiver, &["rev-parse", "--show-object-format"], &[], None).unwrap_or_default();
+    let format = if format == b"sha256\n" {
+        "sha256"
+    } else {
+        "sha1"
+    };
+    if command(
+        scratch,
+        &["init", "--bare", &format!("--object-format={format}")],
+        &[],
+        None,
+    )
+    .is_err()
+    {
+        if format != "sha1" {
+            return Err(Refusal::BadBundle);
+        }
+        command(scratch, &["init", "--bare"], &[], None).map_err(|_| Refusal::BadBundle)?;
     }
     Ok(())
 }
