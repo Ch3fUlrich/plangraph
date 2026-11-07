@@ -82,6 +82,9 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     paths.sort();
     let mut result = Vec::new();
     for path in paths {
+        if !path.join("record.json").is_file() {
+            continue;
+        }
         let id = path
             .file_name()
             .and_then(|s| s.to_str())

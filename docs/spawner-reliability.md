@@ -287,8 +287,12 @@ adoption/reclaim integration remain deferred.
 With an explicit `PLANGRAPH_RELIABILITY_RECONCILE=on`, the daemon takes a
 state-root ownership lock before inventory and retains it through serving.
 A separate reconciliation lock covers inventory, durable orphan or attachment
-decisions, evidence replay and the initial slot-reclaim pass. Listener acceptance
-starts only after that sequence succeeds. Errors refuse startup without issuing
+decisions, evidence replay and the initial slot-reclaim pass. Unix serve calls
+configured recovery before binding its listener, as does Windows before creating
+its named pipe. There is no TCP serve variant in this tree. Recovery itself never
+binds or listens. Acceptance starts only after recovery succeeds.
+The watcher holds one record lock at a time, not the reconciliation lock.
+Errors refuse startup without issuing
 the private reclaim capability. Off performs no reclaim; shadow remains read-only.
 
 Only durably settled, proven-gone identities matching the slot's run, PID, start

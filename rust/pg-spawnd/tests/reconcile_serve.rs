@@ -95,11 +95,14 @@ fn reconcile_real_child_restart_locked_before_reclaim() {
             .unwrap();
         let mut blocked = start_daemon();
         let deadline = Instant::now() + Duration::from_secs(2);
-        while blocked.child.try_wait().unwrap().is_none() {
+        while Instant::now() < deadline {
+            assert!(blocked.child.try_wait().unwrap().is_none());
             assert!(!socket.exists());
-            assert!(Instant::now() < deadline);
-            std::thread::yield_now();
+            std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(blocked.child.try_wait().unwrap().is_none());
+        blocked.child.kill().unwrap();
+        blocked.child.wait().unwrap();
         slots::with_table(&state, Duration::from_secs(1), |t| {
             assert_eq!(t.active.len(), 1)
         })
@@ -108,6 +111,14 @@ fn reconcile_real_child_restart_locked_before_reclaim() {
         for _ in 0..2 {
             let mut daemon = start_daemon();
             drop(common::wait_connect(&socket, Duration::from_secs(3)));
+            let probe = pg_worker_core::lockfile::try_lock(&state.join("reconcile.lock"))
+                .unwrap()
+                .expect("watcher must not hold the sweep lock");
+            drop(probe);
+            let record_dir = state.join("runs").join(&id);
+            let _record_lock = pg_worker_core::lockfile::try_lock(&record_dir.join("record.lock"))
+                .unwrap()
+                .expect("record lock available between advances");
             let record = RunRecord::read(&state, &id).unwrap();
             assert_eq!(
                 record.status(),
@@ -124,6 +135,7 @@ fn reconcile_real_child_restart_locked_before_reclaim() {
                 "RUN_ORPHANED"
             };
             assert_eq!(events.iter().filter(|e| e["event"] == kind).count(), 1);
+            drop(_record_lock);
             slots::with_table(&state, Duration::from_secs(1), |t| {
                 assert_eq!(t.active.len(), usize::from(live))
             })
@@ -158,6 +170,7 @@ fn configured_reconcile_through_serve() {
             let socket = tmp.path().join("socket");
             let state = tmp.path().join("state");
             std::fs::create_dir_all(state.join("runs/not-a-run-id")).unwrap();
+            std::fs::write(state.join("runs/stray-artifact"), "ignored").unwrap();
             let mut command = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
             command
                 .arg("serve")
@@ -176,12 +189,9 @@ fn configured_reconcile_through_serve() {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 if let Some(status) = guard.child.try_wait().unwrap() {
-                    assert!(explicit_on, "advisory config refused {config}");
-                    assert_eq!(status.code(), Some(2));
-                    assert!(!socket.exists());
-                    break;
+                    panic!("serve exited before binding: {status} ({config})");
                 }
-                if !explicit_on && socket.exists() {
+                if socket.exists() {
                     break;
                 }
                 assert!(
