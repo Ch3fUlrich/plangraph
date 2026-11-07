@@ -199,6 +199,14 @@ fn unchanged_gitlink_preserved() {
 
 #[test]
 fn mode_lookup_is_cached_before_candidate_loop() {
+    let source = include_str!("writer_salvage.rs");
+    let snapshot_source = source.split_once("fn snapshot(").unwrap().1;
+    let tip_lookup = snapshot_source.find("entries(root, tip)?").unwrap();
+    let loop_start = snapshot_source.find("for name in listed.split").unwrap();
+    assert!(
+        tip_lookup < loop_start,
+        "tip entries must be cached before the candidate loop starts"
+    );
     let (_dir, repo, base, _) = fixture();
     let root = Path::new(&repo.root);
     command(
