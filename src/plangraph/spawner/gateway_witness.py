@@ -139,8 +139,11 @@ def load_token(secrets=None):
     raise LookupError('no gateway token in spawn env')
 
 
-def gateway_leg(model, env):
+def gateway_leg(model, env=None):
     """Whether the selected provider is routed through the gateway."""
+    if env is None:
+        from plangraph.routing_support.clients import build_child_env
+        env = build_child_env()
     provider = str(model or '').split('/', 1)[0]
     return provider == 'omniroute' or (provider == 'mimo' and _gateway_mimo(env))
 
@@ -258,3 +261,11 @@ def witness_gate(card, role, model, env=None, *, secrets=None):
     """Refuse before launch a review whose card requires a witness this leg cannot give."""
     if role == 'review' and card and card.get('witness_required'):
         require_witness(model, env, secrets=secrets)
+
+
+def witness_gate_legs(card, role, legs):
+    """Validate every leg's real child env before any run artifact exists."""
+    from plangraph.routing_support.clients import build_child_env
+    from .git_guard import writer_launch
+    for leg in legs:
+        witness_gate(card, role, leg.model, build_child_env(writer_launch('', role, leg.model, '')[1]))
