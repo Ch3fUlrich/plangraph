@@ -1,24 +1,28 @@
-//! Fail-closed host pending configured HTTP transport support.
-use og_memory::{
-    adapters,
-    io::{Error, Memory, Receipt, Snapshot, Transport},
-    Capabilities, Validated,
-};
+//! Configured HTTP host; startup failures never expose credential values.
+use og_memory::{adapters, io::Memory};
 use std::io::{self, BufRead, Read};
 const MAX_INPUT: u64 = 1024 * 1024;
-struct Unavailable;
-impl Transport for Unavailable {
-    fn read(&mut self, _: &str) -> Result<Snapshot, Error> {
-        Err(Error::Outage)
+fn configured_transport() -> Result<og_memory::http::Http, &'static str> {
+    let base = std::env::var("OG_MEMORY_BASE_URL").map_err(|_| "HttpUnconfigured")?;
+    let token = std::env::var_os("OG_MEMORY_TOKEN_FILE").ok_or("HttpUnconfigured")?;
+    if base.is_empty() || token.is_empty() {
+        return Err("HttpUnconfigured");
     }
-    fn commit(&mut self, _: &Validated, _: &str) -> Result<Receipt, Error> {
-        Err(Error::Unavailable)
-    }
+    og_memory::http::Http::new(
+        &base,
+        std::path::Path::new(&token),
+        std::time::Duration::from_secs(10),
+    )
+    .map_err(|_| "HttpConfigurationUnavailable")
 }
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let mut m = Memory::new(Unavailable);
-    let c = Capabilities::default();
+    let transport = configured_transport().unwrap_or_else(|reason| {
+        eprintln!("{reason}");
+        std::process::exit(1);
+    });
+    let mut m = Memory::new(transport);
+    let c = og_memory::http::capabilities();
     if args == ["mcp"] {
         let mut stdin = io::stdin().lock();
         loop {

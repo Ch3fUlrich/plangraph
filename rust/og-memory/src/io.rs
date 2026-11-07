@@ -1,6 +1,5 @@
 //! Shared host-independent safety boundary. No local fallback or network implementation.
 use crate::{validate, Capabilities, Envelope, Refusal, Validated};
-
 #[path = "ledger.rs"]
 mod ledger;
 #[cfg(any(test, feature = "mock"))]
@@ -13,7 +12,6 @@ use ledger::{BLOCKED_LIMIT, INVALID_SCOPE};
 #[cfg(any(test, feature = "mock"))]
 pub use mock_transport::MockTransport;
 use readback::matching;
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     Refused(Refusal),
@@ -24,25 +22,26 @@ pub enum Error {
     Unknown,
     /// Verification failed after a possible upstream commit; this is not a rollback.
     Unverified,
+    /// Record committed; follow-up failed. Never retry this publication.
+    PartialPublication {
+        commit: String,
+        cause: Box<Error>,
+    },
     WritesDisabled,
     InvalidScope,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Receipt(pub String);
-
 #[derive(Clone, Debug)]
 pub struct Saved {
     pub envelope: Envelope,
     pub receipt: Receipt,
     pub superseded: bool,
 }
-
 pub struct Snapshot {
     pub graph_commit: String,
     pub facts: Vec<Saved>,
 }
-
 /// Implementations must atomically upsert nodes AND edges, preserving provenance,
 /// scoped by (project, kind, slug). A 412 is Conflict and has no effect.
 /// Unknown means the request may have committed; never automatically replay it.
@@ -50,13 +49,11 @@ pub trait Transport {
     fn read(&mut self, project: &str) -> Result<Snapshot, Error>;
     fn commit(&mut self, fact: &Validated, if_graph_commit: &str) -> Result<Receipt, Error>;
 }
-
 pub struct Recall<'a> {
     pub saved: Vec<Envelope>,
     pub retained_blocked: Vec<&'a Blocked>,
     pub stale: bool,
 }
-
 pub struct Memory<T> {
     pub transport: T,
     pub writes_enabled: bool,
@@ -101,7 +98,7 @@ impl<T: Transport> Memory<T> {
     ) -> Result<Receipt, Error> {
         let result = self.save(project, e, caps);
         if let Err(ref reason) = result {
-            // Errors contain only static variants, never caller payloads.
+            // Retain only sanitized reasons, never caller payloads or receipts.
             if self.blocked.len() == BLOCKED_LIMIT {
                 self.blocked.remove(0);
             }

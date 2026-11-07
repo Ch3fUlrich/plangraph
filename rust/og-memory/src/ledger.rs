@@ -14,6 +14,10 @@ pub(super) fn reason(error: &Error) -> Error {
         Error::InvalidScope => Error::InvalidScope,
         Error::Unknown => Error::Unknown,
         Error::Unverified => Error::Unverified,
+        Error::PartialPublication { commit, cause } => Error::PartialPublication {
+            commit: commit.clone(),
+            cause: Box::new(reason(cause)),
+        },
     }
 }
 
@@ -40,6 +44,10 @@ mod tests {
             Error::Unverified,
             Error::WritesDisabled,
             Error::InvalidScope,
+            Error::PartialPublication {
+                commit: "opaque-record-commit".into(),
+                cause: Box::new(Error::Conflict),
+            },
         ] {
             assert_eq!(reason(&error), error);
         }

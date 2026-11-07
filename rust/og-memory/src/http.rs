@@ -1,12 +1,19 @@
 //! Omnigraph 0.13 HTTP boundary; no retries or redirect following.
-//! Companion recall is available; publication and binary activation remain disabled.
+//! Companion publication uses a conditional receipt-state follow-up.
 use crate::{credentials::read_token, io::Error};
 use serde::Serialize;
 use serde_json::Value;
 use std::{path::Path, time::Duration};
 
+#[path = "http_publish.rs"]
+mod publish;
 #[path = "http_recall.rs"]
 mod recall;
+
+/// Approved V1 capabilities shared by the binary and HTTP reconstruction.
+pub fn capabilities() -> crate::Capabilities {
+    recall::capabilities()
+}
 
 pub struct Http {
     agent: ureq::Agent,

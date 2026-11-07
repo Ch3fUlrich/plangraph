@@ -10,10 +10,13 @@ use std::{collections::BTreeSet, sync::OnceLock};
 #[path = "approved_schema.rs"]
 mod approved_schema;
 const SCHEMA: &str = approved_schema::SCHEMA;
+pub(super) fn capabilities() -> crate::Capabilities {
+    crate::Capabilities::from_schema(SCHEMA)
+}
 static CAPS: OnceLock<crate::Capabilities> = OnceLock::new();
 const RESOLVE: &str = "query memorySnapshot { match { $n: Project } return { $n.slug } }";
 
-const RECORDS: &str = "query memoryRecallRecords($project: String) {
+pub(super) const RECORDS: &str = "query memoryRecallRecords($project: String) {
   match { $n: MemoryRecord }
   where { $n.project == $project }
   return { $n.project, $n.kind, $n.slug, $n.content, $n.version,
@@ -37,7 +40,7 @@ fn key(row: &Value) -> Result<(&str, &str, &str), Error> {
         text(row, "slug")?,
     ))
 }
-fn rows(response: &Value) -> Result<(&str, &[Value]), Error> {
+pub(super) fn rows(response: &Value) -> Result<(&str, &[Value]), Error> {
     let commit = text(response, "graph_commit_id")?;
     let rows = response["rows"].as_array().ok_or(Error::Unverified)?;
     if commit.is_empty()
@@ -53,14 +56,30 @@ fn rows(response: &Value) -> Result<(&str, &[Value]), Error> {
 
 impl Transport for Http {
     fn read(&mut self, project: &str) -> Result<Snapshot, Error> {
+        self.read_snapshot(project, None)
+    }
+    fn commit(&mut self, fact: &Validated, expected: &str) -> Result<Receipt, Error> {
+        self.publish(fact, expected)
+    }
+}
+impl Http {
+    pub(super) fn read_at(&self, project: &str, commit: &str) -> Result<Snapshot, Error> {
+        self.read_snapshot(project, Some(commit))
+    }
+    fn read_snapshot(&self, project: &str, pinned: Option<&str>) -> Result<Snapshot, Error> {
         if !crate::slug_ok(project) || project.starts_with("routing-") {
             return Err(Error::InvalidScope);
         }
-        let resolved = self.query(&Request {
-            query: RESOLVE,
-            params: json!({}),
-        })?;
-        let commit = text(&resolved, "graph_commit_id")?;
+        let resolved;
+        let commit = if let Some(commit) = pinned {
+            commit
+        } else {
+            resolved = self.query(&Request {
+                query: RESOLVE,
+                params: json!({}),
+            })?;
+            text(&resolved, "graph_commit_id")?
+        };
         if commit.is_empty() {
             return Err(Error::Unverified);
         }
@@ -133,10 +152,5 @@ impl Transport for Http {
             graph_commit: commit.into(),
             facts,
         })
-    }
-
-    fn commit(&mut self, _: &Validated, _: &str) -> Result<Receipt, Error> {
-        // Recall-only cut: never publish without the receipt follow-up protocol.
-        Err(Error::Unavailable)
     }
 }

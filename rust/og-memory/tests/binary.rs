@@ -3,7 +3,22 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
 fn run(args: &[&str], body: &[u8]) -> Output {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = std::env::temp_dir().join(format!(
+        "og-host-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    write!(file, "offline-host").unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_og-memory"))
+        .env("OG_MEMORY_BASE_URL", "http://127.0.0.1:1/graphs/local")
+        .env("OG_MEMORY_TOKEN_FILE", &path)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -12,7 +27,9 @@ fn run(args: &[&str], body: &[u8]) -> Output {
         .unwrap();
     // Oversize input may be refused before the writer finishes.
     let _ = child.stdin.take().unwrap().write_all(body);
-    child.wait_with_output().unwrap()
+    let output = child.wait_with_output().unwrap();
+    std::fs::remove_file(path).unwrap();
+    output
 }
 fn fact(project: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({
@@ -65,13 +82,13 @@ fn binary_scope_binding_and_routing_reasons() {
     }
 }
 #[test]
-fn binary_default_transport_is_unavailable() {
+fn binary_configured_transport_outage_refuses() {
     refused(&["recall", "--scope", "global"], b"", "Outage");
-    // The unconfigured binary has no schema capabilities and cannot save.
+    // Configured transport cannot save through an unavailable endpoint.
     refused(
         &["remember", "--scope", "global"],
         &fact("global"),
-        "Refused(MissingType(\"Decision\"))",
+        "Outage",
     );
 }
 #[test]

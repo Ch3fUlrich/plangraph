@@ -26,10 +26,6 @@ fn recall(fault: &str) -> Result<crate::io::Snapshot, Error> {
         .unwrap();
     let mut client = Http::new(&base, &path, Duration::from_secs(2)).unwrap();
     std::fs::remove_file(path).unwrap();
-    let caps =
-        crate::Capabilities::from_schema(include_str!("../tests/fixtures/memory-v1-approved.pg"));
-    let validated = crate::validate(&crate::tests::fact(), &caps).unwrap();
-    assert_eq!(client.commit(&validated, "before"), Err(Error::Unavailable));
     let fault = fault.to_owned();
     let server = thread::spawn(move || {
         for index in 0..3 {
@@ -102,7 +98,7 @@ fn recall(fault: &str) -> Result<crate::io::Snapshot, Error> {
             } else {
                 vec![row]
             };
-            let mut response = json!({"graph_commit_id":if index == 2 && fault == "commit" {"different"} else {"before"},
+            let mut response = json!({"graph_commit_id":if (index == 2 && fault == "commit") || (index == 1 && fault == "records-pin") {"different"} else {"before"},
                 "row_count":if index == 2 && fault == "count" {2} else {rows.len()}, "rows":rows});
             if (index == 2 && fault == "unpinned") || (index == 0 && fault == "resolve-unpinned") {
                 response.as_object_mut().unwrap().remove("graph_commit_id");
@@ -119,8 +115,10 @@ fn recall(fault: &str) -> Result<crate::io::Snapshot, Error> {
                 response
             )
             .unwrap();
-            if index == 0 && matches!(fault.as_str(), "resolve-unpinned" | "resolve-empty-pin") {
-                // No companion query or retry may follow an invalid RESOLVE pin.
+            if (index == 1 && fault == "records-pin")
+                || (index == 0
+                    && matches!(fault.as_str(), "resolve-unpinned" | "resolve-empty-pin"))
+            {
                 listener.set_nonblocking(true).unwrap();
                 return listener;
             }
@@ -157,6 +155,7 @@ fn recall_rejects_incomplete_mismatched_and_unpinned_companions() {
         "unpinned",
         "empty-pin",
         "extra",
+        "records-pin",
     ] {
         assert!(matches!(recall(fault), Err(Error::Unverified)));
     }
