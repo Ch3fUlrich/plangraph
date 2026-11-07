@@ -164,7 +164,7 @@ fn run(c: Config, raw: u64, wall: i64) -> Result<Value, String> {
         }
     }
     #[cfg(not(unix))]
-    return Err("unsupported locking target".into());
+    Err::<(), _>("unsupported locking target")?;
     #[cfg(unix)]
     let _lock = {
         use std::os::fd::AsRawFd;
