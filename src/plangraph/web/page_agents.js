@@ -1,7 +1,9 @@
 (function (global) {
   "use strict";
   var UI = (global.PlanUI = global.PlanUI || {});
-  var fields = ["host", "name", "runtime", "model", "state", "item", "age_s"];
+  var fields = global.PlanAgentsSchema.fields;
+  var panel = document.getElementById("panel-agents"), hosts = document.getElementById("panel-hosts");
+  if (panel && hosts && hosts.parentNode) hosts.parentNode.appendChild(panel);
   function el(tag, value) {
     var node = document.createElement(tag);
     if (value !== undefined) node.textContent = value;
@@ -14,9 +16,9 @@
     var PP = global.PlanPage, data = PP && PP.state && PP.state.snapshot && PP.state.snapshot.agents_view;
     var stamp = data && data.generated_at, age = Date.now() - Date.parse(stamp);
     box.appendChild(el("p", "Generated: " + (stamp || "unknown") +
-      (age > 600000 ? " (stale)" : "")));
+      (!Number.isFinite(age) || age < 0 || age > 600000 ? " (stale/unknown)" : "")));
     var table = el("table"), head = el("tr"), body = el("tbody");
-    fields.forEach(function (key) { head.appendChild(el("th", key)); });
+    fields.forEach(function (key) { head.appendChild(el("th", key === "age_s" ? "age" : key)); });
     table.appendChild(head);
     function row(agent) {
       var tr = el("tr");

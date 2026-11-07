@@ -21,7 +21,7 @@
 
   function show(name) {
     if (name === "qa") name = "needs";
-    if (!PANELS[name] || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
+    if (!PANELS[name] || !$(PANELS[name]) || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
     cur = name;
     var PP = global.PlanPage;
     if (name === "graph" || name === "table") {

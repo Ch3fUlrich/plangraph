@@ -22,8 +22,8 @@ def test_render_reads_private_file(home, monkeypatch):
     from plangraph.render import render
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
     put(home, '.local/state/plangraph/agents-view.json', {'generated_at': 'stamp', 'hosts': [unavailable('remote', 'timeout')]})
-    assert 'remote' in render({'items': []}, home, cdn=True)
-    document = render({'items': [], 'agents_view': {'hosts': [unavailable('supplied', 'timeout')]}}, home, cdn=True)
+    assert 'remote' in render({'items': []}, home, cdn=True, live_agents=True)
+    document = render({'items': [], 'agents_view': {'hosts': [unavailable('supplied', 'timeout')]}}, home, cdn=True, live_agents=True)
     assert 'supplied' not in document
     assert 'remote' in document
     assert '"agents_view":' in document
@@ -44,12 +44,17 @@ const box = node('div');
 global.document = {createElement: node, getElementById: () => box};
 global.PlanPage = {state: {snapshot: {agents_view: {generated_at: '2000-01-01',
   hosts: [{host: 'remote', readable: false, agents: []}]}}}};
+global.PlanAgentsSchema = require(process.argv[2]);
 require(process.argv[1]);
 PlanUI.AgentsPage.render();
 const row = box.children[1].children[1].children[0];
 assert.equal(row.children[0].textContent, 'remote');
 assert(row.children.slice(1).every(n => n.textContent === 'unknown'));
 assert(box.children[0].textContent.includes('stale'));
+assert.equal(box.children[1].children[0].children[6].textContent, 'age');
+global.PlanPage.state.snapshot.agents_view.generated_at = 'invalid';
+PlanUI.AgentsPage.render();
+assert(box.children[0].textContent.includes('unknown'));
 global.PlanPage.state.snapshot.agents_view.hosts = [{readable: true, agents: null}];
 PlanUI.AgentsPage.render();
 assert.equal(box.children[1].children[1].children.length, 1);
@@ -57,15 +62,15 @@ global.PlanPage.state.snapshot = {};
 PlanUI.AgentsPage.render();
 assert.equal(box.children[1].children[1].children.length, 1);
 '''
-    subprocess.run([node_binary, '-e', script, str(root / 'src/plangraph/web/page_agents.js')], check=True)
-    assert 'tab-agents' in (root / 'src/plangraph/web/page_template.html').read_text()
+    subprocess.run([node_binary, '-e', script, str(root / 'src/plangraph/web/page_agents.js'), str(root / 'src/plangraph/web/agents_schema.json')], check=True)
+    assert '@@AGENTS_UI@@' in (root / 'src/plangraph/web/page_template.html').read_text()
     assert 'agents: "panel-agents"' in (root / 'src/plangraph/web/page_pages.js').read_text()
 
 
 @pytest.mark.parametrize('data', [None, [], 'invalid', 1, {}, {'hosts': None}])
 def test_render_malformed_view_is_unknown(home, data):
     from plangraph.render import render
-    document = render({'items': [], 'agents_view': data}, home, cdn=True)
+    document = render({'items': [], 'agents_view': data}, home, cdn=True, live_agents=True)
     assert '"agents_view":null' in document
 
 
@@ -88,8 +93,27 @@ def test_snapshot_producer_excludes_private_view(home, monkeypatch):
         written = json.loads((home / 'snapshot.json').read_text())
         assert 'agents_view' not in snapshot
         assert 'agents_view' not in written
-        document = render(written, home, cdn=True)
+        document = render(written, home, cdn=True, live_agents=True)
         assert 'live-agent' in document and 'excluded' not in document
         assert '"agents_view":' in document
     finally:
         world.close()
+
+@pytest.mark.parametrize('cdn', [False, True])
+def test_nonlive_never_reads_inventory(home, monkeypatch, cdn):
+    from plangraph.render import render
+    def forbidden(cls):
+        raise AssertionError('private inventory accessed')
+    monkeypatch.setattr(Path, 'home', classmethod(forbidden))
+    document = render({'items': [], 'agents_view': {'hosts': []}}, home, cdn=cdn)
+    assert '"agents_view":' not in document
+    assert 'id="tab-agents"' not in document
+    assert 'id="panel-agents"' not in document
+    assert 'UI.AgentsPage =' not in document
+
+
+def test_live_offline_bundles_agents(home):
+    from plangraph.render import render
+    document = render({'items': []}, home, live_agents=True)
+    assert 'id="tab-agents"' in document
+    assert 'UI.AgentsPage =' in document

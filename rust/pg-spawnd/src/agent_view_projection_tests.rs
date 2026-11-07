@@ -23,3 +23,7 @@ fn malformed_hosts_and_rows_isolated() {
     assert!(view["hosts"][1]["agents"][0]["name"].is_null());
     assert_eq!(view["hosts"][1]["agents"][1]["host"], "local");
 }
+#[test]
+fn future_age_is_unknown() {
+    assert!(project(&json!({"started":30}), "local", None, Some(20.0))["age_s"].is_null());
+}

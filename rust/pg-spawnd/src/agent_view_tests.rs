@@ -51,7 +51,7 @@ fn sources_sidecars_finished_and_bad_rows() {
         json!({"state":"done"}),
     );
     let data = local(&home, &state, "local", 20.0);
-    assert_eq!(data["agents"].as_array().unwrap().len(), 4);
+    assert_eq!(data["agents"].as_array().unwrap().len(), 1);
     assert!(data["agents"]
         .as_array()
         .unwrap()
@@ -59,12 +59,16 @@ fn sources_sidecars_finished_and_bad_rows() {
         .all(|r| r["age_s"] == 10.0 && r["name"] == "worker"));
     assert!(!data.to_string().contains("excluded"));
     fs::write(home.join(".claude/jobs/one/state.json"), "{").unwrap();
+    let partial = local(&home, &state, "local", 20.0);
+    assert_eq!(partial["readable"], false);
+    assert_eq!(partial["reason"], "source_unreadable");
+    assert_eq!(partial["agents"][0]["runtime"], "spawner-run");
     assert_eq!(
         local(&home, &state, "local", 20.0)["agents"]
             .as_array()
             .unwrap()
             .len(),
-        4
+        1
     );
     fs::remove_dir_all(home).unwrap();
 }
@@ -76,6 +80,42 @@ fn unreadable_is_not_zero() {
         local(&home, &home.join("absent"), "local", 0.0)["readable"],
         false
     );
+    fs::remove_dir_all(home).unwrap();
+}
+#[test]
+fn source_failure_does_not_skip_other_sources() {
+    let home = fixture();
+    let state = home.join("state");
+    fs::write(&state, "not a directory").unwrap();
+    put(
+        &home,
+        ".claude/jobs/live/state.json",
+        json!({"name":"worker"}),
+    );
+    let data = local(&home, &state, "local", 20.0);
+    assert_eq!(data["readable"], false);
+    assert_eq!(data["agents"].as_array().unwrap().len(), 1);
+    fs::remove_dir_all(home).unwrap();
+}
+#[test]
+fn identities_are_run_ids_not_names() {
+    let home = fixture();
+    for id in ["one", "two"] {
+        put(
+            &home,
+            &format!("state/runs/{id}/record.json"),
+            json!({"run_id":id,"name":"worker","model":"preferred"}),
+        );
+        put(
+            &home,
+            &format!(".claude/jobs/{id}/state.json"),
+            json!({"run_id":id,"name":"worker","model":"other"}),
+        );
+    }
+    let data = local(&home, &home.join("state"), "local", 20.0);
+    let rows = data["agents"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r["model"] == "preferred"));
     fs::remove_dir_all(home).unwrap();
 }
 #[test]
@@ -114,20 +154,8 @@ fn parallel_outer_deadline_and_slack() {
         .iter()
         .any(|r| r["host"] == "slow" && r["reason"] == "timeout"));
 }
-#[test]
-fn no_runtime_invocation() {
-    for source in [
-        include_str!("agent_view.rs"),
-        include_str!("agent_view_projection.rs"),
-    ] {
-        assert!(!source.contains("Command::new(\"claude\")"));
-        assert!(!source.contains("Command::new(\"opencode\")"));
-        for verb in ["ps", "status"] {
-            assert!(!source.contains(&format!("claude {verb}")));
-        }
-        assert!(!source.contains("Command::new(\"sh\")"));
-    }
-}
+#[path = "agent_view_guard_tests.rs"]
+mod guard;
 #[test]
 fn private_atomic_projection() {
     let home = fixture();

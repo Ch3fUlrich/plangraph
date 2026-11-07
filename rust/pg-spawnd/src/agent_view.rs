@@ -28,10 +28,10 @@ fn children(path: &Path) -> Result<Vec<PathBuf>, String> {
     }
 }
 fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
-    let (mut agents, mut successes, mut failures) = (vec![], 0, 0);
+    let (mut agents, mut failures) = (vec![], 0);
+    let mut identities = std::collections::HashSet::new();
     let mut ingest = |path: PathBuf, runtime: &str| match read(&path) {
         Ok(source) => {
-            successes += 1;
             let row = project(&source, host, Some(runtime), Some(now));
             let ended = source
                 .get("ended")
@@ -50,36 +50,47 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
             {
                 return;
             }
-            agents.push(row);
+            let identity = source["run_id"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("{host}/{}", row["name"]));
+            if identities.insert(identity) {
+                agents.push(row);
+            }
         }
         Err(_) => {
             failures += 1;
-            agents.push(project(&Value::Null, host, None, None));
         }
     };
+    let mut source_errors = 0;
+    let mut list = |path: &Path| {
+        children(path).unwrap_or_else(|_| {
+            source_errors += 1;
+            vec![]
+        })
+    };
+    list(state);
+    for path in list(&state.join("runs")) {
+        let record = path.join("record.json");
+        if record.try_exists().unwrap_or(true) {
+            ingest(record, "spawner-run");
+        }
+    }
+    for path in list(&state.join("sessions")) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name.ends_with(".json") && name != "_counters.json" && !name.ends_with(".ready.json") {
+            ingest(path, "spawner-run");
+        }
+    }
+    for path in list(&home.join(".claude/jobs")) {
+        let record = path.join("state.json");
+        if record.try_exists().unwrap_or(true) {
+            ingest(record, "claude");
+        }
+    }
     let scan = || -> Result<(), String> {
-        children(state)?;
-        for path in children(&state.join("runs"))? {
-            let record = path.join("record.json");
-            if record.exists() {
-                ingest(record, "spawner-run");
-            }
-        }
-        for path in children(&state.join("sessions"))? {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name.ends_with(".json") && name != "_counters.json" && !name.ends_with(".ready.json")
-            {
-                ingest(path, "spawner-run");
-            }
-        }
-        for path in children(&home.join(".claude/jobs"))? {
-            let record = path.join("state.json");
-            if record.exists() {
-                ingest(record, "claude");
-            }
-        }
         let config = home.join(".config/autoos/oc-l1.json");
-        if config.exists() {
+        if config.try_exists().map_err(|e| e.to_string())? {
             let config = read(&config)?;
             let lanes = config.get("lanes").unwrap_or(&config);
             let lanes: Vec<_> = match lanes {
@@ -89,16 +100,15 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
             };
             for lane in lanes {
                 if !lane.is_object() {
-                    return Err("bad lane".into());
+                    source_errors += 1;
+                    continue;
                 }
                 if let Some(s) = lane["state_file"].as_str() {
                     let path = s
                         .strip_prefix("~/")
                         .map(|s| home.join(s))
                         .unwrap_or_else(|| s.into());
-                    if path.exists() {
-                        ingest(path, "opencode");
-                    }
+                    ingest(path, "opencode");
                 }
             }
         }
@@ -108,8 +118,8 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
     if scan().is_err() {
         failures += 1;
     }
-    if failures > 0 && successes == 0 {
-        unavailable(host, "source_unreadable")
+    if failures + source_errors > 0 {
+        json!({"host":host,"readable":false,"reason":"source_unreadable","agents":agents})
     } else {
         json!({"host":host,"readable":true,"reason":null,"agents":agents})
     }
@@ -304,6 +314,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     );
     let data = json!({"generated_at":stamp,"hosts":hosts});
     if seen.contains("--write") {
+        fs::create_dir_all(home.join(".local/state/plangraph")).map_err(|e| e.to_string())?;
         pg_worker_core::run::record_io::atomic_write_private(
             &home.join(".local/state/plangraph/agents-view.json"),
             project_view(&data).to_string().as_bytes(),

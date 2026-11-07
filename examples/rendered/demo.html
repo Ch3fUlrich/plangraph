@@ -934,7 +934,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     <button id="tab-activity" data-page="activity" type="button" role="tab" aria-selected="false" aria-controls="panel-activity">Activity</button>
     <button id="tab-progress" data-page="progress" type="button" role="tab" aria-selected="false" aria-controls="panel-progress">Progress</button>
     <button id="tab-hosts" data-page="hosts" type="button" role="tab" aria-selected="false" aria-controls="panel-hosts">Hosts</button>
-    <button id="tab-agents" data-page="agents" type="button" role="tab" aria-selected="false" aria-controls="panel-agents">Agents</button>
+
     <button id="tab-knowledge" data-page="knowledge" type="button" role="tab" aria-selected="false" aria-controls="panel-knowledge" hidden>Knowledge</button>
     <button id="tab-settings" data-page="settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" aria-label="Settings" title="Settings">&#9881;</button>
   </nav>
@@ -984,7 +984,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     <section id="panel-activity" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-activity" hidden>
       <div id="sb-panel-activity" class="pg-body"></div>
     </section>
-    <section id="panel-agents" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-agents" hidden><div id="sb-panel-agents" class="pg-body"></div></section>
     <section id="panel-hosts" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-hosts" hidden>
       <div id="sb-panel-hosts" class="pg-body"></div>
     </section>
@@ -8185,7 +8184,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 
   function show(name) {
     if (name === "qa") name = "needs";
-    if (!PANELS[name] || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
+    if (!PANELS[name] || !$(PANELS[name]) || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
     cur = name;
     var PP = global.PlanPage;
     if (name === "graph" || name === "table") {
@@ -8681,45 +8680,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   }
   PlanUI.HostsPage = { render: render };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
-})(typeof window !== "undefined" ? window : globalThis);
-
-;
-(function (global) {
-  "use strict";
-  var UI = (global.PlanUI = global.PlanUI || {});
-  var fields = ["host", "name", "runtime", "model", "state", "item", "age_s"];
-  function el(tag, value) {
-    var node = document.createElement(tag);
-    if (value !== undefined) node.textContent = value;
-    return node;
-  }
-  function render() {
-    var box = document.getElementById("sb-panel-agents");
-    if (!box) return;
-    while (box.firstChild) box.removeChild(box.firstChild);
-    var PP = global.PlanPage, data = PP && PP.state && PP.state.snapshot && PP.state.snapshot.agents_view;
-    var stamp = data && data.generated_at, age = Date.now() - Date.parse(stamp);
-    box.appendChild(el("p", "Generated: " + (stamp || "unknown") +
-      (age > 600000 ? " (stale)" : "")));
-    var table = el("table"), head = el("tr"), body = el("tbody");
-    fields.forEach(function (key) { head.appendChild(el("th", key)); });
-    table.appendChild(head);
-    function row(agent) {
-      var tr = el("tr");
-      fields.forEach(function (key) {
-        var value = agent[key];
-        tr.appendChild(el("td", value === null || value === undefined || value === "" ? "unknown" : String(value)));
-      });
-      body.appendChild(tr);
-    }
-    if (!data || !Array.isArray(data.hosts) || !data.hosts.length) row({});
-    else data.hosts.forEach(function (host) {
-      if (!host || host.readable !== true || !Array.isArray(host.agents)) row({host: host && host.host});
-      else host.agents.forEach(function (agent) { row(agent || {}); });
-    });
-    table.appendChild(body); box.appendChild(table);
-  }
-  UI.AgentsPage = {render: render};
 })(typeof window !== "undefined" ? window : globalThis);
 
 ;
