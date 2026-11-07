@@ -356,7 +356,7 @@ impl HarnessRegistry {
 ///
 /// `cancelled` is polled while the child runs so a cancel kills the process
 /// group promptly instead of waiting for stall, timeout or natural exit.
-pub fn run_harness(
+pub(crate) fn run_harness(
     h: &dyn Harness,
     run: &HarnessRun,
     home: &Path,

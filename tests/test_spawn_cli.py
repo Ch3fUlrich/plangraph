@@ -3,7 +3,6 @@ import json
 import subprocess
 import time
 import uuid
-
 from plangraph.spawner.cli import main
 from plangraph.spawner.service import SpawnService
 from plangraph.spawner.runner import SpawnerRunner, kill_process_tree, KillIncomplete, JobInfo
@@ -12,6 +11,7 @@ from plangraph.spawner.leg_state import LegStateStore
 import pytest, sys, os
 from fake_pid import FAKE_PID
 from pathlib import Path
+from historical_legs import historical_zen_legs  # noqa: F401
 pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: stub pids owned via the fake provider, never live host pids
 
 
@@ -76,19 +76,20 @@ def test_non_evidence(stderr):
 @pytest.mark.parametrize('wait', [0, .05])
 def test_bounded_wait_and_private_record(tmp_path, wait):
     async def run():
+        release = asyncio.Event()
         async def factory(*args, **kwargs):
+            # Keep the job pending until spawn returns, regardless of host load.
+            # A child-side deadline can expire while the parent is descheduled,
+            # turning the expected running record into a completed one.
+            await release.wait()
             return await asyncio.create_subprocess_exec(sys.executable, '-c',
-                'import time; from pathlib import Path\n'
-                f'go = Path({str(tmp_path / "go")!r})\n'
-                'deadline = time.monotonic() + 20\n'
-                'while not go.exists() and time.monotonic() < deadline: time.sleep(.02)\n'
                 'print("sk-plantedsecret API_KEY=hidden")', **kwargs)
         service = spawn_service(SpawnerRunner(process_factory=factory), tmp_path)
         started = asyncio.get_running_loop().time()
-        record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait)
+        record = await asyncio.wait_for(service.spawn(card={'estimate_tokens': 1000}, wait_seconds=wait), 5)
         assert asyncio.get_running_loop().time() - started < 5
         assert record['status'] == 'running'
-        (tmp_path / 'go').touch()
+        release.set()
         await service.tasks[record['run_id']]
         path = service._path(record['run_id'])
         assert path.stat().st_mode & 0o777 == 0o600
@@ -131,7 +132,7 @@ def test_harness_quota_falls_through(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-def test_replan_and_all_limited(tmp_path, monkeypatch):
+def test_replan_and_all_limited(tmp_path, monkeypatch, historical_zen_legs):
     from plangraph.spawner import resolver
     rows = resolver.get_catalog_models()
     # Exercise quota fallback independently of the host catalog's admission state.
@@ -258,7 +259,7 @@ def test_records_and_review(tmp_path):
 
 
 @pytest.mark.parametrize('provider_stop', [True, False])
-def test_transport_only_fallthrough(tmp_path, provider_stop):
+def test_transport_only_fallthrough(tmp_path, provider_stop, historical_zen_legs):
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()

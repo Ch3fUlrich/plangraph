@@ -93,8 +93,8 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness):
         runner = SpawnerRunner(process_factory=process, default_cwd=str(tmp_path))
         sink = SimpleNamespace(deliver=lambda recipient, event: notifications.append(event))
         service = spawn_service(runner, tmp_path / 'state', completion_sink=sink, keeper_sink=sink)
-        leg = next(l for l in DEFAULT_LEGS if l.harness == 'claude')
-        leg = replace(leg, harness=harness)
+        leg = next(l for l in DEFAULT_LEGS if l.harness == harness and not l.disabled
+                   and 'review' in l.roles and l.tool_mode == 'tools')
         legs = (leg, replace(leg, id='second-leg'))
         monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan(legs, (), 'test', (), ()))
         async def continuation(*a):
@@ -104,7 +104,11 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness):
                                    writer_families=('mimo',), wait_seconds=None)
     monkeypatch.setattr('shutil.which', lambda name, **k: name)
     if harness == 'opencode':
+        async def served(*args, **kwargs):
+            return None
+        monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', served)
         monkeypatch.setattr('plangraph.spawner.runner._opencode_tools_denied', lambda *a: False)
+        monkeypatch.setattr('plangraph.spawner.opencode_isolation.install_go_credential', lambda job_dir: True)   # CI holds no Go key
     record = asyncio.run(run())
     assert len(calls) == 1, record
     if harness == 'claude':

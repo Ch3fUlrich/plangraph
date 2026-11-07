@@ -28,8 +28,8 @@
 //! issuing strictly monotonic tokens, which only carries cross-host value once
 //! a real keeper implements the lock endpoint (RELEASE-DEPLOY gap, see
 //! docs/plan/rtp1-predeploy-gaps.md row 17). Worker deployment versioning is
-//! opt-in via [`pg_worker::buildid::from_env`], which stays off unless a valid
-//! build id is available (see that module for the switch).
+//! mandatory via [`pg_worker::buildid::from_env`], which refuses missing or invalid
+//! deployment and build identities; there is no opt-out switch.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -124,6 +124,13 @@ fn select_keeper(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let identity = buildid::from_env().map_err(anyhow::Error::msg)?;
+    let cfg = Config::default().with_card_allowlist_env()?;
+    if cfg.card_allowlist.is_none() {
+        eprintln!(
+            "warning: PG_CARD_ALLOWLIST is unset; worker starts but terminally refuses every card claim"
+        );
+    }
     let addr = env_or("PG_TEMPORAL_ADDR", "http://127.0.0.1:7233");
     let namespace = env_or("PG_NAMESPACE", "default");
 
@@ -168,7 +175,7 @@ async fn main() -> anyhow::Result<()> {
     let deps = Deps {
         keeper,
         harnesses,
-        cfg: Config::default(),
+        cfg,
         patterns: Patterns::default(),
     };
 
@@ -187,23 +194,21 @@ async fn main() -> anyhow::Result<()> {
         .register_workflow::<Card>()?
         .register_workflow::<Phase>()?
         .register_activities(CardActivities::new(deps));
-    let opts = match buildid::from_env() {
-        Some((deployment, build)) => {
-            println!("worker versioning on: deployment={deployment} build_id={build}");
-            let version = WorkerDeploymentVersion::builder()
-                .deployment_name(deployment)
-                .build_id(build)
-                .build();
-            builder
-                .deployment_options(
-                    WorkerDeploymentOptions::new(version)
-                        .use_worker_versioning(true)
-                        .default_versioning_behavior(VersioningBehavior::Pinned)
-                        .build(),
-                )
-                .build()
-        }
-        None => builder.build(),
+    let opts = {
+        let (deployment, build) = identity;
+        println!("worker versioning on: deployment={deployment} build_id={build}");
+        let version = WorkerDeploymentVersion::builder()
+            .deployment_name(deployment)
+            .build_id(build)
+            .build();
+        builder
+            .deployment_options(
+                WorkerDeploymentOptions::new(version)
+                    .use_worker_versioning(true)
+                    .default_versioning_behavior(VersioningBehavior::Pinned)
+                    .build(),
+            )
+            .build()
     };
 
     let mut worker = Worker::new(&runtime, client, opts)?;

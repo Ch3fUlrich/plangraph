@@ -19,10 +19,10 @@ def test_writer_live_limit_reset_and_scope(tmp_path):
     nxt = next_leg_after_provider_stop(p, p.first_leg.id, 429, "quota exhausted",
                                        {"Retry-After": "60"}, "test", store=store,
                                        now=100, account="A")
-    assert nxt.id == "opencode-deepseek-v4.1-flash-free"  # D-3745: first fallback
+    assert nxt.id == "openrouter-free"  # D-3745: first fallback
     limited = plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=101)
     assert limited.first_leg == nxt
-    assert limited.skipped[0]["evidence"]["status"] == 429
+    assert next(s for s in limited.skipped if s["leg"] == "cx-gpt-6.1-sol")["evidence"]["status"] == 429
     assert plan_spawn(dict(CARD, account="B"), role="implement", leg_reader=store, now=101).first_leg == p.first_leg
     assert plan_spawn(dict(CARD, account="A"), role="implement", leg_reader=store, now=160).first_leg == p.first_leg
     json.dumps(limited.to_dict())
@@ -48,17 +48,18 @@ def test_seats_and_impossible_fence():
     legs = tuple(dataclasses.replace(l, disabled=None) if l.family == "qwen" else l
                  for l in DEFAULT_LEGS)
     p = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs)
-    assert [l.family for l in p.review_seats] == ["qwen", "deepseek"]
+    # No diff_ref: Go is inline-only; Zen is disabled; funded DeepSeek is writer-only.
+    assert [l.family for l in p.review_seats] == ["qwen", "gemini"]
     assert all(l.family != "claude" for l in p.legs if l.id != "claude-haiku-5.5")  # D-3605 Haiku leg
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "deepseek"
-    # D-3084 per-part: with six writer parts a qwen seat covers the five others
-    # and a deepseek seat covers the qwen part.
+    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
+    # With all automatic families fenced, only Haiku remains; Grok is manual-only.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo"), legs=legs)
-    assert [l.family for l in p.review_seats] == ["muse", "claude"] and not p.error
+    assert [l.family for l in p.review_seats] == ["claude"]
+    assert p.error == "two distinct review families unavailable"
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
-                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude"))  # D-3605 Haiku leg
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))  # D-3605 Haiku leg
     assert not p.review_seats and p.error
 
 
@@ -72,7 +73,8 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-3.8-flash",
         "mimo-v2.6-flash", "mimo-v2.6-pro", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
-        "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
+        "omniroute-grok-4.7", "opencode-go-muse-spark", "opencode-console-muse-spark",
+        "opencode-go-deepseek-v4-flash", "omniroute-gemini-3.8-flash", "claude-haiku-5.5"]  # D-3605 Haiku leg
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [dataclasses.asdict(l) for l in DEFAULT_LEGS]}))
     assert load_legs(path) == DEFAULT_LEGS

@@ -7,7 +7,7 @@
 //! heartbeats and cancellation. The mapping helpers are factored out as plain
 //! `pub(crate)` functions so they can be tested without a Temporal server.
 
-use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
+use crate::attempt::{AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
 use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper, KeeperError};
 use crate::mergelock::{self, MergeOutcome};
@@ -687,6 +687,8 @@ pub struct PhaseFinishInput {
     pub key: String,
     pub branch: String,
     pub head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_patch_phase: Option<String>,
 }
 
 pub(crate) fn do_phase_finish(
@@ -694,9 +696,10 @@ pub(crate) fn do_phase_finish(
     key: &str,
     branch: &str,
     head: &str,
+    pre_patch_phase: Option<&str>,
 ) -> Result<crate::phase::PhaseFinish, crate::keeper::KeeperError> {
     retry_transient(&TRANSIENT_BACKOFF, || {
-        keeper.phase_finish(key, branch, head)
+        keeper.phase_finish(key, branch, head, pre_patch_phase)
     })
 }
 
@@ -714,6 +717,18 @@ pub(crate) fn do_claim_card(
     retry_transient(&TRANSIENT_BACKOFF, || {
         keeper.claim_card(merge_owner_id(), key)
     })
+}
+
+pub(crate) fn admitted_claim(
+    keeper: &dyn Keeper,
+    cfg: &Config,
+    key: &str,
+) -> Result<Option<Claim>, ActivityError> {
+    crate::card_admit::allow(cfg, key)?;
+    crate::card_admit::claimed(
+        settle_refusal(do_claim_card(keeper, key), "claim_card").map(Option::flatten)?,
+        key,
+    )
 }
 
 pub(crate) fn do_ensure_phase_branch(
@@ -1197,7 +1212,7 @@ impl CardActivities {
             let input = input.clone();
             tokio::task::spawn_blocking(move || {
                 let is_cancelled = || cancel_flag.load(Ordering::SeqCst);
-                attempt::run_attempt_with(
+                crate::card_admit::run_attempt(
                     harness.as_deref(),
                     &deps.cfg,
                     &deps.patterns,
@@ -1236,7 +1251,7 @@ impl CardActivities {
         if cancelled {
             return Err(ActivityError::cancelled());
         }
-        result.map_err(activity_error)
+        result.map_err(crate::card_admit::attempt_error)
     }
 
     /// Sample the clock for the workflow's backoff decisions.
@@ -1469,13 +1484,13 @@ impl CardActivities {
         input: PhaseFinishInput,
     ) -> Result<crate::phase::PhaseFinish, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let key = input.key.clone();
-        let branch = input.branch.clone();
-        let head = input.head.clone();
-        let res =
-            tokio::task::spawn_blocking(move || do_phase_finish(&*keeper, &key, &branch, &head))
-                .await
-                .map_err(activity_error)?;
+        let (key, branch) = (input.key.clone(), input.branch.clone());
+        let (head, provenance) = (input.head.clone(), input.pre_patch_phase);
+        let res = tokio::task::spawn_blocking(move || {
+            do_phase_finish(&*keeper, &key, &branch, &head, provenance.as_deref())
+        })
+        .await
+        .map_err(activity_error)?;
         match res {
             Ok(f) => Ok(f),
             Err(e) if finish_is_refusal(&e) => Ok(crate::phase::PhaseFinish {
@@ -1520,10 +1535,10 @@ impl CardActivities {
     ) -> Result<Option<Claim>, ActivityError> {
         let keeper = self.deps.keeper.clone();
         let key = input.key;
-        let res = tokio::task::spawn_blocking(move || do_claim_card(&*keeper, &key))
+        let cfg = self.deps.cfg.clone();
+        tokio::task::spawn_blocking(move || admitted_claim(&*keeper, &cfg, &key))
             .await
-            .map_err(activity_error)?;
-        settle_refusal(res, "claim_card").map(Option::flatten)
+            .map_err(activity_error)?
     }
 
     /// Create the phase branch once; a racing creator simply wins the CAS.
@@ -1601,32 +1616,10 @@ mod tests {
 
     use crate::keeper::KeeperError;
 
-    /// The packet the park-path tests park.
-    fn g3_packet() -> ParkPacket {
-        ParkPacket {
-            card: "c-1".into(),
-            tier: Tier::Free,
-            exit_class: pg_worker_core::exit_class::ExitClass::UsageLimit,
-            check_tail: "tail".into(),
-        }
-    }
+    use park_test_support::{g3_exec, g3_live, g3_packet};
 
-    /// An execution identity built the way `park`/`ask_question` build one from
-    /// their input: attempt from the input, `expected_state` from the input.
-    fn g3_exec(expected_state: Option<Vec<String>>) -> ExecId {
-        ExecId {
-            workflow_id: Some("wf-1".into()),
-            run_id: Some("run-1".into()),
-            attempt: Some(4),
-            expected_state,
-        }
-    }
-
-    fn g3_live() -> Vec<String> {
-        crate::keeper::WORKER_LIVE_STATES
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect()
+    mod park_test_support {
+        include!("activities_park_test_support.rs");
     }
 
     /// G3-1 + V7-5: the park path presents exactly the observation the
@@ -2022,7 +2015,7 @@ mod tests {
         Config {
             start_to_close: Duration::from_secs(10),
             check_tail_lines: 20,
-            ..Config::default()
+            ..Config::allow_all_for_tests()
         }
     }
 
@@ -3519,7 +3512,7 @@ mod tests {
         };
         keeper.push_finish(finish.clone());
 
-        let got = do_phase_finish(&keeper, "p1", "phase/p1", "head1").unwrap();
+        let got = do_phase_finish(&keeper, "p1", "phase/p1", "head1", None).unwrap();
         assert_eq!(got.state, finish.state);
         assert_eq!(
             got.pr.as_ref().map(|p| (p.number, p.url.as_str())),
@@ -3536,28 +3529,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn claim_card_pure_body_uses_keeper() {
-        let keeper = StubKeeper::default();
-        let claim = Claim {
-            card: "c1".to_string(),
-            repo: "r".to_string(),
-            base_sha: "s".to_string(),
-            check_cmd: "true".to_string(),
-            allow: vec![],
-            forbid: vec![],
-            prompt: "p".to_string(),
-            ..Default::default()
-        };
-        keeper.push_card_claim(claim.clone());
-
-        assert_eq!(do_claim_card(&keeper, "c1").unwrap(), Some(claim));
-        assert_eq!(
-            keeper.claim_card_calls(),
-            vec![(merge_owner_id().to_string(), "c1".to_string())]
-        );
-
-        let empty = StubKeeper::default();
-        assert_eq!(do_claim_card(&empty, "missing").unwrap(), None);
-    }
+    include!("activities_claim_tests.rs");
 }

@@ -92,7 +92,8 @@ def test_unattempted_leg_never_chosen(tmp_path, monkeypatch):
     monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan(legs, (), 'test', (), ()))
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **kw: None)
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None))
-    assert result['chosen_leg'] is None
+    assert calls == [leg.model for leg in legs]
+    assert result['chosen_leg'] is None  # refused is not chosen
     assert result['stderr_tail']
 
 
@@ -120,7 +121,7 @@ def test_windows_process_cmd_resolution(tmp_path, monkeypatch):
         with monkeypatch.context() as patch:
             from plangraph.spawner import runner as runner_module
             patch.setattr(runner_module, 'os', SimpleNamespace(name='nt', environ=os.environ, getcwd=os.getcwd))
-            job = await runner.spawn(prompt='fixture', model_or_combo=DEFAULT_LEGS[0].model, client='opencode')
+            job = await runner.spawn(prompt='fixture', model_or_combo='openrouter/free', client='opencode')
         await runner._tasks[job.job_id]
         assert unavailable_reason(job.exit_code, job.stdout, job.stderr)
         assert job.stderr

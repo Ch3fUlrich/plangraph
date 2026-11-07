@@ -100,7 +100,7 @@ def test_launch_maps_strict_prompt_bound_before_runner(sandbox, monkeypatch, too
     leg = SimpleNamespace(id='synthetic', roles=('implement',), tool_mode=tool_mode,
                           max_request_tokens=200, model='synthetic', harness='synthetic')
     monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
-    monkeypatch.setattr(launch_spec, 'leg_active', lambda leg: True)
+    monkeypatch.setattr('plangraph.spawner.target.admit_leg', lambda leg: None)
     seat.state = root / 'state'
     seat.runner.spawn = lambda **kw: pytest.fail('runner invoked')
     monkeypatch.setattr(launch_spec, 'SpawnService', lambda **kw: seat)
@@ -251,7 +251,7 @@ def test_launch_maps_real_oversized_diff_refusal(review_payload, monkeypatch):
     leg = SimpleNamespace(id='synthetic', roles=('review',), tool_mode='inline-only',
                           max_request_tokens=200, model='synthetic', harness='synthetic')
     monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
-    monkeypatch.setattr(launch_spec, 'leg_active', lambda leg: True)
+    monkeypatch.setattr('plangraph.spawner.target.admit_leg', lambda leg: None)
     seat.state = root / 'state'
     seat.runner.spawn = lambda **kw: pytest.fail('runner invoked')
     monkeypatch.setattr(launch_spec, 'SpawnService', lambda **kw: seat)

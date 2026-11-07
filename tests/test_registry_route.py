@@ -24,6 +24,7 @@ from plangraph.routing_support import resolver
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.catalog_data import SEED_MODELS
 
+from historical_legs import without_d4196
 from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _repo, _row, _seeded, _service, live_policy, pre_d3552_policy)  # noqa: F401
 
 
@@ -31,9 +32,8 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 
 @pytest.fixture(autouse=True)
 def fixed_route_table(monkeypatch):
-    # Registry/coverage behavior is independent of current provider credits.
-    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"
-                 else leg for leg in DEFAULT_LEGS)
+    # Historical registry/policy behavior is independent of credits and D-4196.
+    legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash" else leg for leg in without_d4196())
     monkeypatch.setitem(plan_spawn.__kwdefaults__, "legs", legs)
 
 def test_schema_has_harness_and_tool_mode_columns():
@@ -251,7 +251,7 @@ def test_high_needs_two_families_per_part_incl_non_claude():
 
 def test_uncoverable_parts_are_an_error():
     only = RoutePolicy(banned_families=("deepseek", "glm", "gpt", "mimo", "gemini", "muse",
-                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi"),
+                                        "north", "laguna", "nvidia", "openai", "openrouter", "kimi", "grok"),
                        off_families=(), paused_harnesses={})
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",), policy=only)
     assert plan.error and "qwen" in _families(plan)

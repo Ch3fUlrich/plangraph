@@ -13,10 +13,12 @@ def request_data(tmp_path, monkeypatch):
     from dataclasses import replace
     from plangraph.spawner import runner, opencode_overlay
     from plangraph.routing_support import host_keys, opencode_render
-    # Exercise launch mechanics with an enabled qodercli review leg.
+    # Exercise launch mechanics with explicitly enabled historical review legs.
     monkeypatch.setattr(spec, 'DEFAULT_LEGS', tuple(
-        replace(leg, disabled=None) if leg.id == 'qodercli-qwen3.8-flash' else leg
+        replace(leg, disabled=None) if leg.id in ('qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free') else leg
         for leg in spec.DEFAULT_LEGS))
+    from plangraph.spawner import target
+    monkeypatch.setattr(target, 'DEFAULT_LEGS', spec.DEFAULT_LEGS)
     monkeypatch.setattr(opencode_overlay, 'overlay_env', lambda env: env)
     monkeypatch.setattr(opencode_render, 'render_gateway_providers', lambda *a: None)
     monkeypatch.setattr(host_keys, 'add_host_keys', lambda *a, **kw: None)
@@ -243,7 +245,7 @@ def test_leg_eligibility(request_data, monkeypatch, kind):
     leg = next(leg for leg in spec.DEFAULT_LEGS if leg.id == request_data['leg']['id'])
     if kind == 'leg_inactive':
         monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled='policy'),))
-        reason = 'leg expired'
+        reason = f'leg disabled: {leg.id}: policy; override cannot enable a disabled leg'
     else:
         monkeypatch.setattr(spec, 'DEFAULT_LEGS', (replace(leg, disabled=None),))
         request_data['role'] = 'implement'

@@ -237,12 +237,12 @@ jobs:
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES --run -n auto
+            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto
             exit $?
           fi
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
           python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
-            tests/test_projector_ddl.py $FILES
+            tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
 
   rust:
     needs: select

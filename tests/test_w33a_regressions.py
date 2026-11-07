@@ -28,7 +28,11 @@ def test_stdout_error_is_unavailable(text):
 
 @pytest.mark.parametrize('marker', ['model unavailable', 'NOT SERVED', 'unknown model', 'not_served_on_host'])
 def test_stderr_diagnostics(marker):
-    assert unavailable_reason(1, '', 'prefix ' + marker)
+    # Unshaped mentions on stderr are not harness diagnostics.
+    text = 'prefix ' + marker
+    assert unavailable_reason(1, '', text) is None
+    assert unavailable_reason(0, '', text) is None
+    assert unavailable_reason(1, text, '') is None
 
 
 def test_redaction_values_and_multiline():
@@ -75,7 +79,7 @@ def test_host_probe_ticks_and_cleans_env(tmp_path, monkeypatch):
                 ticks.append(True)
         ticker = asyncio.create_task(tick())
         try:
-            job = await runner.spawn(prompt='test', model_or_combo=DEFAULT_LEGS[0].model, client='opencode')
+            job = await runner.spawn(prompt='test', model_or_combo='openrouter/free', client='opencode')
         finally:
             ticker.cancel()
             await asyncio.gather(ticker, return_exceptions=True)

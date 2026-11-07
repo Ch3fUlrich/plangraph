@@ -10,9 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import socket
-import time
-import uuid
+import socket, time, uuid
 from . import context_pack
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
@@ -25,8 +23,10 @@ class SpawnService(SeatSpawnMixin):
         self.runner = runner or SpawnerRunner()
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
-        self.leg_reader = leg_reader
-        if leg_reader is not None and not hasattr(self.runner, 'leg_reader'):  # probes write where the planner reads
+        from plangraph.routing_support.leg_state_flag import initialize
+        from .hung_capture import HungBoundary
+        leg_reader = initialize(self, leg_reader, HungBoundary)
+        if leg_reader is not None and hasattr(self.runner, '__dict__') and not hasattr(self.runner, 'leg_reader'):  # probes share the planner cache
             self.runner.leg_reader = leg_reader
         self.tasks, self._running_records = {}, {}   # run tasks; job id -> record (Q13/M8)
     def _path(self, run_id):
@@ -129,7 +129,7 @@ class SpawnService(SeatSpawnMixin):
             raise
 
     def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
-        from plangraph.planner.routing import plan_spawn, SpawnRefused
+        from plangraph.routing_support.leg_state_flag import service_plan, SpawnRefused
         families = list(writer_families)
         if review_of:
             record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
@@ -140,7 +140,7 @@ class SpawnService(SeatSpawnMixin):
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-        return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
+        return service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
@@ -228,16 +228,18 @@ class SpawnService(SeatSpawnMixin):
             target = model if model is not None else (chosen.model if chosen else None)
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
+            from .target import resolve_target
+            target, resolved_leg = resolve_target(target, chosen=chosen)
+            chosen = resolved_leg or chosen
             # Every refusal runs before hand_picked: a refused override leaves no audit line.
             writers = writer_parts(writer_families) if role == 'review' else set()
             if role == 'review' and not writers and not reviewed:
                 raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-            from plangraph.planner.legs import NO_VERDICT_SEATS, leg_active
+            from plangraph.planner.legs import NO_VERDICT_SEATS
             from plangraph.routing_support.liveness import require_available
             if role == 'review' and target in NO_VERDICT_SEATS:
                 raise SpawnRefused('no-verdict seat model (D-3225): ' + target)
             chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
-            if chosen is not None and not leg_active(chosen): raise SpawnRefused('leg expired: ' + chosen.id)  # D-3505
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg
@@ -328,7 +330,7 @@ class SpawnService(SeatSpawnMixin):
                         served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,
                         stdout_tail=job.stdout, stderr_tail=job.stderr))
-                    if job.status in ('completed', 'dry_run') and not unavailable and not stop:
+                    if job.status in ('completed', 'dry_run') and not stop and not unavailable:
                         record['chosen_leg'] = asdict(chosen)
                     record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                         served_family=job.served_family, served_witness_reason=job.served_witness_reason,

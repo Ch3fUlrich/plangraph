@@ -17,6 +17,7 @@ from plangraph.planner.routing import plan_spawn
 from plangraph.planner.seats import seat_family
 
 from registry_route_util import CARD, live_policy  # noqa: F401
+from historical_legs import without_d4196
 
 NEW_IDS = ("opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
            "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash")
@@ -94,8 +95,12 @@ def test_lift_keeps_paused_and_no_verdict_checks():
 def test_implement_route_still_skips_banned_and_off():
     plan = plan_spawn(CARD, role="implement")
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
-    assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
+    assert "D-4196" in reasons["opencode-deepseek-v4.1-flash-free"]
+    assert "D-4196" in reasons["opencode-glm-5.3-flash-free"]
+    policy_plan = plan_spawn(CARD, role="implement", legs=without_d4196())
+    policy_reasons = {s['leg']: s['reason'] for s in policy_plan.skipped}
+    assert policy_reasons['opencode-deepseek-v4.1-flash-free'] == 'banned_family'
+    assert policy_reasons['opencode-glm-5.3-flash-free'] == 'off_family'
     assert not {leg.family for leg in plan.legs} & {"deepseek", "glm", "kimi"}
     assert not {leg.id for leg in plan.legs} & set(NEW_IDS)
 
@@ -105,7 +110,8 @@ def test_review_route_keeps_lifted_families():
     ids = {leg.id for leg in plan.legs}
     assert {"opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"} <= ids
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert not set(NEW_IDS) & set(reasons)
+    assert not (set(NEW_IDS) - {"opencode-go-muse-spark"}) & set(reasons)
+    assert reasons["opencode-go-muse-spark"] == "off_family"
 
 
 def test_review_xiaomi_writer_yields_two_new_leg_seat_families():

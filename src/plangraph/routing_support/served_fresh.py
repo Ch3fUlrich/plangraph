@@ -30,4 +30,4 @@ def served_fresh(model, models, config, env, *, probe=None):
     if fresh is not None and present(fresh):
         with r._served_lock:
             r._served_cache[key] = (time.monotonic() + 300, fresh)
-    return present(fresh)
+    return fresh is not None and present(fresh)

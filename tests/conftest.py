@@ -26,6 +26,14 @@ _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 
 @pytest.fixture
+def w(tmp_path):
+    from keeper_util import World
+    world = World(tmp_path / "keeper")
+    yield world
+    world.close()
+
+
+@pytest.fixture
 def tools_importable():
     """Put the repo's ``tools/`` dir on sys.path for one test only.
 
@@ -170,6 +178,11 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '0')
+    # Services remain default-on, but never construct the production adapter.
+    from plangraph.routing_support import leg_state_flag
+    from types import SimpleNamespace
+    reader = SimpleNamespace(enabled=True, leg_status=lambda *a, **k: dict(state='ok', evidence=None))
+    monkeypatch.setattr(leg_state_flag, 'default_reader', lambda: reader)
     # Route mechanics tests run under a neutral route policy; the operator's
     # live lists (planner/route_policy.json) are pinned in test_registry_route.py.
     neutral = state / 'route-policy.json'

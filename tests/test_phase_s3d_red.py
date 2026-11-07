@@ -6,7 +6,7 @@ from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase_finish
 from plangraph.planner.github_adapter import RestGitHub
-from test_phase_finish import FakeGitHub, git_repo
+from phase_finish_support import FakeGitHub, git_repo
 
 @pytest.fixture
 def w(tmp_path):
