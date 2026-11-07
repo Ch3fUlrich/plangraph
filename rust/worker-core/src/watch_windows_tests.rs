@@ -172,9 +172,10 @@ fn missing_and_nonmember_jobs_are_gone() {
         .empty()
         .unwrap());
     let mut job = AdoptedJob::verify(Some(fake(false)), 42, 99).unwrap();
-    assert!(job.empty().unwrap());
+    assert!(job.is_gone().unwrap());
+    assert!(!job.empty().unwrap());
     job.terminate().unwrap();
-    assert!(job.api.as_ref().unwrap().active);
+    assert!(job.empty().unwrap());
     assert!(job.cpu().is_err());
 }
 #[test]
@@ -184,7 +185,7 @@ fn accounting_and_termination_use_retained_job() {
     job.terminate().unwrap();
     assert!(job.empty().unwrap());
     job.api.as_mut().unwrap().active = true;
-    assert!(job.empty().unwrap());
+    assert!(!job.empty().unwrap());
 }
 #[test]
 fn errors_and_invalid_accounting_are_not_activity() {

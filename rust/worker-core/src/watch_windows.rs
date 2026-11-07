@@ -34,14 +34,17 @@ impl<A: JobApi> AdoptedJob<A> {
         })
     }
     pub fn empty(&mut self) -> io::Result<bool> {
-        if !self.gone {
-            self.gone = !self.api.as_mut().unwrap().active()?;
+        match self.api.as_mut() {
+            Some(api) => Ok(!api.active()?),
+            None => Ok(true),
         }
-        Ok(self.gone)
+    }
+    pub fn is_gone(&mut self) -> io::Result<bool> {
+        Ok(self.gone || self.empty()?)
     }
     pub fn terminate(&mut self) -> io::Result<()> {
-        if !self.empty()? {
-            self.api.as_mut().unwrap().terminate()?;
+        if let Some(api) = self.api.as_mut() {
+            api.terminate()?;
         }
         Ok(())
     }

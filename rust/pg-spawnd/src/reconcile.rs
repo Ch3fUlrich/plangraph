@@ -200,7 +200,7 @@ pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[path = "reconcile_job.rs"]
 pub(crate) mod job;
 #[cfg(test)]

@@ -237,7 +237,6 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     }
     #[cfg(windows)]
     {
-        use pg_worker_core::watch::Child;
         let name = identity.group.as_deref().ok_or(ReconcileError::Unknown)?;
         let run = name
             .strip_prefix("Local\\pg-")
@@ -249,7 +248,7 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
             pgid: identity.pgid,
         };
         crate::reconcile::job::Group::open(run, copy)
-            .and_then(|mut job| job.empty())
+            .and_then(|mut job| job.is_gone())
             .map_err(|_| ReconcileError::Unknown)
     }
     #[cfg(not(any(target_os = "linux", windows)))]
@@ -271,6 +270,10 @@ pub(crate) fn orphan_gone(root: &Path, row: &Entry) -> Result<bool, ReconcileErr
         return Ok(true);
     };
     if !gone(current.identity.as_ref())? {
+        return Ok(false);
+    }
+    #[cfg(windows)]
+    if !crate::reconcile::job::orphan_empty(&current)? {
         return Ok(false);
     }
     let mut record = RunRecord::read(root, &row.run_id).map_err(|_| ReconcileError::Io)?;
