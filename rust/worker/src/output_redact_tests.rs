@@ -89,10 +89,10 @@ fn wrapped_sixteen_byte_lowercase_tail_is_redacted() {
 }
 
 #[test]
-fn wrapped_short_lowercase_word_survives() {
+fn wrapped_short_lowercase_word_is_redacted() {
     for newline in ["\n", "\r\n"] {
         let text = format!("{}a{newline}value", ["s", "k-"].concat());
-        assert_eq!(history_text(&text), "[REDACTED]\nvalue");
+        assert_eq!(history_text(&text), "[REDACTED]");
     }
 }
 
@@ -125,7 +125,6 @@ fn review_wrap_edges() {
     for newline in ["\n", "\r\n"] {
         for prose in [
             "ordinary prose",
-            "value",
             "abc123 prose",
             "abc123; prose",
             "abcé123",
@@ -157,7 +156,7 @@ fn review_wrap_edges() {
     let complete = format!("{prefix}{}\nis fun", "c7".repeat(18));
     assert_eq!(history_text(&complete), "[REDACTED]\nis fun");
     let benign = ["sk", "-word\nvalue"].concat();
-    assert_eq!(history_text(&benign), "[REDACTED]\nvalue");
+    assert_eq!(history_text(&benign), "[REDACTED]");
 }
 
 #[test]

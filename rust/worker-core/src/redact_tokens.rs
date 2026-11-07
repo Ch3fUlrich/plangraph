@@ -4,16 +4,22 @@
 //! `-`; AIza accepts the same alphabet, while AKIA accepts uppercase and digits.
 //! Plain and wrapped paths share each family's minimum body length below.
 //! LF/CRLF continuations consume the full contiguous body on each joined line;
-//! after the floor, further continuations require whole allowed-byte lines
-//! with a digit, mixed case, or at least 16 bytes (see redact_wrapped).
-//! Below-floor bodies and prose
-//! after a complete first line without that shape are preserved. AKIA retains its exact plain
-//! length and word boundary; wrapped joining uses its 16-character floor.
+//! after the floor, whole allowed-byte lines are consumed, including words.
+//! Lines containing disallowed bytes survive. Joining stops at MAX_WRAPPED_BODY.
+//! Below-floor bodies survive; AKIA retains its exact plain length and boundary.
+pub(crate) const MAX_WRAPPED_BODY: usize = 4096;
+
 pub(crate) struct TokenSpec {
     pub prefix: &'static str,
     pub body: &'static str,
     pub floor: usize,
     pub exact: bool,
+}
+
+impl TokenSpec {
+    pub(crate) fn wrapped_limit(&self) -> usize {
+        MAX_WRAPPED_BODY
+    }
 }
 
 pub(crate) const SPECS: &[TokenSpec] = &[
