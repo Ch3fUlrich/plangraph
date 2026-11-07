@@ -1,4 +1,5 @@
-//! Offline v1 durable-fact contract; no transport or persistence operations.
+//! V1 durable-fact contract and transport-independent memory operations.
+pub mod io;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,7 +30,7 @@ pub struct Relation {
 }
 
 /// Payload-free errors: dynamic input is never retained, even in Debug.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     UnsupportedVersion,
     UnknownKind,
