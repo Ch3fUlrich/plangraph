@@ -19,17 +19,17 @@ Authority: `rust/og-memory/src/lib.rs` (`Envelope`, `Source`, `Relation`,
 `V1`, `validate`), `rust/og-memory/src/io.rs` (`Transport`, `Saved`,
 `Snapshot`), and `rust/og-memory/tests/fixtures/memory.pg`.
 This is a partial schema mapping, **not permission to enable writes**.
-OPEN items below block OG-MEM-IO-WIRING from claiming durable round trips.
+O1–O4 are ANSWERED by D-4743; schema approval is not schema application.
 No live Omnigraph calls are needed or permitted for this contract (D-3895).
 
 ### Fields, keys, edges, and provenance
 
 All fact types have `@key(slug)`; Project has `@key(slug)` too.
 The transport's logical identity is `(project, kind, slug)`, not just slug.
-Every row below inherits that unresolved identity mismatch (OPEN O2).
+Every row below describes the original fixture mismatch (ANSWERED O2).
 “None” means no fixture property exists, not permission to discard the field.
 Provenance is caller-supplied, validated/redaction-checked and retained in
-`Validated.envelope`; the fixture cannot persist it (OPEN O1).
+`Validated.envelope`; the original fixture cannot persist it (ANSWERED O1).
 
 | Envelope field | Fixture node.property / value | Node key | Edge, direction (GQ spelling) | Provenance / gap |
 | --- | --- | --- | --- | --- |
@@ -65,7 +65,7 @@ receipt, timestamp, superseded flag, or project property may be written.
 Bind `$project: String` to the validated caller scope, never interpolate it.
 These are exact scalar projection blocks using the repository's GQ
 `match`/`where`/`return` form. They return candidates, **not complete
-Envelopes**: O1–O4 prevent implementing `Transport::read` with them alone.
+Envelopes**: the approved companion records are needed for `Transport::read`.
 Hub-linked candidates must not be assumed to belong exclusively to that hub.
 
 ```gq
@@ -106,24 +106,13 @@ typed search parameters and end with an explicit trailing `limit`; a ranked
 subset cannot substitute for the snapshot used by remember's equality check.
 Do not silently truncate a snapshot; fail closed on incomplete responses.
 
-### Remember and update (mutate route): blocked specification
+### Remember and update (mutate route): approved, not applied
 
-There is **no fixture-backed, lossless remember or update GQ block**.
-Publishing an executable mutate block now would silently drop source/actor
-and relations information or invent properties/types. Therefore none is
-authorized by V1; this is OPEN O1–O4, not an empty/no-op mutation.
-The next lane must resolve these questions before enabling transport writes,
-then add exact `query name($p: T) { ... }` mutate blocks with every parameter
-declared. Query names do not imply read-only execution: HTTP route selects
-query versus mutate. Values must always be bound parameters; schema names
-must come from a fixed validated mapping, never caller interpolation.
-
-Required semantics once resolved: atomically upsert the fact, Project hub,
-and complete edge set while preserving provenance and logical identity.
-The same identity with changed content/provenance/relations is an update,
-not an append or a blind overwrite of another project's fact. Equal facts
-including relations skip the entire commit. No separate supersede/update
-API is established by the fixture; do not infer one from `Supersedes`.
+See [approved GQ mapping](og-memory-gq-mapping.md) for parameterized upserts,
+receipt follow-up, reconciliation, and fixture-only wiring scope (D-4743,
+D-4745). The additive fixture is `memory-v1-approved.pg` beside `memory.pg`.
+Existing fact types and hub edges are unchanged; D-3895 still freezes writes
+until the operator completes OG-MEM-SCHEMA-APPLY.
 
 ### HTTP 0.13 and read-modify-write preconditions
 
@@ -145,20 +134,20 @@ commit or drop the precondition. A lost/malformed mutation response is
 automatically. Successful mutation also requires readback and a matching
 receipt. `Unverified` may mean committed; it is not rollback.
 
-### OPEN questions (blocking wiring)
+### Answered questions (schema application still pending)
 
-1. **O1 — provenance/version:** What approved fixture schema additions or
+1. **O1 — ANSWERED (D-4743), provenance/version:** What approved fixture schema additions or
    durable metadata mechanism store and retrieve `version`, `source.type`,
    `source.path`, `source.hash`, and `actor` losslessly? The fixture has none.
-2. **O2 — identity:** How is `(project, kind, slug)` represented when all fact
+2. **O2 — ANSWERED (D-4743), identity:** How is `(project, kind, slug)` represented when all fact
    keys are only `slug` and the fixture says one Project per graph? Are
    projects isolated graphs, or is an approved composite-key schema needed?
    How are cross-project target slugs resolved without changing caller slugs?
-3. **O3 — relations/scope:** How are the owner project, automatic hub link,
+3. **O3 — ANSWERED (D-4743), relations/scope:** How are the owner project, automatic hub link,
    and explicit `relations` distinguished, with vector order and duplicate
    multiplicity preserved? Extra hub targets otherwise leak recall scope;
    the fixture has no relation provenance or ordering properties.
-4. **O4 — saved state:** Where do `Saved.receipt` and `Saved.superseded` come
+4. **O4 — ANSWERED (D-4743), saved state:** Where do `Saved.receipt` and `Saved.superseded` come
    from for every fact, including non-Decisions? Does Decision's
    `status = superseded` or the `Supersedes` edge participate, and if so how?
    Neither alone defines the transport's per-fact saved state.
@@ -167,7 +156,7 @@ receipt. `Unverified` may mean committed; it is not rollback.
 6. **O6 — ANSWERED (grammar and limits):** Verified examples below establish
    keyed insert/upsert and edge operations, but disprove atomic delete plus
    insert in one mutation. The required lossless remember/update remains
-   blocked by O1–O4 and that transaction limitation; no write authorization.
+   subject to the follow-up protocol below; no live write authorization.
 
 ### Primary-source evidence for O5/O6 (offline, round 2)
 
@@ -198,7 +187,7 @@ grammar sources; MCP bundles the upstream authoring examples as strings.
   `graphManifestVersion`, etc. (`:1016-1018`). For data mutations,
   `commit: null` means successful no-op (`:1575-1589`); affected counts
   are not a receipt. Mapping this operation receipt to per-fact saved state
-  is still O4, not something returned by recall.
+   uses the approved O4 companion state, not the recall response envelope.
 * QueryRequest/ReadOutput have **no pagination/page-token fields**
   (`SDK/dist/index.d.ts:809-856`); do not invent query continuation.
   Change-diff pages instead use wire `next_page_token` (`:323-331`),
@@ -269,16 +258,16 @@ verify String/DateTime typed binding but do not establish a named enum
 parameter type; do not invent one for memory status/severity. Inline enum
 schema syntax is documented in MCP's bundled schema authoring examples.
 
-### Operator decision packet — O1–O4 remain OPEN
+### Operator decision packet — O1–O4 ANSWERED (D-4743)
 
-All blocks below are **PROPOSAL — operator approval required**, not deployed
-schema, fixture edits, migration approval, or write authorization. One
-operator decision can accept/reject this additive companion representation;
+All blocks below are **APPROVED (D-4743), not applied**, not deployed
+schema or live write authorization. The operator approved this additive
+companion representation; OG-MEM-SCHEMA-APPLY remains operator-owned;
 existing keyed fact types and hub edges remain unchanged. New types avoid
 unsupported in-place key changes (MCP bundled schema authoring examples, “Keep
-@key stable”). Names are proposed schema identifiers, never caller values.
+@key stable”). Names are approved schema identifiers, never caller values.
 
-**O2 PROPOSAL — identity:** introduce a companion authoritative record;
+**O2 APPROVED (D-4743), not applied — identity:** introduce a companion authoritative record;
 retain caller slug separately from its composite derived identity. `kind`
 must be validated to the four allowed kinds; project targets use Project.slug.
 Existing fact nodes become projections, not authoritative cross-project keys.
@@ -293,7 +282,7 @@ node MemoryRecord {
 }
 ```
 
-**O1 PROPOSAL — provenance/version:** include these nullable additions on
+**O1 APPROVED (D-4743), not applied — provenance/version:** include these nullable additions on
 MemoryRecord; enforce complete presence for new V1 records and reject legacy
 records missing metadata rather than synthesizing provenance.
 
@@ -306,7 +295,7 @@ sourceHash: String?
 actor: String?
 ```
 
-**O3 PROPOSAL — scope/relations:** owner scope is MemoryRecord.project;
+**O3 APPROVED (D-4743), not applied — scope/relations:** owner scope is MemoryRecord.project;
 automatic hub links are projections only. Store the exact ordered relation
 pair vector as canonical JSON in one scalar, preserving duplicates and empty
 vectors; decode/validate before recall. No extra target changes owner scope.
@@ -316,10 +305,10 @@ vectors; decode/validate before recall. No extra target changes owner scope.
 relationsJson: String?
 ```
 
-**O4 PROPOSAL — saved state:** a companion keyed state record can store an
+**O4 APPROVED (D-4743), not applied — saved state:** a companion keyed state record can store an
 explicit superseded flag and a serialized exact commit receipt per record.
 It must not be populated with a guessed future receipt: publication returns
-the receipt only afterward. Operator must approve a conditional follow-up
+the receipt only afterward. Use the approved conditional follow-up
 state write/reconciliation protocol; this is not an atomic saved-state claim.
 Decision.status and Supersedes remain unrelated unless separately approved.
 
