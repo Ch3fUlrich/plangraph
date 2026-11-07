@@ -1,0 +1,1 @@
+- **VERIFY-RED-PROOF:** Add a standalone red-proof verifier running changed pytest tests against isolated base code with inert stubs for new names, assertion-only proof, decision-linked exemptions, and fixture-repository tests. CI wiring remains out of scope.
