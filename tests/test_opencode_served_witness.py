@@ -11,8 +11,8 @@ from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
-from fake_pid import FAKE_PID
-REQUESTED = 'opencode-go/glm-5.2'
+from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
+REQUESTED = 'opencode-go/glm-5.2'; pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def _store(home, sessions, assistants):
@@ -26,8 +26,7 @@ def _store(home, sessions, assistants):
         conn.executemany('INSERT INTO session_v2 VALUES (?, ?)', sessions)
         conn.executemany('INSERT INTO session_message VALUES (?, ?, ?, ?)',
                          [(f'm{i}', sid, 'assistant',
-                           json.dumps({'model': {'id': 'glm-5.2' if mid == 'glm-5.3-flash-free' else mid,
-                                                 'providerID': 'opencode-go'}}))
+                           json.dumps({'model': {'id': mid.replace('glm-5.3-flash-free', 'glm-5.2'), 'providerID': 'opencode-go'}}))
                           for i, (sid, mid) in enumerate(assistants)])
 
 

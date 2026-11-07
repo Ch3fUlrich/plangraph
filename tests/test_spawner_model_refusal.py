@@ -108,6 +108,7 @@ def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness):
             return None
         monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', served)
         monkeypatch.setattr('plangraph.spawner.runner._opencode_tools_denied', lambda *a: False)
+        monkeypatch.setattr('plangraph.spawner.opencode_isolation.install_go_credential', lambda job_dir: True)   # CI holds no Go key
     record = asyncio.run(run())
     assert len(calls) == 1, record
     if harness == 'claude':
