@@ -174,8 +174,11 @@ def test_one_seat_refusal_keeps_the_other_seat(tmp_path, monkeypatch):
     svc = _service(tmp_path / "state", monkeypatch)
     original = SpawnService._spawn
 
+    failed = False
     async def flaky(self, *a, _plan=None, **kw):
-        if _plan is not None and _plan.legs[0].family == "qwen":
+        nonlocal failed
+        if _plan is not None and not failed:
+            failed = True
             raise SpawnRefused("seat refused in test")
         return await original(self, *a, _plan=_plan, **kw)
     monkeypatch.setattr(SpawnService, "_spawn", flaky)
@@ -333,8 +336,11 @@ def test_base_exception_seat_still_saves_the_group(tmp_path, monkeypatch):
     svc = _service(tmp_path / "state", monkeypatch)
     original = SpawnService._spawn
 
+    failed = False
     async def flaky(self, *a, _plan=None, **kw):
-        if _plan is not None and _plan.legs[0].family == "qwen":
+        nonlocal failed
+        if _plan is not None and not failed:
+            failed = True
             raise Stop()
         return await original(self, *a, _plan=_plan, **kw)
     monkeypatch.setattr(SpawnService, "_spawn", flaky)

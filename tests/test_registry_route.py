@@ -100,11 +100,11 @@ def test_legs_carry_tool_mode():
 def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
     db = _seeded()
     db.conn.execute("UPDATE catalog_models SET available=1, status='active' WHERE model_id=?",
-                    ("opencode-go/qwen3.8-max",))
+                    ("opencode-go/glm-5.2",))
     db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
     record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
-                                   model="opencode-go/qwen3.8-max",
+                                   model="opencode-go/glm-5.2",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
     assert record["chosen_leg"]["harness"] == "opencode"
@@ -132,7 +132,8 @@ def test_default_policy_file():
     # D-3552: deepseek/glm lifted for review seats only; kimi never (D-3084).
     assert policy.review_allowed_families == ("deepseek", "glm")
     assert "kimi" not in policy.review_allowed_families
-    assert policy.allows("qodercli", "review") and not policy.allows("qodercli", "implement")
+    assert not policy.allows("qodercli", "review")
+    assert not policy.allows("qodercli", "implement")
     # D-4699/D-4703: the agy review pause is lifted.
     assert policy.allows("agy", "review") and policy.allows("agy", "implement")
 
@@ -185,7 +186,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
 def test_route_skips_paused_harness_per_role():
     review = plan_spawn(CARD, role="review", writer_families=("mimo",))
     ids = [leg.id for leg in review.legs]
-    assert "qodercli-qwen3.8-flash" in ids
+    assert "qodercli-qwen3.8-flash" not in ids
     assert "agy-gemini-3.8-flash" in ids  # D-4699/D-4703: agy review pause lifted
     pause = RoutePolicy(paused_harnesses={"agy": ("implement",)})
     held = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=pause)

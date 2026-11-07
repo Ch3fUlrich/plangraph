@@ -113,7 +113,8 @@ def test_review_route_keeps_lifted_families():
     ids = {leg.id for leg in plan.legs}
     assert {"opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"} <= ids
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert not (set(NEW_IDS) - {"opencode-go-muse-spark"}) & set(reasons)
+    assert not (set(NEW_IDS) - {"opencode-go-muse-spark", "opencode-go-qwen3.8-max"}) & set(reasons)
+    assert reasons["opencode-go-qwen3.8-max"].startswith("disabled")
     assert reasons["opencode-go-muse-spark"] == "off_family"
 
 
