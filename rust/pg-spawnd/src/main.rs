@@ -1,4 +1,6 @@
 mod adapter;
+mod agent_view;
+mod agent_view_projection;
 mod cli;
 #[cfg(test)]
 mod error_tests;

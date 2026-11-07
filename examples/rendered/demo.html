@@ -934,6 +934,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     <button id="tab-activity" data-page="activity" type="button" role="tab" aria-selected="false" aria-controls="panel-activity">Activity</button>
     <button id="tab-progress" data-page="progress" type="button" role="tab" aria-selected="false" aria-controls="panel-progress">Progress</button>
     <button id="tab-hosts" data-page="hosts" type="button" role="tab" aria-selected="false" aria-controls="panel-hosts">Hosts</button>
+
     <button id="tab-knowledge" data-page="knowledge" type="button" role="tab" aria-selected="false" aria-controls="panel-knowledge" hidden>Knowledge</button>
     <button id="tab-settings" data-page="settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" aria-label="Settings" title="Settings">&#9881;</button>
   </nav>
@@ -8174,8 +8175,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
 
-  var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", hosts: "panel-hosts", knowledge: "panel-knowledge", settings: "panel-settings" };
-  var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", hosts: "tab-hosts", knowledge: "tab-knowledge", settings: "tab-settings" };
+  var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", hosts: "panel-hosts", agents: "panel-agents", knowledge: "panel-knowledge", settings: "panel-settings" };
+  var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", hosts: "tab-hosts", agents: "tab-agents", knowledge: "tab-knowledge", settings: "tab-settings" };
   var SBW_KEY = "plangraph.ui.sbw.v1", SBW_MIN = 180, SBW_MAX = 560;
   var ui = null, cur = "graph";
 
@@ -8183,7 +8184,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 
   function show(name) {
     if (name === "qa") name = "needs";
-    if (!PANELS[name] || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
+    if (!PANELS[name] || !$(PANELS[name]) || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
     cur = name;
     var PP = global.PlanPage;
     if (name === "graph" || name === "table") {
@@ -8204,6 +8205,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (name === "graph" && PP && PP.state && PP.state.cy) { try { PP.state.cy.resize(); } catch (e) { /* not ready */ } }
     if (name === "activity" && PlanUI.ActivityPage && PlanUI.ActivityPage.render) PlanUI.ActivityPage.render();
     if (name === "progress" && PlanUI.ProgressPage && PlanUI.ProgressPage.render) PlanUI.ProgressPage.render();
+    if (name === "agents" && PlanUI.AgentsPage) PlanUI.AgentsPage.render();
     if (name === "hosts" && PlanUI.HostsPage) PlanUI.HostsPage.render();
     if (name === "knowledge" && PlanUI.KnowledgePage) PlanUI.KnowledgePage.render();
     if (PlanUI.Pages.onChange) PlanUI.Pages.onChange(name);

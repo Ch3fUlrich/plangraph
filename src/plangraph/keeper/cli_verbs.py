@@ -437,8 +437,8 @@ def cmd_render(args, session):
     if masked:
         print(f"render: masked {masked} credential-shaped string(s)",
               file=sys.stderr)
-    document = render_mod.render(snapshot, render_mod.default_vendor_dir(),
-                                 cdn=args.cdn)
+    document = render_mod.render(snapshot, render_mod.default_vendor_dir(), cdn=args.cdn,
+                                 live_agents=os.environ.get("PLANGRAPH_LIVE_AGENTS") == "1")
     out = Path(args.out)
     if out.parent and not out.parent.exists():
         out.parent.mkdir(parents=True, exist_ok=True)
