@@ -145,7 +145,7 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
             );
             let script = match mode {
                 "split" => format!(
-                    "printf '{}\\n{}\\n'; {ending}",
+                    "printf '{secret}\\n{}\\n{}\\n'; {ending}",
                     &secret[..prefix.len()],
                     &secret[prefix.len()..]
                 ),
@@ -183,7 +183,7 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                 assert!(!body.contains(fragment), "{mode}: leaked short suffix");
             };
             if mode == "split" {
-                assert_eq!(result.output_tail, "[REDACTED]");
+                assert_eq!(result.output_tail, "[REDACTED]\n[REDACTED]");
             }
             safe(&serde_json::to_string(&result).unwrap());
             safe(
