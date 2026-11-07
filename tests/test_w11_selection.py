@@ -26,9 +26,12 @@ def rows():
 
 
 def test_disabled_writer_never_routed():
-    disabled = {l.id for l in DEFAULT_LEGS if l.disabled and 'implement' in l.roles}
+    from dataclasses import replace
+    disabled_writer = replace(LEAD, id='disabled-test-writer', disabled='synthetic disable')
+    legs = (*DEFAULT_LEGS, disabled_writer)
+    disabled = {l.id for l in legs if l.disabled and 'implement' in l.roles}
     assert disabled
-    plan = plan_spawn(CARD, role='implement', benchmark=rows())
+    plan = plan_spawn(CARD, role='implement', benchmark=rows(), legs=legs)
     assert plan.legs and not disabled & {l.id for l in plan.legs}
 
 
@@ -39,10 +42,12 @@ def test_tier_first_and_swap(monkeypatch):
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(writers)}
     plan = plan_spawn(CARD, role='implement', benchmark=data)
-    assert plan.first_leg == LEAD
-    assert plan.legs[-1] == writers[-1]
+    expected = ('cx-gpt-6.1-sol', 'opencode-deepseek-v4.1-flash-free',
+                'opencode-glm-5.3-flash-free', 'openrouter-free', 'agy-gemini-3.8-flash',
+                'mimo-v2.6-flash', 'mimo-v2.6-pro', 'deepseek')
+    assert tuple(l.id for l in plan.legs) == expected
     data[writers[0].model], data[writers[6].model] = data[writers[6].model], data[writers[0].model]
-    assert plan_spawn(CARD, role='implement', benchmark=data).first_leg == LEAD
+    assert tuple(l.id for l in plan_spawn(CARD, role='implement', benchmark=data).legs) == expected
 
 
 def test_candidate_json_and_limit(monkeypatch):

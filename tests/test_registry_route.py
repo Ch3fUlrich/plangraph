@@ -176,7 +176,7 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
             assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
             from plangraph.planner.routing import SpawnRefused
             from plangraph.spawner.service import SpawnService
-            with pytest.raises(SpawnRefused, match=r"writer disabled \(D-3828\)"):
+            with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
                 asyncio.run(SpawnService(state=tmp_path).spawn(
                     card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
 
