@@ -1,4 +1,23 @@
 //! V1 durable-fact contract and transport-independent memory operations.
+#![cfg_attr(
+    not(feature = "mock"),
+    doc = r#"
+The default library does not expose an in-memory fallback:
+```compile_fail,E0432
+use og_memory::io::MockTransport;
+```
+"#
+)]
+#![cfg_attr(
+    feature = "mock",
+    doc = r#"
+Offline callers must explicitly enable the `mock` feature:
+```
+use og_memory::io::MockTransport;
+let _ = MockTransport::default();
+```
+"#
+)]
 pub mod adapters;
 pub mod io;
 use serde::{Deserialize, Serialize};
