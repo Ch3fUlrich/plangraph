@@ -138,7 +138,7 @@ impl Env {
             heartbeat_timeout: Duration::from_secs(30),
             start_to_close: Duration::from_secs(300),
             stall: Duration::from_secs(30),
-            ..Config::default()
+            ..Config::allow_all_for_tests()
         };
         // `Deps` wants a trait object; name the coercion explicitly so the
         // concrete `Arc<StubKeeper>` widens to `Arc<dyn Keeper>` here.

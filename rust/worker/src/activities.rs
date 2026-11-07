@@ -7,7 +7,7 @@
 //! heartbeats and cancellation. The mapping helpers are factored out as plain
 //! `pub(crate)` functions so they can be tested without a Temporal server.
 
-use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
+use crate::attempt::{AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
 use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper, KeeperError};
 use crate::mergelock::{self, MergeOutcome};
@@ -719,6 +719,18 @@ pub(crate) fn do_claim_card(
     })
 }
 
+pub(crate) fn admitted_claim(
+    keeper: &dyn Keeper,
+    cfg: &Config,
+    key: &str,
+) -> Result<Option<Claim>, ActivityError> {
+    crate::card_admit::allow(cfg, key)?;
+    crate::card_admit::claimed(
+        settle_refusal(do_claim_card(keeper, key), "claim_card").map(Option::flatten)?,
+        key,
+    )
+}
+
 pub(crate) fn do_ensure_phase_branch(
     input: &PhaseBranchInput,
 ) -> Result<PhaseBranchResult, String> {
@@ -1236,7 +1248,7 @@ impl CardActivities {
             let input = input.clone();
             tokio::task::spawn_blocking(move || {
                 let is_cancelled = || cancel_flag.load(Ordering::SeqCst);
-                attempt::run_attempt_with(
+                crate::card_admit::run_attempt(
                     harness.as_deref(),
                     &deps.cfg,
                     &deps.patterns,
@@ -1275,7 +1287,7 @@ impl CardActivities {
         if cancelled {
             return Err(ActivityError::cancelled());
         }
-        result.map_err(activity_error)
+        result.map_err(crate::card_admit::attempt_error)
     }
 
     /// Sample the clock for the workflow's backoff decisions.
@@ -1559,10 +1571,10 @@ impl CardActivities {
     ) -> Result<Option<Claim>, ActivityError> {
         let keeper = self.deps.keeper.clone();
         let key = input.key;
-        let res = tokio::task::spawn_blocking(move || do_claim_card(&*keeper, &key))
+        let cfg = self.deps.cfg.clone();
+        tokio::task::spawn_blocking(move || admitted_claim(&*keeper, &cfg, &key))
             .await
-            .map_err(activity_error)?;
-        settle_refusal(res, "claim_card").map(Option::flatten)
+            .map_err(activity_error)?
     }
 
     /// Create the phase branch once; a racing creator simply wins the CAS.
@@ -2041,7 +2053,7 @@ mod tests {
         Config {
             start_to_close: Duration::from_secs(10),
             check_tail_lines: 20,
-            ..Config::default()
+            ..Config::allow_all_for_tests()
         }
     }
 
@@ -3517,28 +3529,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn claim_card_pure_body_uses_keeper() {
-        let keeper = StubKeeper::default();
-        let claim = Claim {
-            card: "c1".to_string(),
-            repo: "r".to_string(),
-            base_sha: "s".to_string(),
-            check_cmd: "true".to_string(),
-            allow: vec![],
-            forbid: vec![],
-            prompt: "p".to_string(),
-            ..Default::default()
-        };
-        keeper.push_card_claim(claim.clone());
-
-        assert_eq!(do_claim_card(&keeper, "c1").unwrap(), Some(claim));
-        assert_eq!(
-            keeper.claim_card_calls(),
-            vec![(merge_owner_id().to_string(), "c1".to_string())]
-        );
-
-        let empty = StubKeeper::default();
-        assert_eq!(do_claim_card(&empty, "missing").unwrap(), None);
-    }
+    include!("activities_claim_tests.rs");
 }

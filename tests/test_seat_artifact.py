@@ -40,8 +40,11 @@ def dry(directory):
 
 
 @pytest.mark.parametrize('model', ['synthetic/mimo-v2', 'synthetic/gpt-5'])
-def test_witnessed_pair(tmp_path, capsys, model):
+@pytest.mark.parametrize('legacy', [False, True])
+def test_witnessed_pair(tmp_path, capsys, model, legacy):
     record, job = completed(model)
+    if legacy:
+        record.pop('job_id')
     sa.publish(tmp_path, record, job)
     evidence = json.loads((tmp_path / 'evidence.json').read_text())
     assert evidence['prompt_sha256'] == hashlib.sha256(b'exact dispatched synthetic prompt\n').hexdigest()

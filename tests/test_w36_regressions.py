@@ -92,7 +92,8 @@ def test_unattempted_leg_never_chosen(tmp_path, monkeypatch):
     monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan(legs, (), 'test', (), ()))
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **kw: None)
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None))
-    assert result['chosen_leg'] is None
+    assert calls == [leg.model for leg in legs]
+    assert result['chosen_leg'] is None  # refused is not chosen
     assert result['stderr_tail']
 
 

@@ -28,11 +28,48 @@ standalone agent mode.
 | `PG_ATTEMPT_MEMORY_MAX` | Value for the scope's `MemoryMax` property. |
 | `PG_ATTEMPT_TASKS_MAX` | Value for the scope's `TasksMax` property. |
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
+| `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset refuses all cards. Unlisted keys are refused before claim and attempt setup. |
+
+Set `PG_CARD_ALLOWLIST` before deployment. When unset, the worker still starts
+and logs a warning, but terminally refuses every card claim; a healthy poller
+does not imply that cards can run.
+
+Cross-worker exclusivity uses keeper claim arbitration. Each claim sends
+`merge_owner_id()`, the process-stable random worker identity also used for merge
+locks; an empty claim is a non-retryable refusal. A process-global
+drop guard prevents overlapping activity attempts for the same card key and
+releases ownership on return or unwind. Only admission errors are non-retryable;
+filesystem permission errors retain the ordinary retryable attempt failure.
+Typed admission reasons map to terminal `card_not_allowlisted`,
+`card_not_claimable` (empty claim), and `card_attempt_overlap` failures.
+The worker loads the environment allowlist once at startup and passes an immutable
+Config to claim and attempt entry points; unloaded Configs refuse admission.
+Programmatically supplied allowlists take precedence over the environment.
 
 Each attempt creates its own private temporary directory under the system temp
 directory, removed on drop alongside its private HOME. Only that temporary
 directory is writable in the jail, not the shared system temp root; the child
 receives its path as `TMPDIR` after environment confinement.
+
+S1 supplies bounded output-redaction helpers: history keeps the last 64 KiB;
+question text, defaults, and risk tags keep the first 64 KiB after redaction.
+Incomplete prefixed tokens can continue across multiple lines until their
+minimum token length is reached. S3 wires the helpers to history/projection
+writes; seeded harness secrets never reaching either is the S1+S2+S3 stack's
+end-state invariant, not an S1 end-to-end guarantee.
+
+Auth staging excludes `.git-credentials`, `.gitconfig`, `.ssh`, `.netrc`,
+`.npmrc`, `.pypirc`, `.aws`, `.docker`, `.gnupg`, `hosts.yml`, `credentials`,
+and `.config` at both supported directory levels. Ordinary `agent-auth` and
+`sub/agent-auth` survive.
+The nested `stage_auth_into` exclusion was introduced in commit `901b141f`;
+the dual-level staging assertions regress if either exclusion is removed.
+Tests prove parent Git credential lookup succeeds
+with a store helper, while confined harness/check lookup fails for missing
+authentication (Git cannot obtain a password), the positive
+control secret is absent from both output streams, and credential environment
+variables are absent. This is not a
+network prohibition or protection from arbitrary other credential filenames.
 
 The local devstack e2e test profile (`tests/e2e/rtp1_local_util.py`) selects a
 built `pg-jail` beside the worker binary when present, otherwise explicitly sets
@@ -104,6 +141,15 @@ from `osrelease`. The worker checks both at startup: on a WSL kernel it reads
   service.
 
 ## Host facts
+
+The admission policy guard runs exactly three production checks per workspace:
+no default features, defaults, and all named features except test-only features
+and their aliases. Metadata rejects defaults that transitively enable a forbidden
+feature; a downstream compile-fail probe verifies the bypass remains unavailable.
+Run `python3 tools/probe_admission_policy_guard.py` for the two negative probes
+(a caller gated on a disabled default feature and a forbidden default alias).
+Missing tools or paths fail rather than skip. The rust-worker job passed in
+235.1 seconds locally; its guard took 85.59 seconds (207.2 seconds standalone).
 
 Bubblewrap is not available and unprivileged user namespaces are blocked on the
 target host. Landlock and `systemd-run --user --scope` work there, so this layer

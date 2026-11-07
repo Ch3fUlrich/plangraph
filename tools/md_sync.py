@@ -307,19 +307,27 @@ def main(argv=None, out=None, err=None):
         if not opts.apply or not plan.ops:
             return stop(rc, None)
         answers_path = os.path.realpath(opts.answers)
-        for _drop in range(MAX_ITEM_DROPS + 1):
+        refusals = 0  # an already-DONE close spends no drop; len(plan.ops) bounds those
+        for _pass in range(len(plan.ops) + MAX_ITEM_DROPS + 1):
             record = []
             code = _write_and_apply(opts, answers_path, digest, plan.ops,
                                     _Tee(out, record), _Tee(err, record))
             log = "".join(record)
-            key = _refused_key(log) if code != 0 else None
-            if key is None or _drop == MAX_ITEM_DROPS:
+            done = _ALREADY_DONE_RE.search(log) if code != 0 else None
+            key = done.group(1) if done else (_refused_key(log) if code != 0 else None)
+            if key is None or (not done and refusals == MAX_ITEM_DROPS):
                 break
             # D-3395: the atomic batch applied nothing; skip only that item.
             plan.ops = [op for op in plan.ops if apply_batch.op_key(op) != key]
-            plan.refused.append((key, _apply_error(log)))
-            status["refused"] = len(plan.refused)
-            out.write(f"refused {key}: skipped, re-applying the rest\n")
+            if done:
+                plan.skipped.append((key, "already done"))
+                status["skipped"] = len(plan.skipped)
+                out.write(f"already done {key}: no-op, re-applying the rest\n")
+            else:
+                refusals += 1
+                plan.refused.append((key, _apply_error(log)))
+                status["refused"] = len(plan.refused)
+                out.write(f"refused {key}: skipped, re-applying the rest\n")
             if not plan.ops:
                 code = 0
                 break
@@ -337,6 +345,8 @@ MAX_ITEM_DROPS = 3
 # item-level codes only: forbidden/unavailable/locked still halt the run
 _REFUSAL_RE = re.compile(r"^op [0-9]+ [a-z_-]+ (\S+): (?:validation|conflict|bad_state"
                          r"|not_found|evidence_unverified|evidence_missing)(?:\s|$)")
+#: a close on an item closed after the snapshot read is a no-op (D-4162)
+_ALREADY_DONE_RE = re.compile(r"^op [0-9]+ close_on_decision (\S+): locked \1 is DONE\s*$", re.M)
 
 
 def _refused_key(log):

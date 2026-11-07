@@ -1,0 +1,1 @@
+- **ENABLE-FLEET-FOUNDATION (part 3):** Join default-off seat counting, alarm delivery and durable probe-request recording in the file-only tick.

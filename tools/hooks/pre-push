@@ -3,15 +3,18 @@
 
 Runs the tools/split/scrub_check rules over the files changed in the commits being
 pushed (diff vs the remote sha; for a new branch, vs the merge-base with origin/main).
-The private word list path comes ONLY from the environment: PLANGRAPH_SCRUB_WORDS,
-with optional extra rules in PLANGRAPH_SCRUB_RULES.  Unset: the public patterns still
-run and a one-line notice is printed.  Any hit refuses the push (exit 1); the output
+PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
+unreadable list refuses every push. Public remotes use the default (chmod 600);
+if absent, warn once. remote.<name>.plangraph-private=true skips private matching.
+Public patterns always run; PLANGRAPH_SCRUB_RULES adds rules. Any hit refuses (exit 1); output
 is file:line and rule id only -- a matched value is never printed, nor the words-file
-path.  Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
+path. Existing tags are immutable, even when the move would fast-forward.
+Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 """
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,15 +26,17 @@ CHANGELOG_DOCS = TOOLS / "check_changelog_docs.py"
 sys.path.insert(0, str(SPLIT))
 import scrub_check as sc  # noqa: E402
 
-ZERO = "0" * 40
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # Public allow-lists reviewed into the repo; loaded always so pushes of already
 # vetted files behave like the CI tree scan.  Never a place for private words.
 BASE_RULES = ("manifest.toml", "scrub_ci.toml")
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True)
+    return subprocess.run(["git", "--no-replace-objects", *args], capture_output=True)
+
+
+def is_zero(oid):
+    return bool(oid) and set(oid) == {"0"}
 
 
 def git_out(*args):
@@ -43,7 +48,7 @@ def base_commit(remote_sha, local_sha):
     """What the pushed commits add: the remote sha when the push fast-forwards,
     else a merge-base; a new branch diffs against origin/main's merge-base, and
     with no usable base at all, everything in the pushed commits is checked."""
-    if remote_sha != ZERO and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
+    if not is_zero(remote_sha) and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
         if git("merge-base", "--is-ancestor", remote_sha, local_sha).returncode == 0:
             return remote_sha
         mb = git_out("merge-base", remote_sha, local_sha)
@@ -54,7 +59,7 @@ def base_commit(remote_sha, local_sha):
             mb = git_out("merge-base", "origin/main", local_sha)
             if mb:
                 return mb
-    return EMPTY_TREE
+    return git_out("hash-object", "-t", "tree", "--stdin")
 
 
 def scan_blob(rel, local_sha, cfg, find_shapes, hits):
@@ -108,17 +113,68 @@ def changelog_docs_warn(base, head):
 
 
 def main():
+    refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
+    for rec in refs:
+        if (len(rec) != 4 or
+                not all(re.fullmatch(r"[0-9a-fA-F]+", rec[i]) for i in (1, 3)) or
+                len(rec[1]) != len(rec[3]) or
+                git("check-ref-format", rec[2]).returncode != 0):
+            print("pre-push: malformed push record: push refused", file=sys.stderr)
+            return 1
+        _, local_sha, remote_ref, remote_sha = rec
+        if is_zero(local_sha):
+            print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
+            return 1
+        if is_zero(remote_sha):
+            continue
+        if git("cat-file", "-e", remote_sha).returncode != 0:
+            print(f"pre-push: remote object unavailable for {remote_ref}: push refused",
+                  file=sys.stderr)
+            return 1
+        if local_sha == remote_sha:
+            continue
+        if remote_ref.startswith("refs/tags/"):
+            print(f"pre-push: refused update of existing tag {remote_ref}: tags are immutable",
+                  file=sys.stderr)
+            return 1
+        is_commit = git_out("cat-file", "-t", remote_sha) == "commit"
+        if (not is_commit or git(
+                "merge-base", "--is-ancestor", remote_sha, local_sha).returncode != 0):
+            print(f"pre-push: refused non-fast-forward update of {remote_ref}",
+                  file=sys.stderr)
+            return 1
     if file_size_gate():
         return 1
-    refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
-    words = os.environ.get("PLANGRAPH_SCRUB_WORDS") or None
-    if not words:
-        print("pre-push: PLANGRAPH_SCRUB_WORDS unset: public patterns only, "
-              "the private-word rule is inactive", file=sys.stderr)
+    explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
+    words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
+    remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
+    private = git_out("config", "--local", "--bool", f"remote.{remote}.plangraph-private") == "true"
     rules_files = [str(SPLIT / name) for name in BASE_RULES if (SPLIT / name).is_file()]
     if os.environ.get("PLANGRAPH_SCRUB_RULES"):
         rules_files.append(os.environ["PLANGRAPH_SCRUB_RULES"])
     try:
+        if explicit:
+            path = Path(words)
+            if not words or not path.stat().st_mode & 0o444:
+                raise PermissionError
+            with path.open("rb"):
+                pass
+        elif not private:
+            path = Path.home() / ".config/plangraph/scrub-words.txt"
+            try:
+                mode = path.stat().st_mode
+            except FileNotFoundError:
+                print("pre-push: PLANGRAPH_SCRUB_WORDS unset: public patterns only, "
+                      "the private-word rule is inactive", file=sys.stderr)
+            else:
+                if mode & 0o077:
+                    print("pre-push: private list requires chmod 600: push refused", file=sys.stderr)
+                    return 1
+                if not mode & 0o444:
+                    raise PermissionError
+                words = str(path)
+        if private:
+            words = None
         cfg = sc.build_config(words_file=words, rules_files=rules_files)
     except Exception as exc:  # fail closed; never echo the paths
         print(f"pre-push: bad scrub config: {type(exc).__name__}: push refused",
@@ -129,11 +185,7 @@ def main():
     find_shapes = sc._shape_finder()
     hits = []
     for rec in refs:
-        if len(rec) != 4:
-            continue
         _, local_sha, _, remote_sha = rec
-        if local_sha == ZERO:  # branch deletion: nothing pushed to scan
-            continue
         base = base_commit(remote_sha, local_sha)
         changelog_docs_warn(base, local_sha)
         for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():

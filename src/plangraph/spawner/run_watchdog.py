@@ -251,6 +251,7 @@ async def collect(runner, job_id, proc):
             tail = (tail + scrubbed)[-4096:]
             setattr(job, name, tail)
             log.feed(scrubbed)
+            log.flush()  # live activity must not wait for a 16 KB batch or EOF
         try:
             while True:
                 data = await stream.read(65536)

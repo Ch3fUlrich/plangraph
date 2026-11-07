@@ -50,7 +50,7 @@ def read_text_retry(path, *, attempts=20, encoding='utf-8'):
         try:
             return path.read_text(encoding=encoding)
         except PermissionError as exc:
-            if getattr(exc, 'winerror', None) not in (None, 5, 32, 33) or attempt == attempts - 1:
+            if getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == attempts - 1:
                 raise
             time.sleep(0.05)
 
