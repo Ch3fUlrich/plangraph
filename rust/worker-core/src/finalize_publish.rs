@@ -116,6 +116,7 @@ fn git(remote: &Remote<'_>, args: &[&str]) -> Result<std::process::Output> {
     git_with_env(remote, args, &[])
 }
 // Helper-owned settings are shared with the child-environment regression test.
+const GIT_PASSTHROUGH_ENV: &[&str] = &["SSH_AUTH_SOCK"];
 const GIT_FIXED_ENV: &[(&str, &str)] = &[
     ("GIT_CONFIG_NOSYSTEM", "1"),
     ("GIT_CONFIG_SYSTEM", "/dev/null"),
@@ -138,7 +139,10 @@ fn git_with_env(
         command.current_dir(remote.root);
     }
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") || key.to_string_lossy().starts_with("SSH_") {
+        if (key.to_string_lossy().starts_with("GIT_") || key.to_string_lossy().starts_with("SSH_"))
+            && !(GIT_PASSTHROUGH_ENV.contains(&key.to_string_lossy().as_ref())
+                && matches!(args.first(), Some(&"push" | &"fetch" | &"ls-remote")))
+        {
             command.env_remove(key);
         }
     }

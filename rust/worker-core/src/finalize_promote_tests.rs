@@ -384,5 +384,12 @@ fn finalize_promote_non_exdev_link_failure_has_no_ref() {
         Err(PromoteError::Install)
     ));
     assert!(!target.exists());
+    assert!(fs::read_dir(target.parent().unwrap())
+        .unwrap()
+        .all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("failed.pack.")));
     f.no_ref();
 }
