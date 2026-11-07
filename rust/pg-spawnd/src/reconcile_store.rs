@@ -162,14 +162,31 @@ pub(crate) fn lock(
         .ok_or(ReconcileError::Unknown)
 }
 
-/// Named confinement groups are authoritative, even after the leader exits.
-/// Without one, a reused leader is gone; a missing leader alone is not proof.
-fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
+/// Settlement requires both the recorded process and its confinement group gone.
+pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
     let Some(identity) = identity else {
-        return Ok(true);
+        return Err(ReconcileError::Unknown);
     };
     #[cfg(target_os = "linux")]
     {
+        match std::fs::read_to_string(format!("/proc/{}/stat", identity.pid)) {
+            Ok(stat) => {
+                let start = stat
+                    .rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().nth(19)?.parse::<u64>().ok())
+                    .ok_or(ReconcileError::Unknown)?;
+                if identity
+                    .start_time
+                    .is_some_and(|expected| expected != start)
+                {
+                    // A reused PID does not prove the old group is empty.
+                } else {
+                    return Ok(false);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(ReconcileError::Unknown),
+        }
         if let Some(group) = &identity.group {
             if !group.starts_with('/') {
                 return Err(ReconcileError::Unknown);
@@ -185,23 +202,9 @@ fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
                 Err(_) => Err(ReconcileError::Unknown),
             };
         }
-        match std::fs::read_to_string(format!("/proc/{}/stat", identity.pid)) {
-            Ok(stat) => {
-                let start = stat
-                    .rsplit_once(')')
-                    .and_then(|(_, rest)| rest.split_whitespace().nth(19)?.parse::<u64>().ok())
-                    .ok_or(ReconcileError::Unknown)?;
-                if identity
-                    .start_time
-                    .is_some_and(|expected| expected != start)
-                {
-                    return Ok(true);
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(_) => return Err(ReconcileError::Unknown),
-        }
         let pid = i32::try_from(identity.pid).map_err(|_| ReconcileError::Invalid)?;
+        // Legacy records imply pgid == pid: worker-core/src/run/group_unix.rs:38
+        // sets process_group(0) for owned spawns. A live PID above always wins.
         // SAFETY: signal zero only probes the recorded process group.
         if unsafe { libc::kill(-pid, 0) } == 0 {
             return Ok(false);

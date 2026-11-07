@@ -100,19 +100,23 @@ fn reconcile_on_killed_group_orphaned_once_across_startups() {
 fn reconcile_on_live_group_would_reattach_untouched_shadow_writes_nothing() {
     let dir = StateDir::new();
     let mut record = dir.record();
-    let child = GroupChild::new();
+    let mut child = GroupChild::new();
     record.set("proc", child.identity());
     record.save().unwrap();
     let before = std::fs::read(record.path()).unwrap();
     crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).unwrap();
     assert!(!dir.0.join("reconcile.lock").exists());
-    assert!(crate::reconcile::startup(&dir.0, Some("on"), &json!({})).is_err());
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
+    assert!(child.0.try_wait().unwrap().is_none());
     assert_eq!(before, std::fs::read(record.path()).unwrap());
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn reconcile_on_pid_reuse_start_mismatch_is_gone_without_signalling() {
+fn reconcile_on_pid_reuse_with_live_group_is_not_gone() {
     let dir = StateDir::new();
     let mut record = dir.record();
     let mut child = GroupChild::new();
@@ -120,11 +124,14 @@ fn reconcile_on_pid_reuse_start_mismatch_is_gone_without_signalling() {
     identity["start_time"] = json!(identity["start_time"].as_u64().unwrap() + 1);
     record.set("proc", identity);
     record.save().unwrap();
-    crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
     assert!(child.0.try_wait().unwrap().is_none());
     assert_eq!(
         RunRecord::read(&dir.0, "run-test").unwrap().status(),
-        Some(Status::Orphaned)
+        Some(Status::Running)
     );
 }
 
@@ -263,4 +270,91 @@ fn reconcile_crashed_daemon_real_child_inventory_is_read_only() {
     );
     assert_eq!(before, std::fs::read(record.path()).unwrap());
     assert!(!dir.0.join("reconcile.lock").exists());
+}
+
+#[test]
+fn reconcile_missing_identity_is_unknown_and_not_settled() {
+    let dir = StateDir::new();
+    let record = dir.record();
+    let before = std::fs::read(record.path()).unwrap();
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
+    assert!(
+        crate::reconcile::startup(&dir.0, Some("shadow"), &json!({}))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_nonleader_live_pid_group_esrch_is_not_settled() {
+    let dir = StateDir::new();
+    let mut record = dir.record();
+    let mut child = GroupChild(
+        std::process::Command::new("sh")
+            .args(["-c", "read token"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    // SAFETY: only inspect group membership and signal-zero liveness.
+    unsafe {
+        assert_ne!(libc::getpgid(child.0.id() as i32), child.0.id() as i32);
+        assert_eq!(libc::kill(-(child.0.id() as i32), 0), -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+    record.set("proc", child.identity());
+    record.save().unwrap();
+    let before = std::fs::read(record.path()).unwrap();
+    assert!(matches!(
+        crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+        Err(ReconcileError::Unknown)
+    ));
+    assert!(child.0.try_wait().unwrap().is_none());
+    assert_eq!(before, std::fs::read(record.path()).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_exited_leader_live_member_is_not_gone() {
+    use std::os::unix::process::CommandExt;
+    let mut leader = GroupChild::new();
+    let identity: Proc = serde_json::from_value(leader.identity()).unwrap();
+    let mut member = GroupChild(
+        std::process::Command::new("sh")
+            .args(["-c", "read token"])
+            .stdin(std::process::Stdio::piped())
+            .process_group(leader.0.id() as i32)
+            .spawn()
+            .unwrap(),
+    );
+    leader.stop();
+    assert!(!gone(Some(&identity)).unwrap());
+    assert!(member.0.try_wait().unwrap().is_none());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_zombie_leader_is_not_gone() {
+    let child = GroupChild::new();
+    let identity: Proc = serde_json::from_value(child.identity()).unwrap();
+    // SAFETY: terminate only our child, leaving it unreaped for the probe.
+    assert_eq!(unsafe { libc::kill(child.0.id() as i32, libc::SIGKILL) }, 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", child.0.id())).unwrap();
+        if stat.rsplit_once(')').unwrap().1.split_whitespace().next() == Some("Z") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(!gone(Some(&identity)).unwrap());
 }

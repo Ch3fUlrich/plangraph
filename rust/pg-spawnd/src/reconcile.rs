@@ -91,12 +91,10 @@ pub(crate) fn startup(
         }
         // A recorded identity is not proof of liveness. Do not infer would_kill
         // or would_reattach from an unverified PID or arbitrary group string.
-        let mut gone = row.identity.is_none();
-        #[cfg(target_os = "linux")]
-        if let Some(identity) = &row.identity {
-            gone = matches!(std::fs::symlink_metadata(format!("/proc/{}", identity.pid)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-        }
+        let gone = matches!(
+            crate::reconcile_store::gone(row.identity.as_ref()),
+            Ok(true)
+        );
         if gone {
             eprintln!("would_orphan {} {}", row.run_id, row.attempt);
             diagnostics.push(WouldOrphan {
