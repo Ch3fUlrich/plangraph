@@ -13,17 +13,24 @@ fn startup_loads_env_policy_and_unloaded_config_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cards");
     std::fs::write(&path, "startup-listed\n").unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "card_admit::tests::startup_loads_env_policy_and_unloaded_config_refuses",
+        ])
+        .env("PG_PILOT_ALLOWLIST_CHILD", "1")
+        .env("PG_CARD_ALLOWLIST", &path)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "card_admit::tests::startup_loads_env_policy_and_unloaded_config_refuses"
-            ])
-            .env("PG_PILOT_ALLOWLIST_CHILD", "1")
-            .env("PG_CARD_ALLOWLIST", &path)
-            .status()
-            .unwrap()
-            .success()
+        output.status.success(),
+        "child failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.lines().any(|line| line == "running 1 test"),
+        "expected exactly one child test to run: {stdout}"
     );
     let loaded = Config::default().with_card_allowlist(Some(&path)).unwrap();
     assert!(allow(&loaded, "startup-listed").is_ok());
