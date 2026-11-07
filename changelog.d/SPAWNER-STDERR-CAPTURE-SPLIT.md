@@ -1,0 +1,1 @@
+- **SPAWNER-EXIT1-STDERR-CAPTURE:** Move the stderr.log writer and attempt redaction out of service.py into stderr_capture.py so service.py is back under the 400-line limit.

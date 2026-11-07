@@ -1,0 +1,1 @@
+Phase runner retries branch infrastructure failures but refuses invalid Git refs, accounts for untouched cards after branch failure, creates branches only after a usable claim, checks fresh base ancestry on adoption, and preserves memo fields while projecting child plan_key upserts.

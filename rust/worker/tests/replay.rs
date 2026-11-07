@@ -1,6 +1,5 @@
 //! Offline workflow replay tests: no Temporal server, no network. The histories
-//! in `tests/fixtures` were recorded from a real run by `e2e.rs` (writing to
-//! `PG_RECORD_DIR`), with host identity scrubbed. Replay only re-executes the
+//! in `tests/fixtures` were recorded by `e2e.rs` (`PG_RECORD_DIR`), host identity scrubbed. Replay re-executes the
 //! workflow code against the recorded event stream, so it catches any
 //! non-deterministic edit before it reaches a live worker.
 use pg_worker::activities::{CardActivities, CardInput, CardOutput, Tick};
@@ -371,6 +370,8 @@ async fn drifted_code_fails_replay() {
 
 #[path = "replay_phase_legacy/mod.rs"]
 mod phase_legacy;
+#[path = "support/s4_replay.rs"]
+mod s4_replay;
 
 #[path = "replay_phase/basic.rs"]
 mod phase_basic;
