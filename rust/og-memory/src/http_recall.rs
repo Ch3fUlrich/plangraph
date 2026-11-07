@@ -7,7 +7,7 @@ use crate::{
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-const RECORDS: &str = "query memoryRecallRecords($project: String) {
+pub(super) const RECORDS: &str = "query memoryRecallRecords($project: String) {
   match { $n: MemoryRecord }
   where { $n.project == $project }
   return { $n.project, $n.kind, $n.slug, $n.content, $n.version,
@@ -31,7 +31,7 @@ fn key(row: &Value) -> Result<(&str, &str, &str), Error> {
         text(row, "slug")?,
     ))
 }
-fn rows(response: &Value) -> Result<(&str, &[Value]), Error> {
+pub(super) fn rows(response: &Value) -> Result<(&str, &[Value]), Error> {
     let commit = text(response, "graph_commit_id")?;
     let rows = response["rows"].as_array().ok_or(Error::Unverified)?;
     if commit.is_empty()
@@ -47,18 +47,36 @@ fn rows(response: &Value) -> Result<(&str, &[Value]), Error> {
 
 impl Transport for Http {
     fn read(&mut self, project: &str) -> Result<Snapshot, Error> {
+        self.read_snapshot(project, None)
+    }
+    fn commit(&mut self, fact: &Validated, expected: &str) -> Result<Receipt, Error> {
+        self.publish(fact, expected)
+    }
+}
+impl Http {
+    pub(super) fn read_at(&self, project: &str, commit: &str) -> Result<Snapshot, Error> {
+        self.read_snapshot(project, Some(commit))
+    }
+    fn read_snapshot(&self, project: &str, pinned: Option<&str>) -> Result<Snapshot, Error> {
         if !crate::slug_ok(project) || project.starts_with("routing-") {
             return Err(Error::InvalidScope);
         }
-        let records = self.query(&Request {
-            query: RECORDS,
-            params: json!({"project": project}),
-        })?;
+        let records = if let Some(commit) = pinned {
+            self.post_snapshot(RECORDS, project, commit)?
+        } else {
+            self.query(&Request {
+                query: RECORDS,
+                params: json!({"project": project}),
+            })?
+        };
         let (commit, records) = rows(&records)?;
         // snapshot is a top-level HTTP request field, never a GQ parameter.
         let states = self.post_snapshot(STATES, project, commit)?;
         let (state_commit, states) = rows(&states)?;
-        if state_commit != commit || records.len() != states.len() {
+        if pinned.is_some_and(|p| p != commit)
+            || state_commit != commit
+            || records.len() != states.len()
+        {
             return Err(Error::Unverified);
         }
         let caps = crate::Capabilities::from_schema(include_str!(
@@ -121,10 +139,5 @@ impl Transport for Http {
             graph_commit: commit.into(),
             facts,
         })
-    }
-
-    fn commit(&mut self, _: &Validated, _: &str) -> Result<Receipt, Error> {
-        // Recall-only cut: never publish without the receipt follow-up protocol.
-        Err(Error::Outage)
     }
 }
