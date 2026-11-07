@@ -135,10 +135,11 @@ fn finalize_promote_conflicting_ref_preserves_refs() {
     let verified = f.verified();
     git(f.receiver.path(), &["update-ref", REF, &f.base]);
     let before = git(f.receiver.path(), &["for-each-ref"]);
-    assert!(matches!(
-        promote(&f.repo, verified, REF),
-        Err(PromoteError::Ref | PromoteError::Cause { .. })
-    ));
+    match promote(&f.repo, verified, REF).unwrap_err() {
+        PromoteError::Ref => {}
+        PromoteError::Cause { kind, .. } if matches!(*kind, PromoteError::Ref) => {}
+        error => panic!("expected ref contention, got {error:?}"),
+    }
     assert_eq!(git(f.receiver.path(), &["for-each-ref"]), before);
 }
 
@@ -347,7 +348,7 @@ fn finalize_promote_fixture_ignores_local_signing_and_hooks() {
 #[test]
 fn finalize_promote_batches_all_objects_and_reports_missing() {
     let f = Fixture::new();
-    let mut verified = f.verified();
+    let verified = f.verified();
     super::unix::BATCH_INPUTS.with(|inputs| inputs.borrow_mut().clear());
     super::unix::resolve(f.source.path(), &verified).unwrap();
     super::unix::BATCH_INPUTS.with(|inputs| {
@@ -361,8 +362,27 @@ fn finalize_promote_batches_all_objects_and_reports_missing() {
                 >= 4
         );
     });
-    // Empty range forces the head check through batch-check's successful-exit missing response.
-    verified.head = "0".repeat(f.head.len());
-    verified.base = verified.head.clone();
-    assert!(super::unix::resolve(f.source.path(), &verified).is_err());
+    // The appended head duplicates rev-list output. Missing requires repository mutation
+    // between calls, so exercise the successful-exit missing response synthetically.
+    let input = format!("{}\n", f.head);
+    let output = format!("{} missing\n", f.head);
+    assert!(matches!(
+        super::unix::validate_batch(input.as_bytes(), output.as_bytes()),
+        Err(PromoteError::Objects)
+    ));
+}
+
+#[test]
+fn finalize_promote_non_exdev_link_failure_has_no_ref() {
+    let f = Fixture::new();
+    let verified = f.verified();
+    let target = f.receiver.path().join(".git/objects/pack/failed.pack");
+    assert!(matches!(
+        super::unix::install_with(&verified.pack, &target, |_, _| {
+            Err(std::io::Error::from_raw_os_error(libc::EACCES))
+        }),
+        Err(PromoteError::Install)
+    ));
+    assert!(!target.exists());
+    f.no_ref();
 }

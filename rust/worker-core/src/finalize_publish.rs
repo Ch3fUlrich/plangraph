@@ -115,6 +115,14 @@ pub struct Remote<'a> {
 fn git(remote: &Remote<'_>, args: &[&str]) -> Result<std::process::Output> {
     git_with_env(remote, args, &[])
 }
+// Helper-owned settings are shared with the child-environment regression test.
+const GIT_FIXED_ENV: &[(&str, &str)] = &[
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_CONFIG_SYSTEM", "/dev/null"),
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_ALLOW_PROTOCOL", "file:https:ssh"),
+    ("GIT_TERMINAL_PROMPT", "0"),
+];
 fn git_with_env(
     remote: &Remote<'_>,
     args: &[&str],
@@ -140,10 +148,7 @@ fn git_with_env(
                 .copied()
                 .filter(|(key, _)| !key.starts_with("GIT_") && !key.starts_with("SSH_")),
         )
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_ALLOW_PROTOCOL", "file:https:ssh")
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .envs(GIT_FIXED_ENV.iter().copied());
     #[cfg(test)]
     if args == ["--test-env-probe"] {
         return Ok(command.output()?);

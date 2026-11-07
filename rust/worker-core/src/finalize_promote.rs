@@ -141,6 +141,10 @@ mod unix {
         BATCH_INPUTS.with(|inputs| inputs.borrow_mut().push(objects.clone()));
         let output = command(root, &["cat-file", "--batch-check"], &objects, None)
             .map_err(|e| cause(PromoteError::Objects, e))?;
+        validate_batch(&objects, &output)
+    }
+
+    pub(super) fn validate_batch(objects: &[u8], output: &[u8]) -> Result<(), PromoteError> {
         let lines: Vec<_> = output
             .split(|b| *b == b'\n')
             .filter(|s| !s.is_empty())
