@@ -63,3 +63,16 @@ fn permission_denied_allowlist_fails_without_contents() {
         assert!(result.unwrap().card_allowed(&contents));
     }
 }
+#[test]
+fn startup_environment_source_is_loaded_once_and_explicit_policy_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("cards");
+    std::fs::write(&file, "startup-card\n").unwrap();
+    let cfg = Config::default().with_card_allowlist_source(|| Some(file.into_os_string())).unwrap();
+    assert!(cfg.card_allowed("startup-card"));
+    assert!(!cfg.card_allowed("unlisted"));
+    let cfg = cfg.with_card_allowlist_source(|| panic!("explicit policy must win")).unwrap();
+    assert!(cfg.card_allowed("startup-card"));
+    assert!(!Config::default().with_card_allowlist_source(|| None).unwrap().card_allowed("startup-card"));
+    assert!(Config::default().with_card_allowlist_source(|| Some(dir.path().into())).is_err());
+}

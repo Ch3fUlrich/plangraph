@@ -141,6 +141,11 @@ pub fn run_attempt_with(
     inp: &AttemptInput,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<AttemptResult, AttemptError> {
+    if inp.claim.card.trim().is_empty() {
+        return Err(AttemptError::Admission(
+            crate::AdmissionReason::NotClaimable(inp.claim.card.clone()),
+        ));
+    }
     let _owner = crate::card_admit::enter(cfg, &inp.claim.card).map_err(AttemptError::Admission)?;
     // Stamped in one place so every caller's result carries the projector
     // keys, whether the attempt succeeded, was cancelled or was a defect.
@@ -735,7 +740,7 @@ mod tests {
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -1130,7 +1135,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_empty_check_kind_runs_red_first_then_writer() {
+    fn constructed_default_check_kind_runs_red_first_then_writer() {
         assert_legacy_change_path(false);
     }
 
@@ -1154,9 +1159,9 @@ mod tests {
             let json = serde_json::to_string(&value).unwrap();
             c = serde_json::from_str::<Claim>(&json).unwrap();
         } else {
-            c.check_kind.clear();
+            c.check_kind = Claim::default().check_kind;
         }
-        assert_eq!(c.check_kind, "");
+        assert_eq!(c.check_kind, "change");
         let inp = input(c, 1, root.path());
         // The red base check creates scratch; cleanup proves that gate ran.
         let h = Fake::new("test ! -e marker && echo hi > out.txt");

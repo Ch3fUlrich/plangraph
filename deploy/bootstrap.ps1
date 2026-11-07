@@ -111,6 +111,13 @@ function Invoke-PlangraphBootstrap {
         if ($LASTEXITCODE -ne 0) { throw "Watchdog installation failed" }
     }
 
+    # Omnigraph: site config, cache client, session environment, health verification.
+    if ($DryRun) { Write-Host 'Omnigraph dry-run: read site config; cache client; install session environment; verify health' }
+    else { try {
+        & $pythonCommand (Join-Path $PSScriptRoot 'omnigraph_step.py') --dry-run ([int]$DryRun.IsPresent)
+        if ($LASTEXITCODE -ne 0) { Write-Host 'Omnigraph skipped: helper unavailable' }
+    } catch { Write-Host 'Omnigraph skipped: helper unavailable' } }
+
     Write-Host "Plangraph bootstrap completed successfully."
 }
 

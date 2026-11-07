@@ -125,6 +125,11 @@ fn select_keeper(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cfg = Config::default().with_card_allowlist_env()?;
+    if cfg.card_allowlist.is_none() {
+        eprintln!(
+            "warning: PG_CARD_ALLOWLIST is unset; worker starts but terminally refuses every card claim"
+        );
+    }
     let addr = env_or("PG_TEMPORAL_ADDR", "http://127.0.0.1:7233");
     let namespace = env_or("PG_NAMESPACE", "default");
 

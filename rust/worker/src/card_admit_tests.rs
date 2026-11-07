@@ -8,6 +8,17 @@ fn startup_loads_env_policy_and_unloaded_config_refuses() {
     assert!(startup.contains("Config::default().with_card_allowlist_env()?"));
     assert!(!startup.contains("allow_all_for_tests"));
     let cfg = Config::default();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cards");
+    std::fs::write(&path, "startup-listed\n").unwrap();
+    let loaded = Config::default().with_card_allowlist(Some(&path)).unwrap();
+    assert!(allow(&loaded, "startup-listed").is_ok());
+    assert!(allow(&loaded, "unlisted").is_err());
+    assert!(
+        Config::default()
+            .with_card_allowlist(Some(dir.path()))
+            .is_err()
+    );
     assert_failure(
         allow(&cfg, "unloaded").unwrap_err(),
         Some("card_not_allowlisted"),

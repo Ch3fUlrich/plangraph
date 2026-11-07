@@ -34,6 +34,10 @@ function documentation in the included source file.
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
 | `PG_CARD_ALLOWLIST` | Absolute UTF-8 file path, one card key per line; blank and `#` comment lines ignored. Unreadable or empty-of-keys files stop startup. Unset refuses all cards. Unlisted keys are refused before claim and attempt setup. |
 
+Set `PG_CARD_ALLOWLIST` before deployment. When unset, the worker still starts
+and logs a warning, but terminally refuses every card claim; a healthy poller
+does not imply that cards can run.
+
 Cross-worker exclusivity uses keeper claim arbitration. Each claim sends
 `merge_owner_id()`, the process-stable random worker identity also used for merge
 locks; an empty claim is a non-retryable refusal. A process-global
@@ -61,7 +65,10 @@ end-state invariant, not an S1 end-to-end guarantee.
 Auth staging excludes `.git-credentials`, `.gitconfig`, `.ssh`, `.netrc`,
 `.npmrc`, `.pypirc`, `.aws`, `.docker`, `.gnupg`, `hosts.yml`, `credentials`,
 and `.config` at both supported directory levels. Ordinary `agent-auth` and
-`sub/agent-auth` survive. Tests prove parent Git credential lookup succeeds
+`sub/agent-auth` survive.
+The nested `stage_auth_into` exclusion was introduced in commit `901b141f`;
+the dual-level staging assertions regress if either exclusion is removed.
+Tests prove parent Git credential lookup succeeds
 with a store helper, while confined harness/check lookup fails for missing
 authentication (Git cannot obtain a password), the positive
 control secret is absent from both output streams, and credential environment
@@ -138,6 +145,15 @@ from `osrelease`. The worker checks both at startup: on a WSL kernel it reads
   service.
 
 ## Host facts
+
+The admission policy guard runs exactly three production checks per workspace:
+no default features, defaults, and all named features except test-only features
+and their aliases. Metadata rejects defaults that transitively enable a forbidden
+feature; a downstream compile-fail probe verifies the bypass remains unavailable.
+Run `python3 tools/probe_admission_policy_guard.py` for the two negative probes
+(a caller gated on a disabled default feature and a forbidden default alias).
+Missing tools or paths fail rather than skip. The rust-worker job passed in
+235.1 seconds locally; its guard took 85.59 seconds (207.2 seconds standalone).
 
 Bubblewrap is not available and unprivileged user namespaces are blocked on the
 target host. Landlock and `systemd-run --user --scope` work there, so this layer

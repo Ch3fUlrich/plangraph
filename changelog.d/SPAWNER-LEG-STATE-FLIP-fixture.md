@@ -1,0 +1,1 @@
+Keep hermetic service tests on an enabled fake leg-state reader instead of disabling the default-on path; verify shared reader wiring, neutral routing and next-tick hung ranking without live adapter construction. Declaration literal removal and CI grep remain later-slice work, as do F7 host sampling/leg-only stopping and the D-4520 routing follow-up.

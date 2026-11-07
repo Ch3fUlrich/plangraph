@@ -75,6 +75,7 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         .env("PATH", std::env::var_os("PATH").unwrap())
         .env("HOME", &source)
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("LC_ALL", "C")
         .output()
         .unwrap();
     assert!(
@@ -126,8 +127,12 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         }
         let mut cmd = Command::new("sh");
         cmd.current_dir(&dir)
-            .args(["-c", &format!("env; {lookup}")]);
+            .args(["-c", &format!("env; {lookup}")])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
         confine(&mut cmd, home.path());
+        // Pin Git's diagnostic language after confinement for the exact match below.
+        cmd.env("LC_ALL", "C");
         let out = cmd.output().unwrap();
         assert!(!out.status.success());
         let stderr = String::from_utf8_lossy(&out.stderr);

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 fn test_card() -> String {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     format!("pilot-card-{}", NEXT.fetch_add(1, Ordering::SeqCst))
