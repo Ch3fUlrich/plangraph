@@ -717,7 +717,7 @@ class SpawnerRunner:
                                            nonce=self._nonces[job_id])
             from .env_redact import redact_env_values
             env = self._child_envs.get(job_id, os.environ)
-            from .opencode_answer import answer_text, terminated_after_answer
+            from .opencode_answer import answer_text, final_answer, terminated_after_answer
             decoded = answer_text(stdout_text) if is_opencode(job) else stdout_text
             job.stdout = redact(redact_env_values(decoded, env))
             job.stderr = redact(redact_env_values(stderr_text, env))
@@ -725,7 +725,8 @@ class SpawnerRunner:
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
                 # Preserve the existing denied-review terminal verdict contract.
-                tails = [text.rstrip('\r\n').splitlines() for text in (stdout_text, decoded)]
+                tails = [text.rstrip('\r\n').splitlines()
+                         for text in (stdout_text, final_answer(stdout_text) or '')]
                 review_verdict = (
                     exit_code == 1 and is_opencode(job) and job.role == 'review'
                     and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
