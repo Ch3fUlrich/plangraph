@@ -13,6 +13,12 @@ pub enum PromoteError {
     Objects,
     #[error("quarantine ref publication failed")]
     Ref,
+    #[error("{kind}")]
+    Cause {
+        kind: Box<PromoteError>,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 #[derive(Debug)]
@@ -48,8 +54,15 @@ mod unix {
     };
     use std::{fs, io, path::Path};
 
-    fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, PromoteError> {
-        command(root, args, &[], None).map_err(|_| PromoteError::Ref)
+    fn cause(kind: PromoteError, source: crate::writer_result::WriterError) -> PromoteError {
+        PromoteError::Cause {
+            kind: Box::new(kind),
+            source: Box::new(source),
+        }
+    }
+
+    fn git(root: &Path, args: &[&str], kind: PromoteError) -> Result<Vec<u8>, PromoteError> {
+        command(root, args, &[], None).map_err(|e| cause(kind, e))
     }
 
     fn identical(source: &Path, target: &Path) -> Result<(), PromoteError> {
@@ -74,7 +87,16 @@ mod unix {
     }
 
     fn install(source: &Path, target: &Path) -> Result<(), PromoteError> {
-        match fs::hard_link(source, target) {
+        install_with(source, target, |a, b| fs::hard_link(a, b))
+    }
+
+    pub(super) fn install_with(
+        source: &Path,
+        target: &Path,
+        mut link: impl FnMut(&Path, &Path) -> io::Result<()>,
+    ) -> Result<(), PromoteError> {
+        use std::os::unix::fs::PermissionsExt;
+        match link(source, target) {
             Ok(()) => fs::File::open(target)
                 .and_then(|f| f.sync_all())
                 .map_err(|_| PromoteError::Install),
@@ -87,9 +109,12 @@ mod unix {
                 let mut input = fs::File::open(source).map_err(|_| PromoteError::Install)?;
                 io::copy(&mut input, &mut temp).map_err(|_| PromoteError::Install)?;
                 temp.as_file()
+                    .set_permissions(fs::Permissions::from_mode(0o444))
+                    .map_err(|_| PromoteError::Install)?;
+                temp.as_file()
                     .sync_all()
                     .map_err(|_| PromoteError::Install)?;
-                match fs::hard_link(temp.path(), target) {
+                match link(temp.path(), target) {
                     Ok(()) => Ok(()),
                     Err(e) if e.kind() == io::ErrorKind::AlreadyExists => identical(source, target),
                     Err(_) => Err(PromoteError::Install),
@@ -99,17 +124,61 @@ mod unix {
         }
     }
 
-    fn resolve(root: &Path, verified: &VerifiedBundle) -> Result<(), PromoteError> {
-        git(root, &["cat-file", "-e", &verified.head]).map_err(|_| PromoteError::Objects)?;
+    #[cfg(test)]
+    thread_local! {
+        pub(super) static BATCH_INPUTS: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn resolve(root: &Path, verified: &VerifiedBundle) -> Result<(), PromoteError> {
         let range = format!("{}..{}", verified.base, verified.head);
-        let objects = git(
+        let mut objects = git(
             root,
             &["rev-list", "--objects", "--no-object-names", &range],
-        )
-        .map_err(|_| PromoteError::Objects)?;
-        for object in objects.split(|b| *b == b'\n').filter(|s| !s.is_empty()) {
-            let object = std::str::from_utf8(object).map_err(|_| PromoteError::Objects)?;
-            git(root, &["cat-file", "-e", object]).map_err(|_| PromoteError::Objects)?;
+            PromoteError::Objects,
+        )?;
+        objects.extend_from_slice(format!("{}\n", verified.head).as_bytes());
+        #[cfg(test)]
+        BATCH_INPUTS.with(|inputs| inputs.borrow_mut().push(objects.clone()));
+        let output = command(root, &["cat-file", "--batch-check"], &objects, None)
+            .map_err(|e| cause(PromoteError::Objects, e))?;
+        let lines: Vec<_> = output
+            .split(|b| *b == b'\n')
+            .filter(|s| !s.is_empty())
+            .collect();
+        if lines.len()
+            != objects
+                .split(|b| *b == b'\n')
+                .filter(|s| !s.is_empty())
+                .count()
+            || lines.iter().any(|line| {
+                let fields: Vec<_> = line.split(|b| *b == b' ').collect();
+                fields.len() != 3 || !fields[2].iter().all(u8::is_ascii_digit)
+            })
+        {
+            return Err(PromoteError::Objects);
+        }
+        Ok(())
+    }
+
+    pub(super) fn cleanup(mut delete: impl FnMut() -> Result<(), PromoteError>) {
+        // A CAS mismatch is harmless; transient failures get one retry. Never mask resolve.
+        if delete().is_err() {
+            let _ = delete();
+        }
+    }
+
+    fn check_pack(path: &Path, hex: &str) -> Result<(), PromoteError> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = fs::File::open(path).map_err(|_| PromoteError::Install)?;
+        let size = i64::try_from(hex.len() / 2).map_err(|_| PromoteError::Invalid)?;
+        file.seek(SeekFrom::End(-size))
+            .map_err(|_| PromoteError::Install)?;
+        let mut trailer = Vec::new();
+        file.read_to_end(&mut trailer)
+            .map_err(|_| PromoteError::Install)?;
+        let actual: String = trailer.iter().map(|b| format!("{b:02x}")).collect();
+        if actual != hex {
+            return Err(PromoteError::Invalid);
         }
         Ok(())
     }
@@ -118,6 +187,15 @@ mod unix {
         receiver: &RepoEntry,
         verified: VerifiedBundle,
         reference: &str,
+    ) -> Result<Promoted, PromoteError> {
+        promote_with(receiver, verified, reference, resolve)
+    }
+
+    pub(super) fn promote_with(
+        receiver: &RepoEntry,
+        verified: VerifiedBundle,
+        reference: &str,
+        mut resolve: impl FnMut(&Path, &VerifiedBundle) -> Result<(), PromoteError>,
     ) -> Result<Promoted, PromoteError> {
         if !reference
             .strip_prefix("refs/spawner/quarantine/")
@@ -141,8 +219,13 @@ mod unix {
             return Err(PromoteError::Invalid);
         }
         let root = Path::new(&receiver.root);
-        let path = git(root, &["rev-parse", "--git-path", "objects/pack"])?;
-        let path = std::str::from_utf8(&path).map_err(|_| PromoteError::Invalid)?;
+        check_pack(&verified.pack, &name[5..name.len() - 5])?;
+        let path = git(
+            root,
+            &["rev-parse", "--git-path", "objects/pack"],
+            PromoteError::Install,
+        )?;
+        let path = std::str::from_utf8(&path).map_err(|_| PromoteError::Install)?;
         let dir = root.join(path.trim());
         fs::create_dir_all(&dir).map_err(|_| PromoteError::Install)?;
         install(&verified.pack, &dir.join(name))?;
@@ -152,9 +235,18 @@ mod unix {
             .map_err(|_| PromoteError::Install)?;
         resolve(root, &verified)?;
         let zero = "0".repeat(verified.head.len());
-        let created = git(root, &["update-ref", reference, &verified.head, &zero]).is_ok();
+        let created = git(
+            root,
+            &["update-ref", reference, &verified.head, &zero],
+            PromoteError::Ref,
+        )
+        .is_ok();
         if !created {
-            let value = git(root, &["rev-parse", "--verify", reference])?;
+            let value = git(
+                root,
+                &["rev-parse", "--verify", reference],
+                PromoteError::Ref,
+            )?;
             if value != format!("{}\n", verified.head).as_bytes() {
                 return Err(PromoteError::Ref);
             }
@@ -162,7 +254,14 @@ mod unix {
         if let Err(error) = resolve(root, &verified) {
             if created {
                 // Never delete another writer's replacement ref.
-                git(root, &["update-ref", "-d", reference, &verified.head])?;
+                cleanup(|| {
+                    git(
+                        root,
+                        &["update-ref", "-d", reference, &verified.head],
+                        PromoteError::Ref,
+                    )
+                    .map(|_| ())
+                });
             }
             return Err(error);
         }

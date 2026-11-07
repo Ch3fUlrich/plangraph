@@ -9,7 +9,17 @@ use std::{fs, path::Path};
 const REF: &str = "refs/spawner/quarantine/promote-test";
 
 fn git(root: &Path, args: &[&str]) -> String {
-    String::from_utf8(command(root, args, &[], None).unwrap())
+    // command isolates global/system config; pin local signing, hooks and templates too.
+    let mut isolated = vec![
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "init.templateDir=",
+    ];
+    isolated.extend_from_slice(args);
+    String::from_utf8(command(root, &isolated, &[], None).unwrap())
         .unwrap()
         .trim()
         .into()
@@ -119,7 +129,7 @@ fn finalize_promote_conflicting_ref_preserves_refs() {
     let before = git(f.receiver.path(), &["for-each-ref"]);
     assert!(matches!(
         promote(&f.repo, verified, REF),
-        Err(PromoteError::Ref)
+        Err(PromoteError::Ref | PromoteError::Cause { .. })
     ));
     assert_eq!(git(f.receiver.path(), &["for-each-ref"]), before);
 }
@@ -150,7 +160,7 @@ fn finalize_promote_ref_lock_failure_is_retryable() {
     fs::write(&lock, "locked").unwrap();
     assert!(matches!(
         promote(&f.repo, verified, REF),
-        Err(PromoteError::Ref)
+        Err(PromoteError::Cause { kind, .. }) if matches!(*kind, PromoteError::Ref)
     ));
     f.no_ref();
     git(f.receiver.path(), &["cat-file", "-e", &f.head]);
@@ -191,4 +201,160 @@ fn finalize_promote_collision_and_invalid_ref() {
         promote(&f.repo, f.verified(), "refs/heads/invalid"),
         Err(PromoteError::Invalid)
     ));
+}
+
+#[test]
+fn finalize_promote_setup_retains_install_cause() {
+    let mut f = Fixture::new();
+    let verified = f.verified();
+    f.repo.root = f.source.path().join("absent").to_str().unwrap().into();
+    let error = promote(&f.repo, verified, REF).unwrap_err();
+    assert!(
+        matches!(&error, PromoteError::Cause { kind, .. } if matches!(**kind, PromoteError::Install))
+    );
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+#[test]
+fn finalize_promote_rejects_wrong_pack_name() {
+    let f = Fixture::new();
+    let mut verified = f.verified();
+    let wrong = verified
+        .pack
+        .with_file_name(format!("pack-{}.pack", "0".repeat(f.head.len())));
+    fs::rename(&verified.pack, &wrong).unwrap();
+    fs::rename(&verified.idx, wrong.with_extension("idx")).unwrap();
+    verified.pack = wrong;
+    verified.idx = verified.pack.with_extension("idx");
+    assert!(matches!(
+        promote(&f.repo, verified, REF),
+        Err(PromoteError::Invalid)
+    ));
+    f.no_ref();
+}
+
+#[test]
+fn finalize_promote_exdev_mode_collision_and_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let target = dir.path().join("target");
+    fs::write(&source, "pack content").unwrap();
+    for _ in 0..2 {
+        let mut calls = 0;
+        super::unix::install_with(&source, &target, |a, b| {
+            calls += 1;
+            if calls == 1 {
+                Err(std::io::Error::from_raw_os_error(libc::EXDEV))
+            } else {
+                fs::hard_link(a, b)
+            }
+        })
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
+        assert_eq!(fs::read(&target).unwrap(), fs::read(&source).unwrap());
+    }
+    let mut calls = 0;
+    assert!(super::unix::install_with(&source, &target, |_, _| {
+        calls += 1;
+        Err(std::io::Error::from_raw_os_error(if calls == 1 {
+            libc::EXDEV
+        } else {
+            libc::EACCES
+        }))
+    })
+    .is_err());
+}
+
+#[test]
+fn finalize_promote_cleanup_preserves_objects_error_and_retries() {
+    let f = Fixture::new();
+    let mut attempts = 0;
+    super::unix::cleanup(|| {
+        attempts += 1;
+        if attempts == 1 {
+            Err(PromoteError::Ref)
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(attempts, 2);
+    let mut resolves = 0;
+    let result = super::unix::promote_with(&f.repo, f.verified(), REF, |_, _| {
+        resolves += 1;
+        if resolves == 1 {
+            return Ok(());
+        }
+        let lock = f.receiver.path().join(format!(".git/{REF}.lock"));
+        fs::write(lock, "locked").unwrap();
+        Err(PromoteError::Objects)
+    });
+    assert!(matches!(result, Err(PromoteError::Objects)));
+    fs::remove_file(f.receiver.path().join(format!(".git/{REF}.lock"))).unwrap();
+    let mut resolves = 0;
+    let result = super::unix::promote_with(
+        &f.repo,
+        f.verified(),
+        "refs/spawner/quarantine/replacement",
+        |_, _| {
+            resolves += 1;
+            if resolves == 1 {
+                return Ok(());
+            }
+            git(
+                f.receiver.path(),
+                &["update-ref", "refs/spawner/quarantine/replacement", &f.base],
+            );
+            Err(PromoteError::Objects)
+        },
+    );
+    assert!(matches!(result, Err(PromoteError::Objects)));
+    assert_eq!(
+        git(
+            f.receiver.path(),
+            &["rev-parse", "refs/spawner/quarantine/replacement"]
+        ),
+        f.base
+    );
+}
+
+#[test]
+fn finalize_promote_fixture_ignores_local_signing_and_hooks() {
+    let f = Fixture::new();
+    git(f.source.path(), &["config", "commit.gpgsign", "true"]);
+    git(
+        f.source.path(),
+        &["config", "core.hooksPath", "/nonexistent/hooks"],
+    );
+    git(
+        f.source.path(),
+        &["commit", "--allow-empty", "-m", "isolated"],
+    );
+}
+
+#[test]
+fn finalize_promote_batches_all_objects_and_reports_missing() {
+    let f = Fixture::new();
+    let mut verified = f.verified();
+    super::unix::BATCH_INPUTS.with(|inputs| inputs.borrow_mut().clear());
+    super::unix::resolve(f.source.path(), &verified).unwrap();
+    super::unix::BATCH_INPUTS.with(|inputs| {
+        let inputs = inputs.borrow();
+        assert_eq!(inputs.len(), 1);
+        assert!(
+            inputs[0]
+                .split(|b| *b == b'\n')
+                .filter(|s| !s.is_empty())
+                .count()
+                >= 4
+        );
+    });
+    // Empty range forces the head check through batch-check's successful-exit missing response.
+    verified.head = "0".repeat(f.head.len());
+    verified.base = verified.head.clone();
+    assert!(super::unix::resolve(f.source.path(), &verified).is_err());
 }
