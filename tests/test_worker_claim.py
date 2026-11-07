@@ -35,12 +35,24 @@ def test_build_claim_preserves_gate_inputs():
 @pytest.mark.parametrize("metadata", [False, True, "typo", "", "change", None, 1, [], {}])
 def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo, metadata):
     sqlite = _metadata_claim(tmp_path, repo, "sqlite", metadata)
-    backend = "sqlite"
+    if metadata is not False and metadata is not True and metadata not in ("", "change"):
+        assert sqlite == "validation"
+    else:
+        assert sqlite == {
+            "card": "demo:C", "repo": str(repo[0]), "base_sha": repo[1],
+            "check_cmd": "false", "allow": [], "prompt": "fix",
+            "check_kind": "regression" if metadata is True else "change",
+            "forbid": ["fixtures/input.json"] if metadata is True else [],
+            "check_reads": ["fixtures/input.json"] if metadata is True else [],
+            "smoke_checks": ["true"] if metadata is True else [],
+            "exports": ["api"] if metadata is True else [],
+            "heldout_cmd": "heldout" if metadata is True else "",
+            "risk_tagged": metadata is True,
+        }
     if os.environ.get("PG_KEEPER_BACKEND") == "postgres" or os.environ.get("PG_DSN"):
         assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
-        backend = "postgres"
-    compared = _metadata_claim(tmp_path / "comparison", repo, backend, metadata)
-    assert sqlite == compared
+        compared = _metadata_claim(tmp_path / "comparison", repo, "postgres", metadata)
+        assert sqlite == compared
 
 
 @pytest.mark.parametrize("metadata", [False, True, "typo", "", "change", None, 1, [], {}])
