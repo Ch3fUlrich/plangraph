@@ -152,7 +152,7 @@ def verify(repo, base, head):
                    PYTHONPATH=os.pathsep.join([str(root), str(checkout), str(checkout / "src")]),
                    RED_PROOF_REPORT=str(report))
         completed = subprocess.run([sys.executable, "-m", "pytest", "-p", "red_proof_plugin",
-                                    "--rootdir", str(checkout), "-q", *selected], cwd=checkout, env=env,
+                                    "--rootdir", str(checkout), "-q", *(f"./{node}" for node in selected)], cwd=checkout, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180)
         if not report.exists():
             print("red(error): pytest did not produce a report\n" + completed.stdout)

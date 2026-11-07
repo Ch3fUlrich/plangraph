@@ -95,13 +95,25 @@ def test_assignment_and_empty_module_stubs(repo, tmp_path, module, body, stateme
     assert repo(f"import {module}\ndef test_value():\n    {statement}\n", app=app) == code
 
 
-def test_nested_pytest_rootdir(repo, tmp_path, monkeypatch):
+def test_nested_pytest_rootdir(repo, tmp_path, monkeypatch, capsys):
     nested = tmp_path / "nested"
     nested.mkdir()
     (nested / "pytest.ini").write_text("[pytest]\n")
     (nested / "test_nested.py").write_text("def test_red():\n    assert False\n")
     monkeypatch.setenv("PYTEST_ADDOPTS", "--rootdir=nested")
-    assert repo("def test_value():\n    pass\n") == 0
+    assert repo("from app import value\ndef test_value():\n    assert value() == 1\n") == 0
+    output = capsys.readouterr().out
+    assert "red(assertion): test_app.py::test_value" in output
+    assert "red(assertion): nested/test_nested.py::test_red" in output
+
+
+def test_option_like_directory_is_not_pytest_option(repo, tmp_path, capsys):
+    directory = tmp_path / "--rootdir=x"
+    directory.mkdir()
+    (directory / "test_option.py").write_text(
+        "from app import value\ndef test_option():\n    assert value() == 1\n")
+    assert repo("from app import value\ndef test_value():\n    assert value() == 1\n") == 0
+    assert "red(assertion): --rootdir=x/test_option.py::test_option" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("file", ["test_app.py", "app.py"])
@@ -112,11 +124,16 @@ def test_head_syntax_is_collection(repo, capsys, file):
     assert "red(collection)" in capsys.readouterr().out
 
 
-def test_old_exemption_does_not_exempt_head(repo, capsys):
+def test_old_exemption_does_not_exempt_head(repo, tmp_path, capsys):
+    base = proof.git(tmp_path, "rev-parse", "HEAD").decode().strip()
     assert repo("def test_value():\n    assert True\n", message="old\n\nRed-Exempt: D-123 old reason") == 0
     capsys.readouterr()
-    assert repo("def test_value():\n    assert 1 == 1\n") == 1
-    assert "Red-Exempt:" not in capsys.readouterr().out
+    assert repo("def test_value():\n    assert 1 == 1\n", base_ref=base) == 1
+    assert proof.git(tmp_path, "rev-list", "--count", f"{base}..HEAD").strip() == b"2"
+    assert b"Red-Exempt: D-123" in proof.git(tmp_path, "show", "-s", "--format=%B", "HEAD~1")
+    output = capsys.readouterr().out
+    assert "Red-Exempt:" not in output
+    assert "not red (pass/error/missing): test_app.py::test_value" in output
 
 
 @pytest.mark.parametrize("marker,assertion", [("skip", "False"), ("xfail", "False"),
@@ -172,6 +189,7 @@ def test_renamed_test_file(repo, tmp_path, capsys, assertion, code):
     git("add", ".")
     git("commit", "-m", "rename test")
     assert git("diff", "-M", "--name-status", base, "HEAD").startswith("R100")
+    assert proof.source(tmp_path, base, "test_renamed.py") == ""
     assert proof.main(["--repo", str(tmp_path), "--base", base]) == code
     output = capsys.readouterr().out
     assert "test_renamed.py::test_value" in output
