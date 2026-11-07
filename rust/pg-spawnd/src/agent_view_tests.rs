@@ -83,6 +83,25 @@ fn unreadable_is_not_zero() {
     fs::remove_dir_all(home).unwrap();
 }
 #[test]
+fn missing_run_ids_keep_distinct_source_files() {
+    let home = fixture();
+    for (id, name) in [
+        ("one", Value::Null),
+        ("two", Value::Null),
+        ("three", json!("shared")),
+        ("four", json!("shared")),
+    ] {
+        put(
+            &home,
+            &format!("state/sessions/{id}.json"),
+            json!({"name":name}),
+        );
+    }
+    let data = local(&home, &home.join("state"), "local", 20.0);
+    assert_eq!(data["agents"].as_array().unwrap().len(), 4);
+    fs::remove_dir_all(home).unwrap();
+}
+#[test]
 fn source_failure_does_not_skip_other_sources() {
     let home = fixture();
     let state = home.join("state");

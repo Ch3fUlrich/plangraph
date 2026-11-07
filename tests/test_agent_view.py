@@ -68,8 +68,9 @@ assert.equal(box.children[1].children[1].children.length, 1);
 
 
 @pytest.mark.parametrize('data', [None, [], 'invalid', 1, {}, {'hosts': None}])
-def test_render_malformed_view_is_unknown(home, data):
+def test_render_malformed_view_is_unknown(home, data, monkeypatch):
     from plangraph.render import render
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
     document = render({'items': [], 'agents_view': data}, home, cdn=True, live_agents=True)
     assert '"agents_view":null' in document
 
@@ -112,8 +113,23 @@ def test_nonlive_never_reads_inventory(home, monkeypatch, cdn):
     assert 'UI.AgentsPage =' not in document
 
 
-def test_live_offline_bundles_agents(home):
+def test_live_offline_bundles_agents(home, monkeypatch):
     from plangraph.render import render
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
     document = render({'items': []}, home, live_agents=True)
     assert 'id="tab-agents"' in document
     assert 'UI.AgentsPage =' in document
+    assert '"agents_view":null' in document
+
+
+@pytest.mark.parametrize('private', [None, '{'])
+def test_live_missing_private_never_uses_snapshot(home, monkeypatch, private):
+    from plangraph.render import render
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
+    if private is not None:
+        target = home / '.local/state/plangraph/agents-view.json'
+        target.parent.mkdir(parents=True)
+        target.write_text(private)
+    document = render({'items': [], 'agents_view': {'hosts': [unavailable('unvetted', 'timeout')]}}, home, live_agents=True)
+    assert 'unvetted' not in document
+    assert '"agents_view":null' in document

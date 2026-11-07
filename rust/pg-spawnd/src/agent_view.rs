@@ -52,8 +52,8 @@ fn local(home: &Path, state: &Path, host: &str, now: f64) -> Value {
             }
             let identity = source["run_id"]
                 .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("{host}/{}", row["name"]));
+                .map(|id| (Some(id.to_owned()), None))
+                .unwrap_or_else(|| (None, Some(path.clone())));
             if identities.insert(identity) {
                 agents.push(row);
             }

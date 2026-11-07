@@ -303,7 +303,7 @@ def render(
         items = []
     # Always give the page JS an `items` array, even for a malformed/empty snapshot.
     safe_snapshot = dict(snapshot)
-    supplied_agents = safe_snapshot.pop('agents_view', None)
+    safe_snapshot.pop('agents_view', None)
     if live_agents:
         # The page is served as a single bind-mounted file, not a JSON API.
         # Read the independent collector output; never add it to keeper snapshots.
@@ -312,7 +312,7 @@ def render(
                 (Path.home() / '.local/state/plangraph/agents-view.json').read_text(encoding='utf-8')))
         except (OSError, ValueError, TypeError):
             private_agents = None
-        safe_snapshot['agents_view'] = private_agents or _project_agents_view(supplied_agents)
+        safe_snapshot['agents_view'] = private_agents
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)
