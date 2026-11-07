@@ -18,6 +18,7 @@ pub(crate) struct Entry {
     pub role: String,
     pub attempt: u32,
     pub identity: Option<Proc>,
+    pub deadline_ms: Option<u64>,
 }
 fn check(path: &Path, directory: bool) -> Result<(), ReconcileError> {
     let meta = std::fs::symlink_metadata(path).map_err(|_| ReconcileError::Io)?;
@@ -118,12 +119,12 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                 return Err(ReconcileError::Invalid);
             }
             let started = seconds(attempt.get("started").unwrap_or(&record["started"]))?;
-            let limit = seconds(
-                attempt
-                    .get("max_s")
-                    .or_else(|| record.get("max_s"))
-                    .unwrap_or(&json!(1800)),
-            )?;
+            let max_s = attempt
+                .get("max_s")
+                .or_else(|| record.get("max_s"))
+                .filter(|v| !v.is_null())
+                .map(|v| v.as_u64().ok_or(ReconcileError::Invalid))
+                .transpose()?;
             let identity = if attempt["proc"].is_null() {
                 None
             } else {
@@ -138,12 +139,12 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                 }
                 Some(proc)
             };
-            started.checked_add(limit).ok_or(ReconcileError::Invalid)?;
             result.push(Entry {
                 run_id: id.into(),
                 role: role.into(),
                 attempt: u32::try_from(index + 1).map_err(|_| ReconcileError::Invalid)?,
                 identity,
+                deadline_ms: crate::reconcile_time::deadline(started, max_s),
             });
         }
     }
@@ -369,6 +370,10 @@ pub(crate) fn settle(
     entry["outcome"] = serde_json::to_value(row).map_err(|_| invalid())?;
     entry["how"] = json!(how);
     entry["status"] = json!("orphaned");
+    if how == "ended_unobserved" {
+        entry["reason"] = json!("reattached_group_exited");
+    }
+    entry["exit_code"] = Value::Null;
     record
         .transition(Status::Orphaned, now_ms as f64 / 1000.0)
         .map_err(|_| invalid())?;

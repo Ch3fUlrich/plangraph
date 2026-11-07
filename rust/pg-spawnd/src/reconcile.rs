@@ -74,6 +74,7 @@ pub(crate) fn startup(
     };
     let mut diagnostics = Vec::new();
     let mut unavailable = false;
+    let now = epoch_ms().ok();
     for row in crate::reconcile_store::inventory(root)? {
         let mode = mode(env, config, &row.role)?;
         if mode == Mode::Off {
@@ -89,8 +90,7 @@ pub(crate) fn startup(
             }
             continue;
         }
-        // A recorded identity is not proof of liveness. Do not infer would_kill
-        // or would_reattach from an unverified PID or arbitrary group string.
+        // Only a verified live leader can support a read-only adoption decision.
         let gone = matches!(
             crate::reconcile_store::gone(row.identity.as_ref()),
             Ok(true)
@@ -101,6 +101,8 @@ pub(crate) fn startup(
                 run_id: row.run_id,
                 attempt: row.attempt,
             });
+        } else if let Some(kind) = now.and_then(|now| shadow_live(&row, now)) {
+            eprintln!("{kind} {} {}", row.run_id, row.attempt);
         }
     }
     if unavailable {
@@ -108,6 +110,49 @@ pub(crate) fn startup(
     } else {
         Ok(diagnostics)
     }
+}
+
+fn epoch_ms() -> Result<u64, ReconcileError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok())
+        .ok_or(ReconcileError::Invalid)
+}
+
+pub(crate) fn shadow_live(row: &crate::reconcile_store::Entry, now: u64) -> Option<&'static str> {
+    shadow_decision(row.deadline_ms, now, || {
+        #[cfg(target_os = "linux")]
+        {
+            let identity = row.identity.as_ref()?;
+            let copy = crate::reconcile_store::Proc {
+                pid: identity.pid,
+                start_time: identity.start_time,
+                group: identity.group.clone(),
+                pgid: identity.pgid,
+            };
+            crate::reconcile_backend::Leader::open(copy).ok()?;
+            Some(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (row, now);
+            None
+        }
+    })
+}
+
+fn shadow_decision(
+    deadline: Option<u64>,
+    now: u64,
+    verify: impl FnOnce() -> Option<()>,
+) -> Option<&'static str> {
+    verify()?;
+    Some(if deadline.is_some_and(|deadline| now >= deadline) {
+        "would_kill"
+    } else {
+        "would_reattach"
+    })
 }
 
 pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {

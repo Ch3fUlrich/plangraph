@@ -15,7 +15,7 @@ import pytest
 def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, explicit):
     from plangraph.spawner.runner import SpawnerRunner
     first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol')
-    second = replace(first, id='second', model='opencode-go/qwen3.8-max')
+    second = replace(first, id='second', model='opencode-go/gemini-4-argon')
     binary = tmp_path / 'opencode'
     binary.write_text('#!/bin/sh\ncase "$*" in *cx-gpt*) echo "Error: Model unavailable: x $MY_GATEWAY_TOKEN" >&2; exit 1;; esac\necho success\n')
     binary.chmod(0o755)

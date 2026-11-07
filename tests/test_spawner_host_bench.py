@@ -103,8 +103,8 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     assert [leg["id"] for leg in bare["legs"]] == [
-        "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
-        "opencode-go-qwen3.8-max", "opencode-go-deepseek-v4-flash",
+        "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon",
+        "opencode-go-deepseek-v4-flash",
         ]
 
 

@@ -141,11 +141,16 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         reasons.append(f"overflow: window class upgraded to {window_class}")
 
     no_train = bool(_NO_TRAIN_TAGS.intersection(tags))
+    if effective_role == 'review' and not _fits(effective, window_class):
+        window_class = pick_window_class(effective, floor=window_class)
+        reasons.append(f'request limit: window class upgraded to {window_class}')
     window_fits = _fits(effective, window_class)
     dropped: dict[str, int] = {}
     eligible: list[tuple[int, int, Leg]] = []
     for pos, leg in enumerate(legs):
-        if leg.id in unavailable:
+        if not leg_active(leg):
+            why = "disabled"
+        elif leg.id in unavailable:
             why = "unavailable"
         elif leg.family in exclude_fams:
             why = "excluded_family"
