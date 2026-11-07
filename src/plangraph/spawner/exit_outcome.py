@@ -2,7 +2,7 @@
 import atexit
 
 from plangraph.routing_support.leg_state import _down_seconds
-from .env_redact import first_reason, harness_limit_line, unavailable_reason, opencode_limit
+from .env_redact import first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
@@ -193,9 +193,11 @@ def fallthrough_reason(service, chosen, job, record):
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
         reason = 'harness_limit: ' + line
-        structured = opencode_limit(job.stderr) or opencode_limit(job.stdout)
-        if structured:
-            reason = ('credit_limit' if structured.startswith('HTTP 402:') else 'usage_limit') + ': ' + line
+        for status, token in ((429, 'usage_limit'), (402, 'credit_limit')):
+            if line.startswith(f'HTTP {status}: {token}'):
+                record['reason'] = token
+                reason = token + ': ' + line
+                break
         notify_leg_refused(service, record, chosen, reason)
         return reason
     streams = (job.stdout, job.stderr)

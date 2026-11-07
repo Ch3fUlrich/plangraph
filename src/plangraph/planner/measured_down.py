@@ -13,15 +13,17 @@ def measured_down(state, *, now=None):
     now = time.time() if now is None else now
     host = os.environ.get('PLANGRAPH_HOST') or socket.gethostname()
     down = {}
+    from types import SimpleNamespace
     from plangraph.routing_support.leg_state import leg_status, RESET_CAP_S, _default_store
-    window = RESET_CAP_S if _default_store().path.exists() else LEG_DOWN_WINDOW_S
+    from plangraph.spawner.leg_probe import key
+    window = max(RESET_CAP_S, LEG_DOWN_WINDOW_S) if _default_store().path.exists() else LEG_DOWN_WINDOW_S
     for path in (state / 'runs').glob('run-*/record.json'):
         try:
             if not 0 <= now - path.stat().st_mtime < window:
                 continue
             record = json.loads(path.read_text())
             ended = record.get('ended')
-            if record.get('host') != host or not 0 <= now - ended < RESET_CAP_S:
+            if record.get('host') != host or not 0 <= now - ended < window:
                 continue
             attempts = record.get('attempts') or []
             for attempt in attempts:
@@ -29,8 +31,13 @@ def measured_down(state, *, now=None):
                     continue
                 reason = attempt.get('down_reason')
                 leg = attempt.get('leg')
+                booking_key = (key(SimpleNamespace(**leg)) if isinstance(leg, dict)
+                               and isinstance(leg.get('model'), str) else
+                               leg.get('id') if isinstance(leg, dict) else leg)
                 leg = leg.get('id') if isinstance(leg, dict) else leg
-                if now - ended >= LEG_DOWN_WINDOW_S and leg_status(leg, now=now)['state'] != 'limited':
+                if not isinstance(leg, str) or not leg or reason not in DOWN_REASONS:
+                    continue
+                if now - ended >= LEG_DOWN_WINDOW_S and leg_status(booking_key, now=now)['state'] != 'limited':
                     continue
                 if leg and reason in DOWN_REASONS and ended > down.get(leg, {}).get('time', 0):
                     down[leg] = dict(reason=reason, time=ended)

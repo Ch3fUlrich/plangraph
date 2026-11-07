@@ -1,6 +1,7 @@
 """Value-based child credential scrubbing, before any output truncation."""
 import json
 import re
+from decimal import Decimal
 
 
 def redact(value):
@@ -122,6 +123,9 @@ def first_reason(text):
 def opencode_limit(text):
     """Decode only structured error events, never status mentions in prose."""
     for line in normalize(text).splitlines():
+        # Leave non-error objects to the existing envelope readers.
+        if not (line.lstrip().startswith('{') and '"error"' in line and '"type"' in line):
+            continue
         try:
             event = json.loads(line)
             error = event.get('error')
@@ -134,7 +138,7 @@ def opencode_limit(text):
             result = f'HTTP {status}: {reason}'
             delay = error.get('retryAfterMs')
             if type(delay) in (int, float) and delay >= 0 and delay < float('inf'):
-                result += f' (reset after {delay}ms)'
+                result += f' (reset after {Decimal(str(delay)):f}ms)'
             return result
         except (ValueError, TypeError, AttributeError):
             continue
@@ -142,11 +146,11 @@ def opencode_limit(text):
 
 
 def harness_limit_line(exit_code, stdout, stderr):
-    if exit_code in (None, 0):
-        return None
     structured = opencode_limit(stderr) or opencode_limit(stdout)
     if structured:
         return structured
+    if exit_code in (None, 0):
+        return None
     busy = busy_refusal(stderr) or busy_refusal(stdout)
     if busy:
         return busy
