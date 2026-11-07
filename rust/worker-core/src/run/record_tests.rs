@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use std::{collections::HashSet, fs, io, time::Duration};
 use tempfile::tempdir;
 
-const STATUSES: [Status; 10] = [
+const STATUSES: [Status; 11] = [
     Status::Queued,
     Status::Running,
     Status::Completed,
@@ -14,6 +14,7 @@ const STATUSES: [Status; 10] = [
     Status::Refused,
     Status::Limited,
     Status::DryRun,
+    Status::Orphaned,
 ];
 
 #[test]
@@ -125,7 +126,10 @@ fn transition_table_and_sticky_end() {
             let expected = matches!(
                 (from, to),
                 (Queued, Running | Cancelled | Failed | Refused)
-                    | (Running, Completed | Failed | Cancelled | Stalled | Timeout)
+                    | (
+                        Running,
+                        Completed | Failed | Cancelled | Stalled | Timeout | Orphaned
+                    )
             );
             let result = r.transition(to, 2.0);
             if expected {
@@ -154,7 +158,7 @@ fn transition_table_and_sticky_end() {
             }
         }
     }
-    assert_eq!(allowed, 9);
+    assert_eq!(allowed, 10);
     assert_eq!(Status::parse("dry_run"), Some(DryRun));
     assert_eq!(Status::parse("unknown"), None);
 }
@@ -207,6 +211,34 @@ fn failures_and_events() {
         r.set("status", json!("future"));
         assert_eq!(r.status(), None);
     }
+}
+
+#[test]
+fn orphaned_transition_terminal_and_exit_null() {
+    let dir = tempdir().unwrap();
+    let mut record = RunRecord::create(
+        dir.path(),
+        "run-recovery",
+        "fixture",
+        Map::new(),
+        Status::Running,
+        1.0,
+    )
+    .unwrap();
+    record.set("exit_code", json!(1));
+    record.transition(Status::Orphaned, 2.0).unwrap();
+    record.save().unwrap();
+    let mut record = RunRecord::read(dir.path(), "run-recovery").unwrap();
+    assert_eq!(record.status(), Some(Status::Orphaned));
+    assert_eq!(record.get("ended"), Some(&json!(2.0)));
+    assert_eq!(record.get("exit_code"), Some(&Value::Null));
+    for status in STATUSES {
+        assert!(matches!(
+            record.transition(status, 3.0),
+            Err(RecordError::Terminal)
+        ));
+    }
+    assert_eq!(record.get("ended"), Some(&json!(2.0)));
 }
 
 #[test]

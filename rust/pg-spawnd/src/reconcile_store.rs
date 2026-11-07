@@ -1,0 +1,233 @@
+//! Read-only, bounded startup inventory; never skip an unreadable run.
+use crate::reconcile::ReconcileError;
+use pg_worker_core::run::record::valid_run_id;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::{io::Read, path::Path};
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Proc {
+    pub pid: u32,
+    pub start_time: Option<u64>,
+    pub group: Option<String>,
+}
+pub(crate) struct Entry {
+    pub run_id: String,
+    pub role: String,
+    pub attempt: u32,
+    pub identity: Option<Proc>,
+}
+fn check(path: &Path, directory: bool) -> Result<(), ReconcileError> {
+    let meta = std::fs::symlink_metadata(path).map_err(|_| ReconcileError::Io)?;
+    if meta.file_type().is_symlink()
+        || (directory && !meta.is_dir())
+        || (!directory && !meta.is_file())
+    {
+        return Err(ReconcileError::Invalid);
+    }
+    Ok(())
+}
+fn seconds(value: &Value) -> Result<u64, ReconcileError> {
+    let n = value
+        .as_f64()
+        .filter(|n| n.is_finite() && *n >= 0.0)
+        .ok_or(ReconcileError::Invalid)?
+        * 1000.0;
+    if !n.is_finite() || n >= u64::MAX as f64 {
+        return Err(ReconcileError::Invalid);
+    }
+    Ok(n as u64)
+}
+fn read(path: &Path) -> Result<Value, ReconcileError> {
+    check(path, false)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|_| ReconcileError::Io)?;
+    let meta = file.metadata().map_err(|_| ReconcileError::Io)?;
+    const CAP: u64 = 8 * 1024 * 1024;
+    if !meta.is_file() || meta.len() > CAP {
+        return Err(ReconcileError::Invalid);
+    }
+    let mut bytes = Vec::new();
+    file.take(CAP + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ReconcileError::Io)?;
+    if bytes.len() as u64 > CAP {
+        return Err(ReconcileError::Invalid);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| ReconcileError::Invalid)
+}
+pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
+    match std::fs::symlink_metadata(root) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        _ => check(root, true)?,
+    }
+    let runs = root.join("runs");
+    match std::fs::symlink_metadata(&runs) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        _ => check(&runs, true)?,
+    }
+    let mut paths = std::fs::read_dir(runs)
+        .map_err(|_| ReconcileError::Io)?
+        .map(|e| e.map(|e| e.path()).map_err(|_| ReconcileError::Io))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+    let mut result = Vec::new();
+    for path in paths {
+        let id = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| valid_run_id(s))
+            .ok_or(ReconcileError::Invalid)?;
+        check(&path, true)?;
+        for lock in [root.join("reconcile.lock"), path.join("record.lock")] {
+            match std::fs::symlink_metadata(&lock) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                _ => check(&lock, false)?,
+            }
+        }
+        let record = read(&path.join("record.json"))?;
+        if record["run_id"].as_str() != Some(id) {
+            return Err(ReconcileError::Invalid);
+        }
+        if record["status"] != "running" || !record["ended"].is_null() {
+            continue;
+        }
+        let role = record["role"].as_str().ok_or(ReconcileError::Invalid)?;
+        crate::reconcile::mode(None, &Value::Null, role)?;
+        let mut attempts = record["attempts"]
+            .as_array()
+            .ok_or(ReconcileError::Invalid)?
+            .clone();
+        if attempts.is_empty() {
+            attempts.push(json!({"status":"running", "proc":record["proc"],
+                "started":record["started"], "leg":record["plan"]["first_leg"]}));
+        }
+        for (index, attempt) in attempts.iter().enumerate() {
+            if attempt["status"] != "running" {
+                continue;
+            }
+            if !attempt["leg"].is_object() {
+                return Err(ReconcileError::Invalid);
+            }
+            let started = seconds(attempt.get("started").unwrap_or(&record["started"]))?;
+            let limit = seconds(
+                attempt
+                    .get("max_s")
+                    .or_else(|| record.get("max_s"))
+                    .unwrap_or(&json!(1800)),
+            )?;
+            let identity = if attempt["proc"].is_null() {
+                None
+            } else {
+                let proc: Proc = serde_json::from_value(attempt["proc"].clone())
+                    .map_err(|_| ReconcileError::Invalid)?;
+                if proc.pid == 0
+                    || proc.start_time == Some(0)
+                    || proc.group.as_ref().is_some_and(|g| g.is_empty())
+                {
+                    return Err(ReconcileError::Invalid);
+                }
+                Some(proc)
+            };
+            started.checked_add(limit).ok_or(ReconcileError::Invalid)?;
+            result.push(Entry {
+                run_id: id.into(),
+                role: role.into(),
+                attempt: u32::try_from(index + 1).map_err(|_| ReconcileError::Invalid)?,
+                identity,
+            });
+        }
+    }
+    Ok(result)
+}
+
+/// Durable record-only settlement bridge. Caller must hold reconciliation lock
+/// and an emptiness proof; startup does not expose this until authority is wired.
+#[allow(dead_code)] // Authority-gated caller follows in the adoption slice.
+pub(crate) fn settle(
+    state: &Path,
+    record: &mut pg_worker_core::run::record::RunRecord,
+    attempt: u32,
+    how: &str,
+    now_ms: u64,
+) -> Result<(), ReconcileError> {
+    use pg_worker_core::run::record::Status;
+    let invalid = || ReconcileError::Invalid;
+    if !["ended_unobserved", "killed_max_s", "reattach_timeout"].contains(&how) {
+        return Err(invalid());
+    }
+    let run = record
+        .get("run_id")
+        .and_then(Value::as_str)
+        .filter(|s| valid_run_id(s))
+        .ok_or_else(invalid)?
+        .to_owned();
+    if record.path() != state.join("runs").join(&run).join("record.json") {
+        return Err(invalid());
+    }
+    let mut attempts = record
+        .get("attempts")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?
+        .clone();
+    let index = attempt.checked_sub(1).ok_or_else(invalid)? as usize;
+    let entry = attempts
+        .get_mut(index)
+        .filter(|v| v.is_object())
+        .ok_or_else(invalid)?;
+    if record.status() == Some(Status::Orphaned) && entry["outcome"]["outcome"] == "orphaned" {
+        return Ok(());
+    }
+    let role = serde_json::from_value(record.get("role").cloned().ok_or_else(invalid)?)
+        .map_err(|_| invalid())?;
+    let leg = &entry["leg"];
+    let row = crate::evidence_row::OutcomeRow {
+        leg_key: leg["leg_key"].as_str().ok_or_else(invalid)?.into(),
+        route_key: leg["route_key"].as_str().ok_or_else(invalid)?.into(),
+        ts: i64::try_from(now_ms / 1000).map_err(|_| invalid())?,
+        role,
+        outcome: "orphaned".into(),
+        run_id: run.clone(),
+        attempt,
+        duration_s: Some(
+            i64::try_from(
+                now_ms
+                    .checked_sub(seconds(&entry["started"])?)
+                    .ok_or_else(invalid)?
+                    / 1000,
+            )
+            .map_err(|_| invalid())?,
+        ),
+        reset_at: None,
+        reset_assumed: false,
+        reset_clamped: false,
+        open_tools_at_kill: None,
+        s_eff_s: None,
+        line: "reconciled group ended".into(),
+    };
+    crate::evidence_row::validate(&crate::evidence_row::EvidenceRow::Outcome(row.clone()))
+        .map_err(|_| invalid())?;
+    entry["outcome"] = serde_json::to_value(row).map_err(|_| invalid())?;
+    entry["how"] = json!(how);
+    entry["status"] = json!("orphaned");
+    record
+        .transition(Status::Orphaned, now_ms as f64 / 1000.0)
+        .map_err(|_| invalid())?;
+    record.set("attempts", json!(attempts));
+    record
+        .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,
+        "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
+        .map_err(|_| invalid())?;
+    record.save().map_err(|_| ReconcileError::Io)
+}
+
+#[cfg(test)]
+#[path = "reconcile_store_tests.rs"]
+mod tests;

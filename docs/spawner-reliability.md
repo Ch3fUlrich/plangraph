@@ -1,5 +1,25 @@
 # Spawner reliability
 
+## RL29: slice 1 — records, inventory and shadow (partial)
+
+PR changelog: ships record bridges and read-only startup shadow inventory only;
+settlement, RUN_ORPHANED/RUN_REATTACHED, re-attach, kill after max_s, Adopted RL12
+backend, Reconciled capability and reconcile-to-reclaim sequence are next slice.
+Mode `on` still refuses startup. Merge completion/C5 evidence is not claimed.
+
+Run records recognize terminal `orphaned` status (semantic class ORPHANED),
+with a null exit code rather than a manufactured failure code. Normal launch
+records retain validated card `max_s` (1800 seconds when absent); finishing a
+run preserves prior attempts and existing attempt-specific identity, start time,
+deadline and outcome fields without copying legacy fields into completed attempts.
+Attempt-specific values take precedence over legacy fields during inventory.
+
+This slice implements read-only startup inventory in `shadow` mode, not mutating
+startup reconciliation, adoption, recovery events/evidence replay, watchers or
+slot reclaim. It must not be treated as RL29 completion or C5 evidence. Recovery needs
+a follow-up production-line allocation, independent HIGH acceptance and live GO.
+Rollback of these record bridges is `git revert`.
+
 ## RL13: weak CPU activity (P-R6)
 
 `cpu::Sampler` is a pure thirty-second sampler with no daemon caller or switch.
@@ -239,3 +259,15 @@ Invalid report windows are rejected before resolving or reading the state store.
 The remaining behavior and tests require a follow-up size allocation, rather
 than removal of tests to meet the 400-production-line limit. Rollback is
 `git revert`; RL14 must not call this partial API.
+
+Restart inventory now runs before listener acceptance when configured `shadow`.
+Mode precedence is environment, role configuration, top-level configuration,
+then `off`. Explicit `off` bypasses configuration and inventory. Inventory is
+read-only and refuses malformed identities, timestamps and symlinked records.
+Only missing-identity or Linux gone-PID `would_orphan` diagnostics are emitted;
+missing state roots are empty inventories and are not created. Recorded
+identities are not treated as verified liveness. `on` refuses startup until the
+authority-checked backend, watcher, evidence replay and reclaim capability land.
+The record settlement bridge writes semantic ORPHANED as lowercase `orphaned`,
+with null exit status and a stable RUN_ORPHANED key; it is not yet called by
+startup. No slot reclaim or process signalling is enabled by this partial slice.

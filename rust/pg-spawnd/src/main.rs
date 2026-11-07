@@ -15,6 +15,8 @@ mod placement;
 mod prompt;
 mod prompt_git;
 mod pyjson;
+mod reconcile;
+mod reconcile_store;
 mod records;
 mod review_artifacts;
 mod runs;

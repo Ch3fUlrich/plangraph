@@ -284,13 +284,31 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
-    record.set("attempts", json!([{"leg":leg,"status":status.as_str(),
+    let mut attempts = match record.get("attempts") {
+        None => Vec::new(),
+        Some(Value::Array(attempts)) => attempts.clone(),
+        Some(_) => {
+            record.set("attempts_error", json!("attempts must be an array"));
+            return;
+        }
+    };
+    let mut attempt = attempts
+        .pop()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
         "served_witness_reason":"no authenticated harness telemetry; skipped or unobserved leg",
         "request_side_model":null,"witness_kind":null,
         "skip_reason":if status == Status::Completed || dry { None } else { record.get("reason") },
-        "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")} ]));
+        "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")});
+    attempt
+        .as_object_mut()
+        .unwrap()
+        .extend(completion.as_object().unwrap().clone());
+    attempts.push(attempt);
+    record.set("attempts", json!(attempts));
     record.set(
         "chosen_leg",
         if status == Status::Completed || dry {

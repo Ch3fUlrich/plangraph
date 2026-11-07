@@ -33,6 +33,7 @@ pub enum Status {
     Limited,
     DryRun,
     NeedsInput,
+    Orphaned,
 }
 
 impl Status {
@@ -49,6 +50,7 @@ impl Status {
             Self::Limited => "limited",
             Self::DryRun => "dry_run",
             Self::NeedsInput => "needs_input",
+            Self::Orphaned => "orphaned",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -64,6 +66,7 @@ impl Status {
             Self::Limited,
             Self::DryRun,
             Self::NeedsInput,
+            Self::Orphaned,
         ]
         .into_iter()
         .find(|s| s.as_str() == value)
@@ -163,7 +166,7 @@ impl RunRecord {
             (Queued, Running | Cancelled | Failed | Refused | NeedsInput)
                 | (
                     Running,
-                    Completed | Failed | Cancelled | Stalled | Timeout | NeedsInput
+                    Completed | Failed | Cancelled | Stalled | Timeout | NeedsInput | Orphaned
                 )
         ) {
             return Err(RecordError::BadTransition);
@@ -171,6 +174,9 @@ impl RunRecord {
         self.set("status", json!(to.as_str()));
         if to.is_terminal() {
             self.set("ended", json!(now));
+        }
+        if to == Orphaned {
+            self.set("exit_code", Value::Null);
         }
         if to == Failed
             && self
