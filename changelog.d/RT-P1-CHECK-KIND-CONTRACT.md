@@ -10,3 +10,5 @@ Fix parity queries to use the store's portable binding seam; exercise SQLite and
 psycopg query conversion without a DSN, and format Rust contract tests for CI.
 Exercise backend binding through the real Postgres adapter without requiring
 psycopg in SQLite jobs; use lint-clean empty-kind checks in worker tests.
+Restore independent psycopg wire-query conversion coverage when the optional
+driver is installed, while retaining always-run adapter binding coverage.

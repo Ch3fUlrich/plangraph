@@ -53,7 +53,6 @@ _CLAIM_STATE_QUERY = "SELECT state, claimed_by FROM items WHERE key = ?"
 
 def test_claim_state_query_backend_binding(tmp_path):
     import sqlite3
-    from unittest.mock import MagicMock
 
     params = ("demo:C",)
     with sqlite3.connect(tmp_path / "binding.db") as conn:
@@ -61,14 +60,31 @@ def test_claim_state_query_backend_binding(tmp_path):
         conn.execute("INSERT INTO items VALUES (?, ?, ?)", ("demo:C", "open", None))
         assert conn.execute(_CLAIM_STATE_QUERY, params).fetchone() == ("open", None)
 
+    sql, bound = _postgres_claim_state_binding(params)
+    assert sql == "SELECT state, claimed_by FROM items WHERE key = %s"
+    assert bound == params
+
+
+def _postgres_claim_state_binding(params):
+    from unittest.mock import MagicMock
+
     raw = MagicMock()
     cursor = raw.cursor.return_value.__enter__.return_value
     cursor.description = None
     PgConnection(raw, "test").execute(_CLAIM_STATE_QUERY, params)
-    sql, bound = cursor.execute.call_args.args
-    assert sql == "SELECT state, claimed_by FROM items WHERE key = %s"
-    assert bound == params
-    assert sql.count("%s") == len(bound) == 1
+    return cursor.execute.call_args.args
+
+
+def test_claim_state_query_psycopg_conversion():
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg._queries import PostgresQuery
+
+    assert psycopg.paramstyle == "pyformat"
+    sql, bound = _postgres_claim_state_binding(("demo:C",))
+    query = PostgresQuery(psycopg.adapt.Transformer())
+    query.convert(sql, bound)
+    assert query.query == b"SELECT state, claimed_by FROM items WHERE key = $1"
+    assert len(query.params) == 1
 
 
 def _metadata_claim(tmp_path, repo, backend, metadata):
