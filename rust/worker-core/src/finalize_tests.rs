@@ -125,9 +125,11 @@ impl Fixture {
         let root = Path::new(&self.repo.root);
         let refs = || git(root, &["for-each-ref", "--format=%(refname) %(objectname)"]);
         let before = refs();
+        let objects = all_objects(root);
         let reachable = git(root, &["rev-list", "--objects", "--all"]);
         assert_eq!(self.import(), Err(expected));
         assert_eq!(refs(), before);
+        assert_eq!(all_objects(root), objects);
         assert_eq!(git(root, &["rev-list", "--objects", "--all"]), reachable);
         assert!(git(root, &["for-each-ref", "refs/spawner/quarantine/test"]).is_empty());
         assert!(!root.join(".git/FETCH_HEAD").exists());
@@ -145,6 +147,55 @@ fn passing_quarantine_import() {
         f.head
     );
     assert_eq!(f.public_refs(), before);
+    assert_eq!(
+        all_objects(Path::new(&f.repo.root)),
+        git(
+            f._source.path(),
+            &["rev-list", "--objects", "--no-object-names", &f.head]
+        )
+        .lines()
+        .map(str::to_owned)
+        .collect()
+    );
+}
+
+fn all_objects(root: &Path) -> std::collections::BTreeSet<String> {
+    git(
+        root,
+        &[
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname)",
+        ],
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect()
+}
+
+#[test]
+fn refuses_unreachable_pack_blob() {
+    let mut f = Fixture::new("safe");
+    let root = f._source.path();
+    let blob = command(
+        root,
+        &["hash-object", "-w", "--stdin"],
+        b"unreachable payload",
+        None,
+    )
+    .unwrap();
+    let mut objects = command(
+        root,
+        &["rev-list", "--objects", "--no-object-names", &f.head],
+        &[],
+        None,
+    )
+    .unwrap();
+    objects.extend(blob);
+    let pack = command(root, &["pack-objects", "--stdout"], &objects, None).unwrap();
+    f.bytes = format!("# v2 git bundle\n{} HEAD\n\n", f.head).into_bytes();
+    f.bytes.extend(pack);
+    f.assert_refusal(Refusal::UnexpectedObjects);
 }
 #[test]
 fn refuses_hash_mismatch() {

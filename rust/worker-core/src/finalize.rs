@@ -19,6 +19,8 @@ pub enum Refusal {
     BadBundle,
     #[error("hash_mismatch")]
     HashMismatch,
+    #[error("unexpected_objects")]
+    UnexpectedObjects,
 }
 
 /// A verified immutable tip; callers must separately authorize publication.
@@ -29,7 +31,7 @@ pub struct QuarantinedResult {
 }
 
 /// Import bytes bound to the expected digest and head, retaining only a quarantine ref.
-/// Existing refs are never overwritten. Refusals retain only unreachable objects.
+/// Existing refs are never overwritten. Verification objects remain in scratch storage.
 /// The receiver must already have the bundle's origin prerequisites locally.
 pub fn import_result(
     repo: &RepoEntry,
@@ -50,6 +52,25 @@ pub fn import_result(
         return Err(Refusal::BadBundle);
     }
     let root = Path::new(&repo.root);
+    let scratch = tempfile::tempdir().map_err(|_| Refusal::BadBundle)?;
+    let run = |root: &Path, args: &[&str], input: &[u8]| {
+        command(root, args, input, None).map_err(|_| Refusal::BadBundle)
+    };
+    let objects = run(
+        root,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects",
+        ],
+        &[],
+    )?;
+    run(scratch.path(), &["init", "--bare"], &[])?;
+    std::fs::write(scratch.path().join("objects/info/alternates"), objects)
+        .map_err(|_| Refusal::BadBundle)?;
+    let receiver = root;
+    let root = scratch.path();
     let mut bundle = tempfile::NamedTempFile::new().map_err(|_| Refusal::BadBundle)?;
     bundle.write_all(bytes).map_err(|_| Refusal::BadBundle)?;
     let path = bundle.path().to_str().ok_or(Refusal::BadBundle)?;
@@ -70,6 +91,7 @@ pub fn import_result(
         "unbundle",
         path,
     ])?;
+    validate_objects(root, head_sha, base_sha)?;
     if git(&["cat-file", "-t", head_sha])? != b"commit\n" {
         return Err(Refusal::BadBundle);
     }
@@ -99,18 +121,53 @@ pub fn import_result(
             return Err(Refusal::MissingTrailer);
         }
     }
-    if !findings(repo, base_sha, head_sha)
+    let mut scratch_repo = repo.clone();
+    scratch_repo.root = root.to_str().ok_or(Refusal::BadBundle)?.into();
+    if !findings(&scratch_repo, base_sha, head_sha)
         .map_err(|_| Refusal::BadBundle)?
         .is_empty()
     {
         return Err(Refusal::SecretInHistory);
     }
     let reference = format!("refs/spawner/quarantine/{run_id}");
-    git(&["update-ref", &reference, head_sha, &"0".repeat(40)])?;
+    if !run(receiver, &["for-each-ref", &reference], &[])?.is_empty() {
+        return Err(Refusal::BadBundle);
+    }
+    let objects = git(&["rev-list", "--objects", "--no-object-names", &range])?;
+    let pack = run(root, &["pack-objects", "--stdout"], &objects)?;
+    run(receiver, &["index-pack", "--stdin"], &pack)?;
+    run(
+        receiver,
+        &["update-ref", &reference, head_sha, &"0".repeat(40)],
+        &[],
+    )?;
     Ok(QuarantinedResult {
         reference,
         head_sha: head_sha.into(),
     })
+}
+
+fn validate_objects(root: &Path, head: &str, base: &str) -> Result<(), Refusal> {
+    let git = |args: &[&str]| command(root, args, &[], None).map_err(|_| Refusal::BadBundle);
+    let allowed = git(&["rev-list", "--objects", "--no-object-names", head, base])?;
+    let allowed: std::collections::BTreeSet<_> = allowed.split(|b| *b == b'\n').collect();
+    for entry in std::fs::read_dir(root.join("objects/pack")).map_err(|_| Refusal::BadBundle)? {
+        let path = entry.map_err(|_| Refusal::BadBundle)?.path();
+        if path.extension().is_some_and(|ext| ext == "idx") {
+            let listing = git(&[
+                "verify-pack",
+                "-v",
+                path.to_str().ok_or(Refusal::BadBundle)?,
+            ])?;
+            for line in listing.split(|b| *b == b'\n') {
+                let sha = line.split(|b| *b == b' ').next().unwrap_or_default();
+                if sha.len() == 40 && !allowed.contains(sha) {
+                    return Err(Refusal::UnexpectedObjects);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

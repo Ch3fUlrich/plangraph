@@ -67,6 +67,8 @@ pub(crate) fn command(
     let mut cmd = git_command(root);
     cmd.args(["--no-replace-objects", "-c", "core.hooksPath="])
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Secret gate")
         .env("GIT_AUTHOR_EMAIL", "gate@example.invalid")
         .env("GIT_COMMITTER_NAME", "Secret gate")
