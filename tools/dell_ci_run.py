@@ -4,6 +4,7 @@
 The remote login starts in the repository. origin/main is the PR comparison
 base. No dependencies are installed and no remote output/environment is printed.
 Postgres and Rust table entries intentionally defer to slice 2.
+Requested deferred jobs yield partial (exit 2); failures yield exit 1.
 """
 import argparse
 from datetime import datetime, timezone
@@ -59,7 +60,8 @@ def main(argv=None, *, runner=subprocess.run):
     qtree = shlex.quote(tree)
     record = {"sha": args.sha, "host": args.host,
               "started": datetime.now(timezone.utc).isoformat(),
-              "jobs": [], "result": "failure"}
+              "jobs": [], "not_requested": [name for name in JOBS if name not in names],
+              "result": "failure"}
 
     def call(command, timeout=120):
         return remote(args.host, command, timeout, runner)
@@ -85,6 +87,8 @@ def main(argv=None, *, runner=subprocess.run):
             record["jobs"].append(job)
             if command is None:
                 job["reason"] = "slice 2"
+                if record["result"] == "success":
+                    record["result"] = "partial"
                 continue
             start = time.monotonic()
             try:
@@ -117,7 +121,7 @@ def main(argv=None, *, runner=subprocess.run):
             record["cleanup"] = "failure"
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / f"{run_id}.json").write_text(json.dumps(record, indent=2) + "\n")
-    return 0 if record["result"] == "success" else 1
+    return {"success": 0, "failure": 1, "partial": 2}[record["result"]]
 
 
 if __name__ == "__main__":
