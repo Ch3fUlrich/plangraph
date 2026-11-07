@@ -66,8 +66,9 @@ def test_route_gateway_first(monkeypatch, tmp_path):
     @dataclass
     class Plan:
         legs: tuple
-    direct = SimpleNamespace(id='direct', model='direct/model')
-    gateway = SimpleNamespace(id='gateway', model='omniroute/model')
+        review_seats: tuple = ()
+    direct = SimpleNamespace(id='direct', model='direct/model', disabled=None)
+    gateway = SimpleNamespace(id='gateway', model='omniroute/model', disabled=None)
     monkeypatch.setattr(routing, 'service_plan', lambda *a, **k: Plan((direct, gateway)))
     monkeypatch.setattr(measured, 'measured_down', lambda *a: set())
     service = SimpleNamespace(state=tmp_path)
@@ -137,7 +138,7 @@ def test_mixed_gate_retains_all_capable_legs(monkeypatch):
            'OPENCODE_CONFIG_CONTENT': json.dumps({'provider': {'mimo': {
                'options': {'baseURL': 'http://gateway/v1'}}}})}
     monkeypatch.setattr(gw, 'review_child_env', lambda: env)
-    direct, mimo, gateway = [SimpleNamespace(id=p, model=p + '/model')
+    direct, mimo, gateway = [SimpleNamespace(id=p, model=p + '/model', disabled=None)
                              for p in ('direct', 'mimo', 'omniroute')]
     legs = (direct, mimo, gateway)
     card = {'witness_required': True}
@@ -153,7 +154,7 @@ def test_mixed_gate_retains_all_capable_legs(monkeypatch):
     ({'witness_required': True}, 'implement')])
 def test_nonrequired_never_builds_env(monkeypatch, card, role):
     monkeypatch.setattr(gw, 'review_child_env', lambda: pytest.fail('unneeded child env'))
-    legs = (SimpleNamespace(id='direct', model='direct/model'),)
+    legs = (SimpleNamespace(id='direct', model='direct/model', disabled=None),)
     assert gw.witness_gate_legs(card, role, legs) == legs
     assert gw.witness_order(card, role, legs, set()) == legs
 
