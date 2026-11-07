@@ -193,6 +193,11 @@ def fallthrough_reason(service, chosen, job, record):
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
         reason = 'harness_limit: ' + line
+        for status, token in ((429, 'usage_limit'), (402, 'credit_limit')):
+            if line.startswith(f'HTTP {status}: {token}'):
+                record['reason'] = token
+                reason = token + ': ' + line
+                break
         notify_leg_refused(service, record, chosen, reason)
         return reason
     streams = (job.stdout, job.stderr)
