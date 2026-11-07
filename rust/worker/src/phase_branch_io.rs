@@ -70,11 +70,11 @@ pub(super) fn ensure_phase_branch_with(
             head: base_head,
             created: true,
         }),
-        Err(original_error) => {
+        Err(_) => {
             let head = match run(repo, &["rev-parse", "--verify", "-q", branch_ref.as_str()]) {
                 Ok(head) => head,
                 Err(pg_worker_core::git::GitError::Failed { code: Some(1), .. }) => {
-                    return Err(branch_git_error(original_error));
+                    return Err(BranchError::Io);
                 }
                 Err(error) => return Err(branch_git_error(error)),
             };
@@ -187,6 +187,40 @@ mod tests {
         .unwrap_err();
         assert_eq!(calls, 4);
         assert!(matches!(error, BranchError::Io));
+    }
+
+    #[test]
+    fn phase_branch_failed_create_with_absent_ref_is_retryable_for_any_exit() {
+        for code in [Some(1), Some(128), None] {
+            let input = PhaseBranchInput {
+                repo: ".".into(),
+                base_branch: "main".into(),
+                branch: "phase/test".into(),
+            };
+            let mut calls = 0;
+            let error = ensure_phase_branch_with(&input, |_, args| {
+                calls += 1;
+                if calls == 1 {
+                    return Ok("base-head".into());
+                }
+                Err(pg_worker_core::git::GitError::Failed {
+                    args: "private args".into(),
+                    code: if args[0] == "update-ref" {
+                        code
+                    } else {
+                        Some(1)
+                    },
+                    stderr: "private diagnostic".into(),
+                })
+            })
+            .unwrap_err();
+            assert_eq!(calls, 4);
+            assert!(matches!(error, BranchError::Io));
+            let ActivityError::Application(failure) = phase_branch_error(error) else {
+                panic!("expected application failure");
+            };
+            assert!(!failure.is_non_retryable(), "code={code:?}");
+        }
     }
 
     #[test]
