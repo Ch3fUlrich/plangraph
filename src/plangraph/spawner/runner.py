@@ -985,10 +985,9 @@ def spawn_service(*args, **kwargs):
 
         def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
-            reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
             original = self.leg_reader
-            from .leg_probe import read_status
-            self.leg_reader = lambda model, **kw: read_status(reader, model, **kw)
+            from .leg_probe import DispatchReader
+            self.leg_reader = DispatchReader(original, leg_state.leg_status)
             try:
                 return super()._route(card, role, writer_families, review_of, **options)
             finally:
