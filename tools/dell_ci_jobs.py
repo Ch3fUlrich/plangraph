@@ -24,7 +24,7 @@ PG_TEMPORAL_ADDR=http://127.0.0.1:17233 PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 car
 
 POSTGRES = """password=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 export POSTGRES_PASSWORD="$password"
-docker run -d --name "$container" -e POSTGRES_PASSWORD -e POSTGRES_DB=keeper -p 127.0.0.1::5432 postgres:16 >/dev/null
+docker run -d --name "$container" -e POSTGRES_PASSWORD -e POSTGRES_DB=keeper -p 127.0.0.1:0:5432 postgres:16 >/dev/null
 ready=0
 for i in $(seq 1 50); do
     if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then ready=1; break; fi
