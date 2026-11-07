@@ -84,6 +84,10 @@ def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=Non
 def isolated_script(command, source, job, *, postgres=False, browser=False,
                     python_deps=False, cargo_deps=False):
     """Trusted outer lifecycle; only the inner command sees PR-controlled files."""
+    def shell_path(path):
+        path = str(path)
+        return path if path.startswith('"$HOME"/') else shlex.quote(path)
+
     marker = 'port=$(docker port'
     if marker not in POSTGRES:
         raise ValueError("Postgres template missing required marker: " + marker)
@@ -128,7 +132,7 @@ export PG_DSN
     if postgres:
         invocation += ' sh "$PG_DSN" "$password"'
     return f'''set -eu
-scratch={shlex.quote(str(job))}
+scratch={shell_path(job)}
 container=dell-ci-${{scratch##*/}}-${{scratch%/*}}
 container=$(printf '%s' "$container" | tr / -)
 container_id=
@@ -143,10 +147,10 @@ mkdir -m 700 "$scratch"
 trap cleanup EXIT
 trap 'exit 143' HUP INT TERM
 mkdir "$scratch/checkout" "$scratch/data"
-cp -a {shlex.quote(str(source))}/. "$scratch/checkout/"
+cp -a {shell_path(source)}/. "$scratch/checkout/"
 rm -f "$scratch/checkout/.git"
-git -C "$scratch/checkout" init -q
-git -C {shlex.quote(str(source))} bundle create "$scratch/history.bundle" --all HEAD
+git -C "$scratch/checkout" init -q --initial-branch=dell-ci-private
+git -C {shell_path(source)} bundle create "$scratch/history.bundle" --all HEAD
 git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" '+refs/*:refs/*'
 git -C "$scratch/checkout" fetch -q "$scratch/history.bundle" HEAD
 git -C "$scratch/checkout" reset --mixed FETCH_HEAD
