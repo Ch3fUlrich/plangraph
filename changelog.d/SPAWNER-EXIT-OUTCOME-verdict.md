@@ -1,0 +1,1 @@
+- Preserve denied-tool OpenCode review verdicts on exit 1 when JSON text arrives without a stop frame; keep transport-completion evidence requirements unchanged.

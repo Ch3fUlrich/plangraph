@@ -1,5 +1,6 @@
 """D-4430: denied-tool review verdicts survive opencode's rc 1 termination."""
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -54,3 +55,42 @@ def test_denied_review_rc1_without_exact_final_verdict_failed(tmp_path, monkeypa
                                      {'client': 'other'}, {'rc': 2}])
 def test_verdict_without_eligible_denied_review_failed(tmp_path, monkeypatch, options):
     assert _monitor(tmp_path, monkeypatch, 'VERDICT: ACCEPT', **options).status == 'failed'
+
+
+@pytest.mark.parametrize('verdict', ['ACCEPT', 'REQUEST_CHANGES'])
+@pytest.mark.parametrize('finished', [False, True])
+def test_framed_denied_review_preserves_verdict(tmp_path, monkeypatch, verdict, finished):
+    text = f'Full review\nVERDICT: {verdict}'
+    output = json.dumps({'type': 'text', 'part': {'text': text}})
+    if finished:
+        output += '\n' + json.dumps({'type': 'step_finish', 'part': {'reason': 'stop'}})
+    job = _monitor(tmp_path, monkeypatch, output)
+    assert job.status == 'completed'
+    assert job.stdout == text
+    assert not any(e['event'] in ('harness_failed', 'terminated_after_answer') for e in job.events)
+
+
+@pytest.mark.parametrize('rc', [0, 1, 2])
+def test_framed_stdout_callers_receive_plain_answer(tmp_path, monkeypatch, rc):
+    from plangraph.review.verdict import parse_verdict
+    from plangraph.spawner.runner import spawn_service
+    from plangraph.spawner.seat_artifact import publish
+
+    text = 'Review complete\nTEST-GAMING: no - searched tests: 0 hits\nVERDICT: ACCEPT'
+    output = json.dumps({'type': 'text', 'part': {'text': text}})
+    job = _monitor(tmp_path, monkeypatch, output, rc=rc)
+    assert job.stdout == text
+    assert parse_verdict(job.stdout) == 'pass'
+    service = spawn_service(state=tmp_path / 'state')
+    service.runner.jobs[job.job_id] = job
+    record = dict(run_id='run-framed', job_id=job.job_id, role='review',
+                  status=job.status, exit_code=rc, ended=1, attempts=[])
+    service._save(record)
+    assert record['stdout_tail'] == text
+    if rc == 0:
+        job.served_model = 'test/model'
+        job.prompt_sha256 = 'a' * 64
+        job.response_finish_reason = 'stop'
+        publish(tmp_path, record, job)
+        assert (tmp_path / 'review.txt').read_text() == text
+        assert json.loads((tmp_path / 'evidence.json').read_text())['verdict'] == 'pass'

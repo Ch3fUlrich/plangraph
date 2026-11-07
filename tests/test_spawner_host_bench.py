@@ -106,7 +106,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys):
         "opencode-deepseek-v4.1-flash-free",
         "opencode-glm-5.3-flash-free",
         "agy-gemini-3.8-flash", "opencode-go-gemini-4-argon", "opencode-go-glm-5.2",
-        "opencode-go-qwen3.8-max", "omniroute-grok-4.7", "opencode-go-deepseek-v4-flash",
+        "opencode-go-qwen3.8-max", "opencode-go-deepseek-v4-flash",
         ]
 
 

@@ -1,4 +1,4 @@
-"""Grok review admission and D-4280 manual-only Muse contributor seats."""
+"""Manual-only Grok and D-4280 Muse contributor seats."""
 import asyncio
 import json
 import sys
@@ -41,7 +41,7 @@ def test_grok_review_only_and_distinct_family():
     assert seat_family(leg.family) == seat_verdict.model_family(leg.model) == "xai"
     assert seat_family("muse") == "meta"
     assert seat_family(leg.family) != seat_family("gpt")
-    assert GROK in {l.id for l in plan_spawn(CARD, role="review", writer_families=("gpt",)).legs}
+    assert GROK not in {l.id for l in plan_spawn(CARD, role="review", writer_families=("gpt",)).legs}
     assert GROK not in {l.id for l in plan_spawn(CARD, role="implement").legs}
 
 
@@ -102,6 +102,28 @@ def test_muse_never_automatic_even_if_lifted(role):
         assert policy.skip_reason(leg, role) == "off_family"
     plan = plan_spawn(CARD, role=role, writer_families=("gpt",))
     assert not any(l.family == "muse" for l in (*plan.legs, *plan.review_seats))
+
+
+@pytest.mark.parametrize("role", ["review", "implement", "orchestrate"])
+def test_grok_never_automatic_even_if_lifted(role):
+    leg = replace(BY_ID[GROK], roles=(role,))
+    policy = RoutePolicy(review_allowed_families=("grok",))
+    assert policy.skip_reason(leg, role) == "off_family"
+    for spelling in ("xai", "grok-4.7"):
+        assert policy.skip_reason(replace(leg, family=spelling), role) == "off_family"
+    plan = plan_spawn(CARD, role=role, writer_families=("gpt",), policy=policy)
+    assert not any(l.family == "grok" for l in (*plan.legs, *plan.review_seats))
+
+
+def test_explicit_grok_requires_reason_and_still_works(tmp_path):
+    svc = SpawnService(SpawnerRunner(), state=tmp_path)
+    kwargs = dict(card=CARD, prompt="Review public material", role="review",
+                  writer_families=("gpt",), leg=GROK, dry_run=True)
+    with pytest.raises(SpawnRefused, match="override"):
+        asyncio.run(svc.spawn(**kwargs))
+    result = asyncio.run(svc.spawn(**kwargs, override_reason="Audited Grok review"))
+    assert result["chosen_leg"]["id"] == GROK
+    assert "Audited Grok review" in (tmp_path / "spawn-overrides.jsonl").read_text()
 
 
 @pytest.mark.parametrize("family", ["meta", "llama", "llama-4"])
