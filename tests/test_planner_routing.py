@@ -312,9 +312,9 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
     with pytest.raises(ValueError):
         next_after_failure(route, [], "weird", 1)
 
-def test_writer_order_d2683_implement_first_seven():
+def test_writer_order_d2683_implement_first_seven(monkeypatch):
     from test_route_free_first import test_writer_order_d2683_implement_first_seven as check
-    check()
+    check(monkeypatch)
 
 
 def test_writer_order_d2683_unavailable_skipped():
