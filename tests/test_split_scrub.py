@@ -18,6 +18,24 @@ import scrub_check as sc  # noqa: E402
 H = "".join  # join fragments
 
 
+def test_released_history_entropy_allow_is_exact(tmp_path):
+    import tomllib
+
+    path = "rust/worker/tests/fixtures/releases/baseline-v1/happy.json"
+    manifest = ROOT / "tools/split/manifest.toml"
+    entries = tomllib.loads(manifest.read_text())["scrub"]["allow"]
+    assert [entry for entry in entries if entry["path"] == path] == [
+        {"path": path, "rules": ["high-entropy"]},
+    ]
+    fixture = tmp_path / path
+    fixture.parent.mkdir(parents=True)
+    fixture.write_bytes((ROOT / path).read_bytes())
+    cfg = sc.build_config(rules_files=[manifest, ROOT / "tools/split/scrub_ci.toml"])
+    assert sc.scan_tree(tmp_path, cfg) == []
+    fixture.rename(fixture.with_name("other.json"))
+    assert any(hit.rule == "high-entropy" for hit in sc.scan_tree(tmp_path, cfg))
+
+
 def _dirty(root: Path) -> dict:
     """Write one planted leak per file; return {relpath: rule}."""
     leaks = {
