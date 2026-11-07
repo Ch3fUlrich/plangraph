@@ -85,17 +85,17 @@ def test_invalid_src_is_invalid_config(tmp_path, monkeypatch, src):
 
 @pytest.mark.parametrize('src', ['/opt/plangraph/src', '~/code/plangraph/src'])
 def test_config_accepts_src(tmp_path, monkeypatch, src):
-    hosts = [dict(name='node-a', target='target', src=src)]
-    config(tmp_path, monkeypatch, hosts)
-    assert remote_ps.configured_hosts() == hosts
-
+    from unittest.mock import Mock, ANY
+    host = dict(name='node-a', target='target', src=src)
+    config(tmp_path, monkeypatch, [host])
+    transport = Mock(return_value='{"runs": []}')
+    assert remote_ps.list_runs([], transport=transport) == []
+    transport.assert_called_once_with(host, ANY)
 @pytest.mark.parametrize('payload', ['{}', '{"runs": {}}', '{"runs": [null]}',
                                      '{"runs": [{"run_id": "run-a"}]}'])
 def test_malformed_is_named_unknown(payload):
     assert remote_ps._fetch(dict(name='node-a'), lambda *args: payload) == [
         dict(host='node-a', status='unknown', reason='host query failed')]
-
-
 def test_unreachable_does_not_log_secrets(caplog):
     def fail(*args):
         raise OSError('private-address secret-token')
