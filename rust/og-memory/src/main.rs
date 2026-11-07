@@ -5,6 +5,7 @@ use og_memory::{
     Capabilities, Validated,
 };
 use std::io::{self, BufRead, Read};
+const MAX_INPUT: u64 = 1024 * 1024;
 struct Unavailable;
 impl Transport for Unavailable {
     fn read(&mut self, _: &str) -> Result<Snapshot, Error> {
@@ -19,27 +20,69 @@ fn main() {
     let mut m = Memory::new(Unavailable);
     let c = Capabilities::default();
     if args == ["mcp"] {
-        for line in io::stdin().lock().lines() {
-            let Ok(line) = line else {
-                std::process::exit(1)
-            };
-            let Ok(request) = serde_json::from_str(&line) else {
-                eprintln!("InvalidJsonRpc");
-                std::process::exit(1)
-            };
-            if let Some(response) = adapters::mcp(&mut m, &c, request) {
-                println!("{response}");
+        let mut stdin = io::stdin().lock();
+        loop {
+            let mut line = Vec::new();
+            let read = stdin
+                .by_ref()
+                .take(MAX_INPUT + 1)
+                .read_until(b'\n', &mut line);
+            match read {
+                Ok(0) => break,
+                Err(_) => {
+                    eprintln!("StdinUnavailable");
+                    std::process::exit(1);
+                }
+                _ => {}
+            }
+            if line.len() as u64 > MAX_INPUT {
+                println!("{}", parse_error("InputTooLarge"));
+                if line.last() != Some(&b'\n') {
+                    loop {
+                        let chunk = stdin.fill_buf().unwrap_or_default();
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        let end = chunk.iter().position(|b| *b == b'\n');
+                        let consumed = end.map_or(chunk.len(), |i| i + 1);
+                        stdin.consume(consumed);
+                        if end.is_some() {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            match serde_json::from_slice(&line) {
+                Ok(request) => {
+                    if let Some(response) = adapters::mcp(&mut m, &c, request) {
+                        println!("{response}");
+                    }
+                }
+                Err(_) => println!("{}", parse_error("InvalidJsonRpc")),
             }
         }
         return;
     }
-    let mut body = String::new();
-    if args.first().is_some_and(|s| s == "remember")
-        && io::stdin().read_to_string(&mut body).is_err()
-    {
-        eprintln!("StdinUnavailable");
-        std::process::exit(1);
+    let mut bytes = Vec::new();
+    if args.first().is_some_and(|s| s == "remember") {
+        if io::stdin()
+            .take(MAX_INPUT + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            eprintln!("StdinUnavailable");
+            std::process::exit(1);
+        }
+        if bytes.len() as u64 > MAX_INPUT {
+            eprintln!("InputTooLarge");
+            std::process::exit(1);
+        }
     }
+    let Ok(body) = String::from_utf8(bytes) else {
+        eprintln!("InvalidEnvelope");
+        std::process::exit(1);
+    };
     let result = adapters::cli(&mut m, &c, &args, &body);
     let code = adapters::exit_code(&result);
     match result {
@@ -51,4 +94,7 @@ fn main() {
         Ok(value) => println!("{value}"),
     }
     std::process::exit(code);
+}
+fn parse_error(message: &str) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":message}})
 }

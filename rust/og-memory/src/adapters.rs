@@ -34,10 +34,10 @@ pub fn dispatch<T: Transport>(
     match op {
         "remember" => {
             let e = input.envelope.ok_or("MissingEnvelope")?;
-            if e.project != project || input.query.is_some() {
-                return Err("InvalidScope".into());
+            if input.query.is_some() {
+                return Err("InvalidInput".into());
             }
-            m.remember(&e, c)
+            m.remember(&project, &e, c)
                 .map(|r| json!({"receipt":r.0}))
                 .map_err(|e| format!("{e:?}"))
         }
