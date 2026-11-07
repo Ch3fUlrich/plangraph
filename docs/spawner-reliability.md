@@ -271,3 +271,12 @@ authority-checked backend, watcher, evidence replay and reclaim capability land.
 The record settlement bridge writes semantic ORPHANED as lowercase `orphaned`,
 with null exit status and a stable RUN_ORPHANED key; it is not yet called by
 startup. No slot reclaim or process signalling is enabled by this partial slice.
+# Adopted supervision bridge
+
+The re-attach bridge provides a non-waitable child abstraction, a durable
+`RUN_REATTACHED` marker, restarted first-activity/silence monitoring, and an
+absolute max-time stop using the existing escalation path. Only proven emptiness
+may produce the semantic ORPHANED result; an exit status is never invented.
+These callable primitives are not yet connected to daemon startup. Verified
+scope/Job Object adoption, CPU sampling, shadow diagnostics, and durable watcher
+settlement remain incomplete. Reconciliation-gated reclaim is a separate slice.

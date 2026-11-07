@@ -16,7 +16,13 @@ mod prompt;
 mod prompt_git;
 mod pyjson;
 mod reconcile;
+#[allow(dead_code)]
+mod reconcile_attach;
+#[allow(dead_code)] // Callable bridges; locked startup ownership follows separately.
+mod reconcile_backend;
 mod reconcile_store;
+#[allow(dead_code)]
+mod reconcile_watch;
 mod records;
 mod review_artifacts;
 mod runs;
