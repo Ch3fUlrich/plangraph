@@ -38,12 +38,13 @@ pub trait Transport {
 /// Payload-free ledger entries: rejected content must never be retained.
 #[derive(Debug)]
 pub struct Blocked {
+    pub project: String,
     pub reason: Error,
 }
 
 pub struct Recall<'a> {
     pub saved: Vec<Envelope>,
-    pub retained_blocked: &'a [Blocked],
+    pub retained_blocked: Vec<&'a Blocked>,
     pub stale: bool,
 }
 
@@ -74,16 +75,26 @@ impl<T: Transport> Memory<T> {
                 .filter(|f| f.envelope.project == project && !f.superseded)
                 .map(|f| f.envelope)
                 .collect(),
-            retained_blocked: &self.blocked,
+            retained_blocked: self
+                .blocked
+                .iter()
+                .filter(|b| b.project == project)
+                .collect(),
             stale: false,
         })
     }
 
-    pub fn remember(&mut self, e: &Envelope, caps: &Capabilities) -> Result<Receipt, Error> {
-        let result = self.save(e, caps);
+    pub fn remember(
+        &mut self,
+        project: &str,
+        e: &Envelope,
+        caps: &Capabilities,
+    ) -> Result<Receipt, Error> {
+        let result = self.save(project, e, caps);
         if let Err(ref reason) = result {
             // Errors contain only static variants, never caller payloads.
             self.blocked.push(Blocked {
+                project: project.to_owned(),
                 reason: match reason {
                     Error::Refused(r) => Error::Refused(r.clone()),
                     Error::WritesDisabled => Error::WritesDisabled,
@@ -94,7 +105,10 @@ impl<T: Transport> Memory<T> {
         result
     }
 
-    fn save(&mut self, e: &Envelope, caps: &Capabilities) -> Result<Receipt, Error> {
+    fn save(&mut self, project: &str, e: &Envelope, caps: &Capabilities) -> Result<Receipt, Error> {
+        if !crate::slug_ok(project) || project.starts_with("routing-") || e.project != project {
+            return Err(Error::InvalidScope);
+        }
         if !self.writes_enabled {
             return Err(Error::WritesDisabled);
         }
@@ -233,16 +247,16 @@ mod tests {
     fn outage_remember_and_recall_fail_closed() {
         let (mut m, e, c) = setup();
         m.transport.outage = true;
-        assert_eq!(m.remember(&e, &c), Err(Error::Outage));
+        assert_eq!(m.remember(&e.project, &e, &c), Err(Error::Outage));
         assert!(matches!(m.recall("global"), Err(Error::Outage)));
         assert_eq!(m.transport.writes, 0);
     }
     #[test]
     fn explicit_scope_and_superseded_filtering() {
         let (mut m, mut e, c) = setup();
-        m.remember(&e, &c).unwrap();
+        m.remember(&e.project, &e, &c).unwrap();
         e.project = "plangraph".into();
-        m.remember(&e, &c).unwrap();
+        m.remember(&e.project, &e, &c).unwrap();
         assert_eq!(m.recall("global").unwrap().saved.len(), 1);
         assert_eq!(m.recall("plangraph").unwrap().saved.len(), 1);
         m.transport.facts[0].superseded = true;
@@ -253,7 +267,7 @@ mod tests {
     fn conditional_412_rereads_without_unconditional_fallback() {
         let (mut m, e, c) = setup();
         m.transport.conflict_once = true;
-        m.remember(&e, &c).unwrap();
+        m.remember(&e.project, &e, &c).unwrap();
         assert_eq!((m.transport.reads, m.transport.writes), (3, 2));
         assert_eq!(m.transport.facts.len(), 1);
     }
@@ -261,8 +275,8 @@ mod tests {
     fn unknown_reconciles_and_node_edge_retry_is_duplicate_free() {
         let (mut m, e, c) = setup();
         m.transport.lose_response_once = true;
-        let receipt = m.remember(&e, &c).unwrap();
-        assert_eq!(m.remember(&e, &c).unwrap(), receipt);
+        let receipt = m.remember(&e.project, &e, &c).unwrap();
+        assert_eq!(m.remember(&e.project, &e, &c).unwrap(), receipt);
         assert_eq!((m.transport.reads, m.transport.writes), (3, 1));
         assert_eq!((m.transport.facts.len(), m.transport.edges.len()), (1, 1));
     }
@@ -272,7 +286,7 @@ mod tests {
             let (mut m, e, c) = setup();
             m.transport.omit_receipt = missing_receipt;
             m.transport.omit_write = !missing_receipt;
-            assert_eq!(m.remember(&e, &c), Err(Error::Unverified));
+            assert_eq!(m.remember(&e.project, &e, &c), Err(Error::Unverified));
         }
     }
     #[test]
@@ -280,23 +294,95 @@ mod tests {
         let (mut m, e, c) = setup();
         m.transport.lose_response_once = true;
         m.transport.omit_write = true;
-        assert_eq!(m.remember(&e, &c), Err(Error::Unverified));
+        assert_eq!(m.remember(&e.project, &e, &c), Err(Error::Unverified));
         assert_eq!((m.transport.reads, m.transport.writes), (2, 1));
     }
     #[test]
     fn stale_precondition_has_no_node_or_edge_effect() {
+        let (_, e, c) = setup();
+        let mut m = Memory::new(AlteredTransport {
+            stale: true,
+            inner: MockTransport::default(),
+        });
+        assert_eq!(m.remember(&e.project, &e, &c), Err(Error::Conflict));
+        assert_eq!((m.transport.inner.reads, m.transport.inner.writes), (3, 3));
+        assert!(m.transport.inner.facts.is_empty());
+        assert!(m.transport.inner.edges.is_empty());
+    }
+    // Fault injection stays local: stale snapshots or a dishonest commit receipt.
+    struct AlteredTransport {
+        stale: bool,
+        inner: MockTransport,
+    }
+    impl Transport for AlteredTransport {
+        fn read(&mut self, project: &str) -> Result<Snapshot, Error> {
+            let mut snapshot = self.inner.read(project)?;
+            if self.stale {
+                snapshot.graph_commit = "stale".into();
+            }
+            Ok(snapshot)
+        }
+        fn commit(&mut self, fact: &Validated, expected: &str) -> Result<Receipt, Error> {
+            self.inner.commit(fact, expected)?;
+            Ok(Receipt("mismatched".into()))
+        }
+    }
+    #[test]
+    fn mismatched_commit_receipt_fails_remember() {
+        let (_, e, c) = setup();
+        let mut m = Memory::new(AlteredTransport {
+            stale: false,
+            inner: MockTransport::default(),
+        });
+        assert_eq!(m.remember(&e.project, &e, &c), Err(Error::Unverified));
+        assert_eq!(m.transport.inner.facts.len(), 1);
+    }
+    #[test]
+    fn superseded_identical_fact_does_not_satisfy_remember() {
         let (mut m, e, c) = setup();
-        let v = validate(&e, &c).unwrap();
-        assert_eq!(m.transport.commit(&v, "stale"), Err(Error::Conflict));
-        assert!(m.transport.facts.is_empty());
-        assert!(m.transport.edges.is_empty());
+        let old = m.remember(&e.project, &e, &c).unwrap();
+        m.transport.facts[0].superseded = true;
+        let new = m.remember(&e.project, &e, &c).unwrap();
+        assert_ne!(old, new);
+        assert_eq!(m.transport.writes, 2);
+        assert!(!m.transport.facts[0].superseded);
+    }
+    #[test]
+    fn invalid_projects_refuse_remember_and_recall_without_transport() {
+        for project in ["routing-private", "", "Bad Project"] {
+            let (mut m, mut e, c) = setup();
+            e.project = project.into();
+            assert_eq!(m.remember(project, &e, &c), Err(Error::InvalidScope));
+            assert!(matches!(m.recall(project), Err(Error::InvalidScope)));
+            assert_eq!((m.transport.reads, m.transport.writes), (0, 0));
+        }
+    }
+    #[test]
+    fn scope_must_match_envelope_before_transport() {
+        let (mut m, e, c) = setup();
+        assert_eq!(m.remember("plangraph", &e, &c), Err(Error::InvalidScope));
+        assert_eq!((m.transport.reads, m.transport.writes), (0, 0));
+    }
+    #[test]
+    fn blocked_ledger_is_project_scoped() {
+        let (mut m, mut e, c) = setup();
+        m.writes_enabled = false;
+        assert_eq!(m.remember("global", &e, &c), Err(Error::WritesDisabled));
+        assert!(m.recall("plangraph").unwrap().retained_blocked.is_empty());
+        e.project = "plangraph".into();
+        assert_eq!(m.remember("plangraph", &e, &c), Err(Error::WritesDisabled));
+        for project in ["global", "plangraph"] {
+            let recall = m.recall(project).unwrap();
+            assert_eq!(recall.retained_blocked.len(), 1);
+            assert_eq!(recall.retained_blocked[0].project, project);
+        }
     }
     #[test]
     fn rollback_preserves_facts_and_separate_blocked_ledger() {
         let (mut m, e, c) = setup();
-        m.remember(&e, &c).unwrap();
+        m.remember(&e.project, &e, &c).unwrap();
         m.writes_enabled = false;
-        assert_eq!(m.remember(&e, &c), Err(Error::WritesDisabled));
+        assert_eq!(m.remember(&e.project, &e, &c), Err(Error::WritesDisabled));
         let recall = m.recall("global").unwrap();
         assert_eq!((recall.saved.len(), recall.retained_blocked.len()), (1, 1));
         assert!(!recall.stale);
