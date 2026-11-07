@@ -313,16 +313,13 @@ class SpawnerRunner:
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
-        # Resolve local leg IDs and admitted combos before rendering providers
-        # or deciding which isolated credential the child requires.
-        from .target import resolve_target
+        from .target import resolve_target   # leg ids and admitted combos resolve before providers render
         model_or_combo, leg = resolve_target(model_or_combo)
         if leg is not None:
             if client is not None and client != leg.harness:
                 from plangraph.routing_errors import SpawnRefused
                 raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
             client = leg.harness
-
         validate_model(model_or_combo)
         if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
             prompt = IMPLEMENT_HEADER + "\n\n" + prompt
@@ -426,12 +423,10 @@ class SpawnerRunner:
             from .opencode_isolation import close_config_layers, review_credential_reason
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
-                # D-2905 (1): the per-job dir is also the spawner-owned store, read only after
-                # child exit -- the shared store is child-writable and proves nothing.
-                # REVIEW-WITNESS-OPENCODE R1: the child gets NO inherited
-                # config layer at all -- HOME and XDG_CONFIG_HOME live in the
-                # per-job dir and every caller-set OPENCODE_* override outside
-                # _REVIEW_OPENCODE_ENV_ALLOW is dropped.
+                # D-2905 (1): the per-job dir is also the spawner-owned store, read only after child exit
+                # -- the shared store is child-writable and proves nothing. REVIEW-WITNESS-OPENCODE R1:
+                # no inherited config layer: HOME and XDG_CONFIG_HOME live in the per-job dir and every
+                # caller-set OPENCODE_* override outside _REVIEW_OPENCODE_ENV_ALLOW is dropped.
                 render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
                 child_env['HOME'] = oc_dir
                 xdg_config = os.path.join(oc_dir, 'config')
