@@ -219,7 +219,37 @@ def test_default_jobs_success_lists_omissions(tmp_path):
     assert record["not_requested"] == []
     commands = [c for c in fake.calls if c.startswith("timeout ")]
     assert len(commands) == len(ci.JOBS)
+    expected = {
+        "select": "python3 tools/ci_select.py select --full",
+        "scrub": "python3 tools/split/scrub_check.py .",
+        "file-size": "python3 tools/check_file_size.py",
+        "changelog-docs": "python3 tools/check_changelog_docs.py",
+        "pytest": "python3 -m pytest -q -n auto --dist loadgroup --durations=30 tests",
+        "pytest-postgres": "tests/contract tests/test_keeper_pg_unit.py",
+        "rust": "cargo check --target x86_64-pc-windows-gnu",
+        "rust-worker": "PG_TEMPORAL_ADDR=http://127.0.0.1:17233",
+        "rust-spike": "cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
+        "browser": "python3 -m pytest -q tests/browser -m browser",
+        "ci-gate": "python3 tools/ci_select.py gate --needs",
+    }
+    assert set(expected) == set(ci.JOBS)
+    for name, command in zip(ci.JOBS, commands):
+        assert expected[name] in command, name
     assert all(j["result"] == "success" and j["exit"] == 0 for j in record["jobs"])
+
+
+def test_subset_jobs_lists_omissions(tmp_path):
+    fake = Fake()
+    code, record = invoke(tmp_path, fake, jobs="select,browser")
+    assert code == 0 and record["result"] == "success"
+    assert [job["job"] for job in record["jobs"]] == ["select", "browser"]
+    assert record["not_requested"] == [
+        "scrub", "file-size", "changelog-docs", "pytest", "pytest-postgres",
+        "rust", "rust-worker", "rust-spike", "ci-gate"]
+    commands = [c for c in fake.calls if c.startswith("timeout ")]
+    assert len(commands) == 2
+    assert "python3 tools/ci_select.py select --full" in commands[0]
+    assert "python3 -m pytest -q tests/browser -m browser" in commands[1]
 
 
 @pytest.mark.parametrize("name", ["pytest-postgres", "rust", "rust-worker", "rust-spike"])
