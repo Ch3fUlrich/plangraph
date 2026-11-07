@@ -15,6 +15,21 @@ LINE = ("You've reached your credit usage limit. Please upgrade your subscriptio
         "to get more resources. Report Issue (input /feedback)")
 
 
+@pytest.mark.parametrize('code', [None, 0, 1, 7])
+@pytest.mark.parametrize('stdout', [LINE, 'Starting\n' + LINE + '\n \n',
+                                   LINE + '\nAgent continued.'])
+def test_bare_stdout_credit_limit_requires_failed_final_line(code, stdout):
+    expected = LINE if code in (1, 7) and stdout.rstrip().endswith(LINE) else None
+    assert harness_limit_line(code, stdout, '') == expected
+
+
+@pytest.mark.parametrize('prefix', ['', 'error: '])
+def test_streaming_credit_limit_requires_error_shape(prefix):
+    from plangraph.spawner.env_redact import early_refusal
+    text = prefix + LINE
+    assert early_refusal(text + '\n') == (text if prefix else None)
+
+
 @pytest.mark.parametrize('stream', ['stdout', 'stderr'])
 @pytest.mark.parametrize('terminal', [None, 'git_config_mutated', 'writer_no_changes',
                                      'cancelled', 'kill_incomplete', 'model_refusal'])
@@ -33,7 +48,8 @@ def test_recorded_refusal_books_and_runs_next_leg(tmp_path, monkeypatch, stream,
         job = NS(job_id=name, status='failed' if name == 'first' else 'completed',
                  exit_code=1 if name == 'first' else 0, stdout='', stderr='',
                  served_model=name, served_family='synthetic', served_witness_reason='', events=[])
-        setattr(job, stream, LINE if name == 'first' else 'review complete')
+        setattr(job, stream, ('error: ' + LINE if stream == 'stdout' else LINE)
+                if name == 'first' else 'review complete')
         if name != 'first':
             job.stdout += '\nVERDICT: pass\n'
         runner.jobs[name] = job
@@ -56,7 +72,7 @@ def test_recorded_refusal_books_and_runs_next_leg(tmp_path, monkeypatch, stream,
     assert store.leg_status('first')['state'] == 'limited'
     assert record['status'] == 'completed' and 'reason' not in record
     assert [(a['leg']['id'], a['status'], a['skip_reason']) for a in record['attempts']] == [
-        ('first', 'failed', 'harness_limit: ' + LINE),
+        ('first', 'failed', 'harness_limit: ' + ('error: ' if stream == 'stdout' else '') + LINE),
         ('next', 'completed', None), ('unused', 'skipped', 'earlier_leg_succeeded')]
 
 

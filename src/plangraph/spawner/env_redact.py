@@ -33,12 +33,20 @@ def redact(value):
 class OutputLines:
     """Hold incomplete lines across reads, including cancellation/EOF tails."""
     def __init__(self, scrub):
-        self.scrub, self.pending = scrub, ''
+        self.scrub, self.pending, self.discarding = scrub, '', False
 
     def feed(self, text, final=False):
         self.pending += text
-        end = len(self.pending) if final else self.pending.rfind('\n') + 1
+        if self.discarding:
+            match = re.search(r'[\r\n]', self.pending)
+            self.pending = self.pending[match.end():] if match else ''
+            self.discarding = not bool(match)
+        end = len(self.pending) if final else max(self.pending.rfind('\n'), self.pending.rfind('\r')) + 1
         text, self.pending = self.pending[:end], self.pending[end:]
+        if len(self.pending) > 65536:
+            # An arbitrarily long credential cannot safely be partially emitted.
+            text += '[autoos:overlong line withheld]\n'
+            self.pending, self.discarding = '', True
         if not text:
             return ''
         try:
@@ -119,9 +127,9 @@ def harness_limit_line(exit_code, stdout, stderr):
         return busy
     # Quota evidence needs an error-shaped or start-anchored line (D-3257):
     # a mid-line mention in prose, a traceback or a retry log never marks a
-    # leg. Agent prose on stdout only counts via its error-shaped lines.
+    # leg. Bare stdout credit refusals count only as the final non-empty line.
     def quota(line):
-        if _CREDIT_LIMIT.fullmatch(line):
+        if _CREDIT_LIMIT.fullmatch(re.sub(r'^\s*error:\s*', '', line, flags=re.I)):
             return True
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             return _USAGE_LIMIT.fullmatch(line)
@@ -131,9 +139,11 @@ def harness_limit_line(exit_code, stdout, stderr):
         # marks; it needs a quota/rate-limit name alongside.
         return _QUOTA_MARKER.match(line.strip()) or (
             _RESET_AFTER.match(line.strip()) and _QUOTA_MARKER.search(line))
+    stdout_lines = [line for line in normalize(stdout).splitlines() if line.strip()]
     lines = [line for line in normalize(stderr).splitlines() if quota(line)] + [
-        line for line in normalize(stdout).splitlines()
-        if (_ERROR_SHAPED.match(line) and quota(line)) or _CREDIT_LIMIT.fullmatch(line)]
+        line for index, line in enumerate(stdout_lines)
+        if (_ERROR_SHAPED.match(line) and quota(line)) or (
+            index == len(stdout_lines) - 1 and _CREDIT_LIMIT.fullmatch(line))]
     return lines[0].strip() if lines else None
 
 
@@ -151,6 +161,9 @@ def early_refusal(complete_text):
         return busy
     lines = normalize(complete_text).splitlines()
     for line in lines:
+        if _ERROR_SHAPED.match(line) and _CREDIT_LIMIT.fullmatch(
+                re.sub(r'^\s*error:\s*', '', line, flags=re.I)):
+            return line.strip()
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             if _ERROR_SHAPED.match(line) and _USAGE_LIMIT.fullmatch(line):
                 return line.strip()
@@ -189,19 +202,12 @@ def unavailable_reason(exit_code, stdout, stderr):
             return any(error_message(item) for item in value)
         return False
 
-    for line in stderr.splitlines():
-        if 'model unavailable:' in line.lower():
-            if _MODEL_UNAVAILABLE.fullmatch(line):
-                return line.strip()
-            if not _ERROR_SHAPED.match(line):
-                continue
-        if marked(line):
-            return line
-    for line in stdout.splitlines():
+    for is_stderr, line in [(True, line) for line in stderr.splitlines()] + [(False, line) for line in stdout.splitlines()]:
         text = line.strip()
+        if (_MODEL_UNAVAILABLE.fullmatch(text)
+                or (is_stderr and re.fullmatch(r'not_served_on_host:\s*\S+(?:\s+\S+)*', text))):
+            return text
         if 'model unavailable' in text.lower() and not text.startswith('{'):
-            if _ERROR_SHAPED.match(text) and _MODEL_UNAVAILABLE.fullmatch(text):
-                return text
             if not _ERROR_SHAPED.match(text):
                 continue
         if not marked(text):

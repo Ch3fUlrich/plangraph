@@ -285,7 +285,11 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
     else:
         raise ValueError('unsupported watchdog host')
 
-def main(argv=None):
+def main(argv=None, *, hung_config=None):
+    # Host integrations supply structured sampling and leg-scoped actions;
+    # old callers remain disabled rather than guessing process ownership.
+    from .hung_capture import HungBoundary
+    hung = HungBoundary(**hung_config) if hung_config is not None else None
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('tick', 'status', 'install'))
     parser.add_argument('--host', choices=('linux', 'windows'), default=sys.platform if sys.platform == 'linux' else 'windows')
@@ -318,7 +322,7 @@ def main(argv=None):
     finally:
         _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),
-                    deliver=deliver, state=state, dry_run=args.dry_run, budget=budget, stuck=True)
+                    deliver=deliver, state=state, dry_run=args.dry_run, budget=budget, hung=hung, stuck=True)
     error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],

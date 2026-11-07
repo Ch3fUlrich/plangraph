@@ -1,0 +1,1 @@
+- **SPAWNER-MIMO-WITNESS-FU:** The gateway witness treats an active mimo block without a baseURL as the gateway leg and reads call-log provider `xiaomi-mimo` as `mimo`, so a mimo seat can be witnessed; a direct baseURL, a disabled block or a missing tagged call-log row still leaves it unwitnessed.

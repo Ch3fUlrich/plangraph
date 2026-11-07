@@ -164,6 +164,7 @@ fn running_records_not_process_samples() {
         "cancelling",
         "completed",
         "queued",
+        "needs_input",
     ]
     .into_iter()
     .enumerate()
