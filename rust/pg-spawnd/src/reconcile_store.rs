@@ -193,15 +193,37 @@ pub(crate) fn gone(identity: Option<&Proc>) -> Result<bool, ReconcileError> {
             if !group.starts_with('/') {
                 return Err(ReconcileError::Unknown);
             }
-            let events = std::fs::read_to_string(Path::new(group).join("cgroup.events"))
-                .map_err(|_| ReconcileError::Unknown)?;
-            let populated = events
-                .lines()
-                .filter_map(|line| line.strip_prefix("populated "))
-                .collect::<Vec<_>>();
-            return match populated.as_slice() {
-                ["0"] => Ok(true),
-                ["1"] => Ok(false),
+            let events = match std::fs::read_to_string(Path::new(group).join("cgroup.events")) {
+                Ok(events) => Some(events),
+                Err(_) => match std::fs::metadata(group) {
+                    // Only absence of the directory proves cgroup cleanup. A
+                    // missing events file or any other error is not evidence.
+                    Err(e) if e.raw_os_error() == Some(libc::ENOENT) => None,
+                    _ => return Err(ReconcileError::Unknown),
+                },
+            };
+            if let Some(events) = events {
+                let populated = events
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("populated "))
+                    .collect::<Vec<_>>();
+                return match populated.as_slice() {
+                    ["0"] => Ok(true),
+                    ["1"] => Ok(false),
+                    _ => Err(ReconcileError::Unknown),
+                };
+            }
+            if identity.pgid.is_none() {
+                return Ok(true);
+            }
+            // A removed scope must also agree with the recorded PGID probe.
+            return match gone(Some(&Proc {
+                pid: identity.pid,
+                start_time: identity.start_time,
+                group: None,
+                pgid: identity.pgid,
+            })) {
+                Ok(true) => Ok(true),
                 _ => Err(ReconcileError::Unknown),
             };
         }
