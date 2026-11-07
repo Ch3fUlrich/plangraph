@@ -67,10 +67,10 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="mimo/mimo-v2.6-pro",
+            role="review", writer_families=("gpt",),
+            leg="mimo-v2.6-pro", model="mimo/mimo-v2.6-pro",
             override_reason="testing manual model override",
-            prompt="test",
-            wait_seconds=0.1,
+            prompt="test", wait_seconds=0.1,
         )
         assert factory.call_count == 0
         assert record["status"] == "failed"
@@ -117,7 +117,7 @@ def test_sentinel_key_never_leaks(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="mimo/mimo-v2.6-pro",
+            model="omniroute/cx-gpt-6.1-sol",
             override_reason="testing manual model override",
             prompt="task",
             dry_run=True,
@@ -253,7 +253,7 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="mimo/mimo-v2.6-pro",
+            model="omniroute/cx-gpt-6.1-sol",
             override_reason="testing manual model override",
             prompt="task",
             wait_seconds=None,

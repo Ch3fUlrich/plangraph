@@ -303,7 +303,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS
     legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
     for candidate in legs:
-        validate_model(candidate.model)
+        validate_model(candidate.model, allow_inactive=not leg_active(candidate))
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
@@ -331,6 +331,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
 
     states = {l.id: _leg_status(l) for l in candidates}
     limited = {key for key, state in states.items() if unavailable(state)}
+    disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
+                       "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
+               for l in legs if role in l.roles and l.disabled]
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
@@ -361,6 +364,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
+    skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat")}
     try:
@@ -388,7 +392,20 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             if positions:
                 source = "benchmark"
     if role == "review":
-        table_order = {leg.id: i for i, leg in enumerate(legs)}
+        # Benchmarks rank families, not interchangeable seats within a family.
+        # Restore table order only in each family's measured slots, retaining
+        # cross-family ranking and keeping unmeasured legs behind measured ones.
+        input_order = {leg.id: i for i, leg in enumerate(legs)}
+        for family in {leg.family for leg in ordered}:
+            for tier in TIERS:
+                positions = [i for i, leg in enumerate(ordered)
+                             if leg.family == family and leg.tier == tier
+                             and (leg.model in rows or leg.id in rows)]
+                siblings = sorted((ordered[i] for i in positions),
+                                  key=lambda leg: input_order[leg.id])
+                for i, leg in zip(positions, siblings):
+                    ordered[i] = leg
+        table_order = {leg.id: i for i, leg in enumerate(ordered)}
         ordered.sort(key=lambda leg: review_key(
             leg, TIERS.index(leg.tier), table_order[leg.id]))
     seats, coverage, open_parts = [], (), []
@@ -416,7 +433,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                      tuple(candidate_details), groups, coverage)
 
 
-def validate_model(model):
+def validate_model(model, *, allow_inactive=False):
     """The resolver catalog and registered legs are the exact admission door."""
     from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
                                            OPERATOR_REMOVED_MODELS)
@@ -426,7 +443,7 @@ def validate_model(model):
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
     rows = get_catalog_models()
-    inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
+    inactive = {row['id'] for row in rows if not catalog_row_admitted(row)} if not allow_inactive else set()
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
                {leg.model for leg in DEFAULT_LEGS}) - inactive - OPERATOR_REMOVED_MODELS
     if model not in allowed:

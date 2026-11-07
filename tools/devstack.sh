@@ -21,7 +21,7 @@
 set -euo pipefail
 usage() {
   printf '%s\n' \
-    "usage: devstack.sh start|stop [--purge]|status|keeper|set-current" \
+    "usage: devstack.sh start|stop [--purge]|status|keeper|worker|set-current" \
     "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT TEMPORAL_HTTP_PORT DEVSTACK_DEPLOYMENT" \
     "     DEVSTACK_BUILD_ID PG_PORT DEVSTACK_PG_NAME KEEPER_PORT DEVSTACK_PG_MODE PG_BIN" \
     "     DEVSTACK_HEALTH_TIMEOUT" \
@@ -77,19 +77,15 @@ wait_for() { # wait_for <seconds> <cmd...> — poll once per second until the co
   done
   return 1
 }
-
 docker_available() { command -v docker >/dev/null 2>&1; }
-
 pg_docker_up() {
   docker_available || return 1
   [ -n "$(docker ps -q -f "name=^/${DEVSTACK_PG_NAME}$" 2>/dev/null || true)" ]
 }
-
 pg_docker_exists() { # running or merely created — reuse the container instead of hitting name conflicts
   docker_available || return 1
   [ -n "$(docker ps -aq -f "name=^/${DEVSTACK_PG_NAME}$" 2>/dev/null || true)" ]
 }
-
 pg_local_up() {
   local pid=""
   [ -f "$DEVSTACK_STATE/pg/postmaster.pid" ] && pid="$(head -n 1 "$DEVSTACK_STATE/pg/postmaster.pid" 2>/dev/null || true)"
@@ -280,8 +276,7 @@ start_temporal() {
 }
 
 start_set_current() {
-  # The build-id only becomes settable once a worker has registered it; on a bare devstack that
-  # hasn't happened yet, so warn with the exact retry command and let start continue.
+  # Retry registration races; never report a ready stack without promotion.
   local i
   for ((i = 1; i <= 5; i++)); do
     if set_current_version; then
@@ -290,7 +285,8 @@ start_set_current() {
     fi
     sleep 2
   done
-  echo "WARNING: set-current-version failed; the driver hangs without it — once a worker registers build-id '$DEVSTACK_BUILD_ID' re-run: '$TEMPORAL_CLI worker deployment set-current-version --address $TEMPORAL_ADDR --deployment-name $DEVSTACK_DEPLOYMENT --build-id $DEVSTACK_BUILD_ID --yes' (or 'devstack.sh set-current')" >&2
+  echo "ERROR: set-current-version failed; register the build then retry devstack.sh set-current" >&2
+  return 1
 }
 
 start_pg_local() {
@@ -363,8 +359,8 @@ start_postgres() {
 cmd_start() {
   resolve_pg_mode >/dev/null # fail on a bad DEVSTACK_PG_MODE before anything is started
   start_temporal
-  start_set_current
   start_postgres
+  start_set_current || return 1
 }
 
 stop_pidfile() { # TERM, grace 10 s, then KILL; the pid file goes away either way.
@@ -479,6 +475,10 @@ case "${1:-}" in
   stop) shift; cmd_stop "$@" ;;
   status) cmd_status ;;
   keeper) cmd_keeper ;;
+  worker)
+    export PG_DEPLOYMENT="$DEVSTACK_DEPLOYMENT" PG_BUILD_ID="$DEVSTACK_BUILD_ID"
+    export PG_TEMPORAL_ADDR="http://$TEMPORAL_ADDR"
+    exec "${PG_WORKER_BIN:-$REPO_ROOT/rust/worker/target/debug/pg-worker}" ;;
   set-current) ensure_temporal_cli; set_current_version ;;
   -h|--help|help) usage ;;
   "") usage; exit 2 ;;

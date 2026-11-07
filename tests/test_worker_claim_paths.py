@@ -5,7 +5,7 @@ from plangraph.keeper.errors import Refused
 from plangraph.planner.worker_claim import build_claim
 
 
-@pytest.mark.parametrize("kind", ["typo", "", None, 42, [], {}])
+@pytest.mark.parametrize("kind", ["typo", None, 42, [], {}])
 def test_build_claim_refuses_invalid_check_kind(kind):
     card = {"outcome": "fix", "check_cmd": "true", "write_set": [],
             "check_kind": kind}

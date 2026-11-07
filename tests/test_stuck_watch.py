@@ -48,6 +48,24 @@ def test_idle_tree_cancelled_at_300_not_298(seat):
     assert calls == ['cancel']
 
 
+def test_watchdog_tick_records_process_evidence(seat, monkeypatch, tmp_path_factory):
+    from plangraph.spawner import stall_watchdog
+    from conftest_watchdog import isolated_process_evidence
+    root, proc, record, calls, _, _ = seat
+    real_check = watch.check
+    monkeypatch.setattr(os, 'kill', lambda pid, signal: None if signal == 0 else pytest.fail('live signal'))
+    monkeypatch.setattr(watch, 'check', lambda state, runs, now, **kw:
+                        real_check(state, runs, now, proc=proc, **kw))
+    with monkeypatch.context() as isolation:
+        isolated_process_evidence.__wrapped__(isolation, tmp_path_factory)
+        stall_watchdog.tick([record], [], lambda _: None, now=0, state=root, stuck=True)
+        assert json.loads((root / 'watchdog/stuck-samples.json').read_text()) == {}
+    stall_watchdog.tick([record], [], lambda _: None, now=0, state=root, stuck=True)
+    samples = json.loads((root / 'watchdog/stuck-samples.json').read_text())
+    assert samples['run-test']['identity'] == {str(FAKE_PID): 7}
+    assert not calls
+
+
 @pytest.mark.parametrize('change', ['cpu', 'start'])
 def test_cpu_change_and_pid_reuse_reset(seat, change):
     _, _, _, calls, process, check = seat

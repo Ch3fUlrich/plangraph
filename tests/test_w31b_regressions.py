@@ -103,6 +103,7 @@ def test_native_harness_preserves_model(client):
 
 def test_native_runner_does_not_apply_overlay(monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
+    monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: model)
     # Admission may build an opencode probe overlay; only the native child's
     # actual launch environment is constrained here.
     monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', '{"private":"must-not-leak"}')
@@ -114,7 +115,7 @@ def test_native_runner_does_not_apply_overlay(monkeypatch):
             return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("done")', **kwargs)
         runner = SpawnerRunner(process_factory=factory)
         async def run():
-            job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash', client=client)
+            job = await runner.spawn('prompt', model_or_combo='fixture-native-model', client=client)
             await runner._tasks[job.job_id]
             return job
         result = asyncio.run(run())

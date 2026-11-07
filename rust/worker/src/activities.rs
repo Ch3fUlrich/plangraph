@@ -687,6 +687,8 @@ pub struct PhaseFinishInput {
     pub key: String,
     pub branch: String,
     pub head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_patch_phase: Option<String>,
 }
 
 pub(crate) fn do_phase_finish(
@@ -694,9 +696,10 @@ pub(crate) fn do_phase_finish(
     key: &str,
     branch: &str,
     head: &str,
+    pre_patch_phase: Option<&str>,
 ) -> Result<crate::phase::PhaseFinish, crate::keeper::KeeperError> {
     retry_transient(&TRANSIENT_BACKOFF, || {
-        keeper.phase_finish(key, branch, head)
+        keeper.phase_finish(key, branch, head, pre_patch_phase)
     })
 }
 
@@ -730,48 +733,12 @@ pub(crate) fn admitted_claim(
 
 pub(crate) fn do_ensure_phase_branch(
     input: &PhaseBranchInput,
-) -> Result<PhaseBranchResult, String> {
-    if input.repo.is_empty() || input.base_branch.is_empty() || input.branch.is_empty() {
-        return Err("repo, base_branch and branch are required".to_string());
-    }
-    check_rev(&input.base_branch).map_err(|e| e.to_string())?;
-    check_rev(&input.branch).map_err(|e| e.to_string())?;
-    if !input.branch.starts_with("phase/") {
-        return Err("not a phase/ branch".to_string());
-    }
-    if input.branch == input.base_branch {
-        return Err("phase branch must not be the base branch".to_string());
-    }
-    let repo = Path::new(&input.repo);
-    let base_ref = format!("refs/heads/{}", input.base_branch);
-    let branch_ref = format!("refs/heads/{}", input.branch);
-    let base_head = git(repo, &["rev-parse", base_ref.as_str()]).map_err(|e| e.to_string())?;
-    if let Ok(head) = git(repo, &["rev-parse", "--verify", "-q", branch_ref.as_str()]) {
-        crate::phase_ancestry::ensure(repo, &base_head, &head)?;
-        return Ok(PhaseBranchResult {
-            head,
-            created: false,
-        });
-    }
-    let zero = "0000000000000000000000000000000000000000";
-    match git(
-        repo,
-        &["update-ref", branch_ref.as_str(), base_head.as_str(), zero],
-    ) {
-        Ok(_) => Ok(PhaseBranchResult {
-            head: base_head,
-            created: true,
-        }),
-        Err(_) => {
-            let head = git(repo, &["rev-parse", branch_ref.as_str()]).map_err(|e| e.to_string())?;
-            crate::phase_ancestry::ensure(repo, &base_head, &head)?;
-            Ok(PhaseBranchResult {
-                head,
-                created: false,
-            })
-        }
-    }
+) -> Result<PhaseBranchResult, phase_branch_io::BranchError> {
+    ensure_phase_branch_with(input, git)
 }
+#[path = "phase_branch_io.rs"]
+mod phase_branch_io;
+use phase_branch_io::{ensure_phase_branch_with, phase_branch_error};
 
 /// What a gate run produced: a result, or the fact that the caller cancelled
 /// it before the command finished.
@@ -1517,13 +1484,13 @@ impl CardActivities {
         input: PhaseFinishInput,
     ) -> Result<crate::phase::PhaseFinish, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let key = input.key.clone();
-        let branch = input.branch.clone();
-        let head = input.head.clone();
-        let res =
-            tokio::task::spawn_blocking(move || do_phase_finish(&*keeper, &key, &branch, &head))
-                .await
-                .map_err(activity_error)?;
+        let (key, branch) = (input.key.clone(), input.branch.clone());
+        let (head, provenance) = (input.head.clone(), input.pre_patch_phase);
+        let res = tokio::task::spawn_blocking(move || {
+            do_phase_finish(&*keeper, &key, &branch, &head, provenance.as_deref())
+        })
+        .await
+        .map_err(activity_error)?;
         match res {
             Ok(f) => Ok(f),
             Err(e) if finish_is_refusal(&e) => Ok(crate::phase::PhaseFinish {
@@ -1584,9 +1551,7 @@ impl CardActivities {
         tokio::task::spawn_blocking(move || do_ensure_phase_branch(&input))
             .await
             .map_err(activity_error)?
-            .map_err(|msg| {
-                ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(msg))
-            })
+            .map_err(phase_branch_error)
     }
 
     /// Record `question_timeout` for a question whose default was taken.
@@ -1651,32 +1616,10 @@ mod tests {
 
     use crate::keeper::KeeperError;
 
-    /// The packet the park-path tests park.
-    fn g3_packet() -> ParkPacket {
-        ParkPacket {
-            card: "c-1".into(),
-            tier: Tier::Free,
-            exit_class: pg_worker_core::exit_class::ExitClass::UsageLimit,
-            check_tail: "tail".into(),
-        }
-    }
+    use park_test_support::{g3_exec, g3_live, g3_packet};
 
-    /// An execution identity built the way `park`/`ask_question` build one from
-    /// their input: attempt from the input, `expected_state` from the input.
-    fn g3_exec(expected_state: Option<Vec<String>>) -> ExecId {
-        ExecId {
-            workflow_id: Some("wf-1".into()),
-            run_id: Some("run-1".into()),
-            attempt: Some(4),
-            expected_state,
-        }
-    }
-
-    fn g3_live() -> Vec<String> {
-        crate::keeper::WORKER_LIVE_STATES
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect()
+    mod park_test_support {
+        include!("activities_park_test_support.rs");
     }
 
     /// G3-1 + V7-5: the park path presents exactly the observation the
@@ -3430,6 +3373,75 @@ mod tests {
     }
 
     #[test]
+    fn phase_branch_divergence_is_non_retryable_with_or_without_creation_race() {
+        for race in [false, true] {
+            let (dir, base) = repo();
+            let input = PhaseBranchInput {
+                repo: dir.path().to_str().unwrap().into(),
+                base_branch: "main".into(),
+                branch: "phase/race".into(),
+            };
+            if !race {
+                git(dir.path(), &["branch", "phase/race"]);
+            }
+            let mut injected = false;
+            let result = ensure_phase_branch_with(&input, |path, args| {
+                let result = pg_worker_core::git::git(path, args);
+                if !injected && args.contains(&"--verify") {
+                    injected = true;
+                    git(path, &["commit", "--allow-empty", "-m", "advance"]);
+                    if race {
+                        git(path, &["branch", "phase/race", &base]);
+                    }
+                }
+                result
+            });
+            assert!(injected);
+            let error = result.unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "phase branch does not contain the base head",
+                "race={race}"
+            );
+            let ActivityError::Application(failure) = phase_branch_error(error) else {
+                panic!("expected application failure");
+            };
+            assert!(failure.is_non_retryable(), "race={race}");
+        }
+    }
+
+    #[test]
+    fn phase_branch_exit_one_retries_absent_ref_but_adopts_base_head() {
+        for appears in [false, true] {
+            let (dir, base) = repo();
+            let input = PhaseBranchInput {
+                repo: dir.path().to_str().unwrap().into(),
+                base_branch: "main".into(),
+                branch: "phase/race".into(),
+            };
+            let result = ensure_phase_branch_with(&input, |path, args| {
+                if args[0] == "update-ref" {
+                    if appears {
+                        git(path, &["branch", "phase/race", &base]);
+                    }
+                    return Err(pg_worker_core::git::GitError::Failed {
+                        args: String::new(),
+                        code: Some(1),
+                        stderr: String::new(),
+                    });
+                }
+                pg_worker_core::git::git(path, args)
+            });
+            if appears {
+                assert_eq!(result.map(|r| (r.created, r.head)).unwrap(), (false, base));
+            } else {
+                assert!(matches!(phase_branch_error(result.unwrap_err()),
+                    ActivityError::Application(failure) if !failure.is_non_retryable()));
+            }
+        }
+    }
+
+    #[test]
     fn ensure_phase_branch_creates_and_is_idempotent() {
         let (dir, base) = repo();
         let path = dir.path().to_str().unwrap();
@@ -3451,7 +3463,7 @@ mod tests {
         git(dir.path(), &["checkout", "main"]);
         git(dir.path(), &["commit", "--allow-empty", "-m", "base"]);
         assert_eq!(
-            do_ensure_phase_branch(&input).unwrap_err(),
+            do_ensure_phase_branch(&input).unwrap_err().to_string(),
             "phase branch does not contain the base head"
         );
     }
@@ -3465,7 +3477,7 @@ mod tests {
             branch: "phase/x".to_string(),
         };
         assert_eq!(
-            do_ensure_phase_branch(&same).unwrap_err(),
+            do_ensure_phase_branch(&same).unwrap_err().to_string(),
             "phase branch must not be the base branch"
         );
         let not_phase = PhaseBranchInput {
@@ -3474,7 +3486,7 @@ mod tests {
             branch: "main".to_string(),
         };
         assert_eq!(
-            do_ensure_phase_branch(&not_phase).unwrap_err(),
+            do_ensure_phase_branch(&not_phase).unwrap_err().to_string(),
             "not a phase/ branch"
         );
         let evil = PhaseBranchInput {
@@ -3531,7 +3543,7 @@ mod tests {
         };
         keeper.push_finish(finish.clone());
 
-        let got = do_phase_finish(&keeper, "p1", "phase/p1", "head1").unwrap();
+        let got = do_phase_finish(&keeper, "p1", "phase/p1", "head1", None).unwrap();
         assert_eq!(got.state, finish.state);
         assert_eq!(
             got.pr.as_ref().map(|p| (p.number, p.url.as_str())),

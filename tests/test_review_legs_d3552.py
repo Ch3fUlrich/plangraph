@@ -17,6 +17,7 @@ from plangraph.planner.routing import plan_spawn
 from plangraph.planner.seats import seat_family
 
 from registry_route_util import CARD, live_policy  # noqa: F401
+from historical_legs import without_d4196
 
 NEW_IDS = ("opencode-go-gemini-4-argon", "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",
            "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash")
@@ -91,11 +92,18 @@ def test_lift_keeps_paused_and_no_verdict_checks():
 
 # --- route: implement stays banned/off, review seats use the new legs ---------
 
-def test_implement_route_still_skips_banned_and_off():
+def test_implement_route_still_skips_banned_and_off(tmp_path):
+    import asyncio
+    from plangraph.planner.routing import SpawnRefused
+    from plangraph.spawner.service import SpawnService
     plan = plan_spawn(CARD, role="implement")
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
-    assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
-    assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
+    assert reasons == {}  # Review-only legs never enter implement skip accounting.
+    assert [leg.id for leg in plan.legs] == ['cx-gpt-6.1-sol']
+    for leg_id in ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.2"):
+        with pytest.raises(SpawnRefused, match=r"writer disabled \(D-3828\)"):
+            asyncio.run(SpawnService(state=tmp_path).spawn(
+                card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
     assert not {leg.family for leg in plan.legs} & {"deepseek", "glm", "kimi"}
     assert not {leg.id for leg in plan.legs} & set(NEW_IDS)
 

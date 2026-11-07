@@ -71,7 +71,7 @@ Same asserts as locally, plus: no `unknown_shape` alarm, `answer_question` repor
 
 ## Pilot step A
 
-Run `python3 tools/pilot_preflight.py preflight` on dell before starting the pilot.
+Run `python3 tools/pilot_preflight.py preflight` on the pilot host before starting the pilot.
 An unset or empty `PLANGRAPH_TEMPORAL_HTTP` is a refusal: the stub leg must not
 merge until the keeper has this setting. All required worker settings above,
 plus `PG_CARD_ALLOWLIST` (absolute existing UTF-8 file), must be present.
@@ -98,7 +98,7 @@ GIT_CONFIG_COUNT/KEY_*/VALUE_* and XDG_CONFIG_HOME to inspect active configurati
 Pins accept exact version output or `name version`; subprocess output is never
 printed. `rust/pg-jail/src/main.rs:19–33` has no `--help` branch, so the jail
 check asserts a regular executable only; it does not prove sandbox enforcement.
-Record all command output and exit codes in dell run evidence, along with the
+Record all command output and exit codes in the pilot host run evidence, along with the
 isolated two-card run. Do not claim a live pass from hermetic tests: persistence,
-auth, jail, pins and checks must each be OK on dell. Live dell evidence is not
+auth, jail, pins and checks must each be OK on the pilot host. Live pilot host evidence is not
 yet recorded by this step's implementation.

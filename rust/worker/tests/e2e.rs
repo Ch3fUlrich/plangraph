@@ -17,30 +17,28 @@
 //! hence the counter-file check.
 
 #![cfg(unix)]
+mod archive;
+
+use pg_worker::activities::CardOutput;
+use pg_worker::attempt::LegSpec;
+use pg_worker::keeper::KeeperError;
+use pg_worker::phase::PhaseOutput;
+use pg_worker::phase_workflow::Phase;
+use pg_worker::workflow::Card;
+use pg_worker_core::config::Tier;
+#[path = "support/history.rs"]
+mod history;
+use history::decoded_payloads;
 
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::redact::REDACTED;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::str::FromStr;
-use std::sync::Arc;
+use std::process::Command;
 use std::time::Duration;
-
-use pg_worker::activities::{CardActivities, CardOutput, Deps, TASK_QUEUE};
-use pg_worker::attempt::LegSpec;
-use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
-use pg_worker::keeper::{Claim, Keeper, KeeperError, StubKeeper};
-use pg_worker::phase::{PhaseInput, PhaseOutput};
-use pg_worker::phase_workflow::Phase;
-use pg_worker::workflow::{Card, CardInput};
-use pg_worker_core::config::{Config, Tier};
-use pg_worker_core::exit_class::Patterns;
-use tempfile::TempDir;
 use temporalio_client::{
-    Client, ClientOptions, Connection, ConnectionOptions, Url, WorkflowFetchHistoryOptions,
-    WorkflowGetResultOptions, WorkflowHandle, WorkflowSignalOptions, WorkflowStartOptions,
+    Client, WorkflowFetchHistoryOptions, WorkflowGetResultOptions, WorkflowHandle,
+    WorkflowSignalOptions,
 };
-use temporalio_sdk::{Runtime, Worker, WorkerOptions};
 
 /// How long any single card may take before the test gives up.
 const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -54,309 +52,8 @@ const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// reached the child.
 const CANCEL_BUDGET: Duration = Duration::from_secs(150);
 
-type Handle = WorkflowHandle<Client, Card>;
-
-/// Runs `sh -c <script>` inside the attempt's worktree, standing in for a real
-/// agent CLI so a test can dictate exactly what the attempt does. The leg's
-/// model reaches the script as `$PG_MODEL`, so one script can behave
-/// differently per leg (for example, hit a limit on one model only).
-struct ShellHarness {
-    script: String,
-}
-
-impl Harness for ShellHarness {
-    fn name(&self) -> &str {
-        "shell"
-    }
-
-    fn command(&self, run: &HarnessRun) -> Command {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(&self.script)
-            .env("PG_MODEL", run.model)
-            .env("PG_PROMPT", run.prompt)
-            .current_dir(run.workdir);
-        cmd
-    }
-}
-
-/// One self-contained fixture: a real git repo, a workroot, a stub keeper, a
-/// shell harness and a worker polling a private task queue.
-struct Env {
-    /// Kept only so the temporary directories outlive the worker.
-    _repo: TempDir,
-    repo: PathBuf,
-    base_sha: String,
-    _workroot: TempDir,
-    workroot: PathBuf,
-    keeper: Arc<StubKeeper>,
-    client: Client,
-    /// The activities' dependencies, kept so a restarted worker can be built
-    /// with the same keeper, harnesses and config.
-    deps: Deps,
-    /// The `PG_TEMPORAL_ADDR` url, kept so a restarted worker can reconnect.
-    addr: String,
-    task_queue: String,
-    worker: std::cell::RefCell<Option<tokio::task::JoinHandle<()>>>,
-    /// A built worker not yet polling, for tests that signal before any worker runs.
-    held: std::cell::RefCell<Option<Worker>>,
-    /// Question wait cap handed to the next card, in seconds; unset = 24 h.
-    question_cap_s: std::cell::Cell<Option<u64>>,
-    max_rounds: std::cell::Cell<Option<u32>>,
-    _runtime: Runtime,
-}
-
-impl Env {
-    async fn new(addr: &str, name: &str, script: &str, start: bool) -> Env {
-        let repo = tempfile::tempdir().expect("repo tempdir");
-        let repo_path = repo.path().to_path_buf();
-        let base_sha = init_repo(&repo_path);
-        let workroot = tempfile::tempdir().expect("workroot tempdir");
-        let workroot_path = workroot.path().to_path_buf();
-
-        let keeper = Arc::new(StubKeeper::default());
-        // The shell stands in for every harness name a leg may use, so a test
-        // picks the "family" of a leg purely by its `harness` field.
-        let shell: Arc<dyn Harness> = Arc::new(ShellHarness {
-            script: script.to_string(),
-        });
-        let harnesses = HarnessRegistry::new()
-            .with("opencode", shell.clone())
-            .with("claude", shell);
-        // These timeouts are the activities' (heartbeat cadence, stall kill).
-        // The long timeouts keep a starved host from ending an attempt by
-        // timeout, so a cancel test can only pass via the cancel path; the
-        // harness prints every second so the 30 s stall watchdog does not fire
-        // either. The workflow keeps its own `Config::default()` for the retry
-        // policy, so tests must not lean on workflow-side timeouts to finish.
-        let cfg = Config {
-            heartbeat: Duration::from_millis(200),
-            heartbeat_timeout: Duration::from_secs(30),
-            start_to_close: Duration::from_secs(300),
-            stall: Duration::from_secs(30),
-            ..Config::allow_all_for_tests()
-        };
-        // `Deps` wants a trait object; name the coercion explicitly so the
-        // concrete `Arc<StubKeeper>` widens to `Arc<dyn Keeper>` here.
-        let dyn_keeper: Arc<dyn Keeper> = keeper.clone();
-        let deps = Deps {
-            keeper: dyn_keeper,
-            harnesses,
-            cfg,
-            patterns: Patterns::default(),
-        };
-
-        let runtime = Runtime::from_current_tokio(Default::default()).expect("temporal runtime");
-        let url = Url::from_str(addr).expect("PG_TEMPORAL_ADDR parses as a url");
-        let conn = Connection::connect(ConnectionOptions::new(url.clone()).build())
-            .await
-            .expect("connect test client");
-        let client = Client::new(conn, ClientOptions::new("default").build()).expect("test client");
-
-        // A unique task queue per test keeps parallel tests from stealing each
-        // other's workflow and activity tasks.
-        let task_queue = format!("{TASK_QUEUE}-{name}-{}", unique());
-        let opts = WorkerOptions::new(task_queue.as_str())
-            .register_workflow::<Card>()
-            .expect("register card workflow")
-            .register_workflow::<Phase>()
-            .expect("register phase workflow")
-            .register_activities(CardActivities::new(deps.clone()))
-            .build();
-
-        // The worker holds its own connection so the test client stays free to
-        // start and signal workflows.
-        let wconn = Connection::connect(ConnectionOptions::new(url).build())
-            .await
-            .expect("connect worker client");
-        let wclient =
-            Client::new(wconn, ClientOptions::new("default").build()).expect("worker client");
-        let mut worker = Worker::new(&runtime, wclient, opts).expect("build worker");
-        // The run loop only ends on shutdown or an unresolvable error; the test
-        // aborts it in `Drop`, so the value is intentionally discarded.
-        let (worker, held) = if start {
-            let handle = tokio::task::spawn_local(async move {
-                let _ = worker.run().await;
-            });
-            (Some(handle), None)
-        } else {
-            (None, Some(worker))
-        };
-
-        Env {
-            _repo: repo,
-            repo: repo_path,
-            base_sha,
-            _workroot: workroot,
-            workroot: workroot_path,
-            keeper,
-            client,
-            deps,
-            addr: addr.to_string(),
-            task_queue,
-            worker: std::cell::RefCell::new(worker),
-            held: std::cell::RefCell::new(held),
-            question_cap_s: std::cell::Cell::new(None),
-            max_rounds: std::cell::Cell::new(None),
-            _runtime: runtime,
-        }
-    }
-
-    /// A claim against this fixture's repo, with the write set and check given
-    /// by the caller.
-    fn claim(&self, card: &str, allow: &[&str], check_cmd: &str) -> Claim {
-        Claim {
-            card: card.to_string(),
-            repo: self.repo.to_string_lossy().into_owned(),
-            base_sha: self.base_sha.clone(),
-            check_cmd: check_cmd.to_string(),
-            allow: allow.iter().map(|s| s.to_string()).collect(),
-            forbid: Vec::new(),
-            prompt: "do the thing".to_string(),
-            ..Default::default()
-        }
-    }
-
-    /// Start the card workflow for `id` and hand back a typed handle.
-    ///
-    /// The workflow runs under `card:<id>` so the projector can derive the
-    /// `plan_key` from the workflow id; the caller passes the bare `id` around
-    /// and `workflow_id` owns the prefix.
-    async fn start(&self, id: &str, claim: Claim) -> Handle {
-        let legs = vec![LegSpec {
-            id: "leg-1".to_string(),
-            tier: Tier::Free,
-            model: "some/model".to_string(),
-            harness: "opencode".to_string(),
-        }];
-        self.start_with_legs(id, claim, legs).await
-    }
-
-    /// Like [`start`](Self::start), with the card's legs given by the caller.
-    async fn start_with_legs(&self, id: &str, claim: Claim, legs: Vec<LegSpec>) -> Handle {
-        let input = CardInput {
-            legacy: pg_worker::activities::CardInput {
-                claim,
-                legs,
-                workroot: self.workroot.to_string_lossy().into_owned(),
-                main_branch: "main".to_string(),
-                question_wait_cap_s: self.question_cap_s.get(),
-                max_question_rounds: self.max_rounds.get(),
-            },
-            risk_tagged: false,
-            heldout_cmd: String::new(),
-            smoke_checks: Vec::new(),
-            exports: Vec::new(),
-            base_sha: None,
-        };
-        let wf_id = workflow_id(id);
-        self.client
-            .start_workflow(
-                Card::run,
-                input,
-                WorkflowStartOptions::new(self.task_queue.as_str(), wf_id.as_str()).build(),
-            )
-            .await
-            .expect("start card workflow");
-        self.client.get_workflow_handle::<Card>(wf_id.as_str())
-    }
-
-    /// Cap how long the next card waits for an answer, so a test never sleeps 24 h.
-    fn set_question_cap(&self, secs: u64) {
-        self.question_cap_s.set(Some(secs));
-    }
-
-    /// Questions the next card may have answered before it is parked.
-    fn set_max_rounds(&self, n: u32) {
-        self.max_rounds.set(Some(n));
-    }
-
-    async fn start_phase(&self, id: &str, input: PhaseInput) -> WorkflowHandle<Client, Phase> {
-        let wf_id = format!("phase:{id}");
-        self.client
-            .start_workflow(
-                Phase::run,
-                input,
-                WorkflowStartOptions::new(self.task_queue.as_str(), wf_id.as_str()).build(),
-            )
-            .await
-            .expect("start phase workflow");
-        self.client.get_workflow_handle::<Phase>(wf_id.as_str())
-    }
-
-    fn phase_input(&self, key: &str, parallel: u32) -> PhaseInput {
-        PhaseInput {
-            max_waves: None,
-            finish_poll_s: Some(1),
-            finish_max_polls: Some(3),
-            key: key.to_string(),
-            repo: self.repo.display().to_string(),
-            workroot: self.workroot.display().to_string(),
-            base_branch: "main".to_string(),
-            max_parallel: Some(parallel),
-            legs: vec![LegSpec {
-                id: "leg-1".to_string(),
-                tier: Tier::Free,
-                model: "some/model".to_string(),
-                harness: "opencode".to_string(),
-            }],
-        }
-    }
-
-    fn stop(&self) {
-        if let Some(w) = self.worker.borrow().as_ref() {
-            w.abort();
-        }
-    }
-
-    /// Begin polling with a worker that was built but held back.
-    fn resume(&self) {
-        if let Some(mut worker) = self.held.borrow_mut().take() {
-            let handle = tokio::task::spawn_local(async move {
-                let _ = worker.run().await;
-            });
-            *self.worker.borrow_mut() = Some(handle);
-        }
-    }
-
-    /// Restarts the poll loop like a crash or a redeploy would: the old worker
-    /// is aborted and a fresh one, with no memory of anything the old one
-    /// held, starts polling the same task queue. The workflow server replays
-    /// the history onto it, so only state carried in the history survives.
-    async fn restart_worker(&self) {
-        self.stop();
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let opts = WorkerOptions::new(self.task_queue.as_str())
-            .register_workflow::<Card>()
-            .expect("register card workflow")
-            .register_workflow::<Phase>()
-            .expect("register phase workflow")
-            .register_activities(CardActivities::new(self.deps.clone()))
-            .build();
-        let url = Url::from_str(&self.addr).expect("PG_TEMPORAL_ADDR parses as a url");
-        let conn = Connection::connect(ConnectionOptions::new(url).build())
-            .await
-            .expect("connect restart worker client");
-        let wclient =
-            Client::new(conn, ClientOptions::new("default").build()).expect("restart client");
-        let mut worker = Worker::new(&self._runtime, wclient, opts).expect("build restart worker");
-        let handle = tokio::task::spawn_local(async move {
-            let _ = worker.run().await;
-        });
-        *self.worker.borrow_mut() = Some(handle);
-    }
-}
-
-impl Drop for Env {
-    fn drop(&mut self) {
-        // Abort the poll loop before the temporary directories are removed.
-        self.stop();
-    }
-}
-
-/// The skip decision (D6 / I6'), extracted so it is testable without racing
-/// the process env: with no `PG_TEMPORAL_ADDR` a test may skip only outside
-/// CI; under `CI` a skip is a failure, so this panics instead.
+mod support;
+use support::*;
 fn temporal_addr_of(ci: Option<&str>, addr: Option<String>) -> Option<String> {
     match addr {
         Some(addr) if !addr.is_empty() => Some(addr),
@@ -481,32 +178,6 @@ fn b64_decode(s: &str) -> Vec<u8> {
     out
 }
 
-/// Every payload in a history, base64-decoded: the claim input, activity
-/// inputs and activity results all travel as payloads, which the `to_json`
-/// form stores base64-encoded — a raw substring search cannot see into them.
-fn decoded_payloads(v: &serde_json::Value) -> Vec<String> {
-    match v {
-        serde_json::Value::Object(map) => {
-            let mut out = Vec::new();
-            for (k, x) in map {
-                if k == "payloads"
-                    && let Some(items) = x.as_array()
-                {
-                    for p in items {
-                        if let Some(data) = p.get("data").and_then(|d| d.as_str()) {
-                            out.push(String::from_utf8_lossy(&b64_decode(data)).into_owned());
-                        }
-                    }
-                }
-                out.extend(decoded_payloads(x));
-            }
-            out
-        }
-        serde_json::Value::Array(a) => a.iter().flat_map(decoded_payloads).collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// The workflow id for card `<id>`: the projector derives `plan_key` from it.
 fn workflow_id(id: &str) -> String {
     format!("card:{id}")
@@ -575,10 +246,8 @@ async fn record(name: &str, id: &str, handle: &Handle) {
     };
     scrub(&mut value);
     let json = serde_json::to_string(&value).unwrap_or_default();
-    let dir = Path::new(&dir);
-    if std::fs::create_dir_all(dir).is_ok() {
-        let _ = std::fs::write(dir.join(format!("{name}.json")), json);
-    }
+    let dir = archive::directory(Path::new(&dir));
+    archive::append(&dir.join(format!("{name}.json")), json.as_bytes());
 
     // The proto-JSON dump the projector consumes needs the CLI; `PG_TEMPORAL_CLI`
     // together with `PG_RECORD_DIR` opts in, anything else stays silent.
@@ -613,8 +282,7 @@ async fn record(name: &str, id: &str, handle: &Handle) {
         .unwrap_or_else(|e| panic!("temporal CLI emitted invalid JSON: {e}"));
     scrub(&mut value);
     let json = serde_json::to_string(&value).unwrap_or_default();
-    std::fs::write(dir.join(format!("{name}.proj.json")), json)
-        .unwrap_or_else(|e| panic!("write {name}.proj.json: {e}"));
+    archive::append(&dir.join(format!("{name}.proj.json")), json.as_bytes());
 }
 
 /// Replace host-specific identity strings (`pid@hostname`, sticky queue names)
@@ -647,65 +315,6 @@ fn scrub(v: &mut serde_json::Value) {
 
 /// A process-wide counter mixed with the wall clock: unique within a run and
 /// across quick successive runs.
-fn unique() -> u128 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed) as u128;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    (nanos << 64) ^ seq
-}
-
-/// Initialize a repo on `main` with a single commit holding `seed.txt`.
-fn init_repo(dir: &Path) -> String {
-    git(dir, &["init", "-q", "-b", "main"]);
-    // Persist the identity bits the worker's own git calls rely on.
-    git(dir, &["config", "commit.gpgsign", "false"]);
-    std::fs::write(dir.join("seed.txt"), "seed\n").expect("write seed.txt");
-    git(dir, &["add", "-A"]);
-    git(dir, &["commit", "-q", "-m", "init"]);
-    git(dir, &["rev-parse", "HEAD"])
-}
-
-/// Local git runner, pinned identity and hermetic env like the other test
-/// modules: worker-core's own helper is private to that crate.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args([
-            "-c",
-            "user.name=tester",
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .output()
-        .expect("git runs");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
-/// Run a test body inside a `LocalSet`.
-///
-/// The Temporal worker's `run` future is not `Send`, so it can only be polled
-/// from a local task; `LocalSet::run_until` gives one while still riding the
-/// multi-thread test runtime.
-async fn in_local<F: std::future::Future>(f: F) -> F::Output {
-    let local = tokio::task::LocalSet::new();
-    local.run_until(f).await
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn happy_attempt_merges_into_main() {
@@ -2055,10 +1664,8 @@ async fn record_phase(name: &str, handle: &WorkflowHandle<Client, Phase>) {
     };
     scrub(&mut value);
     let json = serde_json::to_string(&value).unwrap_or_default();
-    let dir = Path::new(&dir);
-    if std::fs::create_dir_all(dir).is_ok() {
-        let _ = std::fs::write(dir.join(format!("{name}.json")), json);
-    }
+    let dir = archive::directory(Path::new(&dir));
+    archive::append(&dir.join(format!("{name}.json")), json.as_bytes());
 }
 
 fn plan_json(key: &str, cards: &[(&str, bool)]) -> pg_worker::phase::PhasePlan {
@@ -2097,7 +1704,7 @@ async fn phase_runs_two_cards_into_the_phase_branch() {
         let k = |s: &str| format!("e2e-{s}-{}", unique());
         let a = k("phase-a");
         let b = k("phase-b");
-        let phase_key = format!("phase-{}", unique());
+        let phase_key = "demo:PH-X".to_string();
         env.keeper.push_plan(plan_json(
             &phase_key,
             &[(a.as_str(), false), (b.as_str(), false)],
@@ -2134,7 +1741,19 @@ async fn phase_runs_two_cards_into_the_phase_branch() {
         assert_eq!(merged, expected, "{out:?}");
         assert!(out.not_merged.is_empty(), "{out:?}");
         assert_eq!(out.waves, 1, "{out:?}");
-        assert_eq!(out.branch, format!("phase/{}", phase_key));
+        assert_eq!(out.branch, "phase/h/4095fd20aa975021");
+        let bytes = handle
+            .fetch_history(WorkflowFetchHistoryOptions::default())
+            .to_json()
+            .await
+            .expect("fetch fresh Phase history");
+        let history: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            decoded_payloads(&history)
+                .join("\n")
+                .contains("phase-branch-hash-v1"),
+            "fresh Phase history must record phase-branch-hash-v1"
+        );
         assert_eq!(
             git(&env.repo, &["rev-parse", "refs/heads/main"]),
             env.base_sha
@@ -2483,28 +2102,7 @@ async fn phase_finish_never_green_is_partial() {
     .await;
 }
 
-#[tokio::test]
-async fn phase_card_without_claim_is_not_merged() {
-    in_local(async {
-        let Some(env) = env_or_skip("phase-no-claim", "echo ok > \"$PG_PROMPT\"").await else {
-            println!("skipped: PG_TEMPORAL_ADDR unset");
-            return;
-        };
-        let card = format!("e2e-no-claim-{}", unique());
-        let phase_key = format!("phase-{}", unique());
-        env.keeper
-            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
-
-        let id = format!("e2e-phase-no-claim-{}", unique());
-        let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
-        let out = finish_phase("phase_no_claim", &handle).await;
-
-        assert_eq!(out.outcome, "partial", "{out:?}");
-        assert_eq!(out.not_merged, vec![card.clone()], "{out:?}");
-        assert!(out.merged.is_empty(), "{out:?}");
-    })
-    .await;
-}
+include!("support/phase_no_claim.rs");
 
 #[tokio::test]
 async fn phase_rerun_reuses_a_closed_card_child_id() {

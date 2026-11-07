@@ -11,6 +11,7 @@ from plangraph.planner.worker_claim import worker_claim
 
 
 def test_rust_lock_arguments_from_claim(scoped, tmp_path, monkeypatch):
+    from plangraph.planner.phase_finish import phase_branch
     from test_phase_finish import git_repo
     from test_planner_phase import card
 
@@ -20,7 +21,7 @@ def test_rust_lock_arguments_from_claim(scoped, tmp_path, monkeypatch):
     root, _ = git_repo(tmp_path)
     monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(root))
     claim = worker_claim(world.store, principal, key, repo_root=str(root),
-                         base_branch="phase/demo-PH-X")
+                         base_branch=phase_branch("demo:PH-X"))
     assert claim["repo"] == str(root)
     source = Path("rust/worker/src/activities.rs").read_text()
     assert 'keeper.acquire_merge_lock(&input.repo, owner, merge_lock_ttl_s(cfg))' in source

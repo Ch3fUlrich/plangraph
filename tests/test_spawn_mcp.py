@@ -55,7 +55,7 @@ def test_all_six_rpc_tools(tmp_path, monkeypatch):
         assert 'card' in schema['inputSchema']['required']
         assert (await call('route', card={'estimate_tokens': 1000}))['first_leg']
         record = await call('spawn', card={'estimate_tokens': 1000}, prompt='task', dry_run=True,
-                            model_or_combo='mimo/mimo-v2.6-pro', override_reason='audited RPC override')
+                            model_or_combo='omniroute/cx-gpt-6.1-sol', override_reason='audited RPC override')
         assert json.loads((tmp_path / 'spawn-overrides.jsonl').read_text())['reason'] == 'audited RPC override'
         assert (await call('ps'))['runs'][0]['run_id'] == record['run_id']
         assert (await call('result', run_id=record['run_id']))['status'] == 'dry_run'
@@ -72,4 +72,3 @@ def test_refute_finding_6_mcp_review_scope_only_in_spawn():
             assert 'review_scope' not in tool['inputSchema'].get('properties', {}), (
                 f"{name} should not have review_scope in its inputSchema"
             )
-

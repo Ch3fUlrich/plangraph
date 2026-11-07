@@ -42,7 +42,8 @@ def test_commit_probe_and_timeout(monkeypatch, success):
     from plangraph.spawner.runner import SpawnerRunner
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.routing_support import leg_state
-    leg = next(l for l in DEFAULT_LEGS if l.harness == 'agy' and 'implement' in l.roles)
+    from dataclasses import replace
+    leg = replace(next(l for l in DEFAULT_LEGS if l.harness == 'agy'), roles=('implement',))
     roots = []
     async def factory(*args, **kwargs):
         roots.append(kwargs['cwd'])
@@ -87,6 +88,8 @@ def test_ttl_and_writer_only(monkeypatch):
 
 
 def test_execute_probe_falls_through(tmp_path, monkeypatch):
+    from mechanics_legs import install_fallthrough_legs
+    install_fallthrough_legs(monkeypatch)
     from plangraph.spawner import leg_probe
     from plangraph.spawner.runner import SpawnerRunner, spawn_service, JobInfo
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')

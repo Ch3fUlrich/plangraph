@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import os
+import subprocess
 import types
 from pathlib import Path
 
 import pytest
 
+from plangraph.planner.phase_finish import phase_branch
+
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.db_pg import PgConnection
 from plangraph.planner import gitenv
 from plangraph.planner.worker_claim import build_claim, worker_claim
 
@@ -31,19 +34,71 @@ def test_build_claim_preserves_gate_inputs():
     assert got["risk_tagged"] is True
 
 
-@pytest.mark.skipif(
-    not os.environ.get("PG_DSN"),
-    reason="Postgres parity runs in the pytest-postgres lane",
-)
-@pytest.mark.parametrize("metadata", [False, True, "typo", ""])
+@pytest.mark.parametrize("metadata", [False, True, "typo", "", "change", None, 1, [], {}])
 def test_claim_metadata_sqlite_postgres_parity(tmp_path, repo, metadata):
-    assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
-    assert _metadata_claim(tmp_path, repo, "sqlite", metadata) == _metadata_claim(tmp_path, repo, "postgres", metadata)
+    sqlite = _metadata_claim(tmp_path, repo, "sqlite", metadata)
+    if metadata is not False and metadata is not True and metadata not in ("", "change"):
+        assert sqlite == "validation"
+    else:
+        assert sqlite == {
+            "card": "demo:C", "repo": str(repo[0]), "base_sha": repo[1],
+            "check_cmd": "false", "allow": [], "prompt": "fix",
+            "check_kind": "regression" if metadata is True else "change",
+            "forbid": ["fixtures/input.json"] if metadata is True else [],
+            "check_reads": ["fixtures/input.json"] if metadata is True else [],
+            "smoke_checks": ["true"] if metadata is True else [],
+            "exports": ["api"] if metadata is True else [],
+            "heldout_cmd": "heldout" if metadata is True else "",
+            "risk_tagged": metadata is True,
+        }
+    if os.environ.get("PG_KEEPER_BACKEND") == "postgres" or os.environ.get("PG_DSN"):
+        assert os.environ.get("PG_DSN"), "pytest-postgres requires PG_DSN"
+        compared = _metadata_claim(tmp_path / "comparison", repo, "postgres", metadata)
+        assert sqlite == compared
 
 
-@pytest.mark.parametrize("metadata", [False, True, "typo", ""])
+@pytest.mark.parametrize("metadata", [False, True, "typo", "", "change", None, 1, [], {}])
 def test_claim_metadata_sqlite(tmp_path, repo, metadata):
     _metadata_claim(tmp_path, repo, "sqlite", metadata)
+
+
+_CLAIM_STATE_QUERY = "SELECT state, claimed_by FROM items WHERE key = ?"
+
+
+def test_claim_state_query_backend_binding(tmp_path):
+    import sqlite3
+
+    params = ("demo:C",)
+    with sqlite3.connect(tmp_path / "binding.db") as conn:
+        conn.execute("CREATE TABLE items (key TEXT, state TEXT, claimed_by TEXT)")
+        conn.execute("INSERT INTO items VALUES (?, ?, ?)", ("demo:C", "open", None))
+        assert conn.execute(_CLAIM_STATE_QUERY, params).fetchone() == ("open", None)
+
+    sql, bound = _postgres_claim_state_binding(params)
+    assert sql == "SELECT state, claimed_by FROM items WHERE key = %s"
+    assert bound == params
+
+
+def _postgres_claim_state_binding(params):
+    from unittest.mock import MagicMock
+
+    raw = MagicMock()
+    cursor = raw.cursor.return_value.__enter__.return_value
+    cursor.description = None
+    PgConnection(raw, "test").execute(_CLAIM_STATE_QUERY, params)
+    return cursor.execute.call_args.args
+
+
+def test_claim_state_query_psycopg_conversion():
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg._queries import PostgresQuery
+
+    assert psycopg.paramstyle == "pyformat"
+    sql, bound = _postgres_claim_state_binding(("demo:C",))
+    query = PostgresQuery(psycopg.adapt.Transformer())
+    query.convert(sql, bound)
+    assert query.query == b"SELECT state, claimed_by FROM items WHERE key = $1"
+    assert len(query.params) == 1
 
 
 def _metadata_claim(tmp_path, repo, backend, metadata):
@@ -57,22 +112,24 @@ def _metadata_claim(tmp_path, repo, backend, metadata):
                         smoke_checks=["true"], exports=["api"],
                         heldout_check="heldout", risk_tags=["migration"])
         world.store.put_card(world.p("router"), "demo:C", card)
-        if isinstance(metadata, str):
-            # Model a legacy/hand-written stored card, bypassing card-write validation.
+        if metadata is not False and metadata is not True:
+            card["check_kind"] = metadata
             original = world.store.get_card
             world.store.get_card = lambda *args: dict(original(*args), check_kind=metadata)
+        if metadata is not False and metadata is not True and metadata not in ("", "change"):
+            # Model a legacy/hand-written stored card, bypassing card-write validation.
             with pytest.raises(Refused) as exc:
                 worker_claim(world.store, world.p("workerA"), "demo:C", repo_root=str(repo[0]))
             assert exc.value.code == "validation"
             row = world.store.conn.execute(
-                "SELECT state, claimed_by FROM items WHERE key = ?", ("demo:C",)).fetchone()
+                _CLAIM_STATE_QUERY, ("demo:C",)).fetchone()
             assert tuple(row) == ("open", None)
             return exc.value.code
         payload = worker_claim(world.store, world.p("workerA"), "demo:C",
                                repo_root=str(repo[0]))
         assert payload == build_claim("demo:C", card, repo=str(repo[0]), base_sha=repo[1])
         row = world.store.conn.execute(
-            "SELECT state, claimed_by FROM items WHERE key = ?", ("demo:C",)).fetchone()
+            _CLAIM_STATE_QUERY, ("demo:C",)).fetchone()
         assert tuple(row) == ("claimed", "workerA")
         with pytest.raises(Refused) as exc:
             worker_claim(world.store, world.p("workerB"), "demo:C", repo_root=str(repo[0]))
@@ -103,11 +160,11 @@ def make_repo(tmp_path: Path):
     _git(root, "add", ".")
     _git(root, "commit", "-m", "A")
     main_tip = gitenv.rev_parse(root, "refs/heads/main")
-    _git(root, "checkout", "-b", "phase/demo-PH-X")
+    _git(root, "checkout", "-b", phase_branch("demo:PH-X"))
     (root / "b.txt").write_text("B")
     _git(root, "add", ".")
     _git(root, "commit", "-m", "B")
-    phase_tip = gitenv.rev_parse(root, "refs/heads/phase/demo-PH-X")
+    phase_tip = gitenv.rev_parse(root, f"refs/heads/{phase_branch('demo:PH-X')}")
     _git(root, "checkout", "main")
     return root, main_tip, phase_tip
 
@@ -175,7 +232,7 @@ def test_system_claims_like_a_worker(w, repo, gate):
 
 def test_falls_back_to_main_tip(w, repo, gate):
     root, main_tip, _phase_tip = repo
-    _git(root, "branch", "-D", "phase/demo-PH-X")
+    _git(root, "branch", "-D", phase_branch("demo:PH-X"))
     got = worker_claim(w.store, w.p("workerA"), "demo:C1", repo_root=str(root))
     assert got["base_sha"] == main_tip
 

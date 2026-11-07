@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from keeper_util import World
-from test_phase_finish import gate, finish_cards
+from phase_finish_support import gate, finish_cards
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_types import Result
 from plangraph.planner.phase_finish import attach_merge_evidence

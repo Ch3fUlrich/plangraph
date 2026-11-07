@@ -137,7 +137,7 @@ def test_missing_writer_family(tmp_path, monkeypatch, dispatch):
     from plangraph.planner import routing
 
     service = (DispatchService if dispatch else SpawnService)(_Runner(), state=tmp_path)
-    chosen = next(l for l in DEFAULT_LEGS if l.family == 'qwen')
+    chosen = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol')
     plan = SpawnPlan((chosen,), (), 'test', (), ())
     monkeypatch.setattr(service, 'result', lambda *a, **kw: dict(writer_family=None, given_writer_families=[]))
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)

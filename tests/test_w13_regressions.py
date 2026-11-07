@@ -22,9 +22,9 @@ def test_explicit_leg_preserved(tmp_path, monkeypatch):
     from dataclasses import replace
     from plangraph.planner import legs
     from plangraph.planner.legs import DEFAULT_LEGS
-    target = replace(next(l for l in DEFAULT_LEGS if l.disabled is None), id='duplicate-model-leg')
+    target = replace(next(l for l in DEFAULT_LEGS if l.id == 'mimo-v2.6-flash'), id='duplicate-model-leg')
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', (*DEFAULT_LEGS, target))
-    result = asyncio.run(SpawnService(state=tmp_path).spawn(card={'estimate_tokens': 100}, leg=target.id, override_reason='audited test override', dry_run=True))
+    result = asyncio.run(SpawnService(state=tmp_path).spawn(card={'estimate_tokens': 100}, role='review', writer_families=('gpt',), leg=target.id, override_reason='audited test override', dry_run=True))
     assert result['chosen_leg']['id'] == target.id
 
 

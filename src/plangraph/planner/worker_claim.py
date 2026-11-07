@@ -15,6 +15,8 @@ def build_claim(
 ) -> dict[str, Any]:
     # Share readiness's protection rule so claimed checks cannot be edited away.
     check_kind = card.get("check_kind", "change")
+    if check_kind == "":
+        check_kind = "change"
     if check_kind not in ("change", "regression"):
         raise Refused("validation", "check_kind must be change or regression")
     check_reads = card.get("check_reads", [])

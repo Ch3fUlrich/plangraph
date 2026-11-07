@@ -145,6 +145,25 @@ def summarize(rows, sessions, policy):
     return result
 
 
+def compare_report(args, policy, stats):
+    windows = [(instant(getattr(args, side + "_since")),
+                instant(getattr(args, side + "_until"))) for side in ("before", "after")]
+    if any(end <= start for start, end in windows):
+        raise ValueError("invalid window")
+    rows, sessions = read_projects(args.projects, {}, stats, min(start for start, end in windows))
+    before, after = [summarize([r for r in rows if start <= r["time"] < end], sessions, policy)
+                     for start, end in windows]
+    result = []
+    for role in sorted(before.keys() | after.keys()):
+        old, new = before.get(role, {}), after.get(role, {})
+        result.append(dict(role=role, before_weighted_m=old.get("weighted", 0) / 1e6,
+                           before_share_pct=old.get("share", 0) * 100,
+                           after_weighted_m=new.get("weighted", 0) / 1e6,
+                           after_share_pct=new.get("share", 0) * 100,
+                           share_delta_points=(new.get("share", 0) - old.get("share", 0)) * 100))
+    return sorted(result, key=lambda r: r["after_weighted_m"], reverse=True)
+
+
 def arms_from(args):
     arms = {}
     for specification in args.arm:
@@ -223,10 +242,14 @@ def parser():
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--projects", type=Path, default=Path.home() / ".claude" / "projects")
     sub = ap.add_subparsers(dest="command", required=True)
-    for name in ("pace", "daily", "roles", "weights", "keys"):
+    for name in ("pace", "daily", "roles", "weights", "keys", "compare"):
         cmd = sub.add_parser(name, parents=[common])
         if name == "pace":
             cmd.add_argument("--day", default=datetime.now(timezone.utc).date().isoformat())
+        elif name == "compare":
+            for side in ("before", "after"):
+                for boundary in ("since", "until"):
+                    cmd.add_argument(f"--{side}-{boundary}", required=True)
         elif name == "weights":
             cmd.add_argument("--baseline-since", required=True)
             cmd.add_argument("--baseline-until", required=True)
@@ -246,6 +269,19 @@ def main(argv=None):
     stats = dict(malformed_lines=0, empty_files=0, unreadable_files=0)
     try:
         policy = load_json(Path(__file__).with_name("claude_usage_policy.json"))
+        if args.command == "compare":
+            result = compare_report(args, policy, stats)
+            if args.json:
+                print(json.dumps(result, sort_keys=True))
+            else:
+                print(f"{'role':<24} {'before weighted (M)':>19} {'before share %':>14} "
+                      f"{'after weighted (M)':>18} {'after share %':>14} {'delta (pp)':>12}")
+                for report in result:
+                    print(f"{report['role']:<24} {report['before_weighted_m']:19.3f} "
+                          f"{report['before_share_pct']:14.3f} {report['after_weighted_m']:18.3f} "
+                          f"{report['after_share_pct']:14.3f} {report['share_delta_points']:12.3f}")
+                print("; ".join(f"{key}={value}" for key, value in stats.items()) + f"; {UNSEEN}")
+            return 0
         arms = arms_from(args) if args.command == "keys" else {}
         keys = set().union(*(a["keys"] for a in arms.values()))
         patterns = {k: re.compile(r"(?<![\w:.-])(?:[\w.-]+:)?" + re.escape(k) + r"(?![\w:-])") for k in keys}

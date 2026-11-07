@@ -175,7 +175,16 @@ def test_unmocked_survivor_never_publishes_cancelled(tmp_path, cross_process):
 
 
 @pytest.mark.parametrize('exit_path', ['timeout', 'exception', 'cancel'])
-def test_unmocked_probe_exit_cleans_tree_and_dir(tmp_path, exit_path):
+def test_unmocked_probe_exit_cleans_tree_and_dir(tmp_path, monkeypatch, exit_path):
+    # The process factory supplies the fake harness; make it discoverable by
+    # the host-readiness guard even on runners without opencode installed.
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    harness = bin_dir / 'opencode'
+    harness.write_text('#!/bin/sh\nexit 0\n')
+    harness.chmod(0o755)
+    monkeypatch.setenv('PATH', str(bin_dir) + os.pathsep + os.environ.get('PATH', ''))
+
     async def run():
         launched = asyncio.Event()
         box = {}

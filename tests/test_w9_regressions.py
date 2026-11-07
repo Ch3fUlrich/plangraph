@@ -8,6 +8,7 @@ from fake_pid import FAKE_PID
 import pytest
 
 from plangraph.spawner.runner import JobInfo, SpawnerRunner, spawn_service
+from historical_legs import historical_zen_legs  # noqa: F401
 
 
 
@@ -130,6 +131,8 @@ def test_nonce_capacity_evicts_oldest_finished_first():
 
 
 def test_mid_fallthrough_bench_refusal(tmp_path, monkeypatch):
+    from mechanics_legs import install_fallthrough_legs
+    install_fallthrough_legs(monkeypatch)
     from plangraph.planner.routing import BenchRequired, plan_spawn
     from plangraph.spawner.service import SpawnService
     plan = plan_spawn({'estimate_tokens': 100}, role='implement')

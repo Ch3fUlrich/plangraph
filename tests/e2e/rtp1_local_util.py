@@ -177,6 +177,8 @@ class WorkerProc:
 
     def __init__(self, binary: str, env: dict, log: Path) -> None:
         env = env.copy()
+        env.setdefault("PG_DEPLOYMENT", "pg-worker")
+        env.setdefault("PG_BUILD_ID", "e2e-" + __import__("uuid").uuid4().hex)
         self.pid_dir = Path(env["PG_FAKE_PID_DIR"]) if "PG_FAKE_PID_DIR" in env else None
         if self.pid_dir is not None:
             env["PG_FAKE_PID_DIR"] = str(self.pid_dir.resolve())
