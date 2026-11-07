@@ -1,5 +1,20 @@
 # Workspace resolver: R4A
 
+R5C exposes seat pooling under existing R3 active grants. Admission checks the
+registered maximum. Call R4 `prepare_launch` immediately before spawning; retain
+the grant until the child group is empty. Only the trusted R6 supervisor writes
+`LifecycleRecord::group_empty` after scope/Job membership proof. Finish checks
+detached HEAD and NUL porcelain; dirty runs fail even after reset. This detects
+leftovers, not malicious write-and-restore; outside writes require sandboxing.
+
+The separate writer cleanup API durably records A execution metadata and local
+sealed blobs before constructing receipts. Seal alone is not recording; R7
+replaces this adapter with keeper acknowledgment. Failed writers wait 24 hours
+and require group-empty proof; successful writers require receipts. Dry-run is
+non-mutating; apply prunes daily under a common-dir lock, without branch deletion
+or blob expiry. Existing attempt cleanup is unchanged. R6b owns CLI wiring;
+these APIs do not claim live janitor verb acceptance.
+
 `workspace_resolver::ensure_commit` checks a registry repository for a full
 lowercase commit SHA before taking any lock. On a missing object it locks the
 canonical Git common directory's persistent `spawner-fetch.lock`, rechecks the
