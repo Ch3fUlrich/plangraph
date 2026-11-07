@@ -123,6 +123,7 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
     child.stop();
     // Existing directory with missing events, and an EISDIR read error,
     // remain Unknown even though the recorded PGID now returns ESRCH.
+    std::fs::write(record.path(), &before).unwrap();
     std::fs::create_dir(&scope).unwrap();
     for events_directory in [false, true] {
         if events_directory {
@@ -132,9 +133,15 @@ fn reconcile_removed_scope_requires_recorded_group_gone() {
             gone(Some(&serde_json::from_value(identity.clone()).unwrap())),
             Err(ReconcileError::Unknown)
         ));
+        assert!(matches!(
+            crate::reconcile::startup(&dir.0, Some("on"), &json!({})),
+            Err(ReconcileError::Unknown)
+        ));
+        assert_eq!(before, std::fs::read(record.path()).unwrap());
     }
     std::fs::remove_dir(scope.join("cgroup.events")).unwrap();
     std::fs::remove_dir(&scope).unwrap();
+    std::fs::write(record.path(), &settled).unwrap();
     crate::reconcile::startup(&dir.0, Some("on"), &json!({})).unwrap();
     assert_eq!(settled, std::fs::read(record.path()).unwrap());
 }

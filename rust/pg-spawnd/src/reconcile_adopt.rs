@@ -102,16 +102,14 @@ fn ticks_sample(ticks: u64) -> io::Result<CpuSample> {
     })
 }
 fn members(path: &Path, out: &mut Vec<u32>) -> io::Result<()> {
-    for name in ["cgroup.procs", "cgroup.threads"] {
-        match std::fs::read_to_string(path.join(name)) {
-            Ok(text) => {
-                for pid in text.split_whitespace() {
-                    out.push(pid.parse().map_err(|_| unknown())?);
-                }
+    match std::fs::read_to_string(path.join("cgroup.procs")) {
+        Ok(text) => {
+            for pid in text.split_whitespace() {
+                out.push(pid.parse().map_err(|_| unknown())?);
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-            Err(e) => return Err(e),
         }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e),
     }
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;

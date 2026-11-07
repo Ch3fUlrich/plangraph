@@ -12,11 +12,22 @@ fn scope_child_is_adopted_then_orphaned_once() {
     let state = tmp.path().join("state");
     let id = pg_worker_core::run::record::new_run_id();
     let membership = std::fs::read_to_string("/proc/self/cgroup").unwrap();
-    let relative = membership
+    let Some(relative) = membership
         .lines()
         .find_map(|line| line.strip_prefix(concat!("0:", ":")))
-        .unwrap();
+    else {
+        eprintln!("SKIP real scope: no unified cgroup membership");
+        return;
+    };
     let parent = std::path::Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+    let prefix = std::path::Path::new("/sys/fs/cgroup")
+        .join(format!("user.slice/user-{}.slice", unsafe {
+            libc::geteuid()
+        }));
+    if !parent.starts_with(prefix) {
+        eprintln!("SKIP real scope: membership is outside the permitted user slice");
+        return;
+    }
     let scope = parent.join(format!("pg-{id}.scope"));
     if let Err(error) = std::fs::create_dir(&scope) {
         skip_privilege(error);

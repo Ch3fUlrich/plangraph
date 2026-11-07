@@ -1,5 +1,91 @@
 use super::*;
 #[test]
+fn multithreaded_signal_child() {
+    if std::env::var_os("PG_TEST_THREADED_CHILD").is_none() {
+        return;
+    }
+    let threads: Vec<_> = (0..3)
+        .map(|_| {
+            std::thread::spawn(|| loop {
+                std::thread::park();
+            })
+        })
+        .collect();
+    println!("READY");
+    for thread in threads {
+        thread.join().unwrap();
+    }
+}
+
+#[test]
+fn scope_signals_multithreaded_process_via_process_members_only() {
+    use std::{io::BufRead, os::unix::process::ExitStatusExt, process::Command};
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let root = std::env::temp_dir().join(format!("pg-thread-signal-{}", std::process::id()));
+    let membership = std::fs::read_to_string("/proc/self/cgroup").unwrap();
+    let relative = membership
+        .lines()
+        .find_map(|line| line.strip_prefix(concat!("0:", ":")))
+        .unwrap();
+    let path = root.join(relative.trim_start_matches('/'));
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join("cgroup.events"), "populated 1\n").unwrap();
+    struct RootGuard;
+    impl Drop for RootGuard {
+        fn drop(&mut self) {
+            TEST_ROOT.with(|root| *root.borrow_mut() = None);
+        }
+    }
+    TEST_ROOT.with(|value| *value.borrow_mut() = Some(root.clone()));
+    let _guard = RootGuard;
+    for force in [false, true] {
+        let mut child = ChildGuard(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["multithreaded_signal_child", "--nocapture"])
+                .env("PG_TEST_THREADED_CHILD", "1")
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let output = std::io::BufReader::new(child.0.stdout.take().unwrap());
+        assert!(output.lines().any(|line| line.unwrap().contains("READY")));
+        let pid = child.0.id();
+        let tids: Vec<_> = std::fs::read_dir(format!("/proc/{pid}/task"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(tids.len() > 1);
+        std::fs::write(path.join("cgroup.procs"), pid.to_string()).unwrap();
+        std::fs::write(path.join("cgroup.threads"), tids.join("\n")).unwrap();
+        let mut group = Adopted::new(Scope(path.clone()));
+        if force {
+            group.kill().unwrap();
+        } else {
+            group.terminate().unwrap();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert_eq!(
+            status.signal(),
+            Some(if force { libc::SIGKILL } else { libc::SIGTERM })
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cpu_reads_scope_usage_then_member_ticks_and_handles_unreadable() {
     let path = std::env::temp_dir().join(format!("pg-cpu-source-{}", std::process::id()));
     std::fs::create_dir(&path).unwrap();
@@ -46,7 +132,7 @@ fn vanished_member_does_not_abort_cpu_and_thread_only_scope_refuses_silent_signa
     std::fs::write(path.join("cgroup.threads"), "2147483647\n").unwrap();
     let mut pids = Vec::new();
     members(&path, &mut pids).unwrap();
-    assert_eq!(pids, vec![2147483647]);
+    assert!(pids.is_empty());
     std::fs::write(path.join("cgroup.threads"), "").unwrap();
     std::fs::write(path.join("cgroup.events"), "populated 1\n").unwrap();
     assert!(Scope(path.clone()).signal(false).is_err());

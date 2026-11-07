@@ -164,4 +164,5 @@ fn reconcile_missing_identity_is_unknown_and_not_settled() {
 }
 
 #[path = "reconcile_store_cgroup_tests.rs"]
+#[cfg(unix)]
 mod cgroup_tests;
