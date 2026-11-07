@@ -22,13 +22,21 @@ prevent all jobs from starting; its record has a top-level reason instead.
 
 ## Isolation
 Every PR-controlled command (including dependency installation) runs in bwrap.
+A trusted network-enabled fetch stage reads requirements and Cargo lock files as
+data only. It rejects requirement options, URLs and non-crates.io Cargo sources;
+pip downloads wheels only, and cargo fetch uses synthetic manifests outside the
+checkout, never PR manifests, configuration, setup.py, build.rs or scripts.
+Each job gets private wheels and CARGO_HOME. Inside bwrap, pip installs with
+`--no-index --find-links /scratch/wheels` and Cargo has `CARGO_NET_OFFLINE=true`.
 User, PID and IPC namespaces, a fresh procfs and a cleared, allowlisted environment
 hide host credentials, concurrent process environments and host home directories.
 System directories and Rust toolchains are read-only; only a fresh per-job checkout
 and scratch are writable binds. HOME is ephemeral; cargo, targets, venvs and caches
 are private to each job. PATH never includes the host's `~/.local/bin`.
-The trusted outer driver owns Docker creation/removal and passes only PG_DSN;
+The trusted outer driver owns Docker creation/removal and passes PG_DSN and its
+password as positional arguments;
 no Docker socket is mounted. Temporal runs inside the sandbox.
-Networking is shared for localhost services; this is not network isolation.
-Without a host-loopback bridge, an unshared network cannot reach Docker Postgres; shared networking retains cross-job connection/DoS and unauthenticated Temporal tampering risk, while fresh per-job random Postgres passwords prevent cross-job DB authentication.
+Networking is isolated with `--unshare-net`: host and other-job listeners are
+unreachable. Postgres uses a private Unix socket and SCRAM authentication, not a
+published port; Temporal runs on the job's private loopback network.
 Missing bwrap/user-namespace support fails closed; there is no unsandboxed fallback.

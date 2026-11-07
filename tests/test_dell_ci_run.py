@@ -1,10 +1,6 @@
-import importlib.util
-import json
-import os
+import importlib.util, json, os
 from pathlib import Path
-import re
-import subprocess
-
+import re, subprocess
 import pytest
 SPEC = importlib.util.spec_from_file_location(
     "dell_ci_run", Path(__file__).parents[1] / "tools/dell_ci_run.py")
@@ -21,19 +17,37 @@ def test_explicit_base_and_main_first_parent(tmp_path):
         assert "origin/custom" in command
         assert 'base=$(git rev-parse HEAD^)' in command
         assert '"$base" = "$(git rev-parse HEAD)"' in command
-
-
 @pytest.mark.parametrize("name", ["pytest", "pytest-postgres", "browser"])
 def test_python_jobs_private_venv(tmp_path, name):
     fake = Fake()
     invoke(tmp_path, fake, jobs=name)
     command = next(c for c in fake.calls if c.startswith("timeout "))
     assert "python3 -m venv" in command
-    assert "/venv/bin/python -m pip install -r requirements-ci.txt" in command
+    assert "/venv/bin/python -m pip install --no-index --find-links /scratch/wheels -r requirements-ci.txt" in command
     assert "export PATH=" in command
     assert f"{name}: venv setup or job failed" in command
-
-
+@pytest.mark.parametrize("name", ["pytest", "rust", "rust-worker", "rust-spike"])
+def test_trusted_fetch_precedes_offline_sandbox(tmp_path, name):
+    fake = Fake()
+    invoke(tmp_path, fake, jobs=name)
+    command = next(c for c in fake.calls if c.startswith("timeout "))
+    script = __import__('shlex').split(command)[-1]
+    outer, inner = script.split('/usr/bin/bwrap', 1)
+    assert 'env -i HOME=' in outer and '--unshare-net' not in outer
+    assert '--unshare-net' in inner and '--setenv CARGO_NET_OFFLINE true' in inner
+    argv = __import__('shlex').split(outer[outer.index('env -i '):])
+    program = argv[argv.index('-c') + 1]
+    assert program.count('subprocess.run(') == 1
+    assert all(x not in program for x in ('shell=True', 'exec(', 'eval(', 'setup.py', 'build.rs'))
+    if name == 'pytest':
+        assert '"--only-binary=:all:"' in program
+        assert '"download"' in program and 'unsupported CI requirement' in program
+        assert '--no-index --find-links /scratch/wheels' in inner
+    else:
+        assert '"fetch"' in program and 'unsupported Cargo source' in program
+        assert 'Cargo.toml").read' not in program
+        assert 'cwd=stage' in program
+    assert 'pip install' not in outer and 'cargo test' not in outer
 @pytest.mark.parametrize("content,expected", [
     ("unrelated", ""), ("keeper_util sqlite3", ""),
     ("keeper_util", "tests/test_sample.py"),
@@ -49,8 +63,6 @@ def test_postgres_optional_files(tmp_path, content, expected):
         cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == expected
-
-
 class Fake:
     def __init__(self, head=SHA, dirty="", fail=False, timeout=False):
         self.head, self.dirty = head, dirty
@@ -75,23 +87,17 @@ class Fake:
             if self.fail:
                 return subprocess.CompletedProcess(argv, 7, "", "secret")
         return subprocess.CompletedProcess(argv, 0, output, "")
-
-
 def invoke(tmp_path, fake, sha=SHA, jobs="scrub"):
     code = ci.main(["--sha", sha, "--host", "test-host", "--jobs", jobs,
                     "--out", str(tmp_path)], runner=fake)
     files = list(tmp_path.glob("*.json"))
     return code, json.loads(files[0].read_text()) if files else None
-
-
 @pytest.mark.parametrize("sha", ["abc123", "main", "g" * 40, "a" * 41])
 def test_prefix_and_refs_refused(tmp_path, sha):
     fake = Fake()
     with pytest.raises(SystemExit):
         invoke(tmp_path, fake, sha)
     assert not fake.calls
-
-
 @pytest.mark.parametrize("fake,reason", [
     (Fake(head="cd" * 20), "HEAD mismatch"),
     (Fake(dirty="?? dirty\n"), "dirty worktree"),
@@ -102,8 +108,6 @@ def test_moved_or_dirty_refused(tmp_path, fake, reason):
     assert record["reason"] == reason
     assert not any("scrub_check.py" in c for c in fake.calls)
     assert any("worktree remove" in c for c in fake.calls)
-
-
 def test_failure_record_and_cleanup(tmp_path, capsys):
     fake = Fake(fail=True)
     code, record = invoke(tmp_path, fake)
@@ -113,15 +117,11 @@ def test_failure_record_and_cleanup(tmp_path, capsys):
     assert "secret" not in json.dumps(record)
     assert "worktree remove" in fake.calls[-1]
     assert "secret" not in capsys.readouterr().out
-
-
 def test_timeout(tmp_path):
     code, record = invoke(tmp_path, Fake(timeout=True))
     assert code != 0
     assert record["jobs"][0]["result"] == "timeout"
     assert record["jobs"][0]["exit"] is None
-
-
 def test_exact_identity_and_commands(tmp_path):
     fake = Fake()
     code, record = invoke(tmp_path, fake, jobs="select,scrub,file-size,changelog-docs,pytest")
@@ -140,8 +140,6 @@ def test_exact_identity_and_commands(tmp_path):
     assert all("python3 " in c for c in commands)
     assert all(not re.search(r"(?<!/bin/)\bpython ", c) for c in commands)
     assert all("/bin/python -m pip" in c for c in commands if "pytest" in c)
-
-
 def test_requested_sha_fetch_failure(tmp_path):
     fake = Fake()
 
@@ -156,8 +154,6 @@ def test_requested_sha_fetch_failure(tmp_path):
     assert record["reason"] == "requested SHA fetch failed"
     assert not any("worktree add" in command for command in fake.calls)
     assert not record["jobs"]
-
-
 @pytest.mark.parametrize("repo", ["~/code/custom", "/srv/plangraph"])
 def test_explicit_repository(tmp_path, repo):
     fake = Fake()
@@ -168,8 +164,6 @@ def test_explicit_repository(tmp_path, repo):
                       "worktree add --detach", "worktree remove --force"]:
         assert any(prefix + " " + operation in command for command in fake.calls)
     assert all("git -C " in command for command in fake.calls if "git " in command)
-
-
 @pytest.mark.parametrize("repo", ["relative/path", "~other/repo", "/repo;true",
                                  "~/repo$(id)", "/repo\ntrue", "--help", ""])
 def test_invalid_repository_refused(tmp_path, repo):
@@ -177,8 +171,6 @@ def test_invalid_repository_refused(tmp_path, repo):
     with pytest.raises(SystemExit):
         ci.main(["--sha", SHA, "--repo=" + repo, "--out", str(tmp_path)], runner=fake)
     assert not fake.calls
-
-
 def test_failed_worktree_add_still_removes_private_directory(tmp_path):
     directory = tmp_path / "private"
     fake = Fake()
@@ -205,8 +197,6 @@ def test_failed_worktree_add_still_removes_private_directory(tmp_path):
     assert record["cleanup"] == "failure"
     assert not directory.exists()
     assert not record["jobs"]
-
-
 def test_slice_two_skipped(tmp_path):
     fake = Fake()
     code, record = invoke(tmp_path, fake, jobs="pytest-postgres,rust,rust-worker,rust-spike")

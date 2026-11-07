@@ -2,6 +2,56 @@
 import shlex
 
 
+def dependency_fetch(python=False, cargo=False):
+    """Trusted data-only staging; never load checkout configuration or code."""
+    if not (python or cargo):
+        return ""
+    program = '''import pathlib, re, subprocess, sys, tomllib
+root, data = map(pathlib.Path, sys.argv[1:3])
+stage = data / "fetch"
+stage.mkdir()
+'''
+    if python:
+        program += '''requirements = (root / "requirements-ci.txt").read_text()
+for line in requirements.splitlines():
+    line = line.strip()
+    if line and not line.startswith("#"):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+(?:[<>=!~]+[A-Za-z0-9.*+_-]+(?:,[<>=!~]+[A-Za-z0-9.*+_-]+)*)?", line):
+            raise ValueError("unsupported CI requirement")
+(stage / "requirements-ci.txt").write_text(requirements)
+subprocess.run(["python3", "-I", "-m", "pip", "--isolated", "download",
+                "--only-binary=:all:", "-r", "requirements-ci.txt",
+                "-d", str(data / "wheels")], cwd=stage, check=True)
+'''
+    if cargo:
+        program += '''for index, lock in enumerate(sorted((root / "rust").rglob("Cargo.lock"))):
+    packages = tomllib.loads(lock.read_text())["package"]
+    for n, package in enumerate(packages):
+        source = package.get("source")
+        if source is None:
+            continue
+        if source != "registry+https://github.com/rust-lang/crates.io-index":
+            raise ValueError("unsupported Cargo source")
+        name, version = package["name"], package["version"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or not re.fullmatch(r"[A-Za-z0-9.+_-]+", version):
+            raise ValueError("invalid Cargo package")
+        manifest = stage / f"{index}-{n}"
+        manifest.mkdir()
+        (manifest / "lib.rs").write_text("")
+        (manifest / "Cargo.toml").write_text(
+            '[package]\\nname = "ci-fetch"\\nversion = "0.0.0"\\nedition = "2021"\\n'
+            '[lib]\\npath = "lib.rs"\\n[dependencies]\\n' +
+            f'd = {{ package = "{name}", version = "={version}" }}')
+        subprocess.run(["cargo", "fetch", "--manifest-path", str(manifest / "Cargo.toml")],
+                       cwd=stage, check=True)
+'''
+    return ('mkdir "$scratch/data/cargo"\n'
+            'env -i HOME="$scratch/data/fetch-home" PATH="/usr/bin:/bin:$cargo_bin" '
+            'CARGO_HOME="$scratch/data/cargo" RUSTUP_HOME="$HOME/.rustup" '
+            'python3 -I -c ' + shlex.quote(program) +
+            ' "$scratch/checkout" "$scratch/data"\n')
+
+
 def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=None,
                  browsers=None, temporal=None):
     """Pure capability list: no inherited environment or host home mounts."""
@@ -21,7 +71,7 @@ def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=Non
     if browsers:
         argv += ["--ro-bind", browsers, "/browser-cache"]
     env = {"HOME": "/ci-home", "PATH": "/scratch/bin:/toolchain/temporal-bin:/toolchain/protoc-bin:/toolchain/rust/bin:/cargo-bin:/usr/bin:/bin",
-           "CARGO_HOME": "/scratch/cargo", "CARGO_TARGET_DIR": "/scratch/target",
+            "CARGO_HOME": "/scratch/cargo", "CARGO_NET_OFFLINE": "true", "CARGO_TARGET_DIR": "/scratch/target",
            "RUSTUP_HOME": "/scratch/rustup", "XDG_CACHE_HOME": "/scratch/cache",
            "PYTHONPATH": "/work/src", "CARGO_BUILD_JOBS": "4", "LANG": "C.UTF-8"}
     if browsers:
@@ -31,7 +81,8 @@ def sandbox_argv(checkout, scratch, toolchain, cargo_bin, command, *, protoc=Non
     return argv + ["sh", "-c", command]
 
 
-def isolated_script(command, source, job, *, postgres=False, browser=False):
+def isolated_script(command, source, job, *, postgres=False, browser=False,
+                    python_deps=False, cargo_deps=False):
     """Trusted outer lifecycle; only the inner command sees PR-controlled files."""
     marker = 'port=$(docker port'
     if marker not in POSTGRES:
@@ -105,6 +156,7 @@ protoc=$(command -v protoc || command -v "${{HOME}}/.local/bin/protoc") || {{ ec
 protoc=$(readlink -f "$protoc")
 {('temporal=$(command -v temporal || command -v "${HOME}/.local/bin/temporal") || { echo "host fault: Temporal CLI missing" >&2; exit 1; }' + chr(10) + 'temporal=$(readlink -f "$temporal")') if needs_temporal else ''}
 {('browsers=$(readlink -f "${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}")' + chr(10) + 'test -d "$browsers"') if browser else ''}
+{dependency_fetch(python_deps, cargo_deps)}
 {setup if postgres else ''}
 {invocation}
 '''

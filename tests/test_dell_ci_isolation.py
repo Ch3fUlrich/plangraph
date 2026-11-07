@@ -189,7 +189,7 @@ def test_sandbox_capabilities(tmp_path):
         keys = [argv[i + 1] for i, value in enumerate(argv) if value == "--setenv"]
         assert set(keys) == {"HOME", "PATH", "CARGO_HOME", "CARGO_TARGET_DIR",
                              "RUSTUP_HOME", "XDG_CACHE_HOME", "PYTHONPATH",
-                             "CARGO_BUILD_JOBS", "LANG"}
+                              "CARGO_BUILD_JOBS", "CARGO_NET_OFFLINE", "LANG"}
         assert ".local/bin" not in " ".join(argv)
     assert commands[0] != commands[1]
     assert set(commands[0]) & {str(tmp_path / "two/scratch")} == set()
