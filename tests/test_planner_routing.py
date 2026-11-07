@@ -312,9 +312,9 @@ def test_empty_tried_uses_first_leg_and_bad_input(route):
     with pytest.raises(ValueError):
         next_after_failure(route, [], "weird", 1)
 
-def test_writer_order_d2683_implement_first_seven():
+def test_writer_order_d2683_implement_first_seven(monkeypatch):
     from test_route_free_first import test_writer_order_d2683_implement_first_seven as check
-    check()
+    check(monkeypatch)
 
 
 def test_writer_order_d2683_unavailable_skipped():
@@ -345,7 +345,7 @@ def test_writer_order_d2683_writer_family_exclusion():
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs
     plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert plan_wf.first_leg.id == "cx-gpt-6.1-sol" and "agy-gemini-3.8-flash" in [l.id for l in plan_wf.legs]
+    assert [l.id for l in plan_wf.legs] == ["cx-gpt-6.1-sol"]
 
 
 def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
@@ -371,12 +371,9 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
     plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader, legs=legs)
     assert plan.first_leg.id == "cx-gpt-6.1-sol"
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
-    assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
-    expected_writers = ["cx-gpt-6.1-sol", "opencode-deepseek-v4.1-flash-free",  # D-3745: lead first,
-                        "opencode-glm-5.3-flash-free", "openrouter-free", "agy-gemini-3.8-flash",  # then tier/order
-                        "mimo-v2.6-flash"]
-    assert len(expected_writers) == 6
-    assert [l.id for l in plan.legs[:6]] == expected_writers
+    review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
+    assert {s["leg"]: s["reason"] for s in review.skipped}["mimo-v2.6-pro"] == "limited"
+    assert [l.id for l in plan.legs] == ["cx-gpt-6.1-sol"]
 
 
 def test_no_implement_plan_leg_has_claude_family():
@@ -390,7 +387,9 @@ def test_no_implement_plan_leg_has_claude_family():
             review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review", writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH))
             if estimate == 100000: assert [leg.id for leg in review.review_seats] == (["mimo-v2.6-flash", "claude-haiku-5.5"] if diff else ["claude-haiku-5.5"])
             assert not any(leg.claude_family for leg in (review.review_seats[:-1] if estimate == 100000 else review.review_seats))
-def test_alternate_limit_lookup_restricted_to_agy_harness():
+def test_alternate_limit_lookup_restricted_to_agy_harness(monkeypatch):
+    from mechanics_legs import install_fallthrough_legs
+    install_fallthrough_legs(monkeypatch)
     from plangraph.planner.routing import next_leg_after_provider_stop, SpawnPlan
     from plangraph.planner.legs import DEFAULT_LEGS
 

@@ -46,6 +46,8 @@ def fake_host_binaries(tmp_path, monkeypatch):
 
 def _open_catalog(monkeypatch):
     """Quota fallback independent of the host catalog's admission state."""
+    from mechanics_legs import install_fallthrough_legs
+    install_fallthrough_legs(monkeypatch)
     from plangraph.spawner import resolver
     rows = resolver.get_catalog_models()
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [

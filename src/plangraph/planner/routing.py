@@ -392,7 +392,20 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             if positions:
                 source = "benchmark"
     if role == "review":
-        table_order = {leg.id: i for i, leg in enumerate(legs)}
+        # Benchmarks rank families, not interchangeable seats within a family.
+        # Restore table order only in each family's measured slots, retaining
+        # cross-family ranking and keeping unmeasured legs behind measured ones.
+        input_order = {leg.id: i for i, leg in enumerate(legs)}
+        for family in {leg.family for leg in ordered}:
+            for tier in TIERS:
+                positions = [i for i, leg in enumerate(ordered)
+                             if leg.family == family and leg.tier == tier
+                             and (leg.model in rows or leg.id in rows)]
+                siblings = sorted((ordered[i] for i in positions),
+                                  key=lambda leg: input_order[leg.id])
+                for i, leg in zip(positions, siblings):
+                    ordered[i] = leg
+        table_order = {leg.id: i for i, leg in enumerate(ordered)}
         ordered.sort(key=lambda leg: review_key(
             leg, TIERS.index(leg.tier), table_order[leg.id]))
     seats, coverage, open_parts = [], (), []

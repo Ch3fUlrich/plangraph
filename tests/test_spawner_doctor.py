@@ -385,10 +385,11 @@ def test_real_service_review_family(isolated, monkeypatch):
     def plan(card, role, writer_families, **kwargs):
         if role == 'review':
             seen.extend(writer_key(family) for family in writer_families)
-        return SimpleNamespace(error=None, legs=[SimpleNamespace(id='local-leg')])
+        return routing.SpawnPlan((SimpleNamespace(id='local-leg', model='test/local-leg'),), (), 'doctor-test', (), ())
     monkeypatch.setattr(routing, 'plan_spawn', plan)
-    monkeypatch.setattr(service.SpawnService, 'route', RealService.route)
-    monkeypatch.setattr(service.SpawnService, '_route', RealService._route, raising=False)
+    # Cooldown ordering reads service state and replaces the dataclass plan.
+    real = RealService(state=isolated, runner=object())
+    monkeypatch.setattr(service, 'SpawnService', lambda: real)
     result = run(d.diagnose())
     assert result['ok'], result
     assert seen

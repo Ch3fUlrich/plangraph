@@ -148,15 +148,14 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# D-3745: the lead writer precedes every tier; others retain D-2683 tier/order.
+# D-3828: retain every leg and its review order, but never fall back writers.
+DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
+                             disabled=leg.disabled or (
+                                 'D-3828: writer disabled; no retained review or orchestrate role'
+                                 if leg.roles == ('implement',) else None))
+                     if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
-    "opencode-deepseek-v4.1-flash-free",
-    "opencode-glm-5.3-flash-free",
-    "openrouter-free",
-    "agy-gemini-3.8-flash",
-    "mimo-v2.6-pro",
-    "mimo-v2.6-flash",
 )
 LEAD_WRITER = "cx-gpt-6.1-sol"
 

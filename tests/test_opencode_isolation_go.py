@@ -122,8 +122,12 @@ def test_runner_refuses_disabled_resolution(tmp_path, monkeypatch, target, clien
 
 
 def test_disabled_skips_have_evidence():
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import plan_spawn
-    plan = plan_spawn({'estimate_tokens': 1000}, role='implement')
+    writer = next(l for l in DEFAULT_LEGS if 'implement' in l.roles)
+    disabled = replace(writer, id='disabled-test-writer', disabled='synthetic disable')
+    plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(writer, disabled))
     assert plan.skipped
     assert all('evidence' in entry for entry in plan.skipped)
 
@@ -168,7 +172,10 @@ def test_disabled_and_fallback_routes():
             assert 'D-4196' in leg.disabled
             for plan in plans:
                 assert leg.id not in [l.id for l in plan.legs]
-                assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
+                if 'implement' in leg.roles or plan is plans[0]:
+                    assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
+                else:
+                    assert not any(s['leg'] == leg.id for s in plan.skipped)
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[0].legs]
     assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[1].legs]
 

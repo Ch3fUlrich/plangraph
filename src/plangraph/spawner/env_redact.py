@@ -205,7 +205,7 @@ def unavailable_reason(exit_code, stdout, stderr):
     for is_stderr, line in [(True, line) for line in stderr.splitlines()] + [(False, line) for line in stdout.splitlines()]:
         text = line.strip()
         if (_MODEL_UNAVAILABLE.fullmatch(text)
-                or (is_stderr and re.fullmatch(r'not_served_on_host:\s*\S+(?:\s+\S+)*', text))):
+                or (is_stderr and re.fullmatch(r'not_served_on_host(?::\s*\S+(?:\s+\S+)*)?', text))):
             return text
         if 'model unavailable' in text.lower() and not text.startswith('{'):
             if not _ERROR_SHAPED.match(text):

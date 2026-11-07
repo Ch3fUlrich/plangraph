@@ -5,8 +5,7 @@ from pathlib import Path
 import pytest
 
 from plangraph.spawner import stall_watchdog as w
-
-
+from conftest_watchdog import isolated_process_evidence  # noqa: F401
 @pytest.mark.parametrize('bad', [{}, {'run_id': 'run-fixture', 'card': None},
                                 {'run_id': 'run-fixture', 'card': 1}])
 def test_bad_record_does_not_stop_tick(tmp_path, bad):

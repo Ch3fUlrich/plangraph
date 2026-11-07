@@ -6,8 +6,7 @@ from .git_guard import writer_launch
 from plangraph.routing_errors import ParameterRefused
 import asyncio
 from dataclasses import asdict
-import hashlib
-import json
+import hashlib, json
 import os
 from pathlib import Path
 import socket, time, uuid
@@ -64,6 +63,7 @@ class SpawnService(SeatSpawnMixin):
                 leg = candidate.get('leg')
                 if leg not in attempted:
                     record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
+                        down_reason='not_served_on_host' if (candidate.get('reason') or '').split(':', 1)[0].strip() == 'not_served_on_host' else None,
                         skip_reason=candidate.get('skip_reason') or candidate.get('reason'),
                         served_model='unwitnessed', served_family='unwitnessed',
                         served_witness_reason='leg skipped before launch'))
@@ -140,7 +140,11 @@ class SpawnService(SeatSpawnMixin):
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
-        return service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
+        from dataclasses import replace
+        from plangraph.planner.measured_down import measured_down
+        down = measured_down(self.state)
+        plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
+        return replace(plan, legs=tuple(sorted(plan.legs, key=lambda leg: leg.id in down)))
 
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
@@ -267,6 +271,20 @@ class SpawnService(SeatSpawnMixin):
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             require_available(chosen, self.leg_reader, card)
+            if role == 'implement' and chosen.id != 'cx-gpt-6.1-sol':
+                raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
+            if chosen.tier == 'paid':
+                available = self._route(card, role, writer_families, review_of,
+                    benchmark=benchmark, require_bench=require_bench)
+                from plangraph.planner.measured_down import measured_down
+                down = measured_down(self.state)
+                free = [candidate.id for candidate in available.legs if candidate.tier == 'free' and candidate.id not in down]
+                if override_reason is None and not free:
+                    override_reason = 'No eligible free leg is up on this host'
+                if not isinstance(override_reason, str) or len(override_reason.strip()) < 10:
+                    raise SpawnRefused('paid pin refused; free legs up: ' + ', '.join(free) +
+                        '; --override-reason required (D-4382: no free leg witnesses is a valid reason)')
+                override_reason = override_reason.strip()
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
@@ -280,7 +298,7 @@ class SpawnService(SeatSpawnMixin):
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
-            started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
+             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
 
@@ -325,7 +343,13 @@ class SpawnService(SeatSpawnMixin):
                         job.exit_code = job.exit_code or 1
                     reason = unavailable or ('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}'
                         if job.status in ('failed', 'skipped') else None)
+                    stop_status = stop.get('status') if isinstance(stop, dict) else None
+                    down_token = (unavailable or '').split(':', 1)[0].strip()
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                        # Only failed/skipped attempts count; only 402/429 override unavailable.
+                        down_reason=('credit_limit' if stop_status == 402 else 'usage_limit' if stop_status == 429 else
+                            down_token if down_token in ('not_served_on_host', 'credit_limit', 'usage_limit') else None)
+                            if job.status in ('failed', 'skipped') else None,
                         served_model=job.served_model, served_family=job.served_family,
                         served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,
