@@ -11,7 +11,8 @@ pub(super) fn reason(error: &Error) -> Error {
         Error::Conflict => Error::Conflict,
         Error::WritesDisabled => Error::WritesDisabled,
         Error::InvalidScope => Error::InvalidScope,
-        _ => Error::Unverified,
+        Error::Unknown => Error::Unknown,
+        Error::Unverified => Error::Unverified,
     }
 }
 
@@ -21,4 +22,24 @@ pub(super) fn reason(error: &Error) -> Error {
 pub struct Blocked {
     pub project: String,
     pub reason: Error,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ledger_preserves_every_error_reason() {
+        for error in [
+            Error::Refused(crate::Refusal::UnknownKind),
+            Error::Outage,
+            Error::Conflict,
+            Error::Unknown,
+            Error::Unverified,
+            Error::WritesDisabled,
+            Error::InvalidScope,
+        ] {
+            assert_eq!(reason(&error), error);
+        }
+    }
 }

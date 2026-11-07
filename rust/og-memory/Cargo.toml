@@ -8,5 +8,6 @@ default = []
 mock = []
 
 [dependencies]
+serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 pg-worker-core = { path = "../worker-core" }

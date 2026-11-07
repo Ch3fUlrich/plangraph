@@ -18,6 +18,7 @@ let _ = MockTransport::default();
 ```
 "#
 )]
+pub mod adapters;
 pub mod io;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -264,5 +265,7 @@ pub fn validate(e: &Envelope, caps: &Capabilities) -> Result<Validated, Refusal>
     })
 }
 
+#[cfg(test)]
+mod gate_tests;
 #[cfg(test)]
 mod tests;
