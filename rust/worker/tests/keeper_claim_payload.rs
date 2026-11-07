@@ -103,6 +103,8 @@ fn constructed_default_matches_wire_default() {
 
 #[test]
 fn non_string_check_kinds_are_not_legacy_strings() {
+    // Boundary guard, not a regression against the pre-change String deserializer:
+    // tolerant recorded-string decoding must not widen to arbitrary JSON values.
     let payloads: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/keeper_claim_payload.json")).unwrap();
     for kind in [
