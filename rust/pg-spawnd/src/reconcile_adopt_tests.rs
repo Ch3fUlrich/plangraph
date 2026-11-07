@@ -28,12 +28,7 @@ fn scope_signals_multithreaded_process_via_process_members_only() {
         }
     }
     let root = std::env::temp_dir().join(format!("pg-thread-signal-{}", std::process::id()));
-    let membership = std::fs::read_to_string("/proc/self/cgroup").unwrap();
-    let relative = membership
-        .lines()
-        .find_map(|line| line.strip_prefix(concat!("0:", ":")))
-        .unwrap();
-    let path = root.join(relative.trim_start_matches('/'));
+    let path = root.clone();
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(path.join("cgroup.events"), "populated 1\n").unwrap();
     struct RootGuard;

@@ -28,6 +28,27 @@ impl Child for Fake {
     }
 }
 #[test]
+fn reconcile_watch_empty_completes_without_exit_status() {
+    let mut w = Watch::new(
+        Role::Implement,
+        Limits::default(),
+        0,
+        (0, None),
+        policy(),
+        false,
+    );
+    let mut child = Fake {
+        empty: true,
+        ..Default::default()
+    };
+    assert!(child.reap().unwrap().is_none());
+    assert!(matches!(
+        w.tick(&mut child, 0),
+        Step::Ended("ended_unobserved")
+    ));
+    assert_eq!((child.term, child.kill), (0, 0));
+}
+#[test]
 fn reconcile_max_s_requires_empty_and_escalates_once() {
     let mut w = Watch::new(
         Role::Implement,
