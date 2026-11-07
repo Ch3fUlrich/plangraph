@@ -94,9 +94,9 @@ class _AgentsMixin:
             tail += ["--append-system-prompt", style]
         tail += [prompt_arg]
         bg_argv = head + ["--bg"] + tail
-        # Spec defaults: ctx_cap_tokens 300000, compact_window "330000".
+        # Spec defaults: ctx_cap_tokens 300000, compact_window "400000".
         cap = cfg.get("ctx_cap_tokens") or 300000
-        compact = cfg.get("compact_window") or "330000"
+        compact = cfg.get("compact_window") or "400000"
         env = {**os.environ, "FLEET_SESSION_NAME": name,
                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}
         return bg_argv, env

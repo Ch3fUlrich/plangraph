@@ -26,7 +26,8 @@ bad scalar or missing file refuses every action except `stop`: every action but 
 checks the config, and `stop` alone runs without it. There is no default model. A present key must
 carry its type and may not be `null`: `style_text` a non-empty string, `compact_window` a digit
 string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
-`compact_window` to `330000`. `session_names` is `role-counter` (default) or `free`: in
+`compact_window` to `400000`. Launch env does not reach a background session when the daemon is already running, so user settings env holds the real value.
+`session_names` is `role-counter` (default) or `free`: in
 `role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (next number, never
 reused); `relaunch` stops the old session (its record stays stopped), starts a new one under the next
 number (`previous_name` = old) and is refused ("superseded") while a later record of the role is live.
