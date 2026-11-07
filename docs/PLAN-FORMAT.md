@@ -37,19 +37,19 @@ ops:
     item: {project: server, id: PH-SSO, kind: gate, track: SSO, title: "Phase SSO done",
            done_criteria: "every SSO task done", budget: "16 h, 400k tokens", depends_on: [SSO-OIDC, SSO-REDIS]}
   - op: create
-    item: {project: server, id: SSO-REDIS, kind: lane, track: SSO, owner: server-L1-main, title: "Redis session store for Authelia",
+    item: {project: server, id: SSO-REDIS, kind: lane, track: SSO, owner: the operator, title: "Redis session store for Authelia",
            done_criteria: "Authelia uses Redis; one announced logout window", evidence_kinds: [semaphore-task], review_tier: high,
            estimate_h: 3, priority: 2, depends_on: [OP-LOGOUT-WINDOW]}
   - op: create
     item: {project: server, id: OP-LOGOUT-WINDOW, kind: lane, track: SSO, owner: operator, operator: true,
            title: "DECIDE: logout window for the Redis switch", evidence_kinds: [decision], done_criteria: "router D-id names the window"}
   - op: create
-    item: {project: server, id: SSO-OIDC, kind: lane, track: SSO, owner: server-L1-main, title: "OIDC clients for 12 apps",
+    item: {project: server, id: SSO-OIDC, kind: lane, track: SSO, owner: the operator, title: "OIDC clients for 12 apps",
            done_criteria: "12 apps log in via OIDC", evidence_kinds: [semaphore-task], depends_on: [SSO-REDIS]}
   - op: create
     item: {project: server, id: PH-BACKUP, kind: gate, track: BACKUP, title: "Phase BACKUP done", depends_on: [PH-SSO, BK-DRILL]}
   - op: create
-    item: {project: server, id: BK-DRILL, kind: lane, track: BACKUP, owner: server-L1-main, title: "Restore drill",
+    item: {project: server, id: BK-DRILL, kind: lane, track: BACKUP, owner: the operator, title: "Restore drill",
            done_criteria: "a restore from last night's backup passes", evidence_kinds: [run-record], depends_on: [PH-SSO]}
   # later changes in a NEW file:
   # - {op: edit, key: server:SSO-OIDC, fields: {depends_on: [SSO-REDIS, OP-LOGOUT-WINDOW], priority: 3}}
@@ -64,5 +64,5 @@ unknown `kind`/`review_tier`/evidence kind refused · keys unique.
 
 ## Process
 1. The L1 writes the file in its own repo (e.g. `docs/plan/graph/<date>-<name>.yaml`) and sends the path to the router.
-2. plangraph-L1 validates it symbolically against the live graph and returns the diff + the new ready set.
+2. The operator validates it symbolically against the live graph and returns the diff + the new ready set.
 3. After the router's OK, the router applies it: `python3 tools/apply_batch.py FILE --url … --token-file …` (dry run first).

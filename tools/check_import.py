@@ -25,7 +25,7 @@ import graphlib
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-# SPLIT-DATA-REPO: plan data lives in the private plangraph-data repo (sibling checkout or PG_DATA_DIR).
+# SPLIT-DATA-REPO: plan data lives in the private data repo (sibling checkout or PG_DATA_DIR).
 _REPO = ROOT.parents[2] if ROOT.parent.name == "worktrees" and ROOT.parents[1].name == ".claude" else ROOT
 DATA = Path(os.environ.get("PG_DATA_DIR") or _REPO.parent / "plangraph-data")
 IMPORT_DIR = DATA / "data" / "plan-v3"

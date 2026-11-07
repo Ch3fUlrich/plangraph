@@ -247,7 +247,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - **MODEL-KINDS (D-231/D-292/D-656):** item kinds question/decision/operator_task (operator/wait defaults), fields
   layer/role/agent_id/phase_kind/fixes, evidence kind `error`, router verb `answer` (event `answered`, locks like a
   decision close; old DBs get their lock triggers rebuilt on open), reads `needs_you` / `answers`; MCP 28 tools
-  (aeb0208, L2-mk + plangraph-L1, judge ACCEPT).
+  (aeb0208, L2-mk + the operator, judge ACCEPT).
 - **UI lanes (L2-ui) + keeper proxy files:** table created column from snapshot created_at, node budget 200 per
   expanded phase with a '+N more' node, render new-UI detection on content (97d0ded). Keeper proxy (not live):
   nginx sidecar with mutual TLS + edge allowlist, mint-certs.sh for the shared internal hop CA (b00ea79, D-759 A).
@@ -255,14 +255,14 @@ Merged and pushed changes only (D-630, D-653). Newest first.
   60 s when commit evidence misses (b8ea51b); examples regenerated + README pointer reworded, full suite 0 failures
   (5c029fa); GitHub Actions pytest on push/PR (fffd19f, run 37850230244 green).
 - **PG-MODELS (D-708 A):** keeper verb `record_run` (new role `spawner`, principal created) records run ids, writer
-  model and seat models per item (e2b07d9, judge ACCEPT server-L1-routing); show/snapshot add created_at, done_at,
+  model and seat models per item (e2b07d9, judge ACCEPT the operator); show/snapshot add created_at, done_at,
   reviewed, merged. md-sync status close_skipped carries the reason (c9edf6c).
 - **Activity page (D-696):** keeper snapshot carries 31 days of state events (b8c731b); header page Activity with
   24 h / 7 d / 30 d / custom ranges, counts + lists per project (workst browser PASS). Render drops whole-line JS comments.
 - **Operator waits (D-677):** keeper item field `wait` = answer|task (537d063); md-sync sets it from QUESTIONS.md,
   imports priority-table rows and suffixed OS ids (f7e59d1); page outlines items/phases/projects amber (answer) or
   violet (task), legend, Needs You badges, dependent tooltip (1f1d044, 2cd6d37). Decision text on the Decisions
-  page (8c18e56). md-sync fetches all keeper repos first; workst-gen repo registered.
+  page (8c18e56). md-sync fetches all keeper repos first; the data repo registered.
 - **Page (later 2026-10-08):** Q&A answers update counts and row badges live (797c428, 2d53adb); URL hash keeps
   collapse/focus/filter state (59ff024); tests for table view, Q&A page, sidebar resize (f06ceb6); page_side.js /
   page_ui.js split under 400 lines + size guard (ef4c67f); Decisions table reads keeper ref objects (2d53adb).

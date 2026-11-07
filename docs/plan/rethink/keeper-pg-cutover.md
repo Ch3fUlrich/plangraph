@@ -13,7 +13,7 @@ Rehearsal on a throwaway PG16 container from a copy of backup `live-sync-8165c22
 | edges | 2559 | 2559 | | aliases / principals | 12 / 24 | 12 / 24 |
 Chain head seq=6254 hash=0d6f6305...5eb9 equal on both. Extra gate (rehearsal only, `rowhash.py` = sha256 of every row in PK order, all 19 tables): 0 diffs.
 Gates green on PG: `admin copy-to-pg --dry-run` rc0; `--apply` rc0 ("copied and verified"); 2nd `--apply` rc2 "target is not empty" (re-run safe); `admin verify` rc0; `admin verify-snapshot` rc0; `admin migrate` rc0.
-Scratch keeper on PG (own port, never 8787): whoami, ready, show plangraph:RT-P1-KEEPER-PG, percent rc0; `/v1/alarms` `/inbox` `/v1/questions` HTTP 200; `admin verify` rc0 with daemon up.
+Scratch keeper on PG (own port, never ${KEEPER_PORT}): whoami, ready, show plangraph:RT-P1-KEEPER-PG, percent rc0; `/v1/alarms` `/inbox` `/v1/questions` HTTP 200; `admin verify` rc0 with daemon up.
 Findings (no copy_to_pg defect): (a) **no read-only mode exists in the keeper** (see 3; D-1476 R1 = old unit stopped + chmod 0400); (b) `admin verify-anchor` rc2 "anchors not configured" on this config (live keeper.json has no anchor keys; skip gate unless anchors get enabled);
 (c) `verify-snapshot` needs the `cryptography` package (live python has it; a scratch venv did not); (d) `show` needs the project-qualified key.
 
@@ -85,7 +85,7 @@ EnvironmentFile=<PG_RUNTIME_DSN_FILE>
 Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
 ```
 (or `backend`/`pg_schema` keys in `$KJ`; `select_backend()` in `db.py` takes the explicit config value first, else `PG_KEEPER_BACKEND`.) `$KJ` stays the same file otherwise; keep a dated copy of it.
-3. `systemctl --user daemon-reload && systemctl --user start plangraph-keeper`; wait for `GET http://127.0.0.1:8787/inbox` = 200 (the keeper takes a PG session advisory lock; second start elsewhere fails with KeeperLocked, as intended).
+3. `systemctl --user daemon-reload && systemctl --user start plangraph-keeper`; wait for `GET http://127.0.0.1:${KEEPER_PORT}/inbox` = 200 (the keeper takes a PG session advisory lock; second start elsewhere fails with KeeperLocked, as intended).
 4. Re-run gates 5.2 (admin verify on PG), `pg whoami`, `ready`, `percent`, `/v1/alarms`. **Record the loss boundary now, before any timer or replay:** `psql "$PG_DSN" -Atc "select seq,hash from keeper.events order by seq desc limit 1"` into the lane card and GO report (expected seq 6254 + any events written by the verify smoke; no writes yet). Only then `systemctl --user start plangraph-md-sync.timer plangraph-md-sync.path plangraph-render.timer`; clients run `pg replay`. From the first replay or timer write, PG holds events the sqlite file lacks: a rollback after that point takes the AFTER-writes path of section 7, not the exact one.
 5. Record in the lane card: start time, head seq, counts, sha of the tree.
 

@@ -565,7 +565,7 @@ class OversightMixin:
 
         The key is the principal, never the op-supplied ``finding``: the
         contract promises ONE open ``projector_alarms`` row, and rotating
-        finding ids must not mint unbounded open alarms (routing-00 routes one
+        finding ids must not mint unbounded open alarms (the router routes one
         card).  ON CONFLICT DO UPDATE refreshes the open alarm's detail to the
         latest finding plus the count of denials since the alarm opened (I7):
         the count comes from the ledger in this transaction (``_guard_alarm``),
