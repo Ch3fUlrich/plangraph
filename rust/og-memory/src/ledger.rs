@@ -14,6 +14,10 @@ pub(super) fn reason(error: &Error) -> Error {
         Error::InvalidScope => Error::InvalidScope,
         Error::Unknown => Error::Unknown,
         Error::Unverified => Error::Unverified,
+        Error::PartialPublication { cause, .. } => Error::PartialPublication {
+            commit: "<published>".into(),
+            cause: Box::new(reason(cause)),
+        },
     }
 }
 

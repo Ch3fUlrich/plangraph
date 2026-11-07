@@ -85,10 +85,7 @@ impl Http {
         }
         let states = self.post_snapshot(STATES, project, commit)?;
         let (state_commit, states) = rows(&states)?;
-        if pinned.is_some_and(|p| p != commit)
-            || state_commit != commit
-            || records.len() != states.len()
-        {
+        if state_commit != commit || records.len() != states.len() {
             return Err(Error::Unverified);
         }
         let caps = CAPS.get_or_init(|| crate::Capabilities::from_schema(SCHEMA));

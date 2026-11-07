@@ -108,6 +108,27 @@ fn drain_line(input: &mut impl BufRead) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn unconfigured_transport_publication_is_terminal_unavailable() {
+        let caps = Capabilities::from_schema(include_str!("../tests/fixtures/memory.pg"));
+        let envelope = og_memory::Envelope {
+            version: 1,
+            project: "global".into(),
+            kind: "Decision".into(),
+            slug: "example".into(),
+            content: "Use tests".into(),
+            actor: "test".into(),
+            source: og_memory::Source {
+                r#type: "file".into(),
+                path: "notes.md".into(),
+                hash: "example".into(),
+            },
+            relations: vec![],
+        };
+        let fact = og_memory::validate(&envelope, &caps).unwrap();
+        assert_eq!(Unavailable.commit(&fact, "before"), Err(Error::Unavailable));
+    }
+
     struct InterruptedLine {
         remaining: usize,
     }

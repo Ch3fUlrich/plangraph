@@ -58,17 +58,18 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                 json!({"commit":{"graph_commit_id":id,"created_at":1,
                 "graph_manifest_version":1,"graph_branch":"local"}})
             };
-            if step == 0 && fault == "conflict" {
+            if (step == 0 && fault == "conflict") || (step == 2 && fault == "state-conflict") {
                 write!(stream, "HTTP/1.1 412 Precondition Failed\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
                 return;
             }
-            if step == 0 && fault == "timeout" {
+            if (step == 0 && fault == "timeout") || (step == 2 && fault == "state-timeout") {
                 thread::sleep(Duration::from_millis(200));
                 return;
             }
-            let response = match step {
+            let mut response = match step {
                 0 => {
-                    assert!(headers.contains("omnigraph-if-graph-commit: before\r\n"));
+                    let expected = if updated { "updated-base" } else { "before" };
+                    assert!(headers.contains(&format!("omnigraph-if-graph-commit: {expected}\r\n")));
                     assert!(request["query"]
                         .as_str()
                         .unwrap()
@@ -107,8 +108,15 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                     json!({"graph_commit_id":"followup","row_count":1,
                         "rows":[if step == 3 {&record} else {&state}]})
                 }
+            };
+            if step == 3 && fault == "snapshot" {
+                response["graph_commit_id"] = json!("different");
             }
-            .to_string();
+            if step == 4 && fault == "receipt" {
+                response["rows"][0]["receiptJson"] =
+                    commit("different")["commit"].to_string().into();
+            }
+            let response = response.to_string();
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -116,6 +124,9 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                 response
             )
             .unwrap();
+            if step == 3 && fault == "snapshot" {
+                return;
+            }
         }
     });
     let mut e = crate::tests::fact();
@@ -127,7 +138,10 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
     .into();
     let caps =
         crate::Capabilities::from_schema(include_str!("../tests/fixtures/memory-v1-approved.pg"));
-    let result = client.commit(&crate::validate(&e, &caps).unwrap(), "before");
+    let result = client.commit(
+        &crate::validate(&e, &caps).unwrap(),
+        if updated { "updated-base" } else { "before" },
+    );
     server.join().unwrap();
     result
 }
@@ -147,4 +161,64 @@ fn publication_412_returns_conflict_without_replay() {
 #[test]
 fn publication_timeout_is_outcome_unknown() {
     assert_eq!(publish(false, "timeout"), Err(Error::Unknown));
+}
+
+fn partial(fault: &str, cause: Error) {
+    assert_eq!(
+        publish(false, fault),
+        Err(Error::PartialPublication {
+            commit: "publication".into(),
+            cause: Box::new(cause),
+        })
+    );
+}
+#[test]
+fn state_followup_412_is_partial_publication_without_replay() {
+    partial("state-conflict", Error::Conflict);
+}
+#[test]
+fn state_followup_timeout_is_partial_publication_outcome_unknown() {
+    partial("state-timeout", Error::Unknown);
+}
+#[test]
+fn mismatched_read_at_snapshot_is_partial_publication() {
+    partial("snapshot", Error::Unverified);
+}
+#[test]
+fn receipt_mismatch_is_partial_publication() {
+    partial("receipt", Error::Unverified);
+}
+
+#[test]
+fn memory_surfaces_partial_publication_without_retry_or_readback() {
+    struct PartialTransport(usize);
+    impl Transport for PartialTransport {
+        fn read(&mut self, project: &str) -> Result<crate::io::Snapshot, Error> {
+            assert_eq!(self.0, 0, "no readback after partial publication");
+            self.0 += 1;
+            Ok(crate::io::Snapshot {
+                graph_commit: project.into(),
+                facts: vec![],
+            })
+        }
+        fn commit(&mut self, _: &Validated, _: &str) -> Result<Receipt, Error> {
+            assert_eq!(self.0, 1, "no replay after partial publication");
+            self.0 += 1;
+            Err(Error::PartialPublication {
+                commit: "publication".into(),
+                cause: Box::new(Error::Conflict),
+            })
+        }
+    }
+    let mut memory = crate::io::Memory::new(PartialTransport(0));
+    let caps = crate::Capabilities::from_schema(include_str!("../tests/fixtures/memory.pg"));
+    let result = memory.remember("global", &crate::tests::fact(), &caps);
+    assert_eq!(
+        result,
+        Err(Error::PartialPublication {
+            commit: "publication".into(),
+            cause: Box::new(Error::Conflict),
+        })
+    );
+    assert_eq!(memory.transport.0, 2);
 }

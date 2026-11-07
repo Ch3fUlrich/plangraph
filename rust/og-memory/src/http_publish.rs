@@ -50,6 +50,21 @@ impl Http {
             expected,
         )?;
         let (commit, saved_receipt) = receipt(&publication)?;
+        self.finish_publication(fact, &params, commit, &saved_receipt)
+            .map_err(|cause| Error::PartialPublication {
+                commit: commit.into(),
+                cause: Box::new(cause),
+            })
+    }
+
+    fn finish_publication(
+        &mut self,
+        fact: &Validated,
+        params: &Value,
+        commit: &str,
+        saved_receipt: &str,
+    ) -> Result<Receipt, Error> {
+        let e = fact.envelope();
         // Verify the authoritative record without requiring its not-yet-written state.
         let records = self.post_snapshot(recall::RECORDS, &e.project, commit)?;
         let (read_commit, rows) = recall::rows(&records)?;
@@ -57,7 +72,7 @@ impl Http {
             .iter()
             .filter(|r| r["project"] == e.project && r["kind"] == e.kind && r["slug"] == e.slug)
             .collect();
-        if read_commit != commit || matches.len() != 1 || matches[0] != &params {
+        if read_commit != commit || matches.len() != 1 || matches[0] != params {
             return Err(Error::Unverified);
         }
         let state = self.mutate(
@@ -82,6 +97,6 @@ impl Http {
         {
             return Err(Error::Unverified);
         }
-        Ok(Receipt(saved_receipt))
+        Ok(Receipt(saved_receipt.into()))
     }
 }

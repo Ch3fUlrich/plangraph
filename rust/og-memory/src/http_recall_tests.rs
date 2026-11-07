@@ -116,11 +116,11 @@ fn recall(fault: &str) -> Result<crate::io::Snapshot, Error> {
             )
             .unwrap();
             if (index == 1 && fault == "records-pin")
-                || (index == 0 && matches!(fault.as_str(), "resolve-unpinned" | "resolve-empty-pin"))
+                || (index == 0
+                    && matches!(fault.as_str(), "resolve-unpinned" | "resolve-empty-pin"))
             {
                 listener.set_nonblocking(true).unwrap();
                 return listener;
-
             }
         }
         listener
