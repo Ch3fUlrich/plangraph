@@ -9,7 +9,7 @@ use std::{io::Read, path::Path};
 #[serde(deny_unknown_fields)]
 pub(crate) struct Proc {
     pub pid: u32,
-    pub start_time: u64,
+    pub start_time: Option<u64>,
     pub group: Option<String>,
 }
 pub(crate) struct Entry {
@@ -129,7 +129,7 @@ pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
                 let proc: Proc = serde_json::from_value(attempt["proc"].clone())
                     .map_err(|_| ReconcileError::Invalid)?;
                 if proc.pid == 0
-                    || proc.start_time == 0
+                    || proc.start_time == Some(0)
                     || proc.group.as_ref().is_some_and(|g| g.is_empty())
                 {
                     return Err(ReconcileError::Invalid);

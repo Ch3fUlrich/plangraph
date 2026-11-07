@@ -56,13 +56,6 @@ impl Runs {
         let run_id = new_run_id();
         let job_id = new_job_id();
         let dry = args.get("dry_run") == Some(&json!(true));
-        let max_s = match args["card"].get("max_s") {
-            None => 1800,
-            Some(value) => value
-                .as_u64()
-                .filter(|seconds| seconds.checked_mul(1000).is_some())
-                .ok_or_else(|| internal("invalid max_s"))?,
-        };
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
@@ -99,9 +92,6 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
-        if !dry {
-            base["max_s"] = json!(max_s);
-        }
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);

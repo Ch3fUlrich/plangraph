@@ -26,9 +26,6 @@ impl std::fmt::Display for ReconcileError {
 }
 
 pub(crate) fn mode(env: Option<&str>, config: &Value, role: &str) -> Result<Mode, ReconcileError> {
-    if !config.is_null() && !config.is_object() {
-        return Err(ReconcileError::Invalid);
-    }
     if !["implement", "review", "orchestrate"].contains(&role) {
         return Err(ReconcileError::Invalid);
     }
@@ -43,7 +40,10 @@ pub(crate) fn mode(env: Option<&str>, config: &Value, role: &str) -> Result<Mode
     match value.as_ref().map(Value::as_str) {
         None | Some(Some("off")) => Ok(Mode::Off),
         Some(Some("shadow")) => Ok(Mode::Shadow),
-        Some(Some("on")) => Ok(Mode::On),
+        Some(Some("on")) if env.is_some() => Ok(Mode::On),
+        // Shared configuration is advisory in S1; only explicit env `on`
+        // can request the unavailable mutating backend and refuse startup.
+        _ if env.is_none() => Ok(Mode::Off),
         _ => Err(ReconcileError::Invalid),
     }
 }
@@ -118,10 +118,8 @@ pub(crate) fn configured_startup(root: &Path) -> Result<(), String> {
     let config = match home.map(|p| std::fs::read(p.join("plangraph/reliability.json"))) {
         None => Value::Null,
         Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
-        Some(Ok(bytes)) => {
-            serde_json::from_slice(&bytes).map_err(|_| ReconcileError::Invalid.to_string())?
-        }
-        Some(Err(_)) => return Err(ReconcileError::Io.to_string()),
+        Some(Ok(bytes)) => serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        Some(Err(_)) => Value::Null,
     };
     startup(root, env.as_deref(), &config)
         .map(|_| ())

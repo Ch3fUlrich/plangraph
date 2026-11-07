@@ -1,0 +1,1 @@
+- RL29 S1: keep malformed shared reconciliation config inert, reserve startup refusal for explicit env `on`, defer persisted kill budgets, and accept unknown process start times; cover the daemon startup gate.

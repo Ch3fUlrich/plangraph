@@ -104,7 +104,20 @@ fn dry_spawn_registers_job() {
     registered_job(true);
 }
 
+#[test]
+fn card_max_s_is_ignored_without_persisting_a_kill_budget() {
+    for value in [Value::Null, json!(1800.0), json!("bad")] {
+        for dry in [false, true] {
+            registered_job_with_card(dry, json!({"max_s":value,"max_min":120}));
+        }
+    }
+}
+
 fn registered_job(dry: bool) {
+    registered_job_with_card(dry, json!({}));
+}
+
+fn registered_job_with_card(dry: bool, card: Value) {
     let dir = Dir(std::env::temp_dir().join(new_run_id()));
     std::fs::create_dir(&dir.0).unwrap();
     let runs = Runs::new(Arc::new(
@@ -115,7 +128,7 @@ fn registered_job(dry: bool) {
         }))
         .unwrap(),
     ));
-    let args = json!({"prompt":"p","card":{},"wait_seconds":1,"dry_run":dry});
+    let args = json!({"prompt":"p","card":card,"wait_seconds":1,"dry_run":dry});
     let result = runs
         .spawn_using(
             &dir.0,
@@ -144,6 +157,9 @@ fn registered_job(dry: bool) {
         Some(&result["run_id"].as_str().unwrap().to_string())
     );
     assert!(terminal(&result));
+    let saved = crate::records::read_record(&dir.0, &result["run_id"])
+        .unwrap_or_else(|_| panic!("missing record"));
+    assert!(saved.get("max_s").is_none());
     if !dry {
         let path = dir
             .0

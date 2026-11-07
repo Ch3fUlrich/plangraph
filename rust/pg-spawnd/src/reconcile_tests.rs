@@ -5,10 +5,13 @@ use serde_json::json;
 fn reconcile_mode_precedence_and_invalid_refusal() {
     let config = json!({"reconcile":"shadow", "roles":{"review":{"reconcile":"on"}}});
     assert_eq!(mode(None, &config, "implement").unwrap(), Mode::Shadow);
-    assert_eq!(mode(None, &config, "review").unwrap(), Mode::On);
+    assert_eq!(mode(None, &config, "review").unwrap(), Mode::Off);
     assert_eq!(mode(Some("off"), &config, "review").unwrap(), Mode::Off);
     assert!(mode(Some("invalid"), &config, "review").is_err());
-    assert!(mode(None, &json!({"reconcile":true}), "review").is_err());
+    assert_eq!(
+        mode(None, &json!({"reconcile":true}), "review").unwrap(),
+        Mode::Off
+    );
     assert!(mode(None, &config, "unknown").is_err());
     assert_eq!(mode(None, &json!({}), "review").unwrap(), Mode::Off);
 }

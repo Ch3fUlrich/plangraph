@@ -46,6 +46,28 @@ fn reconcile_inventory_legacy_missing_proc_and_limits() {
 }
 
 #[test]
+fn reconcile_shadow_accepts_unknown_start_time_and_optional_group() {
+    for proc in [
+        json!({"pid":123,"start_time":null,"group":null}),
+        json!({"pid":123}),
+    ] {
+        let dir = StateDir::new();
+        let mut record = dir.record();
+        record.set("proc", proc.clone());
+        record.set("max_s", json!(7200)); // old records remain readable
+        record.save().unwrap();
+        assert!(crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).is_ok());
+        record.set(
+            "attempts",
+            json!([{"status":"running", "started":1,
+            "leg":{}, "proc":proc}]),
+        );
+        record.save().unwrap();
+        assert!(crate::reconcile::startup(&dir.0, Some("shadow"), &json!({})).is_ok());
+    }
+}
+
+#[test]
 fn reconcile_settle_one_outcome_one_event_null_exit() {
     let dir = StateDir::new();
     let mut record = dir.record();
