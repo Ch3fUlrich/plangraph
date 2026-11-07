@@ -2,6 +2,7 @@
 import asyncio
 import math
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
@@ -145,6 +146,12 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s)
     state = store if store is not None else leg_state
     start = time.monotonic()
+    # Missing executables describe this host, not the remote leg. Check each
+    # harness independently, before creating a repo or attempting any leg.
+    if shutil.which(leg.harness) is None:
+        return dict(ok=False, state='host-not-ready',
+                    reason='host-not-ready: harness missing: ' + leg.harness,
+                    infra=True, seconds=time.monotonic() - start)
     deadline = start + timeout
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
     job = None
@@ -263,6 +270,8 @@ async def before_launch(runner, leg, role, dry_run):
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
     result = await asyncio.shield(pending)
+    if result.get('state') == 'host-not-ready':
+        return result['reason']
     return admission() if result['ok'] or result.get('infra') else 'down: ' + result['reason']
 
 
