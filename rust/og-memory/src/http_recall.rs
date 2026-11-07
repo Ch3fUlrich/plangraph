@@ -60,7 +60,10 @@ impl Transport for Http {
             query: RESOLVE,
             params: json!({}),
         })?;
-        let (commit, _) = rows(&resolved)?;
+        let commit = text(&resolved, "graph_commit_id")?;
+        if commit.is_empty() {
+            return Err(Error::Unverified);
+        }
         // snapshot is a top-level HTTP request field, never a GQ parameter.
         let records = self.post_snapshot(RECORDS, project, commit)?;
         let (record_commit, records) = rows(&records)?;
