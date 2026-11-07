@@ -173,3 +173,10 @@ def test_child_env_never_carries_the_call_log_token(monkeypatch):
     monkeypatch.setenv(gw.TOKEN_ENV, 'tok')
     assert gw.TOKEN_ENV not in build_child_env()
     assert gw.TOKEN_ENV not in build_child_env({gw.TOKEN_ENV: 'tok'})   # extra_env cannot re-add it
+
+
+def test_child_env_never_carries_the_token_file_path(monkeypatch):
+    from plangraph.routing_support.clients import build_child_env
+    monkeypatch.setenv(gw.TOKEN_FILE_ENV, '/x/key')
+    assert gw.TOKEN_FILE_ENV not in build_child_env()
+    assert gw.TOKEN_FILE_ENV not in build_child_env({gw.TOKEN_FILE_ENV: '/x/key'})
