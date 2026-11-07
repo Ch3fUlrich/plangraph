@@ -129,8 +129,12 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                 root.path(),
             );
             let script = match mode {
-                "split" => format!("printf '{secret}\\n{fragment}\\n'; {ending}"),
-                "defect" => format!("echo hi > '{secret}'"),
+                "split" => format!(
+                    "printf '{}\\n{}\\n'; {ending}",
+                    &secret[..prefix.len()],
+                    &secret[prefix.len()..]
+                ),
+                "defect" => format!("echo '{secret}'; echo hi > '{secret}'"),
                 "question" => format!(
                     "echo 'PG_QUESTION: {{\"text\":\"{secret}\",\"default\":\"{secret}\",\"risk_tags\":[\"{secret}\"]}}'"
                 ),
@@ -148,6 +152,14 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                 })
                 .unwrap();
             assert_eq!(result.exit_class, expected, "{mode}");
+            if mode == "defect" {
+                // Exercise the result boundary with raw output too: the process
+                // collector may already have redacted the harness's stdout.
+                let raw = defect_result(r.path(), &base, "pilot", &base, secret.clone())
+                    .unwrap();
+                assert_eq!(raw.output_tail, "[REDACTED]");
+                assert_eq!(result.output_tail, "[REDACTED]");
+            }
             let safe = |body: &str| {
                 assert!(
                     excludes_secret_fragments(body, &secret, floor),
