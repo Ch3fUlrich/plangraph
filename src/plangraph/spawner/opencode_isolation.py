@@ -82,11 +82,15 @@ def install_go_credential(job_dir, source=None):
         read = sqlite3.connect(Path(src).resolve().as_uri() + '?mode=ro', uri=True)
         write = None
         try:
+            # Virtual tables recreate their own shadow tables.
+            shadows = {row[1] for row in read.execute('PRAGMA table_list')
+                       if row[2] == 'shadow'}
             schema = [row[0] for row in read.execute(
-                "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL"
-                " AND name NOT GLOB 'sqlite_*' AND tbl_name IN ('migration', 'credential')"
+                "SELECT sql, tbl_name FROM sqlite_master WHERE sql IS NOT NULL"
+                " AND name NOT GLOB 'sqlite_*'"
                 " AND type IN ('table', 'index')"
-                " ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name")]
+                " ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name")
+                if row[1] not in shadows]
             migrations = read.execute(
                 'SELECT id, time_completed FROM migration ORDER BY id').fetchall()
             creds = read.execute(
@@ -101,7 +105,9 @@ def install_go_credential(job_dir, source=None):
             write = sqlite3.connect(temporary)
             for statement in schema:
                 write.execute(statement)
-            write.executemany('INSERT OR IGNORE INTO migration(id, time_completed) VALUES(?, ?)', migrations)
+            # Migration history is valid only with the complete matching schema.
+            # Copy definitions, never application rows or host key material.
+            write.executemany('INSERT INTO migration(id, time_completed) VALUES(?, ?)', migrations)
             write.executemany(
                 'INSERT INTO credential(id, integration_id, label, value, connector_id,'
                 ' method_id, active, time_created, time_updated) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', creds)

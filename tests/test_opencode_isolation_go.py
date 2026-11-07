@@ -75,19 +75,35 @@ def test_missing_store_is_clean(tmp_path):
     assert not install_go_credential(tmp_path / 'job', tmp_path / 'absent')
 
 
-def test_only_auth_schema_is_rebuilt(tmp_path):
+def test_full_schema_is_rebuilt_without_application_data(tmp_path):
     source = tmp_path / 'source.db'
     source_store(source)
     with sqlite3.connect(source) as db:
         db.execute('CREATE TABLE session(id INTEGER PRIMARY KEY AUTOINCREMENT, secret TEXT)')
         db.execute('CREATE VIRTUAL TABLE search USING fts5(content)')
         db.execute('CREATE INDEX credential_provider ON credential(integration_id)')
+        db.execute('INSERT INTO session(secret) VALUES(?)', ('synthetic-session-secret',))
     job = tmp_path / 'job'
     assert install_go_credential(job, source)
     with sqlite3.connect(job / 'opencode' / 'opencode.db') as db:
         names = {r[0] for r in db.execute('SELECT name FROM sqlite_master')}
         assert 'credential_provider' in names
-        assert not any(n.startswith(('session', 'search')) for n in names)
+        assert {'session', 'search'} <= names
+        assert db.execute('SELECT count(*) FROM session').fetchone() == (0,)
+
+
+def test_credential_store_does_not_claim_host_migrations(tmp_path):
+    source = tmp_path / 'source.db'
+    source_store(source)
+    with sqlite3.connect(source) as db:
+        db.execute('CREATE TABLE session(id TEXT PRIMARY KEY)')
+        db.execute('INSERT INTO migration VALUES(?, ?)', ('session-schema', 1))
+    job = tmp_path / 'job'
+    assert install_go_credential(job, source)
+    with sqlite3.connect(job / 'opencode' / 'opencode.db') as db:
+        # Every claimed migration has its matching schema, but no host data.
+        assert db.execute('SELECT id FROM migration').fetchall() == [('session-schema',)]
+        assert db.execute('SELECT count(*) FROM session').fetchone() == (0,)
 
 
 @pytest.mark.parametrize('target', ['opencode-glm-5.3-flash-free',
