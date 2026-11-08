@@ -7,8 +7,8 @@ from .remote_ps import MAX_WORKERS, TIMEOUT, configured_hosts, exit_reason, host
 
 
 def check_host(host):
-    command = host_command(host)
     try:
+        command = host_command(host)
         result = subprocess.run(
             ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
              '--', host['target'], command], check=False, stdin=subprocess.DEVNULL,
@@ -16,6 +16,8 @@ def check_host(host):
         reason = exit_reason(result.returncode)
         state = {None: 'ok', 'host src missing': 'src missing',
                  'host unreachable': 'unreachable'}.get(reason, reason)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        state = 'invalid configuration'
     except OSError:
         state = 'unreachable'
     except subprocess.TimeoutExpired:

@@ -1,7 +1,7 @@
 import json
 import os
 import subprocess
-import time
+from threading import Barrier
 
 import pytest
 
@@ -66,11 +66,26 @@ def test_doctor_ps_hosts_states(ssh, monkeypatch, capsys, code, state):
 
 
 def test_doctor_ps_hosts_parallel_timeout(ssh, monkeypatch):
-    monkeypatch.setenv('SSH_DELAY', '2')
     monkeypatch.setattr(ps_host_doctor, 'TIMEOUT', 0.2)
-    started = time.monotonic()
+    in_flight = Barrier(len(ssh[1]))
+    def run(command, **kwargs):
+        assert kwargs['timeout'] == 0.2
+        # Deadlock guard only: serial execution cannot pass this barrier.
+        in_flight.wait(timeout=10)
+        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+    monkeypatch.setattr(ps_host_doctor.subprocess, 'run', run)
     assert all(row['detail'] == 'host query failed' for row in ps_host_doctor.source_checks())
-    assert time.monotonic() - started < 1.5
+
+
+@pytest.mark.parametrize('error', [ValueError, AttributeError])
+def test_doctor_invalid_command(monkeypatch, error):
+    host = dict(name='host-a', target='host-a', src='/src')
+    monkeypatch.setattr(ps_host_doctor, 'configured_hosts', lambda: [host])
+    def invalid(host):
+        raise error('PRIVATE-DIAGNOSTIC')
+    monkeypatch.setattr(ps_host_doctor, 'host_command', invalid)
+    assert ps_host_doctor.source_checks() == [
+        dict(name='ps_host_host-a', status='fail', detail='invalid configuration')]
 
 
 @pytest.mark.parametrize('entry', [None, 3, 'host', []])

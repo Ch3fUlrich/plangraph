@@ -48,7 +48,8 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('src,distro', [(s, None) for s in [None, '/opt/plangraph/src',
     '~/code/plangraph/src']] +
-    [('/opt/plangraph/src', d) for d in ['Ubuntu-24.04', 'a_B.9-', '.distro', '_distro', '1']])
+    [(s, d) for s in ['/opt/plangraph/src', '~/code/plangraph/src']
+     for d in ['Ubuntu-24.04', 'a_B.9-', '.distro', '_distro', '1']])
 def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
     original = subprocess.Popen
     host = dict(target='private-target')
@@ -59,8 +60,7 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
         command = f'test -d {quoted} || exit 44; PYTHONPATH={quoted} {command}'
     if distro is not None:
         host['wsl_distro'] = distro
-        command = (f"wsl -d {distro} -- sh -c 'test -d {src} || exit 44; "
-                   f"PYTHONPATH={src} python3 -m plangraph.spawner.remote_ps'")
+        command = f"wsl -d {distro} -- sh -c '{command}'"
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'private-target', command]
