@@ -391,6 +391,7 @@ pub(crate) fn settle(
         .push_event(json!({"event":"RUN_ORPHANED", "attempt":attempt,"how":how,
         "idempotency_key":[run,attempt,"RUN_ORPHANED"]}))
         .map_err(|_| invalid())?;
+    crate::gitconfig_guard::enforce(record, Status::Orphaned);
     record.save().map_err(|_| ReconcileError::Io)
 }
 

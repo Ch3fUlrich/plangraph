@@ -1,5 +1,5 @@
 //! Local runs only. Not ported: served-model witnesses, harness-limit leg booking,
-//! writer no-change checks, git config guards, second-leg fall-through, writer
+//! writer no-change checks, second-leg fall-through, writer
 //! continuation, completion events/delivery markers, dispatch-refusal gate, or
 //! SPAWNER-LIVENESS-D3622 watchdog. Context packs and writer env
 //! belong to the Python launch adapter.
@@ -93,6 +93,12 @@ impl Runs {
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
+        if !dry && role == "implement" {
+            let dir = pg_worker_core::run::record::run_dir(state, &run_id)
+                .map_err(|_| internal("invalid run id"))?;
+            base["gitconfig_guard"] = json!(crate::gitconfig_guard::capture(&launch.cwd, &dir)
+                .map_err(|_| internal("could not snapshot git configuration"))?);
+        }
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -282,6 +288,7 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
     }
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+    let status = crate::gitconfig_guard::enforce(record, status);
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
     let mut attempts = match record.get("attempts") {

@@ -7,6 +7,7 @@ mod error_tests;
 mod errors;
 mod evidence;
 mod evidence_row;
+mod gitconfig_guard;
 mod health_cli;
 mod health_report;
 mod health_report_rows;
