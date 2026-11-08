@@ -93,11 +93,16 @@ impl Runs {
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
-        if !dry && role == "implement" {
+        if !dry {
             let dir = pg_worker_core::run::record::run_dir(state, &run_id)
                 .map_err(|_| internal("invalid run id"))?;
-            base["gitconfig_guard"] = json!(crate::gitconfig_guard::capture(&launch.cwd, &dir)
-                .map_err(|_| internal("could not snapshot git configuration"))?);
+            match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
+                Ok(armed) => base["gitconfig_guard"] = json!(armed),
+                Err(_) => {
+                    base["reason"] = json!("gitconfig_capture_refused");
+                    return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+                }
+            }
         }
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
