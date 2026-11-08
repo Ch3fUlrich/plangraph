@@ -131,6 +131,22 @@ except (OSError, ValueError, KeyError, TypeError):
   fi
   { IFS= read -r repo; IFS= read -r sha; IFS= read -r router_dir; } <<< "$values"
   [[ "$repo" != -* ]] || { echo "ctx-watchdog: router_repo must not start with -" >&2; exit 1; }
+  if ! "$PYTHON_CMD" -c '
+import re, sys
+from urllib.parse import urlsplit
+repo = sys.argv[1]
+valid = repo.startswith("/") or re.fullmatch(r"git@[^\s:/-][^\s:/]*:.+", repo)
+if repo.startswith(("https://", "ssh://", "file://")):
+    try:
+        url = urlsplit(repo)
+        valid = (url.scheme == "file" and bool(url.path)) or bool(url.hostname and not url.hostname.startswith("-"))
+    except ValueError:
+        valid = False
+sys.exit(0 if valid else 1)
+' "$repo"; then
+    echo "ctx-watchdog: router_repo must use https://, ssh://, git@host:path, file:// or an absolute path with a non-option host" >&2
+    exit 1
+  fi
   [[ "$router_dir" != -* ]] || { echo "ctx-watchdog: router_dir must not start with -" >&2; exit 1; }
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[DRY-RUN] ctx-watchdog: would read config, clone/fetch pinned router, render units, daemon-reload, enable --now ctx-watchdog.timer and verify health"
@@ -148,12 +164,12 @@ except (OSError, ValueError, KeyError, TypeError):
       echo "ctx-watchdog: $router_dir exists but is not a git checkout" >&2
       exit 1
     fi
-    git_error="$(GIT_TERMINAL_PROMPT=0 git -C "$router_dir" fetch --quiet -- "$repo" "$sha" 2>&1 >/dev/null)" || {
-      ctx_git_failure "$git_error"; exit 1;
+    git_error="$(GIT_TERMINAL_PROMPT=0 git -C "$router_dir" fetch --quiet -- "$repo" "$sha" 2>&1 >/dev/null || { printf '\001'; exit 1; })" || {
+      ctx_git_failure "${git_error%$'\001'}"; exit 1;
     }
   else
-    git_error="$(GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout -- "$repo" "$router_dir" 2>&1 >/dev/null)" || {
-      ctx_git_failure "$git_error"; exit 1;
+    git_error="$(GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout -- "$repo" "$router_dir" 2>&1 >/dev/null || { printf '\001'; exit 1; })" || {
+      ctx_git_failure "${git_error%$'\001'}"; exit 1;
     }
   fi
   if ! git -C "$router_dir" checkout --detach "$sha" -- >/dev/null 2>&1; then
@@ -186,7 +202,9 @@ for name in ("ctx-watchdog.service", "ctx-watchdog.timer"):
   if ! "$PYTHON_CMD" -c '
 import os, pathlib, sys
 binary = pathlib.Path(sys.argv[1]).resolve() / "router/bin/ctx-watchdog"
-value = sys.argv[2].replace("%h", str(pathlib.Path.home())).replace("%%", "%")
+# systemctl show returns the expanded real path, not unit-file specifiers.
+# Compare in that direction so a literal %h in the path stays literal.
+value = sys.argv[2]
 sys.exit(0 if str(binary) in value and os.access(binary, os.X_OK) else 1)
 ' "$router_dir" "$exec_start"; then
     echo "ctx-watchdog: unhealthy (unit ExecStart does not point at the checkout)" >&2
@@ -201,8 +219,8 @@ ctx_git_failure() {
   "$PYTHON_CMD" -c '
 import re, sys
 lines = sys.argv[1].splitlines()
-detail = re.sub(r"[^\s/:@]+:[^\s/@]*@", "", lines[-1] if lines else "git failed")
-print("ctx-watchdog: cannot fetch the router repo on this host; this host needs an operator access step: " + detail, file=sys.stderr)
+detail = re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]*@(?=[^/@\s]*(?:/|\s|$))", r"\1", lines[-1] if lines else "")
+print("ctx-watchdog: cannot fetch the router repo on this host; this host needs an operator access step" + (": " + detail if detail else ""), file=sys.stderr)
 ' "$1"
 }
 install_ctx_watchdog

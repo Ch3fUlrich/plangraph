@@ -50,7 +50,7 @@ if name == 'git':
     assert os.environ.get('GIT_TERMINAL_PROMPT') == '0' or 'checkout' in args
     if os.environ.get('FETCH_FAIL') and ('clone' in args or 'fetch' in args):
         print('first diagnostic', file=sys.stderr)
-        print('fatal: denied https://user:pass@example.org/router', file=sys.stderr)
+        print(os.environ.get('GIT_ERROR', 'fatal: denied https://user:pass@example.org/router'), file=sys.stderr)
         sys.exit(1)
     if 'rev-parse' in args: sys.exit(0 if (Path(args[1]) / '.git').exists() else 1)
     if os.environ.get('CHECKOUT_FAIL') and 'checkout' in args: sys.exit(1)
@@ -66,7 +66,11 @@ if name == 'systemctl' and 'show' in args:
     else:
         base = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config')))
         service = (base / 'systemd/user/ctx-watchdog.service').read_text()
-        print(next(line[10:] for line in service.splitlines() if line.startswith('ExecStart=')))
+        import re, shlex
+        command = next(line[10:] for line in service.splitlines() if line.startswith('ExecStart='))
+        binary = shlex.split(command)[0]
+        binary = re.sub(r'%%|%h', lambda m: '%' if m[0] == '%%' else str(Path.home()), binary)
+        print('{ path=' + binary + ' ; argv[]=' + binary + ' --apply ; ignore_errors=no ; }')
 '''
     for name in ('git', 'systemctl'):
         path = bins / name
@@ -79,7 +83,7 @@ if name == 'systemctl' and 'show' in args:
     return home, log, run
 
 
-@pytest.mark.parametrize('override', [None, 'alternate/router with spaces'])
+@pytest.mark.parametrize('override', [None, 'alternate/router with spaces', 'literal%h/router'])
 def test_install_pinned_host_neutral(host, monkeypatch, override):
     home, log, run = host
     if override:
@@ -89,7 +93,7 @@ def test_install_pinned_host_neutral(host, monkeypatch, override):
     assert result.returncode == 0, result.stderr
     units = home / '.config/systemd/user'
     service = (units / 'ctx-watchdog.service').read_text()
-    assert f'ExecStart="%h/{directory}/router/bin/ctx-watchdog" --apply' in service
+    assert f'ExecStart="%h/{directory.replace(chr(37), chr(37) * 2)}/router/bin/ctx-watchdog" --apply' in service
     assert str(home) not in service
     assert 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' in service
     timer = (units / 'ctx-watchdog.timer').read_text()
@@ -114,6 +118,45 @@ def test_remote_failure(host, monkeypatch, existing):
     assert 'fatal: denied https://example.org/router' in result.stderr
     assert 'user:pass@' not in result.stderr
     assert 'first diagnostic' not in result.stderr
+
+
+@pytest.mark.parametrize('detail', [
+    'https://TOKEN@example.org/router',
+    'https://user:[REDACTED]@example.org/router',
+    'https://user:pa/ss@word@example.org/router',
+    '',
+])
+def test_redact_git_diagnostics(host, monkeypatch, detail):
+    monkeypatch.setenv('FETCH_FAIL', '1')
+    monkeypatch.setenv('GIT_ERROR', detail)
+    result = host[2]()
+    assert result.returncode == 1
+    expected = ': https://example.org/router' if detail else ''
+    assert result.stderr.endswith('operator access step' + expected + '\n')
+
+
+@pytest.mark.parametrize('repo', ['ext::command', '-option', 'ssh://-oProxyCommand=command/repo', 'http://example.org/repo', 'relative/repo'])
+def test_reject_unsafe_transport(host, repo):
+    home, log, run = host
+    config = home / '.config/plangraph/ctx-watchdog.json'
+    values = json.loads(config.read_text())
+    values['router_repo'] = repo
+    config.write_text(json.dumps(values))
+    result = run()
+    assert result.returncode == 1
+    assert 'ctx-watchdog: router_repo' in result.stderr
+    assert not log.exists() or 'git ' not in log.read_text()
+
+
+@pytest.mark.parametrize('repo', ['https://example.org/router', 'ssh://git@example.org/router',
+                                 'git@example.org:router', '/srv/router'])
+def test_allow_safe_transport(host, repo):
+    home, _, run = host
+    config = home / '.config/plangraph/ctx-watchdog.json'
+    values = json.loads(config.read_text())
+    values['router_repo'] = repo
+    config.write_text(json.dumps(values))
+    assert run().returncode == 0
 
 
 @pytest.mark.parametrize('failure', ['CHECKOUT_FAIL', 'WRONG_EXEC', 'missing_git', 'not_repo'])
