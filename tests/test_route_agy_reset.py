@@ -35,13 +35,15 @@ def test_agy_gpt_oss_review_only_and_cross_family(boundary):
     assert leg in plan(boundary).legs
     for role in ('implement', 'orchestrate'):
         assert leg not in plan(boundary, role).legs
-    excluded = plan_spawn(
-        dict(estimate_tokens=1000, diff_ref=dict(repo=str(Path.cwd()), base='HEAD', head='HEAD')), role='review',
-        writer_families=('openai',), leg_reader=boundary, now=100,
-        policy=RoutePolicy())
-    assert leg not in excluded.legs
-    assert any(s['leg'] == leg.id and s['reason'] == 'excluded_family'
-               for s in excluded.skipped)
+    # A cx writer is family "gpt" (legs.py); the keeper treats gpt and openai as one family.
+    for writer in ('openai', 'gpt'):
+        excluded = plan_spawn(
+            dict(estimate_tokens=1000, diff_ref=dict(repo=str(Path.cwd()), base='HEAD', head='HEAD')),
+            role='review', writer_families=(writer,), leg_reader=boundary, now=100,
+            policy=RoutePolicy())
+        assert leg not in excluded.legs, writer
+        assert any(s['leg'] == leg.id and s['reason'] == 'excluded_family'
+                   for s in excluded.skipped), writer
     assert all(l.id != 'ovh-gpt-oss-120b' and
                l.model != 'omniroute/ovh-gpt-oss-120b' for l in DEFAULT_LEGS)
 
@@ -83,7 +85,10 @@ def test_free_and_subscription_before_paid_deepseek(boundary, role):
     # The paid fallback serves implement only; other roles must not offer it.
     if role != 'implement':
         assert all(l.id != 'deepseek' for l in plan(boundary, role).legs)
+        # Haiku-last (D-3763: Haiku review only, last) is pinned by its own test above;
+        # this ordering check covers the non-Claude legs, which must not be empty.
         legs = tuple(l for l in legs if l.family != 'claude')
+        assert any(l.tier in ('free', 'subscription') for l in legs)
     ordered = route_card(dict(estimate_tokens=1000), legs=legs, role=role).legs
     paid = next(i for i, l in enumerate(ordered) if l.id == 'deepseek')
     assert all(i < paid for i, l in enumerate(ordered)
