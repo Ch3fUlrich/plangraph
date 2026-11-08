@@ -711,9 +711,7 @@ class SpawnerRunner:
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
-                    if isinstance(envelope, dict) and 'plangraph_oom' in envelope:
-                        job.events.append(envelope['plangraph_oom'])
-                    continue
+                    job.events.extend([envelope['plangraph_oom']] if isinstance(envelope, dict) and 'plangraph_oom' in envelope else []); continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
                     job.events.append({'event': 'forged_envelope'})
