@@ -16,10 +16,13 @@ runs:
         set -euo pipefail
         dir=$(mktemp -d)
         trap 'rm -rf "$dir"' EXIT
-        curl -fsSL -o "$dir/temporal.tar.gz" --retry 24 --retry-delay 15 \
-          --retry-max-time 360 --retry-all-errors --connect-timeout 30 --max-time 120 \
-          https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
-        # Preserve the existing pinned release archive SHA-256 check unchanged.
+        curl -fsSL -o "$dir/temporal.tar.gz" --retry 3 --retry-delay 5 \
+          --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
+          https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz || \
+          curl -fsSL -o "$dir/temporal.tar.gz" --retry 24 --retry-delay 15 \
+            --retry-max-time 360 --retry-all-errors --connect-timeout 30 --max-time 120 \
+            'https://temporal.download/cli/archive/v1.9.1?platform=linux&arch=amd64'
+        # Both official sources must match this pinned release archive SHA-256.
         echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
         tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
         mkdir -p "$HOME/.cache/temporal-cli/1.9.1"

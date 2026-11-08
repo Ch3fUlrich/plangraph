@@ -101,17 +101,51 @@ def test_temporal_workflow_cache_and_retry_window():
     assert cache["with"]["path"] == "~/.cache/temporal-cli/1.9.1/temporal"
     assert download["if"] == f"steps.{cache['id']}.outputs.cache-hit != 'true'"
     commands = list(downloads((ROOT / ".github/actions/setup-temporal/action.yml").read_text()))
-    assert len(commands) == 1
-    command = commands[0][1]
+    assert len(commands) == 2
+    github, command = [command for _, command in commands]
+    assert github[-1] == (
+        "https://github.com/temporalio/cli/releases/download/v1.9.1/"
+        "temporal_cli_1.9.1_linux_amd64.tar.gz"
+    )
+    assert github[github.index("--retry") + 1] == "3"
+    assert "--retry-all-errors" in github
+    # curl may finish one final transfer after the retry window expires.
+    assert int(github[github.index("--retry-max-time") + 1]) + int(
+        github[github.index("--max-time") + 1]
+    ) <= 60
+    assert command[-1] == (
+        "https://temporal.download/cli/archive/v1.9.1?platform=linux&arch=amd64"
+    )
     assert int(command[command.index("--retry-max-time") + 1]) >= 300
     assert int(command[command.index("--retry") + 1]) >= 20
     assert int(command[command.index("--retry-delay") + 1]) >= 15
     assert "--retry-all-errors" in command
+    script = download["run"]
+    assert "||" in script.split(github[-1], 1)[1].split("curl", 1)[0]
+    for curl in (github, command):
+        assert curl[curl.index("-o") + 1] == "$dir/temporal.tar.gz"
     assert "sha256sum -c -" in download["run"]
+    assert script.index("sha256sum -c -") > script.index(command[-1])
+    assert script.index("sha256sum -c -") < script.index("tar -xzf")
     assert "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5" in download["run"]
     assert "install -m 0755" in download["run"]
     assert "if" not in export  # Cache hits must also export the binary path.
     assert 'TEMPORAL_CLI=$HOME/.cache/temporal-cli/1.9.1/temporal' in export["run"]
+
+
+def test_every_temporal_download_step_has_fallback_and_verification():
+    paths = list((ROOT / ".github/workflows").glob("*.y*ml"))
+    paths += list((ROOT / ".github/actions").rglob("action.y*ml"))
+    found = 0
+    for path in paths:
+        for script, _ in run_blocks(yaml.compose(path.read_text())):
+            if "temporalio/cli/releases/download" not in script:
+                continue
+            found += 1
+            assert "||" in script, path
+            assert "https://temporal.download/cli/archive/v1.9.1?platform=linux&arch=amd64" in script, path
+            assert "sha256sum -c -" in script or 'tar -tzf "$dir/temporal.tar.gz"' in script, path
+    assert found == 1
 
 
 def workflow(command):
