@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import sys
 import urllib.request
 
@@ -150,7 +151,22 @@ async def diagnose(probe=False):
     from .service import SpawnService
     from .leg_probe import probe_many
     checks, plans = [], {}
-    from .ps_host_doctor import source_checks
+    def source_checks():
+        binary = Path(__file__).resolve().parents[3] / 'rust/target/release/pg-spawnd'
+        binary = str(binary) if binary.is_file() else (shutil.which('pg-spawnd') or 'pg-spawnd')
+        detail = 'host query failed'
+        try:
+            result = subprocess.run([binary, 'doctor-sources'], check=False,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=TIMEOUT)
+            rows = json.loads(result.stdout)
+            if result.returncode == 0 and isinstance(rows, list):
+                return rows
+        except FileNotFoundError:
+            detail = 'unavailable'
+        except (OSError, subprocess.TimeoutExpired, ValueError, UnicodeError):
+            pass
+        return [dict(name='ps_hosts', status='fail', detail=detail)]
     checks.extend(await asyncio.to_thread(source_checks))
 
     async def check(name, operation):

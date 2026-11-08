@@ -43,6 +43,9 @@ def host(tmp_path, monkeypatch):
     binary = tmp_path / 'fake'
     binary.write_text(f'#!{sys.executable}\nprint("fake version 1")\n')
     binary.chmod(0o700)
+    helper = tmp_path / 'pg-spawnd'
+    helper.write_text(f'#!{sys.executable}\nprint("[]")\n')
+    helper.chmod(0o700)
     class Service:
         runner = object()
         leg_reader = None

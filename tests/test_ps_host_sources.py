@@ -1,11 +1,10 @@
 import json
 import os
 import subprocess
-from threading import Barrier
 
 import pytest
 
-from plangraph.spawner import ps_host_doctor, remote_ps
+from plangraph.spawner import doctor, remote_ps
 
 
 @pytest.fixture
@@ -55,44 +54,31 @@ def test_remote_ps_source_prefix_executes(ssh):
     assert remote_ps._fetch(hosts[0], remote_ps.query_host)[0]['reason'] == 'host src missing'
 
 
-@pytest.mark.parametrize('code,state', [(0, 'ok'), (44, 'src missing'), (255, 'unreachable'),
-                                       (1, 'host query failed')])
-def test_doctor_ps_hosts_states(ssh, monkeypatch, capsys, code, state):
-    monkeypatch.setenv('SSH_CODE', str(code))
-    rows = ps_host_doctor.source_checks()
-    assert [row['name'] for row in rows] == ['ps_host_host-a', 'ps_host_host-b']
-    assert [row['detail'] for row in rows] == [state, state]
-    assert 'PRIVATE-DIAGNOSTIC' not in json.dumps(rows) + str(capsys.readouterr())
-
-
-def test_doctor_ps_hosts_parallel_timeout(ssh, monkeypatch):
-    monkeypatch.setattr(ps_host_doctor, 'TIMEOUT', 0.2)
-    in_flight = Barrier(len(ssh[1]))
+@pytest.mark.parametrize('mode,detail', [('ok', 'ok'), ('exit', 'host query failed'),
+    ('json', 'host query failed'), ('shape', 'host query failed'),
+    ('timeout', 'host query failed'), ('missing', 'unavailable')])
+def test_doctor_rust_sources(monkeypatch, mode, detail):
+    import asyncio
+    rows = [dict(name='ps_host_a', status='pass', detail='ok')]
     def run(command, **kwargs):
-        assert kwargs['timeout'] == 0.2
-        # Deadlock guard only: serial execution cannot pass this barrier.
-        in_flight.wait(timeout=10)
-        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
-    monkeypatch.setattr(ps_host_doctor.subprocess, 'run', run)
-    assert all(row['detail'] == 'host query failed' for row in ps_host_doctor.source_checks())
-
-
-@pytest.mark.parametrize('error', [ValueError, AttributeError])
-def test_doctor_invalid_command(monkeypatch, error):
-    host = dict(name='host-a', target='host-a', src='/src')
-    monkeypatch.setattr(ps_host_doctor, 'configured_hosts', lambda: [host])
-    def invalid(host):
-        raise error('PRIVATE-DIAGNOSTIC')
-    monkeypatch.setattr(ps_host_doctor, 'host_command', invalid)
-    assert ps_host_doctor.source_checks() == [
-        dict(name='ps_host_host-a', status='fail', detail='invalid configuration')]
-
-
-@pytest.mark.parametrize('entry', [None, 3, 'host', []])
-def test_doctor_invalid_entry(monkeypatch, entry):
-    monkeypatch.setattr(ps_host_doctor, 'configured_hosts', lambda: [entry])
-    assert ps_host_doctor.source_checks() == [
-        dict(name='ps_hosts', status='fail', detail='invalid configuration')]
+        assert command[1:] == ['doctor-sources']
+        assert kwargs['stdin'] == kwargs['stderr'] == subprocess.DEVNULL
+        assert kwargs['stdout'] == subprocess.PIPE
+        assert kwargs['timeout'] == doctor.TIMEOUT
+        if mode == 'timeout':
+            raise subprocess.TimeoutExpired(command, 10)
+        if mode == 'missing':
+            raise FileNotFoundError('PRIVATE-DIAGNOSTIC')
+        return subprocess.CompletedProcess(command, int(mode == 'exit'),
+            'bad' if mode == 'json' else '{}' if mode == 'shape' else json.dumps(rows))
+    async def mcp(*args):
+        return 'pass', 'ok'
+    monkeypatch.setattr(doctor.subprocess, 'run', run)
+    monkeypatch.setattr(doctor, 'mcp', mcp)
+    monkeypatch.setattr(doctor.shutil, 'which', lambda name: None)
+    result = asyncio.run(doctor.diagnose())['checks'][0]
+    assert result == (rows[0] if mode == 'ok' else
+        dict(name='ps_hosts', status='fail', detail=detail))
 
 
 def test_stderr_does_not_control_result(ssh):
