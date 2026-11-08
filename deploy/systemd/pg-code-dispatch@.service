@@ -1,0 +1,11 @@
+[Unit]
+Description=Code-only ready item dispatcher (%i)
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/code-dispatch-%i.env
+ExecStart=%h/.local/bin/pg-code-dispatch
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077

@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll code-only ready work (%i)
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=30
+RandomizedDelaySec=5
+Unit=pg-code-dispatch@%i.service
+
+[Install]
+WantedBy=timers.target
