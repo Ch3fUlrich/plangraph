@@ -100,12 +100,19 @@ def run_hook(repo, lines, env_extra=None):
     env["HOME"] = str(Path(repo).parent / "home")
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
+    env["PREFLIGHT_SKIP"] = "1"  # Scrub/changelog fixtures, not preflight.
     env.update(env_extra or {})
     stdin = "".join(l + "\n" for l in lines)
     command = [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"]
-    return subprocess.run(command,
+    result = subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
+    if result.returncode == 0:
+        notice = "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
+        assert result.stderr.splitlines().count(notice) == 1
+    else:
+        assert "tools/preflight.py missing" not in result.stderr
+    return result
 
 
 @pytest.fixture
@@ -131,7 +138,6 @@ def test_hook_refuses_pushed_public_pattern_hit(repo):
     assert res.returncode == 1, out
     assert "app/net.py:1: ipv4" in out
     assert fake_ip() not in out, "the matched value must never reach the output"
-
 
 def test_hook_passes_a_clean_push(repo):
     r, base = repo
@@ -167,7 +173,6 @@ def test_type_change_to_an_in_repo_relative_symlink_matches_the_added_case(repo)
         assert res.returncode == 1, out
         assert f"{rel}:0: symlink" in out
         assert "../clean.py" not in out
-
 
 def test_unset_scrub_words_is_graceful_with_notice(repo):
     r, base = repo
@@ -206,7 +211,6 @@ def test_words_file_from_env_refuses_without_echoing_the_word(repo, tmp_path):
     assert "app/plan.py:1: private-word" in out
     assert fake_word() not in out
     assert str(words) not in out, "the words-file path itself may leak a private name"
-
 
 def test_hook_applies_an_allow_value_so_the_push_passes(repo, tmp_path):
     """CI's tree scan exempts a reviewed value by (path, rule, sha256); a push of the

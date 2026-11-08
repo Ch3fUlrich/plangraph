@@ -22,9 +22,7 @@ def test_missing_preflight_main(tmp_path, skip):
                     "--allow-empty"], cwd=tmp_path, check=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"],
                                    cwd=tmp_path, text=True).strip()
-    env = dict(os.environ, HOME=str(tmp_path))
-    for key in ("PREFLIGHT_SKIP", "PLANGRAPH_SCRUB_WORDS", "PLANGRAPH_SCRUB_RULES"):
-        env.pop(key, None)
+    env = {"PATH": os.defpath, "HOME": str(tmp_path)}
     if skip:
         env["PREFLIGHT_SKIP"] = "1"
     result = subprocess.run(

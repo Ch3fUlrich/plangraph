@@ -149,7 +149,7 @@ def test_cargo_absent(repo, monkeypatch, capsys, rust_changed):
     output = capsys.readouterr().out
     reason = ("rust: FAIL: missing required tool: cargo" if rust_changed
               else "rust: SKIP: no rust changes")
-    assert output.splitlines().count(reason) == 1
+    assert [line for line in output.splitlines() if line.startswith("rust:")] == [reason]
     assert re.search(rf"^{'FAIL' if rust_changed else 'SKIP'} rust ", output, re.M)
 
 
