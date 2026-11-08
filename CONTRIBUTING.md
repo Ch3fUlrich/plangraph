@@ -51,6 +51,7 @@ counts, and CI refuses an entry added or raised against the change's base (`orig
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
+The file-size gate refuses malformed Git batch headers with a single reason line.
 
 ## Changelog and documentation
 

@@ -107,6 +107,30 @@ class RepoFixture(unittest.TestCase):
         self.assertIn(needle, out, "the refusal never named it:\n" + out)
 
 
+def test_malformed_batch_header_refuses(tmp_path):
+    code = '''
+import runpy
+import subprocess
+import sys
+from unittest.mock import patch
+original = subprocess.run
+def run(argv, **kwargs):
+    if "ls-tree" in argv:
+        return subprocess.CompletedProcess(argv, 0, b"100644 blob abc\\ttext.txt\\0")
+    if "--batch" in argv:
+        return subprocess.CompletedProcess(argv, 0, b"abc missing\\n")
+    return original(argv, **kwargs)
+sys.argv = [sys.argv[1], "--head", "HEAD"]
+with patch.object(subprocess, "run", run):
+    runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+    result = subprocess.run([sys.executable, "-c", code, str(SCRIPT)],
+                            cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == "check-file-size: malformed git cat-file --batch header\n"
+
+
 class RequiredBaseTests(RepoFixture):
     """CI names its base: a checkout where it does not resolve must fail,
     not ratchet against HEAD (the change under test)."""

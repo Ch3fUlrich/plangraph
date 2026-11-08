@@ -15,6 +15,7 @@ SPEC.loader.exec_module(preflight)
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
+    monkeypatch.delenv("PREFLIGHT_TOOLS_DIR", raising=False)
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Test",
                     "-c", "user.email=test@example.invalid", "commit", "-q",
@@ -22,6 +23,14 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("PLANGRAPH_SCRUB_WORDS", raising=False)
     return tmp_path
+
+
+def test_ambient_tools_dir_ignored(tmp_path, monkeypatch, request):
+    monkeypatch.setenv("PREFLIGHT_TOOLS_DIR", "/nonexistent/ambient-preflight-tools")
+    isolated = request.getfixturevalue("repo")
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(["--base", "HEAD", "--fast"], isolated) == 0
+    assert Path(calls[0][0][1]) == Path(preflight.__file__).parent / "split/scrub_check.py"
 
 
 def fake_runner(monkeypatch, failure=None, output="policy rejected\n"):

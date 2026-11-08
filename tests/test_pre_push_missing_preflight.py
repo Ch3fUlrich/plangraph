@@ -22,7 +22,10 @@ def test_missing_preflight_main(tmp_path, skip):
                     "--allow-empty"], cwd=tmp_path, check=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"],
                                    cwd=tmp_path, text=True).strip()
-    env = {"PATH": os.defpath, "HOME": str(tmp_path)}
+    # An explicit allowlist also excludes ambient PREFLIGHT_TOOLS_DIR.
+    path = os.pathsep.join((str(Path(sys.executable).parent),
+                            str(Path(shutil.which("git")).parent), os.defpath))
+    env = {"PATH": path, "HOME": str(tmp_path)}
     if skip:
         env["PREFLIGHT_SKIP"] = "1"
     result = subprocess.run(

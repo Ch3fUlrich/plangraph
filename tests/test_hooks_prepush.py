@@ -1,8 +1,5 @@
-"""tools/hooks/pre-push: the scrub gate refuses pushes whose changed files leak.
-
-The hook reuses scrub_check's rules and output contract (path:line: rule, never a
-matched value), so these tests only drive it as git would: ref lines on stdin,
-exit code 0/1, output free of the planted strings.
+"""Drive tools/hooks/pre-push as Git would: ref lines on stdin, exit code 0/1.
+Pin scrub_check's path:line:rule contract without exposing planted values.
 """
 import os
 import hashlib
@@ -139,6 +136,7 @@ def test_hook_refuses_pushed_public_pattern_hit(repo):
     assert "app/net.py:1: ipv4" in out
     assert fake_ip() not in out, "the matched value must never reach the output"
 
+
 def test_hook_passes_a_clean_push(repo):
     r, base = repo
     head = commit_file(r, "app/other.py", "y = 2\n")
@@ -173,6 +171,7 @@ def test_type_change_to_an_in_repo_relative_symlink_matches_the_added_case(repo)
         assert res.returncode == 1, out
         assert f"{rel}:0: symlink" in out
         assert "../clean.py" not in out
+
 
 def test_unset_scrub_words_is_graceful_with_notice(repo):
     r, base = repo
@@ -211,6 +210,7 @@ def test_words_file_from_env_refuses_without_echoing_the_word(repo, tmp_path):
     assert "app/plan.py:1: private-word" in out
     assert fake_word() not in out
     assert str(words) not in out, "the words-file path itself may leak a private name"
+
 
 def test_hook_applies_an_allow_value_so_the_push_passes(repo, tmp_path):
     """CI's tree scan exempts a reviewed value by (path, rule, sha256); a push of the
