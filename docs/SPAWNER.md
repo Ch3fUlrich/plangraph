@@ -22,7 +22,7 @@ its timeout stops waiting, not the writer.
 Plain stdout, including text saying 429, is never provider evidence.
 
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
-chosen leg, served model/family, writer family, status, started/ended timestamps,
+chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.
 These records are the only source for `--review-of`; unknown ids refuse.
 
