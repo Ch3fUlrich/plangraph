@@ -1,8 +1,8 @@
 # OOM policy (D-5075)
 
 Templates only: nothing here installs configuration or changes live units.
-Not deployed: the launcher is unchanged; daemon isolation requires an operator
-to apply and verify one of the options below. No live-isolation claim is made.
+Not deployed by these templates or repository tests: applying daemon isolation
+requires an operator; this caveat does not revise the item's merged/deployed status.
 Use the contents of `earlyoom/prefer.regex` with earlyoom `--prefer` and
 `earlyoom/avoid.regex` with `--avoid`. These are process-name regexes;
 check the installed earlyoom version's comm-name truncation behaviour.
@@ -44,4 +44,4 @@ second authenticated session and an external timeout/cleanup watchdog. Do not ru
 4. Assert the original herdr/keeper/daemon PID+start identities and health
    survive, and a subsequent writer can start. Kill/reap remaining probe
    descendants by recorded identity and retain timestamped evidence.
-Acceptance (4)(5) remains pending: neither survival, merge nor deployment is verified.
+Repository checks verify child/descendant scores, unchanged parent score, and template/regex contracts, not live earlyoom preference or `claude --bg` isolation; live-pressure survival evidence remains pending here (a cgroup-only test cannot prove global kernel-OOM survival). The item reports done/merged+deployed; this diff does not independently verify that operational status.
