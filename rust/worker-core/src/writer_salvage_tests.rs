@@ -183,6 +183,8 @@ fn bundle_roundtrip_and_ref_cleanup() {
     let bytes = export_salvage(&repo, &base, "roundtrip").unwrap();
     let bundle = dir.join("result.bundle");
     std::fs::write(&bundle, bytes).unwrap();
+    // The owned checkout is canonical (verbatim on Windows); Git needs native paths.
+    let bundle = crate::workspace_launch::git_worktree_path(&bundle);
     command(
         dir,
         &["bundle", "verify", bundle.to_str().unwrap()],

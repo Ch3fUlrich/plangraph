@@ -33,6 +33,8 @@ fn only_rooted_verbatim_disk_and_unc_paths_are_converted() {
 fn writer_rejects_win32_retargeting_leaves_before_git() {
     let f = tests::Fixture::new();
     for leaf in [
+        "",
+        ".",
         "..",
         "../escape",
         "run.",

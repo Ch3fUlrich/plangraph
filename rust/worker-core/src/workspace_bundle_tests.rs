@@ -43,10 +43,22 @@ impl Fixture {
             // g trims Git's line terminator; reject multiple URLs independently.
             let remote = g(&root.join(name), &["remote", "get-url", "--all", "origin"]);
             assert_eq!(remote.lines().count(), 1);
-            let normalize = |s: &str| s.replace('\\', "/").to_ascii_lowercase();
+            let normalize = |path: &Path| {
+                let canonical = fs::canonicalize(path).unwrap();
+                #[cfg(windows)]
+                {
+                    crate::workspace_launch::git_worktree_path(&canonical)
+                        .to_str()
+                        .unwrap()
+                        .replace('\\', "/")
+                        .to_ascii_lowercase()
+                }
+                #[cfg(not(windows))]
+                canonical
+            };
             assert_eq!(
-                normalize(&remote),
-                normalize(root.join("origin").to_str().unwrap())
+                normalize(Path::new(&remote)),
+                normalize(&root.join("origin"))
             );
             RepoEntry {
                 root: root.join(name).to_str().unwrap().into(),
