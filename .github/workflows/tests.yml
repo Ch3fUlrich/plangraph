@@ -291,6 +291,27 @@ jobs:
           PG_JAIL_BIN: ${{ github.workspace }}/rust/target/debug/pg-jail
         run: cargo test
 
+  rust-windows:
+    needs: select
+    if: needs.select.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: cargo test
+        run: cargo test -p pg-worker-core -p pg-spawnd
+
   rust-worker:
     needs: select
     if: needs.select.outputs.rust-worker == 'true'
