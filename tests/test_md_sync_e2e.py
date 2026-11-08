@@ -183,7 +183,7 @@ def test_close_skipped_is_planned_away_and_recorded(world, srv, token, site, tmp
     assert doc["close_skipped"] == [{"id": "Q-ALPHA", "decision": "D-10",
                                      "key": "routing:Q-ALPHA",
                                      "reason": "Closes does not list the key",
-                                     "owner": "routing-00",
+                                     "owner": "router",
                                      "action": "reconcile D-row Closes with the item key; never reopen a done item"}]
     counts = {k: n for k, n in tally(out).items()
               if k not in ("close_skipped", "d_closes", "in_review", "warnings")}

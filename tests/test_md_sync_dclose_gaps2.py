@@ -27,7 +27,7 @@ def test_close_skip_status_has_accountable_owner():
     status = md_sync.status_doc("dry")
     md_sync.fill_status(status, pending)
     assert [row["owner"] for row in status["close_skipped"]] == [
-        "routing-00", "routing-00"]
+        "router", "router"]
     assert all(row["action"] for row in status["close_skipped"])
 
 
