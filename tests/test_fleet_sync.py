@@ -8,6 +8,12 @@ from plangraph.fleet_sync import drift, genconfig, release
 from plangraph.spawner import overflow, remote_ps
 
 
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+
+
 def test_fleet_sync_release_private_atomic(tmp_path, monkeypatch):
     path = tmp_path / 'release.json'
     def query(endpoint):
@@ -38,6 +44,77 @@ def test_fleet_sync_not_green(tmp_path):
     with pytest.raises(ValueError):
         release.record(query, ['a' * 40], tmp_path / 'release.json')
     assert not list(tmp_path.iterdir())
+
+
+def test_fleet_sync_release_api_paths(tmp_path, monkeypatch):
+    calls = []
+    def output(command, **kwargs):
+        calls.append(command)
+        assert command[:2] == ['gh', 'api']
+        endpoint = command[2]
+        assert endpoint.startswith('repos/:owner/:repo/')
+        if endpoint.endswith('required_status_checks'):
+            return json.dumps({'contexts': ['ci']})
+        if 'check-runs' in endpoint:
+            return json.dumps({'check_runs': []})
+        return json.dumps({'statuses': [{'context': 'ci', 'state': 'success'}]})
+    monkeypatch.setattr(release.subprocess, 'check_output', output)
+    release.record(candidates=['abc'], path=tmp_path / 'release.json')
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize('kind', ['completed', 'started', 'status', 'mixed'])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_fleet_sync_newest_result_decides(tmp_path, kind, reverse):
+    old = '2026-01-01T00:00:00Z'
+    new = '2026-01-02T00:00:00Z'
+    runs = [{'name': 'ci', 'status': 'completed', 'conclusion': 'success',
+             'completed_at': old, 'started_at': old}]
+    statuses = []
+    if kind in ('completed', 'started'):
+        runs.append({'name': 'ci', 'status': 'completed' if kind == 'completed' else 'in_progress',
+                     'conclusion': 'failure' if kind == 'completed' else None,
+                     'completed_at': new if kind == 'completed' else None, 'started_at': new})
+    else:
+        statuses.append({'context': 'ci', 'state': 'failure', 'created_at': new})
+        if kind == 'status':
+            runs = []
+            statuses.append({'context': 'ci', 'state': 'success', 'created_at': old})
+    def query(endpoint):
+        if endpoint.endswith('required_status_checks'):
+            return {'contexts': ['ci']}
+        return {'check_runs': list(reversed(runs)) if reverse else runs,
+                'statuses': list(reversed(statuses)) if reverse else statuses}
+    with pytest.raises(ValueError, match='no main commit'):
+        release.record(query, ['abc'], tmp_path / 'release.json')
+
+
+def test_fleet_sync_scan_bounded_and_stops(tmp_path, monkeypatch):
+    calls = []
+    green = set()
+    def git(*args):
+        assert args == ('rev-list', '--max-count=50', 'origin/main')
+        return '\n'.join(str(i) for i in range(100))
+    def query(endpoint):
+        if endpoint.endswith('required_status_checks'):
+            return {'contexts': ['ci']}
+        calls.append(endpoint)
+        sha = endpoint.split('/')[4]
+        return {'check_runs': [], 'statuses': [
+            {'context': 'ci', 'state': 'success' if sha in green else 'failure'}]}
+    monkeypatch.setattr(release, 'git', git)
+    with pytest.raises(ValueError, match='no main commit'):
+        release.record(query, path=tmp_path / 'release.json')
+    assert len(calls) == 100
+    calls.clear()
+    green.update(['1', '2'])
+    assert release.record(query, iter(['0', '1', '2']), tmp_path / 'release.json',
+                          max_commits=3)['sha'] == '1'
+    assert len(calls) == 4
+    calls.clear()
+    with pytest.raises(ValueError, match='no main commit'):
+        release.record(query, iter(['0', '1']), tmp_path / 'release.json', max_commits=1)
+    assert len(calls) == 2
 
 
 def test_fleet_sync_configs(tmp_path, monkeypatch):

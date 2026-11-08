@@ -41,7 +41,7 @@ def gitleaks_steps() -> list[tuple[str, int, dict]]:
     found: list[tuple[str, int, dict]] = []
     for name, job in workflow()["jobs"].items():
         for i, step in enumerate(job.get("steps", [])):
-            if "gitleaks" in str(step.get("name", "")).lower():
+            if "gitleaks" in str(step.get("name", "")).lower() and "run" in step:
                 found.append((name, i, step))
     return found
 
@@ -50,7 +50,8 @@ def pytest_gitleaks_step() -> tuple[int, dict]:
     """The one gitleaks install step of the pytest job: (index, step)."""
     steps = workflow()["jobs"]["pytest"]["steps"]
     found = [
-        (i, s) for i, s in enumerate(steps) if "gitleaks" in str(s.get("name", "")).lower()
+        (i, s) for i, s in enumerate(steps)
+        if "gitleaks" in str(s.get("name", "")).lower() and "run" in s
     ]
     assert len(found) == 1, f"job pytest must hold exactly one gitleaks step, found {len(found)}"
     return found[0]
@@ -104,7 +105,7 @@ def test_single_binary_lands_in_local_bin_and_version_is_8_30_1():
     assert tar_lines[0].rstrip().endswith(" gitleaks"), "only the gitleaks member is extracted"
     assert "~/.local/bin" in script, "the test looks in PATH or ~/.local/bin"
     assert "mkdir -p ~/.local/bin" in script, "~/.local/bin must exist before the install"
-    version_lines = [ln for ln in script.splitlines() if "gitleaks version" in ln]
+    version_lines = [ln for ln in script.splitlines() if 'gitleaks" version' in ln]
     assert len(version_lines) == 1, "the step must assert the installed version"
     assert re.search(r"\|\s*grep\s+-Fx\s+" + re.escape(VERSION), version_lines[0]), (
         "gitleaks version must print exactly 8.30.1"

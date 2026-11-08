@@ -1,10 +1,14 @@
 # Fleet code sync
 
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
-The newest locally known main ancestor with successful required branch checks is
+The newest of the last 50 locally known main commits with successful required branch checks is
 recorded privately and atomically in `~/.local/state/plangraph/release.json`.
 The CLI queries `gh api`; missing protection or required checks fails closed.
 `release show` prints the record. No checkout is changed.
+The Python `record(max_commits=50)` API can configure the scan window; scanning
+stops at the first green commit and fails closed if none is found in the window.
+Check results are selected by completed/started (or status updated/created)
+timestamp, not API response order; equal-time conflicting results fail closed.
 
 `genconfig write --registry PATH` derives ps-hosts.json and overflow-hosts.json
 under `$XDG_CONFIG_HOME/plangraph` (default `~/.config/plangraph`). Each file is
