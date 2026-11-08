@@ -20,6 +20,11 @@ checkout; no fallback to a developer checkout is allowed. Local entries are
 excluded from remote configs; keeper entries fail closed. Windows SSH hosts
 are ps-only. Overflow retains a deny-by-default empty public_repos allowlist.
 
+Generated Linux overflow host entries include `floor_mb`, copied from the
+registry's `caps.mem_floor_mb`, as the free-RAM floor used for admission.
+Regenerate the configs after changing that registry value; generated ps-host
+entries do not include RAM admission fields.
+
 `drift --registry PATH` prints host, live SHA, release SHA, commits behind.
 `drift --json` emits an array. Missing objects or unreachable transports produce
 `unknown`, never a fabricated zero; drift always exits 0. Counts use local Git
