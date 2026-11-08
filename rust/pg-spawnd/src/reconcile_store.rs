@@ -3,7 +3,7 @@ use crate::reconcile::ReconcileError;
 use pg_worker_core::run::record::valid_run_id;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{io::Read, path::Path};
+use std::path::Path;
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Proc {
@@ -22,30 +22,11 @@ pub(crate) struct Entry {
 #[path = "reconcile_store_helpers.rs"]
 mod helpers;
 use helpers::{check, seconds};
-pub(crate) fn read(path: &Path) -> Result<Value, ReconcileError> {
-    check(path, false)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path).map_err(|_| ReconcileError::Io)?;
-    let meta = file.metadata().map_err(|_| ReconcileError::Io)?;
-    const CAP: u64 = 8 * 1024 * 1024;
-    if !meta.is_file() || meta.len() > CAP {
-        return Err(ReconcileError::Invalid);
-    }
-    let mut bytes = Vec::new();
-    file.take(CAP + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ReconcileError::Io)?;
-    if bytes.len() as u64 > CAP {
-        return Err(ReconcileError::Invalid);
-    }
-    serde_json::from_slice(&bytes).map_err(|_| ReconcileError::Invalid)
-}
+#[path = "reconcile_store_hold.rs"]
+mod hold;
+#[path = "reconcile_store_read.rs"]
+mod reader;
+pub(crate) use reader::read;
 pub(crate) fn inventory(root: &Path) -> Result<Vec<Entry>, ReconcileError> {
     match std::fs::symlink_metadata(root) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -171,7 +152,7 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
                 .map_err(|_| ReconcileError::Unknown)?;
             return match std::fs::read_to_string(path.join("cgroup.events")) {
                 Ok(text) => match text.lines().find_map(|s| s.strip_prefix("populated ")) {
-                    Some("0") => Ok(true),
+                    Some("0") => hold::leader_nonlive(identity),
                     Some("1") => crate::reconcile::populated_alive(identity, &path),
                     _ => Err(ReconcileError::Unknown),
                 },
@@ -179,7 +160,7 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
                     if e.kind() == std::io::ErrorKind::NotFound
                         && !path.try_exists().map_err(|_| ReconcileError::Unknown)? =>
                 {
-                    Ok(true)
+                    hold::leader_nonlive(identity)
                 }
                 Err(_) => Err(ReconcileError::Unknown),
             };
@@ -264,7 +245,19 @@ pub(crate) fn orphan_with(
     let result = crate::reconcile::job::settle_probe(row, authority);
     #[cfg(not(windows))]
     let result = gone(&row.run_id, row.identity.as_ref());
-    if !result? {
+    if !matches!(result, Ok(true)) {
+        match result {
+            Ok(false) => {
+                hold::retain(&dir, row)?;
+            }
+            Err(ReconcileError::Unknown) => {
+                if !hold::retain(&dir, row)? {
+                    return Err(ReconcileError::Unknown);
+                }
+            }
+            Err(error) => return Err(error),
+            Ok(true) => unreachable!(),
+        }
         return Ok(false);
     }
     if current.is_none()

@@ -111,7 +111,6 @@ mod reconcile_store_settle_probe_tests {
     }
 
     #[test]
-    #[ignore = "RL29 step 2 red test: invariant 3"]
     fn rl29_dead_leader_populated_saved_group_reclaims_after_grace() {
         let dir = StateDir::new();
         let mut member = Member::new();
@@ -131,7 +130,6 @@ mod reconcile_store_settle_probe_tests {
     }
 
     #[test]
-    #[ignore = "RL29 step 2 red test: invariant 2"]
     fn rl29_zombie_live_member_holds_grace_then_reclaims() {
         let dir = StateDir::new();
         let mut member = Member::new();
@@ -215,7 +213,6 @@ mod reconcile_store_identity_tests {
     }
 
     #[test]
-    #[ignore = "RL29 step 2 red test: invariant 6"]
     fn rl29_stale_identity_without_confinement_proof_becomes_unresolved() {
         let dir = StateDir::new();
         let mut member = Member::new();
@@ -245,7 +242,6 @@ mod reconcile_store_identity_tests {
     }
 
     #[test]
-    #[ignore = "RL29 step 2 red test: invariant 5"]
     fn rl29_identity_rekey_preserves_run_slot_hold_deadline() {
         let dir = StateDir::new();
         let mut member = Member::new();
