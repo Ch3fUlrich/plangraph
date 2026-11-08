@@ -3,8 +3,13 @@
 #[cfg(windows)]
 use crate::reconcile::job as native;
 use crate::reconcile::ReconcileError;
+#[cfg(any(target_os = "linux", windows))]
+#[path = "reconcile_attach_record.rs"]
+mod reconcile_attach_record;
 #[cfg(target_os = "linux")]
 use crate::reconcile_backend::native;
+#[cfg(any(target_os = "linux", windows))]
+use reconcile_attach_record::attach_record;
 #[cfg(windows)]
 #[path = "reconcile_watch.rs"]
 mod reconcile_watch;
@@ -297,6 +302,8 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         };
         let role = serde_json::from_value(serde_json::json!(row.role))
             .map_err(|_| ReconcileError::Unknown)?;
+        #[cfg(windows)]
+        let leader = leader.adopt().map_err(|_| ReconcileError::Unknown)?;
         let watch = Watch::new(
             role,
             Limits::default(),
@@ -372,16 +379,6 @@ fn scan_probe(result: Result<bool, ReconcileError>) -> Result<Option<bool>, Reco
         Ok(value) => Ok(Some(value)),
         Err(_) => Ok(None),
     }
-}
-#[cfg(any(target_os = "linux", windows))]
-fn attach_record(
-    root: &Path,
-    run: &str,
-) -> Option<(LockGuard, pg_worker_core::run::record::RunRecord)> {
-    let dir = root.join("runs").join(run);
-    let lock = crate::reconcile_store::lock(&dir, &dir.join("record.lock")).ok()?;
-    let record = pg_worker_core::run::record::RunRecord::read(root, run).ok()?;
-    Some((lock, record))
 }
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "reconcile_serve_tests.rs"]

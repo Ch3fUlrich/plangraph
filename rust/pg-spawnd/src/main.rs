@@ -49,5 +49,13 @@ mod transport_windows;
 use pg_worker_core::host_probe::probe;
 
 fn main() {
+    #[cfg(windows)]
+    if let Ok(path) = std::env::current_exe() {
+        pg_worker_core::run::job_holder_windows::set_holder_path(path);
+    }
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__job-holder")) {
+        std::process::exit(pg_worker_core::run::job_holder_windows::helper());
+    }
     std::process::exit(cli::run(std::env::args_os().skip(1), probe));
 }

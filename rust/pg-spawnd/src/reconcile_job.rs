@@ -134,6 +134,10 @@ fn validate<'a>(run: &str, identity: &'a Proc) -> io::Result<(&'a str, u64)> {
 }
 #[cfg(windows)]
 impl Group {
+    pub(crate) fn adopt(mut self) -> io::Result<Self> {
+        self.0.adopt()?;
+        Ok(self)
+    }
     pub(crate) fn probe(&mut self) -> io::Result<bool> {
         if self.1.as_ref().map(process_live).transpose()? == Some(false) {
             return exited_probe(self.0.empty());

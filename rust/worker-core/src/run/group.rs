@@ -24,6 +24,7 @@ impl Default for Confinement {
 pub struct RunLimits {
     pub memory_max: Option<String>,
     pub tasks_max: Option<u32>,
+    pub windows_holder_max_s: Option<u64>,
 }
 pub struct LaunchSpec<'a> {
     pub program: &'a OsStr,
@@ -39,6 +40,13 @@ pub struct Identity {
     pub group: Option<String>,
 }
 pub trait RunGroup: Send + Sync {
+    fn holder_deadline_ms(&self) -> Option<u64> {
+        None
+    }
+    /// The Job holder could not break away and dies with the daemon's outer job (D-4913).
+    fn holder_no_breakaway(&self) -> bool {
+        false
+    }
     fn identity(&self) -> &Identity;
     fn members(&self) -> io::Result<Vec<u32>>;
     fn terminate(&self);

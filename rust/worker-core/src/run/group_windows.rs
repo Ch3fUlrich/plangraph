@@ -38,12 +38,14 @@ pub struct JobGroup {
     job: OwnedHandle,
     identity: Identity,
     observed: Mutex<HashMap<u32, OwnedHandle>>,
+    holder_deadline_ms: u64,
+    holder_no_breakaway: bool,
 }
 pub fn spawn_grouped(
     unit: &str,
     spec: &LaunchSpec<'_>,
     _confinement: &Confinement,
-    _limits: &RunLimits,
+    limits: &RunLimits,
 ) -> Result<Grouped, LaunchError> {
     validate_unit(unit)?;
     let name = job_name(unit);
@@ -52,18 +54,17 @@ pub fn spawn_grouped(
         .chain(Some(0))
         .collect();
     // SAFETY: thread-local error slot and terminated name are valid.
-    let raw = unsafe {
-        SetLastError(0);
-        CreateJobObjectW(ptr::null(), wide.as_ptr())
-    };
-    let error = (!raw.is_null()).then(io::Error::last_os_error);
-    let job = own(raw).map_err(|_| LaunchError::JobUnavailable)?;
-    if error.and_then(|e| e.raw_os_error()) == Some(ERROR_ALREADY_EXISTS as i32) {
-        return Err(LaunchError::JobExists);
-    }
-    // SAFETY: all-zero limit information is valid before setting the sole flag.
+    let job = super::job_holder_windows::secure_job(wide.as_ptr()).map_err(|e| {
+        if e.raw_os_error() == Some(ERROR_ALREADY_EXISTS as i32) {
+            LaunchError::JobExists
+        } else {
+            LaunchError::JobUnavailable
+        }
+    })?;
+    let holder_deadline_ms = 0; // Determined by owner exit, never by launch.
+                                // SAFETY: all-zero limit information is valid before setting the sole flag.
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { mem::zeroed() };
-    // Open: daemon death closes the job, unlike Linux; R7e must reconcile restarts.
+    // The independent holder retains this kill-on-close Job across daemon death.
     info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     // SAFETY: owned job and correctly sized, initialized information buffer.
     if unsafe {
@@ -93,6 +94,7 @@ pub fn spawn_grouped(
         .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     let mut child = cmd.spawn()?;
     let pid = child.id();
+    let mut no_breakaway = false;
     let setup = (|| {
         // SAFETY: numeric child pid; requested rights suffice for assignment.
         let process = own(unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) })?;
@@ -100,12 +102,19 @@ pub fn spawn_grouped(
         if unsafe { AssignProcessToJobObject(job.as_raw_handle(), process.as_raw_handle()) } == 0 {
             return Err(io::Error::last_os_error());
         }
+        let holder = super::job_holder_windows::holder_path()?;
+        no_breakaway = super::job_holder_windows::launch(
+            &holder,
+            &job,
+            limits.windows_holder_max_s.unwrap_or(28800),
+            &name,
+        )?;
         resume(pid)
     })();
     if setup.is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(LaunchError::JobUnavailable);
+        return Err(LaunchError::Io(setup.unwrap_err()));
     }
     let identity = Identity {
         pid,
@@ -118,6 +127,8 @@ pub fn spawn_grouped(
             job,
             identity,
             observed: Mutex::new(HashMap::new()),
+            holder_deadline_ms,
+            holder_no_breakaway: no_breakaway,
         }),
     })
 }
@@ -145,7 +156,7 @@ pub(super) fn creation_time(pid: u32) -> Option<u64> {
     }
     Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
 }
-fn resume(pid: u32) -> io::Result<()> {
+pub(super) fn resume(pid: u32) -> io::Result<()> {
     // Child exposes no main-thread handle, so std spawning requires a host-wide snapshot.
     // SAFETY: thread snapshot API has no pointer inputs; RAII closes the result.
     let snapshot = own(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) })?;
@@ -182,6 +193,12 @@ fn resume(pid: u32) -> io::Result<()> {
     }
 }
 impl RunGroup for JobGroup {
+    fn holder_deadline_ms(&self) -> Option<u64> {
+        (self.holder_deadline_ms != 0).then_some(self.holder_deadline_ms)
+    }
+    fn holder_no_breakaway(&self) -> bool {
+        self.holder_no_breakaway
+    }
     fn identity(&self) -> &Identity {
         &self.identity
     }
@@ -287,6 +304,13 @@ impl RunGroup for JobGroup {
         }
     }
     fn kill(&self) {
+        self.terminate();
+    }
+}
+
+impl Drop for JobGroup {
+    fn drop(&mut self) {
+        // Normal teardown is not daemon death: explicitly end remaining payloads.
         self.terminate();
     }
 }
