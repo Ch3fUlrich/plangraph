@@ -5,6 +5,26 @@ import pytest
 from plangraph.spawner import leg_state as ls
 
 
+@pytest.mark.parametrize('role', ('implement', 'review', 'orchestrate'))
+@pytest.mark.parametrize('state', ('limited', 'down'))
+def test_role_automatically_falls_back(role, state, monkeypatch):
+    from plangraph.planner.routing import plan_spawn
+    monkeypatch.setattr('plangraph.routing_support.resolver.get_catalog_models', lambda: [])
+    card = {'estimate_tokens': 1000}
+    kwargs = dict(role=role, writer_families=('claude',))
+    clear = lambda *a, **k: {'state': 'ok', 'evidence': None}
+    first = plan_spawn(card, leg_reader=clear, **kwargs)
+    assert len(first.legs) >= 2
+    blocked = first.legs[0].model
+    def reader(model, **kwargs):
+        return {'state': state if model == blocked else 'ok', 'evidence': None}
+    fallback = plan_spawn(card, leg_reader=reader, **kwargs)
+    assert fallback.legs[0] == first.legs[1]
+    assert all(leg.model != blocked for leg in fallback.legs)
+    assert any(s['leg'] == first.legs[0].id and s['reason'] == state
+               for s in fallback.skipped)
+
+
 def test_route_free_first_keys():
     from dataclasses import replace
     from plangraph.planner.legs import DEFAULT_LEGS, TIERS

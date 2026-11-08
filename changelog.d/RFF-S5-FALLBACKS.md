@@ -1,0 +1,1 @@
+Restore catalog implement eligibility and measured implement ranking so unavailable legs fall back automatically without a writer pin. Cover limited and failed legs for implement, review, and orchestrate.

@@ -380,7 +380,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                          tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details))
     ordered = list(route.legs)
     reasons, source = [*route.reasons, *bench_reasons], "operator-order"
-    if benchmark is not None and role != "implement":
+    if benchmark is not None:
         from plangraph.routing_support.resolver import rank_candidates
         for tier in TIERS:
             tier_positions = [i for i, l in enumerate(ordered) if l.tier == tier]

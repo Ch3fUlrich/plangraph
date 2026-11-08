@@ -147,12 +147,7 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Retain the designated writer; review legs remain available for parallel work.
-DEFAULT_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
-                             disabled=leg.disabled or (
-                                 'D-3828: writer disabled; no retained review or orchestrate role'
-                                 if leg.roles == ('implement',) else None))
-                     if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+# Catalog roles are eligibility inputs, not a single-writer pin.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol",   # D-3745: first implement writer whenever eligible
 )
