@@ -102,37 +102,37 @@ impl Runs {
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
-        let item = args["card"]["item"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
+        let item = args["card"]["item_key"].as_str()
+            .or_else(|| args["card"]["item"].as_str())
+            .filter(|s| !s.is_empty()).map(str::to_owned)
             .or_else(|| {
-                std::env::var("PLANGRAPH_SPAWN_ITEM")
-                    .ok()
-                    .filter(|s| !s.is_empty())
+                std::env::var("PLANGRAPH_SPAWN_ITEM").ok().filter(|s| !s.is_empty())
+            })
+            .or_else(|| {
+                let prompt = args["prompt"].as_str().unwrap_or("");
+                let re = regex::Regex::new(r"\bplangraph:[A-Za-z0-9._:-]+").unwrap();
+                let keys: std::collections::BTreeSet<_> = re.find_iter(prompt).map(|m| m.as_str()).collect();
+                (keys.len() == 1).then(|| keys.first().unwrap().to_string())
             });
         base["item_key"] = match item {
-            Some(s) if crate::records::valid_item(&s) => {
-                json!(s)
-            }
+            Some(s) if crate::records::valid_item(&s) => json!(s),
             Some(_) => {
                 if base.get("warnings").is_none() {
                     base["warnings"] = json!([]);
                 }
-                base["warnings"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!("invalid item_key; stored as null"));
+                base["warnings"].as_array_mut().unwrap().push(json!("invalid item_key; stored as null"));
                 Value::Null
             }
             None => Value::Null,
         };
-        let events: Vec<Value> = launch
-            .events
+        let mut events: Vec<Value> = launch.events
             .unwrap_or_default()
             .into_iter()
             .map(Value::Object)
             .collect();
+        if base["item_key"].is_null() && matches!(role.as_str(), Some("review" | "judge")) {
+            events.push(json!({"event":"seat_item_missing","level":"warning"}));
+        }
         let attempt_id = book_attempt(&mut base, &leg);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));

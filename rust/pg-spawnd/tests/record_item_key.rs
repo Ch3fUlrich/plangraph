@@ -53,3 +53,10 @@ fn record_item_key() {
         }
     }
 }
+
+#[test]
+fn seat_card_item_key_alias() {
+    let mut f = Fixture::new(None);
+    let r = payload(f.call("spawn", json!({"prompt":"p", "card":{"item_key":"plangraph:D-5047"}, "wait_seconds":5})));
+    assert_eq!(r["item_key"], "plangraph:D-5047");
+}
