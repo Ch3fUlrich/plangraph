@@ -50,7 +50,7 @@ def test_failure(repo, monkeypatch, capsys, family, tool):
 def test_infra_retry(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch, "scrub_check.py", "HTTP 503 download failed\n")
     assert preflight.main(["--base", "HEAD"], repo) == 3
-    assert len(calls) == 2
+    assert len(calls) == 7
     assert "INFRA scrub " in capsys.readouterr().out
 
 
@@ -68,11 +68,13 @@ def test_fast_summary_and_ci_env(repo, monkeypatch, capsys):
     assert calls[-1][0][-2:] == ["--exempt", str(repo / "tools/ci_commit_exempt.txt")]
 
 
-def test_keep_going(repo, monkeypatch, capsys):
+def test_all_families_after_scrub_failure(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch, "scrub_check.py")
-    assert preflight.main(["--base", "HEAD", "--keep-going"], repo) == 1
-    assert len(calls) == 6
-    assert "PASS tests " in capsys.readouterr().out
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt"]])
+    assert preflight.main(["--base", "HEAD"], repo) == 1
+    assert len(calls) == 7
+    assert re.findall(r'^(?:PASS|FAIL) (\w+) ', capsys.readouterr().out, re.M) == [
+        'scrub', 'policy', 'rust', 'tests']
 
 
 def test_retry_recovers(repo, monkeypatch, capsys):
@@ -110,4 +112,58 @@ def test_words_and_tools_override(repo, monkeypatch):
     monkeypatch.setenv("PLANGRAPH_SCRUB_WORDS", str(repo / "private"))
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
     assert calls[0][0][1] == str(repo / "fake/split/scrub_check.py")
-    assert calls[0][0][-2:] == ["--words", str(repo / "private")]
+    assert '--words' not in calls[0][0]
+    assert calls[1][0][-2:] == ["--words", str(repo / "private")]
+
+
+def test_fail_fast(repo, monkeypatch, capsys):
+    calls = fake_runner(monkeypatch, 'scrub_check.py')
+    assert preflight.main(['--base', 'HEAD', '--fail-fast'], repo) == 1
+    assert len(calls) == 1
+    assert 'SKIP tests ' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_exit_code_precedence(repo, monkeypatch, reverse):
+    def run(command, cwd, env):
+        name = Path(command[1]).name
+        if name == 'scrub_check.py':
+            return 1, 'rejected' if reverse else 'HTTP 503'
+        if name == 'affected_tests.py':
+            return 1, 'HTTP 503' if reverse else 'rejected'
+        return 0, ''
+
+    monkeypatch.setattr(preflight, 'run', run)
+    assert preflight.main(['--base', 'HEAD'], repo) == 1
+
+
+def private_scrub(repo, added):
+    word = 'synthetic' + 'restrictedfixture'
+    (repo / 'old.txt').write_text(word + '\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c',
+                    'user.email=test@example.invalid', 'commit', '-qm', 'baseline'],
+                   cwd=repo, check=True)
+    (repo / 'new.txt').write_text((word if added else 'clean') + '\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c',
+                    'user.email=test@example.invalid', 'commit', '-qm', 'change'],
+                   cwd=repo, check=True)
+    words = repo / 'words'
+    words.write_text(word + '\n')
+    result = subprocess.run([
+        'python3', str(Path(preflight.__file__).with_name('preflight_private_scrub.py')),
+        '--base', 'HEAD~1', '--head', 'HEAD', '--words', str(words)],
+        cwd=repo, capture_output=True, text=True)
+    assert word not in result.stdout + result.stderr
+    return result
+
+
+def test_private_word_untouched_file(repo):
+    assert private_scrub(repo, False).returncode == 0
+
+
+def test_private_word_added_line_redacted(repo):
+    result = private_scrub(repo, True)
+    assert result.returncode == 1
+    assert 'new.txt:1: private-word' in result.stdout

@@ -53,7 +53,9 @@ def main(argv=None, root=None):
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--fast", action="store_true")
-    parser.add_argument("--keep-going", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--keep-going", action="store_true", help="default behaviour")
+    mode.add_argument("--fail-fast", action="store_true")
     args = parser.parse_args(argv)
     root = Path(root or Path(__file__).resolve().parents[1])
     tools = Path(os.environ.get("PREFLIGHT_TOOLS_DIR", root / "tools"))
@@ -67,14 +69,18 @@ def main(argv=None, root=None):
                    "--rules", str(tools / "split/scrub_ci.toml"))
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS")
     default_words = Path.home() / ".config/plangraph/scrub-words.txt"
+    scrubs = [scrub]
     if "PLANGRAPH_SCRUB_WORDS" in os.environ:
-        scrub += ["--words", words or str(default_words)]
+        words = words or str(default_words)
     elif default_words.exists():
-        scrub += ["--words", str(default_words)]
+        words = str(default_words)
+    if words:
+        scrubs.append(python("preflight_private_scrub.py", "--base", args.base,
+                             "--head", args.head, "--words", words))
     tests = python("affected_tests.py", "--base", args.base, "--run")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["-n", "auto"]
-    families = [("scrub", [scrub]),
+    families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py"), python("check_new_code_lang.py"),
                             python("check_changelog_docs.py"),
                             python("ci_commit_gate.py", "check", "--base", args.base,
@@ -101,8 +107,11 @@ def main(argv=None, root=None):
             except (OSError, subprocess.CalledProcessError, ValueError):
                 status = "FAIL"
             if status in {"FAIL", "INFRA"}:
-                exit_code = max(exit_code, 3 if status == "INFRA" else 1)
-                stopped = not args.keep_going
+                if status == "FAIL" or exit_code == 1:
+                    exit_code = 1
+                else:
+                    exit_code = 3
+                stopped = args.fail_fast
         summary.append(f"{status} {family} {time.monotonic() - start:.3f}")
     print("\n".join(summary))
     return exit_code
