@@ -4,6 +4,9 @@ use serde_json::json;
 #[cfg(target_os = "linux")]
 #[path = "reconcile_store_identity_tests.rs"]
 mod identity_tests;
+#[cfg(target_os = "linux")]
+#[path = "reconcile_store_pgid_tests.rs"]
+mod pgid_tests;
 #[path = "reconcile_store_recovery_tests.rs"]
 mod recovery_tests;
 

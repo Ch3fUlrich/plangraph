@@ -127,10 +127,20 @@ fn pid_zero_with_recorded_live_pgid_is_not_settled() {
     let dir = StateDir::new();
     let mut record = dir.record();
     record.set("proc", json!({"pid":0,"pgid":unsafe { libc::getpgrp() }}));
+    record.set(
+        "started",
+        json!(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()),
+    );
     record.save().unwrap();
     let row = inventory(&dir.0).unwrap().remove(0);
     assert!(row.identity.is_some());
-    assert!(!orphan_gone(&dir.0, &row).unwrap());
+    assert!(matches!(
+        orphan_gone(&dir.0, &row),
+        Err(ReconcileError::Unknown)
+    ));
     assert_eq!(
         RunRecord::read(&dir.0, "run-test").unwrap().status(),
         Some(Status::Running)

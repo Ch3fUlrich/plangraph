@@ -178,6 +178,9 @@ pub(crate) fn gone(run_id: &str, identity: Option<&Proc>) -> Result<bool, Reconc
                 Err(_) => Err(ReconcileError::Unknown),
             };
         }
+        if identity.pid == 0 {
+            return unknown::pgid_gone(identity);
+        }
         match std::fs::read_to_string(format!("/proc/{}/stat", identity.pid)) {
             Ok(stat) => {
                 let start = stat
@@ -253,7 +256,7 @@ pub(crate) fn orphan_with(
     {
         return Err(ReconcileError::Unknown);
     }
-    if row.identity.is_none() {
+    if unknown::needs_grace(row) && !matches!(gone(&row.run_id, row.identity.as_ref()), Ok(true)) {
         return unknown::settle_unknown(root, row);
     }
     #[cfg(windows)]

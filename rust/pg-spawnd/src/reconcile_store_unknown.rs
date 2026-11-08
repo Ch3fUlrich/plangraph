@@ -3,6 +3,44 @@ use super::*;
 
 pub(super) const UNKNOWN_IDENTITY_GRACE_MS: u64 = 10_000;
 
+pub(super) fn needs_grace(row: &Entry) -> bool {
+    row.identity
+        .as_ref()
+        .is_none_or(|p| p.pid == 0 && p.group.is_none() && p.start_time.is_none())
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn pgid_gone(identity: &Proc) -> Result<bool, ReconcileError> {
+    let pgid = identity.pgid.ok_or(ReconcileError::Unknown)?;
+    if let Some(expected) = identity.start_time {
+        match std::fs::read_to_string(format!("/proc/{pgid}/stat")) {
+            Ok(stat) => {
+                let start = stat
+                    .rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().nth(19)?.parse::<u64>().ok())
+                    .ok_or(ReconcileError::Unknown)?;
+                if start != expected {
+                    return Ok(true);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(ReconcileError::Unknown),
+        }
+    }
+    let pgid = i32::try_from(pgid)
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or(ReconcileError::Unknown)?;
+    if unsafe { libc::kill(-pgid, 0) } == 0 {
+        return Ok(false);
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::ESRCH) => Ok(true),
+        Some(libc::EPERM) => Ok(false),
+        _ => Err(ReconcileError::Unknown),
+    }
+}
+
 pub(super) fn attempts(record: &Value) -> Result<Vec<Value>, ReconcileError> {
     match record.get("attempts") {
         None => Ok(Vec::new()),
@@ -49,9 +87,9 @@ pub(super) fn settle_unknown(root: &Path, row: &Entry) -> Result<bool, Reconcile
     if now < base.saturating_add(UNKNOWN_IDENTITY_GRACE_MS) {
         return Err(ReconcileError::Unknown);
     }
-    // Accepted legacy risk: without pid/group/pgid authority no process can be
-    // probed; bounded settlement may release capacity while an unknown child lives.
-    // Recorded pgids are retained in inventory and probed by gone(), not here.
+    // Accepted legacy risk: an unverifiable identity (including a live pgid
+    // without a leader start time) may release capacity while a child lives.
+    // Use the same persisted deadline/started/mtime bound across restarts.
     record.set("attempts", json!(attempts));
     settle(root, &mut record, row.attempt, "unknown_identity", now)?;
     Ok(true)
