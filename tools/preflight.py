@@ -4,30 +4,39 @@ import argparse
 import importlib.util
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
 import time
 import tomllib
 
-INFRA = re.compile(r"download|\b5\d\d\b|connection.?reset|failed to connect|"
-                   r"could not resolve|timed out", re.I)
+CHECK_TIMEOUT = 60
+
+
+class SkipFamily(ValueError):
+    """A check has no usable revision baseline."""
 
 
 def run(command, cwd, env):
     try:
         result = subprocess.run(command, cwd=cwd, env=env, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                timeout=CHECK_TIMEOUT)
         return result.returncode, result.stdout
+    except subprocess.TimeoutExpired:
+        return 1, "check exceeded 60 second timeout\n"
     except OSError as exc:
         return 1, f"unable to start check: {type(exc).__name__}\n"
 
 
 def rust_commands(root, base, head):
-    changed = subprocess.check_output(
-        ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
-        cwd=root, text=True).splitlines()
+    try:
+        changed = subprocess.check_output(
+            ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
+            cwd=root, text=True, stderr=subprocess.DEVNULL,
+            timeout=CHECK_TIMEOUT).splitlines()
+    except subprocess.CalledProcessError as exc:
+        raise SkipFamily("revision baseline unavailable or no merge-base") from exc
     changed = [p for p in changed if p.startswith("rust/")]
     if not changed or not shutil.which("cargo"):
         return []
@@ -57,8 +66,8 @@ def main(argv=None, root=None):
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
     mode.add_argument("--fail-fast", action="store_true")
     args = parser.parse_args(argv)
-    root = Path(root or Path(__file__).resolve().parents[1])
-    tools = Path(os.environ.get("PREFLIGHT_TOOLS_DIR", root / "tools"))
+    root = Path(root or Path.cwd())
+    tools = Path(os.environ.get("PREFLIGHT_TOOLS_DIR", Path(__file__).resolve().parent))
     env = dict(os.environ, FILESIZE_REQUIRE_BASE=args.base, NEWCODE_BASE=args.base,
                CHANGELOG_BASE=args.base, CARGO_BUILD_JOBS="4")
 
@@ -77,12 +86,13 @@ def main(argv=None, root=None):
     if words:
         scrubs.append(python("preflight_private_scrub.py", "--base", args.base,
                              "--head", args.head, "--words", words))
-    tests = python("affected_tests.py", "--base", args.base, "--run")
+    tests = python("affected_tests.py", "--base", args.base, "--head", args.head,
+                   "--root", str(root), "--run")
     if importlib.util.find_spec("xdist") is not None:
-        tests += ["-n", "auto"]
+        tests += ["--workers", "auto"]
     families = [("scrub", scrubs),
-                ("policy", [python("check_file_size.py"), python("check_new_code_lang.py"),
-                            python("check_changelog_docs.py"),
+                ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
+                            python("check_changelog_docs.py", "--head", args.head),
                             python("ci_commit_gate.py", "check", "--base", args.base,
                                    "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
                 ("rust", None), ("tests", [] if args.fast else [tests])]
@@ -98,13 +108,15 @@ def main(argv=None, root=None):
                     cwd = root / "rust" if family == "rust" else root
                     code, output = run(command, cwd, env)
                     print(output, end="", flush=True)
-                    if code and INFRA.search(output):
-                        code, output = run(command, cwd, env)
-                        print(output, end="", flush=True)
-                    status = "PASS" if not code else ("INFRA" if INFRA.search(output) else "FAIL")
+                    status = "PASS" if not code else "FAIL"
                     if code:
                         break
-            except (OSError, subprocess.CalledProcessError, ValueError):
+                if family == "scrub" and not words and status == "PASS":
+                    status = "SKIP"
+                    print("scrub: private word list missing; public rules passed", flush=True)
+            except SkipFamily as exc:
+                print(f"{family}: SKIP: {exc}", flush=True)
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
                 status = "FAIL"
             if status in {"FAIL", "INFRA"}:
                 if status == "FAIL" or exit_code == 1:
@@ -113,7 +125,7 @@ def main(argv=None, root=None):
                     exit_code = 3
                 stopped = args.fail_fast
         summary.append(f"{status} {family} {time.monotonic() - start:.3f}")
-    print("\n".join(summary))
+        print(summary[-1], flush=True)
     return exit_code
 
 

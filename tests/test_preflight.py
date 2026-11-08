@@ -49,23 +49,23 @@ def test_failure(repo, monkeypatch, capsys, family, tool):
 
 def test_infra_retry(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch, "scrub_check.py", "HTTP 503 download failed\n")
-    assert preflight.main(["--base", "HEAD"], repo) == 3
-    assert len(calls) == 7
-    assert "INFRA scrub " in capsys.readouterr().out
+    assert preflight.main(["--base", "HEAD"], repo) == 1
+    assert len(calls) == 6
+    assert "FAIL scrub " in capsys.readouterr().out
 
 
 def test_fast_summary_and_ci_env(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch)
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
-    lines = capsys.readouterr().out.splitlines()
+    lines = [line for line in capsys.readouterr().out.splitlines() if re.match(r"^(PASS|SKIP) ", line)]
     assert [line.split()[:2] for line in lines] == [
-        ["PASS", "scrub"], ["PASS", "policy"], ["SKIP", "rust"], ["SKIP", "tests"]]
+        ["SKIP", "scrub"], ["PASS", "policy"], ["SKIP", "rust"], ["SKIP", "tests"]]
     assert all(re.fullmatch(r"(?:PASS|SKIP) \w+ \d+\.\d{3}", line) for line in lines)
     assert len(calls) == 5
     assert calls[1][2]["FILESIZE_REQUIRE_BASE"] == "HEAD"
     assert calls[1][2]["NEWCODE_BASE"] == "HEAD"
     assert calls[1][2]["CHANGELOG_BASE"] == "HEAD"
-    assert calls[-1][0][-2:] == ["--exempt", str(repo / "tools/ci_commit_exempt.txt")]
+    assert calls[-1][0][-2:] == ["--exempt", str(Path(preflight.__file__).with_name("ci_commit_exempt.txt"))]
 
 
 def test_all_families_after_scrub_failure(repo, monkeypatch, capsys):
@@ -73,7 +73,7 @@ def test_all_families_after_scrub_failure(repo, monkeypatch, capsys):
     monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt"]])
     assert preflight.main(["--base", "HEAD"], repo) == 1
     assert len(calls) == 7
-    assert re.findall(r'^(?:PASS|FAIL) (\w+) ', capsys.readouterr().out, re.M) == [
+    assert re.findall(r'^(?:PASS|FAIL|SKIP) (\w+) ', capsys.readouterr().out, re.M) == [
         'scrub', 'policy', 'rust', 'tests']
 
 
@@ -85,9 +85,9 @@ def test_retry_recovers(repo, monkeypatch, capsys):
         return (1, "connection reset") if len(calls) == 1 else (0, "")
 
     monkeypatch.setattr(preflight, "run", run)
-    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
-    assert len(calls) == 6
-    assert "PASS scrub " in capsys.readouterr().out
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 1
+    assert len(calls) == 5
+    assert "FAIL scrub " in capsys.readouterr().out
 
 
 def test_rust_selection(repo, monkeypatch):
@@ -167,3 +167,53 @@ def test_private_word_added_line_redacted(repo):
     result = private_scrub(repo, True)
     assert result.returncode == 1
     assert 'new.txt:1: private-word' in result.stdout
+
+
+@pytest.mark.parametrize("text", ["500 file-size limit", "download test failed", "timed out assertion"])
+def test_check_output_is_not_infra(repo, monkeypatch, capsys, text):
+    calls = fake_runner(monkeypatch, "scrub_check.py", text)
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 1
+    assert len(calls) == 5
+    assert "INFRA" not in capsys.readouterr().out
+
+
+def test_real_affected_argv(repo, monkeypatch):
+    original = preflight.run
+    seen = []
+
+    def run(command, cwd, env):
+        if Path(command[1]).name != "affected_tests.py":
+            return 0, ""
+        seen.append(command)
+        # Exercise the generated flags with the actual parser, in an empty repo.
+        command[1] = str(Path(preflight.__file__).with_name("affected_tests.py"))
+        return original([*command, "--root", str(repo)], cwd, env)
+
+    monkeypatch.setattr(preflight, "run", run)
+    assert preflight.main(["--base", "HEAD", "--head", "HEAD"], repo) == 0
+    assert seen and seen[0][seen[0].index("--head") + 1] == "HEAD"
+
+
+def test_timeout_is_failure(monkeypatch, repo):
+    def timeout(*args, **kwargs):
+        assert kwargs["timeout"] == preflight.CHECK_TIMEOUT
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(preflight.subprocess, "run", timeout)
+    assert preflight.run(["hung"], repo, {}) == (1, "check exceeded 60 second timeout\n")
+
+
+def test_missing_rust_baseline(repo, monkeypatch, capsys):
+    fake_runner(monkeypatch)
+    assert preflight.main(["--base", "missing", "--fast"], repo) == 0
+    assert "rust: SKIP: revision baseline unavailable" in capsys.readouterr().out
+
+
+def test_summary_is_immediate(repo, monkeypatch, capsys):
+    def run(command, cwd, env):
+        if Path(command[1]).name == "check_file_size.py":
+            assert "SKIP scrub " in capsys.readouterr().out
+        return 0, ""
+
+    monkeypatch.setattr(preflight, "run", run)
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0

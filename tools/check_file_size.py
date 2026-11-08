@@ -175,20 +175,29 @@ def reference_baseline(root, refs=REFERENCE_REFS):
     return None, [], None
 
 
-def measure(root, allowed):
+def measure(root, allowed, head=None):
     """``({path: lines}, binaries)`` for every tracked file the gate counts.
 
     ``-z`` and a NUL split: a name may hold any byte, and plain ``ls-files``
     mangles non-ASCII ones through ``core.quotePath`` into strings that name
     no file at all - such a file would silently never be measured.
     """
-    run = git(root, "ls-files", "-z")
+    run = git(root, "ls-tree", "-rz", "--name-only", head) if head else git(root, "ls-files", "-z")
     if run.returncode != 0:
         raise SystemExit("check-file-size: git ls-files failed: %s"
                          % run.stderr.strip())
     measured, binaries = {}, 0
     for rel in run.stdout.split("\0"):
         if not rel or is_excluded(rel) or rel in allowed:
+            continue
+        if head:
+            blob = git(root, "show", f"{head}:{rel}")
+            if blob.returncode:
+                continue
+            if "\0" in blob.stdout[:8192]:
+                binaries += 1
+            else:
+                measured[rel] = len(blob.stdout.splitlines())
             continue
         full = full_path(root, rel)
         if not os.path.isfile(full):
@@ -272,13 +281,14 @@ def main(argv=None):
     ap.add_argument("--update-baseline", action="store_true",
                     help="rewrite %s: create it if missing, otherwise only "
                          "lower counts - never raise, never add"
-                         % BASELINE_NAME)
+                          % BASELINE_NAME)
+    ap.add_argument("--head", help="measure this revision instead of the checkout")
     args = ap.parse_args(argv)
 
     root = git_toplevel()
     allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
     counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
-    measured, binaries = measure(root, allowed)
+    measured, binaries = measure(root, allowed, args.head)
     required = os.environ.get(REQUIRE_BASE_ENV, "")
     if required:
         base = git(root, "rev-parse", "--verify", "--quiet",
@@ -288,7 +298,7 @@ def main(argv=None):
                   "(actions/checkout fetch-depth: 0) so the baseline ratchets "
                   "against it, not against HEAD" % (REQUIRE_BASE_ENV, required))
             return 1
-        if base.stdout.strip() == git(root, "rev-parse", "HEAD").stdout.strip():
+        if base.stdout.strip() == git(root, "rev-parse", args.head or "HEAD").stdout.strip():
             print("check-file-size: %s=%s is HEAD itself - the ratchet would "
                   "compare the change with itself" % (REQUIRE_BASE_ENV, required))
             return 1
