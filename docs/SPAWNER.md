@@ -1,4 +1,5 @@
 # Plangraph Spawner & Model Routing Architecture
+Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
 Denied-tool OpenCode reviews exiting 1 preserve exact final verdicts from pending text without a stop frame, but not after an explicit non-stop finish; other transport-completion checks remain strict. Opt-in seat verdict posting finishes within its timeout before completion returns; refusal and failure outcomes remain in the run record and a private outcome file.
 ## Spawn by card
 Install the package on each host, then use `python -m plangraph.spawner.cli`
