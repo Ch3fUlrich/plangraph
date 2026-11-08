@@ -150,6 +150,8 @@ async def diagnose(probe=False):
     from .service import SpawnService
     from .leg_probe import probe_many
     checks, plans = [], {}
+    from .ps_host_doctor import source_checks
+    checks.extend(await asyncio.to_thread(source_checks))
 
     async def check(name, operation):
         try:
