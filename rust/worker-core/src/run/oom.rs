@@ -15,18 +15,27 @@ pub(super) fn tolerate(error: io::Error, report: impl FnOnce(&[u8])) -> io::Resu
 pub(super) fn adjust(path: &CStr) -> io::Result<()> {
     // SAFETY: path and stack buffers remain valid for every syscall.
     unsafe {
-        let report = |event: &[u8]| { libc::write(2, event.as_ptr().cast(), event.len()); };
+        let report = |event: &[u8]| {
+            libc::write(2, event.as_ptr().cast(), event.len());
+        };
         let fd = libc::open(path.as_ptr(), libc::O_RDWR);
-        if fd < 0 { return tolerate(io::Error::last_os_error(), report); }
+        if fd < 0 {
+            return tolerate(io::Error::last_os_error(), report);
+        }
         let result = (|| {
             let mut buf = [0u8; 32];
             let n = libc::read(fd, buf.as_mut_ptr().cast(), buf.len());
-            if n < 0 { return Err(io::Error::last_os_error()); }
-            let score = std::str::from_utf8(&buf[..n as usize]).ok()
+            if n < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let score = std::str::from_utf8(&buf[..n as usize])
+                .ok()
                 .and_then(|s| s.trim().parse::<i32>().ok())
                 .filter(|s| (-1000..=1000).contains(s))
                 .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
-            if score >= 500 { return Ok(()); }
+            if score >= 500 {
+                return Ok(());
+            }
             if libc::lseek(fd, 0, libc::SEEK_SET) < 0 {
                 return Err(io::Error::last_os_error());
             }

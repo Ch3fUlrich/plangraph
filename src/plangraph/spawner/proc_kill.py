@@ -311,6 +311,13 @@ async def finish(root, ident, members, *, platform=None, command_factory=None,
 
 
 if __name__ == '__main__':
+    if len(sys.argv) < 3:
+        os.write(2, b'oom wrapper: expected score path and command\n')
+        sys.exit(2)
     event = raise_oom_score(Path(sys.argv[1]))
     os.write(2, (json.dumps({'plangraph_oom': event}) + '\n').encode())
-    os.execvp(sys.argv[2], sys.argv[2:])
+    try:
+        os.execvp(sys.argv[2], sys.argv[2:])
+    except OSError:
+        os.write(2, b'oom wrapper: command execution failed\n')
+        sys.exit(127)

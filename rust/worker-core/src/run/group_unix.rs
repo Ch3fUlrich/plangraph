@@ -177,6 +177,7 @@ pub fn launch(
             )
         }
     };
+    #[cfg(target_os = "linux")]
     unsafe {
         cmd.pre_exec(|| super::oom::adjust(c"/proc/self/oom_score_adj"));
     }

@@ -4,8 +4,17 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import importlib.util
+from pathlib import Path
 
 from plangraph.spawner.runner import JobInfo, SpawnerRunner
+
+
+def _oom_config():
+    spec = importlib.util.spec_from_file_location('oom_test_config', Path(__file__).with_name('conftest.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _monitor(tmp_path, monkeypatch, output, stderr='Error: terminated', rc=1,
@@ -109,17 +118,18 @@ def test_linux_child_oom_inherits_before_exec(tmp_path):
     if not sys.platform.startswith('linux'):
         pytest.skip('Linux proc policy')
     async def run():
-        path = tmp_path / 'score'
-        path.write_text('-900')
+        path = Path('/proc/self/oom_score_adj')
+        before = path.read_text()
         proc = await oom_process_factory(
             sys.executable, '-c',
             "import subprocess,sys; print(open(sys.argv[1]).read().strip()); "
             "subprocess.run(['cat', sys.argv[1]], check=True)", str(path),
-            oom_path=path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         out, err = await proc.communicate()
         assert proc.returncode == 0, err
+        assert len(out.splitlines()) == 2
         assert all(int(score) >= 500 for score in out.splitlines())
+        assert path.read_text() == before
         assert b'oom_score_adj' in err
     asyncio.run(run())
 
@@ -148,7 +158,7 @@ def test_oom_deploy_contract():
 
 
 def test_pytest_memory_policy(tmp_path):
-    import conftest
+    conftest = _oom_config()
     mem = tmp_path / 'meminfo'
     mem.write_text('MemTotal:       15728640 kB\n')
     assert conftest._oom_worker_count(16, mem) == 4
@@ -174,13 +184,13 @@ def test_oom_factory_preserves_preexec_and_tolerates_bad_score(tmp_path, monkeyp
 
 
 def test_oom_worker_override(tmp_path, monkeypatch):
-    import conftest
+    conftest = _oom_config()
     monkeypatch.setenv('PYTEST_XDIST_AUTO_NUM_WORKERS', '2')
     assert conftest._oom_worker_count(16, tmp_path / 'missing') == 2
 
 
 def test_oom_serial_configure(monkeypatch):
-    import conftest
+    conftest = _oom_config()
     from plangraph.spawner import proc_kill
     calls = []
     monkeypatch.setattr(proc_kill, 'raise_oom_score', lambda: calls.append(1) or {'event': 'oom_score_adj'})
@@ -192,3 +202,37 @@ def test_rust_oom_envelope_is_recorded(tmp_path, monkeypatch):
     event = {'event': 'oom_score_adj_denied'}
     job = _monitor(tmp_path, monkeypatch, '', stderr=json.dumps({'plangraph_oom': event}))
     assert event in job.events
+
+
+@pytest.mark.parametrize('override, expected', [('bad', 2), ('99', 2), ('0', 1)])
+def test_oom_override_is_safe(tmp_path, monkeypatch, override, expected):
+    monkeypatch.setenv('PYTEST_XDIST_AUTO_NUM_WORKERS', override)
+    mem = tmp_path / 'meminfo'
+    mem.write_text('MemTotal: 2097152 kB\n')
+    assert _oom_config()._oom_worker_count(16, mem) == expected
+
+
+@pytest.mark.parametrize('args', [[], ['score'], ['score', '/missing/oom-command']])
+def test_oom_wrapper_diagnoses_failure(tmp_path, args):
+    import subprocess
+    import sys
+    from plangraph.spawner import proc_kill
+    (tmp_path / 'score').write_text('500')
+    result = subprocess.run([sys.executable, proc_kill.__file__, *args],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode in (2, 127)
+    assert 'oom wrapper:' in result.stderr
+    assert 'Traceback' not in result.stderr
+
+
+def test_linux_oom_call_is_guarded():
+    source = (Path(__file__).resolve().parents[1] / 'rust/worker-core/src/run/group_unix.rs').read_text()
+    assert '#[cfg(target_os = "linux")]\n    unsafe {\n        cmd.pre_exec' in source
+
+
+def test_inheritance_tests_use_proc():
+    import inspect
+    root = Path(__file__).resolve().parents[1]
+    rust = (root / 'rust/worker-core/src/run/group_tests.rs').read_text()
+    assert 'cat /proc/self/oom_score_adj' in rust
+    assert '/proc/self/oom_score_adj' in inspect.getsource(test_linux_child_oom_inherits_before_exec)

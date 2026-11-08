@@ -26,21 +26,31 @@ fn plain(script: &str, cwd: &Path, piped: bool) -> Grouped {
 #[test]
 fn oom_score_inherited_by_first_descendant() {
     let dir = tempfile::tempdir().unwrap();
-    let score = dir.path().join("score");
-    std::fs::write(&score, "100").unwrap();
-    let path = std::ffi::CString::new(score.as_os_str().as_encoded_bytes()).unwrap();
-    use std::os::unix::process::CommandExt;
-    let mut command = std::process::Command::new("sh");
-    command.args(["-c", "cat score; echo; sh -c 'cat score; echo'"])
-        .current_dir(dir.path()).stdout(std::process::Stdio::piped());
-    unsafe { command.pre_exec(move || super::oom::adjust(&path)); }
-    let mut child = command.spawn().unwrap();
+    let before = std::fs::read_to_string("/proc/self/oom_score_adj").unwrap();
+    let mut launched = plain(
+        "cat /proc/self/oom_score_adj; sh -c 'cat /proc/self/oom_score_adj'",
+        dir.path(),
+        false,
+    );
+    let child = &mut launched.child;
     let mut text = String::new();
-    child.stdout.take().unwrap().read_to_string(&mut text).unwrap();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut text)
+        .unwrap();
     assert!(child.wait().unwrap().success());
-    let scores: Vec<i32> = text.split_whitespace().map(|s| s.parse().unwrap()).collect();
+    let scores: Vec<i32> = text
+        .split_whitespace()
+        .map(|s| s.parse().unwrap())
+        .collect();
     assert_eq!(scores.len(), 2);
     assert!(scores.iter().all(|score| *score >= 500));
+    assert_eq!(
+        std::fs::read_to_string("/proc/self/oom_score_adj").unwrap(),
+        before
+    );
 }
 
 #[test]

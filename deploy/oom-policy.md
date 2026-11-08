@@ -25,7 +25,7 @@ it has `OOMScoreAdjust=200`, `KillMode=process`, and no embedded secrets.
 Do not install or restart either option as part of repository tests.
 
 Pytest auto defaults to min(4, CPUs, memory GiB); the environment variable
-`PYTEST_XDIST_AUTO_NUM_WORKERS` overrides this default. Explicit `-n` remains
+`PYTEST_XDIST_AUTO_NUM_WORKERS` can lower this cap; invalid values use the default. Explicit `-n` remains
 an operator choice. On memory-constrained hosts use at most `-n 2`, including
 when auto would select four workers.
 
@@ -44,4 +44,4 @@ second authenticated session and an external timeout/cleanup watchdog. Do not ru
 4. Assert the original herdr/keeper/daemon PID+start identities and health
    survive, and a subsequent writer can start. Kill/reap remaining probe
    descendants by recorded identity and retain timestamped evidence.
-Do not claim a global kernel-OOM survival result from a cgroup-only test.
+Acceptance (4)(5) remains pending: neither survival, merge nor deployment is verified.

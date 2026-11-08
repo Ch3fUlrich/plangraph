@@ -27,8 +27,10 @@ _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
     override = os.environ.get('PYTEST_XDIST_AUTO_NUM_WORKERS')
-    if override:
-        return max(1, int(override))
+    try:
+        count = min(count, max(1, int(override))) if override else count
+    except ValueError:
+        pass
     try:
         total = int(re.search(r'^MemTotal:\s+(\d+)', meminfo.read_text(), re.M)[1])
     except (OSError, TypeError, ValueError):
