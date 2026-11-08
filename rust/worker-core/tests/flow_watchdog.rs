@@ -11,6 +11,7 @@ fn run(snapshot: &serde_json::Value, dir: &std::path::Path) -> std::process::Out
 }
 
 #[test]
+#[cfg(unix)] // delivery hooks use /bin/cat; flow-watchdog is a systemd timer
 fn thresholds_and_deduplicated_delivery() {
     let dir = tempfile::tempdir().unwrap();
     let safe = serde_json::json!({"pace":66.0,"budget":66.0,
