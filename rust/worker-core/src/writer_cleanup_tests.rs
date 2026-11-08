@@ -3,6 +3,8 @@ use super::*;
 fn dry_run_no_prune() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = RepoEntry {
+        live_dir: None,
+        health_checks: None,
         root: tmp.path().to_string_lossy().into(),
         worktrees_root: tmp.path().to_string_lossy().into(),
         remote: "unused".into(),
@@ -63,6 +65,8 @@ impl Fixture {
         let sha = String::from_utf8(git(&root, &["rev-parse", "HEAD"]).unwrap()).unwrap();
         let sha = sha.trim().to_string();
         let repo = RepoEntry {
+            live_dir: None,
+            health_checks: None,
             root: root.to_string_lossy().into(),
             worktrees_root: trees.to_string_lossy().into(),
             remote: "unused".into(),
