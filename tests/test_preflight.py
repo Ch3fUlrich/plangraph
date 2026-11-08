@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -126,8 +127,30 @@ def test_rust_selection(repo, monkeypatch):
     commands = preflight.rust_commands(repo, "HEAD~1", "HEAD")
     assert commands[1] == ["cargo", "clippy", "-p", "one", "--all-targets", "--", "-D", "warnings"]
     assert commands[2] == ["cargo", "test", "-p", "one"]
-    monkeypatch.setattr(preflight.shutil, "which", lambda _: None)
-    assert preflight.rust_commands(repo, "HEAD~1", "HEAD") == []
+
+
+@pytest.mark.parametrize("rust_changed", [False, True])
+def test_cargo_absent(repo, monkeypatch, capsys, rust_changed):
+    if rust_changed:
+        (repo / "rust").mkdir()
+        (repo / "rust/lib.rs").write_text("// changed\n")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c",
+                        "user.email=test@example.invalid", "commit", "-qm", "rust"],
+                       cwd=repo, check=True)
+    bin_dir = repo / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "git").symlink_to(shutil.which("git"))
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert shutil.which("cargo") is None
+    fake_runner(monkeypatch)
+    base = "HEAD~1" if rust_changed else "HEAD"
+    assert preflight.main(["--base", base, "--fast"], repo) == int(rust_changed)
+    output = capsys.readouterr().out
+    reason = ("rust: FAIL: missing required tool: cargo" if rust_changed
+              else "rust: SKIP: no rust changes")
+    assert output.splitlines().count(reason) == 1
+    assert re.search(rf"^{'FAIL' if rust_changed else 'SKIP'} rust ", output, re.M)
 
 
 def test_words_and_tools_override(repo, monkeypatch):

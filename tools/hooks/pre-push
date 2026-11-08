@@ -259,6 +259,9 @@ def push_main():
     elif os.environ.get("PREFLIGHT_SKIP") == "1":
         print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
               file=sys.stderr)
+    elif any(rec[2] == "refs/heads/main" for rec in refs):
+        print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
+        return 1
     return 0
 
 

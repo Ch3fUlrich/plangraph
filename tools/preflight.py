@@ -12,7 +12,7 @@ import time
 import tomllib
 
 CHECK_TIMEOUT = 60
-# Measured on dell: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
+# Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
 # Leave ample room for slower hosts, multiple affected crates and test suites.
 RUST_TIMEOUT = 600
 TEST_TIMEOUT = 900
@@ -28,6 +28,10 @@ def check_timeout(command):
 
 class SkipFamily(ValueError):
     """A check has no usable revision baseline."""
+
+
+class FailFamily(ValueError):
+    """A check cannot run because a required tool is missing."""
 
 
 def run(command, cwd, env):
@@ -52,8 +56,10 @@ def rust_commands(root, base, head):
     except subprocess.CalledProcessError as exc:
         raise SkipFamily("revision baseline unavailable or no merge-base") from exc
     changed = [p for p in changed if p.startswith("rust/")]
-    if not changed or not shutil.which("cargo"):
-        return []
+    if not changed:
+        raise SkipFamily("no rust changes")
+    if not shutil.which("cargo"):
+        raise FailFamily("missing required tool: cargo")
     manifests = {}
     for manifest in (root / "rust").rglob("Cargo.toml"):
         if "target" in manifest.parts:
@@ -136,6 +142,9 @@ def main(argv=None, root=None):
                     print("scrub: private word list missing; public rules passed", flush=True)
             except SkipFamily as exc:
                 print(f"{family}: SKIP: {exc}", flush=True)
+            except FailFamily as exc:
+                status = "FAIL"
+                print(f"{family}: FAIL: {exc}", flush=True)
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
                 status = "FAIL"
             if status in {"FAIL", "INFRA"}:
