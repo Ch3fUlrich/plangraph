@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn launch_booking_carries_later_id_into_finish() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let prior = json!({"status":"failed","exit_code":7});
+    let mut base = json!({"attempts":[prior]});
+    let leg = json!({"model":"retry"});
+    let id = book_attempt(&mut base, &leg);
+    assert_eq!(id, 2);
+    let mut record = create(&dir, "run-retry", "fixture", base, Status::Running)
+        .unwrap_or_else(|_| panic!("fixture creation failed"));
+    finish(&mut record, Status::Completed, &leg, id);
+    assert_eq!(record.get("attempts").unwrap()[0], prior);
+    assert_eq!(record.get("attempts").unwrap()[1]["status"], "completed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn finish_reports_malformed_attempts_without_dropping_them() {
     let dir = std::env::temp_dir().join(new_run_id());
     let mut record = create(
@@ -128,7 +144,7 @@ fn orphan_settle_selects_non_last_non_first_attempt() {
         json!({
             "role":"implement", "attempts":[first,
                 {"status":"running","started":1,"exit_code":7,
-                 "leg":{"leg_key":"leg","route_key":"route"}}, last]
+                 "leg":{}}, last]
         }),
         Status::Running,
     )
@@ -138,10 +154,38 @@ fn orphan_settle_selects_non_last_non_first_attempt() {
     let attempts = saved.get("attempts").unwrap();
     assert_eq!(attempts[0], first);
     assert_eq!(attempts[1]["status"], "orphaned");
-    // Recovery clears even a pre-existing code: the process exit was unobserved.
+    // Unlike the spawn hook, recovery never observed the exit: keep the old
+    // code separately, rather than presenting it as this orphan's exit code.
     assert_eq!(attempts[1]["exit_code"], Value::Null);
+    assert_eq!(attempts[1]["prior_exit_code"], 7);
+    assert_eq!(attempts[1]["outcome_skip_reason"], "leg_key unavailable");
+    assert_eq!(attempts[1]["served_model"], "unwitnessed");
     assert_eq!(attempts[2], last);
     assert_eq!(saved.status(), Some(Status::Orphaned));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn orphan_settle_with_valid_attribution_preserves_prior_code() {
+    let dir = std::env::temp_dir().join(new_run_id());
+    let leg = json!({"leg_key":"leg","route_key":"route","model":"fixture"});
+    let mut record = create(
+        &dir,
+        "run-valid",
+        "fixture",
+        json!({"role":"implement","attempts":[
+            {"status":"running","started":1,"exit_code":7,"leg":leg}]}),
+        Status::Running,
+    )
+    .unwrap_or_else(|_| panic!("fixture creation failed"));
+    crate::reconcile_store::settle(&dir, &mut record, 1, "gone", 2000).unwrap();
+    let saved = RunRecord::read(&dir, "run-valid").unwrap();
+    let attempt = &saved.get("attempts").unwrap()[0];
+    assert_eq!(saved.status(), Some(Status::Orphaned));
+    assert_eq!(attempt["exit_code"], Value::Null);
+    assert_eq!(attempt["prior_exit_code"], 7);
+    assert_eq!(attempt["outcome"]["leg_key"], "leg");
+    assert_eq!(crate::evidence_row::adapted(&saved.to_value()).0.len(), 1);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

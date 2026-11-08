@@ -1,8 +1,5 @@
-//! Local runs only. Not ported: served-model witnesses, harness-limit leg booking,
-//! writer no-change checks, second-leg fall-through, writer
-//! continuation, completion events/delivery markers, dispatch-refusal gate, or
-//! SPAWNER-LIVENESS-D3622 watchdog. Context packs and writer env
-//! belong to the Python launch adapter.
+//! Local runs; witnesses, retry/fall-through, writer checks/continuation, delivery,
+//! dispatch refusal and D3622 liveness remain unported; packs/env use Python.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
     record::{new_job_id, new_run_id, RunRecord, Status},
@@ -66,7 +63,6 @@ impl Runs {
                 "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;
-
         let mut review_args = serde_json::to_value(args).map_err(|_| internal("invalid args"))?;
         review_args["role"] = role.clone();
         let mode = crate::prompt::configured_mode(role.as_str().unwrap_or(""));
@@ -88,7 +84,6 @@ impl Runs {
         }
         crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
             .map_err(|e| internal(&e.to_string()))?;
-
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
@@ -138,8 +133,7 @@ impl Runs {
             .into_iter()
             .map(Value::Object)
             .collect();
-        let attempt_id = 1;
-        base["attempts"] = json!([{"leg":leg,"status":"running"}]);
+        let attempt_id = book_attempt(&mut base, &leg);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
             if let Some(stdin) = &launch.stdin {
@@ -296,7 +290,17 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
+    if base.get("attempts").is_none() {
+        base["attempts"] = json!([]);
+    }
+    let attempts = base["attempts"].as_array_mut().unwrap();
+    attempts.push(json!({"leg":leg,"status":"running"}));
+    u32::try_from(attempts.len()).expect("attempt count fits u32")
+}
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
+    let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
+    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let mut attempts = match record.get("attempts") {
         None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),
@@ -314,8 +318,6 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         record.set("attempts_error", json!("unknown or invalid attempt id"));
         return;
     };
-    let diagnostic = json!({"reason":leg.get("reason"), "exit_code":leg.get("exit_code")});
-    let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     let dry = status == Status::DryRun;
     let unwitnessed = json!("unwitnessed");
     let completion = json!({"leg":leg,"status":status.as_str(),
@@ -333,14 +335,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
     if record.get("attempts_error").is_some() {
         record.set("attempts_error", Value::Null);
     }
-    record.set(
-        "chosen_leg",
-        if status == Status::Completed || dry {
-            leg.clone()
-        } else {
-            Value::Null
-        },
-    );
+    let chosen = if status == Status::Completed || dry {
+        leg.clone()
+    } else {
+        Value::Null
+    };
+    record.set("chosen_leg", chosen);
     record.set("writer_family", leg["family"].clone());
     if let Some(state) = record
         .path()
@@ -382,6 +382,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
+
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;
