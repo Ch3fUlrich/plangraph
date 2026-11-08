@@ -160,7 +160,7 @@ pub fn create_writer(
             branch,
             "--",
         ])
-        .arg(&dest)
+        .arg(git_worktree_path(&dest))
         .arg(base)
         .output()?;
     require(out.status.success(), "worktree_add")?;
@@ -181,6 +181,53 @@ pub fn create_writer(
         .open(admin.join("spawner-owned"))?;
     marker.write_all(&binding(repo, &checkout)?)?;
     Ok(checkout)
+}
+
+// Git for Windows does not accept Rust's canonical \\?\ worktree arguments.
+#[cfg(all(test, windows))]
+#[test]
+fn git_worktree_paths_preserve_native_identity() {
+    for (verbatim, native) in [
+        (r"\\?\C:\trees\run", r"C:\trees\run"),
+        (r"\\?\c:\trees with spaces\run", r"c:\trees with spaces\run"),
+        (r"\\?\UNC\server\share\run", r"\\server\share\run"),
+        (r"C:\trees\run", r"C:\trees\run"),
+    ] {
+        assert_eq!(git_worktree_path(Path::new(verbatim)), Path::new(native));
+    }
+}
+
+fn git_worktree_path(path: &Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        let prefix = match components.next() {
+            Some(Component::Prefix(prefix)) => prefix,
+            _ => return path.to_path_buf(),
+        };
+        let mut native = std::ffi::OsString::new();
+        match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => native.push(format!("{}:", char::from(drive))),
+            Prefix::VerbatimUNC(server, share) => {
+                native.push("\\\\");
+                native.push(server);
+                native.push("\\");
+                native.push(share);
+            }
+            _ => return path.to_path_buf(),
+        }
+        native.push("\\");
+        let mut result = std::path::PathBuf::from(native);
+        for component in components {
+            if component != Component::RootDir {
+                result.push(component.as_os_str());
+            }
+        }
+        result
+    }
+    #[cfg(not(windows))]
+    path.to_path_buf()
 }
 
 fn strip_git(cmd: &mut Command) {

@@ -41,7 +41,7 @@ impl Fixture {
         let head = g(&source, &["rev-parse", "HEAD"]);
         let entry = |name: &str| RepoEntry {
             root: root.join(name).to_str().unwrap().into(),
-            remote: root.join("origin").to_str().unwrap().into(),
+            remote: g(&root.join(name), &["remote", "get-url", "--all", "origin"]),
             worktrees_root: String::new(),
             python: None,
             import_roots: vec![],
