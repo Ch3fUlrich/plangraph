@@ -25,13 +25,19 @@ fn plain(script: &str, cwd: &Path, piped: bool) -> Grouped {
 #[cfg(target_os = "linux")]
 #[test]
 fn oom_score_inherited_by_first_descendant() {
-    let mut grouped = plain(
-        "cat /proc/self/oom_score_adj; sh -c 'cat /proc/self/oom_score_adj'",
-        Path::new("/"), false,
-    );
+    let dir = tempfile::tempdir().unwrap();
+    let score = dir.path().join("score");
+    std::fs::write(&score, "100").unwrap();
+    let path = std::ffi::CString::new(score.as_os_str().as_encoded_bytes()).unwrap();
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", "cat score; echo; sh -c 'cat score; echo'"])
+        .current_dir(dir.path()).stdout(std::process::Stdio::piped());
+    unsafe { command.pre_exec(move || super::oom::adjust(&path)); }
+    let mut child = command.spawn().unwrap();
     let mut text = String::new();
-    grouped.child.stdout.take().unwrap().read_to_string(&mut text).unwrap();
-    assert!(grouped.child.wait().unwrap().success());
+    child.stdout.take().unwrap().read_to_string(&mut text).unwrap();
+    assert!(child.wait().unwrap().success());
     let scores: Vec<i32> = text.split_whitespace().map(|s| s.parse().unwrap()).collect();
     assert_eq!(scores.len(), 2);
     assert!(scores.iter().all(|score| *score >= 500));

@@ -101,7 +101,7 @@ def test_oom_adjustment_never_lowers_and_records_denial(tmp_path, monkeypatch):
     assert raise_oom_score(path)['event'] == 'oom_score_adj_denied'
 
 
-def test_linux_child_oom_inherits_before_exec():
+def test_linux_child_oom_inherits_before_exec(tmp_path):
     import asyncio
     import sys
     import pytest
@@ -109,10 +109,13 @@ def test_linux_child_oom_inherits_before_exec():
     if not sys.platform.startswith('linux'):
         pytest.skip('Linux proc policy')
     async def run():
+        path = tmp_path / 'score'
+        path.write_text('-900')
         proc = await oom_process_factory(
             sys.executable, '-c',
-            "import subprocess; print(open('/proc/self/oom_score_adj').read().strip()); "
-            "subprocess.run(['cat', '/proc/self/oom_score_adj'], check=True)",
+            "import subprocess,sys; print(open(sys.argv[1]).read().strip()); "
+            "subprocess.run(['cat', sys.argv[1]], check=True)", str(path),
+            oom_path=path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         out, err = await proc.communicate()
         assert proc.returncode == 0, err
@@ -135,6 +138,9 @@ def test_oom_deploy_contract():
     docs = (root / 'deploy/oom-policy.md').read_text()
     assert 'systemd-run --user --scope' in docs
     assert 'claude --bg' in docs
+    assert 'Not deployed' in docs
+    assert 'second authenticated session' in docs
+    assert 'min(4, CPUs, memory GiB)' in docs
     for name, matches in [('prefer', ['python3', 'pytest', 'opencode']),
                           ('avoid', ['herdr', 'claude', 'plangraph-keeper'])]:
         pattern = (root / f'deploy/earlyoom/{name}.regex').read_text().strip()
@@ -148,4 +154,41 @@ def test_pytest_memory_policy(tmp_path):
     assert conftest._oom_worker_count(16, mem) == 4
     assert conftest._oom_worker_count(2, mem) == 2
     mem.write_text('MemTotal:       67108864 kB\n')
-    assert conftest._oom_worker_count(16, mem) == 16
+    assert conftest._oom_worker_count(16, mem) == 4
+    mem.write_text('MemTotal:       2097152 kB\n')
+    assert conftest._oom_worker_count(16, mem) == 2
+
+
+def test_oom_factory_preserves_preexec_and_tolerates_bad_score(tmp_path, monkeypatch):
+    from plangraph.spawner import proc_kill
+    path = tmp_path / 'score'
+    path.write_text('invalid')
+    assert proc_kill.raise_oom_score(path)['event'] == 'oom_score_adj_failed'
+    seen = {}
+    async def spawn(*args, **kwargs):
+        seen.update(kwargs)
+    callback = lambda: None
+    monkeypatch.setattr(proc_kill.asyncio, 'create_subprocess_exec', spawn)
+    asyncio.run(proc_kill.oom_process_factory('true', preexec_fn=callback, oom_path=path))
+    assert seen['preexec_fn'] is callback
+
+
+def test_oom_worker_override(tmp_path, monkeypatch):
+    import conftest
+    monkeypatch.setenv('PYTEST_XDIST_AUTO_NUM_WORKERS', '2')
+    assert conftest._oom_worker_count(16, tmp_path / 'missing') == 2
+
+
+def test_oom_serial_configure(monkeypatch):
+    import conftest
+    from plangraph.spawner import proc_kill
+    calls = []
+    monkeypatch.setattr(proc_kill, 'raise_oom_score', lambda: calls.append(1) or {'event': 'oom_score_adj'})
+    conftest.pytest_oom_configure(SimpleNamespace())
+    assert calls == [1]
+
+
+def test_rust_oom_envelope_is_recorded(tmp_path, monkeypatch):
+    event = {'event': 'oom_score_adj_denied'}
+    job = _monitor(tmp_path, monkeypatch, '', stderr=json.dumps({'plangraph_oom': event}))
+    assert event in job.events

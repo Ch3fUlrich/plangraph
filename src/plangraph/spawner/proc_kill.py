@@ -25,17 +25,16 @@ def raise_oom_score(path=Path('/proc/self/oom_score_adj')):
         return dict(event='oom_score_adj', value=max(current, 500))
     except PermissionError:
         return dict(event='oom_score_adj_denied', errno=13)
-
-
-def oom_child_setup():
-    # Runs before exec: even the first grandchild inherits the raised score.
-    event = raise_oom_score()
-    os.write(2, (json.dumps({'plangraph_oom': event}) + '\n').encode())
+    except (OSError, ValueError) as error:
+        return dict(event='oom_score_adj_failed', errno=getattr(error, 'errno', None))
 
 
 async def oom_process_factory(*args, **kwargs):
+    path = kwargs.pop('oom_path', '/proc/self/oom_score_adj')
     if sys.platform.startswith('linux'):
-        kwargs['preexec_fn'] = oom_child_setup
+        # Execute a fresh interpreter before policy I/O: no Python after fork.
+        # A file entry point also works with env_clear and arbitrary child cwd.
+        args = (sys.executable, str(Path(__file__).resolve()), str(path), *args)
     return await asyncio.create_subprocess_exec(*args, **kwargs)
 
 
@@ -309,3 +308,9 @@ async def finish(root, ident, members, *, platform=None, command_factory=None,
                                 members=left, proc_root=proc_root, ident=ident)
     await verify(root, ident, members, platform=platform, proc_root=proc_root, wait_s=wait_s,
                  live_pids=live_pids, reterminate=reterminate)
+
+
+if __name__ == '__main__':
+    event = raise_oom_score(Path(sys.argv[1]))
+    os.write(2, (json.dumps({'plangraph_oom': event}) + '\n').encode())
+    os.execvp(sys.argv[2], sys.argv[2:])

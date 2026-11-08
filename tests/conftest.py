@@ -26,11 +26,14 @@ _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 
 def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
+    override = os.environ.get('PYTEST_XDIST_AUTO_NUM_WORKERS')
+    if override:
+        return max(1, int(override))
     try:
         total = int(re.search(r'^MemTotal:\s+(\d+)', meminfo.read_text(), re.M)[1])
     except (OSError, TypeError, ValueError):
         return min(count, 4)  # Unknown capacity is not permission for unbounded workers.
-    return min(count, 4) if total < 32 * 1024 * 1024 else count
+    return max(1, min(count, 4, total // (1024 * 1024)))
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -40,7 +43,7 @@ def pytest_xdist_auto_num_workers(config):
 
 @pytest.hookimpl(specname='pytest_configure')
 def pytest_oom_configure(config):
-    if hasattr(config, 'workerinput') and sys.platform.startswith('linux'):
+    if sys.platform.startswith('linux'):
         from plangraph.spawner.proc_kill import raise_oom_score
         import warnings
         event = raise_oom_score()

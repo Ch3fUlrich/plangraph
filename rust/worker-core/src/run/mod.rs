@@ -14,6 +14,8 @@ pub mod group_windows;
 mod group_windows_tests;
 pub mod job_holder_windows;
 pub mod livelog;
+#[cfg(target_os = "linux")]
+mod oom;
 mod monitor;
 #[cfg(all(test, unix))]
 mod process_tests;

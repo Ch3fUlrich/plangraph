@@ -1,6 +1,8 @@
 # OOM policy (D-5075)
 
 Templates only: nothing here installs configuration or changes live units.
+Not deployed: the launcher is unchanged; daemon isolation requires an operator
+to apply and verify one of the options below. No live-isolation claim is made.
 Use the contents of `earlyoom/prefer.regex` with earlyoom `--prefer` and
 `earlyoom/avoid.regex` with `--avoid`. These are process-name regexes;
 check the installed earlyoom version's comm-name truncation behaviour.
@@ -22,13 +24,15 @@ daemon use the existing `systemd/claude-daemon.service` template instead:
 it has `OOMScoreAdjust=200`, `KillMode=process`, and no embedded secrets.
 Do not install or restart either option as part of repository tests.
 
-Pytest `-n auto`/`-n logical` is capped at four below 32 GiB; explicit `-n`
-remains an operator choice. On the 15 GiB router host use at most `-n 2`.
+Pytest auto defaults to min(4, CPUs, memory GiB); the environment variable
+`PYTEST_XDIST_AUTO_NUM_WORKERS` overrides this default. Explicit `-n` remains
+an operator choice. On memory-constrained hosts use at most `-n 2`, including
+when auto would select four workers.
 
 ## Router-owned live probe script specification
 
-Run only in an approved disposable memory-pressure window, with a second
-an authenticated session and an external timeout/cleanup watchdog. Do not run in CI.
+Run only in an approved disposable memory-pressure window, with a
+second authenticated session and an external timeout/cleanup watchdog. Do not run in CI.
 1. Record PID, start time, cgroup, oom_score_adj, and health endpoints for
    herdr, keeper, and the daemon; verify the daemon is outside herdr's cgroup.
 2. Launch a bounded disposable hog through each writer/seat/review launcher;

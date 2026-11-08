@@ -177,32 +177,8 @@ pub fn launch(
             )
         }
     };
-    #[cfg(target_os = "linux")]
     unsafe {
-        use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            // Only async-signal-safe syscalls after fork; no allocator or locks.
-            let fd = libc::open(c"/proc/self/oom_score_adj".as_ptr(), libc::O_RDWR);
-            if fd < 0 { return Err(std::io::Error::last_os_error()); }
-            let mut buf = [0u8; 32];
-            let n = libc::read(fd, buf.as_mut_ptr().cast(), buf.len());
-            let score = if n > 0 {
-                std::str::from_utf8(&buf[..n as usize]).ok()
-                    .and_then(|s| s.trim().parse::<i32>().ok())
-            } else { None };
-            libc::lseek(fd, 0, libc::SEEK_SET);
-            let result = if score.is_some_and(|s| s >= 500) { 3 }
-                else { libc::write(fd, b"500".as_ptr().cast(), 3) };
-            let error = std::io::Error::last_os_error();
-            libc::close(fd);
-            if result < 0 {
-                if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EPERM)) {
-                    let event = b"{\"event\":\"oom_score_adj_denied\"}\n";
-                    libc::write(2, event.as_ptr().cast(), event.len());
-                } else { return Err(error); }
-            }
-            Ok(())
-        });
+        cmd.pre_exec(|| super::oom::adjust(c"/proc/self/oom_score_adj"));
     }
     let mut child = spawn_retrying(|| cmd.spawn())?;
     let pid = child.id();
