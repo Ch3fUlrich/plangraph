@@ -865,9 +865,3 @@ path = "configuration/opencode/plugins/bash-guard/index.mjs"
 rule = "credential-shape"
 value_sha256 = "304cb3d3a87d6100ec926af8140985ef874d05ac3c8d0e1e66d3192c9c4647c0"
 why = "AutoOS bash-guard plugin comment naming a guarded path (byte copy @f806c42b, D-4844)"
-
-[[scrub.allow_value]]
-path = "configuration/opencode/plugins/bash-guard/index.mjs"
-rule = "credential-shape"
-value_sha256 = "fc27ccfa93f112c61779d5d8e15c2a47633c1a27a17cc66b5021e490d76d347a"
-why = "AutoOS bash-guard plugin comment naming a guarded path (byte copy @f806c42b, D-4844)"
