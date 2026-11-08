@@ -111,7 +111,7 @@ mod reconcile_store_settle_probe_tests {
     }
 
     #[test]
-    #[ignore = "RL29 step 3: invariant 3"]
+    #[ignore = "RL29 step 2 red test: invariant 3"]
     fn rl29_dead_leader_populated_saved_group_reclaims_after_grace() {
         let dir = StateDir::new();
         let mut member = Member::new();
@@ -124,61 +124,78 @@ mod reconcile_store_settle_probe_tests {
         record.set("proc", identity.clone());
         record.save().unwrap();
         seed_hold(&dir);
-        let result = reconcile(&dir);
-        if matches!(result, Ok(true)) {
-            assert!(
-                !member.alive(),
-                "P5 reclaim requires member exit before capacity release"
-            );
-            assert!(std::fs::read_to_string(group.join("cgroup.events"))
-                .unwrap()
-                .contains("populated 0"));
-            assert!(gone("run-test", Some(&serde_json::from_value(identity).unwrap())).unwrap());
-        } else {
-            assert!(member.alive());
-            assert_unresolved(&dir);
-        }
+        assert!(!reconcile(&dir).unwrap(), "populated hold, not reclaim");
+        assert!(member.alive());
+        assert_unresolved(&dir);
+        repair_and_reclaim(&dir, &mut member, &group, identity);
     }
 
     #[test]
-    #[ignore = "RL29 step 3: invariant 2"]
+    #[ignore = "RL29 step 2 red test: invariant 2"]
     fn rl29_zombie_live_member_holds_grace_then_reclaims() {
         let dir = StateDir::new();
         let mut member = Member::new();
-        let leader = Member::new();
+        let mut leader = Member::new();
         let mut identity = leader.identity();
         // Leave the child unreaped. Drop reaps it even if an assertion panics.
         assert_eq!(
             unsafe { libc::kill(leader.0.id() as i32, libc::SIGKILL) },
             0
         );
-        let limit = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            let stat = std::fs::read_to_string(format!("/proc/{}/stat", leader.0.id())).unwrap();
-            if stat.rsplit_once(')').unwrap().1.split_whitespace().next() == Some("Z") {
-                break;
-            }
-            assert!(std::time::Instant::now() < limit);
-            std::thread::yield_now();
-        }
+        // The killed child is our controlled event. WNOWAIT observes its exit
+        // without reaping it; no polling, scheduling deadline, or elapsed clock.
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+        // SAFETY: info is writable; P_PID selects our child, retained by WNOWAIT.
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    leader.0.id(),
+                    info.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", leader.0.id())).unwrap();
+        assert_eq!(
+            stat.rsplit_once(')').unwrap().1.split_whitespace().next(),
+            Some("Z")
+        );
         let (_guard, group) = populated(&dir, &member, &mut identity);
         let mut record = dir.record();
         record.set("proc", identity.clone());
         record.save().unwrap();
         seed_hold(&dir);
-        if matches!(reconcile(&dir), Ok(true)) {
-            assert!(
-                !member.alive(),
-                "orphan_gone Ok(true) must not leave a live zombie-group member"
-            );
-            assert!(std::fs::read_to_string(group.join("cgroup.events"))
-                .unwrap()
-                .contains("populated 0"));
-            assert!(gone("run-test", Some(&serde_json::from_value(identity).unwrap())).unwrap());
-        } else {
-            assert!(member.alive());
-            assert_unresolved(&dir);
-        }
+        assert!(!reconcile(&dir).unwrap(), "live zombie-group member holds");
+        assert!(member.alive());
+        assert_unresolved(&dir);
+        leader.0.wait().unwrap();
+        repair_and_reclaim(&dir, &mut member, &group, identity);
+    }
+
+    fn repair_and_reclaim(
+        dir: &StateDir,
+        member: &mut Member,
+        group: &std::path::Path,
+        identity: Value,
+    ) {
+        // Test acts as cleanup owner and kernel events producer. Production
+        // must not write cgroup.events; this regular-file fixture is writable.
+        member.0.kill().unwrap();
+        member.0.wait().unwrap();
+        std::fs::write(group.join("cgroup.procs"), "").unwrap();
+        std::fs::write(group.join("cgroup.events"), "populated 0\n").unwrap();
+        assert!(!member.alive());
+        assert!(gone("run-test", Some(&serde_json::from_value(identity).unwrap())).unwrap());
+        assert!(
+            reconcile(dir).unwrap(),
+            "fresh empty proof permits repair reclaim"
+        );
+        assert_eq!(
+            RunRecord::read(&dir.0, "run-test").unwrap().status(),
+            Some(Status::Orphaned)
+        );
     }
 }
 
@@ -198,22 +215,28 @@ mod reconcile_store_identity_tests {
     }
 
     #[test]
-    #[ignore = "RL29 step 3: invariant 6"]
+    #[ignore = "RL29 step 2 red test: invariant 6"]
     fn rl29_stale_identity_without_confinement_proof_becomes_unresolved() {
         let dir = StateDir::new();
         let mut member = Member::new();
         stale_record(&dir, &member, 1);
         seed_hold(&dir);
-        let _ = reconcile(&dir);
-        let result = reconcile(&dir); // restart across persisted deadline
-        assert!(member.alive(), "never signal a reused PID");
+        assert!(
+            !reconcile(&dir).unwrap(),
+            "expired uncertainty retains capacity"
+        );
         assert_unresolved(&dir);
         assert!(
-            !matches!(result, Err(ReconcileError::Unknown)),
-            "no endless Unknown after max age"
+            !reconcile(&dir).unwrap(),
+            "restart is terminal, never Unknown"
         );
+        assert!(member.alive(), "never signal a reused PID");
+        assert_unresolved(&dir);
         let before = saved(&dir);
-        let _ = reconcile(&dir);
+        assert!(
+            !reconcile(&dir).unwrap(),
+            "terminal replay retains capacity"
+        );
         assert_eq!(
             saved(&dir),
             before,
@@ -222,7 +245,7 @@ mod reconcile_store_identity_tests {
     }
 
     #[test]
-    #[ignore = "RL29 step 3: invariant 5"]
+    #[ignore = "RL29 step 2 red test: invariant 5"]
     fn rl29_identity_rekey_preserves_run_slot_hold_deadline() {
         let dir = StateDir::new();
         let mut member = Member::new();
@@ -236,8 +259,15 @@ mod reconcile_store_identity_tests {
                 "leg":{"leg_key":"leg","route_key":"route"}, "proc":record.get("proc")}));
             record.set("attempts", json!(attempts));
             record.save().unwrap();
-            let _ = reconcile(&dir);
+            assert!(!reconcile(&dir).unwrap(), "re-key retains capacity");
             let hold = saved(&dir);
+            // Proposed evidence fields: unlike seeded anchor values, these
+            // must be written by reconcile after observing the latest record.
+            assert_eq!(
+                hold["observed_identity"],
+                record.get("proc").unwrap().clone()
+            );
+            assert_eq!(hold["observed_attempt"], generation + 1);
             assert_eq!(hold["hold_started_ms"], START);
             assert_eq!(hold["hold_deadline_ms"], DEADLINE);
             assert_eq!(hold["slot_id"], "slot-test");
@@ -245,7 +275,7 @@ mod reconcile_store_identity_tests {
         assert!(member.alive());
         assert_unresolved(&dir);
         let before = saved(&dir);
-        let _ = reconcile(&dir);
+        assert!(!reconcile(&dir).unwrap(), "re-key replay retains capacity");
         assert_eq!(saved(&dir), before);
     }
 }
