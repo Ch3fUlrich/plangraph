@@ -1,5 +1,7 @@
 # RL29 crash reconciliation state model
 
+D-5054 step 1 of 3: design note only; step 2 adds failing tests; step 3 implements the fix.
+
 Plan: `plangraph:RL29-RECONCILE-DESIGN`; router D-5054; replan-0390.
 Design contract for implementation seats and judge; no runtime changes here.
 Baseline: `origin/main:rust/pg-spawnd/src/reconcile_store*.rs`.
@@ -25,7 +27,7 @@ Zombie-only groups remain P until reaped/removed and the authoritative probe is 
 
 | Row | Record | Identity | Leader | Group | States | Action | Required before settled |
 | --- | --- | --- | --- | --- | ---: | --- | --- |
-| S1 | * | V | A | P | 3 | Hold; transfer to reattach/watch owner, or cleanup on policy deadline | Owner observes exit, empties group, then S5–S7 |
+| S1 | * | V | A | P | 3 | Hold; durably transfer to reattach/watch owner with the persisted deadline and terminal-unresolved + alert obligation intact, or cleanup on policy deadline | Owner observes exit, empties group, then S5–S7; unresolved at the unchanged deadline otherwise |
 | S2 | * | V | Z/D | P | 6 | Cleanup owner kills remaining owned members; hold; reclaim only after S5–S7 | Fresh `gone() == Ok(true)`, not leader death or grace expiry |
 | S3 | * | S/U | * | P | 18 | Hold + alert; cleanup only with independent confinement authority | Owned group emptied and original leader non-live; otherwise unresolved |
 | S4 | * | * | A | E/A | 18 | Hold + alert: inconsistent evidence or unrelated reused PID; resolve ownership | Prove recorded leader non-live and group empty/absent; do not kill reused PID |
@@ -67,9 +69,9 @@ constant but its expiry-to-settlement behavior is not the contract.
 
 | Item | Durable location / transition | Bound and crash behavior |
 | --- | --- | --- |
-| Hold anchor | `runs/<run_id>/reconcile.json`, keyed by attempt + saved identity fingerprint: `hold_started_ms`, `hold_deadline_ms`, `reason`, `disposition` | Atomically save before returning hold; deadline = first observation + constant; retries/restarts/record rewrites never extend it |
+| Hold anchor | `runs/<run_id>/reconcile.json`, keyed by stable run/slot ID, not attempt or identity fingerprint: `hold_started_ms`, `hold_deadline_ms`, `reason`, `disposition`; attempt/fingerprint are evidence only | Atomically save before returning the first hold; set deadline once = first hold + constant; retries/restarts/record rewrites and identity/attempt re-keys reuse this anchor and never reset the deadline or create a second hold |
 | Missing record/attempt | Same sidecar/tombstone; discover holds independently of `inventory()` running records | Retain identity and group provenance; missing `record.json` cannot erase the clock |
-| All S1–S4/S8 holds | At deadline, re-probe once; proven gone follows S5–S7; otherwise persist `disposition=unresolved` | Terminal recovery state, not `settled`, not repeated `Err(Unknown)`; S1 may instead complete an explicit durable watch handoff before deadline |
+| All S1–S4/S8 holds | At deadline, re-probe once; proven gone follows S5–S7; otherwise persist `disposition=unresolved` | Terminal recovery state, not `settled`, not repeated `Err(Unknown)`; S1 may transfer responsibility through an explicit durable watch handoff before deadline only if the same persisted anchor/deadline and terminal-unresolved + durable alert obligation transfer with it; handoff neither renews the budget nor exempts the new owner from that ending |
 | Unresolved alert | Sidecar outbox event `RECONCILE_UNRESOLVED`, key `(run_id, attempt, hold_started_ms)`; mirror in record when available | Atomically persist disposition + event, replay delivery idempotently after crash; include evidence and cleanup failure |
 | Capacity/late repair | Keep slot or durable quarantine reservation while unresolved; operator/cleanup repair may later prove gone | End automatic hold retries at deadline; no unproved reclaim; subsequent repair records a separate resolution |
 | Storage/lock failure | Do not acknowledge disposition; retain reservation, surface service-health alert | Deadline remains due; retry durable write on recovery, never reset clock or claim settlement |
@@ -88,6 +90,7 @@ Tests below are required acceptance changes, not tests added by this docs commit
 | P5 dead-leader reclaim must assert group emptied | S2/S3 → S5–S7, never populated → reclaim | Strengthen reference `reconcile_store_settle_probe_tests::dead_leader_populated_saved_group_reclaims_after_grace`: use an owned real group/member; assert member exited and authoritative group empty **before** reclaim; if cleanup unavailable assert unresolved + retained reservation. Fake `populated 1` alone must never pass settlement. |
 | No live zombie-group member after `orphan_gone` returns `Ok(true)` | S2/S3 | Reverse reference `reconcile_store_settle_probe_tests::zombie_live_member_holds_grace_then_reclaims`'s live-child assertion: success requires child exited/reaped and `gone() == Ok(true)`; a surviving child requires non-success, then bounded unresolved. Test must fail on reference success-with-live-child behavior. |
 | Stale identity without confinement proof reaches bounded end | S8 (also S3/S4 if evidence contradicts) | Add `reconcile_store_identity_tests::stale_identity_without_confinement_proof_becomes_unresolved`: reused PID + absent/untrusted PGID, restart across persisted deadline; assert terminal unresolved + exactly one alert, no signal to reused PID, no settlement/reclaim, and no further automatic `Err(Unknown)` loop. |
+| Identity re-key cannot renew or duplicate a hold (invariant 5) | S1–S4/S8 | Step 2 adds `reconcile_store_identity_tests::identity_rekey_preserves_run_slot_hold_deadline`: change attempt/identity fingerprints repeatedly, including across restart; assert one stable run/slot anchor, the original start/deadline unchanged, no second hold, and terminal unresolved + one durable alert at that deadline if still unproven, with capacity retained. |
 
 ## 5. Numbered invariants for seats and judge
 
@@ -95,12 +98,12 @@ Tests below are required acceptance changes, not tests added by this docs commit
 2. `settled` and `orphan_gone == Ok(true)` require no live owned leader/member and fresh fenced whole-group proof.
 3. Leader death, PID reuse, zombie status, grace expiry and successful kill submission never substitute for `gone()`.
 4. Only an authenticated cleanup owner kills members; stale numeric identities never authorize signals.
-5. Every hold has one persisted non-renewable deadline, including missing/terminal records and unreadable groups.
+5. Each stable run/slot ID has one hold anchor and one persisted deadline, set once at first hold, including missing/terminal records and unreadable groups. Identity/attempt re-keys cannot reset that deadline or create a second hold; they only update evidence and restart classification (step-2 test: `identity_rekey_preserves_run_slot_hold_deadline`).
 6. Expired uncertainty becomes terminal unresolved + durable idempotent alert, never fictional settlement or endless `Unknown`.
 7. Unresolved capacity stays reserved/quarantined; proven disposition precedes reclaim, including crash replay.
 8. State/record locking, identity re-read and ownership fencing protect probe-to-commit; changed evidence is reclassified.
 9. Settlement/outcome, alert delivery and reclaim are idempotent across crash/restart; preserve existing terminal outcomes.
-10. All three finding tests assert process/group facts, durable disposition and capacity, not merely return codes.
+10. All finding tests assert process/group facts, durable disposition and capacity, not merely return codes.
 
 Open questions: none for this contract. Implementation seats must select the concrete
 cross-platform ownership fence and sidecar schema/API wiring without weakening it;
