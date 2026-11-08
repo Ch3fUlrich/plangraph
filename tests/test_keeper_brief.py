@@ -223,7 +223,10 @@ def test_mcp_create_reports_the_warning(live):
     reply = mcp.handle(
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
          "params": {"name": "create", "arguments": {"items": [
-             defn("W1"), defn("W1G", ["W1"], kind="goal")]}}},
+             defn("W1", description="Why: Test creation.\nHow: Create a lane."),
+             defn("W1G", ["W1", "W1D"], kind="goal",
+                  description="Why: Test creation.\nHow: Create a goal."),
+             defn("W1D", kind="decision")]}}},
         _client(live, "router"))
     assert reply["result"]["isError"] is False
     assert "description missing: brief will be empty" in \
