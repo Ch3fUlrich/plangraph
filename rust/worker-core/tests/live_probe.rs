@@ -98,6 +98,7 @@ fn daily_runner_records_failure_and_gate_refuses_it() {
     assert!(!invoke("gate").status.success());
 }
 
+#[cfg(unix)] // TMPDIR drives the setup failure; Windows reads TMP/TEMP
 #[test]
 fn output_setup_failure_invalidates_prior_pass() {
     let dir = tempfile::tempdir().unwrap();
