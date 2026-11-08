@@ -50,11 +50,8 @@ def test_negative_readiness_is_malformed(field):
 
 
 @pytest.mark.parametrize('stdout,expected', [
-    ('{"status":"running","card":{"a":1}}', {'status': 'running', 'card': {'a': 1}}),
-    ('{\n"status":"running","card":{"a":1}\n}',
-     {'status': 'running', 'card': {'a': 1}}),
-    ('{"env":"secret"}\nunreadable receipt',
-     {'warning': 'remote spawn succeeded; receipt unavailable'}),
+    ('{"run_id":"run-r","status":"running","card":{"a":1}}',
+     {'run_id': 'run-r', 'status': 'running', 'card': {'a': 1}}),
 ])
 def test_remote_outer_receipt(monkeypatch, stdout, expected):
     def run(argv, **kwargs):
@@ -206,7 +203,7 @@ def test_remote_receipt_boundary_and_mask(inputs, monkeypatch, capsys, mode):
         output = '/invented-stage'
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
             spawns.append(argv)
-            output = bracket(argv[-1], json.dumps({'status': 'running', 'note': 'password ' + secret}))
+            output = bracket(argv[-1], json.dumps({'run_id': 'run-r', 'status': 'running', 'note': 'password ' + secret}))
             lines = output.splitlines()
             if mode == 'missing_end':
                 output = '\n'.join(lines[:-1])
@@ -226,7 +223,7 @@ def test_remote_receipt_boundary_and_mask(inputs, monkeypatch, capsys, mode):
         assert result['note'] == 'password [redacted]'
     else:
         assert result['reason'] == 'receipt_unbracketed'
-        assert 'status' not in result
+        assert result['status'] == 'unknown' and result['acknowledged_unknown']
     assert len(spawns) == 1
 
 
@@ -262,7 +259,7 @@ def test_remote_rewrite_and_quoting(monkeypatch):
             cards.append(json.loads(o.Path(argv[2]).read_text()))
         stdout = '/invented-stage\n'
         if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
-            stdout = bracket(argv[-1], '{"status":"running"}')
+            stdout = bracket(argv[-1], '{"run_id":"run-r","status":"running"}')
         return SimpleNamespace(returncode=0, stdout=stdout)
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo='/invented checkout', spawner_src='/invented source', env_file='/invented env')
@@ -322,9 +319,39 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
             result = real_run(['sh', '-c', command], capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
             received.append(result.stdout.splitlines()[1])
-            return SimpleNamespace(returncode=0, stdout=bracket(argv[-1], '{}'))
+            return SimpleNamespace(returncode=0, stdout=bracket(argv[-1], '{"run_id":"run-r"}'))
         return SimpleNamespace(returncode=0, stdout=str(stage) if argv[-1] == 'mktemp -d' else '{}')
     monkeypatch.setattr(o.subprocess, 'run', run)
     host = dict(ssh='invented-alias', repo=str(tmp_path), spawner_src='src')
-    assert o.remote_spawn('invented', host, {}, prompt, []) == {}
+    assert o.remote_spawn('invented', host, {}, prompt, []) == {'run_id': 'run-r'}
     assert received == [repr(prompt)]
+
+
+@pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])
+@pytest.mark.parametrize('entry', ['main', 'admit'])
+def test_acknowledged_unknown_never_retries(inputs, monkeypatch, capsys, receipt, entry):
+    from plangraph.spawner import admission_overflow as admission
+    from plangraph.spawner.service import SpawnService
+    root, path, args = inputs
+    host = dict(ssh='invented', repo='/invented', spawner_src='/invented/src')
+    path.write_text(json.dumps({'public_repos': [str(root)], 'hosts': {'ash': host, 'birch': host}}))
+    monkeypatch.setattr(o, 'ready_records', lambda config, role='implement': {'ash': healthy(), 'birch': healthy()})
+    spawns = []
+    def run(argv, **kwargs):
+        stdout = '/invented-stage'
+        if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
+            spawns.append(argv)
+            stdout = receipt if receipt == 'unreadable' else bracket(argv[-1], receipt)
+        return SimpleNamespace(returncode=0, stdout=stdout)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    if entry == 'main':
+        assert o.main(args) == 0
+        record = json.loads(capsys.readouterr().out)
+    else:
+        service = SpawnService(state=str(root / 'state'))
+        service.runner.default_cwd = str(root)
+        monkeypatch.setattr(admission, 'resources', lambda service: (100, 4000))
+        record = admission.admit(service, {}, card={})
+        assert record in service.ps()['runs']
+    assert record['status'] == 'unknown' and record['acknowledged_unknown']
+    assert record['host'] == 'ash' and len(spawns) == 1

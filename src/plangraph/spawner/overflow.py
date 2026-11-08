@@ -11,6 +11,7 @@ import secrets
 import shlex
 import subprocess
 import tempfile
+import uuid
 from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
@@ -23,6 +24,21 @@ from .private_io import atomic_write_private
 class Decision(NamedTuple):
     host: str | None
     reason: str
+
+
+class RemoteRefusal(ValueError):
+    """Safe, value-free remote failure reason."""
+
+
+def failure_reason(exc):
+    """Describe the failure without exposing exception values or private paths."""
+    if isinstance(exc, OSError):
+        return 'remote spawn OS operation failed: ' + (os.strerror(exc.errno) if exc.errno else 'I/O error')
+    if isinstance(exc, KeyError):
+        return 'remote spawn configuration missing a required field'
+    if isinstance(exc, TypeError):
+        return 'remote spawn input has an invalid type'
+    return 'remote spawn input or receipt has an invalid value'
 
 
 def registry_caps():
@@ -174,10 +190,10 @@ def remote_spawn(name, host, card, prompt, options):
                               encoding='utf-8', errors='replace')
     staging = ssh('mktemp -d')
     if staging.returncode:
-        return None
+        raise RemoteRefusal('remote staging failed')
     directory = staging.stdout.strip()
     if not directory.startswith('/') or '\n' in directory:
-        return None
+        raise RemoteRefusal('remote staging path invalid')
     q = shlex.quote
     try:
         with tempfile.TemporaryDirectory() as local:
@@ -191,7 +207,7 @@ def remote_spawn(name, host, card, prompt, options):
                                      str(Path(local) / 'prompt.txt'), alias + ':' + q(directory + '/')],
                                     capture_output=True, text=True, encoding='utf-8', errors='replace')
             if copied.returncode:
-                return None
+                raise RemoteRefusal('remote copy failed')
         commands = []
         if host.get('env_file'):
             commands.append('set -a && . ' + q(host['env_file']) + ' && set +a')
@@ -211,21 +227,24 @@ def remote_spawn(name, host, card, prompt, options):
         commands.append("printf '\\n%s\\n' " + q(end))
         result = ssh(' && '.join(commands))
         if result.returncode:
-            return None
+            raise RemoteRefusal('remote command failed')
         # Mask before parsing/exposing any remote output, including JSON keys.
         # Never retry an acknowledged spawn merely because its receipt is unreadable.
         output, _ = mask(result.stdout)
         lines = output.splitlines()
         if lines.count(begin) != 1 or lines.count(end) != 1 or lines.index(begin) >= lines.index(end):
-            return {'warning': 'remote spawn succeeded; receipt unavailable',
+            return {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'unknown',
+                    'host': name, 'acknowledged_unknown': True,
                     'reason': 'receipt_unbracketed'}
         try:
             receipt = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
         except ValueError:
             receipt = None
-        if isinstance(receipt, dict) and ('status' in receipt or receipt == {}):
+        if (isinstance(receipt, dict) and isinstance(receipt.get('run_id'), str)
+                and receipt['run_id'].strip()):
             return receipt
-        return {'warning': 'remote spawn succeeded; receipt unavailable'}
+        return {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'unknown',
+                'host': name, 'acknowledged_unknown': True}
     finally:
         ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
             '; rmdir -- ' + q(directory))
@@ -273,13 +292,16 @@ def main(argv=None):
             attempts += 1
             try:
                 result = remote_spawn(name, config['hosts'][name], card, prompt, options)
-            except (OSError, ValueError, KeyError):
-                result = None
+                refusal = 'remote spawn failed'
+            except RemoteRefusal as exc:
+                result, refusal = None, str(exc)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result, refusal = None, failure_reason(exc)
             if result is not None:
                 result.update(host=name, overflow_reason=decision.reason)
                 print(mask(json.dumps(result))[0])
                 return 0
-            records[name]['refusal'] = 'remote spawn failed'
+            records[name]['refusal'] = refusal
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         print('overflow input or resource check failed', file=__import__('sys').stderr)
         return 1

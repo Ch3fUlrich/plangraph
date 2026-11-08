@@ -53,6 +53,10 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
+            from .admission_overflow import admit
+            admitted = admit(self, options, card=card)
+            if admitted is not None:
+                return admitted
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold

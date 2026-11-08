@@ -1,0 +1,119 @@
+import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+from plangraph.spawner import admission_overflow as a, overflow
+from plangraph.spawner.seat_spawn import SeatSpawnMixin
+
+
+@pytest.fixture
+def setup(tmp_path, monkeypatch):
+    path = tmp_path / 'hosts.json'
+    path.write_text(json.dumps({'public_repos': [str(tmp_path)], 'hosts': {'ash': {}, 'birch': {}}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    monkeypatch.setattr(overflow, 'local_limits', lambda registry, role: (2048, 3000))
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
+    monkeypatch.setattr(a, 'resources', lambda service: (100, 4000))
+    monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {
+        name: dict(ssh=name, ok=True, fresh=True, live_runs=100,
+                   mem_available_mb=6000, role_mb=2048, floor_mb=3000)
+        for name in ('ash', 'birch')})
+    remote = Mock(return_value={'run_id': 'run-remote', 'status': 'running'})
+    monkeypatch.setattr(overflow, 'remote_spawn', remote)
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path)), _save=Mock())
+    return service, path, remote
+
+
+@pytest.mark.parametrize('memory', [5048, 9000])
+def test_local_room_ignores_counts(setup, monkeypatch, memory):
+    service, _, remote = setup
+    monkeypatch.setattr(a, 'resources', lambda service: (100, memory))
+    assert a.admit(service, {}) is None
+    remote.assert_not_called()
+
+
+def test_no_config_or_dry_run_preserves_local(setup):
+    service, path, remote = setup
+    assert a.admit(service, {'dry_run': True}) is None
+    path.unlink()
+    assert a.admit(service, {}) is None
+    remote.assert_not_called()
+    service._save.assert_not_called()
+
+
+def test_forward_options_and_save(setup):
+    service, _, remote = setup
+    card = {'diff_ref': {'repo': service.runner.default_cwd}}
+    result = a.admit(service, {'prompt': 'task', 'role': 'review', 'model': 'model',
+                              'writer_families': ['family'], 'seats': True}, card=card)
+    assert result['host'] == 'ash' and result['overflow_remote']
+    assert remote.call_args.args[2:] == (card, 'task', [
+        '--role', 'review', '--model', 'model', '--writer-family', 'family', '--seats'])
+    service._save.assert_called_once_with(result)
+
+
+@pytest.mark.parametrize('failure,reason', [
+    (overflow.RemoteRefusal('remote copy failed'), 'remote copy failed'),
+    (OSError(2, 'private /secret/path'), 'No such file or directory'),
+    (ValueError('/secret/path'), 'invalid value'),
+    (KeyError('/secret/path'), 'required field'),
+    (TypeError('/secret/path'), 'invalid type'),
+])
+def test_failures_queue_with_safe_reasons(setup, failure, reason):
+    service, _, remote = setup
+    remote.side_effect = failure
+    result = a.admit(service, {})
+    assert result['status'] == 'queued'
+    assert reason in result['reason'] and '/secret' not in result['reason']
+    assert remote.call_count == 2
+
+
+def test_private_card_never_copies(setup):
+    service, _, remote = setup
+    result = a.admit(service, {}, card={'diff_ref': {'repo': '/private'}})
+    assert result['status'] == 'queued' and 'not public' in result['reason']
+    remote.assert_not_called()
+
+
+def test_benchmark_not_forwarded(setup):
+    service, _, remote = setup
+    assert 'benchmark' in a.admit(service, {'benchmark': object()})['reason']
+    remote.assert_not_called()
+
+
+class SharedService(SeatSpawnMixin):
+    async def _spawn(self, card=None, prompt='', **kwargs):
+        raise AssertionError('local spawn')
+
+
+@pytest.mark.parametrize('entry', ['cli', 'mcp'])
+def test_shared_spawn_admission(setup, monkeypatch, entry):
+    from plangraph.spawner import cli
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    service, _, remote = setup
+    shared = SharedService()
+    shared.runner, shared._save = service.runner, service._save
+    if entry == 'mcp':
+        server = object.__new__(MCPSpawnerServer)
+        server.service = shared
+        result = asyncio.run(server.call_tool('plangraph_agent_spawn', {
+            'card': {'task': 'test'}, 'prompt': 'Implement the requested change.'}))
+    else:
+        import io
+        shared.tasks = {}
+        shared.route = lambda *args, **kw: None
+        monkeypatch.setattr(cli, 'SpawnService', lambda **kw: shared)
+        class Output(io.StringIO):
+            def close(self):
+                pass
+        output = Output()
+        monkeypatch.setattr(cli.sys, 'stdout', output)
+        monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps({
+            'state': 'unused', 'card': {}, 'prompt': 'Implement the requested change.'}) + '\n'))
+        assert cli.main(['--supervise']) == 0
+        result = json.loads(output.getvalue())
+    assert result['host'] == 'ash'
+    remote.assert_called_once()

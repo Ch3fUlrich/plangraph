@@ -50,12 +50,23 @@ malformed caps exclude that host from overflow. Local admission instead uses
 conservative defaults of floor 3000 MB and role 2048 MB, with a logged reason.
 The independent OOM guard (D-5057/D-5075) remains unchanged.
 
+Default CLI and MCP spawns try healthy SSH overflow hosts when local RAM
+admission refuses, only for repositories in the `public_repos` allowlist.
+Private or unknown repositories queue without copying. Failed targets are
+excluded for that spawn; when none can accept, a queued record lists safe
+refusal reasons. With no overflow config file, ordinary local admission is
+unchanged and no overflow annotation is added. Dry runs do not overflow.
+Local benchmark databases cannot be forwarded.
+
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel
 lines around the remote spawn JSON. Only the single bracketed JSON receipt is
 accepted; shell-init banners, env-file echoes and JSON after the end are ignored.
 Missing, repeated or reversed sentinel pairs report `receipt_unbracketed` without
 retrying an already acknowledged spawn. Remote stderr stays private, and the
 existing credential-shape masking helper masks receipts before stdout exposure.
+Unreadable receipts or receipts without a nonblank remote run ID produce a
+local tracking ID, `acknowledged_unknown=true` and `status=unknown` on the
+selected host; they are never refused or retried.
 
 Install the package on each host, then use `python -m plangraph.spawner.cli`
 (or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
