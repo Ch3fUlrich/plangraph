@@ -40,5 +40,6 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+pg-worker-core = { path = ".", package = "pg-worker-core", features = ["test-support"] }
 tempfile = "3"
 serial_test = "3"
