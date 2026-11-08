@@ -28,14 +28,7 @@ _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 @pytest.fixture(autouse=True)
 def bounded_shutdown_cleanup(request, monkeypatch):
-    """A mocked process exit must finish cleanup before run closes its DB.
-
-    Keep this teardown here: test_keeper_pg_reconnect.py is already over the
-    400-line file limit, so extending that module would violate D-4691.
-    """
-    if request.node.name != "test_s2_shutdown_bounded":
-        yield
-        return
+    """Finish cleanup before a mocked exit can close the database."""
     from plangraph.keeper import daemon
     real_run = daemon.run
 
@@ -43,14 +36,15 @@ def bounded_shutdown_cleanup(request, monkeypatch):
         record_exit = os._exit  # the test has installed its recorder by now
 
         def exit_and_join(code):
-            record_exit(code)
             # Real _exit never returns. In this in-process test the blocked
             # close has a two-second backstop; finish it before conn.close().
             cleaners = [t for t in threading.enumerate()
-                        if t.name == "keeper-shutdown"]
+                        if getattr(getattr(t, "_target", None), "__qualname__", "")
+                        == "run.<locals>._cleanup"]
             for thread in cleaners:
                 thread.join(timeout=5)
                 assert not thread.is_alive(), "keeper shutdown did not finish"
+            record_exit(code)
 
         with monkeypatch.context() as patch:
             patch.setattr(os, "_exit", exit_and_join)
@@ -62,11 +56,23 @@ def bounded_shutdown_cleanup(request, monkeypatch):
 
 @pytest.fixture(autouse=True, scope="module")
 def no_leaked_keeper_threads():
-    """Attribute keeper workers to their module, including daemon reapers."""
-    before = set(threading.enumerate())
-    yield
-    leaked = [thread for thread in threading.enumerate()
-              if thread not in before and thread.name.startswith("keeper-")]
+    """Track worker targets at start, before Thread deletes its target."""
+    workers = []
+    start = threading.Thread.start
+
+    def track(thread, *args, **kwargs):
+        target = getattr(thread, "_target", None)
+        module = getattr(target, "__module__", "")
+        if module.startswith("plangraph.keeper.") or thread.name.startswith("keeper-"):
+            workers.append(thread)
+        return start(thread, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(threading.Thread, "start", track)
+        yield
+    leaked = [thread for thread in workers if thread.is_alive()]
+    for thread in leaked:
+        thread.join(timeout=5)
     assert not leaked, "Leaked keeper threads: " + ", ".join(
         f"{thread.name} (daemon={thread.daemon})" for thread in leaked)
 
