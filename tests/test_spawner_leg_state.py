@@ -35,6 +35,15 @@ def test_old_limit_evidence_reprobes(store):
     assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
 
 
+@pytest.mark.parametrize('age,reset', [(21600, 86400), (60, 60)])
+def test_expired_probe_failure_cannot_complete_down_streak(store, age, reset):
+    store.record_probe_fail('test/expiry', 'timeout', 'test', now=100, down_s=reset)
+    store.record_probe_fail('test/expiry', 'timeout', 'test', now=100 + age, down_s=86400)
+    assert store.leg_status('test/expiry', now=100 + age)['state'] == 'reprobe'
+    store.record_probe_fail('test/expiry', 'timeout', 'test', now=101 + age, down_s=86400)
+    assert store.leg_status('test/expiry', now=101 + age)['state'] == 'down'
+
+
 @pytest.fixture
 def store(tmp_path):
     return ls.LegStateStore(tmp_path / "legs.sqlite")

@@ -250,7 +250,7 @@ class LegStateStore:
                     behind = None
                     for older in rows:
                         if older['source'] == 'liveness-probe' and older['status'] == 503:
-                            streak += 1
+                            streak += int(now < min(older['ts'] + 21600, older['reset_at'] or older['ts']))
                         else:
                             behind = older
                             break
